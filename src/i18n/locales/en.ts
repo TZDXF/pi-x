@@ -29,7 +29,7 @@ export default {
     "create": "Create and switch",
     "worktreeHint": "Create a separate worktree and new branch from HEAD, then switch to it. Uncommitted changes are not copied.",
     "branchHint": "Create and switch to a new branch from HEAD, preserving working changes.",
-    "emptyTitle": "What would you like to build in {project}?"
+    "emptyTitle": "What do you want to build in {project}?"
 },
   common: {
     localWorkspace: "Local workspace",
@@ -102,7 +102,7 @@ export default {
     export: "Export",
     compactContext: "Compact context",
     emptyTitle: "What do you want to build today?",
-    emptyDesc: "Explore code, solve problems, or turn an idea into reality.",
+    emptyDesc: "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",
     copyReply: "Copy reply",
     thinking: "thinking…",
     removeAttachment: "Remove",
@@ -115,8 +115,6 @@ export default {
     attachImage: "Attach image",
     selectModel: "Select model",
     thinkingLevel: "Thinking",
-    localRun: "Local",
-    inputHint: "Enter to send · Shift + Enter for newline",
     sessionTreeTitle: "Session tree",
     forkTitle: "Fork from an earlier prompt",
     forkDesc: "Continues the conversation from the selected prompt, discarding everything after it.",
@@ -129,10 +127,15 @@ export default {
 
   titleGeneration: {
     page: "Model configuration",
-    description: "Choose a separate title model without changing the conversation model.",
+    description: "Set the default model for new conversations; features like title generation can follow the main model or use their own.",
+    defaultModel: "Default model",
+    defaultFollowMainHint: "Do not override the default model; use pi’s main model selection.",
+    defaultModelHint: "Preferred model for new conversations. Leave empty to keep pi's default behavior.",
     enabled: "Generate session titles automatically",
     hint: "Show the first message immediately, then replace it with an asynchronously generated title. Keep the preview on failure. Try once per new session and preserve manual titles.",
     model: "Title generation model",
+    followMain: "Follow the main model (use the default model above)",
+    followMainHint: "Titles are generated with the default model; skipped when no default model is set.",
     noModels: "Open a project to load available models, or add a model in settings.",
     credentials: "Uses pi provider settings and credentials. Choose from the same model list as the conversation. Title generation incurs additional model usage. Changes apply to new conversations.",
   },

@@ -13,6 +13,16 @@ pub struct AppConfig {
     pub last_project: Option<String>,
     #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<crate::title_generation::TitleModel>,
+    /// Title generation follows the default model instead of `title_model`.
+    #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
+    pub title_follow_main: bool,
+    /// Main model: default for new conversations, followed by feature items.
+    #[serde(rename = "defaultModel", default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<crate::title_generation::TitleModel>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {

@@ -19,10 +19,20 @@ export interface TrustStatus {
   needsDecision: boolean
 }
 
+export interface ModelRef {
+  provider: string
+  modelId: string
+}
+
 export interface AppConfig {
   piPath?: string
   lastProject?: string
-  titleModel?: { provider: string; modelId: string }
+  /** Custom title model; ignored while titleFollowMain is set. */
+  titleModel?: ModelRef
+  /** Title generation follows the default model instead of titleModel. */
+  titleFollowMain?: boolean
+  /** Main model: default for new conversations, followed by feature items. */
+  defaultModel?: ModelRef
 }
 
 export const detectPi = (customPath?: string) =>

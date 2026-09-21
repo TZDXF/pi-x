@@ -129,6 +129,8 @@ async function selectProject(dir: string) {
       return
     }
     phase.value = "chat"
+    // pi starts lazily on first submit; still fill the model picker now.
+    if (!started.value) void session.loadOfflineModels()
   } catch (e) {
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
@@ -141,6 +143,7 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
   if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
   if (trusted) {
     phase.value = "chat"
+    if (!started.value) void session.loadOfflineModels()
     const file = pendingResume.value
     pendingResume.value = null
     if (file && phase.value === "chat") await resumeSession(file)
@@ -157,6 +160,7 @@ async function start(): Promise<boolean> {
     await spawnPi(project.value)
     await session.init(project.value)
     started.value = true
+    await applyDefaultModel()
     return true
   } catch (e) {
     await killPi().catch(() => {})
@@ -166,6 +170,22 @@ async function start(): Promise<boolean> {
     return false
   } finally {
     connecting.value = false
+  }
+}
+
+/** Fresh conversations use the configured default model unless the user picked one
+ * (desiredModelKey is applied by init). Not sticky: resuming keeps its own model. */
+async function applyDefaultModel() {
+  if (session.desiredModelKey) return
+  try {
+    const d = (await getConfig()).defaultModel
+    const current = session.currentModel
+    if (!d?.provider || !d?.modelId) return
+    if (current?.provider === d.provider && current?.id === d.modelId) return
+    await rpcRequest({ type: "set_model", provider: d.provider, modelId: d.modelId })
+    await session.refreshState()
+  } catch (e) {
+    console.warn("[pi] failed to apply default model:", e)
   }
 }
 

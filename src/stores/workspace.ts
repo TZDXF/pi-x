@@ -7,6 +7,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projects = ref<string[]>([])
   const pinnedProjects = ref<string[]>([])
   const histories = ref<Record<string, SessionMeta[]>>({})
+  const sessionOrder = ref<Record<string, string[]>>({})
   const pending = new Map<string, SessionMeta>()
   const versions: Record<string, number> = {}
   try {
@@ -17,14 +18,52 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
     if (Array.isArray(stored)) pinnedProjects.value = stored.filter((p): p is string => typeof p === "string" && projects.value.includes(p))
   } catch { /* Optional storage. */ }
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("pix.sessionOrder") || "{}")
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      for (const [path, files] of Object.entries(stored)) {
+        if (Array.isArray(files)) sessionOrder.value[path] = files.filter((f): f is string => typeof f === "string")
+      }
+    }
+  } catch { /* Optional storage. */ }
   function persistProjects() {
     try {
       localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
       localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
     } catch { /* Optional storage. */ }
   }
+  function persistSessionOrder() {
+    try {
+      localStorage.setItem("pix.sessionOrder", JSON.stringify(sessionOrder.value))
+    } catch { /* Optional storage. */ }
+  }
   function orderedProjects() {
     return [...projects.value].sort((a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)))
+  }
+  /** Persist a manual project ordering. Pinned projects still stay on top. */
+  function reorderProjects(ordered: string[]) {
+    const seen = new Set(ordered)
+    projects.value = [...ordered, ...projects.value.filter(p => !seen.has(p))]
+    persistProjects()
+  }
+  function applySessionOrder(path: string) {
+    const rows = histories.value[path]
+    if (!rows) return
+    const order = (sessionOrder.value[path] || []).filter(f => rows.some(r => r.file === f))
+    sessionOrder.value[path] = order
+    const index = new Map(order.map((f, i) => [f, i]))
+    histories.value[path] = [...rows].sort((a, b) => {
+      const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
+      const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
+      return ia - ib || b.mtimeMs - a.mtimeMs
+    })
+  }
+  /** Persist a manual ordering for the given sessions of a project. */
+  function reorderSessions(path: string, orderedFiles: string[]) {
+    const rest = (sessionOrder.value[path] || []).filter(f => !orderedFiles.includes(f))
+    sessionOrder.value[path] = [...orderedFiles, ...rest]
+    applySessionOrder(path)
+    persistSessionOrder()
   }
   function togglePin(path: string) {
     if (!projects.value.includes(path)) return
@@ -35,10 +74,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function removeProject(path: string) {
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
+    delete sessionOrder.value[path]
     versions[path] = (versions[path] || 0) + 1
     delete histories.value[path]
     for (const [file, row] of pending) if (row.cwd === path) pending.delete(file)
     persistProjects()
+    persistSessionOrder()
   }
   function remember(path: string) {
     if (!path) return
@@ -52,6 +93,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       for (const row of rows) pending.delete(row.file)
       const previews = [...pending.values()].filter(row => row.cwd === path)
       histories.value[path] = [...rows, ...previews].sort((a, b) => b.mtimeMs - a.mtimeMs)
+      applySessionOrder(path)
     }
   }
   // pi does not flush a new session to disk until its first assistant response.
@@ -79,5 +121,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, pinnedProjects, orderedProjects, togglePin, removeProject, histories, remember, refresh, update, preview, generatedTitle }
+  return { gitBusy, projects, pinnedProjects, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, preview, generatedTitle }
 })

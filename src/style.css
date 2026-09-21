@@ -7,8 +7,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: "Geist Variable", sans-serif;
-  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", "Geist", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-serif: "Plantin MT Pro", "Plantin MT Std", Plantin, Georgia, "Songti SC", "SimSun", serif;
+  --font-mono: "Commit Mono", "Departure Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-heading: var(--font-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -47,73 +49,42 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  color-scheme: dark;
+  --background: #0d1116;
+  --foreground: #ebe7e4;
+  --card: #161d27;
+  --card-foreground: #ebe7e4;
+  --popover: #212730;
+  --popover-foreground: #ebe7e4;
+  --primary: #6a9fcc;
+  --primary-foreground: #0d1116;
+  --secondary: #252f3d;
+  --secondary-foreground: #ebe7e4;
+  --muted: #1c242e;
+  --muted-foreground: #9fa4ab;
+  --accent: #2b3646;
+  --accent-foreground: #ebe7e4;
+  --destructive: #e8704f;
+  --border: rgb(73 80 89 / 0.5);
+  --input: rgb(73 80 89 / 0.55);
+  --ring: #6a9fcc;
+  --chart-1: #6a9fcc;
+  --chart-2: #b86b52;
+  --chart-3: #e1b06e;
+  --chart-4: #a3a473;
+  --chart-5: #5db87a;
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #11161d;
+  --sidebar-foreground: #d5d8db;
+  --sidebar-primary: #6a9fcc;
+  --sidebar-primary-foreground: #0d1116;
+  --sidebar-accent: #212730;
+  --sidebar-accent-foreground: #ebe7e4;
+  --sidebar-border: rgb(73 80 89 / 0.5);
+  --sidebar-ring: #6a9fcc;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
-}
+/* pi.dev reference: single dark theme, palette defined in :root */
 
 @layer base {
   * {
@@ -126,9 +97,9 @@
 }
 /* Desktop workspace: quiet navigation, focused conversation, anchored composer. */
 :root {
-  --sidebar: #f7f7f5;
-  --background: #fff;
-  --font-sans: "Geist", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-sans: "Geist Variable", "Geist", "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-serif: "Plantin MT Pro", "Plantin MT Std", Plantin, Georgia, "Songti SC", "SimSun", serif;
+  --font-mono: "Commit Mono", "Departure Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 html,
 body,
@@ -222,7 +193,7 @@ input:focus-visible {
   font-weight: 500;
 }
 .sidebar-action:hover {
-  background: #eaeae7;
+  background: var(--sidebar-accent);
 }
 .sidebar-search {
   display: flex;
@@ -278,7 +249,7 @@ input:focus-visible {
 }
 .session-row.active,
 .session-row:hover {
-  background: #eaeae7;
+  background: var(--sidebar-accent);
 }
 .session-row time {
   margin-left: auto;
@@ -358,7 +329,7 @@ input:focus-visible {
 .composer-dock [data-slot="input-group"] {
   border-radius: 20px;
   padding: 8px;
-  box-shadow: 0 2px 10px #00000005;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 0.45);
 }
 .composer-dock [data-slot="select-trigger"] {
   border: none;
@@ -368,14 +339,6 @@ input:focus-visible {
 .composer-dock textarea {
   font-size: 14px;
   line-height: 1.7;
-}
-.composer-caption {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 10px;
-  color: var(--muted-foreground);
-  margin: 10px 4px 3px;
 }
 .settings-dialog {
   width: min(840px, calc(100vw - 40px)) !important;
@@ -491,9 +454,6 @@ kbd {
   .composer-dock > form > div:last-child {
     flex-wrap: wrap;
   }
-  .composer-caption span:last-child {
-    display: none;
-  }
   .settings-dialog {
     grid-template-columns: 125px minmax(0, 1fr);
   }
@@ -522,13 +482,15 @@ kbd {
   min-height: 240px;
 }
 .chat-empty h3 {
-  font-size: 28px;
+  font-family: var(--font-serif);
+  font-size: 32px;
   font-weight: 500;
-  letter-spacing: -0.8px;
+  letter-spacing: -0.01em;
   margin-bottom: 12px;
 }
 .chat-empty p {
-  font-size: 13px;
+  font-size: 14px;
+  color: var(--muted-foreground);
 }
 .composer-controls {
   width: 100%;
@@ -550,7 +512,7 @@ kbd {
     inset: 0 auto 0 0;
     width: 260px;
     z-index: 30;
-    box-shadow: 12px 0 35px #00000012;
+    box-shadow: 12px 0 35px rgb(0 0 0 / 0.5);
   }
   .chat-empty h3 {
     font-size: 23px;
@@ -558,20 +520,20 @@ kbd {
 }
 
 /* Project/chat hierarchy and composer context, matching the desktop reference. */
-.workspace-sidebar { width: 272px; padding: 14px 7px 8px; background: #eaf5f8; }
-.dark .workspace-sidebar { background: var(--sidebar); }
+.workspace-sidebar { width: 272px; padding: 14px 7px 8px; }
+
 .sidebar-brand { padding: 2px 8px 20px; }
 .sidebar-search { margin-bottom: 12px; }
 .project-groups { flex: 1; min-height: 0; overflow-y: auto; }
 .project-group { margin-bottom: 17px; }
 .project-heading { display: flex; align-items: center; border-radius: 9px; padding-right: 5px; }
-.project-heading:hover, .project-heading.selected { background: #deeaee; }
+.project-heading:hover, .project-heading.selected { background: var(--sidebar-accent); }
 .project-row { min-width: 0; padding: 7px 6px; gap: 7px; text-align: left; font-weight: 400; }
 .project-row svg { flex-shrink: 0; }
 .project-chevron { width: 10px; color: var(--muted-foreground); }
 .session-list { overflow: visible; padding: 0; }
 .session-row { padding: 0 5px 0 32px; min-height: 31px; gap: 2px; margin: 0; font-size: 13px; }
-.session-row.active, .session-row:hover { background: #deeaee; }
+.session-row.active, .session-row:hover { background: var(--sidebar-accent); }
 .session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 7px 0; }
 .session-actions { display: flex; align-items: center; }
 .session-actions .icon-button { width: 24px; height: 24px; }
@@ -589,11 +551,11 @@ kbd {
 .context-menu-item { display: flex; align-items: center; width: 100%; gap: 8px; text-align: left; padding: 9px 8px; border-radius: 6px; font-size: 13px; }
 .context-menu-item:hover { background: var(--accent); }
 .workspace-text-input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; background: var(--background); }
-.workspace-primary { border-radius: 8px; background: var(--foreground); color: var(--background); padding: 8px 14px; font-size: 13px; }
+.workspace-primary { border-radius: 8px; background: var(--primary); color: var(--primary-foreground); padding: 8px 14px; font-size: 13px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
-.composer-dock [data-slot="input-group"] { position: relative; background: var(--background); border-radius: 22px; box-shadow: 0 2px 12px #00000006; }
+.composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.45); }
 .composer-dock { padding-bottom: 12px; }
-.dark .project-heading:hover, .dark .project-heading.selected, .dark .session-row.active, .dark .session-row:hover { background: var(--accent); }
+
 @media (hover: none) { .hover-action { opacity: 1; } }
 @media (max-width: 700px) { .workspace-sidebar { width: 220px; } .workspace-context { margin-inline: 2px; gap: 0; } .context-chip { gap: 4px; } }
 .conversation-column .is-assistant { max-width: 100%; }
@@ -603,3 +565,19 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .project-more { width: 24px; height: 26px; }
 .project-more[data-state="open"] { background: var(--accent); color: var(--foreground); }
 .project-pin { flex-shrink: 0; color: var(--muted-foreground); }
+.project-heading[draggable="true"], .session-row[draggable="true"] { cursor: grab; }
+.project-heading[draggable="true"]:active, .session-row[draggable="true"]:active { cursor: grabbing; }
+.project-heading.drag-source, .session-row.drag-source { opacity: 0.45; }
+.project-heading.drop-before, .session-row.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
+.project-heading.drop-after, .session-row.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
+
+::selection {
+  background: rgb(106 159 204 / 0.28);
+}
+.sidebar-section-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+.sidebar-runtime {
+  font-family: var(--font-mono);
+}

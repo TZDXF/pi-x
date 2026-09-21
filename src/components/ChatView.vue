@@ -247,12 +247,19 @@ const submitStatus = computed(() => {
 
 const modelKey = computed({
   get: () => {
+    if (session.desiredModelKey) return session.desiredModelKey
     const m = session.currentModel
     return m ? `${m.provider}/${m.id}` : ""
   },
   set: (key: string) => {
     const [provider, ...rest] = key.split("/")
-    void session.setModel(provider, rest.join("/"))
+    // pi starts lazily: queue the choice until init() applies it.
+    if (!props.connected) {
+      session.setDesiredModel(key)
+      return
+    }
+    session.setModel(provider, rest.join("/"))
+      .catch(e => ui.pushToast(String(e), "error"))
   },
 })
 
@@ -277,6 +284,12 @@ async function onSubmit(message: {
     return
   }
   await session.send(text, images.length ? images : undefined)
+}
+
+function onThinkingChange(v: unknown) {
+  if (typeof v !== "string") return
+  session.setThinkingLevel(v as ThinkingLevel)
+    .catch(e => ui.pushToast(String(e), "error"))
 }
 
 async function abort() {
@@ -525,16 +538,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             >
               + {{ t("chat.attachment") }}
             </button>
-            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected" />
+            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" />
 
             <Select
               :model-value="session.thinkingLevel"
-              @update:model-value="
-                (v: any) => {
-                  if (typeof v === 'string')
-                    void session.setThinkingLevel(v as ThinkingLevel)
-                }
-              "
+              :disabled="!connected"
+              @update:model-value="onThinkingChange"
             >
               <SelectTrigger class="h-8 w-24 text-xs">
                 <SelectValue />
@@ -554,11 +563,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <PromptInputSubmit :status="submitStatus" :disabled="workspace.gitBusy || connecting" />
         </div>
       </PromptInput>
-      <div class="composer-caption">
-        <span
-          >{{ t("chat.localRun") }} · {{ project.split(/[\\/]/).filter(Boolean).pop() }}</span
-        ><span>{{ t("chat.inputHint") }}</span>
-      </div>
       <StatusBar />
     </div>
 

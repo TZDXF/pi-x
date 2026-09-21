@@ -90,7 +90,13 @@ pub async fn session_generate_title(
     message: String,
 ) -> Result<Option<String>, String> {
     let config = commands::app_config_get(app)?;
-    let Some(model) = config.title_model else {
+    // Follow the main (default) model when configured to do so.
+    let model = if config.title_follow_main {
+        config.default_model.clone()
+    } else {
+        config.title_model.clone()
+    };
+    let Some(model) = model else {
         return Ok(None);
     };
     if model.provider.trim().is_empty()

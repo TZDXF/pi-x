@@ -29,7 +29,7 @@ export default {
     "create": "创建并切换",
     "worktreeHint": "从当前 HEAD 创建独立工作树和新分支，成功后切换至该目录。未提交的修改不会复制。",
     "branchHint": "从当前 HEAD 创建并切换到新分支，保留工作区修改。",
-    "emptyTitle": "你想让我们在 {project} 中构建什么？"
+    "emptyTitle": "想在 {project} 里构建什么？"
 },
   common: {
     localWorkspace: "本地工作区",
@@ -102,7 +102,7 @@ export default {
     export: "导出",
     compactContext: "压缩上下文",
     emptyTitle: "今天想构建什么？",
-    emptyDesc: "探索代码、解决问题，或将一个想法变成现实。",
+    emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",
     thinking: "thinking…",
     removeAttachment: "移除",
@@ -115,8 +115,6 @@ export default {
     attachImage: "插入图片",
     selectModel: "选择模型",
     thinkingLevel: "推理",
-    localRun: "本地运行",
-    inputHint: "Enter 发送 · Shift + Enter 换行",
     sessionTreeTitle: "会话树",
     forkTitle: "从较早的提问分支",
     forkDesc: "从所选提问处继续对话，并丢弃之后的所有内容。",
@@ -129,10 +127,15 @@ export default {
 
   titleGeneration: {
     page: "模型配置",
-    description: "为标题生成指定独立模型，不影响当前对话模型。",
+    description: "设置新会话的默认模型；标题生成等功能可跟随主模型，也可独立指定模型。",
+    defaultModel: "默认模型",
+    defaultFollowMainHint: "不指定默认模型，沿用 pi 的主模型选择。",
+    defaultModelHint: "新建会话时优先使用此模型；留空则沿用 pi 的默认行为。",
     enabled: "自动生成会话标题",
     hint: "首次发送消息后，先显示消息预览，再异步替换为生成的标题。失败时保留预览；每个新会话最多尝试一次，不覆盖手动标题。",
     model: "标题生成模型",
+    followMain: "跟随主模型（使用上方默认模型）",
+    followMainHint: "使用默认模型生成标题；未配置默认模型时跳过生成。",
     noModels: "请先打开项目以加载可用模型，或在设置中添加模型。",
     credentials: "复用 pi 的供应商配置和登录凭据。使用与对话框相同的模型列表选择；此功能会产生额外模型用量。保存后对新会话生效。",
   },

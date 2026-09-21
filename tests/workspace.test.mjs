@@ -80,3 +80,31 @@ test('opening more projects does not evict pinned projects', () => {
   for (let i = 0; i < 10; i++) h.store.remember(`project-${i}`)
   assert.equal(h.store.orderedProjects()[0], 'pinned')
 })
+test('manual project order persists and keeps pinned projects on top', () => {
+  const h = harness()
+  h.store.remember('one'); h.store.remember('two'); h.store.remember('three')
+  h.store.reorderProjects(['two', 'three', 'one'])
+  assert.deepEqual(Array.from(h.store.projects.value), ['two', 'three', 'one'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.recentProjects')), ['two', 'three', 'one'])
+  h.store.togglePin('one')
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['one', 'two', 'three'])
+})
+test('manual session order persists, merges with archived rows, and refresh keeps it', async () => {
+  const h = harness()
+  h.store.histories.value.project = [{ file: 'a', mtimeMs: 3 }, { file: 'b', mtimeMs: 2 }, { file: 'c', mtimeMs: 1, archived: true }]
+  h.store.reorderSessions('project', ['b', 'a'])
+  assert.deepEqual(Array.from(h.store.histories.value.project, r => r.file), ['b', 'a', 'c'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.sessionOrder')).project, ['b', 'a'])
+  const refresh = h.store.refresh('project')
+  h.requests[0].resolve([{ file: 'a', mtimeMs: 3 }, { file: 'b', mtimeMs: 2 }, { file: 'c', mtimeMs: 1, archived: true }])
+  await refresh
+  assert.deepEqual(Array.from(h.store.histories.value.project, r => r.file), ['b', 'a', 'c'])
+})
+test('removing a project also clears its session order', () => {
+  const h = harness()
+  h.store.remember('one')
+  h.store.histories.value.one = [{ file: 'a', mtimeMs: 1 }]
+  h.store.reorderSessions('one', ['a'])
+  h.store.removeProject('one')
+  assert.deepEqual(JSON.parse(h.storage.get('pix.sessionOrder')), {})
+})

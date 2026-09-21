@@ -17,8 +17,8 @@ function harness(runtimeModels = [], custom = {}, saved) {
     getConfig: async () => config, saveConfig: async value => { config = value },
     getModelsConfig: async () => ({ providers: custom }),
   })
-  vm.runInContext(ts.transpile(source + '\nglobalThis.api = { models, modelKey, enabled, save };', { target: ts.ScriptTarget.ES2022 }), context)
-  return { api: context.api, mount: () => mount(), config: () => config }
+  vm.runInContext(ts.transpile(source + '\nglobalThis.api = { models, modelKey, enabled, save, followMain, defaultKey, defaultFollowMain };', { target: ts.ScriptTarget.ES2022 }), context)
+  return { api: context.api, mount: () => mount(), config: () => config, setConfig: value => { config = value } }
 }
 
 test('title selector uses the conversation model list without appending duplicate custom models', async () => {
@@ -44,4 +44,70 @@ test('a previously saved model remains visible when absent from the runtime list
   const h = harness([], {}, { provider: 'saved', modelId: 'model' }); await h.mount()
   assert.equal(h.api.modelKey.value, 'saved/model')
   assert.equal(h.api.models.value[0].id, 'model')
+})
+test('following the main model saves the flag and keeps the custom choice for toggling back', async () => {
+  const h = harness([], {}, { provider: 'saved', modelId: 'model' })
+  await h.mount()
+  h.api.followMain.value = true
+  h.api.defaultKey.value = 'openrouter/vendor/model'
+  await h.api.save()
+  assert.equal(h.config().titleFollowMain, true)
+  assert.equal(h.config().defaultModel.provider, 'openrouter')
+  assert.equal(h.config().defaultModel.modelId, 'vendor/model')
+  assert.equal(h.config().titleModel.provider, 'saved')
+})
+
+test('default model alone saves without enabling title generation', async () => {
+  const h = harness()
+  await h.mount()
+  h.api.defaultKey.value = 'anthropic/claude'
+  await h.api.save()
+  assert.equal(h.config().defaultModel.provider, 'anthropic')
+  assert.equal(h.config().defaultModel.modelId, 'claude')
+  assert.equal(h.config().titleModel, undefined)
+  assert.equal(h.config().titleFollowMain, undefined)
+})
+
+test('a saved follow-main configuration reloads as enabled with the default model', async () => {
+  const source = readFileSync(new URL('../src/components/TitleModelSettings.vue', import.meta.url), 'utf8')
+  assert.ok(source.includes('titleFollowMain'))
+  const h = harness([], { one: { models: [{ id: 'm' }] } })
+  // Simulate stored config by pre-seeding the harness config object.
+  await h.mount()
+  h.api.enabled.value = true
+  h.api.followMain.value = true
+  await h.api.save()
+  const h2 = harness([], { one: { models: [{ id: 'm' }] } }, undefined)
+  h2.setConfig(h.config())
+  await h2.mount()
+  assert.equal(h2.api.enabled.value, true)
+  assert.equal(h2.api.followMain.value, true)
+})
+
+
+test('default model follows main when no override is configured', async () => {
+  const h = harness()
+  await h.mount()
+  assert.equal(h.api.defaultFollowMain.value, true)
+  await h.api.save()
+  assert.equal(h.config().defaultModel, undefined)
+})
+
+test('following main clears the default override and preserves unrelated settings', async () => {
+  const h = harness()
+  h.setConfig({ defaultModel: { provider: 'one', modelId: 'model' }, unrelated: 'keep' })
+  await h.mount()
+  assert.equal(h.api.defaultFollowMain.value, false)
+  h.api.defaultFollowMain.value = true
+  await h.api.save()
+  assert.equal(h.config().defaultModel, undefined)
+  assert.equal(h.config().unrelated, 'keep')
+  h.api.defaultFollowMain.value = false
+  await h.api.save()
+  assert.equal(h.config().defaultModel.provider, 'one')
+  const reloaded = harness()
+  reloaded.setConfig(h.config())
+  await reloaded.mount()
+  assert.equal(reloaded.api.defaultFollowMain.value, false)
+  assert.equal(reloaded.api.defaultKey.value, 'one/model')
 })

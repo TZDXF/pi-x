@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { generateSessionTitle, rpcRequest } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, rpcRequest } from "@/api/piClient"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -62,6 +62,8 @@ export const useSessionStore = defineStore("session", () => {
   const lastUsage = ref<Usage | null>(null)
   const commands = ref<CommandInfo[]>([])
   const models = ref<Model[]>([])
+  /** Model picked before pi starts (or sticky choice); applied on init. */
+  const desiredModelKey = ref<string | null>(null)
   const availableThinking = ref<ThinkingLevel[]>(["off"])
   const cwd = ref("")
 
@@ -362,7 +364,15 @@ export const useSessionStore = defineStore("session", () => {
 
   async function setModel(provider: string, modelId: string) {
     await rpcRequest({ type: "set_model", provider, modelId })
+    desiredModelKey.value = `${provider}/${modelId}`
+    storeDefaultModel(desiredModelKey.value)
     await refreshState()
+  }
+
+  /** Record a model choice made while pi is not running; applied on init. */
+  function setDesiredModel(key: string | null) {
+    desiredModelKey.value = key
+    if (key) storeDefaultModel(key)
   }
 
   async function setThinkingLevel(level: ThinkingLevel) {
@@ -442,10 +452,60 @@ export const useSessionStore = defineStore("session", () => {
       availableThinking.value = res.data.levels ?? ["off"]
   }
 
+  const DEFAULT_MODEL_KEY = "pi:defaultModel"
+  function readStoredDefaultModel(): string | null {
+    try { return localStorage.getItem(DEFAULT_MODEL_KEY) } catch { return null }
+  }
+  function storeDefaultModel(key: string) {
+    try { localStorage.setItem(DEFAULT_MODEL_KEY, key) } catch { /* ignore */ }
+  }
+
+  /** Fill the model picker from ~/.pi/agent/models.json while pi is down. */
+  async function loadOfflineModels() {
+    try {
+      const config = await getModelsConfig()
+      const offline: Model[] = []
+      for (const [provider, entry] of Object.entries(config.providers ?? {})) {
+        for (const m of entry.models ?? []) {
+          offline.push({
+            id: m.id,
+            name: m.name ?? m.id,
+            api: m.api ?? entry.api ?? "",
+            provider,
+            baseUrl: entry.baseUrl ?? "",
+            reasoning: m.reasoning ?? false,
+            input: m.input ?? ["text"],
+            contextWindow: m.contextWindow ?? 0,
+            maxTokens: m.maxTokens ?? 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          })
+        }
+      }
+      models.value = offline
+      // Default to the last picked model, falling back to the first entry.
+      if (!desiredModelKey.value && offline.length) {
+        const stored = readStoredDefaultModel()
+        const valid = stored && offline.some(m => `${m.provider}/${m.id}` === stored)
+        desiredModelKey.value = valid ? stored : `${offline[0].provider}/${offline[0].id}`
+      }
+    } catch (e) {
+      console.warn("[pi] failed to load offline models:", e)
+    }
+  }
+
   async function init(project: string) {
     cwd.value = project
     await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
     await refreshThinkingLevels()
+    const desired = desiredModelKey.value
+    if (desired) {
+      const current = state.value?.model
+      if (!current || `${current.provider}/${current.id}` !== desired) {
+        const [provider, ...rest] = desired.split("/")
+        await setModel(provider, rest.join("/"))
+          .catch(e => console.warn("[pi] failed to apply desired model:", e))
+      }
+    }
   }
 
   function clear() {
@@ -474,6 +534,7 @@ export const useSessionStore = defineStore("session", () => {
     lastUsage,
     commands,
     models,
+    desiredModelKey,
     availableThinking,
     cwd,
     sessionFile,
@@ -486,10 +547,12 @@ export const useSessionStore = defineStore("session", () => {
     newSession,
     compact,
     setModel,
+    setDesiredModel,
     setThinkingLevel,
     refreshState,
     refreshStats,
     refreshModels,
+    loadOfflineModels,
     loadHistory,
     loadMessages,
     init,
