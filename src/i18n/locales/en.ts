@@ -1,6 +1,15 @@
 /** English locale */
 export default {
   workspace: {
+    projectActions: "Project options",
+    pin: "Pin to top",
+    unpin: "Unpin",
+    pinned: "Pinned",
+    openExplorer: "Open in file explorer",
+    removeProject: "Remove",
+    removeProjectHint: "Remove from the project list without deleting files or chats",
+    desktopOnly: "Available in the desktop app only",
+
     "archived": "Archived",
     "rename": "Rename",
     "restore": "Restore chat",

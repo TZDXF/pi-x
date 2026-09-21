@@ -1,6 +1,15 @@
 /** 简体中文语言包 */
 export default {
   workspace: {
+    projectActions: "项目更多设置",
+    pin: "置顶",
+    unpin: "取消置顶",
+    pinned: "已置顶",
+    openExplorer: "在资源管理器中打开",
+    removeProject: "移除",
+    removeProjectHint: "仅从项目列表移除，不删除目录或会话记录",
+    desktopOnly: "仅桌面端可用",
+
     "archived": "已归档",
     "rename": "重命名",
     "restore": "恢复会话",

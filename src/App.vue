@@ -239,6 +239,30 @@ async function newProjectSession(path: string) {
   finally { navigating.value = false }
 }
 
+// Removing a project only removes its navigation entry, never files or logs.
+async function removeProject(path: string) {
+  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  navigating.value = true
+  try {
+    if (path === project.value) {
+      const nextConfig = { ...config.value, lastProject: undefined }
+      // Persist before altering UI so a failure does not silently re-open the project.
+      await saveConfig(nextConfig)
+      await killPi()
+      started.value = false
+      config.value = nextConfig
+      pendingResume.value = null
+      trustInfo.value = null
+      session.clear()
+      ui.clear()
+      project.value = ""
+      phase.value = "pick"
+    }
+    workspace.removeProject(path)
+  } catch (e) { ui.pushToast(String(e), "error") }
+  finally { navigating.value = false }
+}
+
 onUnmounted(() => {
   disposed = true
   unlisteners.forEach((off) => off())
@@ -257,6 +281,7 @@ onUnmounted(() => {
       @select-project="selectProject"
       @resume-session="resumeSession"
       @new-session="newProjectSession"
+      @remove-project="removeProject"
       @settings="settingsOpen = true"
       @collapse="sidebarOpen = false"
     />

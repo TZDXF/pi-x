@@ -5,17 +5,45 @@ import { listSessions, updateSession, type SessionMeta } from "@/api/piClient"
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
   const projects = ref<string[]>([])
+  const pinnedProjects = ref<string[]>([])
   const histories = ref<Record<string, SessionMeta[]>>({})
   const pending = new Map<string, SessionMeta>()
   const versions: Record<string, number> = {}
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.recentProjects") || "[]")
-    if (Array.isArray(stored)) projects.value = stored.filter((p): p is string => typeof p === "string").slice(0, 8)
+    if (Array.isArray(stored)) projects.value = stored.filter((p): p is string => typeof p === "string")
   } catch { /* Optional storage. */ }
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
+    if (Array.isArray(stored)) pinnedProjects.value = stored.filter((p): p is string => typeof p === "string" && projects.value.includes(p))
+  } catch { /* Optional storage. */ }
+  function persistProjects() {
+    try {
+      localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
+      localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
+    } catch { /* Optional storage. */ }
+  }
+  function orderedProjects() {
+    return [...projects.value].sort((a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)))
+  }
+  function togglePin(path: string) {
+    if (!projects.value.includes(path)) return
+    pinnedProjects.value = pinnedProjects.value.includes(path)
+      ? pinnedProjects.value.filter(p => p !== path) : [...pinnedProjects.value, path]
+    persistProjects()
+  }
+  function removeProject(path: string) {
+    projects.value = projects.value.filter(p => p !== path)
+    pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
+    versions[path] = (versions[path] || 0) + 1
+    delete histories.value[path]
+    for (const [file, row] of pending) if (row.cwd === path) pending.delete(file)
+    persistProjects()
+  }
   function remember(path: string) {
     if (!path) return
-    if (!projects.value.includes(path)) projects.value = [path, ...projects.value].slice(0, 8)
-    try { localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value)) } catch { /* Optional storage. */ }
+    if (!projects.value.includes(path)) projects.value = [path, ...projects.value]
+    persistProjects()
   }
   async function refresh(path: string) {
     const version = versions[path] = (versions[path] || 0) + 1
@@ -51,5 +79,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, histories, remember, refresh, update, preview, generatedTitle }
+  return { gitBusy, projects, pinnedProjects, orderedProjects, togglePin, removeProject, histories, remember, refresh, update, preview, generatedTitle }
 })

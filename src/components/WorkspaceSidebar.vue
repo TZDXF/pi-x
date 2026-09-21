@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal } from "@lucide/vue"
-import { type SessionMeta } from "@/api/piClient"
+import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X } from "@lucide/vue"
+import { isDesktop } from "@/api/transport"
+import { openPath, type SessionMeta } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean }>()
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
+  removeProject: [project: string];
   newSession: [project: string]; settings: []; collapse: []
 }>()
 const session = useSessionStore()
@@ -30,6 +32,10 @@ const name = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
   return (workspace.histories[path] || []).filter(s => !!s.archived === showArchived.value && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
+}
+async function openProjectFolder(path: string) {
+  try { await openPath(path) }
+  catch (e) { ui.pushToast(String(e), "error") }
 }
 async function refresh(path: string) {
   loading.value[path] = true
@@ -67,12 +73,22 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
       <button class="icon-button" :disabled="disabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></button></div>
     </div>
     <div class="project-groups">
-      <section v-for="path in workspace.projects" :key="path" class="project-group">
+      <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
         <div class="project-heading" :class="{ selected: path === project && !session.entries.length }">
           <button class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
             <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
           </button>
           <button class="icon-button hover-action" :disabled="disabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></button>
+          <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child><button class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></button></DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="bottom">
+              <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" /><Pin v-else :size="14" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
+              <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem class="text-destructive" :title="t('workspace.removeProjectHint')" @select="emit('removeProject', path)"><X :size="14" />{{ t('workspace.removeProject') }}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div v-if="!collapsed[path]" class="session-list">
           <div v-if="path === project && ready && session.entries.length > 0 && !showArchived && !query && !workspace.histories[path]?.some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>

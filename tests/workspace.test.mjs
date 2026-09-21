@@ -50,3 +50,33 @@ test('a stale list request cannot undo a successful rename', async () => {
   h.requests[0].resolve([{ file: 'one', title: 'original' }]); await refresh
   assert.equal(h.store.histories.value.project[0].title, 'updated')
 })
+test('pinning moves a project to the top and unpinning restores normal order', () => {
+  const h = harness()
+  h.store.remember('one'); h.store.remember('two')
+  h.store.togglePin('one')
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['one', 'two'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.pinnedProjects')), ['one'])
+  h.store.togglePin('one')
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['two', 'one'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.pinnedProjects')), [])
+})
+test('removing a project clears its pin and cached list but does not modify conversations', async () => {
+  const h = harness()
+  h.store.remember('one'); h.store.remember('two'); h.store.togglePin('one')
+  h.store.histories.value.one = [{ file: 'chat.jsonl' }]
+  const request = h.store.refresh('one')
+  h.store.removeProject('one')
+  h.requests[0].resolve([{ file: 'chat.jsonl' }]); await request
+  assert.deepEqual(JSON.parse(h.storage.get('pix.recentProjects')), ['two'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.pinnedProjects')), [])
+  assert.equal(h.store.histories.value.one, undefined)
+  assert.equal(h.writes.length, 0)
+  h.store.remember('one')
+  assert.deepEqual(Array.from(h.store.projects.value), ['one', 'two'])
+})
+test('opening more projects does not evict pinned projects', () => {
+  const h = harness()
+  h.store.remember('pinned'); h.store.togglePin('pinned')
+  for (let i = 0; i < 10; i++) h.store.remember(`project-${i}`)
+  assert.equal(h.store.orderedProjects()[0], 'pinned')
+})
