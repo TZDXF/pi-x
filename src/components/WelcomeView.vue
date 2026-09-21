@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isDesktop } from "@/api/transport"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { open } from "@tauri-apps/plugin-dialog"
@@ -32,7 +33,7 @@ async function saveAndDetect() {
 }
 
 async function pickFolder() {
-  const dir = await open({ directory: true, title: t("welcome.openFolderTitle") })
+  const dir = isDesktop ? await open({ directory: true, title: t("welcome.openFolderTitle") }) : window.prompt(t("settings.remoteProject"))
   if (typeof dir === "string") emit("projectSelected", dir)
 }
 </script>

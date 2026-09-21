@@ -1,6 +1,7 @@
 mod commands;
 mod fs_search;
 mod pi_locate;
+mod remote;
 mod rpc;
 mod sessions;
 mod trust;
@@ -14,7 +15,22 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(RpcState::default())
+        .manage(remote::RemoteState::default())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let cfg = remote::load(&handle);
+            if cfg.enabled {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = remote::remote_set(handle, true, cfg.port).await {
+                        eprintln!("Remote server: {e}");
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            remote::remote_status,
+            remote::remote_set,
             commands::pi_detect,
             commands::app_config_get,
             commands::app_config_save,

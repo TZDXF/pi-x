@@ -1,5 +1,7 @@
 <script setup lang="ts">
 /** Categorized workspace settings and Pi runtime configuration. */
+import { isDesktop } from "@/api/transport"
+import { remoteStatus, remoteSet, type RemoteStatus } from "@/api/piClient"
 import { ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -10,13 +12,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import {
-  detectPi,
-  getConfig,
-  saveConfig,
-  type AppConfig,
-  type PiInfo,
-} from "@/api/piClient"
+import { detectPi, getConfig, saveConfig, type AppConfig, type PiInfo } from "@/api/piClient"
 import { useUiStore } from "@/stores/ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 
@@ -24,6 +20,18 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const ui = useUiStore()
 
+const remote = ref<RemoteStatus>({ enabled: false, port: 1421, urls: [] })
+const remoteBusy = ref(false)
+async function toggleRemote() {
+  remoteBusy.value = true
+  try {
+    remote.value = await remoteSet(!remote.value.enabled, Number(remote.value.port))
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    remoteBusy.value = false
+  }
+}
 const tab = ref("general")
 const { t } = useI18n()
 const selectedLocale = ref<Locale>(currentLocale())
@@ -43,6 +51,7 @@ watch(
     if (!o) return
     info.value = null
     try {
+      if (isDesktop) remote.value = await remoteStatus()
       const c: AppConfig = await getConfig()
       piPath.value = c.piPath ?? ""
     } catch {
@@ -82,12 +91,12 @@ async function save() {
     <DialogContent class="settings-dialog">
       <nav class="settings-nav" :aria-label="t('settings.nav')">
         <h2>{{ t("settings.title") }}</h2>
+        <button :class="{ active: tab === 'remote' }" @click="tab = 'remote'">
+          {{ t("settings.remote") }}
+        </button>
         <button :class="{ active: tab === 'general' }" @click="tab = 'general'">
           {{ t("settings.general") }}</button
-        ><button
-          :class="{ active: tab === 'runtime' }"
-          @click="tab = 'runtime'"
-        >
+        ><button v-if="isDesktop" :class="{ active: tab === 'runtime' }" @click="tab = 'runtime'">
           {{ t("settings.runtime") }}</button
         ><button :class="{ active: tab === 'about' }" @click="tab = 'about'">
           {{ t("settings.about") }}
@@ -95,12 +104,57 @@ async function save() {
         <p>{{ t("settings.subtitle") }}</p>
       </nav>
       <section class="settings-body">
-        <template v-if="tab === 'general'">
+        <template v-if="tab === 'remote'">
+          <DialogHeader
+            ><DialogTitle>{{ t("settings.remote") }}</DialogTitle
+            ><DialogDescription>{{ t("settings.remoteDesc") }}</DialogDescription></DialogHeader
+          >
+          <p class="text-sm text-amber-600">{{ t("settings.remoteWarning") }}</p>
+          <template v-if="isDesktop">
+            <label class="block text-sm" for="remote-port">{{ t("settings.remotePort") }}</label>
+            <Input
+              id="remote-port"
+              v-model="remote.port"
+              type="number"
+              min="1"
+              max="65535"
+              :disabled="remote.enabled || remoteBusy"
+            />
+            <button
+              class="rounded-md border px-4 py-2 text-sm"
+              :disabled="remoteBusy"
+              :aria-pressed="remote.enabled"
+              @click="toggleRemote"
+            >
+              {{
+                remoteBusy
+                  ? t("settings.saving")
+                  : remote.enabled
+                    ? t("settings.remoteDisable")
+                    : t("settings.remoteEnable")
+              }}
+            </button>
+            <div v-if="remote.enabled" class="space-y-3 text-sm">
+              <p>{{ t("settings.remoteLinks") }}</p>
+              <input
+                v-for="url in remote.urls"
+                :key="url"
+                :value="url"
+                readonly
+                :aria-label="t('settings.remoteLinks')"
+                class="w-full rounded border p-2 font-mono text-xs"
+                @focus="($event.target as HTMLInputElement).select()"
+              />
+              <p v-if="!remote.urls.length">{{ t("settings.remoteNoAddress") }}</p>
+              <p class="text-muted-foreground">{{ t("settings.remoteFirewall") }}</p>
+            </div>
+          </template>
+          <p v-else class="text-sm">{{ t("settings.remoteDesktopOnly") }}</p>
+        </template>
+        <template v-else-if="tab === 'general'">
           <DialogHeader
             ><DialogTitle>{{ t("settings.generalTitle") }}</DialogTitle
-            ><DialogDescription
-              >{{ t("settings.generalDesc") }}</DialogDescription
-            ></DialogHeader
+            ><DialogDescription>{{ t("settings.generalDesc") }}</DialogDescription></DialogHeader
           >
           <div class="setting-row">
             <div>
@@ -135,9 +189,10 @@ async function save() {
               <h3>{{ t("settings.shortcutsTitle") }}</h3>
               <p>
                 {{ t("settings.shortcutSend") }} <kbd>Enter</kbd> ·
-                {{ t("settings.shortcutNewline") }} <kbd>Shift + Enter</kbd
-                ><br />{{ t("settings.shortcutStop") }} <kbd>Esc</kbd> ·
-                {{ t("settings.shortcutFileRef") }} <kbd>@</kbd> ·
+                {{ t("settings.shortcutNewline") }} <kbd>Shift + Enter</kbd><br />{{
+                  t("settings.shortcutStop")
+                }}
+                <kbd>Esc</kbd> · {{ t("settings.shortcutFileRef") }} <kbd>@</kbd> ·
                 {{ t("settings.shortcutCommands") }} <kbd>/</kbd>
               </p>
             </div>
@@ -146,9 +201,7 @@ async function save() {
         <template v-else-if="tab === 'about'">
           <DialogHeader
             ><DialogTitle>{{ t("settings.aboutTitle") }}</DialogTitle
-            ><DialogDescription
-              >{{ t("settings.aboutDesc") }}</DialogDescription
-            ></DialogHeader
+            ><DialogDescription>{{ t("settings.aboutDesc") }}</DialogDescription></DialogHeader
           >
           <div class="setting-row">
             <div>
@@ -163,15 +216,13 @@ async function save() {
         <template v-else>
           <DialogHeader>
             <DialogTitle>{{ t("settings.runtimeTitle") }}</DialogTitle
-            ><DialogDescription
-              >{{ t("settings.runtimeDesc") }}</DialogDescription
-            >
+            ><DialogDescription>{{ t("settings.runtimeDesc") }}</DialogDescription>
           </DialogHeader>
 
           <div class="flex flex-col gap-3">
-            <label for="pi-executable" class="text-sm font-medium"
-              >{{ t("settings.piPath") }}</label
-            >
+            <label for="pi-executable" class="text-sm font-medium">{{
+              t("settings.piPath")
+            }}</label>
             <Input
               id="pi-executable"
               v-model="piPath"
@@ -194,11 +245,12 @@ async function save() {
                 <template v-if="info.found">
                   <span class="text-chart-2 font-medium">{{ t("settings.found") }}</span>
                   <span class="text-muted-foreground">
-                    · {{ info.path
-                    }}{{ info.version ? ` · ${info.version}` : "" }}</span
+                    · {{ info.path }}{{ info.version ? ` · ${info.version}` : "" }}</span
                   >
                 </template>
-                <span v-else class="text-destructive font-medium">{{ t("settings.notFound") }}</span>
+                <span v-else class="text-destructive font-medium">{{
+                  t("settings.notFound")
+                }}</span>
               </span>
             </div>
 

@@ -97,6 +97,17 @@ export default {
   },
 
   settings: {
+    remote: "LAN access",
+    remoteDesc: "Use this computer's Pi from a browser on the same network. Disabling disconnects remote clients immediately.",
+    remoteWarning: "The link contains an access key granting control of Pi, file access and command execution. Use trusted networks only: HTTP is not encrypted. Never expose this port to the internet. Desktop and browser share one session; avoid simultaneous operations.",
+    remotePort: "Listen port",
+    remoteEnable: "Enable LAN access",
+    remoteDisable: "Disable LAN access",
+    remoteLinks: "Access links (select and copy to another device)",
+    remoteNoAddress: "No LAN IPv4 address found. Check your network connection.",
+    remoteFirewall: "Keep the desktop app running and allow this port through the firewall on private networks. Re-enabling invalidates old links.",
+    remoteDesktopOnly: "Manage LAN access in the desktop app settings.",
+    remoteProject: "Enter an absolute project path on the host computer (not this device)",
     nav: "Settings sections",
     title: "Settings",
     subtitle: "Your local AI workspace",

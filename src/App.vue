@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   detectPi,
+  piRunning,
   getConfig,
   killPi,
   onPiEvent,
@@ -14,6 +15,7 @@ import {
   trustSave,
   trustStatus,
 } from "@/api/piClient"
+import { isDesktop } from "@/api/transport"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
@@ -24,8 +26,7 @@ import SettingsDialog from "@/components/SettingsDialog.vue"
 import { PanelLeft } from "@lucide/vue"
 import ChatView from "@/components/ChatView.vue"
 
-type Phase =
-  "detecting" | "no-pi" | "pick" | "trust" | "starting" | "chat" | "down"
+type Phase = "detecting" | "no-pi" | "pick" | "trust" | "starting" | "chat" | "down"
 
 const session = useSessionStore()
 const ui = useUiStore()
@@ -53,35 +54,52 @@ onMounted(async () => {
     config.value = {}
   }
 
-  const handlers = await Promise.all([
-    onPiEvent((ev) => {
-      if (ev.type === "extension_ui_request") {
-        ui.handleRequest(ev as any)
-        return
-      }
-      session.handleEvent(ev)
-    }),
-    onPiExit(() => {
-      if (phase.value === "chat" || phase.value === "starting")
+  try {
+    const handlers = await Promise.all([
+      onPiEvent((ev) => {
+        if (ev.type === "extension_ui_request") {
+          ui.handleRequest(ev as any)
+          return
+        }
+        session.handleEvent(ev)
+      }),
+      onPiExit(() => {
+        if (phase.value === "chat" || phase.value === "starting") phase.value = "down"
+      }),
+      onPiStderr((line) => ui.pushStderr(line)),
+    ])
+    if (disposed) {
+      handlers.forEach((off) => off())
+      return
+    }
+    unlisteners = handlers
+
+    if (!isDesktop && (await piRunning())) {
+      try {
+        project.value = config.value.lastProject ?? ""
+        started = true
+        await session.init(project.value)
+        await session.loadHistory()
+        phase.value = "chat"
+      } catch (e) {
+        lastError.value = String(e)
         phase.value = "down"
-    }),
-    onPiStderr((line) => ui.pushStderr(line)),
-  ])
-  if (disposed) {
-    handlers.forEach((off) => off())
-    return
-  }
-  unlisteners = handlers
+      }
+      return
+    }
+    // auto-resume last project on launch
+    if (config.value.lastProject) {
+      project.value = config.value.lastProject
+      await selectProject(project.value)
+      return
+    }
 
-  // auto-resume last project on launch
-  if (config.value.lastProject) {
-    project.value = config.value.lastProject
-    await selectProject(project.value)
-    return
+    const info = await detectPi(config.value.piPath)
+    phase.value = info.found ? "pick" : "no-pi"
+  } catch (e) {
+    lastError.value = String(e)
+    phase.value = "down"
   }
-
-  const info = await detectPi(config.value.piPath)
-  phase.value = info.found ? "pick" : "no-pi"
 })
 
 async function selectProject(dir: string) {
@@ -104,8 +122,7 @@ async function selectProject(dir: string) {
 }
 
 async function onTrustDecision(trusted: boolean, trustParent: boolean) {
-  if (trustInfo.value)
-    await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
+  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
   if (trusted) await start()
   else phase.value = "pick"
 }
@@ -242,22 +259,16 @@ onUnmounted(() => {
         class="flex flex-1 flex-col items-center justify-center gap-4 p-8"
       >
         <p class="text-lg font-medium">{{ t("app.exited") }}</p>
-        <p
-          v-if="lastError"
-          class="text-muted-foreground max-w-xl text-center font-mono text-xs"
-        >
+        <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
           {{ lastError }}
         </p>
-        <div
-          v-if="ui.stderrLines.length"
-          class="bg-muted w-full max-w-2xl rounded-md p-3"
-        >
+        <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
           <p class="text-muted-foreground mb-1 text-xs font-medium">
             {{ t("app.stderr") }}
           </p>
-          <pre
-            class="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap"
-            >{{ ui.stderrLines.slice(-12).join("\n") }}</pre>
+          <pre class="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap">{{
+            ui.stderrLines.slice(-12).join("\n")
+          }}</pre>
         </div>
         <div class="flex gap-2">
           <button
@@ -277,9 +288,7 @@ onUnmounted(() => {
     </main>
     <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
     <!-- global toasts -->
-    <div
-      class="pointer-events-none fixed right-4 bottom-4 z-50 flex flex-col gap-2"
-    >
+    <div class="pointer-events-none fixed right-4 bottom-4 z-50 flex flex-col gap-2">
       <div
         v-for="t in ui.toasts"
         :key="t.id"

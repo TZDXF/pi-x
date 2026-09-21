@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -156,7 +156,7 @@ pub async fn spawn(
             // stdout closed => process exited (or is gone).
             // Only surface it if this reader still belongs to the current session.
             if generation.load(Ordering::Relaxed) == own_gen {
-                let _ = app.emit(EXIT_EVENT, json!({}));
+                crate::remote::emit(&app, EXIT_EVENT, json!({}));
             }
         });
     }
@@ -181,7 +181,7 @@ pub async fn spawn(
                     }
                     let text = String::from_utf8_lossy(&line).to_string();
                     if !text.is_empty() {
-                        let _ = app.emit(STDERR_EVENT, json!({ "line": text }));
+                        crate::remote::emit(&app, STDERR_EVENT, json!({ "line": text }));
                     }
                 }
             }
@@ -207,7 +207,7 @@ async fn dispatch(app: &AppHandle, pending: &PendingMap, value: Value) {
         }
         return;
     }
-    let _ = app.emit(EVENT, value);
+    crate::remote::emit(app, EVENT, value);
 }
 
 async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {

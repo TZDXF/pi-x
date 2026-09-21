@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
+import { invoke, listen } from "./transport"
 import type { ExtensionUiResponse, RpcResponse } from "./protocol"
 
 // ---- process / config commands (Rust side) ----
@@ -91,3 +90,7 @@ export function onPiExit(handler: () => void): Promise<() => void> {
 export function onPiStderr(handler: (line: string) => void): Promise<() => void> {
   return listen<{ line: string }>("pi://stderr", e => handler(e.payload.line))
 }
+
+export interface RemoteStatus { enabled: boolean; port: number; urls: string[] }
+export const remoteStatus = () => invoke<RemoteStatus>("remote_status")
+export const remoteSet = (enabled: boolean, port: number) => invoke<RemoteStatus>("remote_set", { enabled, port })

@@ -97,6 +97,17 @@ export default {
   },
 
   settings: {
+    remote: "局域网访问",
+    remoteDesc: "开启后，同一局域网内的设备可通过浏览器使用此电脑上的 Pi。关闭后立即断开远程连接。",
+    remoteWarning: "访问链接包含密钥，持有者可控制本机 Pi、读写文件及执行命令。仅在可信局域网开启；HTTP 不加密，请勿暴露到公网。桌面和网页共享同一个会话，请避免同时操作。",
+    remotePort: "监听端口",
+    remoteEnable: "开启局域网访问",
+    remoteDisable: "关闭局域网访问",
+    remoteLinks: "访问链接（点击全选后复制到其他设备）",
+    remoteNoAddress: "未检测到局域网 IPv4 地址，请检查网络连接。",
+    remoteFirewall: "请保持桌面应用运行，并允许该端口通过系统防火墙（专用网络）。重新开启后旧链接失效。",
+    remoteDesktopOnly: "请在桌面端设置中管理局域网访问。",
+    remoteProject: "请输入主机上的项目目录绝对路径（不是当前设备上的目录）",
     nav: "设置分类",
     title: "设置",
     subtitle: "你的本地 AI 工作区",
