@@ -80,7 +80,7 @@ export default {
     files: "文件",
     noMatchingCommand: "没有匹配的命令。",
     commands: "命令",
-    inputPlaceholder: "向 Pi 提问，@ 引用文件，/ 使用命令…",
+    inputPlaceholder: "向 Pi 提问，{'@'} 引用文件，/ 使用命令…",
     attachImage: "插入图片",
     selectModel: "选择模型",
     thinkingLevel: "推理",

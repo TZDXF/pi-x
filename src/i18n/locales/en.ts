@@ -80,7 +80,7 @@ export default {
     files: "Files",
     noMatchingCommand: "No matching command.",
     commands: "Commands",
-    inputPlaceholder: "Ask Pi, @ to reference files, / for commands…",
+    inputPlaceholder: "Ask Pi, {'@'} to reference files, / for commands…",
     attachImage: "Attach image",
     selectModel: "Select model",
     thinkingLevel: "Thinking",
