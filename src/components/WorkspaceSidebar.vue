@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
 import {
   Folder,
   FolderPlus,
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 }>()
 const session = useSessionStore()
 const ui = useUiStore()
+const { t, locale } = useI18n()
 const recentProjects = ref<string[]>([])
 try {
   const stored: unknown = JSON.parse(
@@ -43,7 +45,7 @@ const expanded = ref(true)
 const error = ref("")
 let request = 0
 const projectName = computed(
-  () => props.project.split(/[\\/]/).filter(Boolean).pop() || "未打开项目",
+  () => props.project.split(/[\\/]/).filter(Boolean).pop() || t("common.noProject"),
 )
 const filtered = computed(() =>
   history.value.filter((s) =>
@@ -65,7 +67,7 @@ async function refresh() {
     if (id === request)
       history.value = rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
   } catch {
-    if (id === request) error.value = "无法加载会话，请重试"
+    if (id === request) error.value = t("sidebar.loadFailed")
   } finally {
     if (id === request) loading.value = false
   }
@@ -82,7 +84,7 @@ function dateLabel(s: SessionMeta) {
   const date = new Date(s.timestamp || s.mtimeMs)
   return Number.isNaN(date.getTime())
     ? ""
-    : date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" })
+    : date.toLocaleDateString(locale.value, { month: "short", day: "numeric" })
 }
 watch(
   () => props.project,
@@ -115,14 +117,14 @@ watch(
 </script>
 
 <template>
-  <aside class="workspace-sidebar" aria-label="项目与会话">
+  <aside class="workspace-sidebar" :aria-label="t('sidebar.ariaLabel')">
     <div class="sidebar-brand">
       <span class="brand-mark">P</span
       ><span>Pi <span class="text-muted-foreground">X</span></span
       ><button
         class="icon-button ml-auto"
-        aria-label="收起侧栏"
-        title="收起侧栏"
+        :aria-label="t('sidebar.collapse')"
+        :title="t('sidebar.collapse')"
         @click="emit('collapse')"
       >
         <PanelLeft :size="17" />
@@ -133,21 +135,21 @@ watch(
       :disabled="!ready || session.isStreaming"
       @click="newSession"
     >
-      <Plus :size="17" />新会话
+      <Plus :size="17" />{{ t("sidebar.newSession") }}
     </button>
     <label class="sidebar-search"
       ><Search :size="15" /><input
         v-model="query"
-        placeholder="搜索会话"
-        aria-label="搜索会话"
+        :placeholder="t('sidebar.search')"
+        :aria-label="t('sidebar.search')"
     /></label>
     <div class="sidebar-section-label">
-      <span>项目</span
+      <span>{{ t("sidebar.projects") }}</span
       ><button
         class="icon-button"
         :disabled="busy || session.isStreaming"
-        title="打开项目"
-        aria-label="打开项目"
+        :title="t('sidebar.openProject')"
+        :aria-label="t('sidebar.openProject')"
         @click="emit('switchProject')"
       >
         <FolderPlus :size="15" />
@@ -165,11 +167,11 @@ watch(
     </button>
     <div v-if="expanded" class="session-list">
       <div class="sidebar-section-label">
-        <span>会话</span
+        <span>{{ t("sidebar.sessions") }}</span
         ><button
           class="icon-button"
-          aria-label="刷新会话"
-          title="刷新会话"
+          :aria-label="t('sidebar.refresh')"
+          :title="t('sidebar.refresh')"
           :disabled="loading"
           @click="refresh"
         >
@@ -177,14 +179,14 @@ watch(
         </button>
       </div>
       <p v-if="loading && !history.length" class="sidebar-empty">
-        正在加载会话…
+        {{ t("sidebar.loading") }}
       </p>
       <button
         v-if="ready && !history.some((s) => s.file === session.sessionFile)"
         class="session-row active"
         @click="query = ''"
       >
-        <MessageSquare :size="14" /><span class="truncate">当前会话</span>
+        <MessageSquare :size="14" /><span class="truncate">{{ t("sidebar.currentSession") }}</span>
       </button>
       <button
         v-for="s in filtered"
@@ -197,7 +199,7 @@ watch(
         @click="emit('resumeSession', s.file)"
       >
         <MessageSquare :size="14" /><span class="truncate">{{
-          s.preview || "未命名会话"
+          s.preview || t("sidebar.untitled")
         }}</span
         ><time>{{ dateLabel(s) }}</time>
       </button>
@@ -205,8 +207,8 @@ watch(
       <p v-else-if="!loading && !filtered.length" class="sidebar-empty">
         {{
           query
-            ? "没有匹配的会话"
-            : "从一个新会话开始。历史记录会保存在此项目下。"
+            ? t("sidebar.noMatch")
+            : t("sidebar.emptyHint")
         }}
       </p>
     </div>
@@ -214,7 +216,7 @@ watch(
       class="recent-projects"
       v-if="recentProjects.some((p) => p !== project)"
     >
-      <div class="sidebar-section-label">最近项目</div>
+      <div class="sidebar-section-label">{{ t("sidebar.recentProjects") }}</div>
       <button
         v-for="path in recentProjects.filter((p) => p !== project)"
         :key="path"
@@ -230,13 +232,13 @@ watch(
     </div>
     <div class="sidebar-footer">
       <button class="sidebar-action" @click="emit('settings')">
-        <Settings :size="17" />设置
+        <Settings :size="17" />{{ t("sidebar.settings") }}
       </button>
       <div class="sidebar-runtime">
         <span
           :class="ready ? 'bg-emerald-500' : 'bg-muted-foreground'"
           class="size-1.5 rounded-full"
-        />{{ ready ? "Pi 已连接" : "本地工作区"
+        />{{ ready ? t("sidebar.piConnected") : t("common.localWorkspace")
         }}<span class="ml-auto">Pi X</span>
       </div>
     </div>

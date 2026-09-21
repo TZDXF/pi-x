@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue"
+import { useI18n } from "vue-i18n"
 import {
   detectPi,
   getConfig,
@@ -28,6 +29,7 @@ type Phase =
 
 const session = useSessionStore()
 const ui = useUiStore()
+const { t } = useI18n()
 
 const sidebarOpen = ref(true)
 const settingsOpen = ref(false)
@@ -154,7 +156,7 @@ async function resumeSession(file: string) {
           sessionPath: file,
         })
         if (res.success && res.data?.cancelled) {
-          ui.pushToast("Session switch cancelled by an extension", "info")
+          ui.pushToast(t("app.toastSessionCancelled"), "info")
           phase.value = "chat"
           return
         }
@@ -202,8 +204,8 @@ onUnmounted(() => {
       <button
         v-if="!sidebarOpen"
         class="sidebar-restore icon-button"
-        title="展开侧栏"
-        aria-label="展开侧栏"
+        :title="t('app.expandSidebar')"
+        :aria-label="t('app.expandSidebar')"
         @click="sidebarOpen = true"
       >
         <PanelLeft :size="18" />
@@ -228,7 +230,7 @@ onUnmounted(() => {
         class="flex flex-1 items-center justify-center gap-3 text-muted-foreground"
       >
         <span class="size-2 animate-pulse rounded-full bg-primary" />
-        <span>Starting pi…</span>
+        <span>{{ t("app.starting") }}</span>
       </div>
 
       <template v-else-if="phase === 'chat'">
@@ -239,7 +241,7 @@ onUnmounted(() => {
         v-else-if="phase === 'down'"
         class="flex flex-1 flex-col items-center justify-center gap-4 p-8"
       >
-        <p class="text-lg font-medium">pi process exited</p>
+        <p class="text-lg font-medium">{{ t("app.exited") }}</p>
         <p
           v-if="lastError"
           class="text-muted-foreground max-w-xl text-center font-mono text-xs"
@@ -251,7 +253,7 @@ onUnmounted(() => {
           class="bg-muted w-full max-w-2xl rounded-md p-3"
         >
           <p class="text-muted-foreground mb-1 text-xs font-medium">
-            pi stderr (last lines)
+            {{ t("app.stderr") }}
           </p>
           <pre
             class="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap"
@@ -262,13 +264,13 @@ onUnmounted(() => {
             class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
             @click="restartPi"
           >
-            Restart
+            {{ t("app.restart") }}
           </button>
           <button
             class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
             @click="switchProject"
           >
-            Choose another project
+            {{ t("app.chooseProject") }}
           </button>
         </div>
       </div>

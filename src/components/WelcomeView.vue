@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue"
+import { useI18n } from "vue-i18n"
 import { open } from "@tauri-apps/plugin-dialog"
 import { detectPi, saveConfig } from "@/api/piClient"
 import type { AppConfig, PiInfo } from "@/api/piClient"
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 const customPath = ref(props.config.piPath ?? "")
 const info = ref<PiInfo | null>(null)
 const busy = ref(false)
+const { t } = useI18n()
 
 async function saveAndDetect() {
   busy.value = true
@@ -30,7 +32,7 @@ async function saveAndDetect() {
 }
 
 async function pickFolder() {
-  const dir = await open({ directory: true, title: "Open a project folder" })
+  const dir = await open({ directory: true, title: t("welcome.openFolderTitle") })
   if (typeof dir === "string") emit("projectSelected", dir)
 }
 </script>
@@ -40,25 +42,26 @@ async function pickFolder() {
     <div class="w-full max-w-xl space-y-8">
       <div class="space-y-2 text-center">
         <h1 class="text-3xl font-semibold tracking-tight">Pi X</h1>
-        <p class="text-muted-foreground text-sm">你的本地 AI 编程工作区</p>
+        <p class="text-muted-foreground text-sm">{{ t("welcome.subtitle") }}</p>
       </div>
 
       <p
         v-if="phase === 'detecting'"
         class="text-center text-sm text-muted-foreground animate-pulse"
       >
-        正在连接本地运行环境…
+        {{ t("welcome.connecting") }}
       </p>
 
       <!-- pi not found: install guidance -->
       <div v-if="phase === 'no-pi'" class="space-y-4 rounded-lg border p-5">
         <div>
-          <h2 class="font-medium">pi CLI not found</h2>
+          <h2 class="font-medium">{{ t("welcome.noPiTitle") }}</h2>
           <p class="text-muted-foreground mt-1 text-sm">
-            Pi X drives
-            <code class="bg-muted rounded px-1">pi --mode rpc</code> as a child
-            process. Install the pi CLI (requires Node.js), or point Pi X at an
-            existing binary below.
+            {{
+              t("welcome.noPiDesc", {
+                code: "pi --mode rpc",
+              })
+            }}
           </p>
         </div>
         <div
@@ -72,7 +75,7 @@ async function pickFolder() {
         <div class="flex gap-2">
           <input
             v-model="customPath"
-            placeholder="Custom pi path, e.g. C:\Users\you\AppData\Roaming\npm\pi.cmd"
+            :placeholder="t('welcome.pathPlaceholder')"
             class="border-input ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring h-9 flex-1 rounded-md border bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
           />
           <button
@@ -80,7 +83,7 @@ async function pickFolder() {
             class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 text-sm disabled:opacity-50"
             @click="saveAndDetect"
           >
-            {{ busy ? "Checking…" : "Use this path" }}
+            {{ busy ? t("welcome.checking") : t("welcome.usePath") }}
           </button>
         </div>
       </div>
@@ -90,7 +93,7 @@ async function pickFolder() {
         <div class="flex items-center gap-2">
           <span class="size-2 rounded-full bg-green-500" />
           <span class="text-sm">
-            Pi 已就绪
+            Pi {{ t("welcome.ready") }}
             <span v-if="info?.version" class="text-muted-foreground"
               >({{ info.version }})</span
             >
@@ -100,10 +103,10 @@ async function pickFolder() {
           class="bg-primary text-primary-foreground hover:bg-primary/90 w-full rounded-md py-3 text-sm font-medium"
           @click="pickFolder"
         >
-          打开项目文件夹…
+          {{ t("welcome.openFolder") }}
         </button>
         <p class="text-muted-foreground text-center text-xs">
-          选择一个项目，开始探索代码或构建新的想法。
+          {{ t("welcome.pickHint") }}
         </p>
       </div>
     </div>

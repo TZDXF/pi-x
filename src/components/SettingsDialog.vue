@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** Categorized workspace settings and Pi runtime configuration. */
 import { ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
 import {
   Dialog,
   DialogContent,
@@ -17,12 +18,20 @@ import {
   type PiInfo,
 } from "@/api/piClient"
 import { useUiStore } from "@/stores/ui"
+import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const ui = useUiStore()
 
 const tab = ref("general")
+const { t } = useI18n()
+const selectedLocale = ref<Locale>(currentLocale())
+
+function applyLocale(v: Locale) {
+  selectedLocale.value = v
+  setLocale(v)
+}
 const piPath = ref("")
 const info = ref<PiInfo | null>(null)
 const detecting = ref(false)
@@ -58,7 +67,7 @@ async function save() {
   try {
     const c: AppConfig = await getConfig()
     await saveConfig({ ...c, piPath: piPath.value.trim() || undefined })
-    ui.pushToast("已保存，重启会话后生效", "info")
+    ui.pushToast(t("settings.toastSaved"), "info")
     emit("close")
   } catch (e) {
     ui.pushToast(String(e), "error")
@@ -71,93 +80,106 @@ async function save() {
 <template>
   <Dialog :open="props.open" @update:open="(v: boolean) => !v && emit('close')">
     <DialogContent class="settings-dialog">
-      <nav class="settings-nav" aria-label="设置分类">
-        <h2>设置</h2>
+      <nav class="settings-nav" :aria-label="t('settings.nav')">
+        <h2>{{ t("settings.title") }}</h2>
         <button :class="{ active: tab === 'general' }" @click="tab = 'general'">
-          常规</button
+          {{ t("settings.general") }}</button
         ><button
           :class="{ active: tab === 'runtime' }"
           @click="tab = 'runtime'"
         >
-          运行环境</button
+          {{ t("settings.runtime") }}</button
         ><button :class="{ active: tab === 'about' }" @click="tab = 'about'">
-          关于 Pi X
+          {{ t("settings.about") }}
         </button>
-        <p>你的本地 AI 工作区</p>
+        <p>{{ t("settings.subtitle") }}</p>
       </nav>
       <section class="settings-body">
         <template v-if="tab === 'general'">
           <DialogHeader
-            ><DialogTitle>常规</DialogTitle
+            ><DialogTitle>{{ t("settings.generalTitle") }}</DialogTitle
             ><DialogDescription
-              >工作区与对话的使用方式。</DialogDescription
+              >{{ t("settings.generalDesc") }}</DialogDescription
             ></DialogHeader
           >
           <div class="setting-row">
             <div>
-              <h3>本地工作区</h3>
-              <p>在左侧打开项目文件夹，Pi 将在该目录中运行。</p>
+              <h3>{{ t("settings.language") }}</h3>
+              <p>{{ t("settings.languageDesc") }}</p>
             </div>
-            <span class="setting-badge">本地</span>
+            <select
+              class="border-input bg-background h-8 rounded-md border px-2 text-xs"
+              :value="selectedLocale"
+              @change="applyLocale(($event.target as HTMLSelectElement).value as Locale)"
+            >
+              <option v-for="l in LOCALES" :key="l.value" :value="l.value">
+                {{ l.label }}
+              </option>
+            </select>
           </div>
           <div class="setting-row">
             <div>
-              <h3>项目与会话</h3>
-              <p>历史会话按项目保存，重启后自动打开上次的项目。</p>
+              <h3>{{ t("settings.workspaceTitle") }}</h3>
+              <p>{{ t("settings.workspaceDesc") }}</p>
+            </div>
+            <span class="setting-badge">{{ t("settings.workspaceBadge") }}</span>
+          </div>
+          <div class="setting-row">
+            <div>
+              <h3>{{ t("settings.sessionsTitle") }}</h3>
+              <p>{{ t("settings.sessionsDesc") }}</p>
             </div>
           </div>
           <div class="setting-row">
             <div>
-              <h3>键盘快捷操作</h3>
+              <h3>{{ t("settings.shortcutsTitle") }}</h3>
               <p>
-                发送消息 <kbd>Enter</kbd> · 换行 <kbd>Shift + Enter</kbd
-                ><br />停止生成 <kbd>Esc</kbd> · 文件引用 <kbd>@</kbd> · 命令
-                <kbd>/</kbd>
+                {{ t("settings.shortcutSend") }} <kbd>Enter</kbd> ·
+                {{ t("settings.shortcutNewline") }} <kbd>Shift + Enter</kbd
+                ><br />{{ t("settings.shortcutStop") }} <kbd>Esc</kbd> ·
+                {{ t("settings.shortcutFileRef") }} <kbd>@</kbd> ·
+                {{ t("settings.shortcutCommands") }} <kbd>/</kbd>
               </p>
             </div>
           </div>
         </template>
         <template v-else-if="tab === 'about'">
           <DialogHeader
-            ><DialogTitle>关于 Pi X</DialogTitle
+            ><DialogTitle>{{ t("settings.aboutTitle") }}</DialogTitle
             ><DialogDescription
-              >专注于代码与创造的桌面 AI 工作区。</DialogDescription
+              >{{ t("settings.aboutDesc") }}</DialogDescription
             ></DialogHeader
           >
           <div class="setting-row">
             <div>
               <h3>Pi X</h3>
-              <p>
-                基于 pi coding agent
-                的桌面客户端。支持流式对话、工具调用、会话分支和项目上下文。
-              </p>
+              <p>{{ t("settings.aboutBody") }}</p>
             </div>
           </div>
           <p class="text-muted-foreground mt-6 text-xs">
-            模型与推理强度可在对话输入框下方切换。
+            {{ t("settings.aboutHint") }}
           </p>
         </template>
         <template v-else>
           <DialogHeader>
-            <DialogTitle>运行环境</DialogTitle
+            <DialogTitle>{{ t("settings.runtimeTitle") }}</DialogTitle
             ><DialogDescription
-              >配置 Pi 可执行文件与连接环境。</DialogDescription
+              >{{ t("settings.runtimeDesc") }}</DialogDescription
             >
           </DialogHeader>
 
           <div class="flex flex-col gap-3">
             <label for="pi-executable" class="text-sm font-medium"
-              >Pi 可执行文件路径</label
+              >{{ t("settings.piPath") }}</label
             >
             <Input
               id="pi-executable"
               v-model="piPath"
-              placeholder="留空时自动从 PATH 检测"
+              :placeholder="t('settings.piPathPlaceholder')"
               class="font-mono text-xs"
             />
             <p class="text-muted-foreground text-xs">
-              Windows 下会自动解析 npm
-              <code>.cmd</code> 启动脚本。修改将在重启会话后生效。
+              {{ t("settings.piPathHint", { cmd: ".cmd" }) }}
             </p>
 
             <div class="flex items-center gap-2">
@@ -166,17 +188,17 @@ async function save() {
                 :disabled="detecting"
                 @click="detect"
               >
-                {{ detecting ? "检测中…" : "检测" }}
+                {{ detecting ? t("settings.detecting") : t("settings.detect") }}
               </button>
               <span v-if="info" class="text-xs">
                 <template v-if="info.found">
-                  <span class="text-chart-2 font-medium">已找到</span>
+                  <span class="text-chart-2 font-medium">{{ t("settings.found") }}</span>
                   <span class="text-muted-foreground">
                     · {{ info.path
                     }}{{ info.version ? ` · ${info.version}` : "" }}</span
                   >
                 </template>
-                <span v-else class="text-destructive font-medium">未找到</span>
+                <span v-else class="text-destructive font-medium">{{ t("settings.notFound") }}</span>
               </span>
             </div>
 
@@ -185,14 +207,14 @@ async function save() {
                 class="border-input hover:bg-accent rounded-md border px-3 py-1.5 text-xs"
                 @click="emit('close')"
               >
-                取消
+                {{ t("common.cancel") }}
               </button>
               <button
                 class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-xs"
                 :disabled="saving"
                 @click="save"
               >
-                {{ saving ? "保存中…" : "保存更改" }}
+                {{ saving ? t("settings.saving") : t("settings.save") }}
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
 import { useUiStore } from "@/stores/ui"
 
 const ui = useUiStore()
+const { t } = useI18n()
 const input = ref("")
 const editing = ref("")
 
@@ -64,13 +66,13 @@ function confirm(confirmed: boolean) {
           class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
           @click="confirm(false)"
         >
-          No
+          {{ t("ext.no") }}
         </button>
         <button
           class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
           @click="confirm(true)"
         >
-          Yes
+          {{ t("ext.yes") }}
         </button>
       </DialogFooter>
 
@@ -87,13 +89,13 @@ function confirm(confirmed: boolean) {
             class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
             @click="ui.respond(active, { cancelled: true })"
           >
-            Cancel
+            {{ t("ext.cancel") }}
           </button>
           <button
             class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
             @click="submitValue(input)"
           >
-            OK
+            {{ t("ext.ok") }}
           </button>
         </DialogFooter>
       </div>
@@ -110,13 +112,13 @@ function confirm(confirmed: boolean) {
             class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
             @click="ui.respond(active, { cancelled: true })"
           >
-            Cancel
+            {{ t("ext.cancel") }}
           </button>
           <button
             class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
             @click="submitValue(editing)"
           >
-            Save
+            {{ t("ext.save") }}
           </button>
         </DialogFooter>
       </div>

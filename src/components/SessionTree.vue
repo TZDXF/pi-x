@@ -7,6 +7,7 @@
  * highlighted and user-message nodes can be forked from.
  */
 import { computed, ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
 import { rpcRequest } from "@/api/piClient"
 import { useUiStore } from "@/stores/ui"
 import SessionTreeNode from "./SessionTreeNode.vue"
@@ -24,6 +25,7 @@ interface TreeNode {
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ fork: [id: string], close: [] }>()
 const ui = useUiStore()
+const { t } = useI18n()
 
 const nodes = ref<TreeNode[]>([])
 const leafId = ref<string | null>(null)
@@ -85,10 +87,10 @@ const activeIds = computed(() => {
 <template>
   <div class="relative">
     <p v-if="loading" class="text-muted-foreground px-1 py-4 text-center text-xs">
-      Loading tree…
+      {{ t("tree.loading") }}
     </p>
     <p v-else-if="!nodes.length" class="text-muted-foreground px-1 py-4 text-center text-xs">
-      Empty session.
+      {{ t("tree.empty") }}
     </p>
     <template v-else>
       <div class="flex flex-col gap-0.5">
@@ -102,7 +104,7 @@ const activeIds = computed(() => {
         />
       </div>
       <p class="text-muted-foreground mt-3 text-[11px]">
-        {{ nodeCount }} entries · click a user node to fork the conversation from that point.
+        {{ t("tree.entriesHint", { count: nodeCount }) }}
       </p>
     </template>
   </div>

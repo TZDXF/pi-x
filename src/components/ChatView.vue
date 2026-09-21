@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
 import {
   Conversation,
   ConversationContent,
@@ -60,6 +61,7 @@ import { Copy } from "@lucide/vue"
 
 const session = useSessionStore()
 const ui = useUiStore()
+const { t } = useI18n()
 
 const props = defineProps<{ project: string }>()
 
@@ -174,13 +176,13 @@ async function doFork(entryId: string) {
     })
     if (!res.success) throw new Error(res.error ?? "fork failed")
     if (res.data?.cancelled) {
-      ui.pushToast("Fork cancelled by an extension", "info")
+      ui.pushToast(t("chat.toastForkCancelled"), "info")
       return
     }
     session.clear()
     await session.refreshState()
     await session.loadHistory()
-    ui.pushToast("Forked from earlier prompt", "info")
+    ui.pushToast(t("chat.toastForked"), "info")
   } catch (e) {
     ui.pushToast(String(e), "error")
   }
@@ -196,7 +198,7 @@ async function exportSession() {
     if (!res.success || !res.data?.path)
       throw new Error(res.error || "export failed")
     await openPath(res.data.path)
-    ui.pushToast("Session exported", "info")
+    ui.pushToast(t("chat.toastExported"), "info")
   } catch (e) {
     ui.pushToast(String(e), "error")
   } finally {
@@ -211,10 +213,10 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
     .join("\n\n")
 }
 
-async function copyText(t: string) {
+async function copyText(text: string) {
   try {
-    await navigator.clipboard.writeText(t)
-    ui.pushToast("Copied", "info")
+    await navigator.clipboard.writeText(text)
+    ui.pushToast(t("chat.toastCopied"), "info")
   } catch (e) {
     ui.pushToast(String(e), "error")
   }
@@ -307,11 +309,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <header class="workspace-header">
       <div class="min-w-0">
         <h1 class="truncate text-sm font-medium">
-          {{ session.entries.find((e) => e.kind === "user")?.text || "新会话" }}
+          {{ session.entries.find((e) => e.kind === "user")?.text || t("chat.newSession") }}
         </h1>
         <p class="text-muted-foreground truncate text-xs">
           {{ project.split(/[\\/]/).filter(Boolean).pop() }}
-          <span class="mx-1">/</span> 本地工作区
+          <span class="mx-1">/</span> {{ t("common.localWorkspace") }}
         </p>
       </div>
       <div class="header-actions">
@@ -319,23 +321,23 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           session.retryInfo
         }}</span>
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
-          >正在压缩…</span
+          >{{ t("chat.compacting") }}</span
         >
-        <button class="quiet-button" @click="treeOpen = true">会话树</button>
-        <button class="quiet-button" @click="openFork">分支</button>
+        <button class="quiet-button" @click="treeOpen = true">{{ t("chat.sessionTree") }}</button>
+        <button class="quiet-button" @click="openFork">{{ t("chat.fork") }}</button>
         <button
           class="quiet-button"
           :disabled="exporting"
           @click="exportSession"
         >
-          {{ exporting ? "导出中…" : "导出" }}
+          {{ exporting ? t("chat.exporting") : t("chat.export") }}
         </button>
         <button
           class="quiet-button"
           :disabled="session.isStreaming"
           @click="session.compact()"
         >
-          压缩上下文
+          {{ t("chat.compactContext") }}
         </button>
       </div>
     </header>
@@ -348,8 +350,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <ConversationEmptyState
           class="chat-empty"
           v-if="session.entries.length === 0"
-          title="今天想构建什么？"
-          description="探索代码、解决问题，或将一个想法变成现实。"
+          :title="t('chat.emptyTitle')"
+          :description="t('chat.emptyDesc')"
         />
 
         <template v-for="entry in session.entries" :key="entry.id">
@@ -405,7 +407,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           class="text-muted-foreground flex items-center gap-2 text-sm"
         >
           <Loader />
-          <span>thinking…</span>
+          <span>{{ t("chat.thinking") }}</span>
         </div>
 
         <!-- pending steering / follow-up -->
@@ -458,7 +460,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               <button
                 type="button"
                 class="bg-background/80 absolute top-0.5 right-0.5 size-4 rounded-full text-[10px] leading-none"
-                title="Remove"
+                :title="t('chat.removeAttachment')"
                 @click="bridge?.removeFile?.(f.id)"
               >
                 ×
@@ -469,9 +471,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <PromptInputCommand v-if="fileOpen" class="w-full rounded-md border">
             <PromptInputCommandList>
               <PromptInputCommandEmpty
-                >No matching files.</PromptInputCommandEmpty
+                >{{ t("chat.noMatchingFiles") }}</PromptInputCommandEmpty
               >
-              <PromptInputCommandGroup heading="Files">
+              <PromptInputCommandGroup :heading="t('chat.files')">
                 <PromptInputCommandItem
                   v-for="f in fileHits"
                   :key="f.path"
@@ -490,9 +492,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <PromptInputCommand v-if="cmdOpen" class="w-full rounded-md border">
             <PromptInputCommandList>
               <PromptInputCommandEmpty
-                >No matching command.</PromptInputCommandEmpty
+                >{{ t("chat.noMatchingCommand") }}</PromptInputCommandEmpty
               >
-              <PromptInputCommandGroup heading="Commands">
+              <PromptInputCommandGroup :heading="t('chat.commands')">
                 <PromptInputCommandItem
                   v-for="c in filteredCommands"
                   :key="c.name"
@@ -509,7 +511,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           </PromptInputCommand>
         </PromptInputHeader>
         <PromptInputTextarea
-          placeholder="向 Pi 提问，@ 引用文件，/ 使用命令…"
+          :placeholder="t('chat.inputPlaceholder')"
           class="min-h-24"
         />
         <div class="composer-controls flex items-center justify-between">
@@ -517,14 +519,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             <button
               type="button"
               class="text-muted-foreground hover:bg-accent hover:text-foreground rounded-md px-2 py-1.5 text-xs"
-              title="Attach image"
+              :title="t('chat.attachImage')"
               @click="bridge?.openFileDialog?.()"
             >
-              + 附件
+              + {{ t("chat.attachment") }}
             </button>
             <Select v-model="modelKey">
               <SelectTrigger class="h-8 w-56 text-xs">
-                <SelectValue placeholder="选择模型" />
+                <SelectValue :placeholder="t('chat.selectModel')" />
               </SelectTrigger>
               <SelectContent>
                 <template v-for="group in modelGroups" :key="group.provider">
@@ -559,7 +561,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   :value="lv"
                   class="text-xs"
                 >
-                  推理: {{ lv }}
+                  {{ t("chat.thinkingLevel") }}: {{ lv }}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -569,8 +571,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       </PromptInput>
       <div class="composer-caption">
         <span
-          >本地运行 · {{ project.split(/[\\/]/).filter(Boolean).pop() }}</span
-        ><span>Enter 发送 · Shift + Enter 换行</span>
+          >{{ t("chat.localRun") }} · {{ project.split(/[\\/]/).filter(Boolean).pop() }}</span
+        ><span>{{ t("chat.inputHint") }}</span>
       </div>
       <StatusBar />
     </div>
@@ -579,7 +581,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <Dialog v-model:open="treeOpen">
       <DialogContent class="max-h-[75vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Session tree</DialogTitle>
+          <DialogTitle>{{ t("chat.sessionTreeTitle") }}</DialogTitle>
         </DialogHeader>
         <SessionTree
           :open="treeOpen"
@@ -593,11 +595,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <Dialog v-model:open="forkOpen">
       <DialogContent class="max-h-[70vh] max-w-lg overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Fork from an earlier prompt</DialogTitle>
+          <DialogTitle>{{ t("chat.forkTitle") }}</DialogTitle>
         </DialogHeader>
         <p class="text-muted-foreground text-xs">
-          Continues the conversation from the selected prompt, discarding
-          everything after it.
+          {{ t("chat.forkDesc") }}
         </p>
         <div class="flex flex-col gap-1">
           <button
@@ -610,7 +611,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             <span class="line-clamp-2">{{ m.text }}</span>
           </button>
           <p v-if="!forkMessages.length" class="text-muted-foreground text-xs">
-            No user messages available yet.
+            {{ t("chat.forkEmpty") }}
           </p>
         </div>
       </DialogContent>
