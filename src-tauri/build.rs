@@ -1,7 +1,6 @@
 use std::{fs, path::Path};
 
-// Bundle the same production frontend in debug and release builds. Tauri's
-// debug asset resolver otherwise points at the local Vite development server.
+// Remote access serves an embedded production frontend, independently of Vite.
 fn embed_assets(root: &Path, dir: &Path, code: &mut String) {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .expect("Missing frontend assets: run npm run build first")
@@ -23,16 +22,18 @@ fn embed_assets(root: &Path, dir: &Path, code: &mut String) {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=../dist");
-    let root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../dist");
-    let mut code =
-        String::from("fn embedded_asset(path: &str) -> Option<&'static [u8]> { match path {\n");
-    embed_assets(&root, &root, &mut code);
-    code.push_str("_ => None, } }\n");
-    fs::write(
-        Path::new(&std::env::var("OUT_DIR").unwrap()).join("web_assets.rs"),
-        code,
-    )
-    .unwrap();
+    if std::env::var_os("CARGO_FEATURE_REMOTE_ACCESS").is_some() {
+        println!("cargo:rerun-if-changed=../dist");
+        let root = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../dist");
+        let mut code =
+            String::from("fn embedded_asset(path: &str) -> Option<&'static [u8]> { match path {\n");
+        embed_assets(&root, &root, &mut code);
+        code.push_str("_ => None, } }\n");
+        fs::write(
+            Path::new(&std::env::var("OUT_DIR").unwrap()).join("web_assets.rs"),
+            code,
+        )
+        .unwrap();
+    }
     tauri_build::build()
 }

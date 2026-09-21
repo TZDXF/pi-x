@@ -51,19 +51,26 @@ import {
   PromptInputCommandList,
   PromptInputHeader,
 } from "@/components/ai-elements/prompt-input"
+import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
+import WorkspaceContext from "@/components/WorkspaceContext.vue"
+import { useWorkspaceStore } from "@/stores/workspace"
 import { Copy } from "@lucide/vue"
 
 const session = useSessionStore()
 const ui = useUiStore()
 const { t } = useI18n()
 
-const props = defineProps<{ project: string }>()
+const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; connected: boolean }>()
+const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
+const workspace = useWorkspaceStore()
+const currentTitle = computed(() => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title)
+
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 
@@ -249,23 +256,11 @@ const modelKey = computed({
   },
 })
 
-const modelGroups = computed(() => {
-  const groups = new Map<string, typeof session.models>()
-  for (const m of session.models) {
-    const list = groups.get(m.provider) ?? []
-    list.push(m)
-    groups.set(m.provider, list)
-  }
-  return Array.from(groups.entries()).map(([provider, models]) => ({
-    provider,
-    models,
-  }))
-})
-
 async function onSubmit(message: {
   text?: string
   files?: { url?: string }[]
 }) {
+  if (workspace.gitBusy || props.connecting) return
   if (session.isStreaming) {
     await abort()
     return
@@ -277,6 +272,10 @@ async function onSubmit(message: {
     .map((u) => dataUrlToImage(u))
     .filter((im): im is { data: string; mimeType: string } => im !== null)
   if (!text && !images.length) return
+  if (!await props.ensureStarted()) {
+    bridge.value?.setTextInput(text)
+    return
+  }
   await session.send(text, images.length ? images : undefined)
 }
 
@@ -309,7 +308,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <header class="workspace-header">
       <div class="min-w-0">
         <h1 class="truncate text-sm font-medium">
-          {{ session.entries.find((e) => e.kind === "user")?.text || t("chat.newSession") }}
+          {{ currentTitle || session.entries.find((e) => e.kind === "user")?.text || t("chat.newSession") }}
         </h1>
         <p class="text-muted-foreground truncate text-xs">
           {{ project.split(/[\\/]/).filter(Boolean).pop() }}
@@ -334,7 +333,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </button>
         <button
           class="quiet-button"
-          :disabled="session.isStreaming"
+          :disabled="session.isStreaming || !connected"
           @click="session.compact()"
         >
           {{ t("chat.compactContext") }}
@@ -350,7 +349,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <ConversationEmptyState
           class="chat-empty"
           v-if="session.entries.length === 0"
-          :title="t('chat.emptyTitle')"
+          :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
           :description="t('chat.emptyDesc')"
         />
 
@@ -435,6 +434,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
+      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <PromptInput @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
         <PromptInputHeader>
@@ -512,7 +512,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </PromptInputHeader>
         <PromptInputTextarea
           :placeholder="t('chat.inputPlaceholder')"
-          class="min-h-24"
+          :disabled="workspace.gitBusy || connecting"
+          class="min-h-14"
         />
         <div class="composer-controls flex items-center justify-between">
           <div class="composer-options flex items-center gap-1">
@@ -524,23 +525,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             >
               + {{ t("chat.attachment") }}
             </button>
-            <Select v-model="modelKey">
-              <SelectTrigger class="h-8 w-56 text-xs">
-                <SelectValue :placeholder="t('chat.selectModel')" />
-              </SelectTrigger>
-              <SelectContent>
-                <template v-for="group in modelGroups" :key="group.provider">
-                  <SelectItem
-                    v-for="m in group.models"
-                    :key="m.provider + '/' + m.id"
-                    :value="m.provider + '/' + m.id"
-                    class="text-xs"
-                  >
-                    {{ m.provider }} / {{ m.name }}
-                  </SelectItem>
-                </template>
-              </SelectContent>
-            </Select>
+            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected" />
 
             <Select
               :model-value="session.thinkingLevel"
@@ -566,7 +551,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               </SelectContent>
             </Select>
           </div>
-          <PromptInputSubmit :status="submitStatus" />
+          <PromptInputSubmit :status="submitStatus" :disabled="workspace.gitBusy || connecting" />
         </div>
       </PromptInput>
       <div class="composer-caption">

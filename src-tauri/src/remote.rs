@@ -237,6 +237,16 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             rpc::notify(&state, a["command"].clone()).await?;
             Ok(Value::Null)
         }
+        "session_generate_title" => {
+            let title = crate::title_generation::session_generate_title(app.clone(), text("file")?, text("message")?).await?;
+            Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
+        }
+        "session_update" => {
+            crate::sessions::session_update(text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or("缺少 archived")?).await?;
+            Ok(Value::Null)
+        }
+        "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
+        "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or("缺少 worktree")?).await?)),
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
         }

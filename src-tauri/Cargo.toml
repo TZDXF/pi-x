@@ -9,6 +9,10 @@ edition = "2021"
 name = "pi_x_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+remote-access = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

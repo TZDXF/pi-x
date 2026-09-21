@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub pi_path: Option<String>,
     #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
+    #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
+    pub title_model: Option<crate::title_generation::TitleModel>,
 }
 
 fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -112,4 +114,41 @@ pub async fn rpc_kill(state: State<'_, rpc::RpcState>) -> Result<(), String> {
 #[tauri::command]
 pub async fn rpc_running(state: State<'_, rpc::RpcState>) -> Result<bool, String> {
     Ok(rpc::running(&state).await)
+}
+
+// ---- pi models.json (custom provider / model management) ----
+
+fn models_config_path() -> std::path::PathBuf {
+    trust::agent_dir().join("models.json")
+}
+
+/// Read pi's `~/.pi/agent/models.json`. Returns `{ "providers": {} }` when the
+/// file does not exist. The whole document is passed through as `Value` so
+/// unknown fields (cost, compat, headers, samplingParams, modelOverrides, …)
+/// survive a read/edit/save round trip untouched.
+#[tauri::command]
+pub fn models_config_get() -> Result<Value, String> {
+    let path = models_config_path();
+    if !path.exists() {
+        return Ok(serde_json::json!({ "providers": {} }));
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut v: Value = serde_json::from_str(&raw).map_err(|e| format!("models.json 解析失败: {e}"))?;
+    if v.get("providers").is_none() {
+        v["providers"] = serde_json::json!({});
+    }
+    Ok(v)
+}
+
+/// Write pi's `~/.pi/agent/models.json` (2-space pretty JSON + trailing newline,
+/// matching pi's own file style). pi re-reads this file whenever the model
+/// picker opens, so changes take effect without a restart.
+#[tauri::command]
+pub fn models_config_save(config: Value) -> Result<(), String> {
+    let path = models_config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
 }

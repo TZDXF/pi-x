@@ -22,6 +22,7 @@ export interface TrustStatus {
 export interface AppConfig {
   piPath?: string
   lastProject?: string
+  titleModel?: { provider: string; modelId: string }
 }
 
 export const detectPi = (customPath?: string) =>
@@ -49,6 +50,8 @@ export interface SessionMeta {
   cwd: string
   timestamp?: string
   mtimeMs: number
+  title?: string | null
+  archived?: boolean
   preview?: string | null
 }
 
@@ -94,3 +97,53 @@ export function onPiStderr(handler: (line: string) => void): Promise<() => void>
 export interface RemoteStatus { enabled: boolean; port: number; urls: string[] }
 export const remoteStatus = () => invoke<RemoteStatus>("remote_status")
 export const remoteSet = (enabled: boolean, port: number) => invoke<RemoteStatus>("remote_set", { enabled, port })
+
+// ---- pi models.json (custom provider / model management) ----
+
+/** One model entry inside a provider's `models` array. Unknown fields
+ *  (cost, compat, headers, samplingParams, thinkingLevelMap, …) are kept
+ *  verbatim so editing never silently drops pi features. */
+export interface ModelEntry {
+  id: string
+  name?: string
+  api?: string
+  reasoning?: boolean
+  input?: ("text" | "image")[]
+  contextWindow?: number
+  maxTokens?: number
+  [key: string]: unknown
+}
+
+/** One provider entry under `providers` in models.json. */
+export interface ProviderEntry {
+  name?: string
+  baseUrl?: string
+  api?: string
+  apiKey?: string
+  authHeader?: boolean
+  headers?: Record<string, string>
+  models?: ModelEntry[]
+  [key: string]: unknown
+}
+
+/** pi's `~/.pi/agent/models.json` document. */
+export interface ModelsConfig {
+  providers: Record<string, ProviderEntry>
+  [key: string]: unknown
+}
+
+export const getModelsConfig = () => invoke<ModelsConfig>("models_config_get")
+
+export const saveModelsConfig = (config: ModelsConfig) =>
+  invoke<void>("models_config_save", { config })
+
+export const updateSession = (file: string, title: string | null, archived: boolean) =>
+  invoke<void>("session_update", { file, title, archived })
+export interface WorkspaceGitInfo { branch: string; branches: string[]; worktree: boolean }
+export const workspaceGitInfo = (project: string) => invoke<WorkspaceGitInfo>("workspace_git_info", { project })
+export const createWorkspaceGit = (project: string, branch: string, worktree: boolean) =>
+  invoke<string>("workspace_git_create", { project, branch, worktree })
+
+/** Independent, tool-free title generation; never changes the active RPC model. */
+export const generateSessionTitle = (file: string, message: string) =>
+  invoke<string | null>("session_generate_title", { file, message })

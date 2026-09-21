@@ -1,6 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
-import { rpcRequest } from "@/api/piClient"
+import { useWorkspaceStore } from "@/stores/workspace"
+import { generateSessionTitle, rpcRequest } from "@/api/piClient"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -273,6 +274,11 @@ export const useSessionStore = defineStore("session", () => {
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
+    const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
+    // Capture identity now: completion must never name a subsequently selected session.
+    const titleFile = sessionFile.value
+    const titleProject = cwd.value
+    const titleSessionId = state.value?.sessionId
     const promptText = trimmed || "(see attached image)"
     entries.value.push({ kind: "user", id: nextId(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })) })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
@@ -297,6 +303,16 @@ export const useSessionStore = defineStore("session", () => {
         void refreshState()
         void refreshStats()
       })
+    if (firstMessage && titleFile && titleSessionId) {
+      const workspace = useWorkspaceStore()
+      workspace.preview({ file: titleFile, id: titleSessionId, cwd: titleProject,
+        mtimeMs: Date.now(), timestamp: new Date().toISOString(), preview: promptText.replace(/\s+/g, " ").slice(0, 120) })
+      // Independent IPC call: do not await it or switch the active model.
+      void generateSessionTitle(titleFile, promptText).then(async title => {
+        if (title) workspace.generatedTitle(titleFile, title)
+        await workspace.refresh(titleProject)
+      }).catch(error => console.warn("[pi] title generation failed; keeping preview:", error))
+    }
   }
 
   /** Esc: take back queued messages, then abort. Returns text to restore. */
@@ -320,7 +336,9 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   async function newSession() {
-    await rpcRequest({ type: "new_session" })
+    const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
+    if (!result.success) throw new Error(result.error || "新建会话失败")
+    if (result.data?.cancelled) return
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
@@ -471,6 +489,7 @@ export const useSessionStore = defineStore("session", () => {
     setThinkingLevel,
     refreshState,
     refreshStats,
+    refreshModels,
     loadHistory,
     loadMessages,
     init,

@@ -30,7 +30,7 @@
 - **pi 自动检测**：扫描 PATH 与常见安装位置定位 pi；支持在应用内配置自定义 pi 路径；Windows 下解析 npm `.cmd` shim 并直接以 `node + cli.js` 启动（绕开 cmd shim 在管道下的兼容性问题）
 - **会话统计**：状态栏实时显示上下文 token 用量、成本、模型信息
 - **会话导出**：一键导出为 HTML 并用浏览器打开
-- **应用内设置**：自定义 pi 可执行路径 + 实时检测结果（Windows 下自动解析 npm shim）
+- **应用内设置**：自定义 pi 可执行路径 + 实时检测结果（Windows 下自动解析 npm shim）；供应商与模型管理（可视化编辑 pi 的 models.json，打开模型选择器即生效）
 - **消息复制**：AI 回复一键复制为 Markdown 文本
 
 ## 技术栈
@@ -92,13 +92,20 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 | 命令 | 说明 |
 |---|---|
-| `npm run dev:desktop` | 启动桌面应用开发模式（Vite HMR + Tauri） |
+| `npm run dev:desktop` | 桌面开发（不含远程访问） |
+| `npm run dev:desktop:remote` | 桌面开发并包含远程访问功能 |
 | `npm run dev` | 仅前端（浏览器预览，无 pi 进程） |
 | `npm run build` | 前端构建（vite build） |
 | `npm run check` | 前端构建 + cargo check |
 | `npm run test` | Rust 单元测试（cargo test） |
 | `npm run package` | 打包安装程序（NSIS/MSI 到 `src-tauri/target/release/bundle/`） |
 | `npm run package:debug` | Debug 打包 |
+
+普通桌面开发（`npm run dev:desktop`）不编译远程访问功能，无需生成 `dist`，保留 Vite 热更新。
+
+使用 `npm run dev:desktop:remote` 可先构建前端，再启用 `remote-access` feature。启动后可在设置中开启远程访问，已保存的开启状态会自动恢复。远程页面使用编译时的前端快照，不走 HMR。
+
+所有 `package*` 脚本仍包含远程访问功能（包括 Debug 打包）。直接运行 Cargo 默认不包含远程访问；若添加 `--features remote-access`，请先在项目根目录执行 `npm run build`。
 
 ### 调试提示
 
@@ -161,3 +168,9 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - 关闭开关会停止监听并断开网页事件连接，不会终止已经提交给 Pi 的任务。
 - **完整链接包含访问密钥，相当于授予主机上 Pi 的控制权限。HTTP 未加密，只用于可信局域网；不要公开链接或将端口映射到公网。**
 - 网页文件随桌面程序内嵌打包。开发此功能时先运行 `npm run build` 更新网页资源，再启动/重建桌面端；只有 Vite 开发服务不能提供远程 Pi API。
+
+### 自动会话标题
+
+在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 Pi X 重复填写密钥。
+
+新会话发送第一条消息后，侧栏立即显示消息预览，独立的 pi 进程异步生成标题并持久保存。不切换当前对话模型、不使用工具、不加载扩展或项目上下文。生成失败或超时保留预览，每个会话最多尝试一次；手动标题不会被覆盖。默认关闭，启用后会产生额外模型用量，配置变更对新会话生效。

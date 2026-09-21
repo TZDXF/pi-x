@@ -16,6 +16,7 @@ const MAX_SESSIONS: usize = 50;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub file: String,
     pub id: String,
@@ -23,6 +24,8 @@ pub struct SessionMeta {
     pub timestamp: Option<String>,
     pub mtime_ms: u64,
     pub preview: Option<String>,
+    pub title: Option<String>,
+    pub archived: bool,
 }
 
 fn mtime_ms(p: &Path) -> u64 {
@@ -149,6 +152,10 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
                 .and_then(|t| t.as_str())
                 .map(String::from);
             let preview = first_user_preview(&path);
+            let presentation = {
+                let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+                read_presentation(&path)?
+            };
             out.push(SessionMeta {
                 file: path.to_string_lossy().to_string(),
                 id,
@@ -156,10 +163,87 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
                 timestamp,
                 mtime_ms: mtime,
                 preview,
+                title: presentation.title,
+                archived: presentation.archived,
             });
         }
         Ok(out)
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+
+// UI metadata is separate from pi's append-only conversation log.
+#[derive(serde::Deserialize, Serialize, Default)]
+pub struct Presentation {
+    pub title: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub title_generation_attempted: bool,
+}
+pub(crate) static PRESENTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) fn read_presentation(file: &Path) -> Result<Presentation, String> {
+    match std::fs::read(file.with_extension("pix.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Presentation::default()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+// Readers always see a complete JSON document, even while another client lists sessions.
+pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Result<(), String> {
+    let bytes = serde_json::to_vec(presentation).map_err(|e| e.to_string())?;
+    let temporary = file.with_extension(format!("pix.{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub async fn session_update(file: String, title: Option<String>, archived: bool) -> Result<(), String> {
+    let path = canonicalize(&file).map_err(|e| e.to_string())?;
+    let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
+    if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        return Err("无效的会话路径".into());
+    }
+    if std::fs::symlink_metadata(path.with_extension("pix.json")).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("无效的会话元数据路径".into());
+    }
+    update_presentation(&path, title, archived)
+}
+
+fn update_presentation(path: &Path, title: Option<String>, archived: bool) -> Result<(), String> {
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut presentation = read_presentation(path)?;
+    let title = title.map(|t| t.trim().chars().take(120).collect::<String>()).filter(|t| !t.is_empty());
+    if title.is_some() { presentation.title = title; }
+    presentation.archived = archived;
+    write_presentation(&path, &presentation)
+}
+
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    #[test]
+    fn rename_archive_restore() {
+        let dir = std::env::temp_dir().join(format!("pix-metadata-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("session.jsonl");
+        let original = "{\"type\":\"session\"}\n";
+        std::fs::write(&file, original).unwrap();
+        assert!(!read_presentation(&file).unwrap().archived);
+        update_presentation(&file, Some("  新标题  ".into()), false).unwrap();
+        assert_eq!(read_presentation(&file).unwrap().title.as_deref(), Some("新标题"));
+        update_presentation(&file, None, true).unwrap();
+        let archived = read_presentation(&file).unwrap();
+        assert!(archived.archived);
+        assert_eq!(archived.title.as_deref(), Some("新标题"));
+        update_presentation(&file, None, false).unwrap();
+        assert!(!read_presentation(&file).unwrap().archived);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 }

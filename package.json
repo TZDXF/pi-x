@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "vite",
     "dev:desktop": "tauri dev",
+    "dev:desktop:remote": "npm run build && tauri dev --features remote-access",
     "build": "vite build",
     "check": "npm run build && cd src-tauri && cargo check",
     "clean": "cd src-tauri && cargo clean",
     "tauri": "tauri",
-    "package": "tauri build",
-    "package:debug": "tauri build --debug",
-    "package:nsis": "tauri build --bundles nsis",
-    "package:msi": "tauri build --bundles msi"
+    "package": "tauri build --features remote-access",
+    "package:debug": "tauri build --features remote-access --debug",
+    "package:nsis": "tauri build --features remote-access --bundles nsis",
+    "package:msi": "tauri build --features remote-access --bundles msi"
   },
   "dependencies": {
     "@lucide/vue": "^1.47.0",

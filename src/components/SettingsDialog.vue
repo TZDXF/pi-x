@@ -12,7 +12,11 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Separator } from "@/components/ui/separator"
 import { detectPi, getConfig, saveConfig, type AppConfig, type PiInfo } from "@/api/piClient"
+import ProviderSettings from "./ProviderSettings.vue"
+import ModelSettings from "./ModelSettings.vue"
+import TitleModelSettings from "./TitleModelSettings.vue"
 import { useUiStore } from "@/stores/ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 
@@ -96,10 +100,15 @@ async function save() {
         </button>
         <button :class="{ active: tab === 'general' }" @click="tab = 'general'">
           {{ t("settings.general") }}</button
+        ><button v-if="isDesktop" :class="{ active: tab === 'models' }" @click="tab = 'models'">
+          {{ t("settings.providersModels") }}</button
         ><button v-if="isDesktop" :class="{ active: tab === 'runtime' }" @click="tab = 'runtime'">
           {{ t("settings.runtime") }}</button
         ><button :class="{ active: tab === 'about' }" @click="tab = 'about'">
           {{ t("settings.about") }}
+        </button>
+        <button v-if="isDesktop" :class="{ active: tab === 'model-config' }" @click="tab = 'model-config'">
+          {{ t("titleGeneration.page") }}
         </button>
         <p>{{ t("settings.subtitle") }}</p>
       </nav>
@@ -197,6 +206,23 @@ async function save() {
               </p>
             </div>
           </div>
+        </template>
+        <template v-else-if="tab === 'models'">
+          <DialogHeader
+            ><DialogTitle>{{ t("settings.providersModelsTitle") }}</DialogTitle
+            ><DialogDescription>{{ t("settings.providersModelsDesc") }}</DialogDescription></DialogHeader
+          >
+          <p class="text-muted-foreground mb-4 text-xs">{{ t("settings.modelsFileHint") }}</p>
+          <h3 class="settings-section">{{ t("settings.providers") }}</h3>
+          <ProviderSettings />
+          <Separator class="my-6" />
+          <h3 class="settings-section">{{ t("settings.models") }}</h3>
+          <ModelSettings />
+        </template>
+        <template v-else-if="tab === 'model-config'">
+          <DialogHeader><DialogTitle>{{ t("titleGeneration.page") }}</DialogTitle>
+            <DialogDescription>{{ t("titleGeneration.description") }}</DialogDescription></DialogHeader>
+          <TitleModelSettings />
         </template>
         <template v-else-if="tab === 'about'">
           <DialogHeader

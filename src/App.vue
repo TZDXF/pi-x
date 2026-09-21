@@ -18,6 +18,7 @@ import {
 import { isDesktop } from "@/api/transport"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
+import { useWorkspaceStore } from "@/stores/workspace"
 import { useUiStore } from "@/stores/ui"
 import WelcomeView from "@/components/WelcomeView.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
@@ -26,9 +27,12 @@ import SettingsDialog from "@/components/SettingsDialog.vue"
 import { PanelLeft } from "@lucide/vue"
 import ChatView from "@/components/ChatView.vue"
 
-type Phase = "detecting" | "no-pi" | "pick" | "trust" | "starting" | "chat" | "down"
+type Phase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
 
 const session = useSessionStore()
+const workspace = useWorkspaceStore()
+const navigating = ref(false)
+const pendingResume = ref<string | null>(null)
 const ui = useUiStore()
 const { t } = useI18n()
 
@@ -41,7 +45,8 @@ const project = ref("")
 const trustInfo = ref<TrustStatus | null>(null)
 const lastError = ref<string | null>(null)
 
-let started = false
+const started = ref(false)
+const connecting = ref(false)
 // event listener lifecycle: always unlisten on unmount, otherwise HMR
 // remounts stack duplicate listeners and events get handled N times
 let unlisteners: Array<() => void> = []
@@ -64,7 +69,8 @@ onMounted(async () => {
         session.handleEvent(ev)
       }),
       onPiExit(() => {
-        if (phase.value === "chat" || phase.value === "starting") phase.value = "down"
+        started.value = false
+        if (phase.value === "chat" && !connecting.value) phase.value = "down"
       }),
       onPiStderr((line) => ui.pushStderr(line)),
     ])
@@ -77,7 +83,7 @@ onMounted(async () => {
     if (!isDesktop && (await piRunning())) {
       try {
         project.value = config.value.lastProject ?? ""
-        started = true
+        started.value = true
         await session.init(project.value)
         await session.loadHistory()
         phase.value = "chat"
@@ -87,7 +93,7 @@ onMounted(async () => {
       }
       return
     }
-    // auto-resume last project on launch
+    // Restore the workspace only; start pi when a conversation is opened.
     if (config.value.lastProject) {
       project.value = config.value.lastProject
       await selectProject(project.value)
@@ -103,70 +109,91 @@ onMounted(async () => {
 })
 
 async function selectProject(dir: string) {
-  if (started) {
-    await killPi()
-    started = false
-    session.clear()
-    ui.clear()
-  }
-  project.value = dir
-  config.value.lastProject = dir
-  void saveConfig({ ...config.value })
-  const status = await trustStatus(dir)
-  if (status.needsDecision) {
-    trustInfo.value = status
-    phase.value = "trust"
-    return
-  }
-  await start()
-}
-
-async function onTrustDecision(trusted: boolean, trustParent: boolean) {
-  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
-  if (trusted) await start()
-  else phase.value = "pick"
-}
-
-async function start() {
-  if (started) {
-    // restarting after exit: clear stale state first
-    started = false
-  }
-  phase.value = "starting"
+  if (session.isStreaming || workspace.gitBusy || connecting.value) return
+  connecting.value = true
+  phase.value = "chat"
   try {
-    await spawnPi(project.value)
-    started = true
-    await session.init(project.value)
+    if (started.value) {
+      await killPi()
+      started.value = false
+      session.clear()
+      ui.clear()
+    }
+    project.value = dir
+    config.value.lastProject = dir
+    void saveConfig({ ...config.value })
+    const status = await trustStatus(dir)
+    if (status.needsDecision) {
+      trustInfo.value = status
+      phase.value = "trust"
+      return
+    }
     phase.value = "chat"
   } catch (e) {
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
     phase.value = "down"
   }
+  finally { connecting.value = false }
+}
+
+async function onTrustDecision(trusted: boolean, trustParent: boolean) {
+  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
+  if (trusted) {
+    phase.value = "chat"
+    const file = pendingResume.value
+    pendingResume.value = null
+    if (file && phase.value === "chat") await resumeSession(file)
+  } else {
+    pendingResume.value = null
+    phase.value = "pick"
+  }
+}
+
+async function start(): Promise<boolean> {
+  if (started.value) return true
+  connecting.value = true
+  try {
+    await spawnPi(project.value)
+    await session.init(project.value)
+    started.value = true
+    return true
+  } catch (e) {
+    await killPi().catch(() => {})
+    started.value = false
+    lastError.value = String(e)
+    ui.pushToast(String(e), "error")
+    return false
+  } finally {
+    connecting.value = false
+  }
 }
 
 async function switchProject() {
+  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
   await killPi()
-  started = false
+  started.value = false
   session.clear()
   ui.clear()
   phase.value = "pick"
 }
 
-async function restartPi() {
-  await killPi()
-  started = false
-  await start()
-}
-
 /** Resume a stored session: switch in-process when possible, else restart. */
-async function resumeSession(file: string) {
+async function resumeSession(file: string, targetProject?: string) {
+  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  if (targetProject && targetProject !== project.value) {
+    await selectProject(targetProject)
+    if (phase.value !== "chat") {
+      if (phase.value === "trust") pendingResume.value = file
+      return
+    }
+  }
   ui.clear()
-  session.clear()
-  phase.value = "starting"
+  phase.value = "chat"
+  connecting.value = true
   try {
     let switched = false
-    if (started) {
+    if (started.value) {
       try {
         const res = await rpcRequest<{ cancelled?: boolean }>({
           type: "switch_session",
@@ -185,8 +212,9 @@ async function resumeSession(file: string) {
     if (!switched) {
       await killPi()
       await spawnPi(project.value, file)
-      started = true
+      started.value = true
     }
+    session.clear()
     await session.init(project.value)
     await session.loadHistory()
     phase.value = "chat"
@@ -195,6 +223,20 @@ async function resumeSession(file: string) {
     ui.pushToast(String(e), "error")
     phase.value = "down"
   }
+  finally { connecting.value = false }
+}
+
+async function newProjectSession(path: string) {
+  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  navigating.value = true
+  try {
+    if (path !== project.value) await selectProject(path)
+    if (phase.value === "chat") {
+      if (started.value) await session.newSession()
+      else session.clear()
+    }
+  } catch (e) { ui.pushToast(String(e), "error") }
+  finally { navigating.value = false }
 }
 
 onUnmounted(() => {
@@ -210,10 +252,11 @@ onUnmounted(() => {
       v-show="sidebarOpen"
       :project="project"
       :ready="phase === 'chat'"
-      :busy="phase === 'starting' || phase === 'trust'"
+      :busy="navigating || workspace.gitBusy || connecting || phase === 'trust'"
       @switch-project="switchProject"
       @select-project="selectProject"
       @resume-session="resumeSession"
+      @new-session="newProjectSession"
       @settings="settingsOpen = true"
       @collapse="sidebarOpen = false"
     />
@@ -242,16 +285,8 @@ onUnmounted(() => {
         <TrustDialog :info="trustInfo" @done="onTrustDecision" />
       </div>
 
-      <div
-        v-else-if="phase === 'starting'"
-        class="flex flex-1 items-center justify-center gap-3 text-muted-foreground"
-      >
-        <span class="size-2 animate-pulse rounded-full bg-primary" />
-        <span>{{ t("app.starting") }}</span>
-      </div>
-
       <template v-else-if="phase === 'chat'">
-        <ChatView :project="project" />
+        <ChatView :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="selectProject" @open-project="switchProject" />
       </template>
 
       <div
@@ -271,12 +306,6 @@ onUnmounted(() => {
           }}</pre>
         </div>
         <div class="flex gap-2">
-          <button
-            class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
-            @click="restartPi"
-          >
-            {{ t("app.restart") }}
-          </button>
           <button
             class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
             @click="switchProject"
