@@ -24,14 +24,24 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import type { ThinkingLevel } from "@/api/protocol"
-import type { FileHit, SessionMeta } from "@/api/piClient"
-import { listSessions, rpcRequest, searchFiles } from "@/api/piClient"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import type { FileHit } from "@/api/piClient"
+import { rpcRequest, searchFiles } from "@/api/piClient"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   PromptInputCommand,
   PromptInputCommandEmpty,
@@ -45,7 +55,6 @@ import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
-import SettingsDialog from "@/components/SettingsDialog.vue"
 import { openPath } from "@/api/piClient"
 import { Copy } from "@lucide/vue"
 
@@ -53,7 +62,6 @@ const session = useSessionStore()
 const ui = useUiStore()
 
 const props = defineProps<{ project: string }>()
-const emit = defineEmits<{ switchProject: [], resumeSession: [file: string] }>()
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 
@@ -68,10 +76,11 @@ watch(slashToken, (tok) => {
 })
 const filteredCommands = computed(() => {
   const tok = slashToken.value
-  if (tok === null)
-    return []
+  if (tok === null) return []
   return session.commands.filter(
-    c => c.name.toLowerCase().includes(tok) || (c.description ?? "").toLowerCase().includes(tok),
+    (c) =>
+      c.name.toLowerCase().includes(tok) ||
+      (c.description ?? "").toLowerCase().includes(tok),
   )
 })
 
@@ -88,25 +97,23 @@ let fileQuerySeq = 0
 const atToken = computed(() => {
   const t = bridge.value?.textInput ?? ""
   const m = /(?:^|\s)@([^\s]*)$/.exec(t)
-  return m ? { token: m[1]!, index: m.index + m[0].length - m[1]!.length - 1 } : null
+  return m
+    ? { token: m[1]!, index: m.index + m[0].length - m[1]!.length - 1 }
+    : null
 })
 
 watch(atToken, (tok) => {
   fileOpen.value = tok !== null
-  if (tok)
-    void queryFiles(tok.token)
+  if (tok) void queryFiles(tok.token)
 })
 
 async function queryFiles(token: string) {
   const seq = ++fileQuerySeq
   try {
     const hits = await searchFiles(props.project, token)
-    if (seq === fileQuerySeq)
-      fileHits.value = hits
-  }
-  catch {
-    if (seq === fileQuerySeq)
-      fileHits.value = []
+    if (seq === fileQuerySeq) fileHits.value = hits
+  } catch {
+    if (seq === fileQuerySeq) fileHits.value = []
   }
 }
 
@@ -117,8 +124,7 @@ function pickFile(path: string) {
     const before = text.slice(0, tok.index)
     const after = text.slice(tok.index + 1 + tok.token.length)
     bridge.value?.setTextInput(`${before}@${path} ${after}`)
-  }
-  else {
+  } else {
     bridge.value?.setTextInput(`${text}@${path} `)
   }
   fileOpen.value = false
@@ -127,29 +133,33 @@ function pickFile(path: string) {
 // ---- attachments (images) ----
 const attachments = computed(() => bridge.value?.files ?? [])
 
-function dataUrlToImage(d: string): { data: string, mimeType: string } | null {
+function dataUrlToImage(d: string): { data: string; mimeType: string } | null {
   const m = /^data:([^;]+);base64,(.+)$/.exec(d)
   return m ? { data: m[2]!, mimeType: m[1]! } : null
 }
 
 function isImageUrl(url?: string): boolean {
-  return !!url && (url.startsWith("data:image/") || /^https?:\/\/.*\.(png|jpe?g|gif|webp)/i.test(url))
+  return (
+    !!url &&
+    (url.startsWith("data:image/") ||
+      /^https?:\/\/.*\.(png|jpe?g|gif|webp)/i.test(url))
+  )
 }
 
 // ---- fork (restart from a previous prompt) ----
 const forkOpen = ref(false)
-const forkMessages = ref<{ entryId: string, text: string }[]>([])
+const forkMessages = ref<{ entryId: string; text: string }[]>([])
 const treeOpen = ref(false)
 
 async function openFork() {
   try {
-    const res = await rpcRequest<{ messages: { entryId: string, text: string }[] }>({ type: "get_fork_messages" })
-    if (!res.success)
-      throw new Error(res.error ?? "fork list failed")
+    const res = await rpcRequest<{
+      messages: { entryId: string; text: string }[]
+    }>({ type: "get_fork_messages" })
+    if (!res.success) throw new Error(res.error ?? "fork list failed")
     forkMessages.value = (res.data?.messages ?? []).slice().reverse()
     forkOpen.value = true
-  }
-  catch (e) {
+  } catch (e) {
     ui.pushToast(String(e), "error")
   }
 }
@@ -158,9 +168,11 @@ async function doFork(entryId: string) {
   forkOpen.value = false
   treeOpen.value = false
   try {
-    const res = await rpcRequest<{ text?: string, cancelled?: boolean }>({ type: "fork", entryId })
-    if (!res.success)
-      throw new Error(res.error ?? "fork failed")
+    const res = await rpcRequest<{ text?: string; cancelled?: boolean }>({
+      type: "fork",
+      entryId,
+    })
+    if (!res.success) throw new Error(res.error ?? "fork failed")
     if (res.data?.cancelled) {
       ui.pushToast("Fork cancelled by an extension", "info")
       return
@@ -169,42 +181,12 @@ async function doFork(entryId: string) {
     await session.refreshState()
     await session.loadHistory()
     ui.pushToast("Forked from earlier prompt", "info")
-  }
-  catch (e) {
+  } catch (e) {
     ui.pushToast(String(e), "error")
   }
-}
-
-// ---- session history ----
-const historyOpen = ref(false)
-const history = ref<SessionMeta[]>([])
-const historyLoading = ref(false)
-
-watch(historyOpen, (open) => {
-  if (open)
-    void loadHistoryList()
-})
-
-async function loadHistoryList() {
-  historyLoading.value = true
-  try {
-    history.value = await listSessions(props.project)
-  }
-  catch (e) {
-    ui.pushToast(String(e), "error")
-  }
-  finally {
-    historyLoading.value = false
-  }
-}
-
-function formatTime(s: SessionMeta): string {
-  const d = s.timestamp ? new Date(s.timestamp) : new Date(s.mtimeMs)
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString()
 }
 
 // ---- settings / export / copy ----
-const settingsOpen = ref(false)
 const exporting = ref(false)
 
 async function exportSession() {
@@ -215,25 +197,25 @@ async function exportSession() {
       throw new Error(res.error || "export failed")
     await openPath(res.data.path)
     ui.pushToast("Session exported", "info")
-  }
-  catch (e) {
+  } catch (e) {
     ui.pushToast(String(e), "error")
-  }
-  finally {
+  } finally {
     exporting.value = false
   }
 }
 
-function blocksText(blocks: { type: string, text?: string }[]): string {
-  return blocks.filter(b => b.type === "text").map(b => b.text ?? "").join("\n\n")
+function blocksText(blocks: { type: string; text?: string }[]): string {
+  return blocks
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
+    .join("\n\n")
 }
 
 async function copyText(t: string) {
   try {
     await navigator.clipboard.writeText(t)
     ui.pushToast("Copied", "info")
-  }
-  catch (e) {
+  } catch (e) {
     ui.pushToast(String(e), "error")
   }
 }
@@ -272,42 +254,44 @@ const modelGroups = computed(() => {
     list.push(m)
     groups.set(m.provider, list)
   }
-  return Array.from(groups.entries()).map(([provider, models]) => ({ provider, models }))
+  return Array.from(groups.entries()).map(([provider, models]) => ({
+    provider,
+    models,
+  }))
 })
 
-async function onSubmit(message: { text?: string, files?: { url?: string }[] }) {
+async function onSubmit(message: {
+  text?: string
+  files?: { url?: string }[]
+}) {
   if (session.isStreaming) {
     await abort()
     return
   }
   const text = (message.text ?? "").trim()
   const images = (message.files ?? [])
-    .map(f => f.url)
+    .map((f) => f.url)
     .filter((u): u is string => isImageUrl(u))
-    .map(u => dataUrlToImage(u))
-    .filter((im): im is { data: string, mimeType: string } => im !== null)
-  if (!text && !images.length)
-    return
+    .map((u) => dataUrlToImage(u))
+    .filter((im): im is { data: string; mimeType: string } => im !== null)
+  if (!text && !images.length) return
   await session.send(text, images.length ? images : undefined)
 }
 
 async function abort() {
   const restored = await session.abortAndRestore()
-  if (restored)
-    bridge.value?.setTextInput(restored)
+  if (restored) bridge.value?.setTextInput(restored)
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key !== "Escape" || e.isComposing)
-    return
+  if (e.key !== "Escape" || e.isComposing) return
   if (cmdOpen.value || fileOpen.value) {
     e.preventDefault()
     cmdOpen.value = false
     fileOpen.value = false
     return
   }
-  if (ui.activeDialog)
-    return // dialog handles its own cancel
+  if (ui.activeDialog) return // dialog handles its own cancel
   if (session.isStreaming) {
     e.preventDefault()
     void abort()
@@ -319,131 +303,53 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
-    <!-- toolbar -->
-    <header class="border-border flex items-center gap-2 border-b px-4 py-2">
-      <span class="text-sm font-semibold">Pi X</span>
-      <span class="text-muted-foreground truncate font-mono text-xs">{{ session.cwd }}</span>
-
-      <div class="flex-1" />
-
-      <span v-if="session.retryInfo" class="text-xs text-amber-500">{{ session.retryInfo }}</span>
-      <span v-if="session.isCompacting" class="text-muted-foreground animate-pulse text-xs">compacting…</span>
-
-      <Select v-model="modelKey">
-        <SelectTrigger class="h-8 w-56 text-xs">
-          <SelectValue placeholder="Select model" />
-        </SelectTrigger>
-        <SelectContent>
-          <template v-for="group in modelGroups" :key="group.provider">
-            <SelectItem
-              v-for="m in group.models"
-              :key="m.provider + '/' + m.id"
-              :value="m.provider + '/' + m.id"
-              class="text-xs"
-            >
-              {{ m.provider }} / {{ m.name }}
-            </SelectItem>
-          </template>
-        </SelectContent>
-      </Select>
-
-      <Select
-        :model-value="session.thinkingLevel"
-        @update:model-value="(v: any) => { if (typeof v === 'string') void session.setThinkingLevel(v as ThinkingLevel) }"
-      >
-        <SelectTrigger class="h-8 w-24 text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem v-for="lv in session.availableThinking" :key="lv" :value="lv" class="text-xs">
-            thinking: {{ lv }}
-          </SelectItem>
-        </SelectContent>
-      </Select>
-
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="treeOpen = true"
-      >
-        Tree
-      </button>
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="openFork"
-      >
-        Fork
-      </button>
-
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        :disabled="exporting"
-        @click="exportSession"
-      >
-        {{ exporting ? "Exporting…" : "Export" }}
-      </button>
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="settingsOpen = true"
-      >
-        Settings
-      </button>
-
-      <Popover v-model:open="historyOpen">
-        <PopoverTrigger as-child>
-          <button class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs">
-            History
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="end" class="w-96 p-0">
-          <p class="text-muted-foreground border-b px-3 py-2 text-xs font-medium">
-            {{ historyLoading ? "Loading…" : `Sessions (${history.length})` }}
-          </p>
-          <div class="max-h-80 overflow-y-auto">
-            <button
-              v-for="s in history"
-              :key="s.id"
-              class="hover:bg-accent flex w-full flex-col items-start gap-0.5 border-b px-3 py-2 text-left last:border-b-0"
-              :class="s.file === session.sessionFile ? 'bg-accent/60' : ''"
-              @click="emit('resumeSession', s.file); historyOpen = false"
-            >
-              <span class="text-foreground w-full truncate text-xs font-medium">{{ s.preview ?? "(no user message)" }}</span>
-              <span class="text-muted-foreground text-[11px]">{{ formatTime(s) }} · {{ s.id.slice(0, 8) }}</span>
-            </button>
-            <p v-if="!historyLoading && history.length === 0" class="text-muted-foreground px-3 py-4 text-xs">
-              No stored sessions for this project.
-            </p>
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="session.newSession()"
-      >
-        New
-      </button>
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="session.compact()"
-      >
-        Compact
-      </button>
-      <button
-        class="border-input hover:bg-accent rounded-md border px-2.5 py-1.5 text-xs"
-        @click="$emit('switchProject')"
-      >
-        Switch project
-      </button>
+  <div class="chat-workspace">
+    <header class="workspace-header">
+      <div class="min-w-0">
+        <h1 class="truncate text-sm font-medium">
+          {{ session.entries.find((e) => e.kind === "user")?.text || "新会话" }}
+        </h1>
+        <p class="text-muted-foreground truncate text-xs">
+          {{ project.split(/[\\/]/).filter(Boolean).pop() }}
+          <span class="mx-1">/</span> 本地工作区
+        </p>
+      </div>
+      <div class="header-actions">
+        <span v-if="session.retryInfo" class="text-xs text-amber-500">{{
+          session.retryInfo
+        }}</span>
+        <span v-if="session.isCompacting" class="text-xs animate-pulse"
+          >正在压缩…</span
+        >
+        <button class="quiet-button" @click="treeOpen = true">会话树</button>
+        <button class="quiet-button" @click="openFork">分支</button>
+        <button
+          class="quiet-button"
+          :disabled="exporting"
+          @click="exportSession"
+        >
+          {{ exporting ? "导出中…" : "导出" }}
+        </button>
+        <button
+          class="quiet-button"
+          :disabled="session.isStreaming"
+          @click="session.compact()"
+        >
+          压缩上下文
+        </button>
+      </div>
     </header>
 
     <!-- conversation -->
     <Conversation class="min-h-0 flex-1">
-      <ConversationContent class="mx-auto max-w-3xl px-4 py-6">
+      <ConversationContent
+        class="conversation-column mx-auto w-full max-w-3xl px-6 py-10"
+      >
         <ConversationEmptyState
+          class="chat-empty"
           v-if="session.entries.length === 0"
-          title="Pi is ready"
-          :description="'Working in ' + session.cwd"
+          title="今天想构建什么？"
+          description="探索代码、解决问题，或将一个想法变成现实。"
         />
 
         <template v-for="entry in session.entries" :key="entry.id">
@@ -454,24 +360,31 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 class="bg-muted rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
               >
                 {{ entry.text }}
-                <div v-if="entry.images?.length" class="mt-1.5 flex flex-wrap gap-1.5">
+                <div
+                  v-if="entry.images?.length"
+                  class="mt-1.5 flex flex-wrap gap-1.5"
+                >
                   <img
                     v-for="(im, i) in entry.images"
                     :key="i"
                     :src="im.url"
                     class="max-h-40 max-w-xs rounded-md border object-contain"
-                  >
+                  />
                 </div>
               </div>
-              <AssistantBlocks v-else :blocks="entry.blocks" :runs="session.runs" />
-                <MessageActions v-if="entry.kind === 'assistant'" class="mt-1">
-                  <MessageAction
-                    tooltip="Copy reply"
-                    @click="copyText(blocksText(entry.blocks))"
-                  >
-                    <Copy />
-                  </MessageAction>
-                </MessageActions>
+              <AssistantBlocks
+                v-else
+                :blocks="entry.blocks"
+                :runs="session.runs"
+              />
+              <MessageActions v-if="entry.kind === 'assistant'" class="mt-1">
+                <MessageAction
+                  tooltip="Copy reply"
+                  @click="copyText(blocksText(entry.blocks))"
+                >
+                  <Copy />
+                </MessageAction>
+              </MessageActions>
             </MessageContent>
           </Message>
         </template>
@@ -479,12 +392,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <!-- streaming assistant message (assembled from deltas) -->
         <Message v-if="session.partialBlocks" from="assistant">
           <MessageContent>
-            <AssistantBlocks :blocks="session.partialBlocks" :runs="session.runs" />
+            <AssistantBlocks
+              :blocks="session.partialBlocks"
+              :runs="session.runs"
+            />
           </MessageContent>
         </Message>
 
         <!-- waiting indicator before any content arrives -->
-        <div v-if="session.isStreaming && !session.partialBlocks" class="text-muted-foreground flex items-center gap-2 text-sm">
+        <div
+          v-if="session.isStreaming && !session.partialBlocks"
+          class="text-muted-foreground flex items-center gap-2 text-sm"
+        >
           <Loader />
           <span>thinking…</span>
         </div>
@@ -492,7 +411,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <!-- pending steering / follow-up -->
         <QueueSection v-if="session.pendingCount > 0" class="mt-2">
           <QueueList>
-            <QueueItem v-for="(s, i) in [...session.steering, ...session.followUp]" :key="i">
+            <QueueItem
+              v-for="(s, i) in [...session.steering, ...session.followUp]"
+              :key="i"
+            >
               <QueueItemContent>{{ s }}</QueueItemContent>
             </QueueItem>
           </QueueList>
@@ -510,7 +432,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     </div>
 
     <!-- composer -->
-    <div class="border-border mx-auto w-full max-w-3xl border-t p-3">
+    <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
       <PromptInput @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
         <PromptInputHeader>
@@ -526,11 +448,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 :src="f.url"
                 class="size-full object-cover"
                 alt="attachment"
+              />
+              <span
+                v-else
+                class="text-muted-foreground flex h-full items-center justify-center p-1 text-[10px] break-all"
               >
-              <span v-else class="text-muted-foreground flex h-full items-center justify-center p-1 text-[10px] break-all">
                 {{ f.filename ?? "file" }}
               </span>
               <button
+                type="button"
                 class="bg-background/80 absolute top-0.5 right-0.5 size-4 rounded-full text-[10px] leading-none"
                 title="Remove"
                 @click="bridge?.removeFile?.(f.id)"
@@ -542,7 +468,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
           <PromptInputCommand v-if="fileOpen" class="w-full rounded-md border">
             <PromptInputCommandList>
-              <PromptInputCommandEmpty>No matching files.</PromptInputCommandEmpty>
+              <PromptInputCommandEmpty
+                >No matching files.</PromptInputCommandEmpty
+              >
               <PromptInputCommandGroup heading="Files">
                 <PromptInputCommandItem
                   v-for="f in fileHits"
@@ -551,7 +479,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   @select="pickFile(f.path)"
                 >
                   <span class="font-mono text-xs">{{ f.name }}</span>
-                  <span class="text-muted-foreground truncate text-xs">{{ f.dir }}</span>
+                  <span class="text-muted-foreground truncate text-xs">{{
+                    f.dir
+                  }}</span>
                 </PromptInputCommandItem>
               </PromptInputCommandGroup>
             </PromptInputCommandList>
@@ -559,7 +489,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
           <PromptInputCommand v-if="cmdOpen" class="w-full rounded-md border">
             <PromptInputCommandList>
-              <PromptInputCommandEmpty>No matching command.</PromptInputCommandEmpty>
+              <PromptInputCommandEmpty
+                >No matching command.</PromptInputCommandEmpty
+              >
               <PromptInputCommandGroup heading="Commands">
                 <PromptInputCommandItem
                   v-for="c in filteredCommands"
@@ -568,34 +500,80 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   @select="pickCommand(c.name)"
                 >
                   <span class="font-mono text-xs">/{{ c.name }}</span>
-                  <span class="text-muted-foreground truncate text-xs">{{ c.description }}</span>
+                  <span class="text-muted-foreground truncate text-xs">{{
+                    c.description
+                  }}</span>
                 </PromptInputCommandItem>
               </PromptInputCommandGroup>
             </PromptInputCommandList>
           </PromptInputCommand>
         </PromptInputHeader>
         <PromptInputTextarea
-          placeholder="Message pi… (Enter to send, Esc to abort)"
-          class="min-h-16"
+          placeholder="向 Pi 提问，@ 引用文件，/ 使用命令…"
+          class="min-h-24"
         />
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-1">
+        <div class="composer-controls flex items-center justify-between">
+          <div class="composer-options flex items-center gap-1">
             <button
+              type="button"
               class="text-muted-foreground hover:bg-accent hover:text-foreground rounded-md px-2 py-1.5 text-xs"
               title="Attach image"
               @click="bridge?.openFileDialog?.()"
             >
-              + Image
+              + 附件
             </button>
-            <StatusBar />
+            <Select v-model="modelKey">
+              <SelectTrigger class="h-8 w-56 text-xs">
+                <SelectValue placeholder="选择模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <template v-for="group in modelGroups" :key="group.provider">
+                  <SelectItem
+                    v-for="m in group.models"
+                    :key="m.provider + '/' + m.id"
+                    :value="m.provider + '/' + m.id"
+                    class="text-xs"
+                  >
+                    {{ m.provider }} / {{ m.name }}
+                  </SelectItem>
+                </template>
+              </SelectContent>
+            </Select>
+
+            <Select
+              :model-value="session.thinkingLevel"
+              @update:model-value="
+                (v: any) => {
+                  if (typeof v === 'string')
+                    void session.setThinkingLevel(v as ThinkingLevel)
+                }
+              "
+            >
+              <SelectTrigger class="h-8 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="lv in session.availableThinking"
+                  :key="lv"
+                  :value="lv"
+                  class="text-xs"
+                >
+                  推理: {{ lv }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <PromptInputSubmit :status="submitStatus" />
         </div>
       </PromptInput>
+      <div class="composer-caption">
+        <span
+          >本地运行 · {{ project.split(/[\\/]/).filter(Boolean).pop() }}</span
+        ><span>Enter 发送 · Shift + Enter 换行</span>
+      </div>
+      <StatusBar />
     </div>
-
-    <!-- settings dialog -->
-    <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
 
     <!-- session tree dialog -->
     <Dialog v-model:open="treeOpen">
@@ -603,7 +581,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <DialogHeader>
           <DialogTitle>Session tree</DialogTitle>
         </DialogHeader>
-        <SessionTree :open="treeOpen" @fork="doFork" @close="treeOpen = false" />
+        <SessionTree
+          :open="treeOpen"
+          @fork="doFork"
+          @close="treeOpen = false"
+        />
       </DialogContent>
     </Dialog>
 
@@ -614,10 +596,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <DialogTitle>Fork from an earlier prompt</DialogTitle>
         </DialogHeader>
         <p class="text-muted-foreground text-xs">
-          Continues the conversation from the selected prompt, discarding everything after it.
+          Continues the conversation from the selected prompt, discarding
+          everything after it.
         </p>
         <div class="flex flex-col gap-1">
           <button
+            type="button"
             v-for="m in forkMessages"
             :key="m.entryId"
             class="hover:bg-accent rounded-md border px-3 py-2 text-left text-xs"

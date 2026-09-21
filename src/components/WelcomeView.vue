@@ -23,18 +23,15 @@ async function saveAndDetect() {
   try {
     await saveConfig({ ...props.config, piPath: customPath.value || undefined })
     info.value = await detectPi(customPath.value || undefined)
-    if (info.value.found)
-      emit("configured")
-  }
-  finally {
+    if (info.value.found) emit("configured")
+  } finally {
     busy.value = false
   }
 }
 
 async function pickFolder() {
   const dir = await open({ directory: true, title: "Open a project folder" })
-  if (typeof dir === "string")
-    emit("projectSelected", dir)
+  if (typeof dir === "string") emit("projectSelected", dir)
 }
 </script>
 
@@ -43,20 +40,34 @@ async function pickFolder() {
     <div class="w-full max-w-xl space-y-8">
       <div class="space-y-2 text-center">
         <h1 class="text-3xl font-semibold tracking-tight">Pi X</h1>
-        <p class="text-muted-foreground text-sm">Desktop client for the pi coding agent</p>
+        <p class="text-muted-foreground text-sm">你的本地 AI 编程工作区</p>
       </div>
+
+      <p
+        v-if="phase === 'detecting'"
+        class="text-center text-sm text-muted-foreground animate-pulse"
+      >
+        正在连接本地运行环境…
+      </p>
 
       <!-- pi not found: install guidance -->
       <div v-if="phase === 'no-pi'" class="space-y-4 rounded-lg border p-5">
         <div>
           <h2 class="font-medium">pi CLI not found</h2>
           <p class="text-muted-foreground mt-1 text-sm">
-            Pi X drives <code class="bg-muted rounded px-1">pi --mode rpc</code> as a child process.
-            Install the pi CLI (requires Node.js), or point Pi X at an existing binary below.
+            Pi X drives
+            <code class="bg-muted rounded px-1">pi --mode rpc</code> as a child
+            process. Install the pi CLI (requires Node.js), or point Pi X at an
+            existing binary below.
           </p>
         </div>
-        <div class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs">
-          <span class="flex-1 overflow-x-auto whitespace-nowrap">npm install -g --ignore-scripts @earendil-works/pi-coding-agent</span>
+        <div
+          class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs"
+        >
+          <span class="flex-1 overflow-x-auto whitespace-nowrap"
+            >npm install -g --ignore-scripts
+            @earendil-works/pi-coding-agent</span
+          >
         </div>
         <div class="flex gap-2">
           <input
@@ -79,18 +90,20 @@ async function pickFolder() {
         <div class="flex items-center gap-2">
           <span class="size-2 rounded-full bg-green-500" />
           <span class="text-sm">
-            pi ready
-            <span v-if="info?.version" class="text-muted-foreground">({{ info.version }})</span>
+            Pi 已就绪
+            <span v-if="info?.version" class="text-muted-foreground"
+              >({{ info.version }})</span
+            >
           </span>
         </div>
         <button
           class="bg-primary text-primary-foreground hover:bg-primary/90 w-full rounded-md py-3 text-sm font-medium"
           @click="pickFolder"
         >
-          Open project folder…
+          打开项目文件夹…
         </button>
         <p class="text-muted-foreground text-center text-xs">
-          pi will run inside the selected folder and load its .pi resources
+          选择一个项目，开始探索代码或构建新的想法。
         </p>
       </div>
     </div>

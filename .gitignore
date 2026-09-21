@@ -26,3 +26,6 @@ src-tauri/gen/schemas
 *.njsproj
 *.sln
 *.sw?
+
+# Local browser verification artifacts
+.playwright-cli/
