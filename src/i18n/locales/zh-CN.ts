@@ -10,7 +10,7 @@ export default {
     "loading": "正在读取配置…",
     "retry": "重新加载",
     "prompt": "全局提示词",
-    "promptHint": "追加到 Pi 默认系统提示词，保留项目上下文。清空并保存可移除追加内容。",
+    "promptHint": "保存到 Pi 约定的 ~/.pix/agent/SYSTEM.md，并替换默认系统提示词；项目上下文仍会附加。清空并保存会删除该文件。",
     "placeholder": "例如：使用中文回答；修改代码后运行相关测试。",
     "manage": "手动管理 Skills",
     "manualHint": "关闭自动发现，仅加载下方已启用的文件。首次开启会导入当前会话可见的技能。",

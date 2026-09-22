@@ -25,7 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(RpcState::default())
         .setup(|app| {
-            data_dir::initialize(app.handle())?;
+            data_dir::initialize()?;
             let config = app.config().app.windows[0].clone();
             tauri::WebviewWindowBuilder::from_config(app, &config)?
                 .data_directory(data_dir::root().join("webview"))
@@ -55,6 +55,8 @@ pub fn run() {
             commands::pi_detect,
             commands::app_config_get,
             commands::app_config_save,
+            commands::global_prompt_get,
+            commands::global_prompt_save,
             commands::trust_status,
             commands::trust_save,
             commands::rpc_spawn,

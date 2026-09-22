@@ -19,8 +19,6 @@ pub struct AppConfig {
     pub last_project: Option<String>,
     #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<crate::title_generation::TitleModel>,
-    #[serde(rename = "globalPrompt", default)]
-    pub global_prompt: String,
     /// None preserves Pi discovery; Some([]) disables all skills.
     #[serde(rename = "managedSkills", default)]
     pub managed_skills: Option<Vec<ManagedSkill>>,
@@ -63,24 +61,64 @@ fn config_path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+fn global_prompt_path() -> std::path::PathBuf {
+    trust::agent_dir().join("SYSTEM.md")
+}
+
+fn write_config(path: &std::path::Path, config: &AppConfig) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let body = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    std::fs::write(path, body).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
     let path = config_path(&app)?;
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn app_config_save(app: AppHandle, config: AppConfig) -> Result<(), String> {
-    let path = config_path(&app)?;
+    write_config(&config_path(&app)?, &config)
+}
+
+#[tauri::command]
+pub fn global_prompt_get() -> Result<String, String> {
+    read_global_prompt(&global_prompt_path())
+}
+
+fn read_global_prompt(path: &std::path::Path) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    std::fs::read_to_string(path)
+        .map(|s| s.trim_start_matches('\u{feff}').to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn global_prompt_save(prompt: String) -> Result<(), String> {
+    save_global_prompt(&global_prompt_path(), &prompt)
+}
+
+fn save_global_prompt(path: &std::path::Path, prompt: &str) -> Result<(), String> {
+    if prompt.trim().is_empty() {
+        match std::fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, body).map_err(|e| e.to_string())
+    std::fs::write(path, prompt).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -109,14 +147,7 @@ pub async fn rpc_spawn(
     session_file: Option<String>,
 ) -> Result<(), String> {
     let cfg = app_config_get(app.clone())?;
-    let mut extra_args = runtime_args(&cfg)?;
-    if !cfg.global_prompt.trim().is_empty() {
-        let prompt_path = config_path(&app)?.with_file_name("global-prompt.md");
-        std::fs::create_dir_all(prompt_path.parent().ok_or("Missing config directory")?)
-            .map_err(|e| e.to_string())?;
-        std::fs::write(&prompt_path, &cfg.global_prompt).map_err(|e| e.to_string())?;
-        extra_args.extend(["--append-system-prompt".into(), prompt_path.to_string_lossy().into_owned()]);
-    }
+    let extra_args = runtime_args(&cfg)?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
         return Err(
@@ -209,11 +240,22 @@ mod agent_config_tests {
     use super::*;
 
     #[test]
-    fn old_config_keeps_automatic_discovery() {
+    fn config_without_managed_skills_keeps_automatic_discovery() {
         let config: AppConfig = serde_json::from_str(r#"{"piPath":"pi","lastProject":"demo"}"#).unwrap();
-        assert!(config.global_prompt.is_empty());
         assert!(config.managed_skills.is_none());
         assert!(runtime_args(&config).unwrap().is_empty());
+    }
+
+    #[test]
+    fn saving_blank_global_prompt_removes_pi_file() {
+        let root = std::env::temp_dir().join(format!("pix-prompt-{}", uuid::Uuid::new_v4()));
+        let path = root.join("agent").join("SYSTEM.md");
+        save_global_prompt(&path, " 中文 ").unwrap();
+        assert_eq!(read_global_prompt(&path).unwrap(), " 中文 ");
+        save_global_prompt(&path, " \n").unwrap();
+        assert!(!path.exists());
+        assert_eq!(read_global_prompt(&path).unwrap(), "");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -244,13 +286,11 @@ mod agent_config_tests {
     fn enabled_absolute_files_are_passed_as_separate_arguments() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml").to_string_lossy().into_owned();
         let config = AppConfig {
-            global_prompt: "中文\nGlobal instruction".into(),
             managed_skills: Some(vec![ManagedSkill { path: path.clone(), enabled: true }]),
             ..Default::default()
         };
         assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills", "--skill", &path]);
         let roundtrip: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
-        assert_eq!(roundtrip.global_prompt, config.global_prompt);
         assert_eq!(runtime_args(&roundtrip).unwrap(), runtime_args(&config).unwrap());
     }
 }

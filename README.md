@@ -182,5 +182,4 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - 第一次点击关闭会提示选择「最小化到托盘」「退出应用」或「取消」；取消不记录选择。
 - 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
 - 应用数据统一放在用户目录的 `.pix`：`config.json`（设置）、`remote.json`（远程访问）、`agent/`（模型、凭据、会话等）和 `webview/`（桌面界面本地存储与缓存）。
-- 首次升级会复制旧配置、原 `PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 数据，以及 Windows WebView 数据；保留原文件，不覆盖 `.pix` 中已有文件。升级前请退出旧版 PiX，以免 WebView 文件被占用。
 - PiX 启动的 agent 使用 `.pix/agent`，不再与终端 pi 自动同步。项目内 `.pi` 配置与用户项目文件仍保留在原位置。远程浏览器的界面偏好仍属于该浏览器。

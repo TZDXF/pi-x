@@ -10,7 +10,7 @@ export default {
     "loading": "Loading…",
     "retry": "Retry",
     "prompt": "Global prompt",
-    "promptHint": "Appended to the default Pi system prompt, preserving project context. Clear and save to remove.",
+    "promptHint": "Saved to Pi's standard ~/.pix/agent/SYSTEM.md, replacing the default system prompt while project context is still appended. Clear and save to delete the file.",
     "placeholder": "For example: Run relevant tests after code changes.",
     "manage": "Manage skills manually",
     "manualHint": "Disable discovery and load only enabled files below. First enabling imports visible skills from the current session.",

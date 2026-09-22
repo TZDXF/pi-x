@@ -8,6 +8,8 @@ function harness(initial = {}, commands = [], component = "SkillSettings") {
   const source = readFileSync(new URL(`../src/components/${component}.vue`, import.meta.url), 'utf8')
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   let config = initial, mount, failRead = false, failWrite = false
+  let promptFile = config.__promptFile ?? ''
+  delete config.__promptFile
   const toasts = []
   const context = vm.createContext({
     ref: value => ({ value }), computed: fn => ({ get value() { return fn() } }),
@@ -15,15 +17,17 @@ function harness(initial = {}, commands = [], component = "SkillSettings") {
     useSessionStore: () => ({ commands }), useUiStore: () => ({ pushToast: (...args) => toasts.push(args) }),
     getConfig: async () => { if (failRead) throw Error('read failure'); return config },
     saveConfig: async value => { if (failWrite) throw Error('write failure'); config = value },
+    getGlobalPrompt: async () => { if (failRead) throw Error('read failure'); return promptFile },
+    saveGlobalPrompt: async value => { if (failWrite) throw Error('write failure'); promptFile = value },
     open: async () => null,
   })
   const fields = component === 'AgentSettings' ? 'prompt, error, dirty, saving, load, save' : 'managed, skills, loaded, error, dirty, saving, load, save, add, setManaged, chooseSkills'
   vm.runInContext(ts.transpile(source + `\nglobalThis.api = { ${fields} };`, { target: ts.ScriptTarget.ES2022 }), context)
-  return { api: context.api, mount: () => mount(), config: () => config, toasts,
+  return { api: context.api, mount: () => mount(), config: () => config, prompt: () => promptFile, setPrompt: value => { promptFile = value }, toasts,
     failRead: value => { failRead = value }, failWrite: value => { failWrite = value } }
 }
 
-test('legacy configuration retains automatic discovery and editing preserves unrelated settings', async () => {
+test('configuration retains automatic discovery and editing preserves unrelated settings', async () => {
   const h = harness({ piPath: 'custom-pi', defaultModel: { provider: 'p', modelId: 'm' } })
   await h.mount()
   assert.equal(h.api.managed.value, false)
@@ -92,25 +96,26 @@ test('canceling file picker changes nothing', async () => {
 
 test('prompt page saves and clears prompt without changing skills', async () => {
   const skills = [{ path: 'C:/SKILL.md', enabled: false }]
-  const h = harness({ globalPrompt: 'old', managedSkills: skills, piPath: 'pi' }, [], 'AgentSettings')
+  const h = harness({ __promptFile: 'old', managedSkills: skills, piPath: 'pi' }, [], 'AgentSettings')
   await h.mount()
+  assert.equal(h.api.prompt.value, 'old')
   h.api.prompt.value = '中文'
   await h.api.save()
-  assert.equal(h.config().globalPrompt, '中文')
+  assert.equal(h.prompt(), '中文')
   assert.equal(h.config().managedSkills, skills)
   h.api.prompt.value = ''
   await h.api.save()
-  assert.equal(h.config().globalPrompt, '')
+  assert.equal(h.prompt(), '')
   assert.equal(h.config().piPath, 'pi')
 })
 
-test('skills page preserves the latest prompt when saving', async () => {
-  const h = harness({ globalPrompt: 'old' })
+test('skills settings remain independent from the prompt file', async () => {
+  const h = harness({ __promptFile: 'old' })
   await h.mount()
-  h.config().globalPrompt = 'updated elsewhere'
+  h.setPrompt('updated elsewhere')
   h.api.setManaged(true)
   await h.api.save()
-  assert.equal(h.config().globalPrompt, 'updated elsewhere')
+  assert.equal(h.prompt(), 'updated elsewhere')
 })
 
 test('settings exposes separate prompt and skills pages', () => {

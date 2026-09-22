@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { getConfig, saveConfig } from "@/api/piClient"
+import { getGlobalPrompt, saveGlobalPrompt } from "@/api/piClient"
 import { useUiStore } from "@/stores/ui"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -18,8 +18,7 @@ async function load() {
   loading.value = true
   error.value = ""
   try {
-    const config = await getConfig()
-    prompt.value = config.globalPrompt ?? ""
+    prompt.value = await getGlobalPrompt()
     dirty.value = false
   } catch (e) { error.value = String(e) }
   finally { loading.value = false }
@@ -27,8 +26,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const config = await getConfig()
-    await saveConfig({ ...config, globalPrompt: prompt.value })
+    await saveGlobalPrompt(prompt.value)
     dirty.value = false
     ui.pushToast(t("agentConfig.saved"), "info")
   } catch (e) { ui.pushToast(String(e), "error") }
