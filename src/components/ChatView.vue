@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   Conversation,
@@ -74,6 +74,15 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
+
+async function loadOlderHistory(event: MouseEvent) {
+  const viewport = (event.currentTarget as HTMLElement).closest('[role="log"]')
+  const height = viewport?.scrollHeight ?? 0
+  const top = viewport?.scrollTop ?? 0
+  await session.loadOlderHistory()
+  await nextTick()
+  if (viewport?.isConnected) viewport.scrollTop = top + viewport.scrollHeight - height
+}
 
 // ---- slash command palette ----
 const cmdOpen = ref(false)
@@ -364,9 +373,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       <ConversationContent
         class="conversation-column mx-auto w-full max-w-3xl px-6 py-10"
       >
+        <div v-if="session.historyLoading" role="status" class="text-muted-foreground flex items-center justify-center gap-2 text-sm">
+          <Loader :size="16" /> {{ t('chat.historyLoading') }}
+        </div>
+        <Button v-else-if="session.hasOlderHistory" variant="ghost" size="sm"
+          class="mx-auto" :disabled="session.olderHistoryLoading" @click="loadOlderHistory">
+          {{ t(session.olderHistoryLoading ? 'chat.historyLoading' : 'chat.loadOlderHistory') }}
+        </Button>
         <ConversationEmptyState
           class="chat-empty"
-          v-if="session.entries.length === 0"
+          v-if="session.entries.length === 0 && !session.historyLoading"
           :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
           :description="t('chat.emptyDesc')"
         />

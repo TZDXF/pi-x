@@ -94,6 +94,8 @@ export default {
   },
 
   chat: {
+    historyLoading: "Loading history…",
+    loadOlderHistory: "Load earlier messages",
     newSession: "New session",
     compacting: "Compacting…",
     sessionTree: "Session tree",

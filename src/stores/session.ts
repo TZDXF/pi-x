@@ -67,6 +67,23 @@ export const useSessionStore = defineStore("session", () => {
   const availableThinking = ref<ThinkingLevel[]>(["off"])
   const cwd = ref("")
 
+  // Keep unrendered history outside Vue's deep reactive graph.
+  let historyMessages: any[] = []
+  let historyVersion = 0
+  const historyCursor = ref(0)
+  const historyLoading = ref(false)
+  const olderHistoryLoading = ref(false)
+  const hasOlderHistory = computed(() => historyCursor.value > 0)
+  const yieldHistory = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+
+  function invalidateHistory() {
+    historyVersion++
+    historyMessages = []
+    historyCursor.value = 0
+    historyLoading.value = false
+    olderHistoryLoading.value = false
+  }
+
   // streaming assembly
 
   const currentModel = computed(() => state.value?.model ?? null)
@@ -341,6 +358,7 @@ export const useSessionStore = defineStore("session", () => {
     const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
     if (!result.success) throw new Error(result.error || "新建会话失败")
     if (result.data?.cancelled) return
+    invalidateHistory()
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
@@ -390,42 +408,94 @@ export const useSessionStore = defineStore("session", () => {
     }
   }
 
-  /** Rebuild the visible conversation from the session's stored messages. */
-  function loadMessages(msgs: any[]) {
-    entries.value = []
-    runs.value = {}
-    partialBlocks.value = null
-    for (const msg of msgs) {
-      if (msg.role === "user") {
-        const text = contentText(msg.content)
-        if (text.trim())
-          entries.value.push({ kind: "user", id: nextId(), text })
-      }
-      else if (msg.role === "assistant") {
-        const blocks = blocksFromMessage(msg)
-        if (blocks.length)
-          entries.value.push({ kind: "assistant", id: nextId(), blocks })
-      }
-      else if (msg.role === "toolResult") {
-        const callId = String(msg.toolCallId ?? msg.id ?? "")
-        if (!callId)
-          continue
-        runs.value[callId] = {
-          id: callId,
-          name: "tool",
-          argsText: "",
-          outputText: contentText(msg.content),
-          state: msg.isError ? "output-error" : "output-available",
+  /** Materialize only one page, yielding during large tool-heavy histories. */
+  async function loadOlderHistory() {
+    if (olderHistoryLoading.value || !historyCursor.value) return
+    const version = historyVersion
+    const source = historyMessages
+    const end = historyCursor.value
+    olderHistoryLoading.value = true
+    try {
+      await yieldHistory()
+      let start = end
+      let count = 0
+      while (start > 0 && count < 30) {
+        const msg = source[--start]
+        if (msg.role === "user" || msg.role === "assistant") count++
+        if ((end - start) % 100 === 0) {
+          await yieldHistory()
+          if (version !== historyVersion) return
         }
       }
+      const page: Entry[] = []
+      const pageRuns: Record<string, ToolRun> = {}
+      for (let i = start; i < end; i++) {
+        if (version !== historyVersion) return
+        const msg = source[i]
+        if (msg.role === "user") {
+          const text = contentText(msg.content)
+          const images = Array.isArray(msg.content)
+            ? msg.content.filter((c: any) => c.type === "image" && c.data && c.mimeType)
+              .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
+            : []
+          if (text.trim() || images.length)
+            page.push({ kind: "user", id: nextId(), text, images })
+        }
+        else if (msg.role === "assistant") {
+          const blocks = blocksFromMessage(msg)
+          if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks })
+        }
+        else if (msg.role === "toolResult") {
+          const callId = String(msg.toolCallId ?? msg.id ?? "")
+          if (callId) pageRuns[callId] = {
+            id: callId, name: "tool", argsText: "",
+            outputText: contentText(msg.content),
+            state: msg.isError ? "output-error" : "output-available",
+          }
+        }
+        if ((i - start + 1) % 20 === 0) await yieldHistory()
+      }
+      if (version !== historyVersion) return
+      // Keep newer/live results authoritative when prepending an older page.
+      runs.value = { ...pageRuns, ...runs.value }
+      entries.value = [...page, ...entries.value]
+      historyCursor.value = start
+      if (!start) historyMessages = []
+    }
+    finally {
+      if (version === historyVersion) olderHistoryLoading.value = false
     }
   }
 
-  /** Fetch full history from a resumed session and render it. */
+  async function loadMessages(msgs: any[]) {
+    invalidateHistory()
+    entries.value = []
+    runs.value = {}
+    partialBlocks.value = null
+    historyMessages = msgs
+    historyCursor.value = msgs.length
+    await loadOlderHistory()
+  }
+
+  /** Fetch asynchronously; stale responses must never replace another session. */
   async function loadHistory() {
-    const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
-    if (res.success)
-      loadMessages(res.data?.messages ?? [])
+    invalidateHistory()
+    const version = historyVersion
+    historyLoading.value = true
+    try {
+      const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
+      if (version !== historyVersion) return
+      if (!res.success) throw new Error(res.error || "Failed to load history")
+      entries.value = []
+      runs.value = {}
+      partialBlocks.value = null
+      historyMessages = res.data?.messages ?? []
+      historyCursor.value = historyMessages.length
+      await loadOlderHistory()
+    }
+    finally {
+      if (version === historyVersion) historyLoading.value = false
+    }
   }
 
   async function refreshStats() {
@@ -509,6 +579,7 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   function clear() {
+    invalidateHistory()
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
@@ -553,6 +624,10 @@ export const useSessionStore = defineStore("session", () => {
     refreshStats,
     refreshModels,
     loadOfflineModels,
+    historyLoading,
+    olderHistoryLoading,
+    hasOlderHistory,
+    loadOlderHistory,
     loadHistory,
     loadMessages,
     init,

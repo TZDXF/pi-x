@@ -94,6 +94,8 @@ export default {
   },
 
   chat: {
+    historyLoading: "正在加载历史消息…",
+    loadOlderHistory: "加载更早的消息",
     newSession: "新会话",
     compacting: "正在压缩…",
     sessionTree: "会话树",

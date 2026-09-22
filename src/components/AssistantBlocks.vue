@@ -28,7 +28,7 @@ const { t } = useI18n()
       />
 
       <!-- thinking -->
-      <Reasoning v-else-if="block.type === 'thinking'" :is-streaming="block.streaming">
+      <Reasoning v-else-if="block.type === 'thinking'" :is-streaming="block.streaming" :default-open="block.streaming">
         <ReasoningTrigger />
         <ReasoningContent :content="block.text" />
       </Reasoning>
