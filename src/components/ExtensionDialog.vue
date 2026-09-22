@@ -10,6 +10,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useUiStore } from "@/stores/ui"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 
 const ui = useUiStore()
 const { t } = useI18n()
@@ -50,76 +53,59 @@ function confirm(confirmed: boolean) {
 
       <!-- select -->
       <div v-if="active.method === 'select'" class="flex flex-col gap-1">
-        <button
+        <Button
           v-for="(opt, i) in active.options ?? []"
           :key="i"
-          class="hover:bg-accent rounded-md border px-3 py-2 text-left text-sm"
+          variant="outline"
+          class="h-auto justify-start px-3 py-2 text-left"
           @click="submitValue(opt)"
         >
           {{ opt }}
-        </button>
+        </Button>
       </div>
 
       <!-- confirm -->
       <DialogFooter v-else-if="active.method === 'confirm'" class="gap-2">
-        <button
-          class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
-          @click="confirm(false)"
-        >
+        <Button variant="outline" @click="confirm(false)">
           {{ t("ext.no") }}
-        </button>
-        <button
-          class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
-          @click="confirm(true)"
-        >
+        </Button>
+        <Button @click="confirm(true)">
           {{ t("ext.yes") }}
-        </button>
+        </Button>
       </DialogFooter>
 
       <!-- input -->
       <div v-else-if="active.method === 'input'" class="space-y-3">
-        <input
+        <Input
           v-model="input"
           :placeholder="active.placeholder"
-          class="border-input ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring h-9 w-full rounded-md border bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
+          class="h-9"
           @keydown.enter.prevent="submitValue(input)"
         />
         <DialogFooter class="gap-2">
-          <button
-            class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
-            @click="ui.respond(active, { cancelled: true })"
-          >
+          <Button variant="outline" @click="ui.respond(active, { cancelled: true })">
             {{ t("ext.cancel") }}
-          </button>
-          <button
-            class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
-            @click="submitValue(input)"
-          >
+          </Button>
+          <Button @click="submitValue(input)">
             {{ t("ext.ok") }}
-          </button>
+          </Button>
         </DialogFooter>
       </div>
 
       <!-- editor -->
       <div v-else-if="active.method === 'editor'" class="space-y-3">
-        <textarea
+        <Textarea
           v-model="editing"
           rows="10"
-          class="border-input placeholder:text-muted-foreground focus-visible:ring-ring w-full rounded-md border bg-transparent p-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2"
+          class="font-mono text-xs"
         />
         <DialogFooter class="gap-2">
-          <button
-            class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
-            @click="ui.respond(active, { cancelled: true })"
-          >
+          <Button variant="outline" @click="ui.respond(active, { cancelled: true })">
             {{ t("ext.cancel") }}
-          </button>
-          <button
-            class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-sm"
-            @click="submitValue(editing)"
-          >
+          </Button>
+          <Button @click="submitValue(editing)">
             {{ t("ext.save") }}
-          </button>
+          </Button>
         </DialogFooter>
       </div>
     </DialogContent>

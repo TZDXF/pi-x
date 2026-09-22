@@ -25,6 +25,7 @@ import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsDialog from "@/components/SettingsDialog.vue"
 import { PanelLeft } from "@lucide/vue"
+import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 
 type Phase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
@@ -306,15 +307,17 @@ onUnmounted(() => {
       @collapse="sidebarOpen = false"
     />
     <main class="workspace-main">
-      <button
+      <Button
         v-if="!sidebarOpen"
+        variant="ghost"
+        size="icon"
         class="sidebar-restore icon-button"
         :title="t('app.expandSidebar')"
         :aria-label="t('app.expandSidebar')"
         @click="sidebarOpen = true"
       >
         <PanelLeft :size="18" />
-      </button>
+      </Button>
       <WelcomeView
         v-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
         :phase
@@ -351,12 +354,9 @@ onUnmounted(() => {
           }}</pre>
         </div>
         <div class="flex gap-2">
-          <button
-            class="border-input hover:bg-accent rounded-md border px-4 py-2 text-sm"
-            @click="switchProject"
-          >
+          <Button variant="outline" @click="switchProject">
             {{ t("app.chooseProject") }}
-          </button>
+          </Button>
         </div>
       </div>
     </main>

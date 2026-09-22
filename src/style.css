@@ -595,6 +595,21 @@ kbd {
 .workspace-text-input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; background: var(--background); }
 .workspace-primary { border-radius: 8px; background: var(--primary); color: var(--primary-foreground); padding: 8px 14px; font-size: 13px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
+
+/* reka-based controls (data-slot) keep natural height inside custom-styled
+   layouts, and keep lucide's explicit :size instead of the button svg sizing */
+.quiet-button, .sidebar-action, .project-row, .session-link, .sidebar-empty,
+.context-chip, .context-menu-item, .workspace-primary, .workspace-text-input {
+  height: auto;
+}
+.quiet-button svg, .sidebar-action svg, .project-row svg, .session-link svg,
+.sidebar-empty svg, .context-chip svg, .context-menu-item svg {
+  width: auto;
+  height: auto;
+}
+.settings-nav button[data-state="active"] {
+  background: var(--border);
+}
 .composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: var(--composer-shadow); }
 .composer-dock { padding-bottom: 12px; }
 

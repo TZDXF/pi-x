@@ -61,6 +61,7 @@ import { openPath } from "@/api/piClient"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { Copy } from "@lucide/vue"
+import { Button } from "@/components/ui/button"
 
 const session = useSessionStore()
 const ui = useUiStore()
@@ -335,22 +336,26 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
           >{{ t("chat.compacting") }}</span
         >
-        <button class="quiet-button" @click="treeOpen = true">{{ t("chat.sessionTree") }}</button>
-        <button class="quiet-button" @click="openFork">{{ t("chat.fork") }}</button>
-        <button
+        <Button variant="ghost" size="sm" class="quiet-button" @click="treeOpen = true">{{ t("chat.sessionTree") }}</Button>
+        <Button variant="ghost" size="sm" class="quiet-button" @click="openFork">{{ t("chat.fork") }}</Button>
+        <Button
+          variant="ghost"
+          size="sm"
           class="quiet-button"
           :disabled="exporting"
           @click="exportSession"
         >
           {{ exporting ? t("chat.exporting") : t("chat.export") }}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           class="quiet-button"
           :disabled="session.isStreaming || !connected"
           @click="session.compact()"
         >
           {{ t("chat.compactContext") }}
-        </button>
+        </Button>
       </div>
     </header>
 
@@ -470,14 +475,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               >
                 {{ f.filename ?? "file" }}
               </span>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 class="bg-background/80 absolute top-0.5 right-0.5 size-4 rounded-full text-[10px] leading-none"
                 :title="t('chat.removeAttachment')"
                 @click="bridge?.removeFile?.(f.id)"
               >
                 ×
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -530,14 +537,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         />
         <div class="composer-controls flex items-center justify-between">
           <div class="composer-options flex items-center gap-1">
-            <button
+            <Button
               type="button"
-              class="text-muted-foreground hover:bg-accent hover:text-foreground rounded-md px-2 py-1.5 text-xs"
+              variant="ghost"
+              size="sm"
+              class="text-muted-foreground px-2 py-1.5 text-xs"
               :title="t('chat.attachImage')"
               @click="bridge?.openFileDialog?.()"
             >
               + {{ t("chat.attachment") }}
-            </button>
+            </Button>
             <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" />
 
             <Select
@@ -590,15 +599,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           {{ t("chat.forkDesc") }}
         </p>
         <div class="flex flex-col gap-1">
-          <button
+          <Button
             type="button"
             v-for="m in forkMessages"
             :key="m.entryId"
-            class="hover:bg-accent rounded-md border px-3 py-2 text-left text-xs"
+            variant="outline"
+            class="h-auto justify-start px-3 py-2 text-left text-xs"
             @click="doFork(m.entryId)"
           >
             <span class="line-clamp-2">{{ m.text }}</span>
-          </button>
+          </Button>
           <p v-if="!forkMessages.length" class="text-muted-foreground text-xs">
             {{ t("chat.forkEmpty") }}
           </p>

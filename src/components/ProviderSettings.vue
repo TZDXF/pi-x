@@ -3,6 +3,15 @@
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { ProviderEntry } from "@/api/piClient"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/session"
@@ -152,35 +161,38 @@ async function remove(id: string) {
     <div class="flex shrink-0 items-center gap-2">
       <template v-if="confirmingDelete === id">
         <span class="text-destructive text-xs">{{ t("settings.providerDeleteConfirm") }}</span>
-        <button
-          class="border-destructive text-destructive hover:bg-destructive/10 rounded-md border px-2.5 py-1 text-xs"
+        <Button
+          variant="destructive"
+          size="sm"
           :disabled="busy"
           @click="remove(id)"
         >
           {{ t("settings.confirmDelete") }}
-        </button>
-        <button
-          class="border-input hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
-          @click="confirmingDelete = null"
-        >
+        </Button>
+        <Button variant="outline" size="sm" type="button" @click="confirmingDelete = null">
           {{ t("common.cancel") }}
-        </button>
+        </Button>
       </template>
       <template v-else>
-        <button
-          class="border-input hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
           :disabled="!!editing"
           @click="startEdit(id, p)"
         >
           {{ t("settings.edit") }}
-        </button>
-        <button
-          class="border-input text-destructive hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          class="text-destructive"
           :disabled="!!editing"
           @click="confirmingDelete = id"
         >
           {{ t("settings.delete") }}
-        </button>
+        </Button>
       </template>
     </div>
   </div>
@@ -221,13 +233,14 @@ async function remove(id: string) {
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="mb-1 block text-xs" for="provider-api">{{ t("settings.providerApi") }}</label>
-        <select
-          id="provider-api"
-          v-model="editing.api"
-          class="border-input bg-background h-8 w-full rounded-md border px-2 text-xs"
-        >
-          <option v-for="api in PROVIDER_API_TYPES" :key="api" :value="api">{{ api }}</option>
-        </select>
+        <Select v-model="editing.api">
+          <SelectTrigger id="provider-api" class="h-8 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="api in PROVIDER_API_TYPES" :key="api" :value="api">{{ api }}</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div>
         <label class="mb-1 block text-xs" for="provider-key">{{
@@ -245,31 +258,26 @@ async function remove(id: string) {
     </div>
     <p class="text-muted-foreground text-xs">{{ t("settings.providerApiKeyHint") }}</p>
     <label class="flex items-center gap-2 text-xs">
-      <input v-model="editing.authHeader" type="checkbox" />
+      <Checkbox v-model="editing.authHeader" />
       {{ t("settings.providerAuthHeader") }}
     </label>
     <div class="flex justify-end gap-2 pt-1">
-      <button
-        class="border-input hover:bg-accent rounded-md border px-3 py-1.5 text-xs"
-        @click="editing = null"
-      >
+      <Button variant="outline" size="sm" type="button" @click="editing = null">
         {{ t("common.cancel") }}
-      </button>
-      <button
-        class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-xs"
-        :disabled="busy"
-        @click="saveForm"
-      >
+      </Button>
+      <Button size="sm" :disabled="busy" @click="saveForm">
         {{ busy ? t("settings.saving") : t("settings.save") }}
-      </button>
+      </Button>
     </div>
   </div>
 
-  <button
+  <Button
     v-if="!editing"
-    class="border-input hover:bg-accent mt-4 rounded-md border px-3 py-1.5 text-xs"
+    variant="outline"
+    size="sm"
+    class="mt-4"
     @click="startAdd"
   >
     + {{ t("settings.providerAdd") }}
-  </button>
+  </Button>
 </template>

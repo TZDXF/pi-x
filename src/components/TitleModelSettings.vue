@@ -5,6 +5,8 @@ import { getConfig, saveConfig, getModelsConfig } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import ConversationModelSelect from "./ConversationModelSelect.vue"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 const { t } = useI18n()
 const session = useSessionStore()
 const ui = useUiStore()
@@ -97,19 +99,19 @@ async function save() {
     <fieldset :disabled="loading || saving || loadError" class="space-y-4">
       <div>
         <label for="default-model" class="mb-1 block text-sm">{{ t('titleGeneration.defaultModel') }}</label>
-        <label class="mb-2 flex items-center gap-2 text-xs"><input v-model="defaultFollowMain" type="checkbox" />{{ t('titleGeneration.followMain') }}</label>
+        <label class="mb-2 flex items-center gap-2 text-xs"><Checkbox v-model="defaultFollowMain" />{{ t('titleGeneration.followMain') }}</label>
         <p v-if="defaultFollowMain" class="text-muted-foreground text-xs">{{ t('titleGeneration.defaultFollowMainHint') }}</p>
         <ConversationModelSelect v-else id="default-model" v-model="defaultKey" :models="models"
           :disabled="loading || saving || loadError || !models.length" trigger-class="h-8 w-full text-xs" />
         <p class="text-muted-foreground mt-1 text-xs">{{ t('titleGeneration.defaultModelHint') }}</p>
         <p v-if="!loading && !models.length" class="text-muted-foreground mt-1 text-xs">{{ t('titleGeneration.noModels') }}</p>
       </div>
-      <label class="flex items-center gap-2 text-sm"><input v-model="enabled" type="checkbox" />{{ t('titleGeneration.enabled') }}</label>
+      <label class="flex items-center gap-2 text-sm"><Checkbox v-model="enabled" />{{ t('titleGeneration.enabled') }}</label>
       <p class="text-muted-foreground text-xs">{{ t('titleGeneration.hint') }}</p>
       <template v-if="enabled">
         <div>
           <label for="title-model" class="mb-1 block text-sm">{{ t('titleGeneration.model') }}</label>
-          <label class="mb-2 flex items-center gap-2 text-xs"><input v-model="followMain" type="checkbox" />{{ t('titleGeneration.followMain') }}</label>
+          <label class="mb-2 flex items-center gap-2 text-xs"><Checkbox v-model="followMain" />{{ t('titleGeneration.followMain') }}</label>
           <p v-if="followMain" class="text-muted-foreground text-xs">{{ t('titleGeneration.followMainHint') }}</p>
           <template v-else>
             <ConversationModelSelect id="title-model" v-model="modelKey" :models="models"
@@ -118,7 +120,7 @@ async function save() {
           </template>
         </div>
       </template>
-      <button class="bg-primary text-primary-foreground rounded-md px-3 py-1.5 text-xs" type="submit" :disabled="enabled && !followMain && (!provider.trim() || !modelId.trim())">{{ saving ? t('settings.saving') : t('settings.save') }}</button>
+      <Button type="submit" :disabled="enabled && !followMain && (!provider.trim() || !modelId.trim())">{{ saving ? t('settings.saving') : t('settings.save') }}</Button>
     </fieldset>
   </form>
 </template>

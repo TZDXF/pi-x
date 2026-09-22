@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
+import { Button } from "@/components/ui/button"
 import type { TrustStatus } from "@/api/piClient"
 
 const props = defineProps<{ info: TrustStatus }>()
@@ -34,30 +35,32 @@ function decide(trusted: boolean, trustParent = false) {
     </div>
 
     <div class="flex flex-col gap-2">
-      <button
+      <Button
         :disabled="busy"
-        class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+        class="py-2.5"
         @click="decide(true)"
       >
         {{ t("trust.trustFolder") }}
-      </button>
-      <button
+      </Button>
+      <Button
         v-if="props.info.parentPath"
         :disabled="busy"
-        class="border-input hover:bg-accent rounded-md border px-4 py-2.5 text-sm disabled:opacity-50"
+        variant="outline"
+        class="py-2.5"
         @click="decide(true, true)"
       >
         {{ t("trust.trustParent") }}
         <span class="text-muted-foreground font-mono text-xs">({{ props.info.parentPath }})</span>
-      </button>
-      <button
+      </Button>
+      <Button
         :disabled="busy"
-        class="border-input hover:bg-accent rounded-md border px-4 py-2.5 text-sm disabled:opacity-50"
+        variant="outline"
+        class="py-2.5"
         @click="decide(false)"
       >
         {{ t("trust.dontTrust") }}
         <span class="text-muted-foreground text-xs">{{ t("trust.dontTrustNote") }}</span>
-      </button>
+      </Button>
     </div>
 
     <p class="text-muted-foreground text-xs">

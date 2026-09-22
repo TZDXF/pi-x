@@ -5,6 +5,7 @@
  */
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
+import { Button } from "@/components/ui/button"
 
 interface TreeEntry {
   type?: string
@@ -109,14 +110,15 @@ const badge = computed(() => {
         {{ shortened }}
       </span>
       <span v-if="active" class="text-primary shrink-0 text-[10px]">● {{ t("tree.active") }}</span>
-      <button
+      <Button
         v-if="summary.forkable"
-        class="border-input text-muted-foreground hover:bg-accent hidden shrink-0 rounded border px-1.5 py-0.5 text-[10px] group-hover:block"
+        variant="outline"
+        class="text-muted-foreground hidden h-auto rounded px-1.5 py-0.5 text-[10px] hover:bg-accent group-hover:block"
         :title="t('tree.forkTitle')"
         @click="node.entry.id && emit('fork', node.entry.id)"
       >
         {{ t("tree.fork") }}
-      </button>
+      </Button>
     </div>
     <SessionTreeNode
       v-for="(c, i) in node.children"

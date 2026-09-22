@@ -3,6 +3,15 @@
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { ModelEntry } from "@/api/piClient"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/session"
@@ -50,6 +59,15 @@ const editing = ref<ModelForm | null>(null)
 const editingIndex = ref<number | null>(null)
 const confirmingDelete = ref<number | null>(null)
 const busy = ref(false)
+
+/** reka Select forbids empty item values: "inherit" is mapped to an empty api. */
+const API_INHERIT = "__inherit__"
+const apiValue = computed({
+  get: () => (editing.value?.api ? editing.value.api : API_INHERIT),
+  set: (v: string) => {
+    if (editing.value) editing.value.api = v === API_INHERIT ? "" : v
+  },
+})
 
 function startAdd() {
   editingIndex.value = null
@@ -165,15 +183,16 @@ async function remove(index: number) {
     <label class="mb-1 block text-xs" for="model-provider">{{
       t("settings.modelProvider")
     }}</label>
-    <select
-      id="model-provider"
-      v-model="selectedProvider"
-      class="border-input bg-background h-8 rounded-md border px-2 text-xs"
-    >
-      <option v-for="id in providerIds" :key="id" :value="id">
-        {{ store.config.providers[id]?.name || id }}
-      </option>
-    </select>
+    <Select v-model="selectedProvider">
+      <SelectTrigger id="model-provider" class="h-8 w-56 text-xs">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem v-for="id in providerIds" :key="id" :value="id">
+          {{ store.config.providers[id]?.name || id }}
+        </SelectItem>
+      </SelectContent>
+    </Select>
 
     <div v-if="!models.length && !editing" class="text-muted-foreground py-6 text-sm">
       {{ t("settings.modelEmpty") }}
@@ -201,35 +220,38 @@ async function remove(index: number) {
       <div class="flex shrink-0 items-center gap-2">
         <template v-if="confirmingDelete === i">
           <span class="text-destructive text-xs">{{ t("settings.modelDeleteConfirm") }}</span>
-          <button
-            class="border-destructive text-destructive hover:bg-destructive/10 rounded-md border px-2.5 py-1 text-xs"
+          <Button
+            variant="destructive"
+            size="sm"
             :disabled="busy"
             @click="remove(i)"
           >
             {{ t("settings.confirmDelete") }}
-          </button>
-          <button
-            class="border-input hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
-            @click="confirmingDelete = null"
-          >
+          </Button>
+          <Button variant="outline" size="sm" type="button" @click="confirmingDelete = null">
             {{ t("common.cancel") }}
-          </button>
+          </Button>
         </template>
         <template v-else>
-          <button
-            class="border-input hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
             :disabled="!!editing"
             @click="startEdit(i, m)"
           >
             {{ t("settings.edit") }}
-          </button>
-          <button
-            class="border-input text-destructive hover:bg-accent rounded-md border px-2.5 py-1 text-xs"
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            class="text-destructive"
             :disabled="!!editing"
             @click="confirmingDelete = i"
           >
             {{ t("settings.delete") }}
-          </button>
+          </Button>
         </template>
       </div>
     </div>
@@ -257,14 +279,15 @@ async function remove(index: number) {
       <div class="grid grid-cols-3 gap-3">
         <div>
           <label class="mb-1 block text-xs" for="model-api">{{ t("settings.modelApi") }}</label>
-          <select
-            id="model-api"
-            v-model="editing.api"
-            class="border-input bg-background h-8 w-full rounded-md border px-2 text-xs"
-          >
-            <option value="">{{ t("settings.modelApiInherit") }}</option>
-            <option v-for="api in PROVIDER_API_TYPES" :key="api" :value="api">{{ api }}</option>
-          </select>
+          <Select v-model="apiValue">
+            <SelectTrigger id="model-api" class="h-8 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem :value="API_INHERIT">{{ t("settings.modelApiInherit") }}</SelectItem>
+              <SelectItem v-for="api in PROVIDER_API_TYPES" :key="api" :value="api">{{ api }}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <div>
           <label class="mb-1 block text-xs" for="model-ctx">{{
@@ -281,38 +304,33 @@ async function remove(index: number) {
       </div>
       <div class="flex items-center gap-5 text-xs">
         <label class="flex items-center gap-2">
-          <input v-model="editing.reasoning" type="checkbox" />
+          <Checkbox v-model="editing.reasoning" />
           {{ t("settings.modelReasoning") }}
         </label>
         <label class="flex items-center gap-2">
-          <input v-model="editing.image" type="checkbox" />
+          <Checkbox v-model="editing.image" />
           {{ t("settings.modelImage") }}
         </label>
       </div>
       <p class="text-muted-foreground text-xs">{{ t("settings.modelSizeHint") }}</p>
       <div class="flex justify-end gap-2 pt-1">
-        <button
-          class="border-input hover:bg-accent rounded-md border px-3 py-1.5 text-xs"
-          @click="editing = null"
-        >
+        <Button variant="outline" size="sm" type="button" @click="editing = null">
           {{ t("common.cancel") }}
-        </button>
-        <button
-          class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-xs"
-          :disabled="busy"
-          @click="saveForm"
-        >
+        </Button>
+        <Button size="sm" :disabled="busy" @click="saveForm">
           {{ busy ? t("settings.saving") : t("settings.save") }}
-        </button>
+        </Button>
       </div>
     </div>
 
-    <button
+    <Button
       v-if="!editing"
-      class="border-input hover:bg-accent mt-4 rounded-md border px-3 py-1.5 text-xs"
+      variant="outline"
+      size="sm"
+      class="mt-4"
       @click="startAdd"
     >
       + {{ t("settings.modelAdd") }}
-    </button>
+    </Button>
   </template>
 </template>

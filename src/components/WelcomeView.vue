@@ -4,6 +4,8 @@ import { ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { open } from "@tauri-apps/plugin-dialog"
 import { detectPi, saveConfig } from "@/api/piClient"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import type { AppConfig, PiInfo } from "@/api/piClient"
 
 const props = defineProps<{
@@ -74,18 +76,14 @@ async function pickFolder() {
           >
         </div>
         <div class="flex gap-2">
-          <input
+          <Input
             v-model="customPath"
             :placeholder="t('welcome.pathPlaceholder')"
-            class="border-input ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring h-9 flex-1 rounded-md border bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-2"
+            class="h-9 flex-1"
           />
-          <button
-            :disabled="busy"
-            class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 text-sm disabled:opacity-50"
-            @click="saveAndDetect"
-          >
+          <Button :disabled="busy" class="px-4" @click="saveAndDetect">
             {{ busy ? t("welcome.checking") : t("welcome.usePath") }}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -100,12 +98,12 @@ async function pickFolder() {
             >
           </span>
         </div>
-        <button
-          class="bg-primary text-primary-foreground hover:bg-primary/90 w-full rounded-md py-3 text-sm font-medium"
+        <Button
+          class="h-11 w-full"
           @click="pickFolder"
         >
           {{ t("welcome.openFolder") }}
-        </button>
+        </Button>
         <p class="text-muted-foreground text-center text-xs">
           {{ t("welcome.pickHint") }}
         </p>

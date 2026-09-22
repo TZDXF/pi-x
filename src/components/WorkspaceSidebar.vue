@@ -9,6 +9,8 @@ import { useUiStore } from "@/stores/ui"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean }>()
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
@@ -129,24 +131,24 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
 
 <template>
   <aside class="workspace-sidebar" :aria-label="t('sidebar.ariaLabel')">
-    <div class="sidebar-brand"><span>Pi X</span><button class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></button></div>
-    <button class="sidebar-action" :disabled="!ready || disabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</button>
-    <label class="sidebar-search"><Search :size="15" /><input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" /></label>
+    <div class="sidebar-brand"><span>Pi X</span><Button variant="ghost" size="icon" class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></Button></div>
+    <Button variant="ghost" class="sidebar-action" :disabled="!ready || disabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</Button>
+    <label class="sidebar-search"><Search :size="15" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
     <div class="sidebar-section-label"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
-      <div class="flex"><button class="icon-button" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" /></button>
-      <button class="icon-button" :disabled="disabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></button></div>
+      <div class="flex"><Button variant="ghost" size="icon" class="icon-button" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" /></Button>
+      <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></Button></div>
     </div>
     <div class="project-groups" @dragend="clearDrag">
       <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
         <div class="project-heading" :class="{ selected: path === project && !session.entries.length, 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
-          <button class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
+          <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
             <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
-          </button>
-          <button class="icon-button hover-action" :disabled="disabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></button>
+          </Button>
+          <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="disabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
           <DropdownMenu>
-            <DropdownMenuTrigger as-child><button class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></button></DropdownMenuTrigger>
+            <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
               <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" /><Pin v-else :size="14" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
               <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
@@ -159,24 +161,24 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           <div v-if="path === project && ready && session.entries.length > 0 && !showArchived && !query && !workspace.histories[path]?.some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <button class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="disabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</button>
+            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="disabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</Button>
             <span v-if="s.file === session.sessionFile && session.isStreaming" class="session-running" :aria-label="t('chat.thinking')" />
             <div class="session-actions hover-action">
-              <DropdownMenu><DropdownMenuTrigger as-child><button class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></button></DropdownMenuTrigger>
+              <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
-              <button class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><ArchiveRestore v-if="s.archived" :size="14" /><Archive v-else :size="14" /></button>
+              <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><ArchiveRestore v-if="s.archived" :size="14" /><Archive v-else :size="14" /></Button>
             </div>
           </div>
-          <button v-if="errors[path]" class="sidebar-empty text-destructive" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</button>
+          <Button v-if="errors[path]" variant="ghost" class="sidebar-empty text-destructive" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</Button>
           <p v-else-if="loading[path] && !workspace.histories[path]" class="sidebar-empty">{{ t('sidebar.loading') }}</p>
           <p v-else-if="!rows(path).length && (showArchived || query)" class="sidebar-empty">{{ t('sidebar.noMatch') }}</p>
         </div>
       </section>
     </div>
-    <div class="sidebar-footer"><button class="sidebar-action" @click="emit('settings')"><Settings :size="17" />{{ t('sidebar.settings') }}</button></div>
+    <div class="sidebar-footer"><Button variant="ghost" class="sidebar-action" @click="emit('settings')"><Settings :size="17" />{{ t('sidebar.settings') }}</Button></div>
     <Dialog :open="!!renaming" @update:open="v => { if (!v) renaming = null }"><DialogContent class="sm:max-w-md"><DialogHeader><DialogTitle>{{ t('workspace.rename') }}</DialogTitle></DialogHeader>
-      <form @submit.prevent="saveTitle" class="space-y-4"><input v-model="title" autofocus maxlength="120" :aria-label="t('workspace.title')" class="workspace-text-input" /><div class="flex justify-end gap-2"><button type="button" class="quiet-button" @click="renaming = null">{{ t('workspace.cancel') }}</button><button class="workspace-primary" :disabled="saving || !title.trim()">{{ t('workspace.save') }}</button></div></form>
+      <form @submit.prevent="saveTitle" class="space-y-4"><Input v-model="title" autofocus maxlength="120" :aria-label="t('workspace.title')" class="workspace-text-input h-auto" /><div class="flex justify-end gap-2"><Button variant="ghost" size="sm" class="quiet-button" type="button" @click="renaming = null">{{ t('workspace.cancel') }}</Button><Button size="sm" class="workspace-primary" :disabled="saving || !title.trim()">{{ t('workspace.save') }}</Button></div></form>
     </DialogContent></Dialog>
   </aside>
 </template>

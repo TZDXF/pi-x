@@ -13,6 +13,16 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import type { AcceptableValue } from "reka-ui"
 import { detectPi, getConfig, saveConfig, type AppConfig, type PiInfo } from "@/api/piClient"
 import ProviderSettings from "./ProviderSettings.vue"
 import ModelSettings from "./ModelSettings.vue"
@@ -95,27 +105,20 @@ async function save() {
 <template>
   <Dialog :open="props.open" @update:open="(v: boolean) => !v && emit('close')">
     <DialogContent class="settings-dialog">
-      <nav class="settings-nav" :aria-label="t('settings.nav')">
-        <h2>{{ t("settings.title") }}</h2>
-        <button :class="{ active: tab === 'remote' }" @click="tab = 'remote'">
-          {{ t("settings.remote") }}
-        </button>
-        <button :class="{ active: tab === 'general' }" @click="tab = 'general'">
-          {{ t("settings.general") }}</button
-        ><button v-if="isDesktop" :class="{ active: tab === 'models' }" @click="tab = 'models'">
-          {{ t("settings.providersModels") }}</button
-        ><button v-if="isDesktop" :class="{ active: tab === 'runtime' }" @click="tab = 'runtime'">
-          {{ t("settings.runtime") }}</button
-        ><button :class="{ active: tab === 'about' }" @click="tab = 'about'">
-          {{ t("settings.about") }}
-        </button>
-        <button v-if="isDesktop" :class="{ active: tab === 'model-config' }" @click="tab = 'model-config'">
-          {{ t("titleGeneration.page") }}
-        </button>
-        <p>{{ t("settings.subtitle") }}</p>
-      </nav>
-      <section class="settings-body">
-        <template v-if="tab === 'remote'">
+      <Tabs v-model="tab" orientation="vertical" class="contents">
+        <nav class="settings-nav" :aria-label="t('settings.nav')">
+          <h2>{{ t("settings.title") }}</h2>
+          <TabsList variant="line">
+            <TabsTrigger value="remote" class="justify-start">{{ t("settings.remote") }}</TabsTrigger>
+            <TabsTrigger value="general" class="justify-start">{{ t("settings.general") }}</TabsTrigger>
+            <TabsTrigger v-if="isDesktop" value="models" class="justify-start">{{ t("settings.providersModels") }}</TabsTrigger>
+            <TabsTrigger v-if="isDesktop" value="runtime" class="justify-start">{{ t("settings.runtime") }}</TabsTrigger>
+            <TabsTrigger value="about" class="justify-start">{{ t("settings.about") }}</TabsTrigger>
+            <TabsTrigger v-if="isDesktop" value="model-config" class="justify-start">{{ t("titleGeneration.page") }}</TabsTrigger>
+          </TabsList>
+          <p>{{ t("settings.subtitle") }}</p>
+        </nav>
+        <TabsContent value="remote" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.remote") }}</DialogTitle
             ><DialogDescription>{{ t("settings.remoteDesc") }}</DialogDescription></DialogHeader
@@ -131,8 +134,9 @@ async function save() {
               max="65535"
               :disabled="remote.enabled || remoteBusy"
             />
-            <button
-              class="rounded-md border px-4 py-2 text-sm"
+            <Button
+              variant="outline"
+              class="h-auto px-4 py-2"
               :disabled="remoteBusy"
               :aria-pressed="remote.enabled"
               @click="toggleRemote"
@@ -144,16 +148,16 @@ async function save() {
                     ? t("settings.remoteDisable")
                     : t("settings.remoteEnable")
               }}
-            </button>
+            </Button>
             <div v-if="remote.enabled" class="space-y-3 text-sm">
               <p>{{ t("settings.remoteLinks") }}</p>
-              <input
+              <Input
                 v-for="url in remote.urls"
                 :key="url"
-                :value="url"
+                :model-value="url"
                 readonly
                 :aria-label="t('settings.remoteLinks')"
-                class="w-full rounded border p-2 font-mono text-xs"
+                class="font-mono text-xs"
                 @focus="($event.target as HTMLInputElement).select()"
               />
               <p v-if="!remote.urls.length">{{ t("settings.remoteNoAddress") }}</p>
@@ -161,8 +165,8 @@ async function save() {
             </div>
           </template>
           <p v-else class="text-sm">{{ t("settings.remoteDesktopOnly") }}</p>
-        </template>
-        <template v-else-if="tab === 'general'">
+        </TabsContent>
+        <TabsContent value="general" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.generalTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.generalDesc") }}</DialogDescription></DialogHeader
@@ -172,32 +176,42 @@ async function save() {
               <h3 id="theme-label">{{ t("settings.theme") }}</h3>
               <p id="theme-description">{{ t("settings.themeDesc") }}</p>
             </div>
-            <select
-              class="border-input bg-background h-8 rounded-md border px-2 text-xs"
-              aria-labelledby="theme-label"
-              aria-describedby="theme-description"
-              :value="theme"
-              @change="setTheme(($event.target as HTMLSelectElement).value as ThemePreference)"
+            <Select
+              :model-value="theme"
+              @update:model-value="(v: AcceptableValue) => setTheme(v as ThemePreference)"
             >
-              <option value="light">{{ t("settings.themeLight") }}</option>
-              <option value="dark">{{ t("settings.themeDark") }}</option>
-              <option value="system">{{ t("settings.themeSystem") }}</option>
-            </select>
+              <SelectTrigger
+                class="h-8 w-36 text-xs"
+                aria-labelledby="theme-label"
+                aria-describedby="theme-description"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="light">{{ t("settings.themeLight") }}</SelectItem>
+                <SelectItem value="dark">{{ t("settings.themeDark") }}</SelectItem>
+                <SelectItem value="system">{{ t("settings.themeSystem") }}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="setting-row">
             <div>
               <h3>{{ t("settings.language") }}</h3>
               <p>{{ t("settings.languageDesc") }}</p>
             </div>
-            <select
-              class="border-input bg-background h-8 rounded-md border px-2 text-xs"
-              :value="selectedLocale"
-              @change="applyLocale(($event.target as HTMLSelectElement).value as Locale)"
+            <Select
+              :model-value="selectedLocale"
+              @update:model-value="(v: AcceptableValue) => applyLocale(v as Locale)"
             >
-              <option v-for="l in LOCALES" :key="l.value" :value="l.value">
-                {{ l.label }}
-              </option>
-            </select>
+              <SelectTrigger class="h-8 w-36 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="l in LOCALES" :key="l.value" :value="l.value">
+                  {{ l.label }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div class="setting-row">
             <div>
@@ -225,8 +239,8 @@ async function save() {
               </p>
             </div>
           </div>
-        </template>
-        <template v-else-if="tab === 'models'">
+        </TabsContent>
+        <TabsContent v-if="isDesktop" value="models" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.providersModelsTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.providersModelsDesc") }}</DialogDescription></DialogHeader
@@ -237,13 +251,13 @@ async function save() {
           <Separator class="my-6" />
           <h3 class="settings-section">{{ t("settings.models") }}</h3>
           <ModelSettings />
-        </template>
-        <template v-else-if="tab === 'model-config'">
+        </TabsContent>
+        <TabsContent v-if="isDesktop" value="model-config" class="settings-body">
           <DialogHeader><DialogTitle>{{ t("titleGeneration.page") }}</DialogTitle>
             <DialogDescription>{{ t("titleGeneration.description") }}</DialogDescription></DialogHeader>
           <TitleModelSettings />
-        </template>
-        <template v-else-if="tab === 'about'">
+        </TabsContent>
+        <TabsContent value="about" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.aboutTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.aboutDesc") }}</DialogDescription></DialogHeader
@@ -257,8 +271,8 @@ async function save() {
           <p class="text-muted-foreground mt-6 text-xs">
             {{ t("settings.aboutHint") }}
           </p>
-        </template>
-        <template v-else>
+        </TabsContent>
+        <TabsContent v-if="isDesktop" value="runtime" class="settings-body">
           <DialogHeader>
             <DialogTitle>{{ t("settings.runtimeTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.runtimeDesc") }}</DialogDescription>
@@ -279,13 +293,14 @@ async function save() {
             </p>
 
             <div class="flex items-center gap-2">
-              <button
-                class="border-input hover:bg-accent rounded-md border px-3 py-1.5 text-xs"
+              <Button
+                variant="outline"
+                size="sm"
                 :disabled="detecting"
                 @click="detect"
               >
                 {{ detecting ? t("settings.detecting") : t("settings.detect") }}
-              </button>
+              </Button>
               <span v-if="info" class="text-xs">
                 <template v-if="info.found">
                   <span class="text-chart-2 font-medium">{{ t("settings.found") }}</span>
@@ -300,23 +315,16 @@ async function save() {
             </div>
 
             <div class="mt-2 flex justify-end gap-2">
-              <button
-                class="border-input hover:bg-accent rounded-md border px-3 py-1.5 text-xs"
-                @click="emit('close')"
-              >
+              <Button variant="outline" size="sm" type="button" @click="emit('close')">
                 {{ t("common.cancel") }}
-              </button>
-              <button
-                class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-xs"
-                :disabled="saving"
-                @click="save"
-              >
+              </Button>
+              <Button size="sm" :disabled="saving" @click="save">
                 {{ saving ? t("settings.saving") : t("settings.save") }}
-              </button>
+              </Button>
             </div>
           </div>
-        </template>
-      </section>
+        </TabsContent>
+      </Tabs>
     </DialogContent>
   </Dialog>
 </template>
