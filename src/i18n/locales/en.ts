@@ -1,6 +1,11 @@
 /** English locale */
 export default {
   completion: {
+    builtin: "Built-in",
+    command_new: "Start a new session",
+    command_compact: "Compact context with optional instructions",
+    command_export: "Export and open conversation HTML",
+    invalidArguments: "This command does not support attachments or these arguments.",
   "loading": "Loading…",
   "failed": "Loading failed",
   "retry": "Retry",

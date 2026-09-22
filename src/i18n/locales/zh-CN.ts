@@ -1,6 +1,11 @@
 /** 简体中文语言包 */
 export default {
   completion: {
+    builtin: "内置",
+    command_new: "新建会话",
+    command_compact: "压缩上下文，可附加压缩要求",
+    command_export: "导出并打开 HTML 会话",
+    invalidArguments: "该命令不支持附件或这些参数。",
   "loading": "正在加载…",
   "failed": "加载失败",
   "retry": "重试",

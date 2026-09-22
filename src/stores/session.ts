@@ -343,7 +343,7 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   // ---- actions ----
-  async function send(text: string, images?: { data: string, mimeType: string }[]) {
+  async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string) {
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
@@ -352,7 +352,7 @@ export const useSessionStore = defineStore("session", () => {
     const titleFile = sessionFile.value
     const titleProject = cwd.value
     const titleSessionId = state.value?.sessionId
-    const promptText = trimmed || "(see attached image)"
+    const promptText = expandedText || trimmed || "(see attached image)"
     entries.value.push({ kind: "user", id: nextId(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })) })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
@@ -362,8 +362,7 @@ export const useSessionStore = defineStore("session", () => {
     // resolves after the full run finishes; events drive the UI meanwhile
     rpcRequest(command)
       .then(async (res) => {
-        if (!res.success)
-          console.error("[pi] prompt rejected:", res.error)
+        if (!res.success) throw new Error(res.error ?? "Prompt rejected")
       })
       .catch((e) => {
         entries.value.push({
@@ -426,7 +425,8 @@ export const useSessionStore = defineStore("session", () => {
       const command: Record<string, unknown> = { type: "compact" }
       if (customInstructions)
         command.customInstructions = customInstructions
-      await rpcRequest(command)
+      const result = await rpcRequest(command)
+      if (!result.success) throw new Error(result.error ?? "Compaction failed")
     }
     finally {
       isCompacting.value = false
@@ -566,10 +566,13 @@ export const useSessionStore = defineStore("session", () => {
       stats.value = res.data
   }
 
+  let commandRequestVersion = 0
   async function refreshCommands() {
+    const version = ++commandRequestVersion
     const res = await rpcRequest<{ commands: CommandInfo[] }>({ type: "get_commands" })
-    if (res.success && res.data)
-      commands.value = res.data.commands ?? []
+    if (version !== commandRequestVersion) return
+    if (!res.success) throw new Error(res.error ?? "Failed to load commands")
+    commands.value = res.data?.commands ?? []
   }
 
   async function refreshModels() {
@@ -658,6 +661,7 @@ export const useSessionStore = defineStore("session", () => {
     state.value = null
     stats.value = null
     lastUsage.value = null
+    ++commandRequestVersion
     commands.value = []
   }
 
@@ -695,6 +699,7 @@ export const useSessionStore = defineStore("session", () => {
     refreshState,
     refreshStats,
     refreshModels,
+    refreshCommands,
     loadOfflineModels,
     historyLoading,
     olderHistoryLoading,
