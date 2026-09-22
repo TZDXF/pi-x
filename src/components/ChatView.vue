@@ -63,7 +63,7 @@ import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
-import { withFileReferences } from "@/lib/completion"
+import { withFileReferences, desktopCommands } from "@/lib/completion"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
@@ -273,6 +273,23 @@ async function onSubmit(message: {
   const commandName = /^\/([^\s/]+)/.exec(text)?.[1]
   if (commandName) {
     await session.refreshCommands()
+    if (!session.commands.some(c => c.name === commandName) && desktopCommands.some(name => name === commandName)) {
+      const args = text.slice(commandName.length + 1).trim()
+      try {
+        if (images.length || (args && commandName !== 'compact')) throw new Error(t('completion.invalidArguments'))
+        if (commandName === 'new') await session.newSession()
+        else if (commandName === 'compact') await session.compact(args || undefined)
+        else {
+          const result = await rpcRequest<{ path?: string }>({ type: 'export_html' })
+          if (!result.success || !result.data?.path) throw new Error(result.error ?? 'Export failed')
+          await openPath(result.data.path)
+        }
+      } catch (error) {
+        ui.pushToast(String(error), 'error')
+        throw error
+      }
+      return
+    }
     if (!session.commands.some(c => c.name === commandName)) {
       const error = t('completion.unsupported', { name: commandName })
       ui.pushToast(error, 'error')
