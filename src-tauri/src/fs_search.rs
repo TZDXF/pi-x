@@ -71,11 +71,17 @@ pub async fn search(project: String, query: String) -> Result<Vec<FileHit>, Stri
             if visited >= MAX_WALK_ENTRIES || hits.len() >= MAX_HITS * 8 {
                 break;
             }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(e) if dir == root => return Err(format!("cannot search project: {e}")),
+                Err(_) => continue,
+            };
+            let mut entries: Vec<_> = entries.flatten().collect();
+            entries.sort_by_key(|entry| entry.file_name());
             // deterministic-ish order: push entries so files get visited before
             // descending (order within a dir doesn't matter much, scoring does)
             let mut subdirs: Vec<PathBuf> = Vec::new();
-            for entry in entries.flatten() {
+            for entry in entries {
                 visited += 1;
                 if visited >= MAX_WALK_ENTRIES {
                     break;
@@ -84,7 +90,17 @@ pub async fn search(project: String, query: String) -> Result<Vec<FileHit>, Stri
                 let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
                     continue;
                 };
-                let is_dir = p.is_dir();
+                // Do not traverse symlinks/junctions or suggest files outside the project.
+                let Ok(kind) = entry.file_type() else { continue };
+                if kind.is_symlink() { continue; }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    let Ok(metadata) = entry.metadata() else { continue };
+                    if metadata.file_attributes() & 0x400 != 0 { continue; }
+                }
+                let is_dir = kind.is_dir();
+                if !is_dir && !kind.is_file() { continue; }
                 if is_dir {
                     if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
                         continue;
@@ -163,4 +179,30 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+    #[tokio::test]
+    async fn unicode_spaces_separators_and_result_limit() {
+        let root = std::env::temp_dir().join(format!("pix-fssearch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("中文 file.ts"), "").unwrap();
+        for index in 0..70 {
+            std::fs::write(root.join(format!("file-{index:03}.ts")), "").unwrap();
+        }
+        let project = root.to_string_lossy().to_string();
+        let hits = search(project.clone(), "src\\中文".into()).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "src/中文 file.ts");
+        let hits = search(project.clone(), "file".into()).await.unwrap();
+        assert_eq!(hits.len(), MAX_HITS);
+        assert_eq!(hits[0].path, "file-000.ts");
+        let again = search(project, "file".into()).await.unwrap();
+        assert_eq!(hits.iter().map(|h| &h.path).collect::<Vec<_>>(), again.iter().map(|h| &h.path).collect::<Vec<_>>());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_project_reports_error_instead_of_empty_results() {
+        let root = std::env::temp_dir().join(format!("pix-missing-{}", uuid::Uuid::new_v4()));
+        assert!(search(root.to_string_lossy().to_string(), "".into()).await.is_err());
+    }
+
 }

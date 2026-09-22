@@ -22,7 +22,7 @@
 - **工具运行可视化**：每条工具调用的状态机（运行中 / 输出 / 完成 / 出错），可展开查看输出
 - **模型与思考等级切换**：工具栏下拉选择任意 provider/model，实时切换思考等级（仅影响后续轮次）
 - **消息队列**：AI 响应中继续输入 —— steering（转向）与 follow-up（追问）排队显示，Esc 中断后自动恢复输入
-- **@file 引用**：输入 `@` 弹出项目文件补全（基名匹配优先，自动跳过 node_modules/.git/dist 等），选中插入 `@relative/path`
+- **@file 引用**：输入 `@` 弹出项目文件补全（基名匹配优先，自动跳过 node_modules/.git/dist 等），支持光标处补全、中文/空格路径；选中插入 `@"relative/path"`，发送时明确提供路径供 agent 按需读取（不自动附加全文，不跨项目搜索符号链接）
 - **图片输入**：粘贴 / 拖拽 / 添加按钮发送图片（base64），气泡内预览
 - **Fork 分叉**：从任意历史用户提示词重新开始对话（`fork` RPC）
 - **扩展 UI 完整支持**：pi 扩展弹出的 select / confirm / input / editor 对话框以原生桌面对话框呈现，回答通过 `extension_ui_response` 回传
@@ -183,3 +183,13 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
 - 应用数据统一放在用户目录的 `.pix`：`config.json`（设置）、`remote.json`（远程访问）、`agent/`（模型、凭据、会话等）和 `webview/`（桌面界面本地存储与缓存）。
 - PiX 启动的 agent 使用 `.pix/agent`，不再与终端 pi 自动同步。项目内 `.pi` 配置与用户项目文件仍保留在原位置。远程浏览器的界面偏好仍属于该浏览器。
+
+### 输入框补全
+
+- 消息开头输入 `/`：首次主动使用时启动 pi，展示 RPC 返回的扩展、提示词模板和技能命令；内置 `/new`、`/compact [要求]`、`/export` 映射为对应 RPC 操作；其余终端专属或未知命令会提示不支持，不作为普通消息误发。
+- 输入 `@`：搜索当前项目文件；支持在句中移动光标后补全，搜索失败可重试。
+- `↑` / `↓` 切换候选，`Enter` / `Tab` 选择，`Esc` 关闭；`Shift+Enter` 换行。输入法确认不会选中候选或发送。
+- 引用文件只提供项目相对路径，agent 按需读取。扩展命令保留原始参数，其文件引用解释由扩展负责；提示词模板如何使用参数由模板本身决定。
+- 补全 UI 使用 AI Elements 的 PromptInputCommand 系列、PromptInputButton 和 Loader。
+
+补全测试：`node --test tests/completion.test.mjs`。浏览器回归：安装 Playwright 后运行 `node tests/completion.browser.mjs`（默认使用本机 Edge，可通过 `PI_BROWSER_CHANNEL` 切换；`PI_PLAYWRIGHT_MODULE` 可指定已有 Playwright 的 index.mjs 路径）。浏览器测试使用模拟 RPC，不调用模型。

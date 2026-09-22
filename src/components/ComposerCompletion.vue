@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '@/stores/session'
 import { searchFiles, type FileHit } from '@/api/piClient'
@@ -12,6 +12,18 @@ const { t } = useI18n()
 const session = useSessionStore()
 const { textInput, setTextInput } = usePromptInput()
 const id = useId()
+const anchor = ref<HTMLElement | null>(null)
+const panelLeft = ref(0)
+const panelWidth = ref(0)
+const panelBottom = ref(0)
+const panelStyle = computed(() => ({ left: `${panelLeft.value}px`, width: `${panelWidth.value}px`, bottom: `${panelBottom.value}px` }))
+function updatePanelPosition() {
+  if (!open.value || !anchor.value) return
+  const rect = anchor.value.getBoundingClientRect()
+  panelLeft.value = rect.left
+  panelWidth.value = rect.width
+  panelBottom.value = window.innerHeight - rect.top + 6
+}
 const caret = ref(0), selectionEnd = ref(0), focused = ref(false), dismissed = ref(false)
 const active = ref(0), loading = ref(false), error = ref('')
 const files = ref<FileHit[]>([])
@@ -19,6 +31,7 @@ let editor: HTMLTextAreaElement | null = null
 let sequence = 0
 let timer: ReturnType<typeof setTimeout> | undefined
 const initiating = ref(false)
+const composing = ref(false)
 let starting: Promise<boolean> | null = null
 let commandsLoaded = false
 let commandLoad: Promise<void> | null = null
@@ -49,7 +62,7 @@ function syncAccessibility() {
   else editor.removeAttribute('aria-activedescendant')
   row?.scrollIntoView({ block: 'nearest' })
 }
-watch([open, active, items, loading], () => nextTick(syncAccessibility))
+watch([open, active, items, loading], () => nextTick(() => { syncAccessibility(); updatePanelPosition() }))
 
 async function load(retry = false) {
   if (retry) commandsLoaded = false
@@ -94,7 +107,10 @@ async function load(retry = false) {
 watch([token, open, () => props.project, () => props.connected], () => load())
 
 async function onEditorEvent(event: Event) {
+  if (event.type === 'compositionstart') composing.value = true
+  if (event.type === 'compositionend') composing.value = false
   editor = event.target as HTMLTextAreaElement
+  anchor.value = editor?.closest('[data-slot="input-group"]')
   if (event.type === 'blur') { focused.value = false; return }
   await nextTick()
   focused.value = true
@@ -115,25 +131,35 @@ async function pick(value: string) {
   editor?.setSelectionRange(result.caret, result.caret)
 }
 function onKeydown(event: KeyboardEvent) {
-  if (!open.value || event.isComposing || event.keyCode === 229) return
+  if (!open.value || composing.value || event.isComposing || event.keyCode === 229) return
   if (event.key === 'Escape') {
     event.preventDefault(); event.stopPropagation(); dismissed.value = true
   } else if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
     event.preventDefault(); event.stopPropagation()
     if (items.value.length) active.value = (active.value + (event.key === 'ArrowDown' ? 1 : -1) + items.value.length) % items.value.length
-  } else if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+  } else if ((event.key === 'Enter' && !event.shiftKey) || (event.key === 'Tab' && !event.shiftKey)) {
     // Never let Enter submit a partial command while results are loading.
     if (event.key === 'Tab' && !items.value.length) return
     event.preventDefault(); event.stopPropagation()
     if (!loading.value && !error.value && items.value[active.value]) void pick(items.value[active.value]!.value)
   }
 }
-onBeforeUnmount(() => { ++sequence; clearTimeout(timer) })
+onMounted(() => {
+  window.addEventListener('resize', updatePanelPosition)
+  window.addEventListener('scroll', updatePanelPosition, true)
+})
+onBeforeUnmount(() => {
+  ++sequence
+  clearTimeout(timer)
+  window.removeEventListener('resize', updatePanelPosition)
+  window.removeEventListener('scroll', updatePanelPosition, true)
+})
 defineExpose({ onEditorEvent, onKeydown, initiating })
 </script>
 
 <template>
-  <PromptInputCommand v-if="open" class="w-full rounded-md border" @mousedown.prevent>
+  <Teleport to="body">
+    <PromptInputCommand v-if="open" class="fixed z-50 h-auto max-h-[60vh] rounded-xl border shadow-lg" :style="panelStyle" @mousedown.prevent>
     <PromptInputCommandList :id="id" class="max-h-56" :aria-label="t(token?.kind === 'command' ? 'chat.commands' : 'chat.files')">
       <PromptInputCommandGroup :heading="t(token?.kind === 'command' ? 'chat.commands' : 'chat.files')">
         <div v-if="loading" role="status" class="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader :size="14" />{{ t('completion.loading') }}</div>
@@ -148,5 +174,6 @@ defineExpose({ onEditorEvent, onKeydown, initiating })
       </PromptInputCommandGroup>
     </PromptInputCommandList>
     <div class="border-t px-3 py-2 text-xs text-muted-foreground">{{ t('completion.keys') }}<span v-if="token?.kind === 'file'"> · {{ t('completion.pathOnly') }}</span></div>
-  </PromptInputCommand>
+    </PromptInputCommand>
+  </Teleport>
 </template>
