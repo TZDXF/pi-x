@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import { i18n } from "./i18n";
 import "./style.css";
+import "./lib/theme";
 
 if (import.meta.env.DEV) {
   const { default: elementDev } = await import("element-source-dev");

@@ -140,6 +140,12 @@ export default {
     credentials: "Uses pi provider settings and credentials. Choose from the same model list as the conversation. Title generation incurs additional model usage. Changes apply to new conversations.",
   },
   settings: {
+    theme: "Appearance",
+    themeDesc: "Choose light, dark, or system. Changes apply immediately and are saved automatically.",
+    themeLight: "Light",
+    themeDark: "Dark",
+    themeSystem: "System",
+
     remote: "LAN access",
     remoteDesc: "Use this computer's Pi from a browser on the same network. Disabling disconnects remote clients immediately.",
     remoteWarning: "The link contains an access key granting control of Pi, file access and command execution. Use trusted networks only: HTTP is not encrypted. Never expose this port to the internet. Desktop and browser share one session; avoid simultaneous operations.",

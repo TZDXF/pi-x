@@ -49,7 +49,49 @@
 }
 
 :root {
+  color-scheme: light;
+  --background: #f3f2f0;
+  --foreground: #252f3d;
+  --card: #faf9f7;
+  --card-foreground: #252f3d;
+  --popover: #faf9f7;
+  --popover-foreground: #252f3d;
+  --primary: #4b607c;
+  --primary-foreground: #ffffff;
+  --secondary: #e5e3e0;
+  --secondary-foreground: #252f3d;
+  --muted: #eae8e5;
+  --muted-foreground: #68635e;
+  --accent: #e0e4e8;
+  --accent-foreground: #252f3d;
+  --destructive: #a33e2b;
+  --border: rgb(139 132 125 / 0.35);
+  --input: rgb(139 132 125 / 0.5);
+  --ring: #4b607c;
+  --chart-1: #4b607c;
+  --chart-2: #844f3b;
+  --chart-3: #936118;
+  --chart-4: #686b3d;
+  --chart-5: #327548;
+  --radius: 0.625rem;
+  --sidebar: #ebe7e4;
+  --sidebar-foreground: #394352;
+  --sidebar-primary: #4b607c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dfdedb;
+  --sidebar-accent-foreground: #252f3d;
+  --sidebar-border: rgb(139 132 125 / 0.35);
+  --sidebar-ring: #4b607c;
+  --composer-shadow: 0 4px 22px rgb(120 98 81 / 0.1);
+  --sidebar-shadow: 12px 0 35px rgb(120 98 81 / 0.16);
+  --selection-background: rgb(75 96 124 / 0.18);
+}
+
+:root.dark {
   color-scheme: dark;
+  --composer-shadow: 0 8px 30px rgb(0 0 0 / 0.45);
+  --sidebar-shadow: 12px 0 35px rgb(0 0 0 / 0.5);
+  --selection-background: rgb(106 159 204 / 0.28);
   --background: #0d1116;
   --foreground: #ebe7e4;
   --card: #161d27;
@@ -84,7 +126,7 @@
   --sidebar-ring: #6a9fcc;
 }
 
-/* pi.dev reference: single dark theme, palette defined in :root */
+/* Warm paper and tidal blue from pi.dev; dark retains the existing palette. */
 
 @layer base {
   * {
@@ -329,7 +371,7 @@ input:focus-visible {
 .composer-dock [data-slot="input-group"] {
   border-radius: 20px;
   padding: 8px;
-  box-shadow: 0 8px 30px rgb(0 0 0 / 0.45);
+  box-shadow: var(--composer-shadow);
 }
 .composer-dock [data-slot="select-trigger"] {
   border: none;
@@ -512,7 +554,7 @@ kbd {
     inset: 0 auto 0 0;
     width: 260px;
     z-index: 30;
-    box-shadow: 12px 0 35px rgb(0 0 0 / 0.5);
+    box-shadow: var(--sidebar-shadow);
   }
   .chat-empty h3 {
     font-size: 23px;
@@ -553,7 +595,7 @@ kbd {
 .workspace-text-input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; background: var(--background); }
 .workspace-primary { border-radius: 8px; background: var(--primary); color: var(--primary-foreground); padding: 8px 14px; font-size: 13px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
-.composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.45); }
+.composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: var(--composer-shadow); }
 .composer-dock { padding-bottom: 12px; }
 
 @media (hover: none) { .hover-action { opacity: 1; } }
@@ -572,7 +614,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .project-heading.drop-after, .session-row.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
 
 ::selection {
-  background: rgb(106 159 204 / 0.28);
+  background: var(--selection-background);
 }
 .sidebar-section-label {
   font-family: var(--font-mono);

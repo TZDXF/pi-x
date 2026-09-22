@@ -20,6 +20,8 @@ import TitleModelSettings from "./TitleModelSettings.vue"
 import { useUiStore } from "@/stores/ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 
+import { theme, setTheme, type ThemePreference } from "@/lib/theme"
+
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const ui = useUiStore()
@@ -165,6 +167,23 @@ async function save() {
             ><DialogTitle>{{ t("settings.generalTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.generalDesc") }}</DialogDescription></DialogHeader
           >
+          <div class="setting-row">
+            <div>
+              <h3 id="theme-label">{{ t("settings.theme") }}</h3>
+              <p id="theme-description">{{ t("settings.themeDesc") }}</p>
+            </div>
+            <select
+              class="border-input bg-background h-8 rounded-md border px-2 text-xs"
+              aria-labelledby="theme-label"
+              aria-describedby="theme-description"
+              :value="theme"
+              @change="setTheme(($event.target as HTMLSelectElement).value as ThemePreference)"
+            >
+              <option value="light">{{ t("settings.themeLight") }}</option>
+              <option value="dark">{{ t("settings.themeDark") }}</option>
+              <option value="system">{{ t("settings.themeSystem") }}</option>
+            </select>
+          </div>
           <div class="setting-row">
             <div>
               <h3>{{ t("settings.language") }}</h3>
