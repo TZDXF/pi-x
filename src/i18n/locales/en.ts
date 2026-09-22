@@ -107,6 +107,14 @@ export default {
     pickHint: "Pick a project to explore code or build something new.",
   },
 
+  closeNotice: {
+    title: "Close window",
+    desc: "You can minimize to the system tray when closing the window; background tasks keep running. Click the tray icon to restore the window, or right-click it to quit. You can change this anytime in Settings.",
+    minimizeToTray: "Minimize to tray",
+    quit: "Quit app",
+    cancel: "Cancel",
+    dontRemind: "Remember my choice, do not ask again",
+  },
   trust: {
     title: "Trust this project?",
     desc: "contains project-local pi resources",

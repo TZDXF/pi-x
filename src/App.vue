@@ -25,6 +25,7 @@ import WelcomeView from "@/components/WelcomeView.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsDialog from "@/components/SettingsDialog.vue"
+import CloseNoticeDialog from "@/components/CloseNoticeDialog.vue"
 import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
@@ -362,6 +363,7 @@ onUnmounted(() => {
       </div>
     </main>
     <SettingsDialog :open="settingsOpen" :project="project" @close="settingsOpen = false" />
+    <CloseNoticeDialog />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div

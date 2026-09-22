@@ -2,8 +2,8 @@ use crate::commands::{app_config_get, app_config_save};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Window, WindowEvent};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
+use tauri::{AppHandle, Emitter, Manager, Window, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 
 static PROMPT_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -47,6 +47,32 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Result of the in-app close dialog: "tray" hides to tray, "quit" exits,
+/// anything else cancels. `remember` persists the choice and skips future prompts.
+#[tauri::command]
+pub fn close_window_decide(app: AppHandle, action: String, remember: bool) -> Result<(), String> {
+    PROMPT_OPEN.store(false, Ordering::SeqCst);
+    let close_to_tray = match action.as_str() {
+        "tray" => true,
+        "quit" => false,
+        _ => return Ok(()),
+    };
+    if remember {
+        let mut config = app_config_get(app.clone())?;
+        config.close_notice_shown = true;
+        config.close_to_tray = close_to_tray;
+        app_config_save(app.clone(), config)?;
+    }
+    if close_to_tray {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+    } else {
+        app.exit(0);
+    }
+    Ok(())
+}
+
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if window.label() != "main" {
         return;
@@ -66,29 +92,10 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
                 if PROMPT_OPEN.swap(true, Ordering::SeqCst) {
                     return;
                 }
-                let handle = app.clone();
-                app.dialog().message("关闭窗口时可最小化到系统托盘，后台任务会继续运行。点击托盘图标恢复窗口，右键菜单可退出应用。你可以随时在设置中修改。")
-                    .title("PiX · 关闭窗口")
-                    .buttons(MessageDialogButtons::YesNoCancelCustom("最小化到托盘".into(), "退出应用".into(), "取消".into()))
-                    .show_with_result(move |result| {
-                        PROMPT_OPEN.store(false, Ordering::SeqCst);
-                        let close_to_tray = match result {
-                            MessageDialogResult::Custom(ref s) if s == "最小化到托盘" => true,
-                            MessageDialogResult::Custom(ref s) if s == "退出应用" => false,
-                            MessageDialogResult::Yes => true,
-                            MessageDialogResult::No => false,
-                            _ => return,
-                        };
-                        let saved = app_config_get(handle.clone()).and_then(|mut c| {
-                            c.close_notice_shown = true;
-                            c.close_to_tray = close_to_tray;
-                            app_config_save(handle.clone(), c)
-                        });
-                        if let Err(error) = saved { handle.dialog().message(error).show(|_| {}); return; }
-                        if close_to_tray {
-                            if let Some(w) = handle.get_webview_window("main") { let _ = w.hide(); }
-                        } else { handle.exit(0); }
-                    });
+                // The in-app dialog resolves via `close_window_decide`, which resets PROMPT_OPEN.
+                if window.emit("pix://close-requested", ()).is_err() {
+                    PROMPT_OPEN.store(false, Ordering::SeqCst);
+                }
             } else if config.close_to_tray {
                 let _ = window.hide();
             } else {

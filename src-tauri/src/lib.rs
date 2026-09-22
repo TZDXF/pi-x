@@ -55,6 +55,7 @@ pub fn run() {
             commands::pi_detect,
             commands::app_config_get,
             commands::app_config_save,
+            desktop::close_window_decide,
             commands::global_prompt_get,
             commands::global_prompt_save,
             commands::trust_status,

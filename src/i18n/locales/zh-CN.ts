@@ -107,6 +107,14 @@ export default {
     pickHint: "选择一个项目，开始探索代码或构建新的想法。",
   },
 
+  closeNotice: {
+    title: "关闭窗口",
+    desc: "关闭窗口时可最小化到系统托盘，后台任务会继续运行。点击托盘图标恢复窗口，右键托盘菜单可退出应用。你也可以随时在设置中修改此行为。",
+    minimizeToTray: "最小化到托盘",
+    quit: "退出应用",
+    cancel: "取消",
+    dontRemind: "记住选择，不再提醒",
+  },
   trust: {
     title: "信任此项目？",
     desc: "包含项目本地的 pi 资源",
