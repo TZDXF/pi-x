@@ -328,7 +328,7 @@ export default {
     details: "详情",
     perMonth: "月",
     customTitle: "安装自定义来源",
-    customHint: "支持 npm:包名@版本、git:仓库地址、https:// 或本地路径。",
+    customHint: "支持 npm:包名{'@'}版本、git:仓库地址、https:// 或本地路径。",
     scopeGlobal: "全局",
     scopeProject: "当前项目",
     update: "更新",

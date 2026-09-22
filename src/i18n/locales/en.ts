@@ -328,7 +328,7 @@ export default {
     details: "Details",
     perMonth: "mo",
     customTitle: "Install from a custom source",
-    customHint: "Supports npm:pkg@version, git:repo URLs, https:// URLs, and local paths.",
+    customHint: "Supports npm:pkg{'@'}version, git:repo URLs, https:// URLs, and local paths.",
     scopeGlobal: "Global",
     scopeProject: "Current project",
     update: "Update",
