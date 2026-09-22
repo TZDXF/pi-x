@@ -9,7 +9,7 @@ function harness() {
     .split('<script setup lang="ts">')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, '')
   const context = vm.createContext({
-    ref: value => ({ value }), onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
+    watch: () => {}, ref: value => ({ value }), onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
     useI18n: () => ({ t: x => x }), isDesktop: true,
     useSessionStore: () => ({ clear() {}, init: async () => calls.push('init'), loadHistory: async () => {}, newSession: async () => calls.push('new') }),
     useWorkspaceStore: () => ({}), useUiStore: () => ({ clear() {}, pushToast() {} }),

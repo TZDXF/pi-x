@@ -107,14 +107,6 @@ export default {
     pickHint: "选择一个项目，开始探索代码或构建新的想法。",
   },
 
-  closeNotice: {
-    title: "关闭窗口",
-    desc: "关闭窗口时可最小化到系统托盘，后台任务会继续运行。点击托盘图标恢复窗口，右键托盘菜单可退出应用。你也可以随时在设置中修改此行为。",
-    minimizeToTray: "最小化到托盘",
-    quit: "退出应用",
-    cancel: "取消",
-    dontRemind: "记住选择，不再提醒",
-  },
   trust: {
     title: "信任此项目？",
     desc: "包含项目本地的 pi 资源",
@@ -206,10 +198,6 @@ export default {
     credentials: "复用 pi 的供应商配置和登录凭据。使用与对话框相同的模型列表选择；此功能会产生额外模型用量。保存后对新会话生效。",
   },
   settings: {
-    minimizeToTray: '最小化到托盘',
-    minimizeToTrayDesc: '点击最小化时隐藏窗口，后台任务继续运行。',
-    closeToTray: '关闭到托盘',
-    closeToTrayDesc: '点击关闭时保留后台运行；从托盘菜单退出应用。',
     dataDirectory: '应用数据目录',
 
     theme: "外观主题",

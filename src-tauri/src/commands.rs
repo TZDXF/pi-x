@@ -7,12 +7,6 @@ use crate::{fs_search, pi_locate, rpc, sessions, trust};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
-    #[serde(rename = "minimizeToTray", default)]
-    pub minimize_to_tray: bool,
-    #[serde(rename = "closeToTray", default)]
-    pub close_to_tray: bool,
-    #[serde(rename = "closeNoticeShown", default)]
-    pub close_notice_shown: bool,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]

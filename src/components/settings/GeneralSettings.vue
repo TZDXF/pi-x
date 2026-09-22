@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** General preferences page: tray behavior, theme, language, and workspace info. */
-import { onMounted, ref } from "vue"
+/** General preferences page: theme, language, and workspace info. */
+import { ref } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   Select,
@@ -11,13 +11,10 @@ import {
 } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
 import { isDesktop } from "@/api/transport"
-import { getConfig, saveConfig } from "@/api/piClient"
-import { useUiStore } from "@/stores/ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
 
 const { t } = useI18n()
-const ui = useUiStore()
 
 const selectedLocale = ref<Locale>(currentLocale())
 
@@ -25,45 +22,10 @@ function applyLocale(v: Locale) {
   selectedLocale.value = v
   setLocale(v)
 }
-
-const windowPreferencesBusy = ref(false)
-const minimizeToTray = ref(false)
-const closeToTray = ref(false)
-
-onMounted(async () => {
-  if (!isDesktop) return
-  try {
-    const c = await getConfig()
-    minimizeToTray.value = c.minimizeToTray ?? false
-    closeToTray.value = c.closeToTray ?? false
-  } catch {
-    // Keep defaults when the config cannot be loaded.
-  }
-})
-
-async function saveWindowPreferences() {
-  windowPreferencesBusy.value = true
-  try {
-    const c = await getConfig()
-    await saveConfig({ ...c, minimizeToTray: minimizeToTray.value, closeToTray: closeToTray.value })
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-    const c = await getConfig().catch(() => null)
-    if (c) { minimizeToTray.value = c.minimizeToTray ?? false; closeToTray.value = c.closeToTray ?? false }
-  } finally { windowPreferencesBusy.value = false }
-}
 </script>
 
 <template>
   <template v-if="isDesktop">
-    <label class="setting-row">
-      <div><h3>{{ t("settings.minimizeToTray") }}</h3><p>{{ t("settings.minimizeToTrayDesc") }}</p></div>
-      <input v-model="minimizeToTray" type="checkbox" :disabled="windowPreferencesBusy" @change="saveWindowPreferences" />
-    </label>
-    <label class="setting-row">
-      <div><h3>{{ t("settings.closeToTray") }}</h3><p>{{ t("settings.closeToTrayDesc") }}</p></div>
-      <input v-model="closeToTray" type="checkbox" :disabled="windowPreferencesBusy" @change="saveWindowPreferences" />
-    </label>
     <p class="text-xs text-muted-foreground">{{ t("settings.dataDirectory") }}: ~/.pix</p>
   </template>
   <div class="setting-row">

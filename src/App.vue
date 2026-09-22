@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { onMounted, onUnmounted, ref } from "vue"
+import { onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   detectPi,
@@ -25,7 +25,6 @@ import WelcomeView from "@/components/WelcomeView.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsDialog from "@/components/SettingsDialog.vue"
-import CloseNoticeDialog from "@/components/CloseNoticeDialog.vue"
 import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
@@ -110,6 +109,29 @@ onMounted(async () => {
     phase.value = "down"
   }
 })
+
+// Serialize backend switches, but keep navigation clickable and retain the latest choice.
+let queuedNavigation: (() => Promise<unknown>) | null = null
+const navigationRunning = ref(false)
+function requestNavigation(action: () => Promise<unknown>) {
+  if (session.isStreaming || workspace.gitBusy || phase.value === "trust") return
+  queuedNavigation = action
+  void drainNavigation()
+}
+async function drainNavigation() {
+  if (navigationRunning.value || connecting.value || navigating.value || disposed) return
+  navigationRunning.value = true
+  try {
+    while (queuedNavigation && !disposed) {
+      const action = queuedNavigation
+      queuedNavigation = null
+      pendingResume.value = null
+      try { await action() }
+      catch (error) { ui.pushToast(String(error), "error") }
+    }
+  } finally { navigationRunning.value = false }
+}
+watch([connecting, navigating], () => { void drainNavigation() })
 
 async function selectProject(dir: string) {
   if (session.isStreaming || workspace.gitBusy || connecting.value) return
@@ -300,10 +322,11 @@ onUnmounted(() => {
       :project="project"
       :ready="phase === 'chat'"
       :busy="navigating || workspace.gitBusy || connecting || phase === 'trust'"
-      @switch-project="switchProject"
-      @select-project="selectProject"
-      @resume-session="resumeSession"
-      @new-session="newProjectSession"
+      :navigation-busy="workspace.gitBusy || phase === 'trust'"
+      @switch-project="requestNavigation(switchProject)"
+      @select-project="path => requestNavigation(() => selectProject(path))"
+      @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
+      @new-session="path => requestNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
       @settings="settingsOpen = true"
       @collapse="sidebarOpen = false"
@@ -363,7 +386,6 @@ onUnmounted(() => {
       </div>
     </main>
     <SettingsDialog :open="settingsOpen" :project="project" @close="settingsOpen = false" />
-    <CloseNoticeDialog />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div

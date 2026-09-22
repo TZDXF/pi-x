@@ -84,13 +84,25 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 
-async function loadOlderHistory(event: MouseEvent) {
-  const viewport = (event.currentTarget as HTMLElement).closest('[role="log"]')
-  const height = viewport?.scrollHeight ?? 0
-  const top = viewport?.scrollTop ?? 0
-  await session.loadOlderHistory()
-  await nextTick()
-  if (viewport?.isConnected) viewport.scrollTop = top + viewport.scrollHeight - height
+const conversation = ref<InstanceType<typeof Conversation> | null>(null)
+let restoringHistory = false
+async function onHistoryScroll(event: Event) {
+  const viewport = event.target as HTMLElement
+  // Prefetch before reaching the top; ignore initial positioning and duplicate events.
+  if (viewport.scrollTop > 600 || session.historyLoading || props.connecting ||
+      !session.hasOlderHistory || session.olderHistoryLoading || restoringHistory) return
+  restoringHistory = true
+  const file = session.sessionFile
+  conversation.value?.stopScroll()
+  const height = viewport.scrollHeight
+  try {
+    await session.loadOlderHistory()
+    await nextTick()
+    if (viewport.isConnected && file === session.sessionFile)
+      viewport.scrollTop += viewport.scrollHeight - height
+  } catch (error) {
+    ui.pushToast(String(error), "error")
+  } finally { restoringHistory = false }
 }
 
 const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
@@ -378,17 +390,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     </header>
 
     <!-- conversation -->
-    <Conversation class="min-h-0 flex-1">
+    <div v-if="connecting || session.historyLoading" role="status" class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
+      <Loader :size="16" /> {{ t('chat.historyLoading') }}
+    </div>
+    <Conversation v-else ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
+      class="min-h-0 flex-1" @scroll="onHistoryScroll">
       <ConversationContent
         class="conversation-column mx-auto w-full max-w-3xl px-6 py-10"
       >
-        <div v-if="session.historyLoading" role="status" class="text-muted-foreground flex items-center justify-center gap-2 text-sm">
-          <Loader :size="16" /> {{ t('chat.historyLoading') }}
+        <div v-if="session.hasOlderHistory" class="text-muted-foreground flex h-8 items-center justify-center gap-2 text-sm" role="status">
+          <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t('chat.historyLoading') }}</template>
         </div>
-        <Button v-else-if="session.hasOlderHistory" variant="ghost" size="sm"
-          class="mx-auto" :disabled="session.olderHistoryLoading" @click="loadOlderHistory">
-          {{ t(session.olderHistoryLoading ? 'chat.historyLoading' : 'chat.loadOlderHistory') }}
-        </Button>
         <ConversationEmptyState
           class="chat-empty"
           v-if="session.entries.length === 0 && !session.historyLoading"

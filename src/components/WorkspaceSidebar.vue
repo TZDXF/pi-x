@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
-const props = defineProps<{ project: string; ready: boolean; busy: boolean }>()
+const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
   removeProject: [project: string];
@@ -31,6 +31,7 @@ const showArchived = ref(false)
 const renaming = ref<SessionMeta | null>(null)
 const title = ref("")
 const saving = ref(false)
+const navigationDisabled = computed(() => props.navigationBusy || workspace.gitBusy || session.isStreaming || saving.value)
 const disabled = computed(() => props.busy || workspace.gitBusy || session.isStreaming || saving.value)
 const name = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
@@ -134,11 +135,11 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
 <template>
   <aside class="workspace-sidebar" :aria-label="t('sidebar.ariaLabel')">
     <div class="sidebar-brand"><PiXLogo /><Button variant="ghost" size="icon" class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></Button></div>
-    <Button variant="ghost" class="sidebar-action" :disabled="!ready || disabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</Button>
+    <Button variant="ghost" class="sidebar-action" :disabled="!ready || navigationDisabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</Button>
     <label class="sidebar-search"><Search :size="15" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
     <div class="sidebar-section-label"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
       <div class="flex"><Button variant="ghost" size="icon" class="icon-button" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" /></Button>
-      <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></Button></div>
+      <Button variant="ghost" size="icon" class="icon-button" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></Button></div>
     </div>
     <ScrollArea class="project-groups" @dragend="clearDrag">
       <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
@@ -147,7 +148,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
             <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
           </Button>
-          <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="disabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
+          <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
           <DropdownMenu>
             <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
@@ -163,7 +164,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           <div v-if="path === project && ready && session.entries.length > 0 && !showArchived && !query && !workspace.histories[path]?.some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="disabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</Button>
+            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</Button>
             <span v-if="s.file === session.sessionFile && session.isStreaming" class="session-running" :aria-label="t('chat.thinking')" />
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>

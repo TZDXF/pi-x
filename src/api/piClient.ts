@@ -27,9 +27,6 @@ export interface ModelRef {
 export interface ManagedSkill { path: string; enabled: boolean }
 
 export interface AppConfig {
-  minimizeToTray?: boolean
-  closeToTray?: boolean
-  closeNoticeShown?: boolean
   managedSkills?: ManagedSkill[] | null
   piPath?: string
   lastProject?: string
@@ -45,13 +42,6 @@ export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
 export const getConfig = () => invoke<AppConfig>("app_config_get")
-
-export const closeWindowDecide = (action: "tray" | "quit" | "cancel", remember: boolean) =>
-  invoke<void>("close_window_decide", { action, remember })
-
-/** Desktop-only: emitted when the window close button is pressed and no choice was remembered yet. */
-export const onCloseRequested = (handler: () => void) =>
-  listen("pix://close-requested", () => handler())
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
 
