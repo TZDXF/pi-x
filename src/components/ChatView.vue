@@ -299,6 +299,11 @@ async function onSubmit(message: {
 
 function onThinkingChange(v: unknown) {
   if (typeof v !== "string") return
+  // pi starts lazily: queue the choice until init() applies it.
+  if (!props.connected) {
+    session.setDesiredThinkingLevel(v as ThinkingLevel)
+    return
+  }
   session.setThinkingLevel(v as ThinkingLevel)
     .catch(e => ui.pushToast(String(e), "error"))
 }
@@ -568,7 +573,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
             <Select
               :model-value="session.thinkingLevel"
-              :disabled="!connected"
+              :disabled="!connected && session.models.length === 0"
               @update:model-value="onThinkingChange"
             >
               <SelectTrigger class="h-8 w-24 text-xs">

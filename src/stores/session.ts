@@ -41,6 +41,47 @@ function contentText(content: unknown): string {
   return ""
 }
 
+// ---- thinking levels (mirror pi-ai/models.js for offline use) ----
+
+const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+/** pi's DEFAULT_THINKING_LEVEL (core/defaults.js). */
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
+
+/** pi's getSupportedThinkingLevels: derive levels from a models.json entry. */
+function supportedThinkingLevels(model: { reasoning?: boolean, thinkingLevelMap?: unknown }): ThinkingLevel[] {
+  if (!model.reasoning) return ["off"]
+  const map = (model.thinkingLevelMap ?? {}) as Record<string, unknown>
+  return ALL_THINKING_LEVELS.filter(level => {
+    const mapped = map[level]
+    if (mapped === null) return false
+    if (level === "xhigh" || level === "max") return mapped !== undefined
+    return true
+  })
+}
+
+/** pi's clampThinkingLevel: nearest available level, upward first. */
+function clampThinkingLevel(level: ThinkingLevel, available: ThinkingLevel[]): ThinkingLevel {
+  if (available.includes(level)) return level
+  const idx = ALL_THINKING_LEVELS.indexOf(level)
+  if (idx === -1) return available[0] ?? "off"
+  for (let i = idx; i < ALL_THINKING_LEVELS.length; i++)
+    if (available.includes(ALL_THINKING_LEVELS[i])) return ALL_THINKING_LEVELS[i]
+  for (let i = idx - 1; i >= 0; i--)
+    if (available.includes(ALL_THINKING_LEVELS[i])) return ALL_THINKING_LEVELS[i]
+  return available[0] ?? "off"
+}
+
+const DEFAULT_THINKING_KEY = "pi:defaultThinkingLevel"
+function readStoredThinkingLevel(): ThinkingLevel | null {
+  try {
+    const v = localStorage.getItem(DEFAULT_THINKING_KEY)
+    return v && (ALL_THINKING_LEVELS as string[]).includes(v) ? v as ThinkingLevel : null
+  } catch { return null }
+}
+function storeThinkingLevel(level: ThinkingLevel) {
+  try { localStorage.setItem(DEFAULT_THINKING_KEY, level) } catch { /* ignore */ }
+}
+
 let entrySeq = 0
 const nextId = () => ++entrySeq
 
@@ -64,7 +105,11 @@ export const useSessionStore = defineStore("session", () => {
   const models = ref<Model[]>([])
   /** Model picked before pi starts (or sticky choice); applied on init. */
   const desiredModelKey = ref<string | null>(null)
-  const availableThinking = ref<ThinkingLevel[]>(["off"])
+  const rpcThinkingLevels = ref<ThinkingLevel[]>(["off"])
+  /** Per-model thinking levels derived from models.json while pi is down. */
+  const offlineThinkingLevels = ref<Record<string, ThinkingLevel[]>>({})
+  /** Thinking level picked before pi starts (sticky); applied on init. */
+  const desiredThinkingLevel = ref<ThinkingLevel | null>(readStoredThinkingLevel())
   const cwd = ref("")
 
   // Keep unrendered history outside Vue's deep reactive graph.
@@ -87,7 +132,16 @@ export const useSessionStore = defineStore("session", () => {
   // streaming assembly
 
   const currentModel = computed(() => state.value?.model ?? null)
-  const thinkingLevel = computed(() => state.value?.thinkingLevel ?? "off")
+  /** RPC levels once pi runs; config-derived levels (of the desired model) before. */
+  const availableThinking = computed<ThinkingLevel[]>(() => {
+    if (state.value) return rpcThinkingLevels.value
+    const key = desiredModelKey.value
+    return (key && offlineThinkingLevels.value[key]) || ["off"]
+  })
+  const thinkingLevel = computed<ThinkingLevel>(() => {
+    if (state.value) return state.value.thinkingLevel
+    return clampThinkingLevel(desiredThinkingLevel.value ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
+  })
   const pendingCount = computed(() => steering.value.length + followUp.value.length)
 
   // ---- event ingestion ----
@@ -395,8 +449,16 @@ export const useSessionStore = defineStore("session", () => {
 
   async function setThinkingLevel(level: ThinkingLevel) {
     await rpcRequest({ type: "set_thinking_level", level })
+    desiredThinkingLevel.value = level
+    storeThinkingLevel(level)
     await refreshState()
     await refreshThinkingLevels()
+  }
+
+  /** Record a thinking level picked while pi is not running; applied on init. */
+  function setDesiredThinkingLevel(level: ThinkingLevel) {
+    desiredThinkingLevel.value = level
+    storeThinkingLevel(level)
   }
 
   // ---- queries ----
@@ -519,7 +581,7 @@ export const useSessionStore = defineStore("session", () => {
   async function refreshThinkingLevels() {
     const res = await rpcRequest<{ levels: ThinkingLevel[] }>({ type: "get_available_thinking_levels" })
     if (res.success && res.data)
-      availableThinking.value = res.data.levels ?? ["off"]
+      rpcThinkingLevels.value = res.data.levels ?? ["off"]
   }
 
   const DEFAULT_MODEL_KEY = "pi:defaultModel"
@@ -535,6 +597,7 @@ export const useSessionStore = defineStore("session", () => {
     try {
       const config = await getModelsConfig()
       const offline: Model[] = []
+      const levels: Record<string, ThinkingLevel[]> = {}
       for (const [provider, entry] of Object.entries(config.providers ?? {})) {
         for (const m of entry.models ?? []) {
           offline.push({
@@ -549,9 +612,11 @@ export const useSessionStore = defineStore("session", () => {
             maxTokens: m.maxTokens ?? 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           })
+          levels[`${provider}/${m.id}`] = supportedThinkingLevels(m)
         }
       }
       models.value = offline
+      offlineThinkingLevels.value = levels
       // Default to the last picked model, falling back to the first entry.
       if (!desiredModelKey.value && offline.length) {
         const stored = readStoredDefaultModel()
@@ -575,6 +640,11 @@ export const useSessionStore = defineStore("session", () => {
         await setModel(provider, rest.join("/"))
           .catch(e => console.warn("[pi] failed to apply desired model:", e))
       }
+    }
+    const desiredLevel = desiredThinkingLevel.value
+    if (desiredLevel) {
+      await setThinkingLevel(desiredLevel)
+        .catch(e => console.warn("[pi] failed to apply desired thinking level:", e))
     }
   }
 
@@ -606,6 +676,7 @@ export const useSessionStore = defineStore("session", () => {
     commands,
     models,
     desiredModelKey,
+    desiredThinkingLevel,
     availableThinking,
     cwd,
     sessionFile,
@@ -620,6 +691,7 @@ export const useSessionStore = defineStore("session", () => {
     setModel,
     setDesiredModel,
     setThinkingLevel,
+    setDesiredThinkingLevel,
     refreshState,
     refreshStats,
     refreshModels,
