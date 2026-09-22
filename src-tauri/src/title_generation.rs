@@ -128,6 +128,7 @@ pub async fn session_generate_title(
         Some(Launcher::Binary { path }) => Command::new(path),
         None => return Err("No usable pi launcher for title generation".into()),
     };
+    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.args(["--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
         "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
         "--provider", model.provider.trim(), "--model", model.model_id.trim(),

@@ -17,7 +17,7 @@ remote-access = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +29,8 @@ uuid = { version = "1", features = ["v4"] }
 if-addrs = "0.14"
 dunce = "1"
 dirs = "6"
+regex = "1.13.1"
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }
 
 [profile.release]
 codegen-units = 1

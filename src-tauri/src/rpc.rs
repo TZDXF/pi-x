@@ -52,6 +52,7 @@ pub async fn spawn(
     pi: &PiInfo,
     project: &str,
     session_file: Option<String>,
+    extra_args: Vec<String>,
 ) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
     if let Some(mut old) = guard.take() {
@@ -63,6 +64,8 @@ pub async fn spawn(
         args.push("--session".into());
         args.push(sf);
     }
+
+    args.extend(extra_args);
 
     // Prefer the resolved launcher (node + cli.js); never route npm .cmd
     // shims through cmd.exe — its shim trick can exit silently under pipes.
@@ -92,6 +95,7 @@ pub async fn spawn(
         }
     };
 
+    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.current_dir(project)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

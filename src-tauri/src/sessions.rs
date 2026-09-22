@@ -1,4 +1,4 @@
-//! Scan `~/.pi/agent/sessions/` for session files belonging to a project.
+//! Scan `~/.pix/agent/sessions/` for session files belonging to a project.
 //!
 //! Layout: `<agent-dir>/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`.
 //! The encoding of the cwd in directory names is an implementation detail of

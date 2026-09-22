@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -392,7 +393,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             <MessageContent>
               <div
                 v-if="entry.kind === 'user'"
-                class="bg-muted rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
+                class="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]"
               >
                 {{ entry.text }}
                 <div
@@ -455,7 +456,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           </QueueList>
         </QueueSection>
       </ConversationContent>
-      <ConversationScrollButton />
+      <template #overlay><ConversationScrollButton /></template>
     </Conversation>
 
     <!-- extension widget -->
@@ -593,27 +594,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- session tree dialog -->
     <Dialog v-model:open="treeOpen">
-      <DialogContent class="max-h-[75vh] max-w-2xl overflow-y-auto">
+      <DialogContent class="flex max-h-[75dvh] max-w-2xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{{ t("chat.sessionTreeTitle") }}</DialogTitle>
         </DialogHeader>
+        <ScrollArea class="min-h-0" viewport-class="max-h-[55dvh]">
         <SessionTree
           :open="treeOpen"
           @fork="doFork"
           @close="treeOpen = false"
         />
+        </ScrollArea>
       </DialogContent>
     </Dialog>
 
     <!-- fork dialog -->
     <Dialog v-model:open="forkOpen">
-      <DialogContent class="max-h-[70vh] max-w-lg overflow-y-auto">
+      <DialogContent class="flex max-h-[70dvh] max-w-lg flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{{ t("chat.forkTitle") }}</DialogTitle>
         </DialogHeader>
         <p class="text-muted-foreground text-xs">
           {{ t("chat.forkDesc") }}
         </p>
+        <ScrollArea class="min-h-0" viewport-class="max-h-[45dvh]">
         <div class="flex flex-col gap-1">
           <Button
             type="button"
@@ -629,6 +633,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             {{ t("chat.forkEmpty") }}
           </p>
         </div>
+        </ScrollArea>
       </DialogContent>
     </Dialog>
 

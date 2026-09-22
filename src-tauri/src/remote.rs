@@ -53,13 +53,10 @@ struct WebState {
     token: String,
     stop: watch::Receiver<bool>,
 }
-fn path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    Ok(app
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?
-        .join("remote.json"))
+fn path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(crate::data_dir::root().join("remote.json"))
 }
+
 pub fn load(app: &AppHandle) -> Settings {
     path(app)
         .ok()
@@ -130,7 +127,11 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
         let _ = old.stop.send(true);
     }
     if let Some(listener) = listener {
-        let token = uuid::Uuid::new_v4().simple().to_string();
+        // PIX_REMOTE_TOKEN overrides the random token (headless testing / automation).
+        let token = std::env::var("PIX_REMOTE_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
         let (stop, mut stopped) = watch::channel(false);
         let web = WebState {
             app: app.clone(),
@@ -254,6 +255,34 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             commands::search_files(text("project")?, text("query")?).await?,
         )
         .unwrap()),
+        "package_catalog" => Ok(serde_json::to_value(crate::packages::package_catalog().await?)
+            .map_err(|e| e.to_string())?),
+        "package_list" => Ok(serde_json::to_value(crate::packages::package_list(
+            a["project"].as_str().map(str::to_owned),
+        ))
+        .map_err(|e| e.to_string())?),
+        "package_install" => Ok(Value::String(
+            crate::packages::package_install(
+                app.clone(),
+                text("source")?,
+                a["scope"].as_str().map(str::to_owned),
+                a["project"].as_str().map(str::to_owned),
+            )
+            .await?,
+        )),
+        "package_remove" => Ok(Value::String(
+            crate::packages::package_remove(
+                app.clone(),
+                text("source")?,
+                a["scope"].as_str().map(str::to_owned),
+                a["project"].as_str().map(str::to_owned),
+            )
+            .await?,
+        )),
+        "package_update" => Ok(Value::String(
+            crate::packages::package_update(app.clone(), a["source"].as_str().map(str::to_owned))
+                .await?,
+        )),
         _ => Err("此操作仅可在桌面端执行".into()),
     }
 }

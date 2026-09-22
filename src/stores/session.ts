@@ -530,7 +530,7 @@ export const useSessionStore = defineStore("session", () => {
     try { localStorage.setItem(DEFAULT_MODEL_KEY, key) } catch { /* ignore */ }
   }
 
-  /** Fill the model picker from ~/.pi/agent/models.json while pi is down. */
+  /** Fill the model picker from ~/.pix/agent/models.json while pi is down. */
   async function loadOfflineModels() {
     try {
       const config = await getModelsConfig()

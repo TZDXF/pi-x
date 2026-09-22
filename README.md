@@ -26,7 +26,7 @@
 - **图片输入**：粘贴 / 拖拽 / 添加按钮发送图片（base64），气泡内预览
 - **Fork 分叉**：从任意历史用户提示词重新开始对话（`fork` RPC）
 - **扩展 UI 完整支持**：pi 扩展弹出的 select / confirm / input / editor 对话框以原生桌面对话框呈现，回答通过 `extension_ui_response` 回传
-- **项目信任管理**：与 TUI 共享 `~/.pi/agent/trust.json`，首次打开项目弹出信任确认，父目录信任自动继承
+- **项目信任管理**：使用 PiX 独立的 `~/.pix/agent/trust.json`，首次打开项目弹出信任确认，父目录信任自动继承
 - **pi 自动检测**：扫描 PATH 与常见安装位置定位 pi；支持在应用内配置自定义 pi 路径；Windows 下解析 npm `.cmd` shim 并直接以 `node + cli.js` 启动（绕开 cmd shim 在管道下的兼容性问题）
 - **会话统计**：状态栏实时显示上下文 token 用量、成本、模型信息
 - **会话导出**：一键导出为 HTML 并用浏览器打开
@@ -86,7 +86,7 @@ pi-x/
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
-- 模型凭据：沿用 pi 现有配置（`~/.pi/agent/auth.json` 或环境变量）。**OAuth 订阅登录（Claude Pro/Max 等）暂不支持**，请使用 API key 方式。
+- 模型凭据：沿用 pi 现有配置（`~/.pix/agent/auth.json` 或环境变量）。**OAuth 订阅登录（Claude Pro/Max 等）暂不支持**，请使用 API key 方式。
 
 ### 常用命令
 
@@ -132,7 +132,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ## Roadmap
 
 ### M2（已完成）
-- [x] **会话列表**：Rust 扫描 `~/.pi/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
+- [x] **会话列表**：Rust 扫描 `~/.pix/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
 - [x] **斜杠命令面板**：基于 `get_commands` + ai-elements `PromptInputCommand` 的 `/` 命令补全
 - [x] **会话内导航**：`get_tree` 分支树可视化（活跃路径高亮、user 节点一键 fork）
 
@@ -150,7 +150,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - [ ] **扩展管理界面**：列出/启用禁用扩展包
 
 ### 暂缓
-- **主题映射**：pi 主题（`~/.pi/agent/themes`）映射到应用配色
+- **主题映射**：pi 主题（`~/.pix/agent/themes`）映射到应用配色
 - **OAuth 订阅登录**（Claude Pro/Max、ChatGPT、Copilot 等）：需要宿主应用注册与凭据安全存储方案，先依赖 pi 现有 auth.json / API key 配置
 
 ## 平台支持
@@ -174,3 +174,13 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 PiX 重复填写密钥。
 
 新会话发送第一条消息后，侧栏立即显示消息预览，独立的 pi 进程异步生成标题并持久保存。不切换当前对话模型、不使用工具、不加载扩展或项目上下文。生成失败或超时保留预览，每个会话最多尝试一次；手动标题不会被覆盖。默认关闭，启用后会产生额外模型用量，配置变更对新会话生效。
+
+
+### 窗口托盘与数据目录
+
+- 在「设置 → 通用」中分别配置「最小化到托盘」与「关闭到托盘」，修改立即保存。
+- 第一次点击关闭会提示选择「最小化到托盘」「退出应用」或「取消」；取消不记录选择。
+- 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
+- 应用数据统一放在用户目录的 `.pix`：`config.json`（设置）、`remote.json`（远程访问）、`agent/`（模型、凭据、会话等）和 `webview/`（桌面界面本地存储与缓存）。
+- 首次升级会复制旧配置、原 `PI_CODING_AGENT_DIR` 或 `~/.pi/agent` 数据，以及 Windows WebView 数据；保留原文件，不覆盖 `.pix` 中已有文件。升级前请退出旧版 PiX，以免 WebView 文件被占用。
+- PiX 启动的 agent 使用 `.pix/agent`，不再与终端 pi 自动同步。项目内 `.pi` 配置与用户项目文件仍保留在原位置。远程浏览器的界面偏好仍属于该浏览器。

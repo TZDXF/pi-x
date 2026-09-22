@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -349,9 +350,9 @@ onUnmounted(() => {
           <p class="text-muted-foreground mb-1 text-xs font-medium">
             {{ t("app.stderr") }}
           </p>
-          <pre class="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap">{{
+          <ScrollArea viewport-class="max-h-48"><pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
             ui.stderrLines.slice(-12).join("\n")
-          }}</pre>
+          }}</pre></ScrollArea>
         </div>
         <div class="flex gap-2">
           <Button variant="outline" @click="switchProject">
@@ -360,7 +361,7 @@ onUnmounted(() => {
         </div>
       </div>
     </main>
-    <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
+    <SettingsDialog :open="settingsOpen" :project="project" @close="settingsOpen = false" />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-50 flex flex-col gap-2">
       <div

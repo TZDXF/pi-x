@@ -3,15 +3,15 @@ import type { HTMLAttributes } from 'vue'
 import { ArrowDownIcon } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { computed } from 'vue'
-import { useStickToBottomContext } from 'vue-stick-to-bottom'
+import { computed, inject } from 'vue'
+import { conversationKey } from './context'
 
 interface Props {
   class?: HTMLAttributes['class']
 }
 
 const props = defineProps<Props>()
-const { isAtBottom, scrollToBottom } = useStickToBottomContext()
+const { isAtBottom, scrollToBottom } = inject(conversationKey)!
 const showScrollButton = computed(() => !isAtBottom.value)
 
 function handleClick() {

@@ -208,6 +208,7 @@ async fn probe_version(path: &str, launcher: Option<&Launcher>) -> Option<String
     };
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.stdin(Stdio::null());
     let output = cmd.output().await.ok()?;
 

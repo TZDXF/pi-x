@@ -1,18 +1,29 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{fs_search, pi_locate, rpc, sessions, trust};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
+    #[serde(rename = "minimizeToTray", default)]
+    pub minimize_to_tray: bool,
+    #[serde(rename = "closeToTray", default)]
+    pub close_to_tray: bool,
+    #[serde(rename = "closeNoticeShown", default)]
+    pub close_notice_shown: bool,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
     #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<crate::title_generation::TitleModel>,
+    #[serde(rename = "globalPrompt", default)]
+    pub global_prompt: String,
+    /// None preserves Pi discovery; Some([]) disables all skills.
+    #[serde(rename = "managedSkills", default)]
+    pub managed_skills: Option<Vec<ManagedSkill>>,
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
@@ -21,12 +32,34 @@ pub struct AppConfig {
     pub default_model: Option<crate::title_generation::TitleModel>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ManagedSkill {
+    pub path: String,
+    pub enabled: bool,
+}
+
+/// Validate before replacing a running process, and pass each path as one argument.
+pub fn runtime_args(config: &AppConfig) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    if let Some(skills) = &config.managed_skills {
+        args.push("--no-skills".into());
+        for skill in skills.iter().filter(|s| s.enabled) {
+            let path = std::path::Path::new(&skill.path);
+            if !path.is_absolute() || !path.is_file() {
+                return Err(format!("Skill 文件不存在或不是绝对路径：{}", skill.path));
+            }
+            args.extend(["--skill".into(), skill.path.clone()]);
+        }
+    }
+    Ok(args)
+}
+
 fn is_false(v: &bool) -> bool {
     !*v
 }
 
-fn config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+fn config_path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = crate::data_dir::root();
     Ok(dir.join("config.json"))
 }
 
@@ -76,6 +109,14 @@ pub async fn rpc_spawn(
     session_file: Option<String>,
 ) -> Result<(), String> {
     let cfg = app_config_get(app.clone())?;
+    let mut extra_args = runtime_args(&cfg)?;
+    if !cfg.global_prompt.trim().is_empty() {
+        let prompt_path = config_path(&app)?.with_file_name("global-prompt.md");
+        std::fs::create_dir_all(prompt_path.parent().ok_or("Missing config directory")?)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&prompt_path, &cfg.global_prompt).map_err(|e| e.to_string())?;
+        extra_args.extend(["--append-system-prompt".into(), prompt_path.to_string_lossy().into_owned()]);
+    }
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
         return Err(
@@ -83,7 +124,7 @@ pub async fn rpc_spawn(
                 .to_string(),
         );
     }
-    rpc::spawn(app, &state, &info, &project, session_file).await
+    rpc::spawn(app, &state, &info, &project, session_file, extra_args).await
 }
 
 /// List recent stored sessions for a project (newest first).
@@ -132,7 +173,7 @@ fn models_config_path() -> std::path::PathBuf {
     trust::agent_dir().join("models.json")
 }
 
-/// Read pi's `~/.pi/agent/models.json`. Returns `{ "providers": {} }` when the
+/// Read pi's `~/.pix/agent/models.json`. Returns `{ "providers": {} }` when the
 /// file does not exist. The whole document is passed through as `Value` so
 /// unknown fields (cost, compat, headers, samplingParams, modelOverrides, …)
 /// survive a read/edit/save round trip untouched.
@@ -150,7 +191,7 @@ pub fn models_config_get() -> Result<Value, String> {
     Ok(v)
 }
 
-/// Write pi's `~/.pi/agent/models.json` (2-space pretty JSON + trailing newline,
+/// Write pi's `~/.pix/agent/models.json` (2-space pretty JSON + trailing newline,
 /// matching pi's own file style). pi re-reads this file whenever the model
 /// picker opens, so changes take effect without a restart.
 #[tauri::command]
@@ -161,4 +202,55 @@ pub fn models_config_save(config: Value) -> Result<(), String> {
     }
     let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod agent_config_tests {
+    use super::*;
+
+    #[test]
+    fn old_config_keeps_automatic_discovery() {
+        let config: AppConfig = serde_json::from_str(r#"{"piPath":"pi","lastProject":"demo"}"#).unwrap();
+        assert!(config.global_prompt.is_empty());
+        assert!(config.managed_skills.is_none());
+        assert!(runtime_args(&config).unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_manual_list_disables_discovery() {
+        let config = AppConfig { managed_skills: Some(vec![]), ..Default::default() };
+        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills"]);
+    }
+
+    #[test]
+    fn disabled_missing_skills_are_not_validated_or_loaded() {
+        let config = AppConfig {
+            managed_skills: Some(vec![ManagedSkill { path: "missing.md".into(), enabled: false }]),
+            ..Default::default()
+        };
+        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills"]);
+    }
+
+    #[test]
+    fn enabled_relative_paths_are_rejected() {
+        let config = AppConfig {
+            managed_skills: Some(vec![ManagedSkill { path: "SKILL.md".into(), enabled: true }]),
+            ..Default::default()
+        };
+        assert!(runtime_args(&config).is_err());
+    }
+
+    #[test]
+    fn enabled_absolute_files_are_passed_as_separate_arguments() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml").to_string_lossy().into_owned();
+        let config = AppConfig {
+            global_prompt: "中文\nGlobal instruction".into(),
+            managed_skills: Some(vec![ManagedSkill { path: path.clone(), enabled: true }]),
+            ..Default::default()
+        };
+        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills", "--skill", &path]);
+        let roundtrip: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(roundtrip.global_prompt, config.global_prompt);
+        assert_eq!(runtime_args(&roundtrip).unwrap(), runtime_args(&config).unwrap());
+    }
 }

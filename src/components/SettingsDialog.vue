@@ -13,6 +13,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -27,13 +28,16 @@ import type { AcceptableValue } from "reka-ui"
 import { detectPi, getConfig, saveConfig, type AppConfig, type PiInfo } from "@/api/piClient"
 import ProviderSettings from "./ProviderSettings.vue"
 import ModelSettings from "./ModelSettings.vue"
+import AgentSettings from "./AgentSettings.vue"
+import SkillSettings from "./SkillSettings.vue"
 import TitleModelSettings from "./TitleModelSettings.vue"
+import PackageSettings from "./PackageSettings.vue"
 import { useUiStore } from "@/stores/ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
 
-const props = defineProps<{ open: boolean }>()
+const props = defineProps<{ open: boolean; project?: string }>()
 const emit = defineEmits<{ close: [] }>()
 const ui = useUiStore()
 
@@ -57,6 +61,20 @@ function applyLocale(v: Locale) {
   selectedLocale.value = v
   setLocale(v)
 }
+const windowPreferencesBusy = ref(false)
+const minimizeToTray = ref(false)
+const closeToTray = ref(false)
+async function saveWindowPreferences() {
+  windowPreferencesBusy.value = true
+  try {
+    const c = await getConfig()
+    await saveConfig({ ...c, minimizeToTray: minimizeToTray.value, closeToTray: closeToTray.value })
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+    const c = await getConfig().catch(() => null)
+    if (c) { minimizeToTray.value = c.minimizeToTray ?? false; closeToTray.value = c.closeToTray ?? false }
+  } finally { windowPreferencesBusy.value = false }
+}
 const piPath = ref("")
 const info = ref<PiInfo | null>(null)
 const detecting = ref(false)
@@ -71,6 +89,8 @@ watch(
       if (isDesktop) remote.value = await remoteStatus()
       const c: AppConfig = await getConfig()
       piPath.value = c.piPath ?? ""
+      minimizeToTray.value = c.minimizeToTray ?? false
+      closeToTray.value = c.closeToTray ?? false
     } catch {
       piPath.value = ""
     }
@@ -114,11 +134,21 @@ async function save() {
             <TabsTrigger value="general" class="justify-start">{{ t("settings.general") }}</TabsTrigger>
             <TabsTrigger v-if="isDesktop" value="models" class="justify-start">{{ t("settings.providersModels") }}</TabsTrigger>
             <TabsTrigger v-if="isDesktop" value="runtime" class="justify-start">{{ t("settings.runtime") }}</TabsTrigger>
+            <TabsTrigger v-if="isDesktop" value="agent-config" class="justify-start">{{ t("agentConfig.title") }}</TabsTrigger>
+            <TabsTrigger v-if="isDesktop" value="skills" class="justify-start">{{ t("skillsConfig.title") }}</TabsTrigger>
+            <TabsTrigger value="packages" class="justify-start">{{ t("packages.title") }}</TabsTrigger>
             <TabsTrigger value="about" class="justify-start">{{ t("settings.about") }}</TabsTrigger>
             <TabsTrigger v-if="isDesktop" value="model-config" class="justify-start">{{ t("titleGeneration.page") }}</TabsTrigger>
           </TabsList>
           <p>{{ t("settings.subtitle") }}</p>
         </nav>
+        <ScrollArea :key="tab" class="settings-scroll">
+        <TabsContent v-if="isDesktop" value="agent-config" class="settings-body">
+          <AgentSettings />
+        </TabsContent>
+        <TabsContent v-if="isDesktop" value="skills" class="settings-body">
+          <SkillSettings />
+        </TabsContent>
         <TabsContent value="remote" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.remote") }}</DialogTitle
@@ -172,6 +202,17 @@ async function save() {
             ><DialogTitle>{{ t("settings.generalTitle") }}</DialogTitle
             ><DialogDescription>{{ t("settings.generalDesc") }}</DialogDescription></DialogHeader
           >
+          <template v-if="isDesktop">
+            <label class="setting-row">
+              <div><h3>{{ t("settings.minimizeToTray") }}</h3><p>{{ t("settings.minimizeToTrayDesc") }}</p></div>
+              <input v-model="minimizeToTray" type="checkbox" :disabled="windowPreferencesBusy" @change="saveWindowPreferences" />
+            </label>
+            <label class="setting-row">
+              <div><h3>{{ t("settings.closeToTray") }}</h3><p>{{ t("settings.closeToTrayDesc") }}</p></div>
+              <input v-model="closeToTray" type="checkbox" :disabled="windowPreferencesBusy" @change="saveWindowPreferences" />
+            </label>
+            <p class="text-xs text-muted-foreground">{{ t("settings.dataDirectory") }}: ~/.pix</p>
+          </template>
           <div class="setting-row">
             <div>
               <h3 id="theme-label">{{ t("settings.theme") }}</h3>
@@ -258,6 +299,9 @@ async function save() {
             <DialogDescription>{{ t("titleGeneration.description") }}</DialogDescription></DialogHeader>
           <TitleModelSettings />
         </TabsContent>
+        <TabsContent value="packages" class="settings-body">
+          <PackageSettings :active="tab === 'packages' && props.open" :project="props.project" />
+        </TabsContent>
         <TabsContent value="about" class="settings-body">
           <DialogHeader
             ><DialogTitle>{{ t("settings.aboutTitle") }}</DialogTitle
@@ -325,6 +369,7 @@ async function save() {
             </div>
           </div>
         </TabsContent>
+        </ScrollArea>
       </Tabs>
     </DialogContent>
   </Dialog>

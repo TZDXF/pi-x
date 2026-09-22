@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -52,17 +53,17 @@ function confirm(confirmed: boolean) {
       </DialogHeader>
 
       <!-- select -->
-      <div v-if="active.method === 'select'" class="flex flex-col gap-1">
+      <ScrollArea v-if="active.method === 'select'" viewport-class="max-h-[50dvh]"><div class="flex flex-col gap-1">
         <Button
           v-for="(opt, i) in active.options ?? []"
           :key="i"
           variant="outline"
-          class="h-auto justify-start px-3 py-2 text-left"
+          class="h-auto justify-start whitespace-normal break-words px-3 py-2 text-left"
           @click="submitValue(opt)"
         >
           {{ opt }}
         </Button>
-      </div>
+      </div></ScrollArea>
 
       <!-- confirm -->
       <DialogFooter v-else-if="active.method === 'confirm'" class="gap-2">

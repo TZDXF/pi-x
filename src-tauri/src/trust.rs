@@ -26,13 +26,7 @@ const TRUST_ENTRIES: &[&str] = &[
 ];
 
 pub fn agent_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("PI_CODING_AGENT_DIR") {
-        return PathBuf::from(v);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".pi")
-        .join("agent")
+    crate::data_dir::root().join("agent")
 }
 
 fn canon(p: &Path) -> String {

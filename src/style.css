@@ -424,7 +424,6 @@ input:focus-visible {
 }
 .settings-body {
   min-width: 0;
-  overflow: auto;
   padding: 38px 36px;
 }
 .settings-body [data-slot="dialog-header"] {
@@ -566,7 +565,7 @@ kbd {
 
 .sidebar-brand { padding: 2px 8px 20px; }
 .sidebar-search { margin-bottom: 12px; }
-.project-groups { flex: 1; min-height: 0; overflow-y: auto; }
+.project-groups { flex: 1; min-height: 0; min-width: 0; }
 .project-group { margin-bottom: 17px; }
 .project-heading { display: flex; align-items: center; border-radius: 9px; padding-right: 5px; }
 .project-heading:hover, .project-heading.selected { background: var(--sidebar-accent); }
@@ -637,4 +636,27 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 }
 .sidebar-runtime {
   font-family: var(--font-mono);
+}
+
+/* Navigation buttons must shrink inside rows; text-align does not override
+   the shared Button's flex centering or shrink-0 utility. */
+.workspace-sidebar { min-height: 0; overflow: hidden; }
+.sidebar-action, .project-row, .context-menu-item { justify-content: flex-start; }
+.project-row { flex: 1; width: auto; flex-shrink: 1; }
+.session-link { display: block; flex-shrink: 1; border-radius: 0; }
+.session-actions { flex-shrink: 0; }
+.project-group, .project-heading, .session-row { min-width: 0; max-width: 100%; }
+.sidebar-brand, .sidebar-search, .sidebar-section-label, .sidebar-footer { flex-shrink: 0; }
+.sidebar-search > svg { flex-shrink: 0; }
+.settings-scroll { min-height: 0; height: 100%; }
+.settings-nav { min-height: 0; min-width: 0; }
+.settings-nav [data-slot="tabs-list"] { width: 100%; align-items: stretch; }
+.settings-nav [data-slot="tabs-trigger"] { justify-content: flex-start; white-space: normal; flex-shrink: 0; }
+.settings-body { overflow-wrap: anywhere; }
+.setting-row > :first-child { min-width: 0; }
+.conversation-column .is-user, .conversation-column .is-assistant { min-width: 0; }
+.conversation-column .is-assistant > div { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.composer-options [data-slot="select-trigger"] { min-width: 0; }
+@media (max-width: 640px) {
+  .setting-row { flex-wrap: wrap; gap: 12px; }
 }

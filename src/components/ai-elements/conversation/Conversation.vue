@@ -2,7 +2,11 @@
 import type { HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 import { reactiveOmit } from '@vueuse/core'
-import { StickToBottom } from 'vue-stick-to-bottom'
+import { useStickToBottom } from 'vue-stick-to-bottom'
+import { provide, ref, watch, watchEffect } from 'vue'
+import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
+import { ScrollBar } from '@/components/ui/scroll-area'
+import { conversationKey } from './context'
 
 interface Props {
   ariaLabel?: string
@@ -23,15 +27,22 @@ const props = withDefaults(defineProps<Props>(), {
   mass: 1.25,
   anchor: 'none',
 })
-const delegatedProps = reactiveOmit(props, 'class')
+const delegatedProps = reactiveOmit(props, 'class', 'ariaLabel', 'anchor')
+const context = useStickToBottom(delegatedProps)
+const { scrollRef, contentRef } = context
+const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
+watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
+watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
+provide(conversationKey, context)
 </script>
 
 <template>
-  <StickToBottom
-    v-bind="delegatedProps"
-    :class="cn('relative flex-1 overflow-y-hidden', props.class)"
-    role="log"
-  >
-    <slot />
-  </StickToBottom>
+  <ScrollAreaRoot :class="cn('relative min-h-0 min-w-0 flex-1 overflow-hidden', props.class)">
+    <ScrollAreaViewport ref="viewport" class="size-full [&>div]:!block [&>div]:min-h-full [&>div]:min-w-0"
+      :style="{ overflowAnchor: props.anchor }" role="log" :aria-label="props.ariaLabel" tabindex="0">
+      <div :ref="el => { contentRef = el as HTMLElement | null }"><slot /></div>
+    </ScrollAreaViewport>
+    <ScrollBar />
+    <slot name="overlay" />
+  </ScrollAreaRoot>
 </template>

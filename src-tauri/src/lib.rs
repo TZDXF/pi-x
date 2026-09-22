@@ -1,5 +1,8 @@
+mod data_dir;
+mod desktop;
 mod commands;
 mod fs_search;
+mod packages;
 mod pi_locate;
 #[cfg(feature = "remote-access")]
 mod remote;
@@ -22,6 +25,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(RpcState::default())
         .setup(|app| {
+            data_dir::initialize(app.handle())?;
+            let config = app.config().app.windows[0].clone();
+            tauri::WebviewWindowBuilder::from_config(app, &config)?
+                .data_directory(data_dir::root().join("webview"))
+                .build()?;
+            desktop::setup(app.handle())?;
             #[cfg(feature = "remote-access")]
             {
                 app.manage(remote::RemoteState::default());
@@ -39,6 +48,7 @@ pub fn run() {
             let _ = app;
             Ok(())
         })
+        .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             remote::remote_status,
             remote::remote_set,
@@ -61,6 +71,11 @@ pub fn run() {
             commands::open_path,
             commands::models_config_get,
             commands::models_config_save,
+            packages::package_catalog,
+            packages::package_list,
+            packages::package_install,
+            packages::package_remove,
+            packages::package_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

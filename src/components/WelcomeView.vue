@@ -71,7 +71,7 @@ async function pickFolder() {
         <div
           class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs"
         >
-          <span class="flex-1 overflow-x-auto whitespace-nowrap"
+          <span class="min-w-0 flex-1 whitespace-pre-wrap break-words"
             >npm install -g --ignore-scripts
             @earendil-works/pi-coding-agent</span
           >

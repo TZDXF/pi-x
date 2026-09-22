@@ -11,6 +11,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean }>()
 const emit = defineEmits<{
@@ -139,7 +140,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
       <div class="flex"><Button variant="ghost" size="icon" class="icon-button" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" /></Button>
       <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></Button></div>
     </div>
-    <div class="project-groups" @dragend="clearDrag">
+    <ScrollArea class="project-groups" @dragend="clearDrag">
       <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
         <div class="project-heading" :class="{ selected: path === project && !session.entries.length, 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
@@ -176,7 +177,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           <p v-else-if="!rows(path).length && (showArchived || query)" class="sidebar-empty">{{ t('sidebar.noMatch') }}</p>
         </div>
       </section>
-    </div>
+    </ScrollArea>
     <div class="sidebar-footer"><Button variant="ghost" class="sidebar-action" @click="emit('settings')"><Settings :size="17" />{{ t('sidebar.settings') }}</Button></div>
     <Dialog :open="!!renaming" @update:open="v => { if (!v) renaming = null }"><DialogContent class="sm:max-w-md"><DialogHeader><DialogTitle>{{ t('workspace.rename') }}</DialogTitle></DialogHeader>
       <form @submit.prevent="saveTitle" class="space-y-4"><Input v-model="title" autofocus maxlength="120" :aria-label="t('workspace.title')" class="workspace-text-input h-auto" /><div class="flex justify-end gap-2"><Button variant="ghost" size="sm" class="quiet-button" type="button" @click="renaming = null">{{ t('workspace.cancel') }}</Button><Button size="sm" class="workspace-primary" :disabled="saving || !title.trim()">{{ t('workspace.save') }}</Button></div></form>
