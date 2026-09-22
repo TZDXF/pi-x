@@ -1,5 +1,17 @@
 /** 简体中文语言包 */
 export default {
+  completion: {
+  "loading": "正在加载…",
+  "failed": "加载失败",
+  "retry": "重试",
+  "startFailed": "无法启动 pi，请重试",
+  "keys": "↑↓ 选择 · Enter / Tab 确认 · Esc 关闭",
+  "pathOnly": "仅引用路径，由 agent 按需读取",
+  "extension": "扩展",
+  "prompt": "提示词",
+  "skill": "技能",
+  "unsupported": "不支持的命令 /{name}。请输入 / 查看可用命令；终端内置命令请使用界面对应功能。"
+},
   skillsConfig: {
     title: "Skills 管理",
     description: "管理所有项目使用的技能。保存后，下次启动或重新打开会话时生效，不中断当前会话。",
@@ -145,7 +157,16 @@ export default {
     inputPlaceholder: "向 Pi 提问，{'@'} 引用文件，/ 使用命令…",
     attachImage: "插入图片",
     selectModel: "选择模型",
-    thinkingLevel: "推理",
+    thinkingLevels: {
+      off: "关闭",
+      minimal: "极简",
+      low: "低",
+      medium: "中",
+      high: "高",
+      xhigh: "极高",
+      max: "最大",
+      ultra: "超强",
+    },
     sessionTreeTitle: "会话树",
     forkTitle: "从较早的提问分支",
     forkDesc: "从所选提问处继续对话，并丢弃之后的所有内容。",

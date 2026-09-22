@@ -17,8 +17,9 @@ const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput(
 const isComposing = ref(false)
 
 function handleKeyDown(e: KeyboardEvent) {
+  if (e.defaultPrevented) return
   if (e.key === 'Enter') {
-    if (isComposing.value || e.isComposing || e.shiftKey)
+    if (isComposing.value || e.isComposing || e.keyCode === 229 || e.shiftKey)
       return
 
     e.preventDefault()

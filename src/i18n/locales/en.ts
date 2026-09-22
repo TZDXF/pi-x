@@ -1,5 +1,17 @@
 /** English locale */
 export default {
+  completion: {
+  "loading": "Loading…",
+  "failed": "Loading failed",
+  "retry": "Retry",
+  "startFailed": "Could not start pi. Please retry.",
+  "keys": "↑↓ Navigate · Enter / Tab Select · Esc Dismiss",
+  "pathOnly": "Path reference; agent reads on demand",
+  "extension": "Extension",
+  "prompt": "Prompt",
+  "skill": "Skill",
+  "unsupported": "Unsupported command /{name}. Type / to see available commands; use the UI for terminal-only commands."
+},
   skillsConfig: {
     title: "Skills",
     description: "Manage skills across all projects. Changes apply on the next session start or reopen, without interrupting the current session.",
@@ -145,7 +157,16 @@ export default {
     inputPlaceholder: "Ask Pi, {'@'} to reference files, / for commands…",
     attachImage: "Attach image",
     selectModel: "Select model",
-    thinkingLevel: "Thinking",
+    thinkingLevels: {
+      off: "Off",
+      minimal: "Minimal",
+      low: "Low",
+      medium: "Medium",
+      high: "High",
+      xhigh: "Extra high",
+      max: "Max",
+      ultra: "Ultra",
+    },
     sessionTreeTitle: "Session tree",
     forkTitle: "Fork from an earlier prompt",
     forkDesc: "Continues the conversation from the selected prompt, discarding everything after it.",

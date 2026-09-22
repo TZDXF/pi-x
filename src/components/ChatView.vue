@@ -37,8 +37,7 @@ import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { LanguageModelUsage } from "ai"
-import type { FileHit } from "@/api/piClient"
-import { rpcRequest, searchFiles } from "@/api/piClient"
+import { rpcRequest } from "@/api/piClient"
 import {
   Dialog,
   DialogContent,
@@ -46,11 +45,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
-  PromptInputCommand,
-  PromptInputCommandEmpty,
-  PromptInputCommandGroup,
-  PromptInputCommandItem,
-  PromptInputCommandList,
   PromptInputHeader,
 } from "@/components/ai-elements/prompt-input"
 import {
@@ -68,6 +62,8 @@ import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
+import ComposerCompletion from "@/components/ComposerCompletion.vue"
+import { withFileReferences } from "@/lib/completion"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
@@ -78,7 +74,7 @@ import { Button } from "@/components/ui/button"
 
 const session = useSessionStore()
 const ui = useUiStore()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; connected: boolean }>()
 const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
@@ -97,70 +93,7 @@ async function loadOlderHistory(event: MouseEvent) {
   if (viewport?.isConnected) viewport.scrollTop = top + viewport.scrollHeight - height
 }
 
-// ---- slash command palette ----
-const cmdOpen = ref(false)
-const slashToken = computed(() => {
-  const t = bridge.value?.textInput ?? ""
-  return /^\/[\w:-]*$/.test(t) ? t.slice(1).toLowerCase() : null
-})
-watch(slashToken, (tok) => {
-  cmdOpen.value = tok !== null
-})
-const filteredCommands = computed(() => {
-  const tok = slashToken.value
-  if (tok === null) return []
-  return session.commands.filter(
-    (c) =>
-      c.name.toLowerCase().includes(tok) ||
-      (c.description ?? "").toLowerCase().includes(tok),
-  )
-})
-
-function pickCommand(name: string) {
-  bridge.value?.setTextInput(`/${name} `)
-  cmdOpen.value = false
-}
-
-// ---- @file mention completion ----
-const fileOpen = ref(false)
-const fileHits = ref<FileHit[]>([])
-let fileQuerySeq = 0
-
-const atToken = computed(() => {
-  const t = bridge.value?.textInput ?? ""
-  const m = /(?:^|\s)@([^\s]*)$/.exec(t)
-  return m
-    ? { token: m[1]!, index: m.index + m[0].length - m[1]!.length - 1 }
-    : null
-})
-
-watch(atToken, (tok) => {
-  fileOpen.value = tok !== null
-  if (tok) void queryFiles(tok.token)
-})
-
-async function queryFiles(token: string) {
-  const seq = ++fileQuerySeq
-  try {
-    const hits = await searchFiles(props.project, token)
-    if (seq === fileQuerySeq) fileHits.value = hits
-  } catch {
-    if (seq === fileQuerySeq) fileHits.value = []
-  }
-}
-
-function pickFile(path: string) {
-  const tok = atToken.value
-  const text = bridge.value?.textInput ?? ""
-  if (tok) {
-    const before = text.slice(0, tok.index)
-    const after = text.slice(tok.index + 1 + tok.token.length)
-    bridge.value?.setTextInput(`${before}@${path} ${after}`)
-  } else {
-    bridge.value?.setTextInput(`${text}@${path} `)
-  }
-  fileOpen.value = false
-}
+const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 
 // ---- attachments (images) ----
 const attachments = computed(() => bridge.value?.files ?? [])
@@ -243,6 +176,17 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
     .join("\n\n")
 }
 
+
+/** 仅当该 assistant 消息是本轮对话（到下一条用户消息或会话末尾）的最后一条时才显示复制按钮 */
+function isLastAssistantOfTurn(index: number) {
+  const list = session.entries
+  for (let i = index + 1; i < list.length; i++) {
+    const k = list[i].kind
+    if (k === "user") return true
+    if (k === "assistant") return false
+  }
+  return true
+}
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
@@ -324,9 +268,24 @@ async function onSubmit(message: {
   if (!text && !images.length) return
   if (!await props.ensureStarted()) {
     bridge.value?.setTextInput(text)
-    return
+    throw new Error(t("completion.startFailed"))
   }
-  await session.send(text, images.length ? images : undefined)
+  const commandName = /^\/([^\s/]+)/.exec(text)?.[1]
+  if (commandName) {
+    await session.refreshCommands()
+    if (!session.commands.some(c => c.name === commandName)) {
+      const error = t('completion.unsupported', { name: commandName })
+      ui.pushToast(error, 'error')
+      throw new Error(error)
+    }
+  }
+  const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
+  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text))
+}
+
+function thinkingLabel(lv: string) {
+  const key = `chat.thinkingLevels.${lv}`
+  return te(key) ? t(key) : lv
 }
 
 function onThinkingChange(v: unknown) {
@@ -347,12 +306,6 @@ async function abort() {
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.isComposing) return
-  if (cmdOpen.value || fileOpen.value) {
-    e.preventDefault()
-    cmdOpen.value = false
-    fileOpen.value = false
-    return
-  }
   if (ui.activeDialog) return // dialog handles its own cancel
   if (session.isStreaming) {
     e.preventDefault()
@@ -425,7 +378,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :description="t('chat.emptyDesc')"
         />
 
-        <template v-for="entry in session.entries" :key="entry.id">
+        <template v-for="(entry, entryIndex) in session.entries" :key="entry.id">
           <Message :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <MessageContent>
               <div
@@ -450,7 +403,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 :blocks="entry.blocks"
                 :runs="session.runs"
               />
-              <MessageActions v-if="entry.kind === 'assistant'" class="mt-1">
+              <MessageActions v-if="entry.kind === 'assistant' && isLastAssistantOfTurn(entryIndex)" class="mt-1">
                 <MessageAction
                   tooltip="Copy reply"
                   @click="copyText(blocksText(entry.blocks))"
@@ -542,51 +495,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </div>
           </div>
 
-          <PromptInputCommand v-if="fileOpen" class="w-full rounded-md border">
-            <PromptInputCommandList>
-              <PromptInputCommandEmpty
-                >{{ t("chat.noMatchingFiles") }}</PromptInputCommandEmpty
-              >
-              <PromptInputCommandGroup :heading="t('chat.files')">
-                <PromptInputCommandItem
-                  v-for="f in fileHits"
-                  :key="f.path"
-                  :value="f.path"
-                  @select="pickFile(f.path)"
-                >
-                  <span class="font-mono text-xs">{{ f.name }}</span>
-                  <span class="text-muted-foreground truncate text-xs">{{
-                    f.dir
-                  }}</span>
-                </PromptInputCommandItem>
-              </PromptInputCommandGroup>
-            </PromptInputCommandList>
-          </PromptInputCommand>
-
-          <PromptInputCommand v-if="cmdOpen" class="w-full rounded-md border">
-            <PromptInputCommandList>
-              <PromptInputCommandEmpty
-                >{{ t("chat.noMatchingCommand") }}</PromptInputCommandEmpty
-              >
-              <PromptInputCommandGroup :heading="t('chat.commands')">
-                <PromptInputCommandItem
-                  v-for="c in filteredCommands"
-                  :key="c.name"
-                  :value="c.name"
-                  @select="pickCommand(c.name)"
-                >
-                  <span class="font-mono text-xs">/{{ c.name }}</span>
-                  <span class="text-muted-foreground truncate text-xs">{{
-                    c.description
-                  }}</span>
-                </PromptInputCommandItem>
-              </PromptInputCommandGroup>
-            </PromptInputCommandList>
-          </PromptInputCommand>
+          <ComposerCompletion ref="completion" :project="project" :connected="connected" :ensure-started="ensureStarted" />
         </PromptInputHeader>
         <PromptInputTextarea
+          @input="completion?.onEditorEvent($event)"
+          @click="completion?.onEditorEvent($event)"
+          @keyup="completion?.onEditorEvent($event)"
+          @select="completion?.onEditorEvent($event)"
+          @focus="completion?.onEditorEvent($event)"
+          @blur="completion?.onEditorEvent($event)"
+          @keydown.capture="completion?.onKeydown($event)"
           :placeholder="t('chat.inputPlaceholder')"
-          :disabled="workspace.gitBusy || connecting"
+          :disabled="workspace.gitBusy || (connecting && !completion?.initiating)"
           class="min-h-14"
         />
         <div class="composer-controls flex items-center justify-between">
@@ -609,7 +529,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               @update:model-value="onThinkingChange"
             >
               <SelectTrigger class="h-8 w-24 text-xs">
-                <SelectValue />
+                <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem
@@ -618,7 +538,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   :value="lv"
                   class="text-xs"
                 >
-                  {{ t("chat.thinkingLevel") }}: {{ lv }}
+                  {{ thinkingLabel(lv) }}
                 </SelectItem>
               </SelectContent>
             </Select>
