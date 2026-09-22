@@ -8,14 +8,8 @@ const session = useSessionStore()
 const ui = useUiStore()
 const { t } = useI18n()
 
-const contextPercent = computed(
-  () => session.stats?.contextUsage?.percent ?? null,
-)
 const totalCost = computed(
   () => session.stats?.cost ?? session.lastUsage?.cost?.total ?? 0,
-)
-const totalTokens = computed(
-  () => session.stats?.tokens?.total ?? session.lastUsage?.totalTokens ?? 0,
 )
 const statusText = computed(() => Object.values(ui.statusEntries).join(" · "))
 </script>
@@ -25,8 +19,6 @@ const statusText = computed(() => Object.values(ui.statusEntries).join(" · "))
     class="text-muted-foreground flex flex-wrap items-center gap-3 px-1 font-mono text-[10px]"
   >
     <span v-if="statusText" class="text-foreground">{{ statusText }}</span>
-    <span v-if="contextPercent !== null">{{ t("status.ctx") }} {{ contextPercent }}%</span>
-    <span v-if="totalTokens">↑↓ {{ totalTokens.toLocaleString() }}</span>
     <span v-if="totalCost">${{ totalCost.toFixed(4) }}</span>
     <span v-if="session.pendingCount" class="text-amber-500"
       >{{ t("status.queue") }} {{ session.pendingCount }}</span

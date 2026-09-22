@@ -10,10 +10,18 @@ const props = defineProps<{
   class?: HTMLAttributes['class']
 }>()
 
-const { usage, modelId } = useContextValue()
+const { usage, modelId, maxTokens } = useContextValue()
 
 const outputTokens = computed(() => usage.value?.outputTokens ?? 0)
 
+const outputTokensPercent = computed(() => {
+  if (!maxTokens.value || !outputTokens.value)
+    return undefined
+  return new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    maximumFractionDigits: 1,
+  }).format(outputTokens.value / maxTokens.value)
+})
 const outputCostText = computed(() => {
   if (!modelId.value || !outputTokens.value)
     return undefined
@@ -40,6 +48,9 @@ const outputCostText = computed(() => {
     v-bind="$attrs"
   >
     <span class="text-muted-foreground">Output</span>
-    <TokensWithCost :cost-text="outputCostText" :tokens="outputTokens" />
+    <span>
+      <TokensWithCost :cost-text="outputCostText" :tokens="outputTokens" />
+      <span v-if="outputTokensPercent" class="ml-2 text-muted-foreground">· {{ outputTokensPercent }}</span>
+    </span>
   </div>
 </template>

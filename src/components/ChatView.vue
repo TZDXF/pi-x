@@ -36,6 +36,7 @@ import {
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import type { ThinkingLevel } from "@/api/protocol"
+import type { LanguageModelUsage } from "ai"
 import type { FileHit } from "@/api/piClient"
 import { rpcRequest, searchFiles } from "@/api/piClient"
 import {
@@ -52,6 +53,17 @@ import {
   PromptInputCommandList,
   PromptInputHeader,
 } from "@/components/ai-elements/prompt-input"
+import {
+  Context,
+  ContextCacheUsage,
+  ContextContent,
+  ContextContentBody,
+  ContextContentHeader,
+  ContextIcon,
+  ContextInputUsage,
+  ContextOutputUsage,
+  ContextTrigger,
+} from "@/components/ai-elements/context"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
@@ -254,6 +266,26 @@ watch(
 const submitStatus = computed(() => {
   if (session.isStreaming) return "streaming" as const
   return "ready" as const
+})
+// ---- context usage (ai-elements Context) ----
+const contextUsage = computed(() => session.stats?.contextUsage ?? null)
+const contextTokenUsage = computed<LanguageModelUsage | undefined>(() => {
+  const u = session.lastUsage
+  if (!u) return undefined
+  return {
+    inputTokens: u.input,
+    outputTokens: u.output,
+    totalTokens: u.totalTokens,
+    inputTokenDetails: {
+      noCacheTokens: undefined,
+      cacheReadTokens: u.cacheRead,
+      cacheWriteTokens: u.cacheWrite,
+    },
+    outputTokenDetails: {
+      textTokens: undefined,
+      reasoningTokens: undefined,
+    },
+  }
 })
 
 const modelKey = computed({
@@ -591,7 +623,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               </SelectContent>
             </Select>
           </div>
-          <PromptInputSubmit :status="submitStatus" :disabled="workspace.gitBusy || connecting" />
+          <div class="flex items-center gap-1">
+            <Context
+              v-if="contextUsage"
+              :used-tokens="contextUsage.tokens"
+              :max-tokens="contextUsage.contextWindow"
+              :usage="contextTokenUsage"
+              :model-id="session.currentModel?.id"
+            >
+              <ContextTrigger>
+                <Button type="button" variant="ghost" class="h-8 px-2 text-xs">
+                  <ContextIcon />
+                </Button>
+              </ContextTrigger>
+              <ContextContent>
+                <ContextContentHeader />
+                <ContextContentBody class="space-y-2">
+                  <ContextInputUsage />
+                  <ContextOutputUsage />
+                  <ContextCacheUsage />
+                </ContextContentBody>
+              </ContextContent>
+            </Context>
+            <PromptInputSubmit :status="submitStatus" :disabled="workspace.gitBusy || connecting" />
+          </div>
         </div>
       </PromptInput>
       <StatusBar />

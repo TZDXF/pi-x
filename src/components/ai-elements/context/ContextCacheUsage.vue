@@ -10,10 +10,18 @@ const props = defineProps<{
   class?: HTMLAttributes['class']
 }>()
 
-const { usage, modelId } = useContextValue()
+const { usage, modelId, maxTokens } = useContextValue()
 
-const cacheTokens = computed(() => usage.value?.cachedInputTokens ?? 0)
+const cacheTokens = computed(() => usage.value?.inputTokenDetails?.cacheReadTokens ?? 0)
 
+const cacheTokensPercent = computed(() => {
+  if (!maxTokens.value || !cacheTokens.value)
+    return undefined
+  return new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    maximumFractionDigits: 1,
+  }).format(cacheTokens.value / maxTokens.value)
+})
 const cacheCostText = computed(() => {
   if (!modelId.value || !cacheTokens.value)
     return undefined
@@ -40,6 +48,9 @@ const cacheCostText = computed(() => {
     v-bind="$attrs"
   >
     <span class="text-muted-foreground">Cache</span>
-    <TokensWithCost :cost-text="cacheCostText" :tokens="cacheTokens" />
+    <span>
+      <TokensWithCost :cost-text="cacheCostText" :tokens="cacheTokens" />
+      <span v-if="cacheTokensPercent" class="ml-2 text-muted-foreground">· {{ cacheTokensPercent }}</span>
+    </span>
   </div>
 </template>
