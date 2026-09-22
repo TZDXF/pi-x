@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PiXLogo from "@/components/PiXLogo.vue"
 import { isDesktop } from "@/api/transport"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -44,7 +45,7 @@ async function pickFolder() {
   <div class="flex flex-1 items-center justify-center p-8">
     <div class="w-full max-w-xl space-y-8">
       <div class="space-y-2 text-center">
-        <h1 class="text-3xl font-semibold tracking-tight">Pi X</h1>
+        <h1><PiXLogo style="width: 120px; height: 56px" /></h1>
         <p class="text-muted-foreground text-sm">{{ t("welcome.subtitle") }}</p>
       </div>
 

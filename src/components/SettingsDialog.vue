@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PiXLogo from "@/components/PiXLogo.vue"
 /** Categorized workspace settings and Pi runtime configuration. */
 import { isDesktop } from "@/api/transport"
 import { remoteStatus, remoteSet, type RemoteStatus } from "@/api/piClient"
@@ -264,7 +265,7 @@ async function save() {
           >
           <div class="setting-row">
             <div>
-              <h3>Pi X</h3>
+              <h3><PiXLogo /></h3>
               <p>{{ t("settings.aboutBody") }}</p>
             </div>
           </div>

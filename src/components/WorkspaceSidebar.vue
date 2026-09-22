@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X } from "@lucide/vue"
@@ -131,7 +132,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
 
 <template>
   <aside class="workspace-sidebar" :aria-label="t('sidebar.ariaLabel')">
-    <div class="sidebar-brand"><span>Pi X</span><Button variant="ghost" size="icon" class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></Button></div>
+    <div class="sidebar-brand"><PiXLogo /><Button variant="ghost" size="icon" class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></Button></div>
     <Button variant="ghost" class="sidebar-action" :disabled="!ready || disabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</Button>
     <label class="sidebar-search"><Search :size="15" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
     <div class="sidebar-section-label"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>

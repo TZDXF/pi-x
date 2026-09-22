@@ -1,10 +1,10 @@
-# Pi X
+# PiX
 
 **pi coding agent 的桌面客户端** —— 基于 [Tauri 2](https://v2.tauri.app/) + Vue 3 + TypeScript 构建，通过 pi 官方支持的 RPC 模式驱动 [pi coding agent](https://github.com/badlogic/pi-mono)（`@earendil-works/pi-coding-agent`），在原生窗口中提供完整的 AI 结对编程体验。
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                Pi X (Tauri 窗口)                 │
+│                PiX (Tauri 窗口)                 │
 │                                                 │
 │  Vue 3 前端 (ai-elements-vue 聊天 UI)            │
 │      │ Tauri commands / events                  │
@@ -171,6 +171,6 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 ### 自动会话标题
 
-在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 Pi X 重复填写密钥。
+在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 PiX 重复填写密钥。
 
 新会话发送第一条消息后，侧栏立即显示消息预览，独立的 pi 进程异步生成标题并持久保存。不切换当前对话模型、不使用工具、不加载扩展或项目上下文。生成失败或超时保留预览，每个会话最多尝试一次；手动标题不会被覆盖。默认关闭，启用后会产生额外模型用量，配置变更对新会话生效。

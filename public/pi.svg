@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 40 40" fill="none" shape-rendering="crispEdges">
+  <title>PiX</title>
+  <desc>Pixel-art PiX lettering in ivory and mint on a stepped graphite tile.</desc>
+  <path d="M5 1H35V3H37V5H39V35H37V37H35V39H5V37H3V35H1V5H3V3H5Z" fill="#141D27"/>
+  <path d="M5 3H35V5H37V33H35V35H5V33H3V5H5Z" fill="#263441"/>
+  <path d="M5 3H35V5H5ZM3 5H5V33H3Z" fill="#3B4E5B"/>
+  <!-- Each letter is hand-drawn on a two-unit pixel grid; no font dependency. -->
+  <rect x="5" y="13" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="7" y="13" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="9" y="13" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="11" y="13" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="15" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="13" y="15" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="17" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="13" y="17" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="19" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="7" y="19" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="9" y="19" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="11" y="19" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="21" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="23" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="5" y="25" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="13" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="17" y="17" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="17" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="19" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="21" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="23" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="17" y="25" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="19" y="25" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="21" y="25" width="2" height="2" fill="#F5F0DC"/>
+  <rect x="25" y="13" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="33" y="13" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="25" y="15" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="33" y="15" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="27" y="17" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="31" y="17" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="29" y="19" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="27" y="21" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="31" y="21" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="25" y="23" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="33" y="23" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="25" y="25" width="2" height="2" fill="#9AE5C6"/>
+  <rect x="33" y="25" width="2" height="2" fill="#9AE5C6"/>
+</svg>
