@@ -340,6 +340,11 @@ export default {
     toastInstalled: "已安装 {name}",
     toastRemoved: "已移除 {name}",
     toastUpdated: "更新完成",
+    typeAll: "全部",
+    manage: "资源管理",
+    resourcesTitle: "管理 {name} 的资源",
+    resourcesHint: "勾选启用，取消勾选禁用单个资源，等效于 pi config。",
+    resourcesEmpty: "未发现可管理的资源（插件尚未安装或不含资源）。",
     types: {
       extension: "扩展",
       skill: "技能",

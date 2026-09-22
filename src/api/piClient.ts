@@ -210,6 +210,36 @@ export const packageRemove = (source: string, scope: "global" | "project" = "glo
 export const packageUpdate = (source?: string) =>
   invoke<string>("package_update", { source: source ?? null })
 
+/** One loadable resource (extension / skill / prompt / theme file) of an installed package. */
+export interface PackageResource {
+  resourceType: "extensions" | "skills" | "prompts" | "themes"
+  /** Path relative to the package root. */
+  path: string
+  enabled: boolean
+}
+
+/** List an installed package's resources with their enabled state. */
+export const packageResources = (source: string, scope: "global" | "project", project?: string) =>
+  invoke<PackageResource[]>("package_resources", { source, scope, project: project ?? null })
+
+/** Enable or disable one resource of an installed package (writes +path / -path filters). */
+export const packageSetResource = (
+  source: string,
+  scope: "global" | "project",
+  resourceType: PackageResource["resourceType"],
+  path: string,
+  enabled: boolean,
+  project?: string,
+) =>
+  invoke<void>("package_set_resource", {
+    source,
+    scope,
+    resourceType,
+    path,
+    enabled,
+    project: project ?? null,
+  })
+
 /** Normalize an install source ("npm:@scope/pkg@1.2.3", "pkg", "@scope/pkg") to a bare package name. */
 export function packageNameOf(source: string): string {
   let s = source.trim()

@@ -340,6 +340,11 @@ export default {
     toastInstalled: "Installed {name}",
     toastRemoved: "Removed {name}",
     toastUpdated: "Update finished",
+    typeAll: "All",
+    manage: "Resources",
+    resourcesTitle: "Manage resources of {name}",
+    resourcesHint: "Check to enable, uncheck to disable individual resources (same as pi config).",
+    resourcesEmpty: "No manageable resources found (package not installed yet or has none).",
     types: {
       extension: "extension",
       skill: "skill",

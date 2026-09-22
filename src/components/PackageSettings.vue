@@ -21,20 +21,27 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  Dialog,
+  DialogContent,
 } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   packageCatalog,
   packageList,
   packageInstall,
   packageRemove,
   packageUpdate,
+  packageResources,
+  packageSetResource,
   packageNameOf,
   type CatalogPackage,
   type InstalledPackage,
+  type PackageResource,
 } from "@/api/piClient"
 import { useUiStore } from "@/stores/ui"
 import { currentLocale } from "@/i18n"
-import { Download, RefreshCw, ExternalLink, Trash2, ArrowUpCircle, Plus } from "@lucide/vue"
+import { Download, RefreshCw, ExternalLink, Trash2, ArrowUpCircle, Plus, SlidersHorizontal } from "@lucide/vue"
 
 const props = defineProps<{ active?: boolean; project?: string }>()
 const ui = useUiStore()
@@ -54,6 +61,7 @@ const installedLoading = ref(false)
 
 const query = ref("")
 const sortBy = ref<"downloads" | "updated" | "name">("downloads")
+const typeFilter = ref<string>("all")
 
 const customSource = ref("")
 const customScope = ref<"global" | "project">("global")
@@ -112,6 +120,9 @@ function scopesOf(name: string): Set<string> {
 const filteredCatalog = computed(() => {
   const q = query.value.trim().toLowerCase()
   let list = catalog.value
+  if (typeFilter.value !== "all") {
+    list = list.filter((p) => p.types.includes(typeFilter.value))
+  }
   if (q) {
     list = list.filter(
       (p) =>
@@ -219,6 +230,59 @@ function filterSummary(filters: Record<string, unknown> | null): string {
 
 const globalInstalled = computed(() => installed.value.filter((p) => p.scope === "global"))
 const projectInstalled = computed(() => installed.value.filter((p) => p.scope === "project"))
+
+// ---- per-package resource management (enable/disable individual resources) ----
+const resPkg = ref<InstalledPackage | null>(null)
+const resources = ref<PackageResource[]>([])
+const resourcesLoading = ref(false)
+const resourceBusy = ref<string | null>(null)
+
+const RESOURCE_GROUPS: PackageResource["resourceType"][] = ["extensions", "skills", "prompts", "themes"]
+
+async function openResources(p: InstalledPackage) {
+  resPkg.value = p
+  resources.value = []
+  resourcesLoading.value = true
+  try {
+    resources.value = await packageResources(p.source, p.scope, props.project)
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+    resPkg.value = null
+  } finally {
+    resourcesLoading.value = false
+  }
+}
+
+function resourcesOf(type: PackageResource["resourceType"]): PackageResource[] {
+  return resources.value.filter((r) => r.resourceType === type)
+}
+
+async function toggleResource(r: PackageResource) {
+  if (!resPkg.value || resourceBusy.value) return
+  const key = `${r.resourceType}:${r.path}`
+  resourceBusy.value = key
+  try {
+    await packageSetResource(
+      resPkg.value.source,
+      resPkg.value.scope,
+      r.resourceType,
+      r.path,
+      !r.enabled,
+      props.project,
+    )
+    r.enabled = !r.enabled
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    resourceBusy.value = null
+  }
+}
+
+const resourceTypeName = (type: string) => {
+  const key = `packages.types.${type.replace(/s$/, "")}`
+  const label = t(key)
+  return label === key ? type : label
+}
 </script>
 
 <template>
@@ -259,6 +323,19 @@ const projectInstalled = computed(() => installed.value.filter((p) => p.scope ==
             <SelectItem value="name">{{ t("packages.sortName") }}</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+
+      <div class="mb-3 flex flex-wrap items-center gap-1.5">
+        <Button
+          v-for="tf in ['all', 'extension', 'skill', 'prompt', 'theme']"
+          :key="tf"
+          :variant="typeFilter === tf ? 'default' : 'outline'"
+          size="sm"
+          class="h-7 px-2.5 text-xs"
+          @click="typeFilter = tf"
+        >
+          {{ tf === "all" ? t("packages.typeAll") : t(`packages.types.${tf}`) }}
+        </Button>
       </div>
 
       <div v-if="catalogLoading && !catalog.length" class="flex items-center justify-center gap-2 py-12">
@@ -381,6 +458,14 @@ const projectInstalled = computed(() => installed.value.filter((p) => p.scope ==
           <Button
             variant="outline"
             size="sm"
+            @click="openResources(p)"
+          >
+            <SlidersHorizontal :size="14" />
+            {{ t("packages.manage") }}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             :disabled="busy !== null"
             @click="update(p.source)"
           >
@@ -414,21 +499,75 @@ const projectInstalled = computed(() => installed.value.filter((p) => p.scope ==
             <p class="font-mono text-xs">{{ p.source }}</p>
             <p v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            class="shrink-0"
-            :disabled="busy !== null"
-            @click="remove(p)"
-          >
-            <Spinner v-if="busy === `remove:${p.source}`" class="size-3" />
-            <Trash2 v-else :size="14" />
-            {{ t("packages.remove") }}
-          </Button>
+          <div class="flex shrink-0 gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              @click="openResources(p)"
+            >
+              <SlidersHorizontal :size="14" />
+              {{ t("packages.manage") }}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="busy !== null"
+              @click="remove(p)"
+            >
+              <Spinner v-if="busy === `remove:${p.source}`" class="size-3" />
+              <Trash2 v-else :size="14" />
+              {{ t("packages.remove") }}
+            </Button>
+          </div>
         </div>
       </template>
 
       <p class="text-muted-foreground mt-6 text-xs">{{ t("packages.restartHint") }}</p>
     </TabsContent>
   </Tabs>
+
+  <!-- resource management dialog -->
+  <Dialog :open="!!resPkg" @update:open="(v: boolean) => { if (!v) resPkg = null }">
+    <DialogContent v-if="resPkg" class="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{{ t("packages.resourcesTitle", { name: packageNameOf(resPkg.source) }) }}</DialogTitle>
+        <DialogDescription>{{ t("packages.resourcesHint") }}</DialogDescription>
+      </DialogHeader>
+      <div v-if="resourcesLoading" class="flex items-center justify-center gap-2 py-8">
+        <Spinner class="size-4" />
+        <span class="text-muted-foreground text-sm">{{ t("packages.loading") }}</span>
+      </div>
+      <ScrollArea v-else viewport-class="max-h-[55dvh]">
+        <div class="flex flex-col gap-4 pr-2">
+          <template v-for="group in RESOURCE_GROUPS" :key="group">
+            <div v-if="resourcesOf(group).length">
+              <h4 class="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                {{ resourceTypeName(group) }}
+              </h4>
+              <div
+                v-for="r in resourcesOf(group)"
+                :key="`${r.resourceType}:${r.path}`"
+                class="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-muted/50"
+              >
+                <Checkbox
+                  :model-value="r.enabled"
+                  :disabled="resourceBusy !== null"
+                  @update:model-value="() => toggleResource(r)"
+                />
+                <span
+                  class="flex-1 truncate font-mono text-xs"
+                  :class="r.enabled ? '' : 'text-muted-foreground line-through'"
+                  :title="r.path"
+                >{{ r.path }}</span>
+                <Spinner v-if="resourceBusy === `${r.resourceType}:${r.path}`" class="size-3" />
+              </div>
+            </div>
+          </template>
+          <p v-if="!resources.length" class="text-muted-foreground py-6 text-center text-sm">
+            {{ t("packages.resourcesEmpty") }}
+          </p>
+        </div>
+      </ScrollArea>
+    </DialogContent>
+  </Dialog>
 </template>

@@ -76,6 +76,8 @@ pub fn run() {
             packages::package_install,
             packages::package_remove,
             packages::package_update,
+            packages::package_resources,
+            packages::package_set_resource,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
