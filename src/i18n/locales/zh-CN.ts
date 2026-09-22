@@ -162,6 +162,7 @@ export default {
     copyReply: "复制回复",
     thinking: "thinking…",
     removeAttachment: "移除",
+    previewImage: "预览图片",
     attachment: "附件",
     noMatchingFiles: "没有匹配的文件。",
     files: "文件",

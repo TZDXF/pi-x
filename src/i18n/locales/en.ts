@@ -162,6 +162,7 @@ export default {
     copyReply: "Copy reply",
     thinking: "thinking…",
     removeAttachment: "Remove",
+    previewImage: "Preview image",
     attachment: "Attachment",
     noMatchingFiles: "No matching files.",
     files: "Files",

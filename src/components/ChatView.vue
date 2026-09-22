@@ -97,6 +97,7 @@ const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 
 // ---- attachments (images) ----
 const attachments = computed(() => bridge.value?.files ?? [])
+const previewImage = ref<string | null>(null)
 
 function dataUrlToImage(d: string): { data: string; mimeType: string } | null {
   const m = /^data:([^;]+);base64,(.+)$/.exec(d)
@@ -479,9 +480,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       <WorkspaceContext v-if="!session.entries.length && !session.isStreaming" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <PromptInput @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
-        <PromptInputHeader>
+        <PromptInputHeader v-if="attachments.length">
           <!-- pending image attachments -->
-          <div v-if="attachments.length" class="flex flex-wrap gap-2 px-1">
+          <div class="flex flex-wrap gap-2 px-1">
             <div
               v-for="f in attachments"
               :key="f.id"
@@ -490,8 +491,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               <img
                 v-if="isImageUrl(f.url)"
                 :src="f.url"
-                class="size-full object-cover"
+                class="size-full cursor-zoom-in object-cover"
                 alt="attachment"
+                :title="t('chat.previewImage')"
+                @click="previewImage = f.url ?? null"
               />
               <span
                 v-else
@@ -512,8 +515,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </div>
           </div>
 
-          <ComposerCompletion ref="completion" :project="project" :connected="connected" :ensure-started="ensureStarted" />
         </PromptInputHeader>
+        <ComposerCompletion ref="completion" :project="project" :connected="connected" :ensure-started="ensureStarted" />
         <PromptInputTextarea
           @input="completion?.onEditorEvent($event)"
           @click="completion?.onEditorEvent($event)"
@@ -528,7 +531,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :disabled="workspace.gitBusy || (connecting && !completion?.initiating)"
           class="min-h-14"
         />
-        <div class="composer-controls flex items-center justify-between">
+        <div data-align="block-end" class="composer-controls flex items-center justify-between">
           <div class="composer-options flex items-center gap-1">
             <Button
               type="button"
@@ -547,7 +550,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               :disabled="!connected && session.models.length === 0"
               @update:model-value="onThinkingChange"
             >
-              <SelectTrigger class="h-8 w-24 text-xs">
+              <SelectTrigger class="h-8 w-auto min-w-16 max-w-40 text-xs">
                 <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -637,6 +640,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     </Dialog>
 
     <!-- extension UI dialogs -->
+    <Dialog :open="!!previewImage" @update:open="previewImage = null">
+      <DialogContent class="max-w-4xl p-2">
+        <img v-if="previewImage" :src="previewImage" class="max-h-[80dvh] w-full rounded-md object-contain" alt="preview" />
+      </DialogContent>
+    </Dialog>
+
     <ExtensionDialog />
   </div>
 </template>

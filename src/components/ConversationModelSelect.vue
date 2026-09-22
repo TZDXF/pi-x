@@ -9,7 +9,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   id?: string
   triggerClass?: string
-}>(), { triggerClass: "h-8 w-56 text-xs" })
+}>(), { triggerClass: "h-8 w-auto min-w-0 max-w-64 text-xs" })
 const emit = defineEmits<{ "update:modelValue": [value: string] }>()
 const { t } = useI18n()
 const groups = computed(() => {
