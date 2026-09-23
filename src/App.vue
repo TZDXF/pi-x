@@ -10,6 +10,7 @@ import {
   onPiEvent,
   onPiExit,
   onPiStderr,
+  onReconnected,
   onSessionsChanged,
   saveConfig,
   sessionMtime,
@@ -17,7 +18,7 @@ import {
   trustSave,
   trustStatus,
 } from "@/api/piClient"
-import type { AppConfig, TrustStatus } from "@/api/piClient"
+import type { AppConfig, RunningSession, TrustStatus } from "@/api/piClient"
 import { useSessionStore, sessionFor, uiFor, activeRuntimeId, activateSession, createConversation, findConversation } from "@/stores/conversations"
 import { useWorkspaceStore, registerSessionMtimeSync } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
@@ -90,6 +91,21 @@ onMounted(async () => {
         if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
       }),
       onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(line)),
+      onReconnected(() => {
+        if (disposed) return
+        // Events during the disconnect gap are lost; restore from the backend.
+        if (phase.value === "down") {
+          void reattachRunningSessions()
+            .then((restored) => {
+              if (restored) return
+              phase.value = "pick"
+              refreshVisibleHistories()
+            })
+            .catch((e) => { lastError.value = String(e) })
+          return
+        }
+        refreshVisibleHistories()
+      }),
     ])
     if (disposed) {
       handlers.forEach((off) => off())
@@ -101,21 +117,8 @@ onMounted(async () => {
     registerSessionMtimeSync((file, mtime) => findConversation(file)?.syncSessionMtime(mtime))
 
     // Reattach after UI reload / remote connection without spawning duplicates.
-    const running = await listRunningSessions()
-    for (const runtime of running) {
-      const owner = sessionFor(runtime.runtimeId)
-      owner.started = true
-      await owner.init(runtime.project)
-      await owner.loadHistory()
-      owner.isStreaming = runtime.state.isStreaming ?? false
-    }
-    const restored = running.find(runtime => runtime.project === config.value.lastProject) ?? running[0]
-    if (restored) {
-      activateSession(restored.runtimeId)
-      project.value = restored.project
-      phase.value = "chat"
-      return
-    }
+    const restored = await reattachRunningSessions()
+    if (restored) return
     // Restore the workspace only; start pi when a conversation is opened.
     if (config.value.lastProject) {
       project.value = config.value.lastProject
@@ -156,11 +159,30 @@ async function drainNavigation() {
 }
 watch([connecting, navigating], () => { void drainNavigation() })
 
+/** Reattach to runtimes already alive on the backend (UI reload, remote
+ *  reconnect) without spawning duplicates. Returns the restored runtime. */
+async function reattachRunningSessions(): Promise<RunningSession | null> {
+  const running = await listRunningSessions()
+  for (const runtime of running) {
+    const owner = sessionFor(runtime.runtimeId)
+    owner.started = true
+    await owner.init(runtime.project)
+    await owner.loadHistory()
+    owner.isStreaming = runtime.state.isStreaming ?? false
+  }
+  const restored = running.find(runtime => runtime.project === config.value.lastProject) ?? running[0]
+  if (restored) {
+    activateSession(restored.runtimeId)
+    project.value = restored.project
+    phase.value = "chat"
+  }
+  return restored ?? null
+}
+
 // ---- external session changes (e.g. the session continued in a terminal) ----
 
 let sessionsListTimer: ReturnType<typeof setTimeout> | null = null
-function handleExternalSessionChanges(files: string[]) {
-  for (const file of files) scheduleExternalReload(file)
+function refreshVisibleHistories() {
   // Refresh the sidebar lists so previews/titles/timestamps follow the disk.
   if (sessionsListTimer) clearTimeout(sessionsListTimer)
   sessionsListTimer = setTimeout(() => {
@@ -169,6 +191,10 @@ function handleExternalSessionChanges(files: string[]) {
     if (project.value) projects.add(project.value)
     for (const p of projects) void workspace.refresh(p).catch(console.warn)
   }, 600)
+}
+function handleExternalSessionChanges(files: string[]) {
+  for (const file of files) scheduleExternalReload(file)
+  refreshVisibleHistories()
 }
 
 const pendingReloads = new Set<string>()

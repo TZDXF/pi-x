@@ -1,5 +1,5 @@
 import { activeRuntimeId } from "@/stores/runtime"
-import { invoke, listen } from "./transport"
+import { RECONNECTED_EVENT, invoke, listen } from "./transport"
 import type { ExtensionUiResponse, RpcResponse } from "./protocol"
 
 // ---- process / config commands (Rust side) ----
@@ -139,6 +139,12 @@ export function onPiExit(handler: (runtimeId?: string) => void): Promise<() => v
 
 export function onPiStderr(handler: (line: string, runtimeId?: string) => void): Promise<() => void> {
   return listen<{ line: string; runtimeId?: string }>("pi://stderr", e => handler(e.payload.line, e.payload.runtimeId))
+}
+
+/** Remote transport re-established after an unexpected drop (never fired on
+ *  desktop). Events during the gap are lost; handlers should re-sync state. */
+export function onReconnected(handler: () => void): Promise<() => void> {
+  return listen(RECONNECTED_EVENT, () => handler())
 }
 
 export interface RemoteStatus { enabled: boolean; port: number; urls: string[] }

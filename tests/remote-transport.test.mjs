@@ -11,6 +11,15 @@ function harness(desktop = false) {
   const stored = new Map()
   const requests = []
   const sockets = []
+  // Controllable timers: reconnect backoff timers are captured for tests to
+  // fire manually; the 10s first-connect timeout is neutralized.
+  const timers = []
+  const setTimeout_ = (fn, delay) => {
+    if (delay >= 10000) return 0
+    timers.push(fn)
+    return timers.length
+  }
+  const clearTimeout_ = (id) => { if (id) timers[id - 1] = null }
   class Socket {
     static OPEN = 1
     readyState = 0
@@ -18,7 +27,7 @@ function harness(desktop = false) {
     close() { this.readyState = 3; this.onclose() }
   }
   const context = vm.createContext({
-    URLSearchParams, WebSocket: Socket, queueMicrotask, setTimeout, clearTimeout,
+    URLSearchParams, WebSocket: Socket, queueMicrotask, setTimeout: setTimeout_, clearTimeout: clearTimeout_,
     isTauri: () => desktop,
     desktopInvoke: async () => 'desktop',
     desktopListen: async () => () => {},
@@ -28,7 +37,7 @@ function harness(desktop = false) {
     fetch: async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, json: async () => ({ data: 42 }) } },
   })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
-  return { api: context.api, stored, requests, sockets, context }
+  return { api: context.api, stored, requests, sockets, context, runTimers: () => timers.splice(0).forEach(fn => fn?.()) }
 }
 
 test('browser moves fragment key to session storage and sends bearer-authenticated commands', async () => {
@@ -64,4 +73,59 @@ test('invalid access keys produce a useful error', async () => {
   const h = harness()
   h.context.fetch = async () => ({ status: 401 })
   await assert.rejects(h.api.invoke('rpc_running'), /访问密钥无效/)
+})
+
+const flush = () => new Promise(resolve => setImmediate(resolve))
+
+test('unexpected drops reconnect with backoff and emit a reconnected event', async () => {
+  const h = harness()
+  const reconnected = []
+  await h.api.listen('pi://reconnected', e => reconnected.push(e.payload))
+  await h.api.listen('pi://event', () => {})
+  assert.equal(h.sockets.length, 1)
+
+  // Simulate an unexpected transport drop.
+  h.sockets[0].onclose()
+  h.runTimers()
+  await flush()
+
+  // A fresh socket was created and listeners were told to re-sync.
+  assert.equal(h.sockets.length, 2)
+  assert.equal(h.sockets[1].url.includes('/api/events'), true)
+  assert.equal(reconnected.length, 1)
+
+  // A second drop retries; the reconnect attempt reuses the shared socket.
+  h.sockets[1].onclose()
+  h.runTimers()
+  await flush()
+  assert.equal(h.sockets.length, 3)
+  assert.equal(reconnected.length, 2)
+})
+
+test('intentional close after the last listener unsubscribes does not reconnect', async () => {
+  const h = harness()
+  const off = await h.api.listen('pi://event', () => {})
+  off()
+  assert.equal(h.sockets[0].readyState, 3)
+  h.runTimers()
+  await flush()
+  assert.equal(h.sockets.length, 1)
+})
+
+test('stale socket events cannot clobber a newer connection', async () => {
+  const h = harness()
+  const reconnected = []
+  await h.api.listen('pi://reconnected', () => reconnected.push(true))
+  const first = h.sockets[0]
+  first.onclose()
+  h.runTimers()
+  await flush()
+  assert.equal(h.sockets.length, 2)
+  // Late close of the replaced socket must not trigger another reconnect
+  // or dispatch disconnect events for the live connection.
+  first.onclose()
+  h.runTimers()
+  await flush()
+  assert.equal(h.sockets.length, 2)
+  assert.equal(reconnected.length, 1)
 })

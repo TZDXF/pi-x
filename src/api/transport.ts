@@ -20,46 +20,92 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
   if (!res.ok) throw new Error(result.error ?? `HTTP ${res.status}`)
   return result.data
 }
+
 const handlers = new Map<string, Set<(e: { payload: any }) => void>>()
 let socket: WebSocket | undefined
 let connecting: Promise<void> | undefined
+/** Set while WE close the socket deliberately (last listener gone / first-connect timeout). */
+let closingIntentionally = false
+/** Exponential backoff state for unexpected disconnects (1s → 2s → … → 30s cap). */
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+let reconnectAttempts = 0
+const MAX_RECONNECT_DELAY = 30_000
+
+/** Emitted once after a dropped connection has been re-established; events
+ *  during the gap are lost, so listeners should re-sync state (running
+ *  sessions, workspace histories) when they receive it. */
+export const RECONNECTED_EVENT = "pi://reconnected"
+
+function dispatch(event: string, payload: unknown) {
+  handlers.get(event)?.forEach(h => h({ payload }))
+}
+
+function scheduleReconnect() {
+  if (closingIntentionally || reconnectTimer || handlers.size === 0) return
+  const delay = Math.min(1000 * 2 ** reconnectAttempts, MAX_RECONNECT_DELAY)
+  reconnectAttempts += 1
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined
+    connect()
+      .then(() => {
+        reconnectAttempts = 0
+        dispatch(RECONNECTED_EVENT, {})
+      })
+      .catch(() => scheduleReconnect())
+  }, delay)
+}
+
 function connect(): Promise<void> {
   if (socket?.readyState === WebSocket.OPEN) return Promise.resolve()
   if (connecting) return connecting
   connecting = new Promise<void>((resolve, reject) => {
-    socket = new WebSocket(
+    const ws = new WebSocket(
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/events?token=${encodeURIComponent(token)}`,
     )
+    socket = ws
     const timeout = setTimeout(() => {
       reject(new Error("远程连接超时，请检查桌面端服务与防火墙。"))
-      socket?.close()
+      closingIntentionally = true
+      ws.close()
     }, 10000)
-    socket.onopen = () => {
+    ws.onopen = () => {
       clearTimeout(timeout)
+      if (socket !== ws) return
       connecting = undefined
       resolve()
     }
-    socket.onerror = () => {
+    ws.onerror = () => {
       clearTimeout(timeout)
+      if (socket !== ws) return
       connecting = undefined
       reject(new Error("无法连接远程服务，请检查访问链接与桌面端开关。"))
     }
-    socket.onmessage = (e) => {
+    ws.onmessage = (e) => {
       const event = JSON.parse(e.data)
-      handlers.get(event.event)?.forEach((h) => h({ payload: event.payload }))
+      dispatch(event.event, event.payload)
     }
-    socket.onclose = () => {
+    ws.onclose = () => {
       clearTimeout(timeout)
+      // A newer connection may already exist; never clobber it or treat its
+      // stale close as a disconnect of the live socket.
+      if (socket !== ws) return
       connecting = undefined
+      socket = undefined
+      if (closingIntentionally) {
+        closingIntentionally = false
+        return
+      }
+      // Unexpected drop: surface the disconnect, then reconnect in the
+      // background. Callers awaiting this initial connect still see the error.
       reject(new Error("远程连接已断开"))
-      handlers
-        .get("pi://stderr")
-        ?.forEach((h) => h({ payload: { line: "远程连接已断开，请刷新页面重新连接。" } }))
-      handlers.get("pi://exit")?.forEach((h) => h({ payload: {} }))
+      dispatch("pi://stderr", { line: "远程连接已断开，正在自动重连…" })
+      dispatch("pi://exit", {})
+      scheduleReconnect()
     }
   })
   return connecting
 }
+
 export async function listen<T = unknown>(
   event: string,
   handler: (e: { payload: T }) => void,
@@ -76,6 +122,13 @@ export async function listen<T = unknown>(
   }
   return () => {
     set.delete(handler)
-    if ([...handlers.values()].every((s) => s.size === 0)) socket?.close()
+    if ([...handlers.values()].every((s) => s.size === 0)) {
+      closingIntentionally = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = undefined
+      }
+      socket?.close()
+    }
   }
 }
