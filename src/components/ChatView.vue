@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   Conversation,
@@ -60,7 +60,7 @@ import {
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
-import { responseTurns } from "@/lib/responseTurns"
+import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
@@ -243,7 +243,45 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
 }
 
 
-const renderedEntries = computed(() => responseTurns(session.entries, session.isStreaming || !!session.partialBlocks))
+const renderedEntries = computed(() => {
+  const streaming = session.isStreaming || !!session.partialBlocks
+  const turns = responseTurns(session.entries, streaming)
+  const partial = session.partialBlocks
+  if (partial?.length) {
+    const last = turns[turns.length - 1]
+    if (last?.kind === "assistant") {
+      turns[turns.length - 1] = { ...last, blocks: [...last.blocks, ...partial], complete: false }
+    }
+    else {
+      // Nothing committed yet: render the stream in place under the reserved
+      // turn id so completion keeps the same v-for key (no remount flash).
+      turns.push({
+        kind: "assistant",
+        id: session.streamingTurnId ?? -1,
+        lastIndex: session.entries.length,
+        blocks: [...partial],
+        process: [],
+        summary: [],
+        complete: false,
+        durationMs: null,
+        toolCallCount: 0,
+      })
+    }
+  }
+  return turns
+})
+
+/** Completed turns show only the trailing answer; the process collapses. */
+function hasSummary(entry: AssistantTurn): boolean {
+  return entry.complete && !!blocksText(entry.summary).trim()
+}
+
+// Process blocks render lazily on first expand: they are hidden anyway, and
+// skipping them avoids a full markdown re-parse when a turn completes.
+const openedProcesses = reactive(new Set<number>())
+function onProcessToggle(id: number, event: Event) {
+  if ((event.target as HTMLDetailsElement).open) openedProcesses.add(id)
+}
 
 function formatMessageTime(ts?: number): string {
   if (!ts) return ""
@@ -518,19 +556,27 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   </div>
                 </div>
                 <div v-else class="min-w-0 space-y-3">
-                  <template v-if="entry.complete && blocksText(entry.summary).trim()">
-                    <details v-if="entry.process.length" class="response-process">
-                      <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                        {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
-                        <span class="mx-1.5" aria-hidden="true">·</span>
-                        {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
-                      </summary>
-                      <AssistantBlocks class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
-                    </details>
-                    <AssistantBlocks :blocks="entry.summary" :runs="session.runs" />
-                  </template>
-                  <!-- Keep in-flight responses and responses without a final summary visible. -->
-                  <AssistantBlocks v-else :blocks="entry.blocks" :runs="session.runs" />
+                  <!-- The answer keeps one stable render path: while streaming it
+                       is the flat block list, on completion only the trailing
+                       summary stays visible (same keys via keyOffset), so the
+                       markdown below never remounts and re-flashes. -->
+                  <details
+                    v-if="entry.complete && entry.process.length && blocksText(entry.summary).trim()"
+                    class="response-process"
+                    @toggle="onProcessToggle(entry.id, $event)"
+                  >
+                    <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                      {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
+                      <span class="mx-1.5" aria-hidden="true">·</span>
+                      {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
+                    </summary>
+                    <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
+                  </details>
+                  <AssistantBlocks
+                    :blocks="hasSummary(entry) ? entry.summary : entry.blocks"
+                    :key-offset="hasSummary(entry) ? entry.blocks.length - entry.summary.length : 0"
+                    :runs="session.runs"
+                  />
                 </div>
               </MessageContent>
               <MessageActions
@@ -561,16 +607,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </div>
           </Message>
         </template>
-
-        <!-- streaming assistant message (assembled from deltas) -->
-        <Message v-if="session.partialBlocks" from="assistant">
-          <MessageContent>
-            <AssistantBlocks
-              :blocks="session.partialBlocks"
-              :runs="session.runs"
-            />
-          </MessageContent>
-        </Message>
 
         <!-- waiting indicator before any content arrives -->
         <div

@@ -54,10 +54,29 @@ test('empty history and pending questions are preserved', () => {
 test('chat uses an initially closed process disclosure and original index for branching', () => {
   const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
   const blocks = readFileSync(new URL('../src/components/AssistantBlocks.vue', import.meta.url), 'utf8')
-  assert.match(chat, /entry.complete && blocksText\(entry.summary\).trim\(\)/)
-  assert.match(chat, /<details v-if="entry.process.length" class="response-process">/)
+  assert.match(chat, /entry.complete && entry.process.length && blocksText\(entry.summary\).trim\(\)/)
+  assert.match(chat, /<details[\s\S]*?class="response-process"/)
+  assert.doesNotMatch(chat, /response-process[^>]*\bopen\b/)
   assert.match(chat, /forkFromAnswer\(entry.lastIndex\)/)
   assert.doesNotMatch(blocks, /<Agent|ai-elements\/agent/)
+})
+
+test('streaming and completed answers share one render path so markdown never remounts', () => {
+  const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  const blocks = readFileSync(new URL('../src/components/AssistantBlocks.vue', import.meta.url), 'utf8')
+  const session = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
+  // In-flight deltas fold into the last turn instead of a separate Message.
+  assert.doesNotMatch(chat, /<Message v-if="session.partialBlocks"/)
+  assert.match(chat, /blocks: \[\.\.\.last\.blocks, \.\.\.partial\]/)
+  // The turn keeps a stable v-for key across completion via the reserved id.
+  assert.match(session, /streamingTurnId.value \?\?= nextId\(\)/)
+  assert.match(session, /id: streamingTurnId.value \?\? nextId\(\)/)
+  // The summary tail reuses the streaming block keys instead of remounting.
+  assert.match(blocks, /keyOffset\??: number/)
+  assert.match(blocks, /:key="props.keyOffset \+ i"/)
+  assert.match(chat, /:key-offset="hasSummary\(entry\) \? entry.blocks.length - entry.summary.length : 0"/)
+  // The collapsed process renders lazily, not on completion.
+  assert.match(chat, /@toggle="onProcessToggle\(entry.id, \$event\)"/)
 })
 
 test('turn statistics use recorded elapsed time and unique tool call IDs', () => {
