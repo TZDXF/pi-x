@@ -551,16 +551,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       {{ ui.widget.lines.join("\n") }}
     </div>
 
-    <!-- built-in terminal (desktop only) -->
-    <TerminalPanel
-      v-if="isDesktop"
-      ref="terminalPanel"
-      v-show="terminalOpen"
-      :project="project"
-      :visible="terminalOpen"
-      @close="terminalOpen = false"
-    />
-
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
       <WorkspaceContext v-if="!session.entries.length && !session.isStreaming" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
@@ -680,6 +670,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       </PromptInput>
       <StatusBar />
     </div>
+
+    <!-- built-in terminal (desktop only), expanded below the composer -->
+    <TerminalPanel
+      v-if="isDesktop"
+      ref="terminalPanel"
+      v-show="terminalOpen"
+      :project="project"
+      :visible="terminalOpen"
+      @close="terminalOpen = false"
+    />
 
     <!-- session tree dialog -->
     <Dialog v-model:open="treeOpen">
