@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Block, Entry } from '@/stores/conversations'
 import { conversationTurns } from '@/lib/conversationTimeline'
@@ -10,6 +10,27 @@ const emit = defineEmits<{ navigate: [id: number] }>()
 const { t } = useI18n()
 const turns = computed(() => conversationTurns(props.entries, props.partial))
 const selected = ref<number | null>(null)
+// 当轮次很多时压缩节点高度，保证时间线在可视区内完整显示；
+// 只有压缩到下限仍然放不下时才回退为内部滚动。
+const MAX_NODE_H = 26
+const MIN_NODE_H = 12
+const TRACK_PADDING = 8
+const navRef = ref<HTMLElement | null>(null)
+const nodeHeight = ref(MAX_NODE_H)
+function updateNodeHeight() {
+  const available = (navRef.value?.clientHeight ?? 0) - TRACK_PADDING
+  const count = turns.value.length
+  if (available <= 0 || count <= 0) return
+  nodeHeight.value = Math.max(MIN_NODE_H, Math.min(MAX_NODE_H, Math.floor(available / count)))
+}
+let resizeObserver: ResizeObserver | null = null
+onMounted(() => {
+  resizeObserver = new ResizeObserver(updateNodeHeight)
+  if (navRef.value) resizeObserver.observe(navRef.value)
+  updateNodeHeight()
+})
+onBeforeUnmount(() => resizeObserver?.disconnect())
+watch(() => turns.value.length, updateNodeHeight)
 function navigate(id: number) {
   selected.value = id
   emit('navigate', id)
@@ -17,9 +38,9 @@ function navigate(id: number) {
 </script>
 
 <template>
-  <nav v-if="turns.length" class="conversation-timeline" :aria-label="t('chat.timeline')">
+  <nav ref="navRef" v-if="turns.length" class="conversation-timeline" :aria-label="t('chat.timeline')">
     <TooltipProvider :delay-duration="120">
-      <ol class="timeline-track">
+      <ol class="timeline-track" :style="{ '--node-h': nodeHeight + 'px' }">
         <li v-for="(turn, index) in turns" :key="turn.id" class="timeline-item">
           <Tooltip>
             <TooltipTrigger as-child>
@@ -47,8 +68,8 @@ function navigate(id: number) {
 .conversation-timeline::-webkit-scrollbar { display: none; }
 .timeline-track { display: flex; flex-direction: column; align-items: center; padding: 4px 0; margin: 0; list-style: none; }
 .timeline-item { position: relative; }
-.timeline-item:not(:last-child)::after { content: ''; position: absolute; width: 1px; background: var(--border); top: 13px; bottom: -13px; left: 50%; transform: translateX(-50%); pointer-events: none; }
-.timeline-node { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: 26px; border-radius: 7px; cursor: pointer; color: var(--muted-foreground); transition: background 180ms ease, color 180ms ease; }
+.timeline-item:not(:last-child)::after { content: ''; position: absolute; width: 1px; background: var(--border); top: 50%; height: var(--node-h, 26px); left: 50%; transform: translateX(-50%); pointer-events: none; }
+.timeline-node { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: var(--node-h, 26px); border-radius: 7px; cursor: pointer; color: var(--muted-foreground); transition: background 180ms ease, color 180ms ease; }
 .timeline-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); box-shadow: 0 0 0 3px var(--background); transition: transform 200ms ease, background 200ms ease, box-shadow 200ms ease; }
 .timeline-number { position: absolute; opacity: 0; font-size: 10px; font-weight: 600; transition: opacity 180ms ease; }
 .timeline-node:hover, .timeline-node:focus-visible { color: var(--primary); background: var(--accent); outline: 2px solid var(--ring); outline-offset: -2px; }
