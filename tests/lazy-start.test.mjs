@@ -8,15 +8,30 @@ function harness() {
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     .split('<script setup lang="ts">')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, '')
+  const stores = new Map()
+  const activeRuntimeId = { value: 'default' }
+  let seq = 0
+  const sessionFor = id => {
+    if (!stores.has(id)) stores.set(id, { runtimeId: id, started: false, cwd: '',
+      clear() {}, init: async () => calls.push('init'), loadHistory: async () => {}, loadOfflineModels: async () => {} })
+    return stores.get(id)
+  }
   const context = vm.createContext({
-    watch: () => {}, ref: value => ({ value }), onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
-    useI18n: () => ({ t: x => x }), isDesktop: true,
-    useSessionStore: () => ({ clear() {}, init: async () => calls.push('init'), loadHistory: async () => {}, newSession: async () => calls.push('new') }),
+    watch: () => {}, ref: value => ({ value }), computed: get => ({ get value() { return get() } }),
+    onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
+    useI18n: () => ({ t: x => x }),
+    useSessionStore: () => new Proxy({}, { get: (_, k) => sessionFor(activeRuntimeId.value)[k] }),
     useWorkspaceStore: () => ({}), useUiStore: () => ({ clear() {}, pushToast() {} }),
+    sessionFor, uiFor: () => ({ pushToast() {}, handleRequest() {}, pushStderr() {} }),
+    activeRuntimeId,
+    activateSession: id => { sessionFor(id); activeRuntimeId.value = id },
+    createConversation: project => { const id = 'rt' + (++seq); const s = sessionFor(id); s.cwd = project; activeRuntimeId.value = id; return s },
+    findConversation: () => undefined,
     getConfig: async () => ({ lastProject: 'project' }),
     onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
     spawnPi: async () => calls.push('spawn'), killPi: async () => {},
+    listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls }
@@ -44,6 +59,6 @@ test('opening a saved conversation starts pi on demand', async () => {
 
  test('only fresh process startup applies remembered selection', () => {
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
-  assert.match(source, /await spawnPi\(project.value\)\s+await session.init\(project.value, true\)/)
-  assert.equal((source.match(/session.init\(project.value, true\)/g) || []).length, 1)
+  assert.match(source, /await spawnPi\(project.value, undefined, owner.runtimeId\)\s+await owner.init\(project.value, true\)/)
+  assert.equal((source.match(/\.init\(project.value, true\)/g) || []).length, 1)
 })

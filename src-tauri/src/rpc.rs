@@ -378,10 +378,12 @@ pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
 }
 
 pub async fn request(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<Value, String> {
-    process_request(&state.process(runtime_id).await?, command).await
+    let process = state.process(runtime_id).await?;
+    process_request(&process, command).await
 }
 pub async fn notify(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<(), String> {
-    process_notify(&state.process(runtime_id).await?, command).await
+    let process = state.process(runtime_id).await?;
+    process_notify(&process, command).await
 }
 pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
     match state.process(runtime_id).await { Ok(process) => process_running(&process).await, Err(_) => false }

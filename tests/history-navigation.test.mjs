@@ -54,18 +54,15 @@ test('history is mounted only after loading and uses instant initial positioning
   assert.doesNotMatch(chat, /@click="loadOlderHistory"/)
 })
 
-test('streaming navigation aborts before switching rather than ignoring the selection', async () => {
+test('streaming navigation switches without aborting the running generation', async () => {
   const app = source('../src/App.vue')
   const code = app.slice(app.indexOf('let queuedNavigation:'), app.indexOf('watch([connecting, navigating]'))
   const calls = []
-  let finish
-  const context = { ref: value => ({ value }), session: { isStreaming: true, abortAndRestore: () => { calls.push('abort'); return new Promise(resolve => { finish = resolve }) } }, workspace: {}, phase: { value: 'chat' }, connecting: { value: false }, navigating: { value: false }, pendingResume: { value: null }, disposed: false }
+  const context = { ref: value => ({ value }), session: { isStreaming: true, abortAndRestore: () => { calls.push('abort'); return Promise.resolve() } }, workspace: {}, phase: { value: 'chat' }, connecting: { value: false }, navigating: { value: false }, pendingResume: { value: null }, disposed: false }
   run(code + '\nglobalThis.navigate = requestNavigation', context)
   context.navigate(async () => calls.push('switch'))
-  assert.deepEqual(calls, ['abort'])
-  finish()
   await new Promise(resolve => setTimeout(resolve, 0))
-  assert.deepEqual(calls, ['abort', 'switch'])
+  assert.deepEqual(calls, ['switch'])
 })
 
 test('streaming input reaches command dispatch; stopping has its own non-submit button', () => {
@@ -73,7 +70,8 @@ test('streaming input reaches command dispatch; stopping has its own non-submit 
   const submit = chat.slice(chat.indexOf('async function onSubmit('), chat.indexOf('function thinkingLabel'))
   assert.doesNotMatch(submit, /if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
   assert.match(chat, /<Button v-if="session.isStreaming" type="button"[^>]+@click="abort"/)
-  assert.match(submit, /session.isStreaming && \(commandName === 'new' \|\| commandName === 'compact'\)/)
+  assert.match(submit, /session.isStreaming && commandName === 'compact'/)
+  assert.match(submit, /if \(commandName === 'new'\) emit\('newSession'\)/)
   const sidebar = source('../src/components/WorkspaceSidebar.vue')
   assert.doesNotMatch(sidebar, /const navigationDisabled = .*session.isStreaming/)
 })

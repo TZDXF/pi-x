@@ -9,7 +9,7 @@ function loadStore(name, modules) {
   const context = vm.createContext({ exports: {}, console: { warn() {}, error() {} },
     require: id => modules[id], localStorage: { getItem: () => null } })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return Object.values(context.exports)[0]()
+  return (context.exports.useSessionStore ?? Object.values(context.exports)[0])()
 }
 const framework = {
   pinia: { defineStore: (_, setup) => setup },

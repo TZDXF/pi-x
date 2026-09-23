@@ -5,8 +5,10 @@ import { activeRuntimeId } from "./runtime"
 
 export type { Block, ToolCallBlock, ToolRun, Entry } from "./session"
 
-type Session = ReturnType<ReturnType<typeof createSessionStore>>
-type Ui = ReturnType<ReturnType<typeof createUiStore>>
+type SessionStoreFn = ReturnType<typeof createSessionStore>
+type Session = ReturnType<SessionStoreFn>
+type UiStoreFn = ReturnType<typeof createUiStore>
+type Ui = ReturnType<UiStoreFn>
 const sessions = reactive(new Map<string, Session>()) as unknown as Map<string, Session>
 const interfaces = new Map<string, Ui>()
 
@@ -50,7 +52,7 @@ function selected<T extends object>(get: (id: string) => T): T {
   return new Proxy({} as T, {
     get: (_, key) => Reflect.get(get(activeRuntimeId.value), key),
     set: (_, key, value) => Reflect.set(get(activeRuntimeId.value), key, value),
-  })
+  }) as T
 }
 const session = selected(sessionFor)
 const ui = selected(uiFor)
