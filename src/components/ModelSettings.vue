@@ -2,6 +2,8 @@
 /** Model list for one provider: edits its `models` array in pi's models.json. */
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { GripVertical, Pencil, Trash2 } from "@lucide/vue"
+import { VueDraggable } from "vue-draggable-plus"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -25,7 +27,10 @@ const ui = useUiStore()
 const { t } = useI18n()
 
 const provider = computed(() => store.config.providers[props.providerId])
-const models = computed<ModelEntry[]>(() => provider.value?.models ?? [])
+const models = computed<ModelEntry[]>({
+  get: () => provider.value?.models ?? [],
+  set: list => { if (provider.value) provider.value.models = list },
+})
 
 interface ModelForm {
   id: string
@@ -42,13 +47,24 @@ const editing = ref<ModelForm | null>(null)
 const editingIndex = ref<number | null>(null)
 const confirmingDelete = ref<number | null>(null)
 const busy = ref(false)
+let dragSnapshot: ModelEntry[] | null = null
+
+const compactNumber = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+})
+function formatSize(value: number | undefined, fallback: number) {
+  return compactNumber.format(value ?? fallback)
+}
 
 /** Reset transient state when switching providers. */
 watch(
   () => props.providerId,
   () => {
     editing.value = null
+    editingIndex.value = null
     confirmingDelete.value = null
+    dragSnapshot = null
   },
 )
 
@@ -62,6 +78,7 @@ const apiValue = computed({
 })
 
 function startAdd() {
+  confirmingDelete.value = null
   editingIndex.value = null
   editing.value = {
     id: "",
@@ -155,10 +172,31 @@ async function remove(index: number) {
     provider.value.models = list
     confirmingDelete.value = null
     if (editingIndex.value === index) editing.value = null
+    else if (editingIndex.value !== null && editingIndex.value > index) editingIndex.value--
     await store.persist()
     ui.pushToast(t("settings.toastModelsSaved"), "info")
     session.refreshModels().catch(() => {})
   } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    busy.value = false
+  }
+}
+
+function startDrag() {
+  dragSnapshot = [...models.value]
+}
+
+async function finishDrag() {
+  const original = dragSnapshot
+  dragSnapshot = null
+  if (!original || original.every((item, i) => item === models.value[i])) return
+  busy.value = true
+  try {
+    await store.persist()
+    session.refreshModels().catch(() => {})
+  } catch (e) {
+    models.value = original
     ui.pushToast(String(e), "error")
   } finally {
     busy.value = false
@@ -176,68 +214,114 @@ async function remove(index: number) {
       {{ t("settings.modelEmpty") }}
     </div>
 
-    <div
-      v-for="(m, i) in models"
-      :key="m.id"
-      class="setting-row"
-      :class="{ 'opacity-60': editing && editingIndex !== i }"
+    <VueDraggable
+      v-model="models"
+      handle=".drag-handle"
+      :animation="150"
+      :disabled="busy || !!editing"
+      @start="startDrag"
+      @end="finishDrag"
     >
-      <div class="min-w-0">
-        <h3 class="flex items-center gap-2">
-          <span class="truncate font-mono">{{ m.id }}</span>
-          <span v-if="m.reasoning" class="setting-badge">{{ t("settings.modelReasoning") }}</span>
-          <span v-if="(m.input ?? ['text']).includes('image')" class="setting-badge">{{
-            t("settings.modelImage")
-          }}</span>
-        </h3>
-        <p>
-          <template v-if="m.name && m.name !== m.id">{{ m.name }} · </template>
-          {{ t("settings.modelSize", { ctx: m.contextWindow ?? 128000, max: m.maxTokens ?? 16384 }) }}
-        </p>
-      </div>
-      <div class="flex shrink-0 items-center gap-2">
-        <template v-if="confirmingDelete === i">
-          <span class="text-destructive text-xs">{{ t("settings.modelDeleteConfirm") }}</span>
-          <Button
-            variant="destructive"
-            size="sm"
-            :disabled="busy"
-            @click="remove(i)"
+    <div v-for="(m, i) in models" :key="m.id" class="model-item group">
+      <div class="model-item-summary">
+        <span
+          class="drag-handle"
+          :title="t('settings.dragToReorder')"
+          :aria-label="t('settings.dragToReorder')"
+        ><GripVertical :size="14" /></span>
+        <div class="min-w-0 flex-1">
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="truncate font-mono text-xs font-medium" :title="m.id">{{ m.name || m.id }}</span>
+            <span v-if="m.reasoning" class="setting-badge shrink-0">{{ t("settings.modelReasoning") }}</span>
+            <span v-if="(m.input ?? ['text']).includes('image')" class="setting-badge shrink-0">{{ t("settings.modelImage") }}</span>
+          </div>
+          <p
+            class="text-muted-foreground truncate text-[11px]"
+            :title="t('settings.modelSize', { ctx: (m.contextWindow ?? 128000).toLocaleString(), max: (m.maxTokens ?? 16384).toLocaleString() })"
           >
-            {{ t("settings.confirmDelete") }}
-          </Button>
-          <Button variant="outline" size="sm" type="button" @click="confirmingDelete = null">
+            <template v-if="m.name && m.name !== m.id">{{ m.id }} · </template>
+            {{ t("settings.modelSize", { ctx: formatSize(m.contextWindow, 128000), max: formatSize(m.maxTokens, 16384) }) }}
+          </p>
+        </div>
+        <div v-if="confirmingDelete === i" class="flex shrink-0 items-center gap-1">
+          <span class="text-destructive text-xs">{{ t("settings.modelDeleteConfirm") }}</span>
+          <Button variant="destructive" size="sm" :disabled="busy" @click="remove(i)">{{ t("settings.confirmDelete") }}</Button>
+          <Button variant="ghost" size="sm" @click="confirmingDelete = null">{{ t("common.cancel") }}</Button>
+        </div>
+        <div v-else class="model-item-actions flex shrink-0 items-center gap-0.5">
+          <Button variant="ghost" size="icon-xs" :aria-label="t('settings.edit')" :title="t('settings.edit')" :disabled="busy" @click="startEdit(i, m)"><Pencil :size="14" /></Button>
+          <Button variant="ghost" size="icon-xs" class="text-destructive" :aria-label="t('settings.delete')" :title="t('settings.delete')" :disabled="busy" @click="confirmingDelete = i"><Trash2 :size="14" /></Button>
+        </div>
+      </div>
+      <div v-if="editing && editingIndex === i" class="border-border bg-muted/40 space-y-3 border-t p-4">
+        <h3 class="text-sm font-medium">{{ t("settings.modelEdit") }}</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="mb-1 block text-xs" for="model-id">{{ t("settings.modelId") }}</label>
+            <Input
+              id="model-id"
+              v-model="editing.id"
+              :placeholder="t('settings.modelIdPlaceholder')"
+              class="font-mono text-xs"
+              :disabled="editingIndex !== null"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs" for="model-name">{{ t("settings.modelName") }}</label>
+            <Input id="model-name" v-model="editing.name" class="text-xs" />
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="mb-1 block text-xs" for="model-api">{{ t("settings.modelApi") }}</label>
+            <Select v-model="apiValue">
+              <SelectTrigger id="model-api" class="h-8 w-full text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="API_INHERIT">{{ t("settings.modelApiInherit") }}</SelectItem>
+                <SelectItem v-for="api in PROVIDER_API_TYPES" :key="api" :value="api">{{ api }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs" for="model-ctx">{{
+              t("settings.modelContextWindow")
+            }}</label>
+            <Input id="model-ctx" v-model="editing.contextWindow" placeholder="128000" class="text-xs" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs" for="model-max">{{
+              t("settings.modelMaxTokens")
+            }}</label>
+            <Input id="model-max" v-model="editing.maxTokens" placeholder="16384" class="text-xs" />
+          </div>
+        </div>
+        <div class="flex items-center gap-5 text-xs">
+          <label class="flex items-center gap-2">
+            <Checkbox v-model="editing.reasoning" />
+            {{ t("settings.modelReasoning") }}
+          </label>
+          <label class="flex items-center gap-2">
+            <Checkbox v-model="editing.image" />
+            {{ t("settings.modelImage") }}
+          </label>
+        </div>
+        <p class="text-muted-foreground text-xs">{{ t("settings.modelSizeHint") }}</p>
+        <div class="flex justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" type="button" @click="editing = null">
             {{ t("common.cancel") }}
           </Button>
-        </template>
-        <template v-else>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            :disabled="!!editing"
-            @click="startEdit(i, m)"
-          >
-            {{ t("settings.edit") }}
+          <Button size="sm" :disabled="busy" @click="saveForm">
+            {{ busy ? t("settings.saving") : t("settings.save") }}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            class="text-destructive"
-            :disabled="!!editing"
-            @click="confirmingDelete = i"
-          >
-            {{ t("settings.delete") }}
-          </Button>
-        </template>
+        </div>
       </div>
     </div>
+    </VueDraggable>
 
-    <div v-if="editing" class="border-border bg-muted/40 mt-4 space-y-3 rounded-lg border p-4">
-      <h3 class="text-sm font-medium">
-        {{ editingIndex !== null ? t("settings.modelEdit") : t("settings.modelAdd") }}
-      </h3>
+    <div v-if="editing && editingIndex === null" class="border-border bg-muted/40 mt-2 space-y-3 rounded-lg border p-4">
+      <h3 class="text-sm font-medium">{{ t("settings.modelAdd") }}</h3>
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="mb-1 block text-xs" for="model-id">{{ t("settings.modelId") }}</label>
@@ -305,7 +389,7 @@ async function remove(index: number) {
       v-if="!editing"
       variant="outline"
       size="sm"
-      class="mt-4"
+      class="mt-3"
       @click="startAdd"
     >
       + {{ t("settings.modelAdd") }}

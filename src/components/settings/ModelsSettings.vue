@@ -2,11 +2,14 @@
 /** Providers & models page: provider list on the left, provider config and its models on the right. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { GripVertical } from "@lucide/vue"
+import { VueDraggable } from "vue-draggable-plus"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import ProviderSettings from "@/components/ProviderSettings.vue"
 import ModelSettings from "@/components/ModelSettings.vue"
 import { useModelsConfigStore } from "@/stores/modelsConfig"
+import type { ProviderEntry } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 
 const { t } = useI18n()
@@ -21,11 +24,37 @@ onMounted(async () => {
   }
 })
 
-const providers = computed(() => Object.entries(store.config.providers ?? {}))
+const providers = computed({
+  get: () => Object.entries(store.config.providers ?? {}),
+  set: (entries: [string, ProviderEntry][]) => {
+    store.config.providers = Object.fromEntries(entries)
+  },
+})
 
 /** Selected provider key; null while adding a new provider. */
 const selected = ref<string | null>(null)
 const creating = ref(false)
+const reorderBusy = ref(false)
+let dragSnapshot: Record<string, ProviderEntry> | null = null
+
+function startDrag() {
+  dragSnapshot = { ...store.config.providers }
+}
+
+async function finishDrag() {
+  const original = dragSnapshot
+  dragSnapshot = null
+  if (!original || Object.keys(original).every((key, i) => key === providers.value[i]?.[0])) return
+  reorderBusy.value = true
+  try {
+    await store.persist()
+  } catch (e) {
+    store.config.providers = original
+    ui.pushToast(String(e), "error")
+  } finally {
+    reorderBusy.value = false
+  }
+}
 
 /** Keep the selection valid when providers change (load/removed externally). */
 watch(
@@ -64,20 +93,26 @@ function onDeleted() {
 
   <div class="provider-layout">
     <aside class="provider-list">
-      <button
-        v-for="[id, p] in providers"
-        :key="id"
-        type="button"
-        class="provider-item"
-        :class="{ active: !creating && selected === id }"
-        @click="selectProvider(id)"
+      <VueDraggable
+        v-model="providers"
+        class="provider-sortable"
+        handle=".drag-handle"
+        :animation="150"
+        :disabled="reorderBusy"
+        @start="startDrag"
+        @end="finishDrag"
       >
-        <span class="provider-item-name">{{ p.name || id }}</span>
-        <span class="provider-item-meta">
-          <span v-if="p.name && p.name !== id" class="font-mono">{{ id }}</span>
-          <span>{{ t("settings.providerModelCount", { count: p.models?.length ?? 0 }) }}</span>
-        </span>
-      </button>
+        <div v-for="[id, p] in providers" :key="id" class="provider-item" :class="{ active: !creating && selected === id }">
+          <span class="drag-handle" :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"><GripVertical :size="14" /></span>
+          <button type="button" class="provider-item-content" @click="selectProvider(id)">
+            <span class="provider-item-name" :title="p.name || id">{{ p.name || id }}</span>
+            <span class="provider-item-meta" :title="id">
+              <span v-if="p.name && p.name !== id" class="font-mono">{{ id }}</span>
+              <span>{{ t("settings.providerModelCount", { count: p.models?.length ?? 0 }) }}</span>
+            </span>
+          </button>
+        </div>
+      </VueDraggable>
       <Button
         variant="outline"
         size="sm"

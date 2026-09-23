@@ -460,32 +460,51 @@ input:focus-visible {
 }
 .provider-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 20px;
   align-items: start;
 }
 .provider-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   border-right: 1px solid var(--border);
-  padding-right: 16px;
+  padding-right: 12px;
 }
+.provider-sortable { display: flex; flex-direction: column; gap: 3px; }
 .provider-item {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
   min-width: 0;
-  padding: 9px 12px;
-  text-align: left;
   border-radius: 7px;
+  padding: 3px 4px;
 }
 .provider-item:hover,
 .provider-item.active {
   background: var(--border);
 }
+.drag-handle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 2px;
+  color: var(--muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+.drag-handle:active { cursor: grabbing; }
+.provider-item-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+  padding: 3px 5px;
+  text-align: left;
+}
 .provider-item-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -495,7 +514,7 @@ input:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted-foreground);
 }
 .provider-item-meta .font-mono {
@@ -503,6 +522,24 @@ input:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.model-item {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+.model-item-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 4px;
+}
+.model-item:hover,
+.model-item:focus-within { background: var(--muted); }
+.model-item-actions { opacity: 0; }
+.sortable-ghost { opacity: 0.45; background: var(--border); }
+.model-item:hover .model-item-actions,
+.model-item:focus-within .model-item-actions { opacity: 1; }
+@media (hover: none) { .model-item-actions { opacity: 1; } }
 .provider-detail {
   min-width: 0;
 }

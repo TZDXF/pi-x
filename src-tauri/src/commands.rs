@@ -218,6 +218,14 @@ pub async fn pi_settings_save(settings: Value) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn models_config_provider_order_survives_json_round_trip() {
+        let raw = r#"{"providers":{"zeta":{"models":[]},"alpha":{"models":[]}}}"#;
+        let config: Value = serde_json::from_str(raw).unwrap();
+        let saved = serde_json::to_string(&config).unwrap();
+        assert!(saved.find("zeta").unwrap() < saved.find("alpha").unwrap());
+    }
+
+    #[test]
     fn app_config_does_not_keep_pi_owned_fields() {
         let config = AppConfig { pi_path: Some("pi".into()), ..Default::default() };
         let value = serde_json::to_value(config).unwrap();
