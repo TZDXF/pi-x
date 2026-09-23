@@ -19,7 +19,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <div class="flex flex-col gap-3">
+  <div class="flex min-w-0 flex-col gap-2.5">
     <template v-for="(block, i) in props.blocks" :key="i">
       <!-- assistant text -->
       <MessageResponse
@@ -35,8 +35,9 @@ const { t } = useI18n()
       </Reasoning>
 
       <!-- tool call -->
-      <Tool v-else-if="block.type === 'toolCall'">
+      <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
+          class="gap-2 px-3 py-2 [&>div]:min-w-0 [&>div]:flex-wrap [&>div>span]:break-all"
           :type="`tool-${block.name}`"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
@@ -54,5 +55,6 @@ const { t } = useI18n()
         </ToolContent>
       </Tool>
     </template>
+    <slot />
   </div>
 </template>

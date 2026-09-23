@@ -88,3 +88,16 @@ test('failed history request resets loading and can be retried', async () => {
   await retry
   assert.equal(store.hasOlderHistory.value, false)
 })
+
+test('history retains question and answer timestamps across pagination', async () => {
+  const { store } = harness()
+  await store.loadMessages([
+    { role: 'user', content: 'question', timestamp: 1000 },
+    { role: 'assistant', content: [{ type: 'text', text: 'answer' }], timestamp: 7500 },
+    ...messages(29),
+  ])
+  assert.equal(store.entries.value[0].timestamp, 7500)
+  await store.loadOlderHistory()
+  assert.equal(store.entries.value[0].timestamp, 1000)
+  assert.equal(store.entries.value[1].timestamp, 7500)
+})

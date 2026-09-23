@@ -671,19 +671,21 @@ kbd {
 /* Project/chat hierarchy and composer context, matching the desktop reference. */
 .workspace-sidebar { width: 272px; padding: 14px 7px 8px; }
 
-.sidebar-brand { padding: 2px 8px 20px; }
-.sidebar-search { margin-bottom: 12px; }
+.sidebar-brand { padding: 2px 8px 12px; }
+.sidebar-search { margin-bottom: 6px; padding: 6px 10px; }
 .project-groups { flex: 1; min-height: 0; min-width: 0; }
-.project-group { margin-bottom: 17px; }
-.project-heading { display: flex; align-items: center; border-radius: 9px; padding-right: 5px; }
+.project-group { margin-bottom: 6px; }
+.project-heading { display: flex; align-items: center; border-radius: 6px; padding-right: 4px; }
 .project-heading:hover, .project-heading.selected { background: var(--sidebar-accent); }
-.project-row { min-width: 0; padding: 7px 6px; gap: 7px; text-align: left; font-weight: 400; }
+.project-row { min-width: 0; min-height: 30px; padding: 4px 6px; gap: 6px; text-align: left; font-weight: 500; }
 .project-row svg { flex-shrink: 0; }
 .project-chevron { width: 10px; color: var(--muted-foreground); }
 .session-list { overflow: visible; padding: 0; }
-.session-row { padding: 0 5px 0 32px; min-height: 31px; gap: 2px; margin: 0; font-size: 13px; }
+.session-row { padding: 0 4px 0 28px; min-height: 28px; gap: 2px; margin: 0; font-size: 12px; border-radius: 5px; }
 .session-row.active, .session-row:hover { background: var(--sidebar-accent); }
-.session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 7px 0; }
+.session-row.active { box-shadow: inset 2px 0 var(--sidebar-primary); }
+.project-heading > .icon-button, .project-more { width: 24px; height: 24px; }
+.session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 0; font-size: 12px; line-height: 20px; }
 .session-actions { display: flex; align-items: center; }
 .session-actions .icon-button { width: 24px; height: 24px; }
 .hover-action { opacity: 0; }
@@ -784,3 +786,12 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Reserve a narrow rail without covering messages on small screens. */
 .conversation-column.has-timeline { padding-left: 42px; }
+
+/* Keep replies full-width, including short and streaming messages. */
+.conversation-column .is-assistant > div { width: 100%; min-width: 0; }
+@media (pointer: coarse) {
+  .project-row, .session-row, .session-link { min-height: 36px; }
+  .session-actions .icon-button, .project-heading .icon-button { width: 32px; height: 32px; }
+}
+
+.response-process { border-bottom: 1px solid var(--border); padding-bottom: 12px; }

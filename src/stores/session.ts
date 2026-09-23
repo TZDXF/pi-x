@@ -37,8 +37,8 @@ export interface QueuedPrompt {
   expandedText?: string
 }
 
-export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true }
-export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true }
+export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true, timestamp?: number }
+export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true, startedAt?: number, completedAt?: number, timestamp?: number }
 export type Entry = UserEntry | AssistantEntry
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
@@ -196,10 +196,13 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   })
   const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
+  let agentStartedAt: number | undefined
+
   // ---- event ingestion ----
   function handleEvent(ev: Record<string, any>) {
     switch (ev.type) {
       case "agent_start":
+        agentStartedAt = Date.now()
         isStreaming.value = true
         break
 
@@ -237,7 +240,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         if (msg?.role === "assistant") {
           // authoritative replace
           const blocks = blocksFromMessage(msg)
-          entries.value.push({ kind: "assistant", id: nextId(), blocks, live: true })
+          entries.value.push({ kind: "assistant", id: nextId(), blocks, live: true, startedAt: agentStartedAt, completedAt: Date.now() })
           if (msg.usage)
             lastUsage.value = msg.usage
         }
@@ -439,7 +442,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const titleProject = cwd.value
     const titleSessionId = state.value?.sessionId
     const promptText = expandedText || trimmed || "(see attached image)"
-    entries.value.push({ kind: "user", id: nextId(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
+    entries.value.push({ kind: "user", id: nextId(), timestamp: Date.now(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
@@ -603,11 +606,11 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
               .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
             : []
           if (text.trim() || images.length)
-            page.push({ kind: "user", id: nextId(), text, images })
+            page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
         }
         else if (msg.role === "assistant") {
           const blocks = blocksFromMessage(msg)
-          if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks })
+          if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks, timestamp: msg.timestamp })
         }
         else if (msg.role === "toolResult") {
           const callId = String(msg.toolCallId ?? msg.id ?? "")
@@ -771,6 +774,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   }
 
   function clear() {
+    agentStartedAt = undefined
     promptQueue.value = []
     stopping = false
     queuePaused = false

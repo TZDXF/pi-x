@@ -60,6 +60,7 @@ import {
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
+import { responseTurns } from "@/lib/responseTurns"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
@@ -241,16 +242,8 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
 }
 
 
-/** 仅当该 assistant 消息是本轮对话（到下一条用户消息或会话末尾）的最后一条时才显示复制按钮 */
-function isLastAssistantOfTurn(index: number) {
-  const list = session.entries
-  for (let i = index + 1; i < list.length; i++) {
-    const k = list[i].kind
-    if (k === "user") return true
-    if (k === "assistant") return false
-  }
-  return true
-}
+const renderedEntries = computed(() => responseTurns(session.entries, session.isStreaming || !!session.partialBlocks))
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
@@ -483,7 +476,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <Conversation v-else ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
       class="min-h-0 flex-1" @scroll="onHistoryScroll">
       <ConversationContent
-        class="conversation-column mx-auto w-full max-w-3xl px-6 py-10"
+        class="conversation-column mx-auto w-full max-w-3xl gap-5 px-6 py-6"
         :class="{ 'has-timeline': session.entries.some(entry => entry.kind === 'user') }"
       >
         <div v-if="session.hasOlderHistory" class="text-muted-foreground flex h-8 items-center justify-center gap-2 text-sm" role="status">
@@ -496,7 +489,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :description="t('chat.emptyDesc')"
         />
 
-        <template v-for="(entry, entryIndex) in session.entries" :key="entry.id">
+        <template v-for="entry in renderedEntries" :key="entry.id">
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <MessageContent>
               <div
@@ -516,25 +509,29 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   />
                 </div>
               </div>
-              <AssistantBlocks
-                v-else
-                :blocks="entry.blocks"
-                :runs="session.runs"
-              />
-              <MessageActions v-if="entry.kind === 'assistant' && isLastAssistantOfTurn(entryIndex)" class="mt-1">
-                <MessageAction
-                  :tooltip="t('chat.fork')"
-                  @click="forkFromAnswer(entryIndex)"
-                >
-                  <GitBranch />
-                </MessageAction>
-                <MessageAction
-                  tooltip="Copy reply"
-                  @click="copyText(blocksText(entry.blocks))"
-                >
-                  <Copy />
-                </MessageAction>
-              </MessageActions>
+              <div v-else class="min-w-0 space-y-3">
+                <template v-if="entry.complete && blocksText(entry.summary).trim()">
+                  <details v-if="entry.process.length" class="response-process">
+                    <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                      {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
+                      <span class="mx-1.5" aria-hidden="true">·</span>
+                      {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
+                    </summary>
+                    <AssistantBlocks class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
+                  </details>
+                  <AssistantBlocks :blocks="entry.summary" :runs="session.runs" />
+                </template>
+                <!-- Keep in-flight responses and responses without a final summary visible. -->
+                <AssistantBlocks v-else :blocks="entry.blocks" :runs="session.runs" />
+                <MessageActions v-if="entry.complete" class="mt-1">
+                  <MessageAction :tooltip="t('chat.fork')" @click="forkFromAnswer(entry.lastIndex)">
+                    <GitBranch />
+                  </MessageAction>
+                  <MessageAction tooltip="Copy reply" @click="copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))">
+                    <Copy />
+                  </MessageAction>
+                </MessageActions>
+              </div>
             </MessageContent>
           </Message>
         </template>
