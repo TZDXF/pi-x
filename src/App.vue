@@ -372,8 +372,9 @@ onUnmounted(() => {
 
 <template>
   <div class="desktop-shell">
+    <!-- Settings is a standalone full-page route: it covers the entire shell. -->
     <WorkspaceSidebar
-      v-show="sidebarOpen"
+      v-show="sidebarOpen && route.name !== 'settings'"
       :project="project"
       :ready="phase === 'chat'"
       :busy="navigating || workspace.gitBusy || connecting || phase === 'trust'"
@@ -388,20 +389,20 @@ onUnmounted(() => {
     />
     <main class="workspace-main">
       <template v-if="route.name === 'settings'">
-        <Button
-          v-if="!sidebarOpen"
-          variant="ghost"
-          size="icon"
-          class="sidebar-restore icon-button"
-          :title="t('app.expandSidebar')"
-          :aria-label="t('app.expandSidebar')"
-          @click="sidebarOpen = true"
-        >
-          <PanelLeft :size="18" />
-        </Button>
         <SettingsPage :project="project" />
       </template>
       <template v-else>
+      <Button
+        v-if="!sidebarOpen"
+        variant="ghost"
+        size="icon"
+        class="sidebar-restore icon-button"
+        :title="t('app.expandSidebar')"
+        :aria-label="t('app.expandSidebar')"
+        @click="sidebarOpen = true"
+      >
+        <PanelLeft :size="18" />
+      </Button>
       <WelcomeView
         v-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
         :phase
