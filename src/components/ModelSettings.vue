@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** Model management tab: edits each provider's `models` array in pi's models.json. */
-import { computed, onMounted, ref, watch } from "vue"
+/** Model list for one provider: edits its `models` array in pi's models.json. */
+import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -17,31 +17,14 @@ import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
 
+const props = defineProps<{ /** Provider key whose models are managed here. */ providerId: string }>()
+
 const store = useModelsConfigStore()
 const session = useSessionStore()
 const ui = useUiStore()
 const { t } = useI18n()
 
-onMounted(async () => {
-  try {
-    await store.load()
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
-})
-
-const providerIds = computed(() => Object.keys(store.config.providers ?? {}))
-const selectedProvider = ref("")
-
-watch(
-  providerIds,
-  (ids) => {
-    if (!ids.includes(selectedProvider.value)) selectedProvider.value = ids[0] ?? ""
-  },
-  { immediate: true },
-)
-
-const provider = computed(() => store.config.providers[selectedProvider.value])
+const provider = computed(() => store.config.providers[props.providerId])
 const models = computed<ModelEntry[]>(() => provider.value?.models ?? [])
 
 interface ModelForm {
@@ -59,6 +42,15 @@ const editing = ref<ModelForm | null>(null)
 const editingIndex = ref<number | null>(null)
 const confirmingDelete = ref<number | null>(null)
 const busy = ref(false)
+
+/** Reset transient state when switching providers. */
+watch(
+  () => props.providerId,
+  () => {
+    editing.value = null
+    confirmingDelete.value = null
+  },
+)
 
 /** reka Select forbids empty item values: "inherit" is mapped to an empty api. */
 const API_INHERIT = "__inherit__"
@@ -175,25 +167,11 @@ async function remove(index: number) {
 </script>
 
 <template>
-  <div v-if="!providerIds.length" class="text-muted-foreground py-6 text-sm">
+  <div v-if="!provider" class="text-muted-foreground py-6 text-sm">
     {{ t("settings.modelNoProviders") }}
   </div>
 
   <template v-else>
-    <label class="mb-1 block text-xs" for="model-provider">{{
-      t("settings.modelProvider")
-    }}</label>
-    <Select v-model="selectedProvider">
-      <SelectTrigger id="model-provider" class="h-8 w-56 text-xs">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem v-for="id in providerIds" :key="id" :value="id">
-          {{ store.config.providers[id]?.name || id }}
-        </SelectItem>
-      </SelectContent>
-    </Select>
-
     <div v-if="!models.length && !editing" class="text-muted-foreground py-6 text-sm">
       {{ t("settings.modelEmpty") }}
     </div>
