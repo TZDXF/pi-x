@@ -62,16 +62,16 @@ const headings = computed(() => {
       </Button>
       <h2>{{ t("settings.title") }}</h2>
       <ul class="settings-menu">
-        <li><button :class="{ active: tab === 'remote' }" @click="selectTab('remote')">{{ t("settings.remote") }}</button></li>
         <li><button :class="{ active: tab === 'general' }" @click="selectTab('general')">{{ t("settings.general") }}</button></li>
+        <li><button :class="{ active: tab === 'remote' }" @click="selectTab('remote')">{{ t("settings.remote") }}</button></li>
         <li><button :class="{ active: tab === 'archive' }" @click="selectTab('archive')">{{ t("sessionArchive.title") }}</button></li>
+        <li><button :class="{ active: tab === 'packages' }" @click="selectTab('packages')">{{ t("packages.title") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'models' }" @click="selectTab('models')">{{ t("settings.providersModels") }}</button></li>
+        <li v-if="isDesktop"><button :class="{ active: tab === 'model-config' }" @click="selectTab('model-config')">{{ t("titleGeneration.page") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'runtime' }" @click="selectTab('runtime')">{{ t("settings.runtime") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'agent-config' }" @click="selectTab('agent-config')">{{ t("agentConfig.title") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'skills' }" @click="selectTab('skills')">{{ t("skillsConfig.title") }}</button></li>
-        <li><button :class="{ active: tab === 'packages' }" @click="selectTab('packages')">{{ t("packages.title") }}</button></li>
         <li><button :class="{ active: tab === 'about' }" @click="selectTab('about')">{{ t("settings.about") }}</button></li>
-        <li v-if="isDesktop"><button :class="{ active: tab === 'model-config' }" @click="selectTab('model-config')">{{ t("titleGeneration.page") }}</button></li>
       </ul>
       <p>{{ t("settings.subtitle") }}</p>
     </nav>
