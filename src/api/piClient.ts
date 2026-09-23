@@ -182,7 +182,6 @@ export interface ProviderEntry {
   baseUrl?: string
   api?: string
   apiKey?: string
-  authHeader?: boolean
   headers?: Record<string, string>
   models?: ModelEntry[]
   [key: string]: unknown

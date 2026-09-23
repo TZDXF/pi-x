@@ -4,7 +4,6 @@ import { computed, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -34,7 +33,6 @@ interface ProviderForm {
   baseUrl: string
   api: string
   apiKey: string
-  authHeader: boolean
 }
 
 /** New provider id (only editable while adding). */
@@ -44,7 +42,6 @@ const form = reactive<ProviderForm>({
   baseUrl: "",
   api: "openai-completions",
   apiKey: "",
-  authHeader: false,
 })
 const confirmingDelete = ref(false)
 const busy = ref(false)
@@ -57,7 +54,6 @@ function loadForm() {
   form.baseUrl = p?.baseUrl ?? ""
   form.api = p?.api ?? "openai-completions"
   form.apiKey = typeof p?.apiKey === "string" ? p.apiKey : ""
-  form.authHeader = p?.authHeader === true
 }
 
 watch(() => props.providerId, loadForm, { immediate: true })
@@ -87,8 +83,6 @@ async function saveForm() {
     else delete entry.name
     if (form.apiKey.trim()) entry.apiKey = form.apiKey.trim()
     else delete entry.apiKey
-    if (form.authHeader) entry.authHeader = true
-    else delete entry.authHeader
     store.config.providers[id] = entry
     await store.persist()
     ui.pushToast(t("settings.toastModelsSaved"), "info")
@@ -171,18 +165,12 @@ async function remove() {
         <Input
           id="provider-key"
           v-model="form.apiKey"
-          :placeholder="t('settings.providerApiKeyPlaceholder')"
           class="font-mono text-xs"
           type="password"
           autocomplete="off"
         />
       </div>
     </div>
-    <p class="text-muted-foreground text-xs">{{ t("settings.providerApiKeyHint") }}</p>
-    <label class="flex items-center gap-2 text-xs">
-      <Checkbox v-model="form.authHeader" />
-      {{ t("settings.providerAuthHeader") }}
-    </label>
     <div class="flex justify-end gap-2 pt-1">
       <template v-if="confirmingDelete">
         <span class="text-destructive mr-auto self-center text-xs">{{
