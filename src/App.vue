@@ -99,6 +99,7 @@ onMounted(async () => {
           return
         }
         const owner = sessionFor(runtimeId)
+        owner.markInterrupted()
         owner.started = false
         owner.isStreaming = false
         owner.isCompacting = false
@@ -184,6 +185,7 @@ async function reattachRunningSessions(): Promise<RunningSession | null> {
     await owner.init(runtime.project)
     await owner.loadHistory()
     owner.isStreaming = runtime.state.isStreaming ?? false
+    if (owner.isStreaming) owner.markRunning()
   }
   const restored = running.find(runtime => runtime.project === config.value.lastProject) ?? running[0]
   if (restored) {

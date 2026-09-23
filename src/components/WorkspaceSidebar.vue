@@ -5,7 +5,8 @@ import { useI18n } from "vue-i18n"
 import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, ListTree, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
-import { useSessionStore, isSessionRunning } from "@/stores/conversations"
+import { useSessionStore } from "@/stores/conversations"
+import { sessionRunStatus } from "@/stores/sessionRunStatus"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
@@ -169,7 +170,10 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query && workspace.projectFolders(path).length === 1" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
-            <span v-if="isSessionRunning(s.file)" class="session-running" :aria-label="t('chat.thinking')" />
+            <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
+              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
+              {{ t(`sidebar.status.${sessionRunStatus(s.file)}`) }}
+            </span>
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><template v-if="s.file === session.sessionFile && props.ready"><DropdownMenuSeparator /><DropdownMenuItem @select="ui.requestSessionAction('tree')"><ListTree :size="14" />{{ t('chat.sessionTree') }}</DropdownMenuItem><DropdownMenuItem @select="ui.requestSessionAction('export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></template></DropdownMenuContent>

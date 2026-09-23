@@ -2,6 +2,7 @@ import { defineStore } from "pinia"
 import { computed, ref, shallowRef } from "vue"
 import { i18n } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
+import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { contentText } from "@/lib/content"
@@ -104,6 +105,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   /** In-progress assistant message being assembled from streaming deltas. */
   const partialBlocks = ref<Block[] | null>(null)
   const isStreaming = ref(false)
+  let turnFailed = false
+  let turnAborted = false
   const isCompacting = ref(false)
   const retryInfo = ref<string | null>(null)
   const promptQueue = ref<QueuedPrompt[]>([])
@@ -204,10 +207,14 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       case "agent_start":
         agentStartedAt = Date.now()
         isStreaming.value = true
+        turnFailed = false
+        turnAborted = false
+        setSessionRunStatus(sessionFile.value, "running")
         break
 
       case "agent_settled":
         isStreaming.value = false
+        setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")
         void refreshStats()
         void refreshState()
         // Our own worker just flushed the file; sync so watcher events for
@@ -238,6 +245,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       case "message_end": {
         const msg = ev.message
         if (msg?.role === "assistant") {
+          if (msg.stopReason === "error") turnFailed = true
+          if (msg.stopReason === "aborted") turnAborted = true
           // authoritative replace
           const blocks = blocksFromMessage(msg)
           entries.value.push({ kind: "assistant", id: nextId(), blocks, live: true, startedAt: agentStartedAt, completedAt: Date.now() })
@@ -435,6 +444,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     queuePaused = false
     const wasStreaming = isStreaming.value
     isStreaming.value = true
+    if (!wasStreaming) { turnFailed = false; turnAborted = false }
+    setSessionRunStatus(sessionFile.value, "running")
     const version = conversationVersion
     const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
     // Capture identity now: completion must never name a subsequently selected session.
@@ -455,6 +466,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       })
       .catch((e) => {
         if (version !== conversationVersion) return
+        turnFailed = true
+        setSessionRunStatus(sessionFile.value, "error")
         if (!wasStreaming) isStreaming.value = false
         entries.value.push({
           kind: "assistant",
@@ -501,6 +514,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     try {
       await refreshState()
     } finally {
+      turnAborted = true
+      setSessionRunStatus(sessionFile.value, null)
       stopping = false
     }
     return restored.join("\n")
@@ -775,6 +790,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   function clear() {
     agentStartedAt = undefined
+    turnFailed = false
+    turnAborted = false
     promptQueue.value = []
     stopping = false
     queuePaused = false
@@ -831,6 +848,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     runs,
     partialBlocks,
     isStreaming,
+    markInterrupted: () => {
+      if (isStreaming.value) setSessionRunStatus(sessionFile.value, "error")
+    },
+    markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
     isCompacting,
     retryInfo,
     steering,

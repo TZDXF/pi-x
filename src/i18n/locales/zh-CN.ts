@@ -167,6 +167,7 @@ export default {
     recentProjects: "最近项目",
     settings: "设置",
     piConnected: "Pi 已连接",
+    status: { running: "进行中", completed: "完成", error: "错误" },
   },
 
   chat: {
@@ -283,6 +284,7 @@ export default {
     dataDirectory: '应用数据目录',
 
     theme: "外观主题",
+    runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
     themeLight: "亮色",
     themeDark: "暗色",
     themeSystem: "跟随系统",

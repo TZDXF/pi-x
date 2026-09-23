@@ -167,6 +167,7 @@ export default {
     recentProjects: "Recent projects",
     settings: "Settings",
     piConnected: "Pi connected",
+    status: { running: "Running", completed: "Done", error: "Error" },
   },
 
   chat: {
@@ -283,6 +284,7 @@ export default {
     dataDirectory: 'Application data directory',
 
     theme: "Appearance",
+    runningBehaviorDesc: "How a message sent while generating is handled: queued to wait, or steers the current run immediately.",
     themeLight: "Light",
     themeDark: "Dark",
     themeSystem: "System",

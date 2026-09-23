@@ -12,6 +12,7 @@ import {
 import type { AcceptableValue } from "reka-ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
+import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib/runningBehavior"
 
 const { t } = useI18n()
 
@@ -42,6 +43,27 @@ function applyLocale(v: Locale) {
         <SelectItem value="light">{{ t("settings.themeLight") }}</SelectItem>
         <SelectItem value="dark">{{ t("settings.themeDark") }}</SelectItem>
         <SelectItem value="system">{{ t("settings.themeSystem") }}</SelectItem>
+      </SelectContent>
+    </Select>
+  </div>
+  <div class="setting-row">
+    <div>
+      <h3 id="running-behavior-label">{{ t("chat.runningBehavior") }}</h3>
+      <p>{{ t("settings.runningBehaviorDesc") }}</p>
+    </div>
+    <Select
+      :model-value="runningBehavior"
+      @update:model-value="(v: AcceptableValue) => setRunningBehavior(v as RunningBehavior)"
+    >
+      <SelectTrigger
+        class="h-8 w-36 text-xs"
+        aria-labelledby="running-behavior-label"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="queue">{{ t("chat.addToQueue") }}</SelectItem>
+        <SelectItem value="steer">{{ t("chat.steer") }}</SelectItem>
       </SelectContent>
     </Select>
   </div>
