@@ -10,6 +10,7 @@ export interface AssistantTurn {
   complete: boolean
   durationMs: number | null
   toolCallCount: number
+  timestamp?: number
 }
 
 /** Group a turn without changing store entries or indices used for branching. */
@@ -34,6 +35,7 @@ export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry 
     // recorded message timestamp. Never substitute the history loading time.
     const start = questionTime ?? entry.startedAt
     const end = entry.completedAt ?? entry.timestamp
+    turn.timestamp = end ?? turn.timestamp
     turn.durationMs = typeof start === 'number' && Number.isFinite(start) &&
       typeof end === 'number' && Number.isFinite(end) && end >= start ? end - start : null
     // Only trailing text from the final assistant entry is a final answer.

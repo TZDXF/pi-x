@@ -203,6 +203,7 @@ export default {
     emptyTitle: "今天想构建什么？",
     emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",
+    copyPrompt: "复制提问",
     executionDuration: "用时 {seconds} 秒",
     durationUnknown: "用时未知",
     toolCallCount: "工具调用 {count} 次",

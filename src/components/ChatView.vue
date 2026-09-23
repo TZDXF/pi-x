@@ -66,6 +66,7 @@ import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import { withFileReferences, desktopCommands } from "@/lib/completion"
+import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
@@ -244,6 +245,14 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
 
 const renderedEntries = computed(() => responseTurns(session.entries, session.isStreaming || !!session.partialBlocks))
 
+function formatMessageTime(ts?: number): string {
+  if (!ts) return ""
+  const d = new Date(ts)
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  if (d.toDateString() === new Date().toDateString()) return time
+  return `${d.toLocaleDateString([], { month: "numeric", day: "numeric" })} ${time}`
+}
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
@@ -321,7 +330,6 @@ const modelKey = computed({
   },
 })
 
-const runningBehavior = ref<"queue" | "steer">("queue")
 const draggedPrompt = ref<number | null>(null)
 
 function startQueueDrag(event: DragEvent, id: number) {
@@ -347,7 +355,6 @@ async function editQueuedPrompt(id: number) {
     const bytes = Uint8Array.from(atob(image.data), char => char.charCodeAt(0))
     bridge.value.addFiles([new File([bytes], `queued-image-${index + 1}`, { type: image.mimeType })])
   }
-  runningBehavior.value = "queue"
   await nextTick()
   document.querySelector<HTMLTextAreaElement>(".composer-dock textarea")?.focus()
 }
@@ -491,48 +498,67 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
         <template v-for="entry in renderedEntries" :key="entry.id">
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
-            <MessageContent>
-              <div
-                v-if="entry.kind === 'user'"
-                class="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]"
-              >
-                {{ entry.text }}
+            <div class="flex min-w-0 flex-col" :class="{ 'items-end': entry.kind === 'user' }">
+              <MessageContent>
                 <div
-                  v-if="entry.images?.length"
-                  class="mt-1.5 flex flex-wrap gap-1.5"
+                  v-if="entry.kind === 'user'"
+                  class="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]"
                 >
-                  <img
-                    v-for="(im, i) in entry.images"
-                    :key="i"
-                    :src="im.url"
-                    class="max-h-40 max-w-xs rounded-md border object-contain"
-                  />
+                  {{ entry.text }}
+                  <div
+                    v-if="entry.images?.length"
+                    class="mt-1.5 flex flex-wrap gap-1.5"
+                  >
+                    <img
+                      v-for="(im, i) in entry.images"
+                      :key="i"
+                      :src="im.url"
+                      class="max-h-40 max-w-xs rounded-md border object-contain"
+                    />
+                  </div>
                 </div>
-              </div>
-              <div v-else class="min-w-0 space-y-3">
-                <template v-if="entry.complete && blocksText(entry.summary).trim()">
-                  <details v-if="entry.process.length" class="response-process">
-                    <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                      {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
-                      <span class="mx-1.5" aria-hidden="true">·</span>
-                      {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
-                    </summary>
-                    <AssistantBlocks class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
-                  </details>
-                  <AssistantBlocks :blocks="entry.summary" :runs="session.runs" />
-                </template>
-                <!-- Keep in-flight responses and responses without a final summary visible. -->
-                <AssistantBlocks v-else :blocks="entry.blocks" :runs="session.runs" />
-                <MessageActions v-if="entry.complete" class="mt-1">
-                  <MessageAction :tooltip="t('chat.fork')" @click="forkFromAnswer(entry.lastIndex)">
-                    <GitBranch />
-                  </MessageAction>
-                  <MessageAction tooltip="Copy reply" @click="copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))">
-                    <Copy />
-                  </MessageAction>
-                </MessageActions>
-              </div>
-            </MessageContent>
+                <div v-else class="min-w-0 space-y-3">
+                  <template v-if="entry.complete && blocksText(entry.summary).trim()">
+                    <details v-if="entry.process.length" class="response-process">
+                      <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                        {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
+                        <span class="mx-1.5" aria-hidden="true">·</span>
+                        {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
+                      </summary>
+                      <AssistantBlocks class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
+                    </details>
+                    <AssistantBlocks :blocks="entry.summary" :runs="session.runs" />
+                  </template>
+                  <!-- Keep in-flight responses and responses without a final summary visible. -->
+                  <AssistantBlocks v-else :blocks="entry.blocks" :runs="session.runs" />
+                </div>
+              </MessageContent>
+              <MessageActions
+                v-if="entry.kind === 'assistant' && entry.complete"
+                class="invisible mt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 focus-within:visible focus-within:opacity-100"
+              >
+                <MessageAction :tooltip="t('chat.fork')" @click="forkFromAnswer(entry.lastIndex)">
+                  <GitBranch />
+                </MessageAction>
+                <MessageAction :tooltip="t('chat.copyReply')" @click="copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))">
+                  <Copy />
+                </MessageAction>
+                <span v-if="entry.timestamp" class="ml-1 self-center text-xs text-muted-foreground">
+                  {{ formatMessageTime(entry.timestamp) }}
+                </span>
+              </MessageActions>
+              <MessageActions
+                v-else-if="entry.kind === 'user'"
+                class="invisible mt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 focus-within:visible focus-within:opacity-100"
+              >
+                <MessageAction :tooltip="t('chat.copyPrompt')" @click="copyText(entry.text)">
+                  <Copy />
+                </MessageAction>
+                <span v-if="entry.timestamp" class="ml-1 self-center text-xs text-muted-foreground">
+                  {{ formatMessageTime(entry.timestamp) }}
+                </span>
+              </MessageActions>
+            </div>
           </Message>
         </template>
 
@@ -715,15 +741,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 </ContextContentBody>
               </ContextContent>
             </Context>
-            <Button v-if="session.isStreaming" type="button" variant="outline" size="sm" :disabled="workspace.gitBusy || connecting" @click="abort">{{ t("chat.stop") }}</Button>
-            <Select v-if="session.isStreaming" v-model="runningBehavior">
-              <SelectTrigger class="h-8 w-auto text-xs" :aria-label="t('chat.runningBehavior')"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="queue">{{ t('chat.addToQueue') }}</SelectItem>
-                <SelectItem value="steer">{{ t('chat.steer') }}</SelectItem>
-              </SelectContent>
-            </Select>
-            <PromptInputSubmit :title="session.isStreaming ? t(runningBehavior === 'queue' ? 'chat.addToQueue' : 'chat.steer') : undefined" :disabled="workspace.gitBusy || connecting" />
+            <PromptInputSubmit
+              :status="session.isStreaming ? 'streaming' : undefined"
+              :type="session.isStreaming ? 'button' : 'submit'"
+              :title="session.isStreaming ? t('chat.stop') : undefined"
+              :aria-label="session.isStreaming ? t('chat.stop') : undefined"
+              :disabled="workspace.gitBusy || connecting"
+              @click="session.isStreaming && abort()"
+            />
           </div>
         </div>
       </PromptInput>
