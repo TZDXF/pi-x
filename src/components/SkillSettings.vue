@@ -7,7 +7,6 @@ import type { HostedSkill } from "@/api/piClient"
 import { useSessionStore, useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 const { t } = useI18n()
 const session = useSessionStore()
@@ -82,10 +81,10 @@ onMounted(load)
 </script>
 
 <template>
-  <DialogHeader>
-    <DialogTitle>{{ t("skillsConfig.title") }}</DialogTitle>
-    <DialogDescription>{{ t("skillsConfig.description") }}</DialogDescription>
-  </DialogHeader>
+  <header class="flex flex-col gap-2 text-left">
+    <h2 class="text-base leading-none font-medium">{{ t("skillsConfig.title") }}</h2>
+    <p class="text-sm text-muted-foreground">{{ t("skillsConfig.description") }}</p>
+  </header>
   <p v-if="loading" class="text-sm text-muted-foreground">{{ t("agentConfig.loading") }}</p>
   <div v-else-if="error" role="alert" class="space-y-3">
     <p class="text-sm text-destructive">{{ error }}</p>

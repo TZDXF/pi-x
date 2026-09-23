@@ -5,7 +5,6 @@ import { getGlobalPrompt, saveGlobalPrompt } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 const { t } = useI18n()
 const ui = useUiStore()
@@ -36,10 +35,10 @@ onMounted(load)
 </script>
 
 <template>
-  <DialogHeader>
-    <DialogTitle>{{ t("agentConfig.title") }}</DialogTitle>
-    <DialogDescription>{{ t("agentConfig.description") }}</DialogDescription>
-  </DialogHeader>
+  <header class="flex flex-col gap-2 text-left">
+    <h2 class="text-base leading-none font-medium">{{ t("agentConfig.title") }}</h2>
+    <p class="text-sm text-muted-foreground">{{ t("agentConfig.description") }}</p>
+  </header>
   <p v-if="loading" class="text-sm text-muted-foreground">{{ t("agentConfig.loading") }}</p>
   <div v-else-if="error" role="alert" class="space-y-3">
     <p class="text-sm text-destructive">{{ error }}</p>
