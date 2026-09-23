@@ -53,22 +53,20 @@ export interface HostedSkill {
   enabled: boolean
 }
 export const listHostedSkills = () => invoke<HostedSkill[]>("skills_hosted_list")
-export const importHostedSkills = (sources: string[], overwrite = false) =>
-  invoke<{ imported: string[]; conflicts: string[] }>("skills_hosted_import", { sources, overwrite })
+export const openHostedSkillsDirectory = () => invoke<void>("skills_hosted_open_dir")
 export const deleteHostedSkill = (path: string) => invoke<void>("skills_hosted_delete", { path })
 export const setHostedSkillsEnabled = (paths: string[]) =>
   invoke<void>("skills_hosted_set_enabled", { paths })
 
-/** A skill Pi auto-discovers outside ~/.pix/skills (read-only). */
+/** A user-level skill Pi auto-discovers outside the hosted skills (read-only). */
 export interface DiscoveredSkill {
   name: string
   description: string
   path: string
-  scope: "user" | "project"
   hosted: boolean
 }
-export const listDiscoveredSkills = (project?: string | null) =>
-  invoke<DiscoveredSkill[]>("skills_discovered_list", { project: project ?? null })
+export const listDiscoveredSkills = () =>
+  invoke<DiscoveredSkill[]>("skills_discovered_list")
 
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })

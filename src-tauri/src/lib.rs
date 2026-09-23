@@ -94,7 +94,7 @@ pub fn run() {
             packages::package_set_resource,
             skills::skills_hosted_list,
             skills::skills_discovered_list,
-            skills::skills_hosted_import,
+            skills::skills_hosted_open_dir,
             skills::skills_hosted_delete,
             skills::skills_hosted_set_enabled,
             terminal::term_create,

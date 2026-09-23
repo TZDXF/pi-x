@@ -12,6 +12,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tauri::AppHandle;
+use tauri_plugin_opener::OpenerExt;
 
 pub fn skills_root() -> PathBuf {
     crate::data_dir::root().join("skills")
@@ -206,65 +208,12 @@ pub async fn skills_hosted_list() -> Result<Vec<HostedSkill>, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Import complete skills into `~/.pix/skills/`. Sources may be skill
-/// directories (copied whole) or skill Markdown files; a `SKILL.md` source
-/// imports its parent directory. Existing entries are reported as conflicts
-/// unless `overwrite` is set. Imported skills start disabled.
+/// Create and open the hosted skills directory in the system file manager.
 #[tauri::command]
-pub async fn skills_hosted_import(sources: Vec<String>, overwrite: bool) -> Result<Value, String> {
-    tokio::task::spawn_blocking(move || skills_import(&skills_root(), &sources, overwrite))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn skills_import(root: &Path, sources: &[String], overwrite: bool) -> Result<Value, String> {
-    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    let mut imported = Vec::new();
-    let mut conflicts = Vec::new();
-    for source in sources {
-        let source = canonicalize(source).map_err(|e| format!("{source}: {e}"))?;
-        // A selected SKILL.md stands for its complete parent directory.
-        let (src_dir, src_file) = if source.is_dir() {
-            (source.clone(), None)
-        } else if source.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
-            let parent = source.parent().ok_or("Invalid SKILL.md path")?.to_path_buf();
-            (parent, None)
-        } else {
-            (source.clone(), Some(source.clone()))
-        };
-        if src_file.is_none() && !src_dir.join("SKILL.md").is_file() {
-            return Err(format!("not a skill (missing SKILL.md): {}", src_dir.display()));
-        }
-        if let Some(file) = &src_file {
-            let (_, description) = read_frontmatter(file)?;
-            if description.as_deref().unwrap_or_default().is_empty() {
-                return Err(format!(
-                    "not a skill (frontmatter description required): {}",
-                    file.display()
-                ));
-            }
-        }
-        let name = if src_file.is_some() { stem(&source) } else { dir_name(&src_dir) };
-        if name.is_empty() || name.starts_with('.') {
-            return Err(format!("invalid skill name: {name}"));
-        }
-        let target = root.join(&name);
-        if target.exists() {
-            if !overwrite {
-                conflicts.push(name);
-                continue;
-            }
-            remove_path(&target)?;
-        }
-        match &src_file {
-            Some(file) => {
-                std::fs::copy(file, &target).map_err(|e| e.to_string())?;
-            }
-            None => copy_dir(&src_dir, &target).map_err(|e| e.to_string())?,
-        }
-        imported.push(name);
-    }
-    Ok(serde_json::json!({ "imported": imported, "conflicts": conflicts }))
+pub fn skills_hosted_open_dir(app: AppHandle) -> Result<(), String> {
+    let root = skills_root();
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    app.opener().open_path(root.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Delete a hosted skill from `~/.pix/skills/` and unregister it from Pi
@@ -322,8 +271,7 @@ fn skills_set_enabled(root: &Path, paths: &[String]) -> Result<(), String> {
 // Auto-discovered skills (Pi's own discovery dirs, read-only)
 // ---------------------------------------------------------------------------
 
-/// A skill Pi auto-discovers outside the hosted root: `~/.pi/agent/skills`,
-/// `~/.agents/skills`, and the project's `.pi/skills` / `.agents/skills`.
+/// A user-level skill Pi auto-discovers outside the hosted root.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredSkill {
@@ -331,8 +279,6 @@ pub struct DiscoveredSkill {
     pub description: String,
     /// Absolute path of the skill directory or Markdown file.
     pub path: String,
-    /// `user` or `project`, matching Pi's scopes.
-    pub scope: String,
     /// Whether a skill with the same name is already hosted in `~/.pix/skills`.
     pub hosted: bool,
 }
@@ -364,23 +310,16 @@ fn collect_skill_entries(dir: &Path, include_root_files: bool, out: &mut Vec<(Pa
 }
 
 #[tauri::command]
-pub async fn skills_discovered_list(project: Option<String>) -> Result<Vec<DiscoveredSkill>, String> {
-    tokio::task::spawn_blocking(move || skills_discovered(project.as_deref())).await.map_err(|e| e.to_string())?
+pub async fn skills_discovered_list() -> Result<Vec<DiscoveredSkill>, String> {
+    tokio::task::spawn_blocking(skills_discovered).await.map_err(|e| e.to_string())?
 }
 
-fn skills_discovered(project: Option<&str>) -> Result<Vec<DiscoveredSkill>, String> {
+fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
-    let mut roots: Vec<(PathBuf, &str)> = vec![
-        (home.join(".pi").join("agent").join("skills"), "user"),
-        (home.join(".agents").join("skills"), "user"),
+    let roots = [
+        home.join(".pi").join("agent").join("skills"),
+        home.join(".agents").join("skills"),
     ];
-    if let Some(project) = project {
-        let project = PathBuf::from(project);
-        if project.is_dir() {
-            roots.push((project.join(".pi").join("skills"), "project"));
-            roots.push((project.join(".agents").join("skills"), "project"));
-        }
-    }
 
     // Names already managed under ~/.pix/skills, to flag duplicates.
     let hosted_root = skills_root();
@@ -393,7 +332,7 @@ fn skills_discovered(project: Option<&str>) -> Result<Vec<DiscoveredSkill>, Stri
     let mut out: Vec<DiscoveredSkill> = Vec::new();
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_names: HashSet<String> = HashSet::new();
-    for (root, scope) in roots {
+    for root in roots {
         let mut found = Vec::new();
         collect_skill_entries(&root, true, &mut found);
         for (path, kind) in found {
@@ -412,7 +351,6 @@ fn skills_discovered(project: Option<&str>) -> Result<Vec<DiscoveredSkill>, Stri
                 name: entry.name,
                 description: entry.description,
                 path: entry.path,
-                scope: scope.to_string(),
             });
         }
     }
@@ -427,20 +365,6 @@ fn skills_discovered(project: Option<&str>) -> Result<Vec<DiscoveredSkill>, Stri
 fn remove_path(path: &Path) -> Result<(), String> {
     let result = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
     result.map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let target = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -487,39 +411,6 @@ mod tests {
         assert_eq!(entry.kind, "directory");
         assert!(!entry.enabled);
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn imports_directory_and_skmd_and_reports_conflicts() {
-        let root = temp_root("import");
-        let source = temp_root("src");
-        std::fs::create_dir_all(source.join("my-skill/scripts")).unwrap();
-        std::fs::write(source.join("my-skill/SKILL.md"), SKILL_MD).unwrap();
-        std::fs::write(source.join("my-skill/scripts/run.sh"), "#!/bin/sh\n").unwrap();
-        let src = source.join("my-skill").to_string_lossy().into_owned();
-
-        let result = skills_import(&root, &[src.clone()], false).unwrap();
-        assert_eq!(result["imported"], serde_json::json!(["my-skill"]));
-        assert!(root.join("my-skill/scripts/run.sh").is_file());
-
-        // Same source again without overwrite → conflict; with overwrite → replaced.
-        let result = skills_import(&root, &[src.clone()], false).unwrap();
-        assert_eq!(result["conflicts"], serde_json::json!(["my-skill"]));
-        std::fs::write(source.join("my-skill/SKILL.md"), "---\nname: my-skill\ndescription: v2\n---\n").unwrap();
-        let result = skills_import(&root, &[src.clone()], true).unwrap();
-        assert_eq!(result["imported"], serde_json::json!(["my-skill"]));
-        assert_eq!(hosted_entry(&root, &root.join("my-skill"), "directory").unwrap().description, "v2");
-
-        // A lone SKILL.md imports its parent directory.
-        let skmd = source.join("my-skill").join("SKILL.md").to_string_lossy().into_owned();
-        let result = skills_import(&root, &[skmd], false).unwrap();
-        assert_eq!(result["conflicts"], serde_json::json!(["my-skill"]));
-
-        // Directories without SKILL.md are rejected.
-        let empty = source.join("scripts").to_string_lossy().into_owned();
-        assert!(skills_import(&root, &[empty], false).is_err());
-        std::fs::remove_dir_all(root).unwrap();
-        std::fs::remove_dir_all(source).unwrap();
     }
 
     #[test]
