@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue"
+import { Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { ask } from "@tauri-apps/plugin-dialog"
 import { deleteHostedSkill, listDiscoveredSkills, listHostedSkills, openHostedSkillsDirectory, setHostedSkillsEnabled } from "@/api/piClient"
@@ -77,13 +78,13 @@ onMounted(load)
           <Button variant="outline" size="sm" @click="load">{{ t("skillsConfig.refresh") }}</Button>
         </div>
         <p v-if="!skills.length" class="mt-3 text-sm text-muted-foreground">{{ t("skillsConfig.empty") }}</p>
-        <div v-for="skill in skills" :key="skill.path" class="mt-3 flex items-start gap-3 rounded-lg border p-3">
-          <Switch :model-value="skill.enabled" :aria-label="t('skillsConfig.enable')" class="mt-0.5" @update:model-value="v => toggle(skill, Boolean(v))" />
+        <div v-for="skill in skills" :key="skill.path" class="mt-3 flex items-center gap-3 rounded-lg border p-3">
           <div class="min-w-0 flex-1 space-y-1">
             <p class="text-sm font-medium">{{ skill.name }}</p>
-            <p v-if="skill.description" class="text-xs text-muted-foreground">{{ skill.description }}</p>
+            <p v-if="skill.description" class="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
           </div>
-          <Button variant="ghost" size="sm" @click="remove(skill)">{{ t("skillsConfig.delete") }}</Button>
+          <Switch :model-value="skill.enabled" :aria-label="`${t('skillsConfig.enable')} · ${skill.name}`" @update:model-value="v => toggle(skill, Boolean(v))" />
+          <Button variant="ghost" size="icon-sm" class="text-destructive hover:text-destructive" :aria-label="`${t('skillsConfig.delete')} · ${skill.name}`" :title="t('skillsConfig.delete')" @click="remove(skill)"><Trash2 :size="15" /></Button>
         </div>
       </div>
     </section>
@@ -93,7 +94,7 @@ onMounted(load)
       <div v-for="skill in discovered" :key="skill.path" class="flex items-start gap-3 rounded-lg border p-3">
         <div class="min-w-0 flex-1 space-y-1">
           <p class="text-sm font-medium">{{ skill.name }}</p>
-          <p v-if="skill.description" class="text-xs text-muted-foreground">{{ skill.description }}</p>
+          <p v-if="skill.description" class="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
         </div>
       </div>
     </section>

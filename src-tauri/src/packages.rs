@@ -218,7 +218,7 @@ pub fn package_list(project: Option<String>) -> Vec<InstalledPackage> {
 // pi CLI runner (install / remove / update)
 // ---------------------------------------------------------------------------
 
-async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) -> Result<String, String> {
+pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) -> Result<String, String> {
     use pi_locate::Launcher;
     use tokio::process::Command;
 

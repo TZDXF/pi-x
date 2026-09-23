@@ -48,24 +48,58 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     }
     let (mut name, mut description) = (None, None);
+    let mut block_lines = Vec::new();
+    let mut block_style = None;
     for line in lines {
-        let line = line.trim();
-        if line == "---" || line == "..." {
+        let trimmed = line.trim();
+        if trimmed == "---" || trimmed == "..." {
             break;
         }
-        if let Some(rest) = line.strip_prefix("name:") {
+        if let Some(style) = block_style {
+            if line.starts_with([' ', '\t']) || trimmed.is_empty() {
+                block_lines.push(trimmed);
+                continue;
+            }
+            description = Some(fold_description(&block_lines, style));
+            block_lines.clear();
+            block_style = None;
+        }
+        if let Some(rest) = trimmed.strip_prefix("name:") {
             let v = clean(rest);
             if !v.is_empty() {
                 name = Some(v);
             }
-        } else if let Some(rest) = line.strip_prefix("description:") {
+        } else if let Some(rest) = trimmed.strip_prefix("description:") {
             let v = clean(rest);
-            if !v.is_empty() {
+            if let Some(style) = v.chars().next().filter(|c| *c == '>' || *c == '|') {
+                block_style = Some(style);
+            } else if !v.is_empty() {
                 description = Some(v);
             }
         }
     }
+    if let Some(style) = block_style {
+        description = Some(fold_description(&block_lines, style));
+    }
     (name, description)
+}
+
+/// Collapse a YAML block scalar for display, keeping paragraph breaks.
+fn fold_description(lines: &[&str], style: char) -> String {
+    let mut text = String::new();
+    for line in lines {
+        if line.is_empty() {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+        } else {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push(if style == '|' { '\n' } else { ' ' });
+            }
+            text.push_str(line);
+        }
+    }
+    text.trim().to_string()
 }
 
 /// Read a skill Markdown file and return its frontmatter values.
@@ -388,6 +422,13 @@ mod tests {
         let (name, description) = parse_frontmatter("# no frontmatter\n");
         assert_eq!(name, None);
         assert_eq!(description, None);
+        let (name, description) = parse_frontmatter(
+            "---\nname: find-docs\ndescription: >-\n  Retrieves up-to-date documentation\n  for developer tools.\n\n  Use it for APIs.\nmetadata: test\n---\n"
+        );
+        assert_eq!(name.as_deref(), Some("find-docs"));
+        assert_eq!(description.as_deref(), Some("Retrieves up-to-date documentation for developer tools.\nUse it for APIs."));
+        let (_, description) = parse_frontmatter("---\ndescription: |\n  First line\n  Second line\n---\n");
+        assert_eq!(description.as_deref(), Some("First line\nSecond line"));
     }
 
     #[test]

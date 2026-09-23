@@ -10,7 +10,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
-import { isDesktop } from "@/api/transport"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
 
@@ -25,13 +24,9 @@ function applyLocale(v: Locale) {
 </script>
 
 <template>
-  <template v-if="isDesktop">
-    <p class="text-xs text-muted-foreground">{{ t("settings.dataDirectory") }}: ~/.pix</p>
-  </template>
   <div class="setting-row">
     <div>
       <h3 id="theme-label">{{ t("settings.theme") }}</h3>
-      <p id="theme-description">{{ t("settings.themeDesc") }}</p>
     </div>
     <Select
       :model-value="theme"
@@ -40,7 +35,6 @@ function applyLocale(v: Locale) {
       <SelectTrigger
         class="h-8 w-36 text-xs"
         aria-labelledby="theme-label"
-        aria-describedby="theme-description"
       >
         <SelectValue />
       </SelectTrigger>
@@ -54,7 +48,6 @@ function applyLocale(v: Locale) {
   <div class="setting-row">
     <div>
       <h3>{{ t("settings.language") }}</h3>
-      <p>{{ t("settings.languageDesc") }}</p>
     </div>
     <Select
       :model-value="selectedLocale"
@@ -69,19 +62,6 @@ function applyLocale(v: Locale) {
         </SelectItem>
       </SelectContent>
     </Select>
-  </div>
-  <div class="setting-row">
-    <div>
-      <h3>{{ t("settings.workspaceTitle") }}</h3>
-      <p>{{ t("settings.workspaceDesc") }}</p>
-    </div>
-    <span class="setting-badge">{{ t("settings.workspaceBadge") }}</span>
-  </div>
-  <div class="setting-row">
-    <div>
-      <h3>{{ t("settings.sessionsTitle") }}</h3>
-      <p>{{ t("settings.sessionsDesc") }}</p>
-    </div>
   </div>
   <div class="setting-row">
     <div>

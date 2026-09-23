@@ -35,10 +35,6 @@ onMounted(load)
 </script>
 
 <template>
-  <header class="flex flex-col gap-2 text-left">
-    <h2 class="text-base leading-none font-medium">{{ t("agentConfig.title") }}</h2>
-    <p class="text-sm text-muted-foreground">{{ t("agentConfig.description") }}</p>
-  </header>
   <p v-if="loading" class="text-sm text-muted-foreground">{{ t("agentConfig.loading") }}</p>
   <div v-else-if="error" role="alert" class="space-y-3">
     <p class="text-sm text-destructive">{{ error }}</p>

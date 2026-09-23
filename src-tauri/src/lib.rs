@@ -4,6 +4,7 @@ mod commands;
 mod fs_search;
 mod packages;
 mod pi_locate;
+mod pi_update;
 #[cfg(feature = "remote-access")]
 mod remote;
 #[cfg(not(feature = "remote-access"))]
@@ -59,6 +60,8 @@ pub fn run() {
             remote::remote_status,
             remote::remote_set,
             commands::pi_detect,
+            pi_update::pi_update_check,
+            pi_update::pi_update_execute,
             commands::pi_settings_get,
             commands::pi_settings_save,
             commands::app_config_get,

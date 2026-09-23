@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** Full-page workspace settings and Pi runtime configuration, routed via #/settings/:tab. */
+/** Full-page workspace settings, routed via #/settings/:tab. */
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import { ArrowLeft } from "@lucide/vue"
@@ -11,7 +11,6 @@ import RemoteSettings from "@/components/settings/RemoteSettings.vue"
 import GeneralSettings from "@/components/settings/GeneralSettings.vue"
 import ArchiveSettings from "@/components/settings/ArchiveSettings.vue"
 import ModelsSettings from "@/components/settings/ModelsSettings.vue"
-import RuntimeSettings from "@/components/settings/RuntimeSettings.vue"
 import AboutSettings from "@/components/settings/AboutSettings.vue"
 import AgentSettings from "@/components/AgentSettings.vue"
 import SkillSettings from "@/components/SkillSettings.vue"
@@ -23,7 +22,7 @@ const props = defineProps<{ project?: string }>()
 const route = useRoute()
 const { t } = useI18n()
 
-const DESKTOP_ONLY = new Set(["models", "runtime", "agent-config", "skills", "model-config"])
+const DESKTOP_ONLY = new Set(["models", "agent-config", "skills", "model-config"])
 
 // Guard the tab param: desktop-only tabs fall back to "general" on the web.
 const tab = computed<SettingsTab>(() => {
@@ -39,16 +38,15 @@ function selectTab(value: SettingsTab) {
 const headings = computed(() => {
   switch (tab.value) {
     case "remote": return { title: t("settings.remote"), desc: t("settings.remoteDesc") }
-    case "general": return { title: t("settings.generalTitle"), desc: t("settings.generalDesc") }
+    case "general": return { title: t("settings.generalTitle"), desc: "" }
     case "archive": return { title: t("sessionArchive.title"), desc: t("sessionArchive.description") }
     case "models": return { title: t("settings.providersModelsTitle"), desc: t("settings.providersModelsDesc") }
-    case "model-config": return { title: t("titleGeneration.page"), desc: t("titleGeneration.description") }
-    case "packages": return { title: t("packages.title"), desc: "" }
-    case "about": return { title: t("settings.aboutTitle"), desc: t("settings.aboutDesc") }
-    case "runtime": return { title: t("settings.runtimeTitle"), desc: t("settings.runtimeDesc") }
-    case "agent-config": return { title: t("agentConfig.title"), desc: "" }
+    case "model-config": return { title: t("titleGeneration.page"), desc: "" }
+    case "packages": return { title: t("packages.title"), desc: t("packages.description") }
+    case "about": return { title: t("settings.aboutTitle"), desc: "" }
+    case "agent-config": return { title: t("agentConfig.title"), desc: t("agentConfig.description") }
     case "skills": return { title: t("skillsConfig.title"), desc: "" }
-    default: return { title: t("settings.generalTitle"), desc: t("settings.generalDesc") }
+    default: return { title: t("settings.generalTitle"), desc: "" }
   }
 })
 </script>
@@ -68,12 +66,10 @@ const headings = computed(() => {
         <li><button :class="{ active: tab === 'packages' }" @click="selectTab('packages')">{{ t("packages.title") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'models' }" @click="selectTab('models')">{{ t("settings.providersModels") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'model-config' }" @click="selectTab('model-config')">{{ t("titleGeneration.page") }}</button></li>
-        <li v-if="isDesktop"><button :class="{ active: tab === 'runtime' }" @click="selectTab('runtime')">{{ t("settings.runtime") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'agent-config' }" @click="selectTab('agent-config')">{{ t("agentConfig.title") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'skills' }" @click="selectTab('skills')">{{ t("skillsConfig.title") }}</button></li>
         <li><button :class="{ active: tab === 'about' }" @click="selectTab('about')">{{ t("settings.about") }}</button></li>
       </ul>
-      <p>{{ t("settings.subtitle") }}</p>
     </nav>
     <ScrollArea :key="tab" class="settings-scroll">
       <div class="settings-body">
@@ -90,7 +86,6 @@ const headings = computed(() => {
         <TitleModelSettings v-else-if="isDesktop && tab === 'model-config'" />
         <PackageSettings v-else-if="tab === 'packages'" :active="tab === 'packages'" :project="props.project" />
         <AboutSettings v-else-if="tab === 'about'" />
-        <RuntimeSettings v-else-if="isDesktop && tab === 'runtime'" @close="goHome()" />
       </div>
     </ScrollArea>
   </div>

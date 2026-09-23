@@ -26,7 +26,6 @@ export const SETTINGS_TABS = [
   "general",
   "archive",
   "models",
-  "runtime",
   "agent-config",
   "skills",
   "packages",

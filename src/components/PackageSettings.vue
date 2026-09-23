@@ -332,11 +332,6 @@ const resourceTypeName = (type: string) => {
 </script>
 
 <template>
-  <header class="flex flex-col gap-2 text-left">
-    <h2 class="text-base leading-none font-medium">{{ t("packages.title") }}</h2>
-    <p class="text-sm text-muted-foreground">{{ t("packages.description") }}</p>
-  </header>
-
   <Tabs v-model="innerTab" class="min-h-0">
     <div class="mb-3 flex items-center justify-between gap-2">
       <TabsList>

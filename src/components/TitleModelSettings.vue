@@ -102,11 +102,10 @@ async function save() {
     <fieldset :disabled="loading || saving || loadError" class="space-y-4">
       <div>
         <label for="default-model" class="mb-1 block text-sm">{{ t('titleGeneration.defaultModel') }}</label>
-        <label class="mb-2 flex items-center gap-2 text-xs"><Checkbox v-model="defaultFollowMain" />{{ t('titleGeneration.followMain') }}</label>
-        <p v-if="defaultFollowMain" class="text-muted-foreground text-xs">{{ t('titleGeneration.defaultFollowMainHint') }}</p>
-        <ConversationModelSelect v-else id="default-model" v-model="defaultKey" :models="models"
+        <label class="mb-2 flex items-center gap-2 text-xs"><Checkbox v-model="defaultFollowMain" />{{ t('titleGeneration.usePiModel') }}</label>
+        <ConversationModelSelect v-if="!defaultFollowMain" id="default-model" v-model="defaultKey" :models="models"
           :disabled="loading || saving || loadError || !models.length" trigger-class="h-8 w-full text-xs" />
-        <p class="text-muted-foreground mt-1 text-xs">{{ t('titleGeneration.defaultModelHint') }}</p>
+        <p v-if="!defaultFollowMain" class="text-muted-foreground mt-1 text-xs">{{ t('titleGeneration.defaultModelHint') }}</p>
         <p v-if="!loading && !models.length" class="text-muted-foreground mt-1 text-xs">{{ t('titleGeneration.noModels') }}</p>
       </div>
       <label class="flex items-center gap-2 text-sm"><Checkbox v-model="enabled" />{{ t('titleGeneration.enabled') }}</label>

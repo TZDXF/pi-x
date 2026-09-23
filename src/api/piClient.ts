@@ -71,6 +71,10 @@ export const listDiscoveredSkills = () =>
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
+export interface PiUpdateStatus { currentVersion: string; latestVersion: string; updateAvailable: boolean }
+export const checkPiUpdate = () => invoke<PiUpdateStatus>("pi_update_check")
+export const executePiUpdate = () => invoke<string>("pi_update_execute")
+
 export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
