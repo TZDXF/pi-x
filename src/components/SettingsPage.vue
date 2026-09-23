@@ -48,6 +48,7 @@ const headings = computed(() => {
     case "runtime": return { title: t("settings.runtimeTitle"), desc: t("settings.runtimeDesc") }
     case "agent-config": return { title: t("agentConfig.title"), desc: "" }
     case "skills": return { title: t("skillsConfig.title"), desc: "" }
+    default: return { title: t("settings.generalTitle"), desc: t("settings.generalDesc") }
   }
 })
 </script>

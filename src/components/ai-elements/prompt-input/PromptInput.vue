@@ -23,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const instance = getCurrentInstance()
+// @ts-expect-error bound via template string ref (`ref="formRef"`), invisible to noUnusedLocals
 const formRef = ref<HTMLFormElement | null>(null)
 
 function getListener(name: 'onSubmit' | 'onError') {
@@ -74,6 +75,7 @@ if (!context) {
   throw new Error('PromptInput context is missing.')
 }
 
+// @ts-expect-error bound via template string ref (`ref="fileInputRef"`), invisible to noUnusedLocals
 const { fileInputRef, addFiles, submitForm } = context
 
 function handleDragOver(e: DragEvent) {

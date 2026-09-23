@@ -97,8 +97,11 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `npm run dev:desktop:remote` | 桌面开发并包含远程访问功能 |
 | `npm run dev` | 仅前端（浏览器预览，无 pi 进程） |
 | `npm run build` | 前端构建（vite build） |
-| `npm run check` | 前端构建 + cargo check |
+| `npm run typecheck` | 前端类型检查（vue-tsc） |
+| `npm run lint` | ESLint（src + tests，vendored ui/ai-elements 已排除） |
+| `npm run check` | lint + typecheck + 前端构建 + cargo check |
 | `npm run test` | Rust 单元测试（cargo test） |
+| `npm run test:web` | 前端/协议单元测试（node --test tests） |
 | `npm run package` | 打包安装程序（NSIS/MSI 到 `src-tauri/target/release/bundle/`） |
 | `npm run package:debug` | Debug 打包 |
 
@@ -197,4 +200,12 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - 引用文件只提供项目相对路径，agent 按需读取。扩展命令保留原始参数，其文件引用解释由扩展负责；提示词模板如何使用参数由模板本身决定。
 - 补全 UI 使用 AI Elements 的 PromptInputCommand 系列、PromptInputButton 和 Loader。
 
-补全测试：`node --test tests/completion.test.mjs`。浏览器回归：安装 Playwright 后运行 `node tests/completion.browser.mjs`（默认使用本机 Edge，可通过 `PI_BROWSER_CHANNEL` 切换；`PI_PLAYWRIGHT_MODULE` 可指定已有 Playwright 的 index.mjs 路径）。浏览器测试使用模拟 RPC，不调用模型。
+补全测试：`npm run test:web`（即 `node --test "tests/*.test.mjs"`，运行全部单元测试）。浏览器回归：安装 Playwright 后运行 `node tests/completion.browser.mjs`（默认使用本机 Edge，可通过 `PI_BROWSER_CHANNEL` 切换；`PI_PLAYWRIGHT_MODULE` 可指定已有 Playwright 的 index.mjs 路径）。浏览器测试使用模拟 RPC，不调用模型。
+
+推送/PR 由 GitHub Actions（`.github/workflows/ci.yml`）自动执行 lint、typecheck、构建、Node 测试与 Rust check/test。
+
+#### 错误消息约定
+
+- **UI 层用户可见消息**：一律走 vue-i18n（`zh-CN` / `en`），包括 store 抛出的可预期错误。
+- **Rust 侧诊断消息**：面向开发者/日志，保持原文；前端在展示时可用 toast 包装。
+- **包管理器**：统一使用 pnpm（`pnpm-lock.yaml` 是唯一锁文件）；scripts 中的 `npm run` 仅为脚本执行器，与安装工具无关。

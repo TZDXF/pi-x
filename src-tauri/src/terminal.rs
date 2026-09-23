@@ -73,20 +73,23 @@ pub fn term_create(
     let writer = pair.master.take_writer().map_err(|e| format!("{e}"))?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("{e}"))?;
 
-    // Stream PTY output to the webview.
+    // Stream PTY output to the webview. The PTY read is blocking, so it runs
+    // on a dedicated blocking thread instead of pinning an async worker.
     tauri::async_runtime::spawn(async move {
-        let mut buf = [0u8; 8192];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                    if on_output.send(encoded).is_err() {
-                        break;
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut buf = [0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                        if on_output.send(encoded).is_err() {
+                            break;
+                        }
                     }
                 }
             }
-        }
+        }).await;
     });
 
     // Notify the webview when the shell exits.

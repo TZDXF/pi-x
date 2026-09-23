@@ -66,7 +66,7 @@ fn scan_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn is_windows_script(path: &str) -> bool {
+pub(crate) fn is_windows_script(path: &str) -> bool {
     let lower = path.to_lowercase();
     lower.ends_with(".cmd") || lower.ends_with(".bat")
 }

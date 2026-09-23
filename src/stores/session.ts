@@ -1,8 +1,10 @@
 import { defineStore } from "pinia"
 import { computed, ref, shallowRef } from "vue"
+import { i18n } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
+import { contentText } from "@/lib/content"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -31,16 +33,6 @@ export type Block = TextBlock | ThinkingBlock | ToolCallBlock
 export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true }
 export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true }
 export type Entry = UserEntry | AssistantEntry
-
-function contentText(content: unknown): string {
-  if (typeof content === "string")
-    return content
-  if (Array.isArray(content))
-    return content
-      .map((c: any) => (c && c.type === "text" ? c.text : ""))
-      .join("")
-  return ""
-}
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
 
@@ -468,7 +460,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   async function newSession() {
     const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
-    if (!result.success) throw new Error(result.error || "新建会话失败")
+    if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.newSession"))
     if (result.data?.cancelled) return
     ++conversationVersion
     invalidateHistory()
@@ -487,7 +479,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       if (customInstructions)
         command.customInstructions = customInstructions
       const result = await rpcRequest(command)
-      if (!result.success) throw new Error(result.error ?? "Compaction failed")
+      if (!result.success) throw new Error(result.error ?? i18n.global.t("chat.errors.compaction"))
     }
     finally {
       isCompacting.value = false
@@ -497,7 +489,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   async function setModel(provider: string, modelId: string) {
     const result = await rpcRequest({ type: "set_model", provider, modelId })
-    if (!result.success) throw new Error(result.error || "切换模型失败")
+    if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
     desiredModelKey.value = null
     await refreshState()
     await refreshThinkingLevels()
@@ -513,7 +505,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   async function setThinkingLevel(level: ThinkingLevel) {
     const result = await rpcRequest({ type: "set_thinking_level", level })
-    if (!result.success) throw new Error(result.error || "切换思考等级失败")
+    if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
     desiredThinkingLevel.value = null
     await refreshState()
     await refreshThinkingLevels()
@@ -824,5 +816,3 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   }
 })
 
-// Default store is retained for standalone consumers and unit tests.
-export const useSessionStore = createSessionStore()

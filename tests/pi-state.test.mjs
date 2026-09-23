@@ -10,6 +10,7 @@ function harness(storage = new Map()) {
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
+    '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': { useWorkspaceStore: () => ({}) },
     '@/api/piClient': {
       getModelsConfig: async () => ({ providers: { pi: { models: [{ id: 'default', reasoning: true }] } } }),
@@ -31,11 +32,11 @@ function harness(storage = new Map()) {
   })
   const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return { store: context.exports.useSessionStore(), calls, state, storage }
+  return { store: context.exports.createSessionStore('default')(), calls, state, storage }
 }
 
 test('Pi defaults are displayed offline but never overwrite a restored session', async () => {
-  const { store, calls, state, storage } = harness()
+  const { store, calls, state } = harness()
   await store.loadOfflineModels()
   assert.equal(store.offlineDefaultModelKey.value, 'pi/default')
   assert.equal(store.desiredModelKey.value, null)

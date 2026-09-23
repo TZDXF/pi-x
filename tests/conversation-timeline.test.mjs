@@ -4,8 +4,19 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import vm from 'node:vm'
 const source = readFileSync(new URL('../src/lib/conversationTimeline.ts', import.meta.url), 'utf8')
-const context = { exports: {} }
-vm.runInNewContext(ts.transpile(source, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }), context)
+const tsCompile = code => ts.transpile(code, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 })
+// conversationTimeline now shares contentText with the session store via
+// '@/lib/content'; load the real module so its behavior is under test too.
+const require = (id) => {
+  if (id === '@/lib/content') {
+    const content = { exports: {} }
+    vm.runInNewContext(tsCompile(readFileSync(new URL('../src/lib/content.ts', import.meta.url), 'utf8')), content)
+    return content.exports
+  }
+  throw new Error(`unexpected module: ${id}`)
+}
+const context = { exports: {}, require }
+vm.runInNewContext(tsCompile(source), context)
 const turns = context.exports.conversationTurns
 const user = (id, text = '') => ({ kind: 'user', id, text })
 const text = value => ({ type: 'text', text: value })

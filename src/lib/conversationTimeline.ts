@@ -1,3 +1,4 @@
+import { contentText } from '@/lib/content'
 import type { Block, Entry, UserEntry } from '@/stores/session'
 
 export interface ConversationTurn { id: number; question: string; answer: string }
@@ -37,13 +38,6 @@ export function conversationTurns(entries: Entry[], partial: Block[] | null = nu
   return turns
 }
 
-const rawUserText = (content: unknown): string =>
-  typeof content === 'string'
-    ? content
-    : Array.isArray(content)
-      ? content.map((c: any) => (c && c.type === 'text' ? c.text : '')).join('')
-      : ''
-
 const rawHasImage = (content: unknown) =>
   Array.isArray(content) && content.some((c: any) => c?.type === 'image' && c.data && c.mimeType)
 
@@ -79,7 +73,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     if (msg?.role === 'user') {
-      const text = rawUserText(msg.content)
+      const text = contentText(msg.content)
       if (!text.trim() && !rawHasImage(msg.content)) continue
       // Same acceptance rule as page materialization, so ranks stay aligned.
       const entryId = i >= cursor ? userEntries[materialized++]?.id ?? null : null

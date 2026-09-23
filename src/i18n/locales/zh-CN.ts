@@ -211,6 +211,12 @@ export default {
     toastForkNoLater: "这条回答之后没有提问，无需分支",
     toastExported: "会话已导出",
     toastCopied: "已复制",
+    errors: {
+      newSession: "新建会话失败",
+      modelSwitch: "切换模型失败",
+      thinkingSwitch: "切换思考等级失败",
+      compaction: "上下文压缩失败",
+    },
   },
 
   terminal: {

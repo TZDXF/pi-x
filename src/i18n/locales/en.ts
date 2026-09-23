@@ -211,6 +211,12 @@ export default {
     toastForkNoLater: "No prompt after this answer - nothing to branch off",
     toastExported: "Session exported",
     toastCopied: "Copied",
+    errors: {
+      newSession: "Failed to start a new session",
+      modelSwitch: "Failed to switch model",
+      thinkingSwitch: "Failed to switch thinking level",
+      compaction: "Compaction failed",
+    },
   },
 
   terminal: {

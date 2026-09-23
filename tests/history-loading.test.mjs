@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { contentModule } from './lib/load-ts.mjs'
 
 function harness() {
   const requests = []
@@ -10,12 +11,14 @@ function harness() {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/api/piClient': { rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
+    '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': {},
+    '@/lib/content': contentModule(),
   }
   const context = vm.createContext({ exports: {}, setTimeout, require: id => modules[id] })
   const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return { store: context.exports.useSessionStore(), requests }
+  return { store: context.exports.createSessionStore('default')(), requests }
 }
 const messages = count => Array.from({ length: count }, (_, i) => ({ role: 'user', content: `message ${i}` }))
 

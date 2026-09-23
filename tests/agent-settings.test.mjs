@@ -19,7 +19,7 @@ function harness(initial = {}, commands = [], component = "SkillSettings") {
   let deletedPaths = []
   const context = vm.createContext({
     ref: value => ({ value }), computed: fn => ({ get value() { return fn() } }),
-    onMounted: fn => { mount = fn }, useI18n: () => ({ t: (key, vars) => key }),
+    onMounted: fn => { mount = fn }, useI18n: () => ({ t: (key) => key }),
     useSessionStore: () => ({ commands }), useUiStore: () => ({ pushToast: (...args) => toasts.push(args) }),
     listHostedSkills: async () => { if (failRead) throw Error('read failure'); return hosted },
     setHostedSkillsEnabled: async paths => { if (failWrite) throw Error('write failure'); savedEnabled = paths },
@@ -137,9 +137,9 @@ test('prompt page saves and clears prompt without touching hosted skills', async
 })
 
 test('settings exposes separate prompt and skills pages', () => {
-  const settings = readFileSync(new URL('../src/components/SettingsDialog.vue', import.meta.url), 'utf8')
-  assert.match(settings, /TabsTrigger[^>]*value="skills"/)
-  assert.match(settings, /TabsContent[^>]*value="skills"[^>]*>\s*<SkillSettings/)
+  const settings = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8')
+  assert.match(settings, /selectTab\('skills'\)/)
+  assert.match(settings, /<SkillSettings v-else-if="isDesktop && tab === 'skills'"/)
   const prompt = readFileSync(new URL('../src/components/AgentSettings.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(prompt, /managedSkills|manage-skills/)
 })

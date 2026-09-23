@@ -9,6 +9,7 @@ defineOptions({
 
 const props = defineProps<WithClassAsProps>()
 
+// @ts-expect-error bound via template string ref (`ref="carouselRef"`), invisible to noUnusedLocals
 const { carouselRef, orientation } = useCarousel()
 </script>
 

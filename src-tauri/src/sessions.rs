@@ -9,8 +9,10 @@ use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
 const MAX_SESSIONS: usize = 50;
@@ -140,7 +142,9 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
             if out.len() >= MAX_SESSIONS {
                 break;
             }
-            let meta = read_session_meta(&path, mtime)?;
+            // Skip unreadable/partial/corrupt files instead of failing the
+            // whole listing (one bad file must not empty the sidebar).
+            let Ok(meta) = read_session_meta(&path, mtime) else { continue };
             let cwd_norm = normalize(Path::new(&meta.cwd)).unwrap_or_else(|| meta.cwd.clone());
             if cwd_norm != project_norm {
                 continue;
@@ -155,6 +159,9 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
 
 /// Build `SessionMeta` for one session file (header + preview + presentation).
 fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+    if let Some(cached) = cached_meta(path, mtime) {
+        return Ok(cached);
+    }
     let Some(line) = first_line(path) else {
         return Err("empty session file".into());
     };
@@ -182,7 +189,7 @@ fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
         let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
         read_presentation(path)?
     };
-    Ok(SessionMeta {
+    let meta = SessionMeta {
         file: path.to_string_lossy().to_string(),
         id,
         cwd,
@@ -191,7 +198,39 @@ fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
         preview,
         title: read_session_name(path)?,
         archived: presentation.archived,
-    })
+    };
+    cache_meta(path, mtime, &meta);
+    Ok(meta)
+}
+
+/// Parse results cache keyed by path + mtime: listing sessions repeatedly
+/// re-reads every file (header + 32 KB preview scan + full name scan); the
+/// cache skips that work until the file changes on disk.
+struct CachedMeta {
+    mtime: u64,
+    meta: SessionMeta,
+}
+fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
+    static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, CachedMeta>>> = OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+const META_CACHE_CAP: usize = 4096;
+fn cached_meta(path: &Path, mtime: u64) -> Option<SessionMeta> {
+    let cache = meta_cache().lock().ok()?;
+    cache.get(path).filter(|c| c.mtime == mtime).map(|c| c.meta.clone())
+}
+fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
+    if let Ok(mut cache) = meta_cache().lock() {
+        if cache.len() >= META_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(path.to_path_buf(), CachedMeta { mtime, meta: meta.clone() });
+    }
+}
+fn invalidate_meta_cache(path: &Path) {
+    if let Ok(mut cache) = meta_cache().lock() {
+        cache.remove(path);
+    }
 }
 
 /// List archived sessions across all projects (newest first).
@@ -225,9 +264,12 @@ pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
             }
             // Cheap presentation check first: skip unarchived files without
             // parsing headers and scanning previews.
-            let archived = {
-                let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
-                read_presentation(&path)?.archived
+            let archived = match cached_meta(&path, mtime) {
+                Some(meta) => meta.archived,
+                None => {
+                    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+                    read_presentation(&path)?.archived
+                }
             };
             if !archived {
                 continue;
@@ -316,7 +358,10 @@ fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
     let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
     let mut presentation = read_presentation(path)?;
     presentation.archived = archived;
-    write_presentation(&path, &presentation)
+    write_presentation(&path, &presentation)?;
+    // The jsonl mtime is unchanged, so the meta cache must be told explicitly.
+    invalidate_meta_cache(path);
+    Ok(())
 }
 
 /// Permanently delete a session file and its PiX presentation metadata.
@@ -329,6 +374,7 @@ pub async fn session_delete(file: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     // Presentation metadata is optional; ignore a missing sidecar.
     let _ = std::fs::remove_file(path.with_extension("pix.json"));
+    invalidate_meta_cache(&path);
     Ok(())
 }
 
@@ -350,6 +396,21 @@ mod presentation_tests {
         std::fs::write(&file, "{\"type\":\"session_info\",\"name\":\"\"}\n").unwrap();
         assert_eq!(read_session_name(&file).unwrap(), None);
         std::fs::remove_file(file).unwrap();
+    }
+    #[test]
+    fn meta_cache_serves_same_mtime_and_invalidates_on_write() {
+        let file = std::env::temp_dir().join(format!("pix-cache-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"cache-test\"}\n").unwrap();
+        let mtime = mtime_ms(&file);
+        let fresh = read_session_meta(&file, mtime).unwrap();
+        assert_eq!(fresh.id, "cache-test");
+        // File disappears but mtime is unchanged: the cache still answers.
+        std::fs::remove_file(&file).unwrap();
+        let cached = read_session_meta(&file, mtime).unwrap();
+        assert_eq!(cached.id, "cache-test");
+        // After invalidation the missing file is reported again.
+        invalidate_meta_cache(&file);
+        assert!(read_session_meta(&file, mtime).is_err());
     }
     #[test]
     fn rename_archive_restore() {

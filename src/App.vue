@@ -227,7 +227,8 @@ async function selectProject(dir: string) {
     createConversation(dir)
     project.value = dir
     config.value.lastProject = dir
-    void saveConfig({ ...config.value })
+    // Await so quick successive selections cannot persist out of order.
+    await saveConfig({ ...config.value })
     const status = await trustStatus(dir)
     if (status.needsDecision) {
       trustInfo.value = status

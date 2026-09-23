@@ -125,5 +125,3 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
     clear,
   }
 })
-
-export const useUiStore = createUiStore()

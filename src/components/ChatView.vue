@@ -399,6 +399,8 @@ async function abort() {
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.isComposing) return
   if (ui.activeDialog) return // dialog handles its own cancel
+  // Let our own dialogs (fork / tree / image preview) handle Escape first.
+  if (forkOpen.value || treeOpen.value || previewImage.value) return
   if (session.isStreaming) {
     e.preventDefault()
     void abort()

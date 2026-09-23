@@ -347,8 +347,18 @@ pub fn emit(app: &AppHandle, name: &str, payload: Value) {
         .send(json!({"event": name, "payload": payload}));
 }
 
+/// Constant-time byte comparison so token validity cannot be probed via
+/// timing side channels over the network.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 fn valid_token(expected: &str, supplied: &str, stopped: bool) -> bool {
-    !stopped && !expected.is_empty() && expected == supplied
+    !stopped && !expected.is_empty() && constant_time_eq(expected, supplied)
 }
 
 #[cfg(test)]
@@ -359,6 +369,13 @@ mod tests {
         let cfg = Settings::default();
         assert!(!cfg.enabled);
         assert_eq!(cfg.port, 1421);
+    }
+    #[test]
+    fn token_compare_is_constant_time_and_correct() {
+        assert!(constant_time_eq("secret", "secret"));
+        assert!(!constant_time_eq("secret", "secreT"));
+        assert!(!constant_time_eq("secret", "secret "));
+        assert!(!constant_time_eq("", ""));
     }
     #[test]
     fn token_required_and_revoked_on_shutdown() {

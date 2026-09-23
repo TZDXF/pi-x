@@ -1,5 +1,5 @@
 {
-  "name": "pix-cta",
+  "name": "pix",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,9 +8,13 @@
     "dev:desktop": "tauri dev",
     "dev:desktop:remote": "npm run build && tauri dev --features remote-access",
     "build": "vite build",
-    "check": "npm run build && cd src-tauri && cargo check",
+    "typecheck": "vue-tsc --noEmit",
+    "lint": "eslint src tests",
+    "check": "npm run lint && npm run typecheck && npm run build && cd src-tauri && cargo check",
     "clean": "cd src-tauri && cargo clean",
     "tauri": "tauri",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:web": "node --test \"tests/*.test.mjs\"",
     "package": "tauri build --features remote-access",
     "package:debug": "tauri build --features remote-access --debug",
     "package:nsis": "tauri build --features remote-access --bundles nsis",
@@ -52,11 +56,16 @@
     "vue-stream-markdown": "^2.0.0-beta.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2",
     "@types/node": "^26.6.2",
     "@vitejs/plugin-vue": "^6.0.7",
     "element-source-dev": "^0.5.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-vue": "^10.11.0",
+    "globals": "^17.12.0",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8.0.16",
     "vue-tsc": "^3.3.5"
   }

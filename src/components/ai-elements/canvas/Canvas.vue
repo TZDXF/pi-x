@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<FlowProps>(), {
 
 const emits = defineEmits<FlowEmits>()
 const slots = defineSlots<FlowSlots>()
+// @ts-expect-error vue-flow generics trigger excessive type instantiation depth here
 const forwarded = useForwardPropsEmits(props, emits)
 </script>
 

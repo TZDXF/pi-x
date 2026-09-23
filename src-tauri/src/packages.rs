@@ -45,19 +45,43 @@ fn unescape_html(s: &str) -> String {
 }
 
 fn strip_tags(s: &str) -> String {
-    let re = regex::Regex::new(r"<[^>]*>").unwrap();
+    static TAGS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = TAGS.get_or_init(|| regex::Regex::new(r"<[^>]*>").unwrap());
     re.replace_all(s, "").to_string()
 }
 
+/// Precompiled catalog parsers, built once per process (parsing used to
+/// recompile a regex per attribute lookup).
+struct CatalogRegexes {
+    name: regex::Regex,
+    downloads: regex::Regex,
+    date: regex::Regex,
+    types: regex::Regex,
+    desc: regex::Regex,
+    author: regex::Regex,
+    npm: regex::Regex,
+    install: regex::Regex,
+}
+
+fn catalog_regexes() -> &'static CatalogRegexes {
+    static RE: std::sync::OnceLock<CatalogRegexes> = std::sync::OnceLock::new();
+    RE.get_or_init(|| CatalogRegexes {
+        name: regex::Regex::new(r#"data-package-name="([^"]*)""#).unwrap(),
+        downloads: regex::Regex::new(r#"data-package-downloads="([^"]*)""#).unwrap(),
+        date: regex::Regex::new(r#"data-package-date="([^"]*)""#).unwrap(),
+        types: regex::Regex::new(r#"data-package-types="([^"]*)""#).unwrap(),
+        desc: regex::Regex::new(r#"(?s)<p class="packages-desc">(.*?)</p>"#).unwrap(),
+        author: regex::Regex::new(r#"(?s)<div class="packages-meta">\s*<span>(.*?)</span>"#).unwrap(),
+        npm: regex::Regex::new(r#"href="(https://www\.npmjs\.com/package/[^"]+)""#).unwrap(),
+        install: regex::Regex::new(r"pi install ([^\s<]+)").unwrap(),
+    })
+}
+
 fn parse_catalog(html: &str) -> Vec<CatalogPackage> {
-    let attr = |tag: &str, key: &str| -> Option<String> {
-        let re = regex::Regex::new(&format!(r#"{key}="([^"]*)""#)).ok()?;
-        Some(unescape_html(re.captures(tag)?.get(1)?.as_str()))
+    let re = catalog_regexes();
+    let attr_re = |r: &regex::Regex, tag: &str| -> Option<String> {
+        Some(unescape_html(r.captures(tag)?.get(1)?.as_str()))
     };
-    let desc_re = regex::Regex::new(r#"(?s)<p class="packages-desc">(.*?)</p>"#).unwrap();
-    let author_re = regex::Regex::new(r#"(?s)<div class="packages-meta">\s*<span>(.*?)</span>"#).unwrap();
-    let npm_re = regex::Regex::new(r#"href="(https://www\.npmjs\.com/package/[^"]+)""#).unwrap();
-    let install_re = regex::Regex::new(r"pi install ([^\s<]+)").unwrap();
 
     let mut out = Vec::new();
     for chunk in html.split(r#"data-package-card="true""#).skip(1) {
@@ -67,32 +91,35 @@ fn parse_catalog(html: &str) -> Vec<CatalogPackage> {
         let tag_end = card.find('>').unwrap_or(0);
         let tag = &card[..tag_end];
 
-        let Some(name) = attr(tag, "data-package-name") else { continue };
-        let description = desc_re
+        let Some(name) = attr_re(&re.name, tag) else { continue };
+        let description = re
+            .desc
             .captures(card)
             .map(|c| strip_tags(&unescape_html(c.get(1).unwrap().as_str())).trim().to_string())
             .unwrap_or_default();
-        let author = author_re
+        let author = re
+            .author
             .captures(card)
             .map(|c| strip_tags(c.get(1).unwrap().as_str()).trim().to_string())
             .unwrap_or_default();
-        let downloads_month = attr(tag, "data-package-downloads")
+        let downloads_month = attr_re(&re.downloads, tag)
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        let updated_ms = attr(tag, "data-package-date")
+        let updated_ms = attr_re(&re.date, tag)
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        let mut types: Vec<String> = attr(tag, "data-package-types")
+        let mut types: Vec<String> = attr_re(&re.types, tag)
             .map(|v| v.split_whitespace().map(|s| s.to_string()).collect())
             .unwrap_or_default();
         if types.is_empty() {
             types.push("package".into());
         }
-        let source = install_re
+        let source = re
+            .install
             .captures(card)
             .map(|c| unescape_html(c.get(1).unwrap().as_str()))
             .unwrap_or_else(|| format!("npm:{name}"));
-        let npm_url = npm_re.captures(card).map(|c| c.get(1).unwrap().as_str().to_string());
+        let npm_url = re.npm.captures(card).map(|c| c.get(1).unwrap().as_str().to_string());
 
         out.push(CatalogPackage {
             detail_url: format!("https://pi.dev/packages/{name}"),

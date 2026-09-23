@@ -7,7 +7,7 @@
 //! - Responses echo the numeric `id` we attached to the request; everything
 //!   else (agent events, extension UI requests) is forwarded to the frontend.
 
-use crate::pi_locate::{Launcher, PiInfo};
+use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -32,6 +32,10 @@ struct SessionInner {
     next_id: Arc<AtomicU64>,
 }
 
+/// Bound for internal `get_state` probes (spawn duplicate checks, session
+/// listing). A hung pi process must never block these indefinitely.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[derive(Default)]
 pub struct ProcessState {
     runtime_id: String,
@@ -40,11 +44,6 @@ pub struct ProcessState {
     navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
     generation: Arc<AtomicU64>,
-}
-
-fn is_windows_script(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".cmd") || lower.ends_with(".bat")
 }
 
 /// Spawn `pi --mode rpc` inside `project` and wire up the stdio bridge.
@@ -230,7 +229,15 @@ async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {
 }
 
 /// Send a correlated request; resolves with the matching `response` object.
+/// No timeout: user-driven commands (e.g. `prompt`) legitimately take as long
+/// as the agent run does. Internal probes use `process_request_timeout`.
 pub async fn process_request(state: &ProcessState, mut command: Value) -> Result<Value, String> {
+    process_request_timeout(state, &mut command, None).await
+}
+
+/// Same as `process_request`, with an optional per-request timeout. On timeout
+/// the pending entry is removed so a late response cannot be misattributed.
+pub async fn process_request_timeout(state: &ProcessState, command: &mut Value, timeout: Option<std::time::Duration>) -> Result<Value, String> {
     let _navigation = if matches!(command["type"].as_str(), Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")) {
         Some(state.navigation.lock().await)
     } else { None };
@@ -249,10 +256,18 @@ pub async fn process_request(state: &ProcessState, mut command: Value) -> Result
     }
     drop(guard);
 
-    match rx.await {
-        Ok(response) => Ok(response),
-        Err(_) => Err("pi exited before responding".into()),
+    let result = match timeout {
+        Some(t) => tokio::time::timeout(t, rx).await
+            .map_err(|_| format!("pi did not respond within {}s", t.as_secs()))
+            .and_then(|r| r.map_err(|_| "pi exited before responding".into())),
+        None => rx.await.map_err(|_| "pi exited before responding".into()),
+    };
+    if result.is_err() {
+        if let Some(inner) = state.inner.lock().await.as_ref() {
+            inner.pending.lock().await.remove(&id);
+        }
     }
+    result
 }
 
 /// Serialize name writes with navigation so a delayed title cannot rename a different session.
@@ -359,12 +374,14 @@ pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
     if let Some(existing) = pool.get(&id) {
         if process_running(existing).await { return Err("Runtime is already running".into()); }
     }
-    // Never open the same persisted conversation in two processes.
+    // Never open the same persisted conversation in two processes. Probes are
+    // time-bounded: a hung pi process must not block spawning forever.
     if let Some(file) = &session_file {
         let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
         for process in pool.values() {
             if !process_running(process).await { continue; }
-            let response = process_request(process, json!({"type": "get_state"})).await?;
+            let mut probe = json!({"type": "get_state"});
+            let Ok(response) = process_request_timeout(process, &mut probe, Some(PROBE_TIMEOUT)).await else { continue };
             if response["data"]["sessionFile"].as_str()
                 .and_then(|f| dunce::canonicalize(f).ok()).as_ref() == Some(&path) {
                 return Err(format!("Session already open in runtime {}", process.runtime_id));
@@ -403,7 +420,8 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
     let mut result = Vec::new();
     for process in processes {
         if !process_running(&process).await { continue; }
-        if let Ok(response) = process_request(&process, json!({"type": "get_state"})).await {
+        let mut probe = json!({"type": "get_state"});
+        if let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await {
             result.push(json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]}));
         }
     }
@@ -413,7 +431,9 @@ pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, t
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     for process in processes {
         if !process_running(&process).await { continue; }
-        let response = process_request(&process, json!({"type": "get_state"})).await?;
+        let mut probe = json!({"type": "get_state"});
+        // Time-bounded probe: skip hung runtimes instead of failing the rename.
+        let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await else { continue };
         let active = response["data"]["sessionFile"].as_str().and_then(|f| dunce::canonicalize(f).ok());
         if active.as_deref() == Some(path) {
             return process_set_session_name(&process, path, title, only_if_empty).await;

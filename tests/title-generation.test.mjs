@@ -3,13 +3,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { contentModule } from './lib/load-ts.mjs'
 
 function loadStore(name, modules) {
   const source = readFileSync(new URL(`../src/stores/${name}.ts`, import.meta.url), 'utf8')
   const context = vm.createContext({ exports: {}, console: { warn() {}, error() {} },
     require: id => modules[id], localStorage: { getItem: () => null } })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return (context.exports.useSessionStore ?? Object.values(context.exports)[0])()
+  const exports = context.exports
+  // session.ts: factory (runtimeId => store); workspace.ts: plain store fn.
+  const factory = exports.createSessionStore ?? exports.createUiStore
+  const store = factory ? factory('default')() : Object.values(exports)[0]()
+  return store
 }
 const framework = {
   pinia: { defineStore: (_, setup) => setup },
@@ -25,7 +30,7 @@ function sessionHarness() {
       return new Promise((resolve, reject) => { finish = resolve; fail = reject })
     },
   }
-  const store = loadStore('session', { ...framework, '@/api/piClient': api, '@/stores/workspace': { useWorkspaceStore: () => ({
+  const store = loadStore('session', { ...framework, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/stores/workspace': { useWorkspaceStore: () => ({
     preview: row => previews.push(row), generatedTitle: (...args) => titles.push(args), refresh: async path => refreshed.push(path),
   }) } })
   store.state.value = { sessionId: 'one', messageCount: 0 }

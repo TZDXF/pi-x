@@ -1,4 +1,5 @@
 import { reactive } from "vue"
+import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
 import { createUiStore } from "./ui"
 import { activeRuntimeId } from "./runtime"
@@ -32,10 +33,30 @@ export function activateSession(id: string) {
 }
 export function createConversation(project: string) {
   const id = crypto.randomUUID()
+  pruneDormantConversations()
   const store = sessionFor(id)
   store.cwd = project
   activateSession(id)
   return store
+}
+
+/** Drop dormant (not started, not streaming, not active) conversation stores
+ *  once too many accumulate; each holds loaded history incl. base64 images.
+ *  Dormant conversations are lazily restarted with a fresh worker and their
+ *  history reloads from disk when the user reopens them, so eviction is safe. */
+const MAX_OPEN_CONVERSATIONS = 12
+export function pruneDormantConversations() {
+  if (sessions.size <= MAX_OPEN_CONVERSATIONS) return
+  for (const [id, store] of [...sessions]) {
+    if (sessions.size <= MAX_OPEN_CONVERSATIONS) break
+    if (id === activeRuntimeId.value || store.started || store.isStreaming) continue
+    sessions.delete(id)
+    interfaces.delete(id)
+    // Remove the cached Pinia instance as well, or its state stays in memory.
+    const pinia = getActivePinia() as unknown as { _s?: Map<string, unknown> } | null
+    pinia?._s?.delete(`session:${id}`)
+    pinia?._s?.delete(`ui:${id}`)
+  }
 }
 const normalized = (file: string) => file.replace(/\\/g, "/")
 export function findConversation(file: string) {
