@@ -24,6 +24,7 @@ export interface Route {
 export const SETTINGS_TABS = [
   "remote",
   "general",
+  "archive",
   "models",
   "runtime",
   "agent-config",

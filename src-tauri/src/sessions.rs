@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 const MAX_SESSIONS: usize = 50;
+const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
 
 #[derive(Serialize, Clone)]
@@ -139,44 +140,101 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
             if out.len() >= MAX_SESSIONS {
                 break;
             }
-            let Some(line) = first_line(&path) else { continue };
-            let Ok(header) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-            if header.get("type").and_then(|t| t.as_str()) != Some("session") {
-                continue;
-            }
-            let cwd = header
-                .get("cwd")
-                .and_then(|c| c.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let cwd_norm = normalize(Path::new(&cwd)).unwrap_or_else(|| cwd.clone());
+            let meta = read_session_meta(&path, mtime)?;
+            let cwd_norm = normalize(Path::new(&meta.cwd)).unwrap_or_else(|| meta.cwd.clone());
             if cwd_norm != project_norm {
                 continue;
             }
-            let id = header
-                .get("id")
-                .and_then(|i| i.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let timestamp = header
-                .get("timestamp")
-                .and_then(|t| t.as_str())
-                .map(String::from);
-            let preview = first_user_preview(&path);
-            let presentation = {
+            out.push(meta);
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Build `SessionMeta` for one session file (header + preview + presentation).
+fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+    let Some(line) = first_line(path) else {
+        return Err("empty session file".into());
+    };
+    let header = serde_json::from_str::<serde_json::Value>(&line)
+        .map_err(|e| format!("invalid session header: {e}"))?;
+    if header.get("type").and_then(|t| t.as_str()) != Some("session") {
+        return Err("not a session file".into());
+    }
+    let cwd = header
+        .get("cwd")
+        .and_then(|c| c.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let id = header
+        .get("id")
+        .and_then(|i| i.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let timestamp = header
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .map(String::from);
+    let preview = first_user_preview(path);
+    let presentation = {
+        let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+        read_presentation(path)?
+    };
+    Ok(SessionMeta {
+        file: path.to_string_lossy().to_string(),
+        id,
+        cwd,
+        timestamp,
+        mtime_ms: mtime,
+        preview,
+        title: read_session_name(path)?,
+        archived: presentation.archived,
+    })
+}
+
+/// List archived sessions across all projects (newest first).
+pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
+    tokio::task::spawn_blocking(move || {
+        let sessions_root = agent_dir().join("sessions");
+        let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
+
+        let dirs = match std::fs::read_dir(&sessions_root) {
+            Ok(d) => d,
+            Err(_) => return Ok(Vec::new()), // no sessions yet
+        };
+        for dir in dirs.flatten() {
+            let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+            for f in files.flatten() {
+                let p = f.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                candidates.push((p.clone(), mtime_ms(&p)));
+            }
+        }
+
+        // newest first, then keep only archived sessions
+        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+
+        let mut out = Vec::new();
+        for (path, mtime) in candidates {
+            if out.len() >= MAX_ARCHIVED {
+                break;
+            }
+            // Cheap presentation check first: skip unarchived files without
+            // parsing headers and scanning previews.
+            let archived = {
                 let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
-                read_presentation(&path)?
+                read_presentation(&path)?.archived
             };
-            out.push(SessionMeta {
-                file: path.to_string_lossy().to_string(),
-                id,
-                cwd,
-                timestamp,
-                mtime_ms: mtime,
-                preview,
-                title: read_session_name(&path)?,
-                archived: presentation.archived,
-            });
+            if !archived {
+                continue;
+            }
+            if let Ok(meta) = read_session_meta(&path, mtime) {
+                out.push(meta);
+            }
         }
         Ok(out)
     })
@@ -261,6 +319,25 @@ fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
     write_presentation(&path, &presentation)
 }
 
+/// Permanently delete a session file and its PiX presentation metadata.
+#[tauri::command]
+pub async fn session_delete(file: String) -> Result<(), String> {
+    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    // Presentation metadata is optional; ignore a missing sidecar.
+    let _ = std::fs::remove_file(path.with_extension("pix.json"));
+    Ok(())
+}
+
+/// List archived sessions across every project, newest first.
+#[tauri::command]
+pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
+    list_archived().await
+}
+
 
 #[cfg(test)]
 mod presentation_tests {
@@ -289,8 +366,10 @@ mod presentation_tests {
         update_presentation(&file, false).unwrap();
         assert!(!read_presentation(&file).unwrap().archived);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
-        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
-        std::fs::remove_file(file).unwrap();
+        update_presentation(&file, true).unwrap();
+        assert!(std::fs::remove_file(&file).is_ok());
+        let _ = std::fs::remove_file(file.with_extension("pix.json"));
+        assert!(!file.exists());
         std::fs::remove_dir(dir).unwrap();
     }
 }

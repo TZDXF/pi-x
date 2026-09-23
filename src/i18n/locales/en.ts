@@ -51,6 +51,22 @@ export default {
     "unsaved": "Unsaved changes",
     "saved": "Configuration saved. Applies on the next session start."
 },
+  sessionArchive: {
+    title: "Archived sessions",
+    description: "Manage archived conversations across projects: restore them to the session list or delete them permanently.",
+    refresh: "Refresh",
+    reload: "Reload",
+    restore: "Restore chat",
+    delete: "Delete chat",
+    deleteConfirm: "Delete “{name}”? The conversation file will be removed permanently. This cannot be undone.",
+    empty: "No archived sessions yet. Archive chats from the sidebar to manage them here.",
+    loading: "Loading…",
+    loadFailed: "Failed to load archived sessions.",
+    deleted: "Session deleted",
+    restored: "Session restored",
+    count: "{count} archived session(s)",
+    projectSessions: "{count} session(s)",
+  },
   workspace: {
     projectActions: "Project options",
     pin: "Pin to top",

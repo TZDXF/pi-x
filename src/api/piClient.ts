@@ -187,6 +187,12 @@ export const saveModelsConfig = (config: ModelsConfig) =>
 /** Returns the resulting session-file mtime so callers can sync change detection. */
 export const updateSession = (file: string, title: string | null, archived: boolean) =>
   invoke<number>("session_update", { file, title, archived })
+
+/** List archived sessions across every project, newest first. */
+export const listArchivedSessions = () => invoke<SessionMeta[]>("session_list_archived")
+
+/** Permanently delete a session file (and its PiX metadata sidecar). */
+export const deleteSession = (file: string) => invoke<void>("session_delete", { file })
 export interface WorkspaceGitInfo { branch: string; branches: string[]; worktree: boolean }
 export const workspaceGitInfo = (project: string) => invoke<WorkspaceGitInfo>("workspace_git_info", { project })
 export const createWorkspaceGit = (project: string, branch: string, worktree: boolean) =>

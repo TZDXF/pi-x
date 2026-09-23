@@ -51,6 +51,22 @@ export default {
     "unsaved": "有未保存的修改",
     "saved": "配置已保存，下次启动会话时生效"
 },
+  sessionArchive: {
+    title: "归档会话",
+    description: "按项目管理所有已归档的会话：可恢复到会话列表，或永久删除。",
+    refresh: "刷新",
+    reload: "重新加载",
+    restore: "恢复会话",
+    delete: "删除会话",
+    deleteConfirm: "删除「{name}」？会话文件将被永久移除，该操作不可恢复。",
+    empty: "暂无归档会话。可在侧边栏归档会话后在此管理。",
+    loading: "加载中…",
+    loadFailed: "归档会话加载失败。",
+    deleted: "会话已删除",
+    restored: "会话已恢复",
+    count: "{count} 个归档会话",
+    projectSessions: "{count} 个会话",
+  },
   workspace: {
     projectActions: "项目更多设置",
     pin: "置顶",

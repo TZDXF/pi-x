@@ -9,6 +9,7 @@ import { isDesktop } from "@/api/transport"
 import { useRoute, isSettingsTab, navigate, goHome, type SettingsTab } from "@/lib/router"
 import RemoteSettings from "@/components/settings/RemoteSettings.vue"
 import GeneralSettings from "@/components/settings/GeneralSettings.vue"
+import ArchiveSettings from "@/components/settings/ArchiveSettings.vue"
 import ModelsSettings from "@/components/settings/ModelsSettings.vue"
 import RuntimeSettings from "@/components/settings/RuntimeSettings.vue"
 import AboutSettings from "@/components/settings/AboutSettings.vue"
@@ -39,6 +40,7 @@ const headings = computed(() => {
   switch (tab.value) {
     case "remote": return { title: t("settings.remote"), desc: t("settings.remoteDesc") }
     case "general": return { title: t("settings.generalTitle"), desc: t("settings.generalDesc") }
+    case "archive": return { title: t("sessionArchive.title"), desc: t("sessionArchive.description") }
     case "models": return { title: t("settings.providersModelsTitle"), desc: t("settings.providersModelsDesc") }
     case "model-config": return { title: t("titleGeneration.page"), desc: t("titleGeneration.description") }
     case "packages": return { title: t("packages.title"), desc: "" }
@@ -61,6 +63,7 @@ const headings = computed(() => {
       <ul class="settings-menu">
         <li><button :class="{ active: tab === 'remote' }" @click="selectTab('remote')">{{ t("settings.remote") }}</button></li>
         <li><button :class="{ active: tab === 'general' }" @click="selectTab('general')">{{ t("settings.general") }}</button></li>
+        <li><button :class="{ active: tab === 'archive' }" @click="selectTab('archive')">{{ t("sessionArchive.title") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'models' }" @click="selectTab('models')">{{ t("settings.providersModels") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'runtime' }" @click="selectTab('runtime')">{{ t("settings.runtime") }}</button></li>
         <li v-if="isDesktop"><button :class="{ active: tab === 'agent-config' }" @click="selectTab('agent-config')">{{ t("agentConfig.title") }}</button></li>
@@ -81,6 +84,7 @@ const headings = computed(() => {
         <SkillSettings v-else-if="isDesktop && tab === 'skills'" />
         <RemoteSettings v-else-if="tab === 'remote'" />
         <GeneralSettings v-else-if="tab === 'general'" />
+        <ArchiveSettings v-else-if="tab === 'archive'" />
         <ModelsSettings v-else-if="isDesktop && tab === 'models'" />
         <TitleModelSettings v-else-if="isDesktop && tab === 'model-config'" />
         <PackageSettings v-else-if="tab === 'packages'" :active="tab === 'packages'" :project="props.project" />
