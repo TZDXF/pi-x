@@ -11,6 +11,7 @@ mod remote;
 mod remote;
 mod rpc;
 mod sessions;
+mod skills;
 mod terminal;
 mod title_generation;
 mod workspace_git;
@@ -86,6 +87,10 @@ pub fn run() {
             packages::package_update,
             packages::package_resources,
             packages::package_set_resource,
+            skills::skills_hosted_list,
+            skills::skills_hosted_import,
+            skills::skills_hosted_delete,
+            skills::skills_hosted_set_enabled,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,

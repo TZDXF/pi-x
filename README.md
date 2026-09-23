@@ -31,6 +31,7 @@
 - **会话统计**：状态栏实时显示上下文 token 用量、成本、模型信息
 - **会话导出**：一键导出为 HTML 并用浏览器打开
 - **应用内设置**：自定义 pi 可执行路径 + 实时检测结果（Windows 下自动解析 npm shim）；供应商与模型管理（可视化编辑 pi 的 models.json，打开模型选择器即生效）
+- **技能托管**：完整技能（含 SKILL.md、脚本、参考文档）保存在 `~/.pix/skills`，可视化导入 / 启用 / 禁用 / 删除；启用列表写入 pi 的 settings.json，对所有项目生效
 - **消息复制**：AI 回复一键复制为 Markdown 文本
 
 ## 技术栈
@@ -145,6 +146,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - [x] **应用设置**：pi 路径配置 + 检测（SettingsDialog）
 - [x] **会话导出**：`export_html` + 系统默认浏览器打开
 - [x] **消息复制**：ai-elements `MessageActions` 一键复制回复
+- [x] **技能托管**：完整技能存放在 `~/.pix/skills`，设置中可视化导入 / 启用禁用 / 删除（`skills.rs`，启用列表同步到 pi settings）
 - [ ] **自动更新**：tauri-plugin-updater（需签名密钥与发布渠道）
 - [ ] **多会话并行**：多窗口 + 每窗口独立 pi 进程（需将 RpcState 改为 per-window 实例）
 - [ ] **扩展管理界面**：列出/启用禁用扩展包
@@ -182,7 +184,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
 - Pi 数据由 Pi 管理，默认使用 `~/.pi/agent`，尊重用户设置的 `PI_CODING_AGENT_DIR`。模型、凭据、提示词、技能、包配置、信任决定和会话与终端共用；PiX 不再创建独立 agent 目录。
 - 模型和思考等级作为界面选择偏好保存在浏览器本地，新项目和新对话沿用上次选择；恢复历史会话时以 Pi 会话记录为准。
-- `.pix` 仅保存 PiX 自有设置（窗口/界面、最近项目、自动标题功能、远程访问等）。会话名称保存为 Pi 原生 `session_info`；`*.pix.json` 仅保存归档和标题生成尝试标记。
+- `.pix` 仅保存 PiX 自有设置（窗口/界面、最近项目、自动标题功能、远程访问等），以及托管的完整技能（`~/.pix/skills`，启用状态记录在 Pi 的 settings.json；删除托管技能会同时从启用列表移除）。会话名称保存为 Pi 原生 `session_info`；`*.pix.json` 仅保存归档和标题生成尝试标记。
 - 不读取或迁移旧 `.pix/agent`、旧默认模型、旧技能列表和旧标题字段；不会自动删除旧文件。
 - 信任、默认模型、技能路径和离线会话改名通过已安装 Pi 的 SDK 操作，要求提供 `dist/core` 的 npm 版 Pi 及 Node.js；不会自动安装第二份 Pi。
 - 项目内 `.pi` 配置仍在原位置，浏览器的界面偏好仍属于该浏览器。

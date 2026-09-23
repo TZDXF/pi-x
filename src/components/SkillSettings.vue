@@ -1,54 +1,83 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { open } from "@tauri-apps/plugin-dialog"
-import { getPiSettings, savePiSettings } from "@/api/piClient"
-import { useSessionStore } from "@/stores/conversations"
-import { useUiStore } from "@/stores/conversations"
+import { ask, open } from "@tauri-apps/plugin-dialog"
+import { deleteHostedSkill, importHostedSkills, listHostedSkills, setHostedSkillsEnabled } from "@/api/piClient"
+import type { HostedSkill } from "@/api/piClient"
+import { useSessionStore, useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
+import { Switch } from "@/components/ui/switch"
 import { DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 const { t } = useI18n()
 const session = useSessionStore()
 const ui = useUiStore()
-const skills = ref<string[]>([])
+const skills = ref<HostedSkill[]>([])
 const loading = ref(true)
-const saving = ref(false)
+const busy = ref(false)
 const error = ref("")
-const dirty = ref(false)
 const loaded = computed(() => session.commands.filter(c => c.source === "skill"))
-const key = (path: string) => path.replace(/\\/g, "/")
-function add(paths: string[]) {
-  for (const path of paths) {
-    if (!skills.value.some(s => key(s) === key(path))) skills.value.push(path)
-  }
-  dirty.value = true
-}
-async function chooseSkills() {
-  try {
-    const paths = await open({ multiple: true, filters: [{ name: "Skill Markdown", extensions: ["md"] }] })
-    if (paths) add(Array.isArray(paths) ? paths : [paths])
-  } catch (e) { ui.pushToast(String(e), "error") }
-}
+
 async function load() {
   loading.value = true
   error.value = ""
   try {
-    const settings = await getPiSettings()
-    skills.value = [...settings.skills]
-    dirty.value = false
+    skills.value = await listHostedSkills()
   } catch (e) { error.value = String(e) }
   finally { loading.value = false }
 }
-async function save() {
-  saving.value = true
+
+async function chooseSources() {
   try {
-    await savePiSettings({ skills: [...skills.value] })
-    dirty.value = false
-    ui.pushToast(t("agentConfig.saved"), "info")
+    const paths = await open({ multiple: true })
+    if (!paths) return
+    await runImport(Array.isArray(paths) ? paths : [paths])
   } catch (e) { ui.pushToast(String(e), "error") }
-  finally { saving.value = false }
 }
+
+async function importLoaded() {
+  const sources = loaded.value.flatMap(s => s.path ? [s.path] : [])
+  if (sources.length) await runImport(sources)
+}
+
+async function runImport(sources: string[], overwrite = false) {
+  busy.value = true
+  try {
+    const result = await importHostedSkills(sources, overwrite)
+    if (result.conflicts.length && !overwrite) {
+      const names = result.conflicts.join("\n")
+      const replace = await ask(t("skillsConfig.overwriteConfirm", { names }), { title: t("skillsConfig.title"), okLabel: t("skillsConfig.overwrite"), cancelLabel: t("common.cancel") })
+      if (replace) return await runImport(sources, true)
+    }
+    if (result.imported.length) {
+      ui.pushToast(t("skillsConfig.imported", { count: result.imported.length }), "info")
+      await load()
+    }
+  } catch (e) { ui.pushToast(String(e), "error") }
+  finally { busy.value = false }
+}
+
+async function toggle(skill: HostedSkill, checked: boolean) {
+  const previous = skill.enabled
+  skill.enabled = checked
+  try {
+    await setHostedSkillsEnabled(skills.value.filter(s => s.enabled).map(s => s.path))
+    ui.pushToast(t("skillsConfig.enabledSaved"), "info")
+  } catch (e) {
+    skill.enabled = previous
+    ui.pushToast(String(e), "error")
+  }
+}
+
+async function remove(skill: HostedSkill) {
+  const confirmed = await ask(t("skillsConfig.deleteConfirm", { name: skill.name }), { title: t("skillsConfig.title"), okLabel: t("skillsConfig.delete"), cancelLabel: t("common.cancel") })
+  if (!confirmed) return
+  try {
+    await deleteHostedSkill(skill.path)
+    await load()
+  } catch (e) { ui.pushToast(String(e), "error") }
+}
+
 onMounted(load)
 </script>
 
@@ -62,35 +91,38 @@ onMounted(load)
     <p class="text-sm text-destructive">{{ error }}</p>
     <Button variant="outline" @click="load">{{ t("agentConfig.retry") }}</Button>
   </div>
-  <fieldset v-else :disabled="saving" class="min-w-0 space-y-6">
+  <fieldset v-else :disabled="busy" class="min-w-0 space-y-6">
     <section class="space-y-3">
-      <p class="text-xs text-muted-foreground">{{ t("agentConfig.autoHint") }}</p>
+      <h3 class="text-sm font-medium">{{ t("skillsConfig.hosted") }}</h3>
+      <p class="text-xs text-muted-foreground">{{ t("skillsConfig.hostedHint") }}</p>
       <div>
         <div class="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" @click="chooseSkills">{{ t("agentConfig.add") }}</Button>
-          <Button variant="outline" size="sm" :disabled="!loaded.some(s => s.path)" @click="add(loaded.flatMap(s => s.path ? [s.path] : []))">{{ t("agentConfig.import") }}</Button>
+          <Button variant="outline" size="sm" @click="chooseSources">{{ t("skillsConfig.importBtn") }}</Button>
+          <Button variant="outline" size="sm" :disabled="!loaded.some(s => s.path)" @click="importLoaded">{{ t("skillsConfig.importLoaded") }}</Button>
         </div>
-        <p v-if="!skills.length" class="text-sm text-muted-foreground">{{ t("agentConfig.none") }}</p>
-        <div v-for="(skill, index) in skills" :key="skill" class="flex items-center gap-3 rounded-lg border p-3">
-          <span class="min-w-0 flex-1 break-all text-xs font-mono">{{ skill }}</span>
-          <Button variant="ghost" size="sm" @click="skills.splice(index, 1); dirty = true">{{ t("agentConfig.remove") }}</Button>
+        <p class="mt-2 text-xs text-muted-foreground">{{ t("skillsConfig.importHint") }}</p>
+        <p v-if="!skills.length" class="mt-3 text-sm text-muted-foreground">{{ t("skillsConfig.empty") }}</p>
+        <div v-for="skill in skills" :key="skill.path" class="mt-3 flex items-start gap-3 rounded-lg border p-3">
+          <Switch :model-value="skill.enabled" :aria-label="t('skillsConfig.enable')" class="mt-0.5" @update:model-value="v => toggle(skill, Boolean(v))" />
+          <div class="min-w-0 flex-1 space-y-1">
+            <p class="text-sm font-medium">{{ skill.name }}</p>
+            <p v-if="skill.description" class="text-xs text-muted-foreground">{{ skill.description }}</p>
+            <p class="break-all text-xs font-mono text-muted-foreground">{{ skill.path }}</p>
+          </div>
+          <Button variant="ghost" size="sm" @click="remove(skill)">{{ t("skillsConfig.delete") }}</Button>
         </div>
-        <p class="text-xs text-amber-600">{{ t("agentConfig.security") }}</p>
+        <p class="mt-3 text-xs text-amber-600">{{ t("skillsConfig.security") }}</p>
       </div>
     </section>
     <section class="space-y-3">
-      <h3 class="text-sm font-medium">{{ t("agentConfig.loaded") }} ({{ loaded.length }})</h3>
-      <p class="text-xs text-muted-foreground">{{ t("agentConfig.loadedHint") }}</p>
-      <p v-if="!loaded.length" class="text-sm text-muted-foreground">{{ t("agentConfig.noLoaded") }}</p>
+      <h3 class="text-sm font-medium">{{ t("skillsConfig.loaded") }} ({{ loaded.length }})</h3>
+      <p class="text-xs text-muted-foreground">{{ t("skillsConfig.loadedHint") }}</p>
+      <p v-if="!loaded.length" class="text-sm text-muted-foreground">{{ t("skillsConfig.noLoaded") }}</p>
       <div v-for="skill in loaded" :key="skill.path ?? skill.name" class="space-y-1 rounded-lg border p-3">
         <p class="text-sm font-medium">{{ skill.name }}</p>
         <p v-if="skill.description" class="text-xs text-muted-foreground">{{ skill.description }}</p>
         <p v-if="skill.path" class="break-all text-xs font-mono text-muted-foreground">{{ skill.path }}</p>
       </div>
     </section>
-    <div class="flex items-center gap-3">
-      <Button :disabled="saving || !dirty" @click="save">{{ t(saving ? "agentConfig.saving" : "agentConfig.save") }}</Button>
-      <span v-if="dirty" class="text-xs text-muted-foreground">{{ t("agentConfig.unsaved") }}</span>
-    </div>
   </fieldset>
 </template>

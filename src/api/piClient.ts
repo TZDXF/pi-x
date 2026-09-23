@@ -45,6 +45,20 @@ export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">>) =>
   invoke<void>("pi_settings_save", { settings })
 
+export interface HostedSkill {
+  name: string
+  description: string
+  path: string
+  kind: "directory" | "file"
+  enabled: boolean
+}
+export const listHostedSkills = () => invoke<HostedSkill[]>("skills_hosted_list")
+export const importHostedSkills = (sources: string[], overwrite = false) =>
+  invoke<{ imported: string[]; conflicts: string[] }>("skills_hosted_import", { sources, overwrite })
+export const deleteHostedSkill = (path: string) => invoke<void>("skills_hosted_delete", { path })
+export const setHostedSkillsEnabled = (paths: string[]) =>
+  invoke<void>("skills_hosted_set_enabled", { paths })
+
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
