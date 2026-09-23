@@ -273,6 +273,17 @@ async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) -> Result<S
     }
 }
 
+// A missing project must never make `pi install -l` use the app process's cwd.
+fn local_project_dir(project: Option<&str>) -> Result<&str, String> {
+    let dir = project.map(str::trim).filter(|s| !s.is_empty())
+        .ok_or("请选择要安装的项目文件夹")?;
+    let path = std::path::Path::new(dir);
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(format!("项目文件夹不存在或不是完整路径: {dir}"));
+    }
+    Ok(dir)
+}
+
 /// `pi install <source>` — scope "project" installs project-locally (`-l`).
 #[tauri::command]
 pub async fn package_install(
@@ -286,7 +297,7 @@ pub async fn package_install(
     if local {
         args.push("-l".into());
     }
-    let cwd = if local { project.as_deref() } else { None };
+    let cwd = if local { Some(local_project_dir(project.as_deref())?) } else { None };
     run_pi(&app, &args, cwd).await
 }
 
@@ -303,7 +314,7 @@ pub async fn package_remove(
     if local {
         args.push("-l".into());
     }
-    let cwd = if local { project.as_deref() } else { None };
+    let cwd = if local { Some(local_project_dir(project.as_deref())?) } else { None };
     run_pi(&app, &args, cwd).await
 }
 
@@ -688,6 +699,16 @@ pub fn package_set_resource(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_install_requires_explicit_existing_directory() {
+        assert!(local_project_dir(None).is_err());
+        assert!(local_project_dir(Some("  ")).is_err());
+        assert!(local_project_dir(Some("relative-project")).is_err());
+        assert!(local_project_dir(Some("/nonexistent-pi-x-test-project")).is_err());
+        let dir = std::env::current_dir().unwrap();
+        assert_eq!(local_project_dir(dir.to_str()), Ok(dir.to_str().unwrap()));
+    }
 
     #[test]
     fn parses_catalog_cards() {

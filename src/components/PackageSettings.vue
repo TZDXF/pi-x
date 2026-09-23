@@ -4,6 +4,8 @@
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { open } from "@tauri-apps/plugin-dialog"
+import { isDesktop } from "@/api/transport"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +25,7 @@ import {
   DialogDescription,
   Dialog,
   DialogContent,
+  DialogFooter,
 } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -40,11 +43,13 @@ import {
   type PackageResource,
 } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
+import { useWorkspaceStore } from "@/stores/workspace"
 import { currentLocale } from "@/i18n"
 import { Download, RefreshCw, ExternalLink, Trash2, ArrowUpCircle, Plus, SlidersHorizontal } from "@lucide/vue"
 
 const props = defineProps<{ active?: boolean; project?: string }>()
 const ui = useUiStore()
+const workspace = useWorkspaceStore()
 const { t } = useI18n()
 
 const innerTab = ref("market")
@@ -65,6 +70,14 @@ const typeFilter = ref<string>("all")
 
 const customSource = ref("")
 const customScope = ref<"global" | "project">("global")
+// The project whose installed packages are displayed is independent of the
+// project selected in the main chat UI. Installation always asks for a target.
+const viewedProject = ref(props.project ?? "")
+const installTarget = ref("")
+const pendingProjectSource = ref("")
+const recentProjects = computed(() => [...new Set([
+  ...workspace.orderedProjects(), props.project, viewedProject.value,
+].filter((p): p is string => !!p))])
 
 /** busy key: `${action}:${source}` or "catalog" / "installed" / "all" */
 const busy = ref<string | null>(null)
@@ -95,7 +108,7 @@ async function loadCatalog() {
 async function refreshInstalled() {
   installedLoading.value = true
   try {
-    installed.value = await packageList(props.project || undefined)
+    installed.value = await packageList(viewedProject.value || undefined)
   } catch (e) {
     ui.pushToast(String(e), "error")
   } finally {
@@ -168,16 +181,46 @@ function typeLabel(type: string): string {
   return label === key ? type : label
 }
 
-async function install(source: string, scope: "global" | "project") {
-  const key = `install:${source}`
+function chooseProjectForInstall(source: string) {
   if (busy.value) return
-  busy.value = key
+  pendingProjectSource.value = source
+  installTarget.value = "" // Never silently reuse the main UI's project.
+}
+
+async function browseInstallTarget() {
   try {
-    await packageInstall(source, scope, scope === "project" ? props.project : undefined)
-    ui.pushToast(t("packages.toastInstalled", { name: packageNameOf(source) }), "info")
-    await refreshInstalled()
+    const dir = isDesktop
+      ? await open({ directory: true, title: t("packages.chooseProject") })
+      : window.prompt(t("packages.projectPathPrompt"))
+    if (typeof dir === "string") installTarget.value = dir
   } catch (e) {
     ui.pushToast(String(e), "error")
+  }
+}
+
+async function confirmProjectInstall() {
+  const source = pendingProjectSource.value
+  const target = installTarget.value.trim()
+  if (!source || !target) return
+  if (await install(source, "project", target)) {
+    if (customSource.value.trim() === source) customSource.value = ""
+    pendingProjectSource.value = ""
+  }
+}
+
+async function install(source: string, scope: "global" | "project", target?: string): Promise<boolean> {
+  const key = `install:${source}`
+  if (busy.value) return false
+  busy.value = key
+  try {
+    await packageInstall(source, scope, target)
+    if (scope === "project" && target) viewedProject.value = target
+    ui.pushToast(t("packages.toastInstalled", { name: packageNameOf(source) }), "info")
+    await refreshInstalled()
+    return true
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+    return false
   } finally {
     busy.value = null
   }
@@ -188,7 +231,7 @@ async function remove(pkg: InstalledPackage) {
   if (busy.value) return
   busy.value = key
   try {
-    await packageRemove(pkg.source, pkg.scope, pkg.scope === "project" ? props.project : undefined)
+    await packageRemove(pkg.source, pkg.scope, pkg.scope === "project" ? viewedProject.value : undefined)
     ui.pushToast(t("packages.toastRemoved", { name: packageNameOf(pkg.source) }), "info")
     await refreshInstalled()
   } catch (e) {
@@ -217,8 +260,11 @@ async function update(source?: string) {
 async function installCustom() {
   const src = customSource.value.trim()
   if (!src) return
-  await install(src, customScope.value)
-  customSource.value = ""
+  if (customScope.value === "project") {
+    chooseProjectForInstall(src)
+  } else if (await install(src, "global")) {
+    customSource.value = ""
+  }
 }
 
 function filterSummary(filters: Record<string, unknown> | null): string {
@@ -244,7 +290,7 @@ async function openResources(p: InstalledPackage) {
   resources.value = []
   resourcesLoading.value = true
   try {
-    resources.value = await packageResources(p.source, p.scope, props.project)
+    resources.value = await packageResources(p.source, p.scope, viewedProject.value)
   } catch (e) {
     ui.pushToast(String(e), "error")
     resPkg.value = null
@@ -268,7 +314,7 @@ async function toggleResource(r: PackageResource) {
       r.resourceType,
       r.path,
       !r.enabled,
-      props.project,
+      viewedProject.value,
     )
     r.enabled = !r.enabled
   } catch (e) {
@@ -383,11 +429,10 @@ const resourceTypeName = (type: string) => {
               {{ scopesOf(p.name).has("global") ? t("packages.installedBadge") : t("packages.install") }}
             </Button>
             <Button
-              v-if="project && !scopesOf(p.name).has('project')"
               variant="outline"
               size="sm"
               :disabled="busy !== null"
-              @click="install(p.source, 'project')"
+              @click="chooseProjectForInstall(p.source)"
             >
               {{ t("packages.installProject") }}
             </Button>
@@ -415,7 +460,7 @@ const resourceTypeName = (type: string) => {
             class="h-8 flex-1 font-mono text-xs"
             @keydown.enter="installCustom"
           />
-          <Select v-if="project" v-model="customScope">
+          <Select v-model="customScope">
             <SelectTrigger class="h-8 w-28 shrink-0"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="global">{{ t("packages.scopeGlobal") }}</SelectItem>
@@ -486,10 +531,10 @@ const resourceTypeName = (type: string) => {
         </div>
       </div>
 
-      <template v-if="project">
+      <template v-if="viewedProject">
         <Separator class="my-4" />
         <h3 class="settings-section">{{ t("packages.scopeProject") }}</h3>
-        <p class="text-muted-foreground mb-2 font-mono text-xs">{{ project }}/.pi/settings.json</p>
+        <p class="text-muted-foreground mb-2 font-mono text-xs">{{ viewedProject }}/.pi/settings.json</p>
         <p v-if="!projectInstalled.length" class="text-muted-foreground py-3 text-sm">
           {{ t("packages.noneProject") }}
         </p>
@@ -525,6 +570,33 @@ const resourceTypeName = (type: string) => {
       <p class="text-muted-foreground mt-6 text-xs">{{ t("packages.restartHint") }}</p>
     </TabsContent>
   </Tabs>
+
+  <!-- Always choose the installation target explicitly, even when a chat project is open. -->
+  <Dialog :open="!!pendingProjectSource" @update:open="(v: boolean) => { if (!v && !busy) pendingProjectSource = '' }">
+    <DialogContent class="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{{ t("packages.chooseProject") }}</DialogTitle>
+        <DialogDescription>{{ t("packages.chooseProjectHint", { name: packageNameOf(pendingProjectSource) }) }}</DialogDescription>
+      </DialogHeader>
+      <Select v-if="recentProjects.length" v-model="installTarget">
+        <SelectTrigger class="w-full"><SelectValue :placeholder="t('packages.recentProjects')" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="path in recentProjects" :key="path" :value="path">{{ path }}</SelectItem>
+        </SelectContent>
+      </Select>
+      <div class="flex gap-2">
+        <Input v-model="installTarget" :placeholder="t('packages.projectPathPrompt')" class="min-w-0 flex-1 font-mono text-xs" />
+        <Button v-if="isDesktop" variant="outline" @click="browseInstallTarget">{{ t("packages.browseProject") }}</Button>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" :disabled="busy !== null" @click="pendingProjectSource = ''">{{ t("packages.cancel") }}</Button>
+        <Button :disabled="busy !== null || !installTarget.trim()" @click="confirmProjectInstall">
+          <Spinner v-if="busy !== null" class="size-3" />
+          {{ t("packages.installProject") }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 
   <!-- resource management dialog -->
   <Dialog :open="!!resPkg" @update:open="(v: boolean) => { if (!v) resPkg = null }">
