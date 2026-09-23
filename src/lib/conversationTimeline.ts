@@ -12,8 +12,13 @@ export function conversationTurns(entries: Entry[], partial: Block[] | null = nu
   const append = (blocks: Block[]) => {
     const turn = turns[turns.length - 1]
     if (!turn) return
-    const text = blocks.filter(b => b.type === 'text').map(b => b.text).join(' ')
-    turn.answer = excerpt([turn.answer, text].filter(Boolean).join(' '))
+    // Keep only text after the last tool call: earlier text is tool-run commentary, not the answer.
+    let text = ''
+    for (const block of blocks) {
+      if (block.type === 'toolCall') text = ''
+      else if (block.type === 'text') text = [text, block.text].filter(Boolean).join(' ')
+    }
+    if (text) turn.answer = excerpt([turn.answer, text].filter(Boolean).join(' '))
   }
   for (const entry of entries) {
     if (entry.kind === 'user') turns.push({ id: entry.id, question: excerpt(entry.text), answer: '' })

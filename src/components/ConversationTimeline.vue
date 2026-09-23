@@ -31,9 +31,8 @@ function navigate(id: number) {
             </TooltipTrigger>
             <TooltipContent side="right" :side-offset="6" :collision-padding="16" class="timeline-preview">
               <div class="space-y-2">
-                <p class="text-xs opacity-60">{{ t('chat.timelineJump', { number: index + 1 }) }}</p>
-                <div><p class="mb-1 text-xs font-semibold opacity-60">{{ t('chat.timelineQuestion') }}</p><p class="line-clamp-2 leading-snug">{{ turn.question || t('chat.timelineImage') }}</p></div>
-                <div class="border-t border-current/15 pt-2"><p class="mb-1 text-xs font-semibold opacity-60">{{ t('chat.timelineAnswer') }}</p><p class="line-clamp-3 leading-snug">{{ turn.answer || t('chat.timelinePending') }}</p></div>
+                <p v-if="turn.question || !turn.answer" class="line-clamp-1 font-medium leading-snug">{{ turn.question || t('chat.timelineImage') }}</p>
+                <p v-if="turn.answer" class="line-clamp-3 leading-snug opacity-80">{{ turn.answer }}</p>
               </div>
             </TooltipContent>
           </Tooltip>

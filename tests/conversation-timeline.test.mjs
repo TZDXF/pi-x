@@ -16,6 +16,15 @@ test('groups each question with subsequent replies and excludes reasoning/tools'
   assert.equal(result[0].answer, 'answer continued')
   assert.equal(result[1].answer, 'streaming')
 })
+test('answer keeps only text after the last tool call, dropping run commentary', () => {
+  const tool = { type: 'toolCall', callId: 'c1', name: 'bash', argsText: 'ls' }
+  const result = turns([user(1, '提交代码'), assistant(text('我先看一下工作区改动'), tool, text('已提交 17d0e8c，终端功能已提交。'))])
+  assert.equal(result[0].answer, '已提交 17d0e8c，终端功能已提交。')
+  const trailing = turns([user(1, 'q'), assistant(tool, text('done'), text(' all')), assistant(text('final'))])
+  assert.equal(trailing[0].answer, 'done all final')
+  const toolOnly = turns([user(1, 'q'), assistant(text('commentary'), tool)])
+  assert.equal(toolOnly[0].answer, '')
+})
 test('handles empty/image questions, unanswered turns, and bounded excerpts', () => {
   assert.equal(turns([]).length, 0)
   assert.equal(turns([user(1)])[0].answer, '')
