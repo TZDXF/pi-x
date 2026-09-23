@@ -248,6 +248,7 @@ const contextTokenUsage = computed<LanguageModelUsage | undefined>(() => {
 const modelKey = computed({
   get: () => {
     if (session.desiredModelKey) return session.desiredModelKey
+    if (!props.connected && session.offlineDefaultModelKey) return session.offlineDefaultModelKey
     const m = session.currentModel
     return m ? `${m.provider}/${m.id}` : ""
   },

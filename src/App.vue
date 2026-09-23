@@ -183,9 +183,8 @@ async function start(): Promise<boolean> {
   connecting.value = true
   try {
     await spawnPi(project.value)
-    await session.init(project.value)
+    await session.init(project.value, true)
     started.value = true
-    await applyDefaultModel()
     return true
   } catch (e) {
     await killPi().catch(() => {})
@@ -195,22 +194,6 @@ async function start(): Promise<boolean> {
     return false
   } finally {
     connecting.value = false
-  }
-}
-
-/** Fresh conversations use the configured default model unless the user picked one
- * (desiredModelKey is applied by init). Not sticky: resuming keeps its own model. */
-async function applyDefaultModel() {
-  if (session.desiredModelKey) return
-  try {
-    const d = (await getConfig()).defaultModel
-    const current = session.currentModel
-    if (!d?.provider || !d?.modelId) return
-    if (current?.provider === d.provider && current?.id === d.modelId) return
-    await rpcRequest({ type: "set_model", provider: d.provider, modelId: d.modelId })
-    await session.refreshState()
-  } catch (e) {
-    console.warn("[pi] failed to apply default model:", e)
   }
 }
 

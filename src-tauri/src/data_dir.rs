@@ -8,6 +8,6 @@ pub fn root() -> PathBuf {
 
 pub fn initialize() -> Result<(), std::io::Error> {
     let root = root();
-    std::fs::create_dir_all(root.join("agent"))?;
+    std::fs::create_dir_all(root)?;
     Ok(())
 }

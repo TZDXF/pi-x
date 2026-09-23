@@ -14,6 +14,7 @@ mod sessions;
 mod title_generation;
 mod workspace_git;
 mod trust;
+mod pi_data;
 
 use rpc::RpcState;
 use tauri::Manager;
@@ -53,6 +54,8 @@ pub fn run() {
             remote::remote_status,
             remote::remote_set,
             commands::pi_detect,
+            commands::pi_settings_get,
+            commands::pi_settings_save,
             commands::app_config_get,
             commands::app_config_save,
             commands::global_prompt_get,

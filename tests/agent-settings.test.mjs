@@ -15,60 +15,43 @@ function harness(initial = {}, commands = [], component = "SkillSettings") {
     ref: value => ({ value }), computed: fn => ({ get value() { return fn() } }),
     onMounted: fn => { mount = fn }, useI18n: () => ({ t: key => key }),
     useSessionStore: () => ({ commands }), useUiStore: () => ({ pushToast: (...args) => toasts.push(args) }),
+    getPiSettings: async () => { if (failRead) throw Error('read failure'); return { skills: config.skills ?? [] } },
+    savePiSettings: async patch => { if (failWrite) throw Error('write failure'); config = { ...config, ...patch } },
     getConfig: async () => { if (failRead) throw Error('read failure'); return config },
     saveConfig: async value => { if (failWrite) throw Error('write failure'); config = value },
     getGlobalPrompt: async () => { if (failRead) throw Error('read failure'); return promptFile },
     saveGlobalPrompt: async value => { if (failWrite) throw Error('write failure'); promptFile = value },
     open: async () => null,
   })
-  const fields = component === 'AgentSettings' ? 'prompt, error, dirty, saving, load, save' : 'managed, skills, loaded, error, dirty, saving, load, save, add, setManaged, chooseSkills'
+  const fields = component === 'AgentSettings' ? 'prompt, error, dirty, saving, load, save' : 'skills, loaded, error, dirty, saving, load, save, add, chooseSkills'
   vm.runInContext(ts.transpile(source + `\nglobalThis.api = { ${fields} };`, { target: ts.ScriptTarget.ES2022 }), context)
   return { api: context.api, mount: () => mount(), config: () => config, prompt: () => promptFile, setPrompt: value => { promptFile = value }, toasts,
     failRead: value => { failRead = value }, failWrite: value => { failWrite = value } }
 }
 
-test('configuration retains automatic discovery and editing preserves unrelated settings', async () => {
-  const h = harness({ piPath: 'custom-pi', defaultModel: { provider: 'p', modelId: 'm' } })
+test('skills are stored only in Pi settings and preserve unrelated fields', async () => {
+  const h = harness({ piPath: 'custom-pi', defaultModel: 'm' })
   await h.mount()
-  assert.equal(h.api.managed.value, false)
+  h.api.add(['C:/skills/SKILL.md', 'C:\\skills\\SKILL.md'])
+  assert.equal(h.api.skills.value.length, 1)
   await h.api.save()
   assert.equal(h.config().piPath, 'custom-pi')
-  assert.equal(h.config().defaultModel.modelId, 'm')
-  assert.equal(h.config().managedSkills, null)
+  assert.equal(h.config().defaultModel, 'm')
+  assert.equal(h.config().skills[0], 'C:/skills/SKILL.md')
+  assert.equal(h.config().managedSkills, undefined)
 })
 
-test('manual discovery imports skills only, deduplicates paths, and preserves disabled choices', async () => {
-  const h = harness({}, [
-    { source: 'skill', path: 'C:\\skills\\SKILL.md', name: 'skill' },
-    { source: 'extension', path: 'C:/extension.ts', name: 'extension' },
-  ])
+test('Pi skill patterns roundtrip without an application discovery override', async () => {
+  const paths = ['C:/SKILL.md', '!**/excluded/**', '-C:/disabled.md']
+  const h = harness({ skills: paths })
   await h.mount()
-  h.api.setManaged(true)
-  h.api.add(['C:/skills/SKILL.md'])
-  assert.equal(h.api.skills.value.length, 1)
-  h.api.skills.value[0].enabled = false
+  h.api.skills.value.pop()
+  assert.equal(paths.length, 3)
   await h.api.save()
-  assert.equal(h.config().managedSkills[0].enabled, false)
-  await h.mount()
-  assert.equal(h.api.skills.value[0].enabled, false)
-})
-
-test('empty manual list is distinct from automatic discovery', async () => {
-  const h = harness({ managedSkills: [] })
-  await h.mount()
-  assert.equal(h.api.managed.value, true)
+  assert.equal(h.config().skills.length, 2)
+  h.api.skills.value = []
   await h.api.save()
-  assert.equal(h.config().managedSkills.length, 0)
-  h.api.setManaged(false)
-  await h.api.save()
-  assert.equal(h.config().managedSkills, null)
-})
-
-test('editing a skill does not mutate persisted data before save', async () => {
-  const h = harness({ managedSkills: [{ path: 'C:/SKILL.md', enabled: true }] })
-  await h.mount()
-  h.api.skills.value[0].enabled = false
-  assert.equal(h.config().managedSkills[0].enabled, true)
+  assert.equal(h.config().skills.length, 0)
 })
 
 test('load failures support retry and failed saves keep unsaved changes', async () => {
@@ -95,14 +78,14 @@ test('canceling file picker changes nothing', async () => {
 })
 
 test('prompt page saves and clears prompt without changing skills', async () => {
-  const skills = [{ path: 'C:/SKILL.md', enabled: false }]
-  const h = harness({ __promptFile: 'old', managedSkills: skills, piPath: 'pi' }, [], 'AgentSettings')
+  const skills = ['C:/SKILL.md']
+  const h = harness({ __promptFile: 'old', skills, piPath: 'pi' }, [], 'AgentSettings')
   await h.mount()
   assert.equal(h.api.prompt.value, 'old')
   h.api.prompt.value = '中文'
   await h.api.save()
   assert.equal(h.prompt(), '中文')
-  assert.equal(h.config().managedSkills, skills)
+  assert.equal(h.config().skills, skills)
   h.api.prompt.value = ''
   await h.api.save()
   assert.equal(h.prompt(), '')
@@ -113,7 +96,7 @@ test('skills settings remain independent from the prompt file', async () => {
   const h = harness({ __promptFile: 'old' })
   await h.mount()
   h.setPrompt('updated elsewhere')
-  h.api.setManaged(true)
+  h.api.add(["C:/SKILL.md"])
   await h.api.save()
   assert.equal(h.prompt(), 'updated elsewhere')
 })

@@ -135,7 +135,7 @@ pub async fn package_catalog() -> Result<Vec<CatalogPackage>, String> {
 pub struct InstalledPackage {
     /// Install source as stored in settings.json.
     pub source: String,
-    /// "global" (~/.pix/agent/settings.json) or "project" (<cwd>/.pi/settings.json)
+    /// "global" (~/.pi/agent/settings.json) or "project" (<cwd>/.pi/settings.json)
     pub scope: String,
     /// Resource filters when the object form is used (`{source, extensions, ...}`),
     /// passed through verbatim for display.
@@ -217,7 +217,6 @@ async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) -> Result<S
             c
         }
     };
-    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.args(args);
     if let Some(dir) = cwd.filter(|s| !s.trim().is_empty()) {
         cmd.current_dir(dir);

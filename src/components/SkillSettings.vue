@@ -2,18 +2,16 @@
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { open } from "@tauri-apps/plugin-dialog"
-import { getConfig, saveConfig, type ManagedSkill } from "@/api/piClient"
+import { getPiSettings, savePiSettings } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 const { t } = useI18n()
 const session = useSessionStore()
 const ui = useUiStore()
-const managed = ref(false)
-const skills = ref<ManagedSkill[]>([])
+const skills = ref<string[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const error = ref("")
@@ -22,13 +20,8 @@ const loaded = computed(() => session.commands.filter(c => c.source === "skill")
 const key = (path: string) => path.replace(/\\/g, "/")
 function add(paths: string[]) {
   for (const path of paths) {
-    if (!skills.value.some(s => key(s.path) === key(path))) skills.value.push({ path, enabled: true })
+    if (!skills.value.some(s => key(s) === key(path))) skills.value.push(path)
   }
-  dirty.value = true
-}
-function setManaged(value: boolean) {
-  managed.value = value
-  if (value && !skills.value.length) add(loaded.value.flatMap(s => s.path ? [s.path] : []))
   dirty.value = true
 }
 async function chooseSkills() {
@@ -41,9 +34,8 @@ async function load() {
   loading.value = true
   error.value = ""
   try {
-    const config = await getConfig()
-    managed.value = config.managedSkills != null
-    skills.value = config.managedSkills?.map(s => ({ ...s })) ?? []
+    const settings = await getPiSettings()
+    skills.value = [...settings.skills]
     dirty.value = false
   } catch (e) { error.value = String(e) }
   finally { loading.value = false }
@@ -51,8 +43,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const config = await getConfig()
-    await saveConfig({ ...config, managedSkills: managed.value ? skills.value.map(s => ({ ...s })) : null })
+    await savePiSettings({ skills: [...skills.value] })
     dirty.value = false
     ui.pushToast(t("agentConfig.saved"), "info")
   } catch (e) { ui.pushToast(String(e), "error") }
@@ -73,24 +64,19 @@ onMounted(load)
   </div>
   <fieldset v-else :disabled="saving" class="min-w-0 space-y-6">
     <section class="space-y-3">
-      <div class="flex items-center justify-between gap-3">
-        <label for="manage-skills" class="text-sm font-medium">{{ t("agentConfig.manage") }}</label>
-        <Switch id="manage-skills" :model-value="managed" :disabled="saving" @update:model-value="setManaged" />
-      </div>
-      <p class="text-xs text-muted-foreground">{{ t(managed ? "agentConfig.manualHint" : "agentConfig.autoHint") }}</p>
-      <template v-if="managed">
+      <p class="text-xs text-muted-foreground">{{ t("agentConfig.autoHint") }}</p>
+      <div>
         <div class="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" @click="chooseSkills">{{ t("agentConfig.add") }}</Button>
           <Button variant="outline" size="sm" :disabled="!loaded.some(s => s.path)" @click="add(loaded.flatMap(s => s.path ? [s.path] : []))">{{ t("agentConfig.import") }}</Button>
         </div>
         <p v-if="!skills.length" class="text-sm text-muted-foreground">{{ t("agentConfig.none") }}</p>
-        <div v-for="(skill, index) in skills" :key="skill.path" class="flex items-center gap-3 rounded-lg border p-3">
-          <Switch v-model="skill.enabled" :disabled="saving" :aria-label="t('agentConfig.enable') + ': ' + skill.path" @update:model-value="dirty = true" />
-          <span class="min-w-0 flex-1 break-all text-xs font-mono">{{ skill.path }}</span>
+        <div v-for="(skill, index) in skills" :key="skill" class="flex items-center gap-3 rounded-lg border p-3">
+          <span class="min-w-0 flex-1 break-all text-xs font-mono">{{ skill }}</span>
           <Button variant="ghost" size="sm" @click="skills.splice(index, 1); dirty = true">{{ t("agentConfig.remove") }}</Button>
         </div>
         <p class="text-xs text-amber-600">{{ t("agentConfig.security") }}</p>
-      </template>
+      </div>
     </section>
     <section class="space-y-3">
       <h3 class="text-sm font-medium">{{ t("agentConfig.loaded") }} ({{ loaded.length }})</h3>

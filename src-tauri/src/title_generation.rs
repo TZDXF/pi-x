@@ -89,10 +89,12 @@ pub async fn session_generate_title(
     file: String,
     message: String,
 ) -> Result<Option<String>, String> {
-    let config = commands::app_config_get(app)?;
+    let config = commands::app_config_get(app.clone())?;
     // Follow the main (default) model when configured to do so.
     let model = if config.title_follow_main {
-        config.default_model.clone()
+        let settings = commands::pi_settings_get().await?;
+        settings["defaultProvider"].as_str().zip(settings["defaultModel"].as_str())
+            .map(|(provider, model_id)| TitleModel { provider: provider.into(), model_id: model_id.into() })
     } else {
         config.title_model.clone()
     };
@@ -111,8 +113,9 @@ pub async fn session_generate_title(
             .lock()
             .map_err(|e| e.to_string())?;
         let mut metadata = sessions::read_presentation(&path)?;
-        if metadata.title.is_some() || metadata.title_generation_attempted {
-            return Ok(metadata.title);
+        let title = sessions::read_session_name(&path)?;
+        if title.is_some() || metadata.title_generation_attempted {
+            return Ok(title);
         }
         // Claim once across clients/restarts, including failure; no surprise repeated billing.
         metadata.title_generation_attempted = true;
@@ -128,7 +131,6 @@ pub async fn session_generate_title(
         Some(Launcher::Binary { path }) => Command::new(path),
         None => return Err("No usable pi launcher for title generation".into()),
     };
-    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.args(["--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
         "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
         "--provider", model.provider.trim(), "--model", model.model_id.trim(),
@@ -157,16 +159,7 @@ pub async fn session_generate_title(
         return Err("Title generation failed; check the selected model and pi credentials".into());
     }
     let title = extract_title(&output.stdout)?;
-    let _guard = sessions::PRESENTATION_LOCK
-        .lock()
-        .map_err(|e| e.to_string())?;
-    // Re-read under the same lock as manual updates. Preserve names and archive state.
-    let mut metadata = sessions::read_presentation(&path)?;
-    if metadata.title.is_none() {
-        metadata.title = Some(title);
-        sessions::write_presentation(&path, &metadata)?;
-    }
-    Ok(metadata.title)
+    sessions::set_session_name(&app, &path, title, true).await
 }
 
 #[cfg(test)]

@@ -1,178 +1,40 @@
-//! Project trust decisions, mirroring pi's `~/.pi/agent/trust.json` logic
-//! (see pi dist/core/trust-manager.js):
-//! - file format: `{ "<canonical path>": true | false | null }`, sorted keys,
-//!   2-space pretty JSON + trailing newline
-//! - lookup walks from cwd up to the filesystem root; nearest true/false wins
-//! - trust is required when cwd/.pi contains trust-requiring resources, or
-//!   when cwd or an ancestor contains `.agents/skills` (excluding the user's
-//!   own `~/.agents/skills`)
-//!
-//! Path normalization must match Node's `realpathSync`, i.e. WITHOUT the
-//! `\\?\` extended-length prefix that Rust's fs::canonicalize produces on
-//! Windows — hence `dunce::canonicalize`.
+//! Project trust is read and persisted by the installed Pi implementation.
+use serde_json::{json, Value};
+use std::path::PathBuf;
 
-use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-const TRUST_ENTRIES: &[&str] = &[
-    "settings.json",
-    "extensions",
-    "skills",
-    "prompts",
-    "themes",
-    "SYSTEM.md",
-    "APPEND_SYSTEM.md",
-];
-
+/// Match Pi's getAgentDir, including a user-supplied environment override.
 pub fn agent_dir() -> PathBuf {
-    crate::data_dir::root().join("agent")
+    resolve_agent_dir(std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
+        &dirs::home_dir().expect("Cannot locate user home directory"))
 }
 
-fn canon(p: &Path) -> String {
-    match dunce::canonicalize(p) {
-        Ok(x) => x.to_string_lossy().to_string(),
-        Err(_) => p.to_string_lossy().to_string(),
-    }
-}
-
-fn same_path(a: &str, b: &str) -> bool {
-    #[cfg(windows)]
-    {
-        a.eq_ignore_ascii_case(b)
-    }
-    #[cfg(not(windows))]
-    {
-        a == b
+fn resolve_agent_dir(value: Option<&str>, home: &std::path::Path) -> PathBuf {
+    match value.filter(|s| !s.is_empty()) {
+        Some("~") => home.to_path_buf(),
+        Some(s) if s.starts_with("~/") || s.starts_with("~\\") => home.join(&s[2..]),
+        Some(s) => PathBuf::from(s),
+        None => home.join(".pi").join("agent"),
     }
 }
 
-fn trust_file() -> PathBuf {
-    agent_dir().join("trust.json")
-}
-
-fn read_trust_map() -> Result<BTreeMap<String, Value>, String> {
-    let path = trust_file();
-    if !path.exists() {
-        return Ok(BTreeMap::new());
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("failed to read trust.json: {e}"))?;
-    let raw = raw.trim_start_matches('\u{feff}');
-    let parsed: Value = serde_json::from_str(raw).map_err(|e| format!("failed to parse trust.json: {e}"))?;
-    let mut map = BTreeMap::new();
-    if let Value::Object(obj) = parsed {
-        for (k, v) in obj {
-            if v.is_boolean() || v.is_null() {
-                map.insert(k, v);
-            }
-        }
-    }
-    Ok(map)
-}
-
-fn write_trust_map(map: &BTreeMap<String, Value>) -> Result<(), String> {
-    let path = trust_file();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    // BTreeMap iterates in sorted key order, matching pi's writer.
-    let mut obj = Map::new();
-    for (k, v) in map {
-        obj.insert(k.clone(), v.clone());
-    }
-    let body = Value::Object(obj);
-    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&body).unwrap()))
-        .map_err(|e| e.to_string())
-}
-
-fn find_nearest_decision(map: &BTreeMap<String, Value>, cwd: &str) -> Option<bool> {
-    let mut current = PathBuf::from(cwd);
-    loop {
-        let key = current.to_string_lossy().to_string();
-        for (k, v) in map {
-            if same_path(k, &key) {
-                if let Some(decision) = v.as_bool() {
-                    return Some(decision);
-                }
-            }
-        }
-        match current.parent() {
-            Some(p) if p != current => current = p.to_path_buf(),
-            _ => return None,
-        }
-    }
-}
-
-fn has_trust_requiring_resources(cwd: &Path) -> bool {
-    let pi_dir = cwd.join(".pi");
-    if pi_dir.exists() && TRUST_ENTRIES.iter().any(|e| pi_dir.join(e).exists()) {
-        return true;
-    }
-    let user_agents_skills = dirs::home_dir()
-        .map(|h| h.join(".agents").join("skills"))
-        .map(|p| canon(&p))
-        .unwrap_or_default();
-    let mut current = cwd.to_path_buf();
-    loop {
-        let dir = current.join(".agents").join("skills");
-        if dir.exists() && canon(&dir) != user_agents_skills {
-            return true;
-        }
-        match current.parent() {
-            Some(p) if p != current => current = p.to_path_buf(),
-            _ => return false,
-        }
-    }
-}
-
-/// Current trust state for a project folder, consumed by the desktop UI.
 pub async fn status(project: &str) -> Result<Value, String> {
-    let project = project.to_string();
-    tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let cwd = PathBuf::from(project);
-        let canonical = dunce::canonicalize(&cwd).unwrap_or(cwd);
-        let cwd_s = canonical.to_string_lossy().to_string();
-        let map = read_trust_map()?;
-        let decision = find_nearest_decision(&map, &cwd_s);
-        let has_resources = has_trust_requiring_resources(&canonical);
-        let parent_path = canonical
-            .parent()
-            .filter(|p| *p != canonical)
-            .map(|p| p.to_string_lossy().to_string());
-        Ok(json!({
-            "projectPath": cwd_s,
-            "parentPath": parent_path,
-            "hasTrustRequiringResources": has_resources,
-            // true | false | null (no saved decision)
-            "decision": decision,
-            // show the trust dialog?
-            "needsDecision": has_resources && decision.is_none(),
-        }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let request = json!({"op": "trust_status", "project": project});
+    tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())?
+}
+pub async fn save(project: &str, trusted: bool, trust_parent: bool) -> Result<Value, String> {
+    let request = json!({"op": "trust_save", "project": project, "trusted": trusted, "trustParent": trust_parent});
+    tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())?
 }
 
-/// Persist a decision in pi's exact format.
-pub async fn save(project: &str, trusted: bool, trust_parent: bool) -> Result<Value, String> {
-    let project = project.to_string();
-    tokio::task::spawn_blocking(move || -> Result<Value, String> {
-        let mut map = read_trust_map()?;
-        let cwd = PathBuf::from(project);
-        let canonical = dunce::canonicalize(&cwd).unwrap_or(cwd);
-        let project_key = canonical.to_string_lossy().to_string();
-        if trust_parent {
-            if let Some(parent) = canonical.parent() {
-                map.insert(parent.to_string_lossy().to_string(), Value::Bool(trusted));
-            }
-            // pi writes project decision `null`, which means "delete key"
-            map.remove(&project_key);
-        } else {
-            map.insert(project_key, Value::Bool(trusted));
-        }
-        write_trust_map(&map)?;
-        Ok(json!({ "ok": true }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn pi_directory_respects_environment() {
+        let home = std::path::Path::new("/home/test");
+        assert_eq!(resolve_agent_dir(None, home), home.join(".pi/agent"));
+        assert_eq!(resolve_agent_dir(Some(""), home), home.join(".pi/agent"));
+        assert_eq!(resolve_agent_dir(Some("~/custom"), home), home.join("custom"));
+        assert_eq!(resolve_agent_dir(Some("/custom/agent"), home), PathBuf::from("/custom/agent"));
+    }
 }

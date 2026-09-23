@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { getConfig, saveConfig, getModelsConfig } from "@/api/piClient"
+import { getConfig, saveConfig, getModelsConfig, getPiSettings, savePiSettings } from "@/api/piClient"
 import { useSessionStore } from "@/stores/session"
 import { useUiStore } from "@/stores/ui"
 import ConversationModelSelect from "./ConversationModelSelect.vue"
@@ -62,9 +62,10 @@ onMounted(async () => {
     enabled.value = !!config.titleModel || followMain.value
     provider.value = config.titleModel?.provider ?? ""
     modelId.value = config.titleModel?.modelId ?? ""
-    defaultFollowMain.value = !config.defaultModel
-    defaultProvider.value = config.defaultModel?.provider ?? ""
-    defaultModelId.value = config.defaultModel?.modelId ?? ""
+    const piSettings = await getPiSettings()
+    defaultFollowMain.value = !piSettings.defaultModel
+    defaultProvider.value = piSettings.defaultProvider ?? ""
+    defaultModelId.value = piSettings.defaultModel ?? ""
     try {
       const custom = await getModelsConfig()
       customModels.value = Object.entries(custom.providers).flatMap(([provider, entry]) => (entry.models ?? []).map(m => ({ provider, id: m.id, name: m.name })))
@@ -78,12 +79,14 @@ async function save() {
   saving.value = true
   try {
     const config = await getConfig()
+    const hasDefault = !defaultFollowMain.value && defaultProvider.value.trim() && defaultModelId.value.trim()
+    await savePiSettings({
+      defaultProvider: hasDefault ? defaultProvider.value.trim() : null,
+      defaultModel: hasDefault ? defaultModelId.value.trim() : null,
+    })
     // Keep the custom title model while following main so toggling back restores it.
     await saveConfig({
       ...config,
-      defaultModel: !defaultFollowMain.value && defaultProvider.value.trim() && defaultModelId.value.trim()
-        ? { provider: defaultProvider.value.trim(), modelId: defaultModelId.value.trim() }
-        : undefined,
       titleModel: enabled.value && customValid
         ? { provider: provider.value.trim(), modelId: modelId.value.trim() }
         : undefined,

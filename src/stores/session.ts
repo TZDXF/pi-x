@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { generateSessionTitle, getModelsConfig, rpcRequest } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest } from "@/api/piClient"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -71,15 +71,24 @@ function clampThinkingLevel(level: ThinkingLevel, available: ThinkingLevel[]): T
   return available[0] ?? "off"
 }
 
-const DEFAULT_THINKING_KEY = "pi:defaultThinkingLevel"
-function readStoredThinkingLevel(): ThinkingLevel | null {
-  try {
-    const v = localStorage.getItem(DEFAULT_THINKING_KEY)
-    return v && (ALL_THINKING_LEVELS as string[]).includes(v) ? v as ThinkingLevel : null
-  } catch { return null }
+const SELECTION_KEY = "pix.conversationSelection"
+interface RememberedSelection { model?: Model; thinking?: ThinkingLevel; levels?: ThinkingLevel[] }
+// Cache display metadata only, never provider headers or credentials from RPC models.
+function selectionModel(model: Model): Model {
+  return { id: model.id, provider: model.provider, name: model.name || model.id,
+    reasoning: model.reasoning === true, api: "", baseUrl: "", input: [],
+    contextWindow: 0, maxTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
 }
-function storeThinkingLevel(level: ThinkingLevel) {
-  try { localStorage.setItem(DEFAULT_THINKING_KEY, level) } catch { /* ignore */ }
+function readSelection(): RememberedSelection {
+  try {
+    const value = JSON.parse(localStorage.getItem(SELECTION_KEY) || "{}")
+    if (!value || typeof value !== "object") return {}
+    return {
+      model: typeof value.model?.provider === "string" && typeof value.model?.id === "string" ? selectionModel(value.model) : undefined,
+      thinking: ALL_THINKING_LEVELS.includes(value.thinking) ? value.thinking : undefined,
+      levels: Array.isArray(value.levels) ? value.levels.filter((v: ThinkingLevel) => ALL_THINKING_LEVELS.includes(v)) : undefined,
+    }
+  } catch { return {} }
 }
 
 let entrySeq = 0
@@ -103,14 +112,28 @@ export const useSessionStore = defineStore("session", () => {
   const lastUsage = ref<Usage | null>(null)
   const commands = ref<CommandInfo[]>([])
   const models = ref<Model[]>([])
-  /** Model picked before pi starts (or sticky choice); applied on init. */
+  /** Explicit pre-start model choice, consumed once by init. */
+  const remembered = ref<RememberedSelection>(readSelection())
   const desiredModelKey = ref<string | null>(null)
+  const piDefaultModelKey = ref<string | null>(null)
+  const offlineDefaultModelKey = computed(() => remembered.value.model
+    ? `${remembered.value.model.provider}/${remembered.value.model.id}` : piDefaultModelKey.value)
+  const offlineDefaultThinking = ref<ThinkingLevel | null>(null)
   const rpcThinkingLevels = ref<ThinkingLevel[]>(["off"])
   /** Per-model thinking levels derived from models.json while pi is down. */
   const offlineThinkingLevels = ref<Record<string, ThinkingLevel[]>>({})
-  /** Thinking level picked before pi starts (sticky); applied on init. */
-  const desiredThinkingLevel = ref<ThinkingLevel | null>(readStoredThinkingLevel())
+  /** Explicit pre-start thinking choice, consumed once by init. */
+  const desiredThinkingLevel = ref<ThinkingLevel | null>(null)
   const cwd = ref("")
+
+  if (remembered.value.model) models.value = [remembered.value.model]
+  let offlineLoadVersion = 0
+
+  function remember(model?: Model, thinking?: ThinkingLevel, levels?: ThinkingLevel[]) {
+    remembered.value = { ...remembered.value, ...(model ? { model: selectionModel(model) } : {}),
+      ...(thinking ? { thinking } : {}), ...(levels ? { levels } : {}) }
+    try { localStorage.setItem(SELECTION_KEY, JSON.stringify(remembered.value)) } catch { /* Optional UI preference. */ }
+  }
 
   // Keep unrendered history outside Vue's deep reactive graph.
   let historyMessages: any[] = []
@@ -135,12 +158,14 @@ export const useSessionStore = defineStore("session", () => {
   /** RPC levels once pi runs; config-derived levels (of the desired model) before. */
   const availableThinking = computed<ThinkingLevel[]>(() => {
     if (state.value) return rpcThinkingLevels.value
-    const key = desiredModelKey.value
+    const key = desiredModelKey.value ?? offlineDefaultModelKey.value
+    const saved = remembered.value.model
+    if (saved && key === `${saved.provider}/${saved.id}` && remembered.value.levels?.length) return remembered.value.levels
     return (key && offlineThinkingLevels.value[key]) || ["off"]
   })
   const thinkingLevel = computed<ThinkingLevel>(() => {
-    if (state.value) return state.value.thinkingLevel
-    return clampThinkingLevel(desiredThinkingLevel.value ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
+    if (state.value) return clampThinkingLevel(state.value.thinkingLevel ?? remembered.value.thinking ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
+    return clampThinkingLevel(desiredThinkingLevel.value ?? remembered.value.thinking ?? offlineDefaultThinking.value ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
   })
   const pendingCount = computed(() => steering.value.length + followUp.value.length)
 
@@ -416,6 +441,7 @@ export const useSessionStore = defineStore("session", () => {
     runs.value = {}
     partialBlocks.value = null
     await refreshState()
+    await applyRememberedSelection()
     await refreshStats()
   }
 
@@ -435,30 +461,34 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   async function setModel(provider: string, modelId: string) {
-    await rpcRequest({ type: "set_model", provider, modelId })
-    desiredModelKey.value = `${provider}/${modelId}`
-    storeDefaultModel(desiredModelKey.value)
+    const result = await rpcRequest({ type: "set_model", provider, modelId })
+    if (!result.success) throw new Error(result.error || "切换模型失败")
+    desiredModelKey.value = null
     await refreshState()
+    await refreshThinkingLevels()
+    if (state.value?.model) remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
   }
 
   /** Record a model choice made while pi is not running; applied on init. */
   function setDesiredModel(key: string | null) {
     desiredModelKey.value = key
-    if (key) storeDefaultModel(key)
+    const model = models.value.find(m => `${m.provider}/${m.id}` === key)
+    if (model) remember(model, undefined, supportedThinkingLevels(model))
   }
 
   async function setThinkingLevel(level: ThinkingLevel) {
-    await rpcRequest({ type: "set_thinking_level", level })
-    desiredThinkingLevel.value = level
-    storeThinkingLevel(level)
+    const result = await rpcRequest({ type: "set_thinking_level", level })
+    if (!result.success) throw new Error(result.error || "切换思考等级失败")
+    desiredThinkingLevel.value = null
     await refreshState()
     await refreshThinkingLevels()
+    remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? level, rpcThinkingLevels.value)
   }
 
   /** Record a thinking level picked while pi is not running; applied on init. */
   function setDesiredThinkingLevel(level: ThinkingLevel) {
     desiredThinkingLevel.value = level
-    storeThinkingLevel(level)
+    remember(undefined, level)
   }
 
   // ---- queries ----
@@ -587,18 +617,11 @@ export const useSessionStore = defineStore("session", () => {
       rpcThinkingLevels.value = res.data.levels ?? ["off"]
   }
 
-  const DEFAULT_MODEL_KEY = "pi:defaultModel"
-  function readStoredDefaultModel(): string | null {
-    try { return localStorage.getItem(DEFAULT_MODEL_KEY) } catch { return null }
-  }
-  function storeDefaultModel(key: string) {
-    try { localStorage.setItem(DEFAULT_MODEL_KEY, key) } catch { /* ignore */ }
-  }
-
-  /** Fill the model picker from ~/.pix/agent/models.json while pi is down. */
+  /** Fill the model picker from ~/.pi/agent/models.json while pi is down. */
   async function loadOfflineModels() {
+    const version = ++offlineLoadVersion
     try {
-      const config = await getModelsConfig()
+      const [config, settings] = await Promise.all([getModelsConfig(), getPiSettings()])
       const offline: Model[] = []
       const levels: Record<string, ThinkingLevel[]> = {}
       for (const [provider, entry] of Object.entries(config.providers ?? {})) {
@@ -618,40 +641,54 @@ export const useSessionStore = defineStore("session", () => {
           levels[`${provider}/${m.id}`] = supportedThinkingLevels(m)
         }
       }
+      if (version !== offlineLoadVersion || state.value) return
+      const saved = remembered.value.model
+      if (saved && !offline.some(m => m.provider === saved.provider && m.id === saved.id)) offline.unshift(saved)
       models.value = offline
       offlineThinkingLevels.value = levels
-      // Default to the last picked model, falling back to the first entry.
-      if (!desiredModelKey.value && offline.length) {
-        const stored = readStoredDefaultModel()
-        const valid = stored && offline.some(m => `${m.provider}/${m.id}` === stored)
-        desiredModelKey.value = valid ? stored : `${offline[0].provider}/${offline[0].id}`
-      }
+      piDefaultModelKey.value = settings.defaultProvider && settings.defaultModel
+        ? `${settings.defaultProvider}/${settings.defaultModel}` : offline[0] ? `${offline[0].provider}/${offline[0].id}` : null
+      const key = desiredModelKey.value ?? offlineDefaultModelKey.value
+      offlineDefaultThinking.value = (key && settings.modelThinkingLevels?.[key]) || settings.defaultThinkingLevel || null
     } catch (e) {
       console.warn("[pi] failed to load offline models:", e)
     }
   }
 
-  async function init(project: string) {
+  async function applyRememberedSelection() {
+    // Snapshot both choices: setModel may update Pi's effective thinking level.
+    const savedModel = remembered.value.model
+    const modelKey = desiredModelKey.value ?? (savedModel ? `${savedModel.provider}/${savedModel.id}` : null)
+    const level = desiredThinkingLevel.value ?? remembered.value.thinking
+    desiredModelKey.value = null
+    desiredThinkingLevel.value = null
+    if (modelKey && `${state.value?.model?.provider}/${state.value?.model?.id}` !== modelKey) {
+      const [provider, ...rest] = modelKey.split("/")
+      await setModel(provider, rest.join("/")).catch(e => console.warn("[pi] remembered model unavailable:", e))
+    }
+    await refreshThinkingLevels()
+    if (level) {
+      const supported = clampThinkingLevel(level, availableThinking.value)
+      if (supported !== state.value?.thinkingLevel) await setThinkingLevel(supported)
+    }
+    if (state.value?.model) remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
+  }
+
+  async function init(project: string, fresh = false) {
+    ++offlineLoadVersion
     cwd.value = project
     await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
     await refreshThinkingLevels()
-    const desired = desiredModelKey.value
-    if (desired) {
-      const current = state.value?.model
-      if (!current || `${current.provider}/${current.id}` !== desired) {
-        const [provider, ...rest] = desired.split("/")
-        await setModel(provider, rest.join("/"))
-          .catch(e => console.warn("[pi] failed to apply desired model:", e))
-      }
-    }
-    const desiredLevel = desiredThinkingLevel.value
-    if (desiredLevel) {
-      await setThinkingLevel(desiredLevel)
-        .catch(e => console.warn("[pi] failed to apply desired thinking level:", e))
+    if (fresh) await applyRememberedSelection()
+    else {
+      // A restored session is authoritative, even when an offline draft had choices.
+      desiredModelKey.value = null
+      desiredThinkingLevel.value = null
     }
   }
 
   function clear() {
+    ++offlineLoadVersion
     invalidateHistory()
     entries.value = []
     runs.value = {}
@@ -680,6 +717,7 @@ export const useSessionStore = defineStore("session", () => {
     commands,
     models,
     desiredModelKey,
+    offlineDefaultModelKey,
     desiredThinkingLevel,
     availableThinking,
     cwd,

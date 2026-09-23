@@ -41,3 +41,9 @@ test('opening a saved conversation starts pi on demand', async () => {
   await context.actions.resumeSession('session.jsonl')
   assert.deepEqual(calls, ['spawn', 'init'])
 })
+
+ test('only fresh process startup applies remembered selection', () => {
+  const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+  assert.match(source, /await spawnPi\(project.value\)\s+await session.init\(project.value, true\)/)
+  assert.equal((source.match(/session.init\(project.value, true\)/g) || []).length, 1)
+})

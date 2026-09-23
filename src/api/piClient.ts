@@ -24,19 +24,25 @@ export interface ModelRef {
   modelId: string
 }
 
-export interface ManagedSkill { path: string; enabled: boolean }
-
 export interface AppConfig {
-  managedSkills?: ManagedSkill[] | null
   piPath?: string
   lastProject?: string
   /** Custom title model; ignored while titleFollowMain is set. */
   titleModel?: ModelRef
   /** Title generation follows the default model instead of titleModel. */
   titleFollowMain?: boolean
-  /** Main model: default for new conversations, followed by feature items. */
-  defaultModel?: ModelRef
 }
+
+export interface PiSettings {
+  defaultProvider?: string | null
+  defaultModel?: string | null
+  defaultThinkingLevel?: import("./protocol").ThinkingLevel
+  modelThinkingLevels?: Record<string, import("./protocol").ThinkingLevel>
+  skills: string[]
+}
+export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
+export const savePiSettings = (settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">>) =>
+  invoke<void>("pi_settings_save", { settings })
 
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
@@ -144,7 +150,7 @@ export interface ProviderEntry {
   [key: string]: unknown
 }
 
-/** pi's `~/.pix/agent/models.json` document. */
+/** pi's `~/.pi/agent/models.json` document. */
 export interface ModelsConfig {
   providers: Record<string, ProviderEntry>
   [key: string]: unknown

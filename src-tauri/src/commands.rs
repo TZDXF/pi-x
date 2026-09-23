@@ -13,37 +13,9 @@ pub struct AppConfig {
     pub last_project: Option<String>,
     #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
     pub title_model: Option<crate::title_generation::TitleModel>,
-    /// None preserves Pi discovery; Some([]) disables all skills.
-    #[serde(rename = "managedSkills", default)]
-    pub managed_skills: Option<Vec<ManagedSkill>>,
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
-    /// Main model: default for new conversations, followed by feature items.
-    #[serde(rename = "defaultModel", default, skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<crate::title_generation::TitleModel>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct ManagedSkill {
-    pub path: String,
-    pub enabled: bool,
-}
-
-/// Validate before replacing a running process, and pass each path as one argument.
-pub fn runtime_args(config: &AppConfig) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    if let Some(skills) = &config.managed_skills {
-        args.push("--no-skills".into());
-        for skill in skills.iter().filter(|s| s.enabled) {
-            let path = std::path::Path::new(&skill.path);
-            if !path.is_absolute() || !path.is_file() {
-                return Err(format!("Skill 文件不存在或不是绝对路径：{}", skill.path));
-            }
-            args.extend(["--skill".into(), skill.path.clone()]);
-        }
-    }
-    Ok(args)
 }
 
 fn is_false(v: &bool) -> bool {
@@ -141,7 +113,7 @@ pub async fn rpc_spawn(
     session_file: Option<String>,
 ) -> Result<(), String> {
     let cfg = app_config_get(app.clone())?;
-    let extra_args = runtime_args(&cfg)?;
+    let extra_args = Vec::new();
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
         return Err(
@@ -198,7 +170,7 @@ fn models_config_path() -> std::path::PathBuf {
     trust::agent_dir().join("models.json")
 }
 
-/// Read pi's `~/.pix/agent/models.json`. Returns `{ "providers": {} }` when the
+/// Read pi's `~/.pi/agent/models.json`. Returns `{ "providers": {} }` when the
 /// file does not exist. The whole document is passed through as `Value` so
 /// unknown fields (cost, compat, headers, samplingParams, modelOverrides, …)
 /// survive a read/edit/save round trip untouched.
@@ -216,7 +188,7 @@ pub fn models_config_get() -> Result<Value, String> {
     Ok(v)
 }
 
-/// Write pi's `~/.pix/agent/models.json` (2-space pretty JSON + trailing newline,
+/// Write pi's `~/.pi/agent/models.json` (2-space pretty JSON + trailing newline,
 /// matching pi's own file style). pi re-reads this file whenever the model
 /// picker opens, so changes take effect without a restart.
 #[tauri::command]
@@ -229,62 +201,37 @@ pub fn models_config_save(config: Value) -> Result<(), String> {
     std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn pi_settings_get() -> Result<Value, String> {
+    tokio::task::spawn_blocking(|| crate::pi_data::call(serde_json::json!({"op": "settings_get"})))
+        .await.map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn pi_settings_save(settings: Value) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::pi_data::call(serde_json::json!({"op": "settings_save", "settings": settings})))
+        .await.map_err(|e| e.to_string())??;
+    Ok(())
+}
+
 #[cfg(test)]
-mod agent_config_tests {
+mod tests {
     use super::*;
-
     #[test]
-    fn config_without_managed_skills_keeps_automatic_discovery() {
-        let config: AppConfig = serde_json::from_str(r#"{"piPath":"pi","lastProject":"demo"}"#).unwrap();
-        assert!(config.managed_skills.is_none());
-        assert!(runtime_args(&config).unwrap().is_empty());
+    fn app_config_does_not_keep_pi_owned_fields() {
+        let config = AppConfig { pi_path: Some("pi".into()), ..Default::default() };
+        let value = serde_json::to_value(config).unwrap();
+        assert_eq!(value["piPath"], "pi");
+        assert!(value.get("managedSkills").is_none());
+        assert!(value.get("defaultModel").is_none());
     }
-
     #[test]
     fn saving_blank_global_prompt_removes_pi_file() {
         let root = std::env::temp_dir().join(format!("pix-prompt-{}", uuid::Uuid::new_v4()));
-        let path = root.join("agent").join("SYSTEM.md");
+        let path = root.join("SYSTEM.md");
         save_global_prompt(&path, " 中文 ").unwrap();
         assert_eq!(read_global_prompt(&path).unwrap(), " 中文 ");
         save_global_prompt(&path, " \n").unwrap();
         assert!(!path.exists());
-        assert_eq!(read_global_prompt(&path).unwrap(), "");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn empty_manual_list_disables_discovery() {
-        let config = AppConfig { managed_skills: Some(vec![]), ..Default::default() };
-        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills"]);
-    }
-
-    #[test]
-    fn disabled_missing_skills_are_not_validated_or_loaded() {
-        let config = AppConfig {
-            managed_skills: Some(vec![ManagedSkill { path: "missing.md".into(), enabled: false }]),
-            ..Default::default()
-        };
-        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills"]);
-    }
-
-    #[test]
-    fn enabled_relative_paths_are_rejected() {
-        let config = AppConfig {
-            managed_skills: Some(vec![ManagedSkill { path: "SKILL.md".into(), enabled: true }]),
-            ..Default::default()
-        };
-        assert!(runtime_args(&config).is_err());
-    }
-
-    #[test]
-    fn enabled_absolute_files_are_passed_as_separate_arguments() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml").to_string_lossy().into_owned();
-        let config = AppConfig {
-            managed_skills: Some(vec![ManagedSkill { path: path.clone(), enabled: true }]),
-            ..Default::default()
-        };
-        assert_eq!(runtime_args(&config).unwrap(), vec!["--no-skills", "--skill", &path]);
-        let roundtrip: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
-        assert_eq!(runtime_args(&roundtrip).unwrap(), runtime_args(&config).unwrap());
+        std::fs::remove_dir(root).unwrap();
     }
 }

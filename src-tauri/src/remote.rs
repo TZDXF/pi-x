@@ -196,6 +196,11 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
     };
     let state = app.state::<rpc::RpcState>();
     match cmd {
+        "pi_settings_get" => commands::pi_settings_get().await,
+        "pi_settings_save" => {
+            commands::pi_settings_save(a["settings"].clone()).await?;
+            Ok(Value::Null)
+        }
         "app_config_get" => {
             serde_json::to_value(commands::app_config_get(app.clone())?).map_err(|e| e.to_string())
         }
@@ -243,7 +248,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
         }
         "session_update" => {
-            crate::sessions::session_update(text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or("缺少 archived")?).await?;
+            crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or("缺少 archived")?).await?;
             Ok(Value::Null)
         }
         "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),

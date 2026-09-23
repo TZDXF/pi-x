@@ -7,7 +7,7 @@ import {
 } from "@/api/piClient"
 
 /**
- * Shared state for pi's `~/.pix/agent/models.json`, backing the provider and
+ * Shared state for pi's `~/.pi/agent/models.json`, backing the provider and
  * model management tabs in Settings. Mutations are persisted immediately;
  * pi re-reads the file whenever its model picker opens, so no restart is
  * needed.

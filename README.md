@@ -26,7 +26,7 @@
 - **图片输入**：粘贴 / 拖拽 / 添加按钮发送图片（base64），气泡内预览
 - **Fork 分叉**：从任意历史用户提示词重新开始对话（`fork` RPC）
 - **扩展 UI 完整支持**：pi 扩展弹出的 select / confirm / input / editor 对话框以原生桌面对话框呈现，回答通过 `extension_ui_response` 回传
-- **项目信任管理**：使用 PiX 独立的 `~/.pix/agent/trust.json`，首次打开项目弹出信任确认，父目录信任自动继承
+- **项目信任管理**：调用已安装 Pi 的信任管理器，与终端共用 `trust.json`；首次打开项目弹出信任确认，父目录继承规则由 Pi 决定
 - **pi 自动检测**：扫描 PATH 与常见安装位置定位 pi；支持在应用内配置自定义 pi 路径；Windows 下解析 npm `.cmd` shim 并直接以 `node + cli.js` 启动（绕开 cmd shim 在管道下的兼容性问题）
 - **会话统计**：状态栏实时显示上下文 token 用量、成本、模型信息
 - **会话导出**：一键导出为 HTML 并用浏览器打开
@@ -69,7 +69,7 @@ pi-x/
 │   └── src/
 │       ├── rpc.rs              # pi 子进程生命周期 + stdio 桥 + 请求/响应关联
 │       ├── pi_locate.rs        # pi 定位 + npm shim 解析（node+cli.js 直启）
-│       ├── trust.rs            # trust.json 读写（与 pi TUI 语义一致）
+│       ├── trust.rs            # 调用 Pi SDK 的信任管理器
 │       ├── commands.rs         # Tauri commands + 应用配置
 │       └── lib.rs / main.rs    # 入口，退出时清理子进程
 └── package.json
@@ -86,7 +86,7 @@ pi-x/
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
-- 模型凭据：沿用 pi 现有配置（`~/.pix/agent/auth.json` 或环境变量）。**OAuth 订阅登录（Claude Pro/Max 等）暂不支持**，请使用 API key 方式。
+- 模型凭据：沿用 pi 现有配置（`~/.pi/agent/auth.json` 或环境变量）。**OAuth 订阅登录（Claude Pro/Max 等）暂不支持**，请使用 API key 方式。
 
 ### 常用命令
 
@@ -132,7 +132,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ## Roadmap
 
 ### M2（已完成）
-- [x] **会话列表**：Rust 扫描 `~/.pix/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
+- [x] **会话列表**：Rust 扫描 `~/.pi/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
 - [x] **斜杠命令面板**：基于 `get_commands` + ai-elements `PromptInputCommand` 的 `/` 命令补全
 - [x] **会话内导航**：`get_tree` 分支树可视化（活跃路径高亮、user 节点一键 fork）
 
@@ -150,7 +150,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - [ ] **扩展管理界面**：列出/启用禁用扩展包
 
 ### 暂缓
-- **主题映射**：pi 主题（`~/.pix/agent/themes`）映射到应用配色
+- **主题映射**：pi 主题（`~/.pi/agent/themes`）映射到应用配色
 - **OAuth 订阅登录**（Claude Pro/Max、ChatGPT、Copilot 等）：需要宿主应用注册与凭据安全存储方案，先依赖 pi 现有 auth.json / API key 配置
 
 ## 平台支持
@@ -180,8 +180,12 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 - 点击关闭按钮直接最小化到系统托盘，后台任务继续运行。
 - 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
-- 应用数据统一放在用户目录的 `.pix`：`config.json`（设置）、`remote.json`（远程访问）、`agent/`（模型、凭据、会话等）和 `webview/`（桌面界面本地存储与缓存）。
-- PiX 启动的 agent 使用 `.pix/agent`，不再与终端 pi 自动同步。项目内 `.pi` 配置与用户项目文件仍保留在原位置。远程浏览器的界面偏好仍属于该浏览器。
+- Pi 数据由 Pi 管理，默认使用 `~/.pi/agent`，尊重用户设置的 `PI_CODING_AGENT_DIR`。模型、凭据、提示词、技能、包配置、信任决定和会话与终端共用；PiX 不再创建独立 agent 目录。
+- 模型和思考等级作为界面选择偏好保存在浏览器本地，新项目和新对话沿用上次选择；恢复历史会话时以 Pi 会话记录为准。
+- `.pix` 仅保存 PiX 自有设置（窗口/界面、最近项目、自动标题功能、远程访问等）。会话名称保存为 Pi 原生 `session_info`；`*.pix.json` 仅保存归档和标题生成尝试标记。
+- 不读取或迁移旧 `.pix/agent`、旧默认模型、旧技能列表和旧标题字段；不会自动删除旧文件。
+- 信任、默认模型、技能路径和离线会话改名通过已安装 Pi 的 SDK 操作，要求提供 `dist/core` 的 npm 版 Pi 及 Node.js；不会自动安装第二份 Pi。
+- 项目内 `.pi` 配置仍在原位置，浏览器的界面偏好仍属于该浏览器。
 
 ### 输入框补全
 

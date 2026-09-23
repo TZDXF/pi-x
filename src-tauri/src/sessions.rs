@@ -1,4 +1,4 @@
-//! Scan `~/.pix/agent/sessions/` for session files belonging to a project.
+//! Scan `~/.pi/agent/sessions/` for session files belonging to a project.
 //!
 //! Layout: `<agent-dir>/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`.
 //! The encoding of the cwd in directory names is an implementation detail of
@@ -8,6 +8,7 @@
 use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::Serialize;
+use tauri::{AppHandle, Manager};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -163,7 +164,7 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
                 timestamp,
                 mtime_ms: mtime,
                 preview,
-                title: presentation.title,
+                title: read_session_name(&path)?,
                 archived: presentation.archived,
             });
         }
@@ -174,10 +175,33 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
 }
 
 
-// UI metadata is separate from pi's append-only conversation log.
+/// Read the last Pi session_info entry, including renames made in the terminal.
+pub(crate) fn read_session_name(path: &Path) -> Result<Option<String>, String> {
+    use std::io::{BufRead, BufReader};
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut name = None;
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
+            if entry["type"] == "session_info" {
+                name = entry["name"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+            }
+        }
+    }
+    Ok(name)
+}
+
+pub(crate) async fn set_session_name(app: &AppHandle, path: &Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+    crate::rpc::set_session_name(&app.state::<crate::rpc::RpcState>(), path, title, only_if_empty).await
+}
+
+// Only PiX-only archive/generation bookkeeping lives in the sidecar.
 #[derive(serde::Deserialize, Serialize, Default)]
 pub struct Presentation {
-    pub title: Option<String>,
     #[serde(default)]
     pub archived: bool,
     #[serde(default)]
@@ -200,7 +224,7 @@ pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Re
     std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
 }
 #[tauri::command]
-pub async fn session_update(file: String, title: Option<String>, archived: bool) -> Result<(), String> {
+pub async fn session_update(app: AppHandle, file: String, title: Option<String>, archived: bool) -> Result<(), String> {
     let path = canonicalize(&file).map_err(|e| e.to_string())?;
     let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
     if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
@@ -209,14 +233,15 @@ pub async fn session_update(file: String, title: Option<String>, archived: bool)
     if std::fs::symlink_metadata(path.with_extension("pix.json")).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("无效的会话元数据路径".into());
     }
-    update_presentation(&path, title, archived)
+    if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
+        set_session_name(&app, &path, title.trim().chars().take(120).collect(), false).await?;
+    }
+    update_presentation(&path, archived)
 }
 
-fn update_presentation(path: &Path, title: Option<String>, archived: bool) -> Result<(), String> {
+fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
     let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
     let mut presentation = read_presentation(path)?;
-    let title = title.map(|t| t.trim().chars().take(120).collect::<String>()).filter(|t| !t.is_empty());
-    if title.is_some() { presentation.title = title; }
     presentation.archived = archived;
     write_presentation(&path, &presentation)
 }
@@ -226,6 +251,15 @@ fn update_presentation(path: &Path, title: Option<String>, archived: bool) -> Re
 mod presentation_tests {
     use super::*;
     #[test]
+    fn native_session_names_use_latest_entry_and_support_clearing() {
+        let file = std::env::temp_dir().join(format!("pix-name-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "{\"type\":\"session_info\",\"name\":\"First\"}\n{\"type\":\"session_info\",\"name\":\" Last \"}\n").unwrap();
+        assert_eq!(read_session_name(&file).unwrap().as_deref(), Some("Last"));
+        std::fs::write(&file, "{\"type\":\"session_info\",\"name\":\"\"}\n").unwrap();
+        assert_eq!(read_session_name(&file).unwrap(), None);
+        std::fs::remove_file(file).unwrap();
+    }
+    #[test]
     fn rename_archive_restore() {
         let dir = std::env::temp_dir().join(format!("pix-metadata-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
@@ -233,13 +267,11 @@ mod presentation_tests {
         let original = "{\"type\":\"session\"}\n";
         std::fs::write(&file, original).unwrap();
         assert!(!read_presentation(&file).unwrap().archived);
-        update_presentation(&file, Some("  新标题  ".into()), false).unwrap();
-        assert_eq!(read_presentation(&file).unwrap().title.as_deref(), Some("新标题"));
-        update_presentation(&file, None, true).unwrap();
+        update_presentation(&file, false).unwrap();
+        update_presentation(&file, true).unwrap();
         let archived = read_presentation(&file).unwrap();
         assert!(archived.archived);
-        assert_eq!(archived.title.as_deref(), Some("新标题"));
-        update_presentation(&file, None, false).unwrap();
+        update_presentation(&file, false).unwrap();
         assert!(!read_presentation(&file).unwrap().archived);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
         std::fs::remove_file(file.with_extension("pix.json")).unwrap();

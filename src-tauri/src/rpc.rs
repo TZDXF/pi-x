@@ -35,6 +35,7 @@ struct SessionInner {
 #[derive(Default)]
 pub struct RpcState {
     inner: Mutex<Option<SessionInner>>,
+    navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
     generation: Arc<AtomicU64>,
 }
@@ -95,7 +96,6 @@ pub async fn spawn(
         }
     };
 
-    cmd.env("PI_CODING_AGENT_DIR", crate::trust::agent_dir());
     cmd.current_dir(project)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -224,6 +224,9 @@ async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {
 
 /// Send a correlated request; resolves with the matching `response` object.
 pub async fn request(state: &RpcState, mut command: Value) -> Result<Value, String> {
+    let _navigation = if matches!(command["type"].as_str(), Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")) {
+        Some(state.navigation.lock().await)
+    } else { None };
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
 
@@ -243,6 +246,47 @@ pub async fn request(state: &RpcState, mut command: Value) -> Result<Value, Stri
         Ok(response) => Ok(response),
         Err(_) => Err("pi exited before responding".into()),
     }
+}
+
+/// Serialize name writes with navigation so a delayed title cannot rename a different session.
+pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+    let _navigation = state.navigation.lock().await;
+    let guard = state.inner.lock().await;
+    if let Some(inner) = guard.as_ref() {
+        let response = name_request(inner, json!({"type": "get_state"})).await?;
+        let data = &response["data"];
+        let active = data["sessionFile"].as_str().map(|f| dunce::canonicalize(f).unwrap_or_else(|_| f.into()));
+        if active.as_deref() == Some(path) {
+            if only_if_empty {
+                if let Some(name) = data["sessionName"].as_str().filter(|s| !s.is_empty()) { return Ok(Some(name.into())); }
+            }
+            name_request(inner, json!({"type": "set_session_name", "name": title})).await?;
+            return Ok(Some(title));
+        }
+    }
+    // Keep navigation locked while the SDK updates an inactive log as well.
+    if !path.is_file() { return Err("Pi session has not been persisted".into()); }
+    let request = json!({"op": "session_name", "file": path, "title": title, "onlyIfEmpty": only_if_empty});
+    let result = tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())??;
+    drop(guard);
+    Ok(result.as_str().map(str::to_owned))
+}
+
+async fn name_request(inner: &SessionInner, mut command: Value) -> Result<Value, String> {
+    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+    command["id"] = json!(id);
+    let (tx, rx) = oneshot::channel();
+    inner.pending.lock().await.insert(id, tx);
+    let result = async {
+        write_line(inner, command.to_string()).await?;
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx).await
+            .map_err(|_| "Pi session name request timed out".to_string())?
+            .map_err(|_| "Pi exited before responding".to_string())?;
+        if response["success"] != true { return Err(response["error"].to_string()); }
+        Ok(response)
+    }.await;
+    inner.pending.lock().await.remove(&id);
+    result
 }
 
 /// Fire-and-forget write (e.g. `extension_ui_response`).
