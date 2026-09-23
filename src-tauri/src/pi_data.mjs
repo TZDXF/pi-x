@@ -27,7 +27,7 @@ if (op.startsWith("trust_")) {
   checkErrors(settings);
   const policy = settings.getDefaultProjectTrust();
   result = { projectPath: project, parentPath: getProjectTrustParentPath(project) ?? null,
-    hasTrustRequiringResources: resources, decision,
+    hasTrustRequiringResources: resources, decision, policy,
     needsDecision: resources && decision === null && policy === "ask" };
 } else if (op.startsWith("settings_")) {
   const { SettingsManager } = await load("core/settings-manager.js");

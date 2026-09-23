@@ -18,11 +18,12 @@ import {
   trustSave,
   trustStatus,
 } from "@/api/piClient"
-import type { AppConfig, RunningSession, TrustStatus } from "@/api/piClient"
+import type { AppConfig, RunningSession, TrustStatus, WorkspaceContext } from "@/api/piClient"
 import { useSessionStore, sessionFor, uiFor, activeRuntimeId, activateSession, createConversation, findConversation } from "@/stores/conversations"
-import { useWorkspaceStore, registerSessionMtimeSync } from "@/stores/workspace"
+import { useWorkspaceStore, registerSessionMtimeSync, type ProjectGroup } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
+import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
@@ -43,6 +44,8 @@ const ui = useUiStore()
 const { t } = useI18n()
 
 const sidebarOpen = ref(true)
+const projectDialogOpen = ref(false)
+const editingProjectPath = ref<string | null>(null)
 
 const phase = ref<Phase>("detecting")
 const config = ref<AppConfig>({})
@@ -52,6 +55,18 @@ const lastError = ref<string | null>(null)
 
 const started = computed({ get: () => session.started, set: value => { session.started = value } })
 const connecting = ref(false)
+const runtimeWorkspaces = new Map<string, string>()
+function contextFor(dir: string): WorkspaceContext | undefined {
+  const group = workspace.projectGroups[workspace.projectRoot(dir)]
+  return group ? { name: group.name, primary: group.primary, roots: [...group.folders] } : undefined
+}
+function contextSignature(dir: string) { return JSON.stringify(contextFor(dir) ?? null) }
+async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
+  const context = contextFor(dir)
+  await spawnPi(dir, file, runtimeId, context)
+  runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
+}
+
 // event listener lifecycle: always unlisten on unmount, otherwise HMR
 // remounts stack duplicate listeners and events get handled N times
 let unlisteners: Array<() => void> = []
@@ -219,7 +234,7 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
   if (active) connecting.value = true
   try {
     await killPi(owner.runtimeId)
-    await spawnPi(dir, file, owner.runtimeId)
+    await spawnWorkspacePi(dir, file, owner.runtimeId)
     owner.started = true
     owner.clear()
     await owner.init(dir)
@@ -288,10 +303,19 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
 
 async function start(): Promise<boolean> {
   const owner = sessionFor(activeRuntimeId.value)
-  if (owner.started) return true
+  if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value)) return true
+  if (owner.started && owner.isStreaming) return true // rebuild when the current turn settles
+  if (owner.started && owner.sessionFile) {
+    await rebuildConversation(owner)
+    return owner.started
+  }
+  if (owner.started) {
+    await killPi(owner.runtimeId)
+    owner.started = false
+  }
   connecting.value = true
   try {
-    await spawnPi(project.value, undefined, owner.runtimeId)
+    await spawnWorkspacePi(project.value, undefined, owner.runtimeId)
     await owner.init(project.value, true)
     owner.started = true
     return true
@@ -308,7 +332,32 @@ async function start(): Promise<boolean> {
 
 async function switchProject() {
   if (workspace.gitBusy || navigating.value || connecting.value) return
-  phase.value = "pick"
+  editingProjectPath.value = null
+  projectDialogOpen.value = true
+}
+
+function editProject(path: string) {
+  if (workspace.gitBusy || navigating.value || connecting.value) return
+  editingProjectPath.value = path
+  projectDialogOpen.value = true
+}
+
+async function saveProject(group: ProjectGroup) {
+  try {
+    const oldPath = editingProjectPath.value
+    if (oldPath) {
+      const activeGroup = workspace.projectRoot(project.value) === oldPath
+      workspace.updateProject(oldPath, group)
+      projectDialogOpen.value = false
+      editingProjectPath.value = null
+      for (const folder of group.folders) void workspace.refresh(folder).catch(console.warn)
+      if (activeGroup && group.primary !== project.value) await selectProject(group.primary)
+    } else {
+      workspace.createProject(group)
+      projectDialogOpen.value = false
+      await selectProject(group.primary)
+    }
+  } catch (e) { ui.pushToast(String(e), "error") }
 }
 
 /** Resume a stored session: switch in-process when possible, else restart. */
@@ -339,7 +388,7 @@ async function resumeSession(file: string, targetProject?: string) {
     // A dormant conversation gets its own worker; other workers are untouched.
     if (!owner) owner = createConversation(project.value)
     else activateSession(owner.runtimeId)
-    await spawnPi(project.value, file, owner.runtimeId)
+    await spawnWorkspacePi(project.value, file, owner.runtimeId)
     owner.started = true
     owner.clear()
     await owner.init(project.value)
@@ -374,7 +423,7 @@ async function removeProject(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {
-    if (path === project.value) {
+    if (workspace.projectRoot(project.value) === path) {
       const nextConfig = { ...config.value, lastProject: undefined }
       // Persist before altering UI so a failure does not silently re-open the project.
       await saveConfig(nextConfig)
@@ -411,6 +460,7 @@ onUnmounted(() => {
       @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
       @new-session="path => requestNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
+      @edit-project="editProject"
       @settings="navigate('/settings/general')"
       @collapse="sidebarOpen = false"
     />
@@ -435,7 +485,7 @@ onUnmounted(() => {
         :phase
         :config
         @configured="phase = 'pick'"
-        @project-selected="selectProject"
+        @open-project="switchProject"
       />
 
       <div
@@ -446,7 +496,7 @@ onUnmounted(() => {
       </div>
 
       <template v-else-if="phase === 'chat'">
-        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(project))" />
+        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" />
       </template>
 
       <div
@@ -473,6 +523,7 @@ onUnmounted(() => {
       </div>
       </template>
     </main>
+    <CreateProjectDialog :open="projectDialogOpen" :edit-path="editingProjectPath" @close="projectDialogOpen = false; editingProjectPath = null" @save="saveProject" />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div

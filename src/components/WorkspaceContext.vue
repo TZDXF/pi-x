@@ -23,7 +23,7 @@ const worktree = ref(false)
 const branch = ref("")
 const error = ref("")
 const blocked = computed(() => props.disabled || workspace.gitBusy)
-const name = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
+const name = (path: string) => workspace.projectName(path)
 let request = 0
 async function refresh() {
   const id = ++request
@@ -63,7 +63,7 @@ watch(() => props.project, refresh, { immediate: true })
   <div class="workspace-context">
     <Popover v-model:open="projectOpen"><PopoverTrigger as-child><Button variant="ghost" size="sm" class="context-chip" :disabled="blocked" :title="project"><Folder :size="14" /><span class="truncate">{{ name(project) }}</span><ChevronDown :size="12" /></Button></PopoverTrigger>
       <PopoverContent align="start" class="w-72 p-2"><p class="px-2 py-1 text-xs text-muted-foreground">{{ t('workspace.selectProject') }}</p>
-        <Button v-for="path in workspace.orderedProjects()" :key="path" variant="ghost" size="sm" class="context-menu-item" :aria-current="path === project ? 'true' : undefined" :title="path" @click="select(path)"><Folder :size="14" /><span class="truncate">{{ name(path) }}</span><span v-if="path === project" class="ml-auto">✓</span></Button>
+        <Button v-for="path in workspace.orderedProjects()" :key="path" variant="ghost" size="sm" class="context-menu-item" :aria-current="path === workspace.projectRoot(project) ? 'true' : undefined" :title="path" @click="select(path)"><Folder :size="14" /><span class="truncate">{{ name(path) }}</span><span v-if="path === workspace.projectRoot(project)" class="ml-auto">✓</span></Button>
         <Button variant="ghost" size="sm" class="context-menu-item" @click="projectOpen = false; emit('openProject')"><Plus :size="14" />{{ t('sidebar.openProject') }}</Button>
       </PopoverContent>
     </Popover>

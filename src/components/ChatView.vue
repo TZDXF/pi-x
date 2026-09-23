@@ -403,7 +403,7 @@ async function onSubmit(message: {
     }
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text), runningBehavior.value)
+  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text, workspace.projectFolders(props.project).filter(path => path !== props.project)), runningBehavior.value)
 }
 
 function thinkingLabel(lv: string) {

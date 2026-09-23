@@ -230,6 +230,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 text("project")?,
                 a["sessionFile"].as_str().map(str::to_owned),
                 a["runtimeId"].as_str().map(str::to_owned),
+                serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
             )
             .await?;
             Ok(Value::Null)

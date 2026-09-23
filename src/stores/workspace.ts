@@ -13,10 +13,13 @@ function notifySessionMtimeSync(file: string, mtimeMs: number) {
   sessionMtimeSync?.(file, mtimeMs)
 }
 
+export interface ProjectGroup { name: string; folders: string[]; primary: string }
+
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
   const projects = ref<string[]>([])
   const pinnedProjects = ref<string[]>([])
+  const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
   const pending = new Map<string, SessionMeta>()
@@ -37,10 +40,24 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   } catch { /* Optional storage. */ }
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("pix.projectGroups") || "{}")
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      for (const [primary, value] of Object.entries(stored)) {
+        if (!projects.value.includes(primary) || !value || typeof value !== "object") continue
+        const group = value as Partial<ProjectGroup>
+        if (typeof group.name === "string" && Array.isArray(group.folders)
+          && group.folders.every(p => typeof p === "string") && group.folders.includes(primary)) {
+          projectGroups.value[primary] = { name: group.name, folders: group.folders, primary }
+        }
+      }
+    }
+  } catch { /* Optional storage. */ }
   function persistProjects() {
     try {
       localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
       localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
+      localStorage.setItem("pix.projectGroups", JSON.stringify(projectGroups.value))
     } catch { /* Optional storage. */ }
   }
   function persistSessionOrder() {
@@ -76,6 +93,39 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     applySessionOrder(path)
     persistSessionOrder()
   }
+  function createProject(group: ProjectGroup) {
+    const { primary, folders, name } = group
+    if (!primary || !name.trim() || !folders.includes(primary) || new Set(folders).size !== folders.length
+      || folders.some(path => projects.value.includes(path) || Object.values(projectGroups.value).some(existing => existing.folders.includes(path)))) {
+      throw new Error("Project folders must be unique and not belong to another project")
+    }
+    projects.value = [primary, ...projects.value]
+    projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
+    persistProjects()
+  }
+  function projectRoot(path: string) {
+    return Object.values(projectGroups.value).find(group => group.folders.includes(path))?.primary || path
+  }
+  function updateProject(oldPrimary: string, group: ProjectGroup) {
+    if (!projects.value.includes(oldPrimary)) throw new Error("Project not found")
+    const { primary, folders, name } = group
+    if (!primary || !name.trim() || !folders.includes(primary) || new Set(folders).size !== folders.length
+      || folders.some(folder => projects.value.some(path => path !== oldPrimary && path === folder)
+        || Object.entries(projectGroups.value).some(([path, existing]) => path !== oldPrimary && existing.folders.includes(folder)))) {
+      throw new Error("Project folders must be unique and not belong to another project")
+    }
+    projects.value = projects.value.map(path => path === oldPrimary ? primary : path)
+    pinnedProjects.value = pinnedProjects.value.map(path => path === oldPrimary ? primary : path)
+    delete projectGroups.value[oldPrimary]
+    projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
+    persistProjects()
+  }
+  function projectName(path: string) {
+    return projectGroups.value[projectRoot(path)]?.name || path.split(/[\\/]/).filter(Boolean).pop() || path
+  }
+  function projectFolders(path: string) {
+    return projectGroups.value[projectRoot(path)]?.folders || [path]
+  }
   function togglePin(path: string) {
     if (!projects.value.includes(path)) return
     pinnedProjects.value = pinnedProjects.value.includes(path)
@@ -85,6 +135,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function removeProject(path: string) {
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
+    delete projectGroups.value[path]
     delete sessionOrder.value[path]
     versions[path] = (versions[path] || 0) + 1
     delete histories.value[path]
@@ -94,7 +145,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function remember(path: string) {
     if (!path) return
-    if (!projects.value.includes(path)) projects.value = [path, ...projects.value]
+    if (!projects.value.includes(path) && projectRoot(path) === path) projects.value = [path, ...projects.value]
     persistProjects()
   }
   async function refresh(path: string) {
@@ -146,5 +197,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, pinnedProjects, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
+  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
 })

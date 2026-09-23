@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-function harness() {
+function harness(initialStorage = new Map()) {
   const source = readFileSync(new URL('../src/stores/workspace.ts', import.meta.url), 'utf8')
     .replace(/^import .*$/gm, '').replace(/export /g, '') + '\nglobalThis.store = useWorkspaceStore();'
-  const requests = [], writes = [], storage = new Map()
+  const requests = [], writes = [], storage = initialStorage
   const context = vm.createContext({
     defineStore: (_, setup) => setup, ref: value => ({ value }),
     listSessions: path => new Promise(resolve => requests.push({ path, resolve })),
@@ -19,6 +19,36 @@ function harness() {
 test('projects are persisted without duplicates', () => {
   const h = harness(); h.store.remember('C:/one'); h.store.remember('C:/one'); h.store.remember('C:/two')
   assert.deepEqual(JSON.parse(h.storage.get('pix.recentProjects')), ['C:/two', 'C:/one'])
+})
+test('named projects keep all folders and selected primary without duplicating navigation entries', () => {
+  const h = harness()
+  h.store.createProject({ name: 'Workspace', folders: ['C:/frontend', 'C:/backend'], primary: 'C:/backend' })
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['C:/backend'])
+  assert.equal(h.store.projectName('C:/backend'), 'Workspace')
+  assert.deepEqual(Array.from(h.store.projectFolders('C:/backend')), ['C:/frontend', 'C:/backend'])
+  assert.equal(JSON.parse(h.storage.get('pix.projectGroups'))['C:/backend'].primary, 'C:/backend')
+  const reopened = harness(h.storage)
+  assert.equal(reopened.store.projectName('C:/backend'), 'Workspace')
+  assert.deepEqual(Array.from(reopened.store.projectFolders('C:/backend')), ['C:/frontend', 'C:/backend'])
+  assert.throws(() => h.store.createProject({ name: 'Duplicate', folders: ['C:/frontend'], primary: 'C:/frontend' }))
+  h.store.removeProject('C:/backend')
+  assert.deepEqual(JSON.parse(h.storage.get('pix.projectGroups')), {})
+})
+test('editing a project rekeys its primary and pin while preserving folder session caches', () => {
+  const h = harness()
+  h.store.createProject({ name: 'Before', folders: ['C:/old', 'C:/new'], primary: 'C:/old' })
+  h.store.togglePin('C:/old')
+  h.store.histories.value['C:/old'] = [{ file: 'old-chat', cwd: 'C:/old' }]
+  h.store.updateProject('C:/old', { name: 'After', folders: ['C:/old', 'C:/new'], primary: 'C:/new' })
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['C:/new'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.pinnedProjects')), ['C:/new'])
+  assert.equal(h.store.projectRoot('C:/old'), 'C:/new')
+  assert.equal(h.store.projectName('C:/old'), 'After')
+  assert.equal(h.store.histories.value['C:/old'][0].file, 'old-chat')
+  h.store.remember('C:/old')
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ['C:/new'])
+  assert.equal(harness(h.storage).store.projectName('C:/new'), 'After')
+  assert.throws(() => h.store.updateProject('C:/new', { name: 'Nope', folders: ['C:/old', 'C:/old'], primary: 'C:/old' }))
 })
 test('refresh sorts by time and ignores stale responses', async () => {
   const h = harness(); const a = h.store.refresh('project'), b = h.store.refresh('project')

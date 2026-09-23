@@ -2,14 +2,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '@/stores/conversations'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { searchFiles, type FileHit } from '@/api/piClient'
-import { completionToken, insertCompletion, desktopCommands } from '@/lib/completion'
+import { completionToken, insertCompletion, desktopCommands, mergeWorkspaceFiles } from '@/lib/completion'
 import { usePromptInput, PromptInputCommand, PromptInputCommandList, PromptInputCommandGroup, PromptInputCommandItem, PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { Loader } from '@/components/ai-elements/loader'
 
 const props = defineProps<{ project: string; connected: boolean; ensureStarted: () => Promise<boolean> }>()
 const { t } = useI18n()
 const session = useSessionStore()
+const workspace = useWorkspaceStore()
+const roots = computed(() => workspace.projectFolders(props.project))
 const { textInput, setTextInput } = usePromptInput()
 const id = useId()
 const anchor = ref<HTMLElement | null>(null)
@@ -75,12 +78,17 @@ async function load(retry = false) {
   if (!open.value || !token.value) return
   const current = token.value
   const project = props.project
+  const searchRoots = [...new Set([project, ...roots.value])]
   loading.value = true
   if (current.kind === 'file') {
     timer = setTimeout(async () => {
       try {
-        const hits = await searchFiles(project, current.query)
-        if (seq === sequence) files.value = hits
+        const results = await Promise.allSettled(searchRoots.map(root => searchFiles(root, current.query)))
+        if (seq === sequence) {
+          const hits = mergeWorkspaceFiles(project, searchRoots, results.map(result => result.status === 'fulfilled' ? result.value : null))
+          files.value = hits
+          if (!hits.length && results.every(result => result.status === 'rejected')) throw (results[0] as PromiseRejectedResult).reason
+        }
       } catch (e) { if (seq === sequence) error.value = String(e) }
       finally { if (seq === sequence) loading.value = false }
     }, 150)
@@ -104,7 +112,7 @@ async function load(retry = false) {
     finally { if (seq === sequence) loading.value = false }
   }
 }
-watch([token, open, () => props.project, () => props.connected], () => load())
+watch([token, open, () => props.project, () => props.connected, () => JSON.stringify(roots.value)], () => load())
 
 async function onEditorEvent(event: Event) {
   if (event.type === 'compositionstart') composing.value = true

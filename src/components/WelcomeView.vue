@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import PiXLogo from "@/components/PiXLogo.vue"
-import { isDesktop } from "@/api/transport"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { open } from "@tauri-apps/plugin-dialog"
 import { detectPi, saveConfig } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,7 +14,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   configured: []
-  projectSelected: [dir: string]
+  openProject: []
 }>()
 
 const customPath = ref(props.config.piPath ?? "")
@@ -33,11 +31,6 @@ async function saveAndDetect() {
   } finally {
     busy.value = false
   }
-}
-
-async function pickFolder() {
-  const dir = isDesktop ? await open({ directory: true, title: t("welcome.openFolderTitle") }) : window.prompt(t("settings.remoteProject"))
-  if (typeof dir === "string") emit("projectSelected", dir)
 }
 </script>
 
@@ -101,7 +94,7 @@ async function pickFolder() {
         </div>
         <Button
           class="h-11 w-full"
-          @click="pickFolder"
+          @click="emit('openProject')"
         >
           {{ t("welcome.openFolder") }}
         </Button>

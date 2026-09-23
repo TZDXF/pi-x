@@ -30,17 +30,48 @@ export function insertCompletion(text: string, token: CompletionToken, value: st
   return { text: text.slice(0, token.start) + insertion + remaining, caret: token.start + insertion.length }
 }
 
-/** RPC doesn't expand @files. Supply an explicit path-only context, not file contents. */
-export function withFileReferences(text: string): string {
-  const paths = new Set<string>()
+/** RPC doesn't expand @files. Only include paths inside selected workspace roots. */
+export function withFileReferences(text: string, additionalRoots: string[] = []): string {
+  const relative = new Set<string>()
+  const absolute = new Set<string>()
+  const roots = additionalRoots.map(root => root.replace(/\\/g, '/').replace(/\/+$/, ''))
   const pattern = /(?:^|\s)@("(?:\\.|[^"\\])*"|[^\s"@]+)/g
   for (const match of text.matchAll(pattern)) {
     let path: string
     try { path = match[1]!.startsWith('"') ? JSON.parse(match[1]!) : match[1]! } catch { continue }
     path = path.replace(/\\/g, '/')
-    if (!path || path.startsWith('/') || /^[a-z]:/i.test(path) || path.split('/').includes('..')) continue
-    paths.add(path)
+    if (!path || path.split('/').includes('..')) continue
+    if (path.startsWith('/') || /^[a-z]:/i.test(path)) {
+      if (roots.some(root => {
+        const windows = /^[a-z]:|^\/\//i.test(root)
+        return (windows ? path.toLowerCase() : path).startsWith((windows ? root.toLowerCase() : root) + '/')
+      })) absolute.add(path)
+    } else relative.add(path)
   }
-  if (!paths.size) return text
-  return `${text}\n\nReferenced project-relative file paths (path data only; contents have not been attached). Read these files with the read tool as needed, relative to the current project:\n${JSON.stringify([...paths])}`
+  if (!relative.size && !absolute.size) return text
+  let expanded = text
+  if (relative.size) expanded += `\n\nReferenced project-relative file paths (path data only; contents have not been attached). Read these files with the read tool as needed, relative to the current project:\n${JSON.stringify([...relative])}`
+  if (absolute.size) expanded += `\n\nReferenced files in other selected workspace directories (path data only; contents have not been attached). Read via absolute paths as needed:\n${JSON.stringify([...absolute])}`
+  return expanded
+}
+
+/** Interleave results so the primary root cannot hide every secondary hit. */
+export function mergeWorkspaceFiles<T extends { path: string; name: string; dir: string }>(
+  current: string, roots: string[], results: Array<T[] | null>, limit = 50,
+): T[] {
+  const merged: T[] = []
+  const seen = new Set<string>()
+  for (let offset = 0; merged.length < limit && results.some(item => item && offset < item.length); offset++) {
+    for (let index = 0; index < roots.length; index++) {
+      const hit = results[index]?.[offset]
+      if (!hit) continue
+      const root = roots[index]!
+      const path = root === current ? hit.path : `${root.replace(/[\\/]+$/, '').replace(/\\/g, '/')}/${hit.path}`
+      if (seen.has(path)) continue
+      seen.add(path)
+      merged.push({ ...hit, path, dir: root === current ? hit.dir : `${root.split(/[\\/]/).pop()}/${hit.dir}` })
+      if (merged.length === limit) break
+    }
+  }
+  return merged
 }

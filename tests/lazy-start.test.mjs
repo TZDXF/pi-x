@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-function harness() {
-  const calls = []
+function harness(group = null) {
+  const calls = [], spawnArgs = []
+  const workspace = { projectRoot: path => path, projectGroups: group ? { project: group } : {} }
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     .split('<script setup lang="ts">')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, '')
@@ -21,7 +22,7 @@ function harness() {
     onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
     useI18n: () => ({ t: x => x }),
     useSessionStore: () => new Proxy({}, { get: (_, k) => sessionFor(activeRuntimeId.value)[k] }),
-    useWorkspaceStore: () => ({}), useUiStore: () => ({ clear() {}, pushToast() {} }),
+    useWorkspaceStore: () => workspace, useUiStore: () => ({ clear() {}, pushToast() {} }),
     sessionFor, uiFor: () => ({ pushToast() {}, handleRequest() {}, pushStderr() {} }),
     activeRuntimeId,
     activateSession: id => { sessionFor(id); activeRuntimeId.value = id },
@@ -30,13 +31,13 @@ function harness() {
     getConfig: async () => ({ lastProject: 'project' }),
     onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
-    spawnPi: async () => calls.push('spawn'), killPi: async () => {},
+    spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
-  return { context, calls }
+  return { context, calls, spawnArgs, workspace }
 }
 test('opening the app, selecting projects and drafting a new chat do not start pi', async () => {
   const { context, calls } = harness()
@@ -61,6 +62,22 @@ test('opening a saved conversation starts pi on demand', async () => {
 
  test('only fresh process startup applies remembered selection', () => {
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
-  assert.match(source, /await spawnPi\(project.value, undefined, owner.runtimeId\)\s+await owner.init\(project.value, true\)/)
+  assert.match(source, /await spawnWorkspacePi\(project.value, undefined, owner.runtimeId\)\s+await owner.init\(project.value, true\)/)
   assert.equal((source.match(/\.init\(project.value, true\)/g) || []).length, 1)
+})
+
+test('a grouped project passes every root to Pi and refreshes context on the next prompt after edits', async () => {
+  const group = { name: 'Both', primary: 'project', folders: ['project', 'other'] }
+  const { context, calls, spawnArgs } = harness(group)
+  await context.mount()
+  await context.actions.selectProject('project')
+  assert.equal(await context.actions.start(), true)
+  assert.ok(spawnArgs[0][3], JSON.stringify(spawnArgs))
+  assert.deepEqual(Array.from(spawnArgs[0][3].roots), ['project', 'other'])
+  assert.equal(spawnArgs[0][3].name, 'Both')
+  context.sessionFor(context.activeRuntimeId.value).sessionFile = 'saved.jsonl'
+  group.name = 'Renamed'
+  assert.equal(await context.actions.start(), true)
+  assert.equal(spawnArgs[1][3].name, 'Renamed')
+  assert.deepEqual(calls, ['spawn', 'init', 'spawn', 'init'])
 })

@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
-  removeProject: [project: string];
+  removeProject: [project: string]; editProject: [project: string];
   newSession: [project: string]; settings: []; collapse: []
 }>()
 const session = useSessionStore()
@@ -33,10 +33,13 @@ const title = ref("")
 const saving = ref(false)
 const navigationDisabled = computed(() => props.navigationBusy || workspace.gitBusy || saving.value)
 const disabled = computed(() => props.busy || workspace.gitBusy || saving.value)
-const name = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
+const name = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
-  return (workspace.histories[path] || []).filter(s => !!s.archived === showArchived.value && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
+  const folders = workspace.projectFolders(path)
+  const sessions = folders.length === 1 ? (workspace.histories[path] || [])
+    : folders.flatMap(folder => workspace.histories[folder] || []).sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return sessions.filter(s => !!s.archived === showArchived.value && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
 }
 async function openProjectFolder(path: string) {
   try { await openPath(path) }
@@ -99,7 +102,7 @@ function onProjectDrop(e: DragEvent, path: string) {
   workspace.reorderProjects(next)
 }
 function onSessionDragStart(e: DragEvent, path: string, file: string) {
-  if (disabled.value || query.value) { e.preventDefault(); return }
+  if (disabled.value || query.value || workspace.projectFolders(path).length > 1) { e.preventDefault(); return }
   dragSession.value = { path, file }
   if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", file) }
 }
@@ -129,7 +132,7 @@ watch(() => props.project, path => { workspace.remember(path); if (path) void re
 watch(() => [props.ready, session.sessionFile, session.isStreaming], () => {
   if (props.ready && !session.isStreaming && props.project) void refresh(props.project)
 })
-for (const path of workspace.projects) if (path !== props.project) void refresh(path)
+for (const path of workspace.projects) for (const folder of workspace.projectFolders(path)) if (folder !== props.project) void refresh(folder)
 </script>
 
 <template>
@@ -143,7 +146,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
     </div>
     <ScrollArea class="project-groups" @dragend="clearDrag">
       <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
-        <div class="project-heading" :class="{ selected: path === project && !session.entries.length, 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
+        <div class="project-heading" :class="{ selected: path === workspace.projectRoot(project) && !session.entries.length, 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
           <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
             <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
@@ -154,6 +157,7 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
             <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
               <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" /><Pin v-else :size="14" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
+              <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
               <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem class="text-destructive" :title="t('workspace.removeProjectHint')" @select="emit('removeProject', path)"><X :size="14" />{{ t('workspace.removeProject') }}</DropdownMenuItem>
@@ -161,10 +165,10 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           </DropdownMenu>
         </div>
         <div v-if="!collapsed[path]" class="session-list">
-          <div v-if="path === project && ready && session.entries.length > 0 && !showArchived && !query && !workspace.histories[path]?.some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
-            :draggable="!disabled && !query" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</Button>
+            :draggable="!disabled && !query && workspace.projectFolders(path).length === 1" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
+            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
             <span v-if="isSessionRunning(s.file)" class="session-running" :aria-label="t('chat.thinking')" />
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>

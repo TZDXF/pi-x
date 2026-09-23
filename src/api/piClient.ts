@@ -85,8 +85,10 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
 
-export const spawnPi = (project: string, sessionFile?: string, runtimeId = activeRuntimeId.value) =>
-  invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId })
+export interface WorkspaceContext { name: string; primary: string; roots: string[] }
+
+export const spawnPi = (project: string, sessionFile?: string, runtimeId = activeRuntimeId.value, workspace?: WorkspaceContext) =>
+  invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId, workspace: workspace ?? null })
 
 export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_kill", { runtimeId })
 
