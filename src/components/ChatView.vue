@@ -149,24 +149,38 @@ async function openFork() {
   }
 }
 
-/** Branch from the prompt that produced the answer at entryIndex. */
+/**
+ * Branch right AFTER the answer at entryIndex: the new branch keeps this
+ * answer and drops the questions (and everything else) that follow it.
+ * pi forks *before* a user message, so we fork at the next question.
+ */
 async function forkFromAnswer(entryIndex: number) {
   const list = session.entries
-  let promptText: string | null = null
-  for (let i = entryIndex - 1; i >= 0; i--) {
+  let questionText: string | null = null
+  let questionIndex = -1
+  for (let i = entryIndex + 1; i < list.length; i++) {
     const e = list[i]
-    if (e.kind === "user") { promptText = e.text; break }
+    if (e.kind === "user") { questionText = e.text; questionIndex = i; break }
+  }
+  if (questionText === null) {
+    ui.pushToast(t("chat.toastForkNoLater"), "info")
+    return
   }
   try {
     const res = await rpcRequest<{
       messages: { entryId: string; text: string }[]
     }>({ type: "get_fork_messages" })
     if (!res.success) throw new Error(res.error ?? "fork list failed")
-    // Oldest first, then find the nearest match so duplicates resolve to the latest prompt.
-    const chronological = (res.data?.messages ?? []).slice().reverse()
-    const target = promptText !== null
-      ? [...chronological].reverse().find(m => m.text === promptText)
-      : undefined
+    const chronological = res.data?.messages ?? []
+    // Resolve duplicates by occurrence rank: the n-th identical question on
+    // this branch maps to the n-th identical entry in the fork list.
+    let rank = 0
+    for (let i = 0; i <= questionIndex; i++) {
+      const e = list[i]
+      if (e.kind === "user" && e.text === questionText) rank++
+    }
+    const matches = chronological.filter(m => m.text === questionText)
+    const target = matches[rank - 1] ?? matches[matches.length - 1]
     if (target) await doFork(target.entryId)
     else await openFork() // fall back to the prompt picker
   } catch (e) {

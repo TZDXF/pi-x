@@ -192,6 +192,7 @@ export default {
     forkEmpty: "No user messages available yet.",
     toastForkCancelled: "Fork cancelled by an extension",
     toastForked: "Forked from earlier prompt",
+    toastForkNoLater: "No prompt after this answer - nothing to branch off",
     toastExported: "Session exported",
     toastCopied: "Copied",
   },
