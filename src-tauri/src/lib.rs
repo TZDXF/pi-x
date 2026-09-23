@@ -11,6 +11,7 @@ mod remote;
 mod remote;
 mod rpc;
 mod sessions;
+mod terminal;
 mod title_generation;
 mod workspace_git;
 mod trust;
@@ -25,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(RpcState::default())
+        .manage(terminal::TerminalState::default())
         .setup(|app| {
             data_dir::initialize()?;
             let config = app.config().app.windows[0].clone();
@@ -84,6 +86,10 @@ pub fn run() {
             packages::package_update,
             packages::package_resources,
             packages::package_set_resource,
+            terminal::term_create,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_kill,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -91,6 +97,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 let state = app.state::<RpcState>();
                 let _ = tauri::async_runtime::block_on(rpc::kill_all(&state));
+                terminal::kill_all(&app.state::<terminal::TerminalState>());
             }
         });
 }

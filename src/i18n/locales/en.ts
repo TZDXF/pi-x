@@ -191,6 +191,14 @@ export default {
     toastCopied: "Copied",
   },
 
+  terminal: {
+    toggle: "Terminal",
+    new: "New terminal",
+    closeTab: "Close terminal",
+    hide: "Hide terminal",
+    exited: "Process exited (code {code}). Click + to open a new terminal.",
+  },
+
   titleGeneration: {
     page: "Model configuration",
     description: "Set the default model for new conversations; features like title generation can follow the main model or use their own.",

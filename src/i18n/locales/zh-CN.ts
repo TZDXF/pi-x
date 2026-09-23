@@ -191,6 +191,14 @@ export default {
     toastCopied: "已复制",
   },
 
+  terminal: {
+    toggle: "终端",
+    new: "新建终端",
+    closeTab: "关闭终端",
+    hide: "收起终端",
+    exited: "进程已退出（退出码 {code}），点击 + 新建终端",
+  },
+
   titleGeneration: {
     page: "模型配置",
     description: "设置新会话的默认模型；标题生成等功能可跟随主模型，也可独立指定模型。",

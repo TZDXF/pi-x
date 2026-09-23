@@ -67,10 +67,12 @@ import { withFileReferences, desktopCommands } from "@/lib/completion"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
+import { isDesktop } from "@/api/transport"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
 const runtimeId = activeRuntimeId.value
 const session = sessionFor(runtimeId)
@@ -257,6 +259,16 @@ watch(
   },
 )
 
+// ---- built-in terminal (desktop only) ----
+const terminalOpen = ref(false)
+const terminalPanel = ref<InstanceType<typeof TerminalPanel> | null>(null)
+function toggleTerminal() {
+  terminalOpen.value = !terminalOpen.value
+  if (terminalOpen.value && !terminalPanel.value?.hasTerminals()) {
+    terminalPanel.value?.openTerminal()
+  }
+}
+
 // ---- context usage (ai-elements Context) ----
 const contextUsage = computed(() => session.stats?.contextUsage ?? null)
 const contextTokenUsage = computed<LanguageModelUsage | undefined>(() => {
@@ -397,6 +409,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
           >{{ t("chat.compacting") }}</span
         >
+        <Button
+          v-if="isDesktop"
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground"
+          :title="t('terminal.toggle')"
+          :class="{ 'bg-accent text-accent-foreground': terminalOpen }"
+          @click="toggleTerminal"
+        >
+          <SquareTerminal />
+        </Button>
       </div>
     </header>
 
@@ -507,6 +531,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     >
       {{ ui.widget.lines.join("\n") }}
     </div>
+
+    <!-- built-in terminal (desktop only) -->
+    <TerminalPanel
+      v-if="isDesktop"
+      ref="terminalPanel"
+      v-show="terminalOpen"
+      :project="project"
+      :visible="terminalOpen"
+      @close="terminalOpen = false"
+    />
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
