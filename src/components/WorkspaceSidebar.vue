@@ -2,11 +2,11 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X } from "@lucide/vue"
+import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, ListTree, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
-import { useSessionStore } from "@/stores/session"
-import { useUiStore } from "@/stores/ui"
+import { useSessionStore, isSessionRunning } from "@/stores/conversations"
+import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -31,8 +31,8 @@ const showArchived = ref(false)
 const renaming = ref<SessionMeta | null>(null)
 const title = ref("")
 const saving = ref(false)
-const navigationDisabled = computed(() => props.navigationBusy || workspace.gitBusy || session.isStreaming || saving.value)
-const disabled = computed(() => props.busy || workspace.gitBusy || session.isStreaming || saving.value)
+const navigationDisabled = computed(() => props.navigationBusy || workspace.gitBusy || saving.value)
+const disabled = computed(() => props.busy || workspace.gitBusy || saving.value)
 const name = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
@@ -165,10 +165,10 @@ for (const path of workspace.projects) if (path !== props.project) void refresh(
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, path)">{{ label(s) }}</Button>
-            <span v-if="s.file === session.sessionFile && session.isStreaming" class="session-running" :aria-label="t('chat.thinking')" />
+            <span v-if="isSessionRunning(s.file)" class="session-running" :aria-label="t('chat.thinking')" />
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem></DropdownMenuContent>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><template v-if="s.file === session.sessionFile && props.ready"><DropdownMenuSeparator /><DropdownMenuItem @select="ui.requestSessionAction('tree')"><ListTree :size="14" />{{ t('chat.sessionTree') }}</DropdownMenuItem><DropdownMenuItem @select="ui.requestSessionAction('export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></template></DropdownMenuContent>
               </DropdownMenu>
               <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><ArchiveRestore v-if="s.archived" :size="14" /><Archive v-else :size="14" /></Button>
             </div>

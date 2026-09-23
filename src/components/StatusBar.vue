@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
-import { useSessionStore } from "@/stores/session"
-import { useUiStore } from "@/stores/ui"
+import { useSessionStore } from "@/stores/conversations"
+import { useUiStore } from "@/stores/conversations"
 
 const session = useSessionStore()
 const ui = useUiStore()

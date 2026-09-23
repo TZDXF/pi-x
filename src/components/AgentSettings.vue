@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getGlobalPrompt, saveGlobalPrompt } from "@/api/piClient"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"

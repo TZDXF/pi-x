@@ -140,6 +140,7 @@ export default {
   },
 
   chat: {
+    stop: "Stop",
     timeline: "Conversation timeline",
     timelineJump: "Jump to question {number}",
     timelineQuestion: "Question",

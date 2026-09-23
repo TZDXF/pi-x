@@ -5,7 +5,7 @@ import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { detectPi, getConfig, saveConfig, type AppConfig, type PiInfo } from "@/api/piClient"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()

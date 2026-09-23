@@ -4,7 +4,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { useI18n } from "vue-i18n"
-import type { Block, ToolCallBlock, ToolRun } from "@/stores/session"
+import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
 const props = defineProps<{
   blocks: Block[]

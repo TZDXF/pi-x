@@ -1,26 +1,24 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { onMounted, onUnmounted, ref, watch } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   detectPi,
-  piRunning,
+  listRunningSessions,
   getConfig,
   killPi,
   onPiEvent,
   onPiExit,
   onPiStderr,
-  rpcRequest,
   saveConfig,
   spawnPi,
   trustSave,
   trustStatus,
 } from "@/api/piClient"
-import { isDesktop } from "@/api/transport"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
-import { useSessionStore } from "@/stores/session"
+import { useSessionStore, sessionFor, uiFor, activeRuntimeId, activateSession, createConversation, findConversation } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
@@ -47,7 +45,7 @@ const project = ref("")
 const trustInfo = ref<TrustStatus | null>(null)
 const lastError = ref<string | null>(null)
 
-const started = ref(false)
+const started = computed({ get: () => session.started, set: value => { session.started = value } })
 const connecting = ref(false)
 // event listener lifecycle: always unlisten on unmount, otherwise HMR
 // remounts stack duplicate listeners and events get handled N times
@@ -64,17 +62,29 @@ onMounted(async () => {
   try {
     const handlers = await Promise.all([
       onPiEvent((ev) => {
+        const id = ev.runtimeId ?? "default"
         if (ev.type === "extension_ui_request") {
-          ui.handleRequest(ev as any)
+          uiFor(id).handleRequest(ev as any)
           return
         }
-        session.handleEvent(ev)
+        const owner = sessionFor(id)
+        owner.handleEvent(ev)
+        if (ev.type === "agent_settled" && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
       }),
-      onPiExit(() => {
-        started.value = false
-        if (phase.value === "chat" && !connecting.value) phase.value = "down"
+      onPiExit((runtimeId) => {
+        // An unscoped exit is a transport disconnect; it is not an agent exit.
+        if (!runtimeId) {
+          if (phase.value === "chat") phase.value = "down"
+          return
+        }
+        const owner = sessionFor(runtimeId)
+        owner.started = false
+        owner.isStreaming = false
+        owner.isCompacting = false
+        owner.partialBlocks = null
+        if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
       }),
-      onPiStderr((line) => ui.pushStderr(line)),
+      onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(line)),
     ])
     if (disposed) {
       handlers.forEach((off) => off())
@@ -82,17 +92,20 @@ onMounted(async () => {
     }
     unlisteners = handlers
 
-    if (!isDesktop && (await piRunning())) {
-      try {
-        project.value = config.value.lastProject ?? ""
-        started.value = true
-        await session.init(project.value)
-        await session.loadHistory()
-        phase.value = "chat"
-      } catch (e) {
-        lastError.value = String(e)
-        phase.value = "down"
-      }
+    // Reattach after UI reload / remote connection without spawning duplicates.
+    const running = await listRunningSessions()
+    for (const runtime of running) {
+      const owner = sessionFor(runtime.runtimeId)
+      owner.started = true
+      await owner.init(runtime.project)
+      await owner.loadHistory()
+      owner.isStreaming = runtime.state.isStreaming ?? false
+    }
+    const restored = running.find(runtime => runtime.project === config.value.lastProject) ?? running[0]
+    if (restored) {
+      activateSession(restored.runtimeId)
+      project.value = restored.project
+      phase.value = "chat"
       return
     }
     // Restore the workspace only; start pi when a conversation is opened.
@@ -114,7 +127,7 @@ onMounted(async () => {
 let queuedNavigation: (() => Promise<unknown>) | null = null
 const navigationRunning = ref(false)
 function requestNavigation(action: () => Promise<unknown>) {
-  if (session.isStreaming || workspace.gitBusy || phase.value === "trust") return
+  if (workspace.gitBusy || phase.value === "trust") return
   queuedNavigation = action
   void drainNavigation()
 }
@@ -126,7 +139,9 @@ async function drainNavigation() {
       const action = queuedNavigation
       queuedNavigation = null
       pendingResume.value = null
-      try { await action() }
+      try {
+        await action()
+      }
       catch (error) { ui.pushToast(String(error), "error") }
     }
   } finally { navigationRunning.value = false }
@@ -134,16 +149,12 @@ async function drainNavigation() {
 watch([connecting, navigating], () => { void drainNavigation() })
 
 async function selectProject(dir: string) {
-  if (session.isStreaming || workspace.gitBusy || connecting.value) return
+  if (workspace.gitBusy || connecting.value) return
   connecting.value = true
   phase.value = "chat"
   try {
-    if (started.value) {
-      await killPi()
-      started.value = false
-      session.clear()
-      ui.clear()
-    }
+    // Selecting a project creates an independent, lazily started draft.
+    createConversation(dir)
     project.value = dir
     config.value.lastProject = dir
     void saveConfig({ ...config.value })
@@ -179,18 +190,19 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
 }
 
 async function start(): Promise<boolean> {
-  if (started.value) return true
+  const owner = sessionFor(activeRuntimeId.value)
+  if (owner.started) return true
   connecting.value = true
   try {
-    await spawnPi(project.value)
-    await session.init(project.value, true)
-    started.value = true
+    await spawnPi(project.value, undefined, owner.runtimeId)
+    await owner.init(project.value, true)
+    owner.started = true
     return true
   } catch (e) {
-    await killPi().catch(() => {})
-    started.value = false
+    await killPi(owner.runtimeId).catch(() => {})
+    owner.started = false
     lastError.value = String(e)
-    ui.pushToast(String(e), "error")
+    uiFor(owner.runtimeId).pushToast(String(e), "error")
     return false
   } finally {
     connecting.value = false
@@ -198,17 +210,13 @@ async function start(): Promise<boolean> {
 }
 
 async function switchProject() {
-  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
-  await killPi()
-  started.value = false
-  session.clear()
-  ui.clear()
+  if (workspace.gitBusy || navigating.value || connecting.value) return
   phase.value = "pick"
 }
 
 /** Resume a stored session: switch in-process when possible, else restart. */
 async function resumeSession(file: string, targetProject?: string) {
-  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  if (workspace.gitBusy || navigating.value || connecting.value) return
   if (targetProject && targetProject !== project.value) {
     await selectProject(targetProject)
     if (phase.value !== "chat") {
@@ -216,37 +224,28 @@ async function resumeSession(file: string, targetProject?: string) {
       return
     }
   }
-  ui.clear()
   phase.value = "chat"
   connecting.value = true
+  let owner = findConversation(file)
   try {
-    let switched = false
-    if (started.value) {
-      try {
-        const res = await rpcRequest<{ cancelled?: boolean }>({
-          type: "switch_session",
-          sessionPath: file,
-        })
-        if (res.success && res.data?.cancelled) {
-          ui.pushToast(t("app.toastSessionCancelled"), "info")
-          phase.value = "chat"
-          return
-        }
-        switched = res.success
-      } catch {
-        switched = false
-      }
+    if (owner?.started) {
+      activateSession(owner.runtimeId)
+      project.value = owner.cwd
+      return
     }
-    if (!switched) {
-      await killPi()
-      await spawnPi(project.value, file)
-      started.value = true
-    }
-    session.clear()
-    await session.init(project.value)
-    await session.loadHistory()
-    phase.value = "chat"
+    // A dormant conversation gets its own worker; other workers are untouched.
+    if (!owner) owner = createConversation(project.value)
+    else activateSession(owner.runtimeId)
+    await spawnPi(project.value, file, owner.runtimeId)
+    owner.started = true
+    owner.clear()
+    await owner.init(project.value)
+    await owner.loadHistory()
   } catch (e) {
+    if (owner) {
+      await killPi(owner.runtimeId).catch(() => {})
+      owner.started = false
+    }
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
     phase.value = "down"
@@ -255,13 +254,13 @@ async function resumeSession(file: string, targetProject?: string) {
 }
 
 async function newProjectSession(path: string) {
-  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {
     if (path !== project.value) await selectProject(path)
     if (phase.value === "chat") {
-      if (started.value) await session.newSession()
-      else session.clear()
+      createConversation(path)
+      void session.loadOfflineModels()
     }
   } catch (e) { ui.pushToast(String(e), "error") }
   finally { navigating.value = false }
@@ -269,20 +268,17 @@ async function newProjectSession(path: string) {
 
 // Removing a project only removes its navigation entry, never files or logs.
 async function removeProject(path: string) {
-  if (session.isStreaming || workspace.gitBusy || navigating.value || connecting.value) return
+  if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {
     if (path === project.value) {
       const nextConfig = { ...config.value, lastProject: undefined }
       // Persist before altering UI so a failure does not silently re-open the project.
       await saveConfig(nextConfig)
-      await killPi()
-      started.value = false
+      // Removing a navigation entry does not cancel background conversations.
       config.value = nextConfig
       pendingResume.value = null
       trustInfo.value = null
-      session.clear()
-      ui.clear()
       project.value = ""
       phase.value = "pick"
     }
@@ -342,7 +338,7 @@ onUnmounted(() => {
       </div>
 
       <template v-else-if="phase === 'chat'">
-        <ChatView :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="selectProject" @open-project="switchProject" />
+        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(project))" />
       </template>
 
       <div

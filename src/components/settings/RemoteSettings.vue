@@ -6,7 +6,7 @@ import { isDesktop } from "@/api/transport"
 import { remoteStatus, remoteSet, type RemoteStatus } from "@/api/piClient"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 
 const { t } = useI18n()
 const ui = useUiStore()

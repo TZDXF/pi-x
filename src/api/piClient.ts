@@ -1,3 +1,4 @@
+import { activeRuntimeId } from "@/stores/runtime"
 import { invoke, listen } from "./transport"
 import type { ExtensionUiResponse, RpcResponse } from "./protocol"
 
@@ -61,12 +62,12 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
 
-export const spawnPi = (project: string, sessionFile?: string) =>
-  invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null })
+export const spawnPi = (project: string, sessionFile?: string, runtimeId = activeRuntimeId.value) =>
+  invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId })
 
-export const killPi = () => invoke<void>("rpc_kill")
+export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_kill", { runtimeId })
 
-export const piRunning = () => invoke<boolean>("rpc_running")
+export const piRunning = (runtimeId = activeRuntimeId.value) => invoke<boolean>("rpc_running", { runtimeId })
 
 export interface SessionMeta {
   file: string
@@ -96,13 +97,13 @@ export const openPath = (path: string) => invoke<void>("open_path", { path })
 // ---- RPC bridge ----
 
 /** Correlated request: resolves with the `response` record that carries our id. */
-export function rpcRequest<T = unknown>(command: Record<string, unknown>): Promise<RpcResponse<T>> {
-  return invoke<RpcResponse<T>>("rpc_request", { command })
+export function rpcRequest<T = unknown>(command: Record<string, unknown>, runtimeId = activeRuntimeId.value): Promise<RpcResponse<T>> {
+  return invoke<RpcResponse<T>>("rpc_request", { command, runtimeId })
 }
 
 /** Fire-and-forget write (extension_ui_response has no response record). */
-export function rpcNotify(command: ExtensionUiResponse | Record<string, unknown>): Promise<void> {
-  return invoke<void>("rpc_notify", { command })
+export function rpcNotify(command: ExtensionUiResponse | Record<string, unknown>, runtimeId = activeRuntimeId.value): Promise<void> {
+  return invoke<void>("rpc_notify", { command, runtimeId })
 }
 
 /** Subscribe to all non-response stdout records (agent events, extension UI requests). */
@@ -110,12 +111,12 @@ export function onPiEvent(handler: (event: Record<string, any>) => void): Promis
   return listen<Record<string, any>>("pi://event", e => handler(e.payload))
 }
 
-export function onPiExit(handler: () => void): Promise<() => void> {
-  return listen("pi://exit", () => handler())
+export function onPiExit(handler: (runtimeId?: string) => void): Promise<() => void> {
+  return listen<{ runtimeId?: string }>("pi://exit", e => handler(e.payload.runtimeId))
 }
 
-export function onPiStderr(handler: (line: string) => void): Promise<() => void> {
-  return listen<{ line: string }>("pi://stderr", e => handler(e.payload.line))
+export function onPiStderr(handler: (line: string, runtimeId?: string) => void): Promise<() => void> {
+  return listen<{ line: string; runtimeId?: string }>("pi://stderr", e => handler(e.payload.line, e.payload.runtimeId))
 }
 
 export interface RemoteStatus { enabled: boolean; port: number; urls: string[] }
@@ -256,3 +257,6 @@ export function packageNameOf(source: string): string {
   if (at > 0) s = s.slice(0, at)
   return s
 }
+
+export interface RunningSession { runtimeId: string; project: string; state: import("./protocol").SessionState }
+export const listRunningSessions = () => invoke<RunningSession[]>("rpc_sessions")

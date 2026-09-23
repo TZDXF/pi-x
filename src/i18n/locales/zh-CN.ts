@@ -140,6 +140,7 @@ export default {
   },
 
   chat: {
+    stop: "停止生成",
     timeline: "对话时间轴",
     timelineJump: "跳转到第 {number} 次提问",
     timelineQuestion: "提问",

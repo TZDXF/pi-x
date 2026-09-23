@@ -39,7 +39,7 @@ import {
   type InstalledPackage,
   type PackageResource,
 } from "@/api/piClient"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 import { currentLocale } from "@/i18n"
 import { Download, RefreshCw, ExternalLink, Trash2, ArrowUpCircle, Plus, SlidersHorizontal } from "@lucide/vue"
 

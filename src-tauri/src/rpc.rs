@@ -33,7 +33,9 @@ struct SessionInner {
 }
 
 #[derive(Default)]
-pub struct RpcState {
+pub struct ProcessState {
+    runtime_id: String,
+    project: String,
     inner: Mutex<Option<SessionInner>>,
     navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
@@ -47,15 +49,16 @@ fn is_windows_script(path: &str) -> bool {
 
 /// Spawn `pi --mode rpc` inside `project` and wire up the stdio bridge.
 /// `session_file` resumes a stored session (`--session <path>`).
-pub async fn spawn(
+pub async fn process_spawn(
     app: AppHandle,
-    state: &RpcState,
+    state: &ProcessState,
     pi: &PiInfo,
     project: &str,
     session_file: Option<String>,
     extra_args: Vec<String>,
 ) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
+    state.generation.fetch_add(1, Ordering::Relaxed);
     if let Some(mut old) = guard.take() {
         let _ = kill_inner(&mut old).await;
     }
@@ -133,6 +136,7 @@ pub async fn spawn(
         let pending = pending.clone();
         let generation = state.generation.clone();
         let own_gen = generation.load(Ordering::Relaxed);
+        let runtime_id = state.runtime_id.clone();
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut buf: Vec<u8> = Vec::new();
@@ -154,13 +158,14 @@ pub async fn spawn(
                     let Ok(value) = serde_json::from_slice::<Value>(&line) else {
                         continue;
                     };
-                    dispatch(&app, &pending, value).await;
+                    dispatch(&app, &pending, &runtime_id, value).await;
                 }
             }
             // stdout closed => process exited (or is gone).
             // Only surface it if this reader still belongs to the current session.
             if generation.load(Ordering::Relaxed) == own_gen {
-                crate::remote::emit(&app, EXIT_EVENT, json!({}));
+                pending.lock().await.clear();
+                crate::remote::emit(&app, EXIT_EVENT, json!({ "runtimeId": runtime_id }));
             }
         });
     }
@@ -168,6 +173,7 @@ pub async fn spawn(
     // stderr reader: forward raw lines for logging
     {
         let app = app.clone();
+        let runtime_id = state.runtime_id.clone();
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stderr);
             let mut buf: Vec<u8> = Vec::new();
@@ -185,7 +191,7 @@ pub async fn spawn(
                     }
                     let text = String::from_utf8_lossy(&line).to_string();
                     if !text.is_empty() {
-                        crate::remote::emit(&app, STDERR_EVENT, json!({ "line": text }));
+                        crate::remote::emit(&app, STDERR_EVENT, json!({ "line": text, "runtimeId": runtime_id }));
                     }
                 }
             }
@@ -201,7 +207,7 @@ pub async fn spawn(
     Ok(())
 }
 
-async fn dispatch(app: &AppHandle, pending: &PendingMap, value: Value) {
+async fn dispatch(app: &AppHandle, pending: &PendingMap, runtime_id: &str, mut value: Value) {
     if value.get("type").and_then(|t| t.as_str()) == Some("response") {
         if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
             let tx = pending.lock().await.remove(&id);
@@ -211,6 +217,7 @@ async fn dispatch(app: &AppHandle, pending: &PendingMap, value: Value) {
         }
         return;
     }
+    value["runtimeId"] = json!(runtime_id);
     crate::remote::emit(app, EVENT, value);
 }
 
@@ -223,7 +230,7 @@ async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {
 }
 
 /// Send a correlated request; resolves with the matching `response` object.
-pub async fn request(state: &RpcState, mut command: Value) -> Result<Value, String> {
+pub async fn process_request(state: &ProcessState, mut command: Value) -> Result<Value, String> {
     let _navigation = if matches!(command["type"].as_str(), Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")) {
         Some(state.navigation.lock().await)
     } else { None };
@@ -249,7 +256,7 @@ pub async fn request(state: &RpcState, mut command: Value) -> Result<Value, Stri
 }
 
 /// Serialize name writes with navigation so a delayed title cannot rename a different session.
-pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+pub(crate) async fn process_set_session_name(state: &ProcessState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
     let _navigation = state.navigation.lock().await;
     let guard = state.inner.lock().await;
     if let Some(inner) = guard.as_ref() {
@@ -290,14 +297,15 @@ async fn name_request(inner: &SessionInner, mut command: Value) -> Result<Value,
 }
 
 /// Fire-and-forget write (e.g. `extension_ui_response`).
-pub async fn notify(state: &RpcState, command: Value) -> Result<(), String> {
+pub async fn process_notify(state: &ProcessState, command: Value) -> Result<(), String> {
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
     write_line(inner, command.to_string()).await
 }
 
-pub async fn running(state: &RpcState) -> bool {
-    state.inner.lock().await.is_some()
+pub async fn process_running(state: &ProcessState) -> bool {
+    let mut guard = state.inner.lock().await;
+    guard.as_mut().is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
 }
 
 async fn kill_inner(inner: &mut SessionInner) -> Result<(), String> {
@@ -320,10 +328,94 @@ async fn kill_inner(inner: &mut SessionInner) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn kill(state: &RpcState) -> Result<(), String> {
+pub async fn process_kill(state: &ProcessState) -> Result<(), String> {
+    state.generation.fetch_add(1, Ordering::Relaxed);
     let mut guard = state.inner.lock().await;
     if let Some(mut inner) = guard.take() {
         kill_inner(&mut inner).await?;
     }
     Ok(())
+}
+
+
+/// Each runtime owns a process, request correlation table and navigation lock.
+/// The pool lock is never held while waiting for an agent response.
+#[derive(Default)]
+pub struct RpcState {
+    processes: Mutex<HashMap<String, Arc<ProcessState>>>,
+}
+
+impl RpcState {
+    async fn process(&self, runtime_id: Option<&str>) -> Result<Arc<ProcessState>, String> {
+        self.processes.lock().await.get(runtime_id.unwrap_or("default")).cloned()
+            .ok_or_else(|| "pi is not running".into())
+    }
+}
+
+pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
+    session_file: Option<String>, extra_args: Vec<String>, runtime_id: Option<String>) -> Result<(), String> {
+    let id = runtime_id.unwrap_or_else(|| "default".into());
+    let mut pool = state.processes.lock().await;
+    if let Some(existing) = pool.get(&id) {
+        if process_running(existing).await { return Err("Runtime is already running".into()); }
+    }
+    // Never open the same persisted conversation in two processes.
+    if let Some(file) = &session_file {
+        let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
+        for process in pool.values() {
+            if !process_running(process).await { continue; }
+            let response = process_request(process, json!({"type": "get_state"})).await?;
+            if response["data"]["sessionFile"].as_str()
+                .and_then(|f| dunce::canonicalize(f).ok()).as_ref() == Some(&path) {
+                return Err(format!("Session already open in runtime {}", process.runtime_id));
+            }
+        }
+    }
+    let process = Arc::new(ProcessState { runtime_id: id.clone(), project: project.into(), ..Default::default() });
+    process_spawn(app, &process, pi, project, session_file, extra_args).await?;
+    pool.insert(id, process);
+    Ok(())
+}
+
+pub async fn request(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<Value, String> {
+    process_request(&state.process(runtime_id).await?, command).await
+}
+pub async fn notify(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<(), String> {
+    process_notify(&state.process(runtime_id).await?, command).await
+}
+pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
+    match state.process(runtime_id).await { Ok(process) => process_running(&process).await, Err(_) => false }
+}
+pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
+    let process = state.processes.lock().await.remove(runtime_id.unwrap_or("default"));
+    if let Some(process) = process { process_kill(&process).await?; }
+    Ok(())
+}
+pub async fn kill_all(state: &RpcState) -> Result<(), String> {
+    let processes = std::mem::take(&mut *state.processes.lock().await);
+    for process in processes.values() { process_kill(process).await?; }
+    Ok(())
+}
+pub async fn list(state: &RpcState) -> Vec<Value> {
+    let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
+    let mut result = Vec::new();
+    for process in processes {
+        if !process_running(&process).await { continue; }
+        if let Ok(response) = process_request(&process, json!({"type": "get_state"})).await {
+            result.push(json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]}));
+        }
+    }
+    result
+}
+pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+    let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
+    for process in processes {
+        if !process_running(&process).await { continue; }
+        let response = process_request(&process, json!({"type": "get_state"})).await?;
+        let active = response["data"]["sessionFile"].as_str().and_then(|f| dunce::canonicalize(f).ok());
+        if active.as_deref() == Some(path) {
+            return process_set_session_name(&process, path, title, only_if_empty).await;
+        }
+    }
+    process_set_session_name(&ProcessState::default(), path, title, only_if_empty).await
 }

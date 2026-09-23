@@ -111,6 +111,7 @@ pub async fn rpc_spawn(
     state: State<'_, rpc::RpcState>,
     project: String,
     session_file: Option<String>,
+    runtime_id: Option<String>,
 ) -> Result<(), String> {
     let cfg = app_config_get(app.clone())?;
     let extra_args = Vec::new();
@@ -121,7 +122,7 @@ pub async fn rpc_spawn(
                 .to_string(),
         );
     }
-    rpc::spawn(app, &state, &info, &project, session_file, extra_args).await
+    rpc::spawn(app, &state, &info, &project, session_file, extra_args, runtime_id).await
 }
 
 /// List recent stored sessions for a project (newest first).
@@ -145,23 +146,23 @@ pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn rpc_request(state: State<'_, rpc::RpcState>, command: Value) -> Result<Value, String> {
-    rpc::request(&state, command).await
+pub async fn rpc_request(state: State<'_, rpc::RpcState>, command: Value, runtime_id: Option<String>) -> Result<Value, String> {
+    rpc::request(&state, command, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_notify(state: State<'_, rpc::RpcState>, command: Value) -> Result<(), String> {
-    rpc::notify(&state, command).await
+pub async fn rpc_notify(state: State<'_, rpc::RpcState>, command: Value, runtime_id: Option<String>) -> Result<(), String> {
+    rpc::notify(&state, command, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_kill(state: State<'_, rpc::RpcState>) -> Result<(), String> {
-    rpc::kill(&state).await
+pub async fn rpc_kill(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<(), String> {
+    rpc::kill(&state, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_running(state: State<'_, rpc::RpcState>) -> Result<bool, String> {
-    Ok(rpc::running(&state).await)
+pub async fn rpc_running(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<bool, String> {
+    Ok(rpc::running(&state, runtime_id.as_deref()).await)
 }
 
 // ---- pi models.json (custom provider / model management) ----
@@ -234,4 +235,9 @@ mod tests {
         assert!(!path.exists());
         std::fs::remove_dir(root).unwrap();
     }
+}
+
+#[tauri::command]
+pub async fn rpc_sessions(state: State<'_, rpc::RpcState>) -> Result<Vec<Value>, String> {
+    Ok(rpc::list(&state).await)
 }

@@ -9,7 +9,7 @@
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { rpcRequest } from "@/api/piClient"
-import { useUiStore } from "@/stores/ui"
+import { useUiStore } from "@/stores/conversations"
 import SessionTreeNode from "./SessionTreeNode.vue"
 
 interface TreeEntry {

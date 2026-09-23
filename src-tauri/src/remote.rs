@@ -229,18 +229,20 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 state,
                 text("project")?,
                 a["sessionFile"].as_str().map(str::to_owned),
+                a["runtimeId"].as_str().map(str::to_owned),
             )
             .await?;
             Ok(Value::Null)
         }
-        "rpc_running" => Ok(json!(rpc::running(&state).await)),
+        "rpc_sessions" => Ok(json!(rpc::list(&state).await)),
+        "rpc_running" => Ok(json!(rpc::running(&state, a["runtimeId"].as_str()).await)),
         "rpc_kill" => {
-            rpc::kill(&state).await?;
+            rpc::kill(&state, a["runtimeId"].as_str()).await?;
             Ok(Value::Null)
         }
-        "rpc_request" => rpc::request(&state, a["command"].clone()).await,
+        "rpc_request" => rpc::request(&state, a["command"].clone(), a["runtimeId"].as_str()).await,
         "rpc_notify" => {
-            rpc::notify(&state, a["command"].clone()).await?;
+            rpc::notify(&state, a["command"].clone(), a["runtimeId"].as_str()).await?;
             Ok(Value::Null)
         }
         "session_generate_title" => {

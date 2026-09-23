@@ -11,7 +11,7 @@ export interface Toast {
 
 let toastSeq = 0
 
-export const useUiStore = defineStore("ui", () => {
+export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtimeId}`, () => {
   /** Dialog requests (select/confirm/input/editor) awaiting user input. */
   const dialogs = ref<ExtensionUiRequest[]>([])
   /** Fire-and-forget widget lines displayed above the composer. */
@@ -23,6 +23,9 @@ export const useUiStore = defineStore("ui", () => {
   const pendingEditorText = ref<string | null>(null)
   /** Tail of pi's stderr output, for diagnostics. */
   const stderrLines = ref<string[]>([])
+  /** Sidebar session-menu requests (session tree / export) forwarded to ChatView. */
+  const sessionAction = ref<{ action: "tree" | "export"; nonce: number } | null>(null)
+  let sessionActionSeq = 0
 
   function pushStderr(line: string) {
     stderrLines.value.push(line)
@@ -82,7 +85,12 @@ export const useUiStore = defineStore("ui", () => {
     const idx = dialogs.value.indexOf(req)
     if (idx >= 0)
       dialogs.value.splice(idx, 1)
-    void rpcNotify({ type: "extension_ui_response", id: req.id, ...value })
+    void rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
+  }
+
+  /** Ask ChatView to open the session tree or export the active session. */
+  function requestSessionAction(action: "tree" | "export") {
+    sessionAction.value = { action, nonce: ++sessionActionSeq }
   }
 
   function pushToast(message: string, kind: Toast["kind"] = "info") {
@@ -107,6 +115,8 @@ export const useUiStore = defineStore("ui", () => {
     toasts,
     pendingEditorText,
     stderrLines,
+    sessionAction,
+    requestSessionAction,
     pushStderr,
     activeDialog,
     handleRequest,
@@ -115,3 +125,5 @@ export const useUiStore = defineStore("ui", () => {
     clear,
   }
 })
+
+export const useUiStore = createUiStore()

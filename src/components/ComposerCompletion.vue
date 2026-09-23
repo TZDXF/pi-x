@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useSessionStore } from '@/stores/session'
+import { useSessionStore } from '@/stores/conversations'
 import { searchFiles, type FileHit } from '@/api/piClient'
 import { completionToken, insertCompletion, desktopCommands } from '@/lib/completion'
 import { usePromptInput, PromptInputCommand, PromptInputCommandList, PromptInputCommandGroup, PromptInputCommandItem, PromptInputButton } from '@/components/ai-elements/prompt-input'

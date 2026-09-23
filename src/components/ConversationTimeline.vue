@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Block, Entry } from '@/stores/session'
+import type { Block, Entry } from '@/stores/conversations'
 import { conversationTurns } from '@/lib/conversationTimeline'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 

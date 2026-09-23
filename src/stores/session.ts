@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime } from "@/api/piClient"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -94,7 +94,10 @@ function readSelection(): RememberedSelection {
 let entrySeq = 0
 const nextId = () => ++entrySeq
 
-export const useSessionStore = defineStore("session", () => {
+export const createSessionStore = (runtimeId = "default") => defineStore(`session:${runtimeId}`, () => {
+  const rpcRequest: typeof requestForRuntime = (command) => requestForRuntime(command, runtimeId)
+  const started = ref(false)
+
   // ---- state ----
   const entries = ref<Entry[]>([])
   const runs = ref<Record<string, ToolRun>>({})
@@ -368,10 +371,13 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   // ---- actions ----
+  let conversationVersion = 0
+
   async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string) {
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
+    const version = conversationVersion
     const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
     // Capture identity now: completion must never name a subsequently selected session.
     const titleFile = sessionFile.value
@@ -390,6 +396,7 @@ export const useSessionStore = defineStore("session", () => {
         if (!res.success) throw new Error(res.error ?? "Prompt rejected")
       })
       .catch((e) => {
+        if (version !== conversationVersion) return
         entries.value.push({
           kind: "assistant",
           id: nextId(),
@@ -397,6 +404,7 @@ export const useSessionStore = defineStore("session", () => {
         })
       })
       .finally(() => {
+        if (version !== conversationVersion) return
         void refreshState()
         void refreshStats()
       })
@@ -436,6 +444,7 @@ export const useSessionStore = defineStore("session", () => {
     const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
     if (!result.success) throw new Error(result.error || "新建会话失败")
     if (result.data?.cancelled) return
+    ++conversationVersion
     invalidateHistory()
     entries.value = []
     runs.value = {}
@@ -560,6 +569,7 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   async function loadMessages(msgs: any[]) {
+    ++conversationVersion
     invalidateHistory()
     entries.value = []
     runs.value = {}
@@ -688,7 +698,12 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   function clear() {
+    isStreaming.value = false
+    isCompacting.value = false
+    retryInfo.value = null
+    sessionFile.value = null
     ++offlineLoadVersion
+    ++conversationVersion
     invalidateHistory()
     entries.value = []
     runs.value = {}
@@ -703,6 +718,8 @@ export const useSessionStore = defineStore("session", () => {
   }
 
   return {
+    runtimeId,
+    started,
     entries,
     runs,
     partialBlocks,
@@ -749,3 +766,6 @@ export const useSessionStore = defineStore("session", () => {
     clear,
   }
 })
+
+// Default store is retained for standalone consumers and unit tests.
+export const useSessionStore = createSessionStore()

@@ -67,6 +67,7 @@ pub fn run() {
             commands::rpc_notify,
             commands::rpc_kill,
             commands::rpc_running,
+            commands::rpc_sessions,
             commands::session_list,
             sessions::session_update,
             title_generation::session_generate_title,
@@ -89,7 +90,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let state = app.state::<RpcState>();
-                let _ = tauri::async_runtime::block_on(rpc::kill(&state));
+                let _ = tauri::async_runtime::block_on(rpc::kill_all(&state));
             }
         });
 }

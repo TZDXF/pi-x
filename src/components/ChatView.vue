@@ -33,11 +33,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useSessionStore } from "@/stores/session"
-import { useUiStore } from "@/stores/ui"
+import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { LanguageModelUsage } from "ai"
-import { rpcRequest } from "@/api/piClient"
+import { rpcRequest as requestForRuntime } from "@/api/piClient"
 import {
   Dialog,
   DialogContent,
@@ -70,15 +69,17 @@ import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy } from "@lucide/vue"
+import { Copy, GitBranch } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 
-const session = useSessionStore()
-const ui = useUiStore()
+const runtimeId = activeRuntimeId.value
+const session = sessionFor(runtimeId)
+const ui = uiFor(runtimeId)
+const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const { t, te } = useI18n()
 
 const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; connected: boolean }>()
-const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
+const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
 const workspace = useWorkspaceStore()
 const currentTitle = computed(() => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title)
 
@@ -141,6 +142,31 @@ async function openFork() {
     if (!res.success) throw new Error(res.error ?? "fork list failed")
     forkMessages.value = (res.data?.messages ?? []).slice().reverse()
     forkOpen.value = true
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
+}
+
+/** Branch from the prompt that produced the answer at entryIndex. */
+async function forkFromAnswer(entryIndex: number) {
+  const list = session.entries
+  let promptText: string | null = null
+  for (let i = entryIndex - 1; i >= 0; i--) {
+    const e = list[i]
+    if (e.kind === "user") { promptText = e.text; break }
+  }
+  try {
+    const res = await rpcRequest<{
+      messages: { entryId: string; text: string }[]
+    }>({ type: "get_fork_messages" })
+    if (!res.success) throw new Error(res.error ?? "fork list failed")
+    // Oldest first, then find the nearest match so duplicates resolve to the latest prompt.
+    const chronological = (res.data?.messages ?? []).slice().reverse()
+    const target = promptText !== null
+      ? [...chronological].reverse().find(m => m.text === promptText)
+      : undefined
+    if (target) await doFork(target.entryId)
+    else await openFork() // fall back to the prompt picker
   } catch (e) {
     ui.pushToast(String(e), "error")
   }
@@ -213,7 +239,14 @@ async function copyText(text: string) {
   }
 }
 
-// extensions can push text into the editor (set_editor_text)
+// Sidebar session menu (tree / export) requests forwarded via the ui store.
+watch(() => ui.sessionAction, (action) => {
+  if (!action) return
+  if (action.action === "tree") treeOpen.value = true
+  else void exportSession()
+})
+
+// extensions can push text into the editor (set_editor_text))
 watch(
   () => ui.pendingEditorText,
   (text) => {
@@ -224,10 +257,6 @@ watch(
   },
 )
 
-const submitStatus = computed(() => {
-  if (session.isStreaming) return "streaming" as const
-  return "ready" as const
-})
 // ---- context usage (ai-elements Context) ----
 const contextUsage = computed(() => session.stats?.contextUsage ?? null)
 const contextTokenUsage = computed<LanguageModelUsage | undefined>(() => {
@@ -273,10 +302,6 @@ async function onSubmit(message: {
   files?: { url?: string }[]
 }) {
   if (workspace.gitBusy || props.connecting) return
-  if (session.isStreaming) {
-    await abort()
-    return
-  }
   const text = (message.text ?? "").trim()
   const images = (message.files ?? [])
     .map((f) => f.url)
@@ -295,7 +320,8 @@ async function onSubmit(message: {
       const args = text.slice(commandName.length + 1).trim()
       try {
         if (images.length || (args && commandName !== 'compact')) throw new Error(t('completion.invalidArguments'))
-        if (commandName === 'new') await session.newSession()
+        if (session.isStreaming && commandName === 'compact') await abort()
+        if (commandName === 'new') emit('newSession')
         else if (commandName === 'compact') await session.compact(args || undefined)
         else {
           const result = await rpcRequest<{ path?: string }>({ type: 'export_html' })
@@ -371,26 +397,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
           >{{ t("chat.compacting") }}</span
         >
-        <Button variant="ghost" size="sm" class="quiet-button" @click="treeOpen = true">{{ t("chat.sessionTree") }}</Button>
-        <Button variant="ghost" size="sm" class="quiet-button" @click="openFork">{{ t("chat.fork") }}</Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          class="quiet-button"
-          :disabled="exporting"
-          @click="exportSession"
-        >
-          {{ exporting ? t("chat.exporting") : t("chat.export") }}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          class="quiet-button"
-          :disabled="session.isStreaming || !connected"
-          @click="session.compact()"
-        >
-          {{ t("chat.compactContext") }}
-        </Button>
       </div>
     </header>
 
@@ -440,6 +446,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 :runs="session.runs"
               />
               <MessageActions v-if="entry.kind === 'assistant' && isLastAssistantOfTurn(entryIndex)" class="mt-1">
+                <MessageAction
+                  :tooltip="t('chat.fork')"
+                  @click="forkFromAnswer(entryIndex)"
+                >
+                  <GitBranch />
+                </MessageAction>
                 <MessageAction
                   tooltip="Copy reply"
                   @click="copyText(blocksText(entry.blocks))"
@@ -608,7 +620,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 </ContextContentBody>
               </ContextContent>
             </Context>
-            <PromptInputSubmit :status="submitStatus" :disabled="workspace.gitBusy || connecting" />
+            <Button v-if="session.isStreaming" type="button" variant="outline" size="sm" :disabled="workspace.gitBusy || connecting" @click="abort">{{ t("chat.stop") }}</Button>
+            <PromptInputSubmit :disabled="workspace.gitBusy || connecting" />
           </div>
         </div>
       </PromptInput>

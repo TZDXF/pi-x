@@ -14,8 +14,8 @@ import {
 } from "@/components/ui/select"
 import type { ProviderEntry } from "@/api/piClient"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
-import { useSessionStore } from "@/stores/session"
-import { useUiStore } from "@/stores/ui"
+import { useSessionStore } from "@/stores/conversations"
+import { useUiStore } from "@/stores/conversations"
 
 const store = useModelsConfigStore()
 const session = useSessionStore()
