@@ -200,12 +200,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
   let agentStartedAt: number | undefined
+  /** Reserved entry id for the in-flight assistant turn. Assigned at the
+   *  first assistant message_start and reused when the entry is committed, so
+   *  the UI can key the streaming turn stably across completion. */
+  const streamingTurnId = ref<number | null>(null)
 
   // ---- event ingestion ----
   function handleEvent(ev: Record<string, any>) {
     switch (ev.type) {
       case "agent_start":
         agentStartedAt = Date.now()
+        streamingTurnId.value = null
         isStreaming.value = true
         turnFailed = false
         turnAborted = false
@@ -226,6 +231,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       case "message_start": {
         const msg = ev.message
         if (msg?.role === "assistant") {
+          streamingTurnId.value ??= nextId()
           partialBlocks.value = []
         }
         break
@@ -249,12 +255,13 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           if (msg.stopReason === "aborted") turnAborted = true
           // authoritative replace
           const blocks = blocksFromMessage(msg)
-          entries.value.push({ kind: "assistant", id: nextId(), blocks, live: true, startedAt: agentStartedAt, completedAt: Date.now() })
+          entries.value.push({ kind: "assistant", id: streamingTurnId.value ?? nextId(), blocks, live: true, startedAt: agentStartedAt, completedAt: Date.now() })
           if (msg.usage)
             lastUsage.value = msg.usage
         }
         // user / toolResult messages are rendered from local state + tool runs
         partialBlocks.value = null
+        streamingTurnId.value = null
         break
       }
 
@@ -307,6 +314,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
       case "auto_retry_end":
         retryInfo.value = null
+        // A recovered provider error must not leave the turn marked failed.
+        turnFailed = !ev.success
         if (!ev.success)
           void refreshState()
         break
@@ -530,6 +539,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
+    streamingTurnId.value = null
     await refreshState()
     await applyRememberedSelection()
     await refreshStats()
@@ -655,6 +665,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
+    streamingTurnId.value = null
     historyMessages.value = msgs
     historyCursor.value = msgs.length
     await loadOlderHistory()
@@ -672,6 +683,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       entries.value = []
       runs.value = {}
       partialBlocks.value = null
+      streamingTurnId.value = null
       historyMessages.value = res.data?.messages ?? []
       historyCursor.value = historyMessages.value.length
       await loadOlderHistory()
@@ -807,6 +819,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
+    streamingTurnId.value = null
     steering.value = []
     followUp.value = []
     state.value = null
@@ -847,6 +860,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     revealTimelineTurn,
     runs,
     partialBlocks,
+    streamingTurnId,
     isStreaming,
     markInterrupted: () => {
       if (isStreaming.value) setSessionRunStatus(sessionFile.value, "error")

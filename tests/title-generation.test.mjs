@@ -30,7 +30,8 @@ function sessionHarness() {
       return new Promise((resolve, reject) => { finish = resolve; fail = reject })
     },
   }
-  const store = loadStore('session', { ...framework, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/stores/workspace': { useWorkspaceStore: () => ({
+  const store = loadStore('session', { ...framework,
+    '@/stores/sessionRunStatus': { setSessionRunStatus() {} }, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/stores/workspace': { useWorkspaceStore: () => ({
     preview: row => previews.push(row), generatedTitle: (...args) => titles.push(args), refresh: async path => refreshed.push(path),
   }) } })
   store.state.value = { sessionId: 'one', messageCount: 0 }

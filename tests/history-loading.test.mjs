@@ -11,6 +11,7 @@ function harness() {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/api/piClient': { rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
+    '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': {},
     '@/lib/content': contentModule(),

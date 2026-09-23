@@ -65,11 +65,13 @@ test('streaming navigation switches without aborting the running generation', as
   assert.deepEqual(calls, ['switch'])
 })
 
-test('streaming input reaches command dispatch; stopping has its own non-submit button', () => {
+test('streaming input reaches command dispatch; the submit button doubles as stop while streaming', () => {
   const chat = source('../src/components/ChatView.vue')
   const submit = chat.slice(chat.indexOf('async function onSubmit('), chat.indexOf('function thinkingLabel'))
   assert.doesNotMatch(submit, /if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
-  assert.match(chat, /<Button v-if="session.isStreaming" type="button"[^>]+@click="abort"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?:status="session\.isStreaming \? 'streaming' : undefined"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?:type="session\.isStreaming \? 'button' : 'submit'"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?@click="session\.isStreaming && abort\(\)"/)
   assert.match(submit, /session.isStreaming && commandName === 'compact'/)
   assert.match(submit, /if \(commandName === 'new'\) emit\('newSession'\)/)
   const sidebar = source('../src/components/WorkspaceSidebar.vue')

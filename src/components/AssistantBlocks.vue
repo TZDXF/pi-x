@@ -6,10 +6,13 @@ import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { useI18n } from "vue-i18n"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   blocks: Block[]
   runs: Record<string, ToolRun>
-}>()
+  /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
+   *  keeps the same keys it had while the full block list was streaming. */
+  keyOffset?: number
+}>(), { keyOffset: 0 })
 
 function runFor(block: ToolCallBlock): ToolRun | undefined {
   return props.runs[block.callId]
@@ -20,7 +23,7 @@ const { t } = useI18n()
 
 <template>
   <div class="flex min-w-0 flex-col gap-2.5">
-    <template v-for="(block, i) in props.blocks" :key="i">
+    <template v-for="(block, i) in props.blocks" :key="props.keyOffset + i">
       <!-- assistant text -->
       <MessageResponse
         v-if="block.type === 'text'"

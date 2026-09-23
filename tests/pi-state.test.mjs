@@ -10,6 +10,7 @@ function harness(storage = new Map()) {
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
+    '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': { useWorkspaceStore: () => ({}) },
     '@/api/piClient': {
