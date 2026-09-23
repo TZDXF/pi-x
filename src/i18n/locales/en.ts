@@ -37,6 +37,12 @@ export default {
     loaded: "Visible skills in current session",
     loadedHint: "From Pi skill commands, not a preview of saved settings. Skills with disabled commands may not appear.",
     noLoaded: "No visible skills. Open a session or import skill files.",
+    discovered: "Auto-discovered skills",
+    discoveredHint: "Pi auto-loads skills from ~/.pi/agent/skills, ~/.agents/skills, and the project's .pi/skills / .agents/skills. This list is read-only; import a skill to manage its enabled state here.",
+    noDiscovered: "No auto-discovered skills found.",
+    importOne: "Import",
+    scope_user: "user",
+    scope_project: "project",
   },
   agentConfig: {
     "title": "Global prompt",
@@ -161,6 +167,18 @@ export default {
   },
 
   chat: {
+    queuedPrompts: "Queued prompts",
+    resumeQueue: "Resume queue",
+    dragQueue: "Drag to reorder",
+    queuedImages: "{count} images",
+    moveQueueUp: "Move up",
+    moveQueueDown: "Move down",
+    editQueuedPrompt: "Edit in composer",
+    deleteQueuedPrompt: "Delete prompt",
+    runningBehavior: "Send while running",
+    addToQueue: "Add to queue",
+    steer: "Steer",
+
     stop: "Stop",
     timeline: "Conversation timeline",
     timelineJump: "Jump to question {number}",

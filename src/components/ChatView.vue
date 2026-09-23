@@ -71,7 +71,7 @@ import { openPath } from "@/api/piClient"
 import { isDesktop } from "@/api/transport"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2, ArrowUp, ArrowDown } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
@@ -328,6 +328,37 @@ const modelKey = computed({
   },
 })
 
+const runningBehavior = ref<"queue" | "steer">("queue")
+const draggedPrompt = ref<number | null>(null)
+
+function startQueueDrag(event: DragEvent, id: number) {
+  draggedPrompt.value = id
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData("text/plain", String(id))
+  }
+}
+
+function dropQueuedPrompt(targetId: number) {
+  if (draggedPrompt.value !== null) session.moveQueuedPrompt(draggedPrompt.value, targetId)
+  draggedPrompt.value = null
+}
+
+async function editQueuedPrompt(id: number) {
+  const item = session.removeQueuedPrompt(id)
+  if (!item || !bridge.value) return
+  // Keep any draft already being composed rather than silently discarding it.
+  const draft = bridge.value.textInput
+  bridge.value.setTextInput([draft, item.text].filter(Boolean).join("\n\n"))
+  for (const [index, image] of (item.images ?? []).entries()) {
+    const bytes = Uint8Array.from(atob(image.data), char => char.charCodeAt(0))
+    bridge.value.addFiles([new File([bytes], `queued-image-${index + 1}`, { type: image.mimeType })])
+  }
+  runningBehavior.value = "queue"
+  await nextTick()
+  document.querySelector<HTMLTextAreaElement>(".composer-dock textarea")?.focus()
+}
+
 async function onSubmit(message: {
   text?: string
   files?: { url?: string }[]
@@ -372,7 +403,7 @@ async function onSubmit(message: {
     }
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text))
+  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text), runningBehavior.value)
 }
 
 function thinkingLabel(lv: string) {
@@ -527,8 +558,30 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <span>{{ t("chat.thinking") }}</span>
         </div>
 
+        <QueueSection v-if="session.promptQueue.length" class="mt-2" :aria-label="t('chat.queuedPrompts')">
+          <div class="flex items-center justify-between px-3 py-2 text-xs text-muted-foreground">
+            <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
+            <Button v-if="!session.isStreaming" type="button" size="sm" variant="ghost" @click="session.dispatchQueuedPrompt()">{{ t('chat.resumeQueue') }}</Button>
+          </div>
+          <QueueList>
+            <QueueItem v-for="(item, index) in session.promptQueue" :key="item.id"
+              class="flex items-center gap-2" :class="{ 'opacity-50': draggedPrompt === item.id }"
+              @dragover.prevent @drop.prevent.stop="dropQueuedPrompt(item.id)">
+              <span draggable="true" class="cursor-grab p-1" :title="t('chat.dragQueue')"
+                @dragstart="startQueueDrag($event, item.id)" @dragend="draggedPrompt = null"><GripVertical class="size-4" /></span>
+              <QueueItemContent class="min-w-0 flex-1 whitespace-pre-wrap">{{ item.text }}<span v-if="item.images?.length" class="text-muted-foreground"> · {{ t('chat.queuedImages', { count: item.images.length }) }}</span></QueueItemContent>
+              <div class="flex shrink-0 gap-1">
+                <Button type="button" variant="ghost" size="icon-xs" :disabled="index === 0" :aria-label="t('chat.moveQueueUp')" @click="session.moveQueuedPrompt(item.id, session.promptQueue[index - 1]!.id)"><ArrowUp class="size-3" /></Button>
+                <Button type="button" variant="ghost" size="icon-xs" :disabled="index === session.promptQueue.length - 1" :aria-label="t('chat.moveQueueDown')" @click="session.moveQueuedPrompt(item.id, session.promptQueue[index + 1]!.id)"><ArrowDown class="size-3" /></Button>
+                <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.editQueuedPrompt')" @click="editQueuedPrompt(item.id)"><Pencil class="size-3" /></Button>
+                <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.deleteQueuedPrompt')" @click="session.removeQueuedPrompt(item.id)"><Trash2 class="size-3" /></Button>
+              </div>
+            </QueueItem>
+          </QueueList>
+        </QueueSection>
+
         <!-- pending steering / follow-up -->
-        <QueueSection v-if="session.pendingCount > 0" class="mt-2">
+        <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
           <QueueList>
             <QueueItem
               v-for="(s, i) in [...session.steering, ...session.followUp]"
@@ -666,7 +719,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               </ContextContent>
             </Context>
             <Button v-if="session.isStreaming" type="button" variant="outline" size="sm" :disabled="workspace.gitBusy || connecting" @click="abort">{{ t("chat.stop") }}</Button>
-            <PromptInputSubmit :disabled="workspace.gitBusy || connecting" />
+            <Select v-if="session.isStreaming" v-model="runningBehavior">
+              <SelectTrigger class="h-8 w-auto text-xs" :aria-label="t('chat.runningBehavior')"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="queue">{{ t('chat.addToQueue') }}</SelectItem>
+                <SelectItem value="steer">{{ t('chat.steer') }}</SelectItem>
+              </SelectContent>
+            </Select>
+            <PromptInputSubmit :title="session.isStreaming ? t(runningBehavior === 'queue' ? 'chat.addToQueue' : 'chat.steer') : undefined" :disabled="workspace.gitBusy || connecting" />
           </div>
         </div>
       </PromptInput>

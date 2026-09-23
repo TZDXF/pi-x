@@ -93,6 +93,7 @@ pub fn run() {
             packages::package_resources,
             packages::package_set_resource,
             skills::skills_hosted_list,
+            skills::skills_discovered_list,
             skills::skills_hosted_import,
             skills::skills_hosted_delete,
             skills::skills_hosted_set_enabled,

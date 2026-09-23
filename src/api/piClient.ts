@@ -59,6 +59,17 @@ export const deleteHostedSkill = (path: string) => invoke<void>("skills_hosted_d
 export const setHostedSkillsEnabled = (paths: string[]) =>
   invoke<void>("skills_hosted_set_enabled", { paths })
 
+/** A skill Pi auto-discovers outside ~/.pix/skills (read-only). */
+export interface DiscoveredSkill {
+  name: string
+  description: string
+  path: string
+  scope: "user" | "project"
+  hosted: boolean
+}
+export const listDiscoveredSkills = (project?: string | null) =>
+  invoke<DiscoveredSkill[]>("skills_discovered_list", { project: project ?? null })
+
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 

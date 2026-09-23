@@ -2,8 +2,8 @@
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { ask, open } from "@tauri-apps/plugin-dialog"
-import { deleteHostedSkill, importHostedSkills, listHostedSkills, setHostedSkillsEnabled } from "@/api/piClient"
-import type { HostedSkill } from "@/api/piClient"
+import { deleteHostedSkill, importHostedSkills, listDiscoveredSkills, listHostedSkills, setHostedSkillsEnabled } from "@/api/piClient"
+import type { DiscoveredSkill, HostedSkill } from "@/api/piClient"
 import { useSessionStore, useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -12,6 +12,7 @@ const { t } = useI18n()
 const session = useSessionStore()
 const ui = useUiStore()
 const skills = ref<HostedSkill[]>([])
+const discovered = ref<DiscoveredSkill[]>([])
 const loading = ref(true)
 const busy = ref(false)
 const error = ref("")
@@ -21,7 +22,13 @@ async function load() {
   loading.value = true
   error.value = ""
   try {
-    skills.value = await listHostedSkills()
+    const [hosted, found] = await Promise.all([
+      listHostedSkills(),
+      listDiscoveredSkills(session.cwd || null).catch(() => []),
+    ])
+    skills.value = hosted
+    // Hide skills already managed under ~/.pix/skills.
+    discovered.value = found.filter(s => !s.hosted)
   } catch (e) { error.value = String(e) }
   finally { loading.value = false }
 }
@@ -111,6 +118,22 @@ onMounted(load)
           <Button variant="ghost" size="sm" @click="remove(skill)">{{ t("skillsConfig.delete") }}</Button>
         </div>
         <p class="mt-3 text-xs text-amber-600">{{ t("skillsConfig.security") }}</p>
+      </div>
+    </section>
+    <section class="space-y-3">
+      <h3 class="text-sm font-medium">{{ t("skillsConfig.discovered") }} ({{ discovered.length }})</h3>
+      <p class="text-xs text-muted-foreground">{{ t("skillsConfig.discoveredHint") }}</p>
+      <p v-if="!discovered.length" class="text-sm text-muted-foreground">{{ t("skillsConfig.noDiscovered") }}</p>
+      <div v-for="skill in discovered" :key="skill.path" class="flex items-start gap-3 rounded-lg border p-3">
+        <div class="min-w-0 flex-1 space-y-1">
+          <div class="flex items-center gap-2">
+            <p class="text-sm font-medium">{{ skill.name }}</p>
+            <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ t(`skillsConfig.scope_${skill.scope}`) }}</span>
+          </div>
+          <p v-if="skill.description" class="text-xs text-muted-foreground">{{ skill.description }}</p>
+          <p class="break-all text-xs font-mono text-muted-foreground">{{ skill.path }}</p>
+        </div>
+        <Button variant="outline" size="sm" :disabled="busy" @click="runImport([skill.path])">{{ t("skillsConfig.importOne") }}</Button>
       </div>
     </section>
     <section class="space-y-3">

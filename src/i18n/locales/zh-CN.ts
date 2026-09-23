@@ -37,6 +37,12 @@ export default {
     loaded: "当前会话可见的 Skills",
     loadedHint: "来自 Pi 技能命令列表，不是已保存配置的预览；关闭技能命令的 Skills 可能不显示。",
     noLoaded: "暂无可见技能。可先打开会话，或导入技能文件。",
+    discovered: "自动发现的 Skills",
+    discoveredHint: "Pi 会自动加载 ~/.pi/agent/skills、~/.agents/skills 及项目内 .pi/skills、.agents/skills 中的技能；此处仅为只读展示，导入后才可统一管理启用状态。",
+    noDiscovered: "未发现自动加载的技能。",
+    importOne: "导入",
+    scope_user: "用户级",
+    scope_project: "项目级",
   },
   agentConfig: {
     "title": "全局提示词",
@@ -161,6 +167,18 @@ export default {
   },
 
   chat: {
+    queuedPrompts: "待发送队列",
+    resumeQueue: "继续队列",
+    dragQueue: "拖拽调整顺序",
+    queuedImages: "{count} 张图片",
+    moveQueueUp: "上移",
+    moveQueueDown: "下移",
+    editQueuedPrompt: "编辑并回到输入框",
+    deleteQueuedPrompt: "删除提问",
+    runningBehavior: "运行中发送方式",
+    addToQueue: "加入队列",
+    steer: "调整方向",
+
     stop: "停止生成",
     timeline: "对话时间轴",
     timelineJump: "跳转到第 {number} 次提问",

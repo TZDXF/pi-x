@@ -30,6 +30,13 @@ export interface ThinkingBlock { type: "thinking", text: string, streaming: bool
 export interface ToolCallBlock { type: "toolCall", callId: string, name: string, argsText: string }
 export type Block = TextBlock | ThinkingBlock | ToolCallBlock
 
+export interface QueuedPrompt {
+  id: number
+  text: string
+  images?: { data: string, mimeType: string }[]
+  expandedText?: string
+}
+
 export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true }
 export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true }
 export type Entry = UserEntry | AssistantEntry
@@ -99,6 +106,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const isStreaming = ref(false)
   const isCompacting = ref(false)
   const retryInfo = ref<string | null>(null)
+  const promptQueue = ref<QueuedPrompt[]>([])
+  let stopping = false
+  let queuePaused = false
   const steering = ref<string[]>([])
   const followUp = ref<string[]>([])
   const state = ref<SessionState | null>(null)
@@ -184,7 +194,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     if (state.value) return clampThinkingLevel(state.value.thinkingLevel ?? remembered.value.thinking ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
     return clampThinkingLevel(desiredThinkingLevel.value ?? remembered.value.thinking ?? offlineDefaultThinking.value ?? DEFAULT_THINKING_LEVEL, availableThinking.value)
   })
-  const pendingCount = computed(() => steering.value.length + followUp.value.length)
+  const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
   // ---- event ingestion ----
   function handleEvent(ev: Record<string, any>) {
@@ -200,6 +210,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         // Our own worker just flushed the file; sync so watcher events for
         // this write are not mistaken for external edits.
         void syncSessionFile()
+        if (!stopping && !queuePaused) dispatchQueuedPrompt()
         break
 
       case "message_start": {
@@ -390,10 +401,37 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   // ---- actions ----
   let conversationVersion = 0
 
-  async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string) {
+  function removeQueuedPrompt(id: number) {
+    const index = promptQueue.value.findIndex(item => item.id === id)
+    if (index < 0) return
+    return promptQueue.value.splice(index, 1)[0]
+  }
+
+  function moveQueuedPrompt(id: number, targetId: number) {
+    const from = promptQueue.value.findIndex(item => item.id === id)
+    const to = promptQueue.value.findIndex(item => item.id === targetId)
+    if (from < 0 || to < 0 || from === to) return
+    promptQueue.value.splice(to, 0, promptQueue.value.splice(from, 1)[0])
+  }
+
+  function dispatchQueuedPrompt() {
+    if (isStreaming.value || stopping) return
+    queuePaused = false
+    const next = promptQueue.value.shift()
+    if (next) void send(next.text, next.images, next.expandedText)
+  }
+
+  async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string, behavior: "queue" | "steer" = "steer") {
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
+    if (isStreaming.value && behavior === "queue") {
+      promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
+      return
+    }
+    queuePaused = false
+    const wasStreaming = isStreaming.value
+    isStreaming.value = true
     const version = conversationVersion
     const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
     // Capture identity now: completion must never name a subsequently selected session.
@@ -405,7 +443,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
-    if (isStreaming.value)
+    if (wasStreaming)
       command.streamingBehavior = "steer"
     // resolves after the full run finishes; events drive the UI meanwhile
     rpcRequest(command)
@@ -414,6 +452,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       })
       .catch((e) => {
         if (version !== conversationVersion) return
+        if (!wasStreaming) isStreaming.value = false
         entries.value.push({
           kind: "assistant",
           id: nextId(),
@@ -440,6 +479,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   /** Esc: take back queued messages, then abort. Returns text to restore. */
   async function abortAndRestore(): Promise<string> {
+    stopping = true
+    queuePaused = true
     const restored: string[] = []
     try {
       const res = await rpcRequest<{ steering?: string[], followUp?: string[] }>({ type: "clear_queue" })
@@ -454,7 +495,11 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     catch {
       // ignore
     }
-    await refreshState()
+    try {
+      await refreshState()
+    } finally {
+      stopping = false
+    }
     return restored.join("\n")
   }
 
@@ -628,10 +673,19 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   let commandRequestVersion = 0
   async function refreshCommands() {
     const version = ++commandRequestVersion
-    const res = await rpcRequest<{ commands: CommandInfo[] }>({ type: "get_commands" })
+    const res = await rpcRequest<{ commands: Array<CommandInfo & {
+      sourceInfo?: { path?: string, scope?: "user" | "project" | "temporary" }
+    }> }>({ type: "get_commands" })
     if (version !== commandRequestVersion) return
     if (!res.success) throw new Error(res.error ?? "Failed to load commands")
-    commands.value = res.data?.commands ?? []
+    // Pi nests the resource file path in `sourceInfo` instead of a top-level
+    // `path`; flatten it so the loaded-skills list and "import loaded" work.
+    commands.value = (res.data?.commands ?? []).map(({ sourceInfo, ...command }) => ({
+      ...command,
+      path: command.path ?? sourceInfo?.path,
+      location: command.location
+        ?? (sourceInfo?.scope === "user" || sourceInfo?.scope === "project" ? sourceInfo.scope : undefined),
+    }))
   }
 
   async function refreshModels() {
@@ -717,6 +771,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   }
 
   function clear() {
+    promptQueue.value = []
+    stopping = false
+    queuePaused = false
     isStreaming.value = false
     isCompacting.value = false
     retryInfo.value = null
@@ -791,6 +848,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     currentModel,
     thinkingLevel,
     pendingCount,
+    promptQueue,
+    removeQueuedPrompt,
+    moveQueuedPrompt,
+    dispatchQueuedPrompt,
     handleEvent,
     send,
     abortAndRestore,

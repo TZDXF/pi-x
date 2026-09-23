@@ -13,9 +13,9 @@
  */
 import { usePromptInput } from "@/components/ai-elements/prompt-input/context"
 
-const { textInput, setTextInput, submitForm, files, removeFile, openFileDialog } = usePromptInput()
+const { textInput, setTextInput, submitForm, files, addFiles, removeFile, openFileDialog } = usePromptInput()
 
-defineExpose({ textInput, setTextInput, submitForm, files, removeFile, openFileDialog })
+defineExpose({ textInput, setTextInput, submitForm, files, addFiles, removeFile, openFileDialog })
 </script>
 
 <template>
