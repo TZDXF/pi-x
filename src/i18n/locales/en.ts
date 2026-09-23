@@ -220,6 +220,7 @@ export default {
     credentials: "Uses pi provider settings and credentials. Choose from the same model list as the conversation. Title generation incurs additional model usage. Changes apply to new conversations.",
   },
   settings: {
+    back: "Back",
     dataDirectory: 'Application data directory',
 
     theme: "Appearance",

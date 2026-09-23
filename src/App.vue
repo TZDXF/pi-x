@@ -10,22 +10,27 @@ import {
   onPiEvent,
   onPiExit,
   onPiStderr,
+  onSessionsChanged,
   saveConfig,
+  sessionMtime,
   spawnPi,
   trustSave,
   trustStatus,
 } from "@/api/piClient"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import { useSessionStore, sessionFor, uiFor, activeRuntimeId, activateSession, createConversation, findConversation } from "@/stores/conversations"
-import { useWorkspaceStore } from "@/stores/workspace"
+import { useWorkspaceStore, registerSessionMtimeSync } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
-import SettingsDialog from "@/components/SettingsDialog.vue"
+import SettingsPage from "@/components/SettingsPage.vue"
 import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
+import { useRoute, navigate } from "@/lib/router"
+
+const route = useRoute()
 
 type Phase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
 
@@ -37,7 +42,6 @@ const ui = useUiStore()
 const { t } = useI18n()
 
 const sidebarOpen = ref(true)
-const settingsOpen = ref(false)
 
 const phase = ref<Phase>("detecting")
 const config = ref<AppConfig>({})
@@ -71,6 +75,7 @@ onMounted(async () => {
         owner.handleEvent(ev)
         if (ev.type === "agent_settled" && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
       }),
+      onSessionsChanged((files) => handleExternalSessionChanges(files)),
       onPiExit((runtimeId) => {
         // An unscoped exit is a transport disconnect; it is not an agent exit.
         if (!runtimeId) {
@@ -91,6 +96,9 @@ onMounted(async () => {
       return
     }
     unlisteners = handlers
+
+    // Metadata writes (rename/archive) by this app must not look external.
+    registerSessionMtimeSync((file, mtime) => findConversation(file)?.syncSessionMtime(mtime))
 
     // Reattach after UI reload / remote connection without spawning duplicates.
     const running = await listRunningSessions()
@@ -147,6 +155,68 @@ async function drainNavigation() {
   } finally { navigationRunning.value = false }
 }
 watch([connecting, navigating], () => { void drainNavigation() })
+
+// ---- external session changes (e.g. the session continued in a terminal) ----
+
+let sessionsListTimer: ReturnType<typeof setTimeout> | null = null
+function handleExternalSessionChanges(files: string[]) {
+  for (const file of files) scheduleExternalReload(file)
+  // Refresh the sidebar lists so previews/titles/timestamps follow the disk.
+  if (sessionsListTimer) clearTimeout(sessionsListTimer)
+  sessionsListTimer = setTimeout(() => {
+    sessionsListTimer = null
+    const projects = new Set<string>(Object.keys(workspace.histories))
+    if (project.value) projects.add(project.value)
+    for (const p of projects) void workspace.refresh(p).catch(console.warn)
+  }, 600)
+}
+
+const pendingReloads = new Set<string>()
+function scheduleExternalReload(file: string) {
+  if (pendingReloads.has(file)) return
+  // Let in-flight own writes settle and their mtimes sync first.
+  pendingReloads.add(file)
+  setTimeout(() => {
+    pendingReloads.delete(file)
+    void reloadExternalConversation(file)
+  }, 800)
+}
+
+/** Restart a conversation's worker so it picks up history appended elsewhere;
+ *  `get_messages` reads worker memory, so a reload alone is not enough. */
+async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
+  const file = owner.sessionFile
+  const dir = owner.cwd
+  if (!file || !dir) return
+  const active = owner.runtimeId === activeRuntimeId.value
+  // The scoped pi-exit handler keeps phase "chat" while connecting.
+  if (active) connecting.value = true
+  try {
+    await killPi(owner.runtimeId)
+    await spawnPi(dir, file, owner.runtimeId)
+    owner.started = true
+    owner.clear()
+    await owner.init(dir)
+    await owner.loadHistory()
+  } catch (e) {
+    await killPi(owner.runtimeId).catch(() => {})
+    owner.started = false
+    lastError.value = String(e)
+    uiFor(owner.runtimeId).pushToast(String(e), "error")
+  } finally {
+    if (active) connecting.value = false
+  }
+}
+
+async function reloadExternalConversation(file: string) {
+  if (disposed || connecting.value || navigating.value) return
+  const owner = findConversation(file)
+  if (!owner?.started || !owner.sessionFile || owner.isStreaming) return
+  const disk = await sessionMtime(file).catch(() => null)
+  // Equal mtime means the write was our own (already synced at agent_settled).
+  if (disk == null || disk === owner.syncedSessionMtime) return
+  await rebuildConversation(owner)
+}
 
 async function selectProject(dir: string) {
   if (workspace.gitBusy || connecting.value) return
@@ -231,6 +301,12 @@ async function resumeSession(file: string, targetProject?: string) {
     if (owner?.started) {
       activateSession(owner.runtimeId)
       project.value = owner.cwd
+      // The session may have been continued externally since we last saw it;
+      // rebuild the worker when the file changed on disk.
+      if (!owner.isStreaming && owner.sessionFile) {
+        const disk = await sessionMtime(owner.sessionFile).catch(() => null)
+        if (disk != null && disk !== owner.syncedSessionMtime) await rebuildConversation(owner)
+      }
       return
     }
     // A dormant conversation gets its own worker; other workers are untouched.
@@ -307,21 +383,25 @@ onUnmounted(() => {
       @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
       @new-session="path => requestNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
-      @settings="settingsOpen = true"
+      @settings="navigate('/settings/general')"
       @collapse="sidebarOpen = false"
     />
     <main class="workspace-main">
-      <Button
-        v-if="!sidebarOpen"
-        variant="ghost"
-        size="icon"
-        class="sidebar-restore icon-button"
-        :title="t('app.expandSidebar')"
-        :aria-label="t('app.expandSidebar')"
-        @click="sidebarOpen = true"
-      >
-        <PanelLeft :size="18" />
-      </Button>
+      <template v-if="route.name === 'settings'">
+        <Button
+          v-if="!sidebarOpen"
+          variant="ghost"
+          size="icon"
+          class="sidebar-restore icon-button"
+          :title="t('app.expandSidebar')"
+          :aria-label="t('app.expandSidebar')"
+          @click="sidebarOpen = true"
+        >
+          <PanelLeft :size="18" />
+        </Button>
+        <SettingsPage :project="project" />
+      </template>
+      <template v-else>
       <WelcomeView
         v-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
         :phase
@@ -363,8 +443,8 @@ onUnmounted(() => {
           </Button>
         </div>
       </div>
+      </template>
     </main>
-    <SettingsDialog :open="settingsOpen" :project="project" @close="settingsOpen = false" />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div

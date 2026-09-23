@@ -382,21 +382,35 @@ input:focus-visible {
   font-size: 14px;
   line-height: 1.7;
 }
-.settings-dialog {
-  width: min(840px, calc(100vw - 40px)) !important;
-  max-width: 840px !important;
-  height: min(580px, calc(100dvh - 60px));
-  display: grid !important;
+.settings-page {
+  flex: 1;
+  min-height: 0;
+  display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
-  gap: 0 !important;
-  padding: 0 !important;
   overflow: hidden;
-  border-radius: 16px;
 }
+.settings-back {
+  align-self: flex-start;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.settings-back:hover { color: var(--foreground); }
+.settings-menu {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+}
+.settings-menu button { width: 100%; }
 .settings-nav {
   background: var(--sidebar);
   border-right: 1px solid var(--border);
-  padding: 28px 14px;
+  padding: 20px 14px 28px;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -404,7 +418,7 @@ input:focus-visible {
 .settings-nav h2 {
   font-size: 16px;
   font-weight: 600;
-  padding: 0 12px 22px;
+  padding: 0 12px 18px;
 }
 .settings-nav button {
   padding: 10px 12px;
@@ -426,9 +440,18 @@ input:focus-visible {
   min-width: 0;
   padding: 38px 36px;
 }
-.settings-body [data-slot="dialog-header"] {
+.settings-header {
   margin-bottom: 30px;
   text-align: left;
+}
+.settings-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+}
+.settings-header p {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
 }
 .settings-section {
   font-size: 13px;
@@ -495,7 +518,7 @@ kbd {
   .composer-dock > form > div:last-child {
     flex-wrap: wrap;
   }
-  .settings-dialog {
+  .settings-page {
     grid-template-columns: 125px minmax(0, 1fr);
   }
   .settings-body {

@@ -220,6 +220,7 @@ export default {
     credentials: "复用 pi 的供应商配置和登录凭据。使用与对话框相同的模型列表选择；此功能会产生额外模型用量。保存后对新会话生效。",
   },
   settings: {
+    back: "返回",
     dataDirectory: '应用数据目录',
 
     theme: "外观主题",
