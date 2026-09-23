@@ -39,3 +39,73 @@ test('rendered entries have anchors and navigation stops automatic following', (
   assert.match(conversation, /context.stopScroll\(\)[\s\S]*viewport.scrollTo/)
   assert.match(conversation, /prefers-reduced-motion/)
 })
+
+// ---- buildTimelineTurns: full-session timeline over paginated history ----
+const build = context.exports.buildTimelineTurns
+const rawUser = (text, images = []) => ({ role: 'user', content: images.length ? [{ type: 'text', text }, ...images] : text })
+const rawAssistant = (...parts) => ({ role: 'assistant', content: parts })
+const rawToolCall = { type: 'toolCall', id: 'c1', name: 'bash', arguments: 'ls' }
+const liveUser = (id, text) => ({ kind: 'user', id, text, live: true })
+
+test('unmaterialized turns show with synthetic ids; materialized ones map to entries in order', () => {
+  const messages = [
+    rawUser('q1'), rawAssistant({ type: 'text', text: 'a1' }),
+    rawUser('q2'), rawAssistant(rawToolCall, { type: 'text', text: 'a2' }),
+    rawUser('q3'), rawAssistant({ type: 'text', text: 'a3' }),
+  ]
+  // cursor=4: q3/a3 materialized as entries; q1/q2 only raw.
+  const entries = [
+    { kind: 'user', id: 50, text: 'q3' },
+    { kind: 'assistant', id: 51, blocks: [text('a3')] },
+  ]
+  const result = build(messages, 4, entries)
+  assert.equal(result.length, 3)
+  assert.equal(result.map(t => t.question).join('|'), 'q1|q2|q3')
+  assert.equal(result[0].id, -1)
+  assert.equal(result[0].entryId, null)
+  assert.equal(result[1].id, -3)
+  assert.equal(result[1].entryId, null)
+  assert.equal(result[2].id, 50)
+  assert.equal(result[2].entryId, 50)
+  assert.equal(result[1].answer, 'a2')
+  assert.equal(result[0].answer, 'a1')
+})
+
+test('live entries appended after the snapshot extend the timeline', () => {
+  const messages = [rawUser('q1'), rawAssistant({ type: 'text', text: 'a1' })]
+  const entries = [
+    { kind: 'user', id: 10, text: 'q1' },
+    { kind: 'assistant', id: 11, blocks: [text('a1')] },
+    liveUser(12, 'q2 live'),
+    { kind: 'assistant', id: 13, blocks: [text('a2 live')], live: true },
+  ]
+  const result = build(messages, 2, entries)
+  assert.equal(result.length, 2)
+  assert.equal(result[1].id, 12)
+  assert.equal(result[1].entryId, 12)
+  assert.equal(result[1].answer, 'a2 live')
+})
+
+test('empty snapshot falls back to entries-only turns (fully materialized session)', () => {
+  const entries = [
+    { kind: 'user', id: 1, text: 'q1' },
+    { kind: 'assistant', id: 2, blocks: [text('a1')] },
+    liveUser(3, 'q2'),
+  ]
+  const result = build([], 0, entries)
+  assert.equal(result.length, 2)
+  assert.equal(result[0].entryId, 1)
+  assert.equal(result[1].entryId, 3)
+  assert.equal(result[1].answer, '')
+})
+
+test('empty or image-only raw user messages are skipped, matching materialization', () => {
+  const messages = [rawUser(''), rawUser('q1', [{ type: 'image', data: 'x', mimeType: 'image/png' }])]
+  const result = build(messages, 0, [])
+  assert.equal(result.length, 1)
+  assert.equal(result[0].question, 'q1')
+  assert.equal(result[0].entryId, null)
+  const imageOnly = build([rawUser('', [{ type: 'image', data: 'x', mimeType: 'image/png' }])], 0, [])
+  assert.equal(imageOnly.length, 1)
+  assert.equal(imageOnly[0].question, '')
+})

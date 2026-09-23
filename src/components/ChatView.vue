@@ -59,6 +59,7 @@ import {
 } from "@/components/ai-elements/context"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
+import type { TimelineTurn } from "@/lib/conversationTimeline"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
@@ -89,7 +90,11 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
-function navigateToQuestion(id: number) {
+async function navigateToQuestion(turn: TimelineTurn) {
+  // Unmaterialized turns load their history pages first, then scroll.
+  const id = turn.entryId ?? await session.revealTimelineTurn(turn.id)
+  if (id == null) return
+  conversation.value?.stopScroll()
   conversation.value?.scrollToMessage(id)
 }
 let restoringHistory = false
@@ -533,7 +538,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </QueueSection>
       </ConversationContent>
       <template #overlay>
-        <ConversationTimeline :entries="session.entries" :partial="session.partialBlocks" @navigate="navigateToQuestion" />
+        <ConversationTimeline :turns="session.timelineTurns" :partial="session.partialBlocks" @navigate="navigateToQuestion" />
         <ConversationScrollButton />
       </template>
     </Conversation>

@@ -1,7 +1,8 @@
 import { defineStore } from "pinia"
-import { computed, ref } from "vue"
+import { computed, ref, shallowRef } from "vue"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime } from "@/api/piClient"
+import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import type {
   AssistantMessageEvent,
   CommandInfo,
@@ -27,8 +28,8 @@ export interface ThinkingBlock { type: "thinking", text: string, streaming: bool
 export interface ToolCallBlock { type: "toolCall", callId: string, name: string, argsText: string }
 export type Block = TextBlock | ThinkingBlock | ToolCallBlock
 
-export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[] }
-export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[] }
+export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true }
+export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true }
 export type Entry = UserEntry | AssistantEntry
 
 function contentText(content: unknown): string {
@@ -138,8 +139,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     try { localStorage.setItem(SELECTION_KEY, JSON.stringify(remembered.value)) } catch { /* Optional UI preference. */ }
   }
 
-  // Keep unrendered history outside Vue's deep reactive graph.
-  let historyMessages: any[] = []
+  // Raw history snapshot outside Vue's deep reactive graph; emptied once fully materialized.
+  const historyMessages = shallowRef<any[]>([])
   let historyVersion = 0
   const historyCursor = ref(0)
   const historyLoading = ref(false)
@@ -149,7 +150,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   function invalidateHistory() {
     historyVersion++
-    historyMessages = []
+    historyMessages.value = []
     historyCursor.value = 0
     historyLoading.value = false
     olderHistoryLoading.value = false
@@ -209,7 +210,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         if (msg?.role === "assistant") {
           // authoritative replace
           const blocks = blocksFromMessage(msg)
-          entries.value.push({ kind: "assistant", id: nextId(), blocks })
+          entries.value.push({ kind: "assistant", id: nextId(), blocks, live: true })
           if (msg.usage)
             lastUsage.value = msg.usage
         }
@@ -384,7 +385,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const titleProject = cwd.value
     const titleSessionId = state.value?.sessionId
     const promptText = expandedText || trimmed || "(see attached image)"
-    entries.value.push({ kind: "user", id: nextId(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })) })
+    entries.value.push({ kind: "user", id: nextId(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
@@ -401,6 +402,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           kind: "assistant",
           id: nextId(),
           blocks: [{ type: "text", text: `**Error:** ${String(e)}` }],
+          live: true,
         })
       })
       .finally(() => {
@@ -513,7 +515,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   async function loadOlderHistory() {
     if (olderHistoryLoading.value || !historyCursor.value) return
     const version = historyVersion
-    const source = historyMessages
+    const source = historyMessages.value
     const end = historyCursor.value
     olderHistoryLoading.value = true
     try {
@@ -561,7 +563,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       runs.value = { ...pageRuns, ...runs.value }
       entries.value = [...page, ...entries.value]
       historyCursor.value = start
-      if (!start) historyMessages = []
+      if (!start) historyMessages.value = []
     }
     finally {
       if (version === historyVersion) olderHistoryLoading.value = false
@@ -574,7 +576,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
-    historyMessages = msgs
+    historyMessages.value = msgs
     historyCursor.value = msgs.length
     await loadOlderHistory()
   }
@@ -591,8 +593,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       entries.value = []
       runs.value = {}
       partialBlocks.value = null
-      historyMessages = res.data?.messages ?? []
-      historyCursor.value = historyMessages.length
+      historyMessages.value = res.data?.messages ?? []
+      historyCursor.value = historyMessages.value.length
       await loadOlderHistory()
     }
     finally {
@@ -717,10 +719,35 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     commands.value = []
   }
 
+  /** Timeline turns across the whole session, including turns whose history
+   * pages are not materialized yet (they carry a synthetic negative id). */
+  const timelineTurns = computed<TimelineTurn[]>(() =>
+    buildTimelineTurns(historyMessages.value, historyCursor.value, entries.value))
+
+  /** Load older history until the turn materializes; returns its user entry id. */
+  async function revealTimelineTurn(turnId: number): Promise<number | null> {
+    const turns = timelineTurns.value
+    const index = turns.findIndex(t => t.id === turnId)
+    if (index < 0) return null
+    if (turns[index].entryId != null) return turns[index].entryId
+    const fromEnd = turns.length - 1 - index
+    while (historyCursor.value > 0) {
+      const cursorBefore = historyCursor.value
+      await loadOlderHistory()
+      if (historyCursor.value === cursorBefore) break
+    }
+    const loaded = timelineTurns.value
+    const resolved = loaded[loaded.length - 1 - fromEnd]
+      ?? [...loaded].reverse().find(t => t.entryId != null && t.question === turns[index].question)
+    return resolved?.entryId ?? null
+  }
+
   return {
     runtimeId,
     started,
     entries,
+    timelineTurns,
+    revealTimelineTurn,
     runs,
     partialBlocks,
     isStreaming,

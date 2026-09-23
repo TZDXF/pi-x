@@ -9,7 +9,7 @@ function harness(storage = new Map()) {
   const state = { model: { provider: 'restored', id: 'session-model', reasoning: true }, thinkingLevel: 'low' }
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
-    vue: { ref: value => ({ value }), computed: get => ({ get value() { return get() } }) },
+    vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/stores/workspace': { useWorkspaceStore: () => ({}) },
     '@/api/piClient': {
       getModelsConfig: async () => ({ providers: { pi: { models: [{ id: 'default', reasoning: true }] } } }),

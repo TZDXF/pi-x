@@ -8,7 +8,7 @@ function harness() {
   const requests = []
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
-    vue: { ref: value => ({ value }), computed: get => ({ get value() { return get() } }) },
+    vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/api/piClient': { rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
     '@/stores/workspace': {},
   }

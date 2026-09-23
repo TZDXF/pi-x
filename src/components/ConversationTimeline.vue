@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Block, Entry } from '@/stores/conversations'
-import { conversationTurns } from '@/lib/conversationTimeline'
+import type { Block } from '@/stores/conversations'
+import { appendPartial, type TimelineTurn } from '@/lib/conversationTimeline'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
-const props = defineProps<{ entries: Entry[]; partial: Block[] | null }>()
-const emit = defineEmits<{ navigate: [id: number] }>()
+const props = defineProps<{ turns: TimelineTurn[]; partial: Block[] | null }>()
+const emit = defineEmits<{ navigate: [turn: TimelineTurn] }>()
 const { t } = useI18n()
-const turns = computed(() => conversationTurns(props.entries, props.partial))
+const turns = computed(() => {
+  const list = props.turns.map(turn => ({ ...turn }))
+  if (props.partial?.length && list.length) appendPartial(list[list.length - 1], props.partial)
+  return list
+})
 const selected = ref<number | null>(null)
 // 当轮次很多时压缩节点高度，保证时间线在可视区内完整显示；
 // 只有压缩到下限仍然放不下时才回退为内部滚动。
@@ -31,9 +35,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => resizeObserver?.disconnect())
 watch(() => turns.value.length, updateNodeHeight)
-function navigate(id: number) {
-  selected.value = id
-  emit('navigate', id)
+function navigate(turn: TimelineTurn) {
+  selected.value = turn.id
+  emit('navigate', turn)
 }
 </script>
 
@@ -46,7 +50,7 @@ function navigate(id: number) {
             <TooltipTrigger as-child>
               <button type="button" class="timeline-node" :class="{ 'is-selected': selected === turn.id }"
                 :aria-label="t('chat.timelineJump', { number: index + 1 }) + ': ' + (turn.question || t('chat.timelineImage'))"
-                @click="navigate(turn.id)">
+                @click="navigate(turn)">
                 <span class="timeline-dot" /><span class="timeline-number" aria-hidden="true">{{ index + 1 }}</span>
               </button>
             </TooltipTrigger>
