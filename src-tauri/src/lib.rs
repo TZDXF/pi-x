@@ -10,6 +10,7 @@ mod remote;
 #[path = "remote_disabled.rs"]
 mod remote;
 mod rpc;
+mod session_watch;
 mod sessions;
 mod skills;
 mod terminal;
@@ -30,6 +31,7 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .setup(|app| {
             data_dir::initialize()?;
+            session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
             tauri::WebviewWindowBuilder::from_config(app, &config)?
                 .data_directory(data_dir::root().join("webview"))
@@ -72,6 +74,7 @@ pub fn run() {
             commands::rpc_running,
             commands::rpc_sessions,
             commands::session_list,
+            sessions::session_mtime,
             sessions::session_update,
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,

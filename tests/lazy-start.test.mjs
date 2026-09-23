@@ -32,6 +32,8 @@ function harness() {
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
     spawnPi: async () => calls.push('spawn'), killPi: async () => {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
+    onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
+    registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls }

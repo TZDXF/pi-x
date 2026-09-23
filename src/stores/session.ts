@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref, shallowRef } from "vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import type {
   AssistantMessageEvent,
@@ -112,6 +112,27 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const state = ref<SessionState | null>(null)
   /** File path of the active pi session (null until persisted). */
   const sessionFile = ref<string | null>(null)
+  /** On-disk mtime at the last time our own view of the file was synced;
+   *  a watcher event reporting a different value means an external edit. */
+  const syncedSessionMtime = ref<number | null>(null)
+  let mtimeSyncSeq = 0
+  /** Re-read the session file's mtime from disk after loading our own history
+   *  or after one of our own runs settles. */
+  async function syncSessionFile() {
+    const seq = ++mtimeSyncSeq
+    const file = sessionFile.value
+    if (!file) return
+    try {
+      const mtime = await sessionMtime(file)
+      if (seq === mtimeSyncSeq && sessionFile.value === file)
+        syncedSessionMtime.value = mtime
+    } catch { /* file missing or unreadable; keep previous value */ }
+  }
+  /** Record a known mtime without hitting disk (e.g. after a rename via us). */
+  function syncSessionMtime(mtime: number) {
+    ++mtimeSyncSeq
+    syncedSessionMtime.value = mtime
+  }
   const stats = ref<SessionStats | null>(null)
   const lastUsage = ref<Usage | null>(null)
   const commands = ref<CommandInfo[]>([])
@@ -184,6 +205,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         isStreaming.value = false
         void refreshStats()
         void refreshState()
+        // Our own worker just flushed the file; sync so watcher events for
+        // this write are not mistaken for external edits.
+        void syncSessionFile()
         break
 
       case "message_start": {
@@ -596,6 +620,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       historyMessages.value = res.data?.messages ?? []
       historyCursor.value = historyMessages.value.length
       await loadOlderHistory()
+      void syncSessionFile()
     }
     finally {
       if (version === historyVersion) historyLoading.value = false
@@ -704,6 +729,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     isCompacting.value = false
     retryInfo.value = null
     sessionFile.value = null
+    syncedSessionMtime.value = null
+    ++mtimeSyncSeq
     ++offlineLoadVersion
     ++conversationVersion
     invalidateHistory()
@@ -766,6 +793,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     availableThinking,
     cwd,
     sessionFile,
+    syncedSessionMtime,
+    syncSessionFile,
+    syncSessionMtime,
     currentModel,
     thinkingLevel,
     pendingCount,

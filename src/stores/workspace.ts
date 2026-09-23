@@ -2,6 +2,17 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { listSessions, updateSession, type SessionMeta } from "@/api/piClient"
 
+/** Registered by the app shell so metadata writes (rename/archive) can record
+ *  the resulting mtime; lets the session watcher tell its own writes from
+ *  external ones without importing the conversation stores (cycle). */
+let sessionMtimeSync: ((file: string, mtimeMs: number) => void) | null = null
+export function registerSessionMtimeSync(sync: (file: string, mtimeMs: number) => void) {
+  sessionMtimeSync = sync
+}
+function notifySessionMtimeSync(file: string, mtimeMs: number) {
+  sessionMtimeSync?.(file, mtimeMs)
+}
+
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
   const projects = ref<string[]>([])
@@ -111,8 +122,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const draft = pending.get(file)
     if (draft && !draft.title) draft.title = title
   }
+  /** Lets the app shell record the mtime of metadata writes (rename/archive)
+   *  so the session watcher can tell its own writes from external ones. */
   async function update(row: SessionMeta, title: string | null, archived: boolean) {
-    await updateSession(row.file, title, archived)
+    const mtime = await updateSession(row.file, title, archived)
+    if (typeof mtime === "number") notifySessionMtimeSync(row.file, mtime)
     for (const [path, rows] of Object.entries(histories.value)) {
       const match = rows.find(s => s.file === row.file)
       if (match) {
@@ -121,5 +135,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, pinnedProjects, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, preview, generatedTitle }
+  /** Drop a deleted session from every cached history so the sidebar stays in sync. */
+  function removeSession(file: string) {
+    pending.delete(file)
+    for (const [path, rows] of Object.entries(histories.value)) {
+      const next = rows.filter(s => s.file !== file)
+      if (next.length !== rows.length) {
+        versions[path] = (versions[path] || 0) + 1
+        histories.value[path] = next
+      }
+    }
+  }
+  return { gitBusy, projects, pinnedProjects, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
 })

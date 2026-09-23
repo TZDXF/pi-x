@@ -33,6 +33,7 @@ regex = "1.13.1"
 ureq = { version = "2", default-features = false, features = ["tls", "native-certs"] }
 portable-pty = "0.8"
 base64 = "0.22"
+notify = "8"
 
 [profile.release]
 codegen-units = 1

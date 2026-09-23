@@ -97,6 +97,16 @@ fn normalize(p: &Path) -> Option<String> {
     canonicalize(p).ok().map(|s| s.to_string_lossy().to_string())
 }
 
+/// Reject paths outside the pi sessions directory (or non-session files).
+fn validate_session_path(file: &str) -> Result<PathBuf, String> {
+    let path = canonicalize(file).map_err(|e| e.to_string())?;
+    let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
+    if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+        return Err("无效的会话路径".into());
+    }
+    Ok(path)
+}
+
 /// List the most recent sessions whose `cwd` matches `project`.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
     let project_norm = normalize(Path::new(&project))
@@ -224,19 +234,24 @@ pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Re
     std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
 }
 #[tauri::command]
-pub async fn session_update(app: AppHandle, file: String, title: Option<String>, archived: bool) -> Result<(), String> {
-    let path = canonicalize(&file).map_err(|e| e.to_string())?;
-    let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
-    if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-        return Err("无效的会话路径".into());
-    }
+pub async fn session_mtime(file: String) -> Result<u64, String> {
+    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    Ok(mtime_ms(&path))
+}
+
+#[tauri::command]
+pub async fn session_update(app: AppHandle, file: String, title: Option<String>, archived: bool) -> Result<u64, String> {
+    let path = validate_session_path(&file)?;
     if std::fs::symlink_metadata(path.with_extension("pix.json")).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("无效的会话元数据路径".into());
     }
     if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
         set_session_name(&app, &path, title.trim().chars().take(120).collect(), false).await?;
     }
-    update_presentation(&path, archived)
+    update_presentation(&path, archived)?;
+    Ok(mtime_ms(&path))
 }
 
 fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {

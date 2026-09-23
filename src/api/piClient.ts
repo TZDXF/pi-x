@@ -97,6 +97,14 @@ export interface SessionMeta {
 export const listSessions = (project: string) =>
   invoke<SessionMeta[]>("session_list", { project })
 
+/** On-disk mtime of a session file, used to detect external edits. */
+export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
+
+/** Session files under ~/.pi/agent/sessions changed on disk (possibly externally). */
+export function onSessionsChanged(handler: (files: string[]) => void): Promise<() => void> {
+  return listen<{ files: string[] }>("pi://sessions-changed", e => handler(e.payload.files))
+}
+
 export interface FileHit {
   path: string
   name: string
@@ -176,8 +184,9 @@ export const getModelsConfig = () => invoke<ModelsConfig>("models_config_get")
 export const saveModelsConfig = (config: ModelsConfig) =>
   invoke<void>("models_config_save", { config })
 
+/** Returns the resulting session-file mtime so callers can sync change detection. */
 export const updateSession = (file: string, title: string | null, archived: boolean) =>
-  invoke<void>("session_update", { file, title, archived })
+  invoke<number>("session_update", { file, title, archived })
 export interface WorkspaceGitInfo { branch: string; branches: string[]; worktree: boolean }
 export const workspaceGitInfo = (project: string) => invoke<WorkspaceGitInfo>("workspace_git_info", { project })
 export const createWorkspaceGit = (project: string, branch: string, worktree: boolean) =>
