@@ -140,6 +140,13 @@ export default {
   },
 
   chat: {
+    timeline: "对话时间轴",
+    timelineJump: "跳转到第 {number} 次提问",
+    timelineQuestion: "提问",
+    timelineAnswer: "回答",
+    timelineImage: "图片提问",
+    timelinePending: "暂无文字回答",
+
     historyLoading: "正在加载历史消息…",
     loadOlderHistory: "加载更早的消息",
     newSession: "新会话",

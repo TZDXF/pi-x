@@ -20,7 +20,19 @@ interface Props {
 }
 
 const emit = defineEmits<{ scroll: [event: Event] }>()
-defineExpose({ stopScroll: () => context.stopScroll() })
+defineExpose({
+  stopScroll: () => context.stopScroll(),
+  scrollToMessage: (id: number) => {
+    const viewport = scrollRef.value
+    const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+    if (!viewport || !message) return
+    context.stopScroll()
+    viewport.scrollTo({
+      top: viewport.scrollTop + message.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 24,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+    })
+  },
+})
 
 const props = withDefaults(defineProps<Props>(), {
   ariaLabel: 'Conversation',

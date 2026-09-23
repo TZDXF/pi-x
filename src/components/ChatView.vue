@@ -59,6 +59,7 @@ import {
   ContextTrigger,
 } from "@/components/ai-elements/context"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
+import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
@@ -85,6 +86,9 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
+function navigateToQuestion(id: number) {
+  conversation.value?.scrollToMessage(id)
+}
 let restoringHistory = false
 async function onHistoryScroll(event: Event) {
   const viewport = event.target as HTMLElement
@@ -398,6 +402,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       class="min-h-0 flex-1" @scroll="onHistoryScroll">
       <ConversationContent
         class="conversation-column mx-auto w-full max-w-3xl px-6 py-10"
+        :class="{ 'has-timeline': session.entries.some(entry => entry.kind === 'user') }"
       >
         <div v-if="session.hasOlderHistory" class="text-muted-foreground flex h-8 items-center justify-center gap-2 text-sm" role="status">
           <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t('chat.historyLoading') }}</template>
@@ -410,7 +415,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         />
 
         <template v-for="(entry, entryIndex) in session.entries" :key="entry.id">
-          <Message :from="entry.kind === 'user' ? 'user' : 'assistant'">
+          <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <MessageContent>
               <div
                 v-if="entry.kind === 'user'"
@@ -477,7 +482,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           </QueueList>
         </QueueSection>
       </ConversationContent>
-      <template #overlay><ConversationScrollButton /></template>
+      <template #overlay>
+        <ConversationTimeline :entries="session.entries" :partial="session.partialBlocks" @navigate="navigateToQuestion" />
+        <ConversationScrollButton />
+      </template>
     </Conversation>
 
     <!-- extension widget -->

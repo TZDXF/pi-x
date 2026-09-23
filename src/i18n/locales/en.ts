@@ -140,6 +140,13 @@ export default {
   },
 
   chat: {
+    timeline: "Conversation timeline",
+    timelineJump: "Jump to question {number}",
+    timelineQuestion: "Question",
+    timelineAnswer: "Answer",
+    timelineImage: "Image question",
+    timelinePending: "No text response yet",
+
     historyLoading: "Loading history…",
     loadOlderHistory: "Load earlier messages",
     newSession: "New session",

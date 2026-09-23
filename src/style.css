@@ -659,3 +659,6 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 @media (max-width: 640px) {
   .setting-row { flex-wrap: wrap; gap: 12px; }
 }
+
+/* Reserve a narrow rail without covering messages on small screens. */
+.conversation-column.has-timeline { padding-left: 42px; }
