@@ -442,7 +442,11 @@ async function newProjectSession(path: string) {
   try {
     if (path !== project.value) await selectProject(path)
     if (phase.value === "chat") {
-      createConversation(path)
+      // "New session" creates nothing until the first message is sent: reuse
+      // the pristine draft instead of accumulating empty conversations.
+      const active = sessionFor(activeRuntimeId.value)
+      const pristine = !active.started && !active.sessionFile && !active.entries.length
+      if (!pristine || active.cwd !== path) createConversation(path)
       void session.loadOfflineModels()
     }
   } catch (e) { ui.pushToast(String(e), "error") }
