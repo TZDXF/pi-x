@@ -242,6 +242,27 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(Value::Null)
         }
         "rpc_request" => rpc::request(&state, a["command"].clone(), a["runtimeId"].as_str()).await,
+        // A remote browser cannot open host files. Export either the requested
+        // saved session directly or the active runtime, then return its HTML.
+        "session_export_html" => {
+            let (path, temporary) = if let Some(file) = a["file"].as_str() {
+                (commands::session_export_file(file.to_owned(), None).await?, true)
+            } else {
+                let response = rpc::request(&state, json!({"type": "export_html"}), a["runtimeId"].as_str()).await?;
+                if response["success"] != true {
+                    return Err(response["error"].as_str().unwrap_or("Export failed").to_owned());
+                }
+                (response["data"]["path"].as_str().ok_or("Export returned no path")?.to_owned(), false)
+            };
+            let html = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read exported HTML: {e}"));
+            if temporary { let _ = std::fs::remove_file(&path); }
+            let download_name = if temporary {
+                let file = a["file"].as_str().ok_or("Missing session file")?;
+                let stem = std::path::Path::new(file).file_stem().and_then(|s| s.to_str()).ok_or("Invalid session name")?;
+                format!("pi-session-{stem}.html")
+            } else { path };
+            Ok(json!({"path": download_name, "html": html?}))
+        }
         "rpc_notify" => {
             rpc::notify(&state, a["command"].clone(), a["runtimeId"].as_str()).await?;
             Ok(Value::Null)
@@ -352,7 +373,7 @@ pub fn emit(app: &AppHandle, name: &str, payload: Value) {
 /// timing side channels over the network.
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
+    if a.is_empty() || a.len() != b.len() {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0

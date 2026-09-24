@@ -101,7 +101,7 @@ fn normalize(p: &Path) -> Option<String> {
 }
 
 /// Reject paths outside the pi sessions directory (or non-session files).
-fn validate_session_path(file: &str) -> Result<PathBuf, String> {
+pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
     let path = canonicalize(file).map_err(|e| e.to_string())?;
     let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
     if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {

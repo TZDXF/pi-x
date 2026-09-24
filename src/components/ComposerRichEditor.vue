@@ -1,10 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { usePromptInput } from '@/components/ai-elements/prompt-input/context'
-import { composerParts, editorSelection, editorText, setEditorCaret } from '@/lib/composerTokens'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { composerParts, editorSelection, editorText, normalizedPath, setEditorCaret } from '@/lib/composerTokens'
 
 defineProps<{ placeholder: string; disabled?: boolean }>()
 const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput()
+const workspace = useWorkspaceStore()
+const sessionLabels = computed(() => {
+  const labels: Record<string, string> = {}
+  for (const row of Object.values(workspace.histories).flat()) {
+    const label = row.title || row.preview
+    if (label) labels[normalizedPath(row.file)] = label
+  }
+  return labels
+})
 const editor = ref<HTMLElement | null>(null)
 const composing = ref(false)
 
@@ -12,7 +22,7 @@ function render(value: string, caret?: number) {
   const root = editor.value
   if (!root) return
   root.replaceChildren()
-  for (const part of composerParts(value)) {
+  for (const part of composerParts(value, sessionLabels.value)) {
     if (part.kind === 'text') {
       root.append(document.createTextNode(part.raw))
       continue
@@ -35,6 +45,10 @@ onMounted(() => render(textInput.value))
 watch(textInput, (value) => {
   if (composing.value || !editor.value || editorText(editor.value) === value) return
   render(value, document.activeElement === editor.value ? value.length : undefined)
+})
+watch(sessionLabels, () => {
+  if (composing.value || !editor.value) return
+  render(textInput.value, document.activeElement === editor.value ? editorSelection(editor.value).start : undefined)
 })
 
 function onInput() {
@@ -66,7 +80,7 @@ function onKeydown(event: KeyboardEvent) {
     }
     if (start === end) {
       let cursor = 0
-      for (const part of composerParts(textInput.value)) {
+      for (const part of composerParts(textInput.value, sessionLabels.value)) {
         const next = cursor + part.raw.length
         if (part.kind !== 'text' && (event.key === 'Backspace' ? next === start : cursor === start)) {
           event.preventDefault()

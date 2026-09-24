@@ -85,6 +85,7 @@ pub fn run() {
             workspace_git::workspace_git_info,
             workspace_git::workspace_git_create,
             commands::search_files,
+            commands::session_export_file,
             commands::open_path,
             commands::models_config_get,
             commands::models_config_save,

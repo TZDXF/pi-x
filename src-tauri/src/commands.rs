@@ -208,6 +208,32 @@ pub async fn search_files(project: String, query: String) -> Result<Vec<fs_searc
     fs_search::search(project, query).await
 }
 
+/// Export a stored Pi session without activating or switching any runtime.
+/// When no output path is supplied (remote browser download), use a temporary
+/// HTML file which the remote handler removes after reading it.
+#[tauri::command]
+pub async fn session_export_file(file: String, output_path: Option<String>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let source = sessions::validate_session_path(&file)?;
+        let target = match output_path {
+            Some(path) => {
+                let path = std::path::PathBuf::from(path);
+                if !path.is_absolute() || !path.parent().is_some_and(|parent| parent.is_dir()) {
+                    return Err("Invalid export directory".into());
+                }
+                path
+            }
+            None => std::env::temp_dir().join(format!("pix-session-export-{}.html", uuid::Uuid::new_v4())),
+        };
+        let result = crate::pi_data::call(json!({
+            "op": "session_export_html", "file": source, "outputPath": target
+        }))?;
+        let exported = result.as_str().ok_or("Pi did not return an export path")?;
+        dunce::canonicalize(exported).map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| format!("Cannot locate exported HTML: {e}"))
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Open a file or directory with the system default handler.
 #[tauri::command]
 pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {

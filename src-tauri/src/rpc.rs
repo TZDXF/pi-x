@@ -10,6 +10,7 @@
 use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -396,7 +397,24 @@ pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
 
 pub async fn request(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
-    process_request(&process, command).await
+    let exporting = command["type"] == "export_html";
+    let mut response = process_request(&process, command).await?;
+    if exporting {
+        resolve_export_path(&mut response, &process.project)?;
+    }
+    Ok(response)
+}
+
+/// Pi writes the default HTML export relative to its own working directory,
+/// not the desktop process's. Return a real absolute path for open_path (and
+/// for remote clients, whose browser runs on yet another machine).
+fn resolve_export_path(response: &mut Value, project: &str) -> Result<(), String> {
+    if response["success"] != true { return Ok(()); }
+    let Some(path) = response["data"]["path"].as_str() else { return Ok(()); };
+    let absolute = dunce::canonicalize(Path::new(project).join(path))
+        .map_err(|e| format!("Cannot locate exported HTML {path}: {e}"))?;
+    response["data"]["path"] = json!(absolute.to_string_lossy());
+    Ok(())
 }
 pub async fn notify(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<(), String> {
     let process = state.process(runtime_id).await?;
@@ -440,4 +458,33 @@ pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, t
         }
     }
     process_set_session_name(&ProcessState::default(), path, title, only_if_empty).await
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_relative_export_against_pi_project_not_desktop_cwd() {
+        let project = std::env::temp_dir().join(format!("pix-export-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&project).unwrap();
+        let file = project.join("session.html");
+        std::fs::write(&file, "<html></html>").unwrap();
+
+        let mut relative = json!({ "success": true, "data": { "path": "session.html" } });
+        resolve_export_path(&mut relative, project.to_str().unwrap()).unwrap();
+        let expected = dunce::canonicalize(&file).unwrap().to_string_lossy().to_string();
+        assert_eq!(relative["data"]["path"], expected);
+
+        let mut absolute = json!({ "success": true, "data": { "path": expected } });
+        resolve_export_path(&mut absolute, project.to_str().unwrap()).unwrap();
+        assert_eq!(absolute["data"]["path"], expected);
+
+        let mut failed = json!({ "success": false, "error": "Nothing to export yet" });
+        resolve_export_path(&mut failed, project.to_str().unwrap()).unwrap();
+        assert_eq!(failed["error"], "Nothing to export yet");
+
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(project).unwrap();
+    }
 }

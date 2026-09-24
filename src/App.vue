@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   detectPi,
+  exportSessionFileHtml,
   listRunningSessions,
   getConfig,
   killPi,
@@ -423,13 +424,16 @@ async function resumeSession(file: string, targetProject?: string) {
   finally { connecting.value = false }
 }
 
-/** Sidebar actions must run against the selected session's runtime, not the
- * previously active one. Wait for ChatView to mount its action listener. */
-async function openSessionAction(file: string, targetProject: string, action: "export") {
-  await resumeSession(file, targetProject)
-  if (phase.value !== "chat" || !session.started || findConversation(file)?.runtimeId !== activeRuntimeId.value) return
-  await nextTick()
-  ui.requestSessionAction(action)
+/** Export a sidebar session directly from its saved file. Never change the
+ * active project or conversation just to perform an action on that file. */
+async function openSessionAction(file: string, action: "export") {
+  if (action !== "export") return
+  try {
+    if (await exportSessionFileHtml(file, t("chat.exportDirectory")))
+      ui.pushToast(t("chat.toastExported"), "info")
+  } catch (error) {
+    ui.pushToast(String(error), "error")
+  }
 }
 
 async function newProjectSession(path: string) {
@@ -485,7 +489,7 @@ onUnmounted(() => {
       @switch-project="requestNavigation(switchProject)"
       @select-project="path => requestNavigation(() => selectProject(path))"
       @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
-      @session-action="(file, path, action) => requestNavigation(() => openSessionAction(file, path, action))"
+      @session-action="(file, action) => openSessionAction(file, action)"
       @new-session="path => requestNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
       @edit-project="editProject"

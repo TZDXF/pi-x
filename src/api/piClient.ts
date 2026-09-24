@@ -1,5 +1,7 @@
 import { activeRuntimeId } from "@/stores/runtime"
-import { RECONNECTED_EVENT, invoke, listen } from "./transport"
+import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
+import { join } from "@tauri-apps/api/path"
+import { RECONNECTED_EVENT, invoke, isDesktop, listen } from "./transport"
 import type { ExtensionUiResponse, RpcResponse } from "./protocol"
 
 // ---- process / config commands (Rust side) ----
@@ -130,6 +132,64 @@ export const searchFiles = (project: string, query: string) =>
   invoke<FileHit[]>("search_files", { project, query })
 
 export const openPath = (path: string) => invoke<void>("open_path", { path })
+
+async function chooseExportPath(sessionFile?: string | null, directoryTitle?: string): Promise<string | null> {
+  const directory = await chooseDirectory({ directory: true, title: directoryTitle })
+  if (typeof directory !== "string") return null
+  const base = sessionFile?.split(/[/\\]/).pop()?.replace(/\.jsonl$/i, "") || `session-${Date.now()}`
+  const filename = `pi-session-${base.replace(/[^a-zA-Z0-9._-]/g, "_")}.html`
+  return join(directory, filename)
+}
+
+function downloadExport(path: string, html: string): void {
+  const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }))
+  try {
+    const link = document.createElement("a")
+    link.href = url
+    link.download = path.split(/[/\\]/).pop() || "session.html"
+    document.body.append(link)
+    link.click()
+    link.remove()
+  } finally {
+    // Keep the object URL alive until the browser has consumed the download.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  }
+}
+
+/** Export the current runtime. Desktop picks a destination folder; remote
+ * browsers download to their browser-managed location. */
+export async function exportSessionHtml(
+  runtimeId = activeRuntimeId.value,
+  sessionFile?: string | null,
+  directoryTitle?: string,
+): Promise<boolean> {
+  if (isDesktop) {
+    const outputPath = await chooseExportPath(sessionFile, directoryTitle)
+    if (!outputPath) return false
+    const result = await rpcRequest<{ path?: string }>({ type: "export_html", outputPath }, runtimeId)
+    if (!result.success || !result.data?.path) throw new Error(result.error ?? "Export failed")
+    await openPath(result.data.path)
+    return true
+  }
+  const { path, html } = await invoke<{ path: string; html: string }>("session_export_html", { runtimeId })
+  downloadExport(path, html)
+  return true
+}
+
+/** Export a saved session by file path without selecting it or touching any
+ * Pi runtime, including when another conversation is currently active. */
+export async function exportSessionFileHtml(file: string, directoryTitle?: string): Promise<boolean> {
+  if (isDesktop) {
+    const outputPath = await chooseExportPath(file, directoryTitle)
+    if (!outputPath) return false
+    const path = await invoke<string>("session_export_file", { file, outputPath })
+    await openPath(path)
+    return true
+  }
+  const { path, html } = await invoke<{ path: string; html: string }>("session_export_html", { file })
+  downloadExport(path, html)
+  return true
+}
 
 // ---- RPC bridge ----
 

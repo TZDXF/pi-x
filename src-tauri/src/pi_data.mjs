@@ -55,6 +55,9 @@ if (op.startsWith("trust_")) {
   result = { defaultProvider: global.defaultProvider, defaultModel: global.defaultModel,
     defaultThinkingLevel: global.defaultThinkingLevel, modelThinkingLevels: global.modelThinkingLevels,
     skills: global.skills ?? [] };
+} else if (op === "session_export_html") {
+  const { exportFromFile } = await load("core/export-html/index.js");
+  result = await exportFromFile(request.file, { outputPath: request.outputPath });
 } else if (op === "session_name") {
   const { SessionManager } = await load("core/session-manager.js");
   const session = SessionManager.open(request.file);

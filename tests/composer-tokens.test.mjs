@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/lib/composerTokens.ts', import.meta.url), 'utf8')
 const js = ts.transpile(source, { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 })
-const { composerParts } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { composerParts, normalizedPath } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
 
 test('composer chips hide paths and slash prefixes without changing raw text', () => {
   const text = '/review @"C:/project/src/my file.ts" @session("C:/sessions/old.jsonl") with @src/App.vue '
@@ -22,4 +22,23 @@ test('unfinished completion tokens remain editable plain text', () => {
   assert.equal(composerParts('/rev').some(p => p.kind !== 'text'), false)
   assert.equal(composerParts('@src/in').some(p => p.kind !== 'text'), false)
   assert.equal(composerParts('mail@example.com ').some(p => p.kind !== 'text'), false)
+})
+
+test('known session references display their current title', () => {
+  const raw = '@session("C:/sessions/old.jsonl")'
+  const labels = { [normalizedPath('C:\\sessions\\old.jsonl')]: '修复登录问题' }
+  const [part] = composerParts(`请看 ${raw} 的上下文`, labels)
+  assert.equal(part.kind, 'text')
+  const session = composerParts(`请看 ${raw} 的上下文`, labels).find(p => p.kind === 'session')
+  assert.equal(session.label, '修复登录问题')
+  assert.equal(session.raw, raw)
+  assert.equal(composerParts(`请看 ${raw} `, {}).find(p => p.kind === 'session').label, 'old.jsonl')
+})
+
+test('rich editor wires workspace session titles into chip rendering', () => {
+  const editor = readFileSync(new URL('../src/components/ComposerRichEditor.vue', import.meta.url), 'utf8')
+  assert.match(editor, /useWorkspaceStore/)
+  assert.match(editor, /row\.title \|\| row\.preview/)
+  assert.match(editor, /composerParts\(value, sessionLabels\.value\)/)
+  assert.match(editor, /watch\(sessionLabels/)
 })

@@ -1,7 +1,11 @@
 export interface ComposerPart { kind: 'text' | 'file' | 'session' | 'command'; raw: string; label: string }
 
+export function normalizedPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
 /** Keep transport text intact; only replace complete references in the editor display. */
-export function composerParts(text: string): ComposerPart[] {
+export function composerParts(text: string, sessionLabels: Record<string, string> = {}): ComposerPart[] {
   const parts: ComposerPart[] = []
   const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s)|^\/[^\s/]+(?=\s)/g
   let cursor = 0
@@ -19,7 +23,8 @@ export function composerParts(text: string): ComposerPart[] {
       const value = session ? raw.slice(9, -1) : raw.slice(1)
       try { label = value.startsWith('"') ? JSON.parse(value) as string : value } catch { continue }
       if (!label || label.split(/[\\/]/).includes('..')) continue
-      label = label.replace(/\\/g, '/').split('/').pop() || label
+      const path = normalizedPath(label)
+      label = (session ? sessionLabels[path] : undefined) || path.split('/').pop() || label
       kind = session ? 'session' : 'file'
     }
     if (start > cursor) parts.push({ kind: 'text', raw: text.slice(cursor, start), label: text.slice(cursor, start) })

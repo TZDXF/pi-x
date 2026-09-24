@@ -81,6 +81,17 @@ test('Pi native session names roundtrip and automatic names preserve manual name
   assert.equal(existsSync(file.replace('.jsonl', '.pix.json')), false)
 })
 
+test('Pi exports a saved session file directly without opening a runtime', { skip: !dist }, t => {
+  const { root, project, call } = fixture(t)
+  const file = join(root, 'conversation.jsonl'), outputPath = join(root, 'chosen.html')
+  writeFileSync(file, [
+    { type: 'session', version: 3, id: 'saved', timestamp: new Date().toISOString(), cwd: project },
+    { type: 'message', id: 'm1', parentId: null, timestamp: new Date().toISOString(), message: { role: 'user', content: 'offline export marker', timestamp: Date.now() } },
+  ].map(v => JSON.stringify(v)).join('\n') + '\n')
+  assert.equal(call({ op: 'session_export_html', file, outputPath }), outputPath)
+  assert.ok(readFileSync(outputPath, 'utf8').startsWith('<!DOCTYPE html>'))
+})
+
 test('malformed Pi settings and invalid patches fail without replacing the file', { skip: !dist }, t => {
   const { agent, call } = fixture(t)
   const file = join(agent, 'settings.json')

@@ -4,7 +4,15 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 const source = readFileSync(new URL('../src/lib/completion.ts', import.meta.url), 'utf8')
 const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { completionToken, insertCompletion, insertSessionCompletion, sessionReference, fileReference, withFileReferences, withSessionReferences, mergeWorkspaceFiles } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { desktopCommands, completionToken, insertCompletion, insertSessionCompletion, sessionReference, fileReference, withFileReferences, withSessionReferences, mergeWorkspaceFiles } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+
+test('built-in slash commands exclude export while keeping new and compact', () => {
+  assert.deepEqual([...desktopCommands], ['new', 'compact'])
+  const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  const submit = chat.slice(chat.indexOf('async function onSubmit('), chat.indexOf('function thinkingLabel'))
+  assert.doesNotMatch(submit, /exportSessionHtml|type: ["']export_html["']|commandName === ["']export["']/)
+  assert.match(submit, /completion\.unsupported/)
+})
 
 test('slash completion is start-only and supports skill, unicode and hyphenated names', () => {
   for (const text of ['/', '/skill:review', '/my-template', '/检查']) {

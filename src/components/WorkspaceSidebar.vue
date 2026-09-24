@@ -18,7 +18,7 @@ const props = defineProps<{ project: string; ready: boolean; busy: boolean; navi
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
   removeProject: [project: string]; editProject: [project: string];
-  newSession: [project: string]; sessionAction: [file: string, project: string, action: "export"]; settings: []; collapse: []
+  newSession: [project: string]; sessionAction: [file: string, action: "export"]; settings: []; collapse: []
 }>()
 const session = useSessionStore()
 const ui = useUiStore()
@@ -189,7 +189,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
             <div class="session-actions hover-action">
               <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" /></Button>
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, s.cwd, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
             </div>
           </div>

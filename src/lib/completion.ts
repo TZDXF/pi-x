@@ -1,5 +1,5 @@
 /** TUI commands with equivalent, supported desktop RPC actions. */
-export const desktopCommands = ['new', 'compact', 'export'] as const
+export const desktopCommands = ['new', 'compact'] as const
 
 export interface CompletionToken { kind: 'command' | 'file'; query: string; start: number; end: number }
 
