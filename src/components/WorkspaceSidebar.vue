@@ -178,7 +178,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           </DropdownMenu>
         </div>
         <div v-if="!collapsed[path]" class="session-list">
-          <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && (session.started || session.entries.length) && !showArchived && !query" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled" @dragstart="onSessionDragStart($event, path, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>

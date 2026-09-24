@@ -13,12 +13,12 @@ function harness(group = null) {
   const activeRuntimeId = { value: 'default' }
   let seq = 0
   const sessionFor = id => {
-    if (!stores.has(id)) stores.set(id, { runtimeId: id, started: false, cwd: '',
+    if (!stores.has(id)) stores.set(id, { runtimeId: id, started: false, cwd: '', entries: [], sessionFile: null,
       clear() {}, init: async () => calls.push('init'), loadHistory: async () => {}, loadOfflineModels: async () => {} })
     return stores.get(id)
   }
   const context = vm.createContext({
-    watch: () => {}, ref: value => ({ value }), computed: get => ({ get value() { return get() } }),
+    watch: () => {}, ref: value => ({ value }), computed: def => ({ get value() { return (typeof def === 'function' ? def : def.get)() } }),
     onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
     useI18n: () => ({ t: x => x }),
     useSessionStore: () => new Proxy({}, { get: (_, k) => sessionFor(activeRuntimeId.value)[k] }),
@@ -29,7 +29,7 @@ function harness(group = null) {
     createConversation: project => { const id = 'rt' + (++seq); const s = sessionFor(id); s.cwd = project; activeRuntimeId.value = id; return s },
     findConversation: () => undefined,
     getConfig: async () => ({ lastProject: 'project' }),
-    onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {},
+    onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {}, onReconnected: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
     spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
@@ -44,6 +44,18 @@ test('opening the app, selecting projects and drafting a new chat do not start p
   await context.mount()
   await context.actions.selectProject('other')
   await context.actions.newProjectSession('other')
+  assert.deepEqual(calls, [])
+})
+test('clicking new session reuses the pristine draft until a message is sent', async () => {
+  const { context, calls } = harness()
+  await context.mount()
+  await context.actions.newProjectSession('project')
+  assert.equal(context.activeRuntimeId.value, 'rt1')
+  await context.actions.newProjectSession('project')
+  assert.equal(context.activeRuntimeId.value, 'rt1')
+  context.sessionFor('rt1').entries = [{ kind: 'user' }]
+  await context.actions.newProjectSession('project')
+  assert.equal(context.activeRuntimeId.value, 'rt2')
   assert.deepEqual(calls, [])
 })
 test('first conversation starts pi and reuses the initialized process', async () => {
