@@ -15,3 +15,10 @@ export function setSessionRunStatus(file: string | null, status: SessionRunStatu
   if (status) statuses.set(key(file), status)
   else statuses.delete(key(file))
 }
+
+/** A viewed terminal result is acknowledged; an in-flight turn stays visible. */
+export function acknowledgeSessionRunStatus(file: string | null) {
+  if (!file) return
+  const status = sessionRunStatus(file)
+  if (status === "completed" || status === "error") statuses.delete(key(file))
+}

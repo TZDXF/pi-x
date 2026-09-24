@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
+import { sessionChanges } from "@/lib/sessionChanges"
 import { contentText } from "@/lib/content"
 import type {
   AssistantMessageEvent,
@@ -857,6 +858,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     runtimeId,
     started,
     entries,
+    fileChanges: computed(() => sessionChanges(historyMessages.value, entries.value, partialBlocks.value, runs.value)),
     timelineTurns,
     revealTimelineTurn,
     runs,

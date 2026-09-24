@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { contentModule } from './lib/load-ts.mjs'
+import { contentModule, loadTsSource } from './lib/load-ts.mjs'
 
 function harness() {
   const requests = []
@@ -15,6 +15,7 @@ function harness() {
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': {},
     '@/lib/content': contentModule(),
+    '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
   }
   const context = vm.createContext({ exports: {}, setTimeout, require: id => modules[id] })
   const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
@@ -101,4 +102,26 @@ test('history retains question and answer timestamps across pagination', async (
   await store.loadOlderHistory()
   assert.equal(store.entries.value[0].timestamp, 1000)
   assert.equal(store.entries.value[1].timestamp, 7500)
+})
+
+
+test('file change totals remain safe across idle, history loading, completion and clear', async () => {
+  const { store } = harness()
+  assert.equal(store.partialBlocks.value, null)
+  assert.equal(store.fileChanges.value.length, 0)
+  const loading = store.loadMessages([
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'edit-1', name: 'edit', arguments: { path: 'a.ts', oldText: 'old', newText: 'new' } }] },
+    { role: 'toolResult', toolCallId: 'edit-1', content: 'ok' },
+  ])
+  assert.doesNotThrow(() => store.fileChanges.value)
+  await loading
+  assert.equal(store.partialBlocks.value, null)
+  assert.equal(store.fileChanges.value[0].added, 1)
+  assert.equal(store.fileChanges.value[0].removed, 1)
+  store.partialBlocks.value = []
+  assert.equal(store.fileChanges.value.length, 1)
+  store.partialBlocks.value = null
+  assert.equal(store.fileChanges.value.length, 1)
+  store.clear()
+  assert.equal(store.fileChanges.value.length, 0)
 })

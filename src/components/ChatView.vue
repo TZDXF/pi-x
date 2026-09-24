@@ -77,6 +77,11 @@ import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2 } from "@
 import { Button } from "@/components/ui/button"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
+import SessionChanges from "@/components/SessionChanges.vue"
+
+const changesOpen = ref(false)
+const changeTotals = computed(() => session.fileChanges.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed, unknown: sum.unknown || change.unknownBefore }), { added: 0, removed: 0, unknown: false }))
+
 const runtimeId = activeRuntimeId.value
 const session = sessionFor(runtimeId)
 const ui = uiFor(runtimeId)
@@ -481,6 +486,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 </script>
 
 <template>
+  <div class="chat-review-layout">
   <div class="chat-workspace">
     <header class="workspace-header">
       <div class="min-w-0">
@@ -493,6 +499,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </p>
       </div>
       <div class="header-actions">
+        <Button variant="ghost" size="sm" :aria-expanded="changesOpen" :aria-label="t('changes.title')" @click="changesOpen = !changesOpen">
+          {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
+        </Button>
         <span v-if="session.retryInfo" class="text-xs text-amber-500">{{
           session.retryInfo
         }}</span>
@@ -852,5 +861,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     </Dialog>
 
     <ExtensionDialog />
+  </div>
+  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" @close="changesOpen = false" />
   </div>
 </template>

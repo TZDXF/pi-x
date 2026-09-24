@@ -31,6 +31,7 @@ import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import { useRoute, navigate } from "@/lib/router"
+import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 
 const route = useRoute()
 
@@ -55,6 +56,13 @@ const lastError = ref<string | null>(null)
 
 const started = computed({ get: () => session.started, set: value => { session.started = value } })
 const connecting = ref(false)
+// A terminal badge represents an unread result, not a permanent session state.
+watch(() => {
+  if (phase.value !== "chat" || route.value.name !== "home" || connecting.value || navigating.value) return null
+  const file = session.sessionFile
+  const status = file ? sessionRunStatus(file) : undefined
+  return status === "completed" || status === "error" ? file : null
+}, file => acknowledgeSessionRunStatus(file), { immediate: true })
 const runtimeWorkspaces = new Map<string, string>()
 function contextFor(dir: string): WorkspaceContext | undefined {
   const group = workspace.projectGroups[workspace.projectRoot(dir)]
@@ -371,6 +379,14 @@ async function resumeSession(file: string, targetProject?: string) {
       if (phase.value === "trust") pendingResume.value = file
       return
     }
+  }
+  // Clicking the already-active session is a no-op: it is still attached in
+  // memory, and appends made elsewhere are picked up by the session-file
+  // watcher (scheduleExternalReload), so no reconnect or history reload.
+  const activeOwner = findConversation(file)
+  if (activeOwner?.started && activeOwner.runtimeId === activeRuntimeId.value) {
+    project.value = activeOwner.cwd
+    return
   }
   phase.value = "chat"
   connecting.value = true

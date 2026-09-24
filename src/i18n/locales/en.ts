@@ -1,5 +1,14 @@
 /** English locale */
 export default {
+  changes: {
+    unified: "Unified", split: "Split", wordDiff: "Inline diff", before: "Before", after: "After",
+    expand: "Expand {count} unchanged lines", loadMore: "Show more ({count} lines remaining)", snippetLines: "Line numbers are relative to the tool's code snippet",
+    files: "Files", fileDiff: "File changes",
+    resize: "Drag to resize code review (or use left/right arrow keys)",
+    title: "Session changes", review: "Review", close: "Close code review",
+    description: "Successful file tools only. Counts accumulate per operation, not a Git net diff. Writes without original content are excluded.",
+    empty: "No successful file changes in this session.", unknown: "Original content unknown · write preview only, excluded from totals",
+  },
   completion: {
     builtin: "Built-in",
     command_new: "Start a new session",

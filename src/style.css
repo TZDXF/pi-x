@@ -681,18 +681,21 @@ kbd {
 .project-row svg { flex-shrink: 0; }
 .project-chevron { width: 10px; color: var(--muted-foreground); }
 .session-list { overflow: visible; padding: 0; }
-.session-row { padding: 0 4px 0 28px; min-height: 28px; gap: 2px; margin: 0; font-size: 12px; border-radius: 5px; }
+.session-row { position: relative; padding: 0 4px 0 28px; min-height: 28px; gap: 2px; margin: 0; font-size: 12px; border-radius: 5px; }
 .session-row.active, .session-row:hover { background: var(--sidebar-accent); }
 .session-row.active { box-shadow: inset 2px 0 var(--sidebar-primary); }
 .project-heading > .icon-button, .project-more { width: 24px; height: 24px; }
 .session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 0; font-size: 12px; line-height: 20px; }
-.session-actions { display: flex; align-items: center; }
+.session-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; padding-left: 6px; border-radius: 4px; background: var(--sidebar-accent); pointer-events: none; }
+.session-row:hover .session-actions, .session-row:focus-within .session-actions,
+.session-actions:has([data-state="open"]) { pointer-events: auto; }
 .session-actions .icon-button { width: 24px; height: 24px; }
 .hover-action { opacity: 0; }
 .project-heading:hover > .hover-action, .project-heading:focus-within > .hover-action,
 .session-row:hover .hover-action, .session-row:focus-within .hover-action,
 .hover-action:has([data-state="open"]) { opacity: 1; }
-.session-status { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 10px; line-height: 16px; color: var(--muted-foreground); }
+.session-status { display: inline-flex; align-items: center; justify-content: center; width: 14px; margin-left: 4px; flex-shrink: 0; color: var(--muted-foreground); }
+.session-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .session-status-completed { color: var(--primary); }
 .session-status-error { color: var(--destructive); }
 .session-running { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--muted-foreground); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -725,7 +728,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: var(--composer-shadow); }
 .composer-dock { padding-bottom: 12px; }
 
-@media (hover: none) { .hover-action { opacity: 1; } }
+@media (hover: none) { .hover-action:not(.session-actions) { opacity: 1; } }
 @media (max-width: 700px) { .workspace-sidebar { width: 220px; } .workspace-context { margin-inline: 2px; gap: 0; } .context-chip { gap: 4px; } }
 .conversation-column .is-assistant { max-width: 100%; }
 .composer-options { flex: 1; }
@@ -798,3 +801,46 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 }
 
 .response-process { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+
+/* Keep review scoped to the active conversation, beside chat on wide screens. */
+.chat-review-layout { display: flex; flex: 1; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+.chat-review-layout > .chat-workspace { flex: 1; min-width: 0; }
+.changes-sidebar { position: relative; flex-shrink: 0; display: flex; flex-direction: column; width: clamp(300px, 36%, 640px); min-height: 0; border-left: 1px solid var(--border); background: var(--background); }
+@media (max-width: 900px) {
+  .changes-sidebar { position: absolute; inset: 0 0 0 auto; width: min(100%, 480px); z-index: 30; box-shadow: -8px 0 24px #0002; }
+}
+
+.changes-resize-handle { position: absolute; inset: 0 auto 0 0; width: 7px; z-index: 2; cursor: col-resize; touch-action: none; }
+.changes-resize-handle::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; background: transparent; transition: background 120ms; }
+.changes-resize-handle:hover::after, .changes-resize-handle:focus-visible::after, .changes-resize-handle.is-dragging::after { background: var(--primary); }
+.changes-resize-handle:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+
+/* Review: selected file on the left, independently scrolling file navigation on the right. */
+.changes-review-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 30%); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.changes-file-view, .changes-file-list { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.changes-file-list { border-left: 1px solid var(--border); background: var(--muted); }
+
+/* RepoMeow-style diff gutters, dual-theme highlighting and paired old/new rows. */
+.review-diff { font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 20px; }
+.review-unified { width: max-content; min-width: 100%; }
+.review-code-line { display: flex; min-height: 20px; min-width: 0; }
+.review-line-number { flex: 0 0 4ch; padding: 0 6px; text-align: right; color: var(--muted-foreground); user-select: none; background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.review-line-sign { flex: 0 0 2ch; text-align: center; user-select: none; color: var(--muted-foreground); }
+.review-code-text { white-space: pre; padding-right: 12px; font: inherit; tab-size: 4; }
+.review-add { background: rgb(34 197 94 / 0.10); }
+.review-del { background: rgb(239 68 68 / 0.10); }
+.review-add .review-line-sign { color: #16a34a; }
+.review-del .review-line-sign { color: #ef4444; }
+.review-placeholder { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--muted) 4px 5px); }
+.review-diff .diff-word-del { background: rgb(239 68 68 / 0.28); }
+.review-diff .diff-word-add { background: rgb(34 197 94 / 0.28); }
+.review-diff [style*="--shiki-light"] { color: var(--shiki-light); }
+.dark .review-diff [style*="--shiki-dark"] { color: var(--shiki-dark); }
+.review-split { min-width: 560px; }
+.review-split-row, .review-split-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.review-split-row > :first-child, .review-split-head > :first-child { border-right: 1px solid var(--border); }
+.review-split-row .review-code-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-split-head { position: sticky; top: 0; background: var(--muted); color: var(--muted-foreground); }
+.review-split-head span { padding: 4px 12px; }
+.review-fold { display: block; width: 100%; min-height: 28px; padding: 3px 12px; text-align: left; font-size: 11px; color: var(--muted-foreground); background: var(--muted); cursor: pointer; }
+.review-fold:hover, .review-fold:focus-visible { background: var(--accent); color: var(--accent-foreground); }

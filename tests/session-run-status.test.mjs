@@ -61,3 +61,24 @@ test('aborted turns clear status; unexpected process exit marks running turn as 
   store.markInterrupted()
   assert.equal(statuses.get('first.jsonl'), 'error')
 })
+
+test('viewing a session acknowledges terminal badges without clearing running or other sessions', () => {
+  const source = readFileSync(new URL('../src/stores/sessionRunStatus.ts', import.meta.url), 'utf8')
+  const context = vm.createContext({ exports: {}, require: () => ({ reactive: value => value }) })
+  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
+  const { setSessionRunStatus: set, sessionRunStatus: get, acknowledgeSessionRunStatus: acknowledge } = context.exports
+  for (const terminal of ['completed', 'error']) {
+    set('project/first.jsonl', terminal)
+    set('second.jsonl', terminal)
+    acknowledge('project\\first.jsonl')
+    assert.equal(get('project/first.jsonl'), undefined)
+    assert.equal(get('second.jsonl'), terminal)
+  }
+  set('project/first.jsonl', 'running')
+  acknowledge('project/first.jsonl')
+  assert.equal(get('project/first.jsonl'), 'running')
+  acknowledge(null)
+  acknowledge('missing.jsonl')
+  set('project/first.jsonl', 'completed')
+  assert.equal(get('project/first.jsonl'), 'completed')
+})

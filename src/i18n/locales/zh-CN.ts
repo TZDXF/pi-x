@@ -1,5 +1,14 @@
 /** 简体中文语言包 */
 export default {
+  changes: {
+    unified: "逐行", split: "并排", wordDiff: "行内差异", before: "修改前", after: "修改后",
+    expand: "展开 {count} 行未改动代码", loadMore: "继续显示（剩余 {count} 行）", snippetLines: "行号相对于工具提供的代码片段",
+    files: "文件列表", fileDiff: "文件变动",
+    resize: "拖拽调整审查栏宽度（也可使用左右方向键）",
+    title: "会话代码变动", review: "审查", close: "关闭代码审查",
+    description: "仅统计成功的文件修改工具，按操作累计增删行（非 Git 净变动）。未记录原内容的写入不计入增删。",
+    empty: "当前会话暂无成功的文件修改。", unknown: "原内容未知 · 仅展示写入内容，未计入统计",
+  },
   completion: {
     builtin: "内置",
     command_new: "新建会话",

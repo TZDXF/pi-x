@@ -170,9 +170,9 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query && workspace.projectFolders(path).length === 1" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
-            <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
+            <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
               <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
-              {{ t(`sidebar.status.${sessionRunStatus(s.file)}`) }}
+              <span v-else class="session-status-dot" aria-hidden="true" />
             </span>
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
