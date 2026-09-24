@@ -24,7 +24,6 @@ import {
 import {
   PromptInput,
   PromptInputSubmit,
-  PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input"
 import {
   Select,
@@ -66,6 +65,7 @@ import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
+import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import { withFileReferences, withSessionReferences, sessionReference, desktopCommands } from "@/lib/completion"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
@@ -119,7 +119,7 @@ function onSessionDrop(event: DragEvent) {
   const reference = sessionReference(file)
   const previous = bridge.value?.textInput ?? ''
   bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? ' ' : '') + reference + ' ')
-  nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer-dock textarea')?.focus())
+  nextTick(() => document.querySelector<HTMLElement>('.composer-dock .composer-rich-editor')?.focus())
 }
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
@@ -475,7 +475,7 @@ async function editQueuedPrompt(id: number) {
     bridge.value.addFiles([new File([bytes], `queued-image-${index + 1}`, { type: image.mimeType })])
   }
   await nextTick()
-  document.querySelector<HTMLTextAreaElement>(".composer-dock textarea")?.focus()
+  document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")?.focus()
 }
 
 async function onSubmit(message: {
@@ -819,7 +819,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
         </PromptInputHeader>
         <ComposerCompletion ref="completion" :project="project" :connected="connected" :ensure-started="ensureStarted" />
-        <PromptInputTextarea
+        <ComposerRichEditor
           @input="completion?.onEditorEvent($event)"
           @click="completion?.onEditorEvent($event)"
           @keyup="completion?.onEditorEvent($event)"

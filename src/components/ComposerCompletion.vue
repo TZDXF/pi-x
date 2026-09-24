@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/conversations'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { searchFiles, type FileHit } from '@/api/piClient'
 import { completionToken, insertCompletion, insertSessionCompletion, desktopCommands, mergeWorkspaceFiles } from '@/lib/completion'
+import { editorSelection, setEditorCaret } from '@/lib/composerTokens'
 import { usePromptInput, PromptInputCommand, PromptInputCommandList, PromptInputCommandGroup, PromptInputCommandItem, PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { Loader } from '@/components/ai-elements/loader'
 
@@ -30,7 +31,7 @@ function updatePanelPosition() {
 const caret = ref(0), selectionEnd = ref(0), focused = ref(false), dismissed = ref(false)
 const active = ref(0), loading = ref(false), error = ref('')
 const files = ref<FileHit[]>([])
-let editor: HTMLTextAreaElement | null = null
+let editor: HTMLElement | null = null
 let sequence = 0
 let timer: ReturnType<typeof setTimeout> | undefined
 const initiating = ref(false)
@@ -131,14 +132,15 @@ watch([token, open, () => props.project, () => props.connected, () => JSON.strin
 async function onEditorEvent(event: Event) {
   if (event.type === 'compositionstart') composing.value = true
   if (event.type === 'compositionend') composing.value = false
-  editor = event.target as HTMLTextAreaElement
+  editor = event.target as HTMLElement
   anchor.value = editor?.closest('[data-slot="input-group"]')
   if (event.type === 'blur') { focused.value = false; return }
   await nextTick()
   focused.value = true
-  const changed = caret.value !== editor.selectionStart || selectionEnd.value !== editor.selectionEnd
-  caret.value = editor.selectionStart
-  selectionEnd.value = editor.selectionEnd
+  const selection = editorSelection(editor)
+  const changed = caret.value !== selection.start || selectionEnd.value !== selection.end
+  caret.value = selection.start
+  selectionEnd.value = selection.end
   if (changed || event.type === 'input') dismissed.value = false
   syncAccessibility()
 }
@@ -152,7 +154,7 @@ async function pick(item: (typeof items.value)[number]) {
   caret.value = selectionEnd.value = result.caret
   await nextTick()
   editor?.focus()
-  editor?.setSelectionRange(result.caret, result.caret)
+  if (editor) setEditorCaret(editor, result.caret)
 }
 function onKeydown(event: KeyboardEvent) {
   if (!open.value || composing.value || event.isComposing || event.keyCode === 229) return

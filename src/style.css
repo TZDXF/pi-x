@@ -378,7 +378,8 @@ input:focus-visible {
   box-shadow: none;
   max-width: 190px;
 }
-.composer-dock textarea {
+.composer-dock textarea,
+.composer-dock .composer-rich-editor {
   font-size: 14px;
   line-height: 1.7;
 }
