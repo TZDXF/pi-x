@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
+import { composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { LanguageModelUsage } from "ai"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
@@ -97,6 +98,24 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
+const draftFile = ref<string | null>(session.sessionFile)
+const draftProject = () => session.cwd || props.project
+const draftTarget = () => session.sessionFile ?? draftFile.value
+const initialDraft = composerDraftText(draftProject(), draftTarget())
+watch(() => bridge.value?.textInput, text => {
+  if (text !== undefined) recordComposerDraft(draftProject(), draftTarget(), text)
+})
+// Loading an existing session can set its file after the editor has mounted.
+// Reconnecting may briefly clear sessionFile, so keep its last value as the key.
+watch(() => session.sessionFile, file => {
+  if (file) draftFile.value = file
+  if (!bridge.value) return
+  if (file && !bridge.value.textInput) {
+    const saved = composerDraftText(draftProject(), file)
+    if (saved) bridge.value.setTextInput(saved)
+  }
+  recordComposerDraft(draftProject(), draftTarget(), bridge.value.textInput)
+})
 const sessionDragOver = ref(false)
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
 function onSessionDragOver(event: DragEvent) {
@@ -780,7 +799,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           </li>
         </ul>
       </section>
-      <PromptInput @submit="onSubmit">
+      <PromptInput :initial-input="initialDraft" @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
         <PromptInputHeader v-if="attachments.length">
           <!-- pending image attachments -->
