@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '@/stores/conversations'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { searchFiles, type FileHit } from '@/api/piClient'
-import { completionToken, insertCompletion, desktopCommands, mergeWorkspaceFiles } from '@/lib/completion'
+import { completionToken, insertCompletion, insertSessionCompletion, desktopCommands, mergeWorkspaceFiles } from '@/lib/completion'
 import { usePromptInput, PromptInputCommand, PromptInputCommandList, PromptInputCommandGroup, PromptInputCommandItem, PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { Loader } from '@/components/ai-elements/loader'
 
@@ -50,9 +50,23 @@ const commands = computed(() => [
   ...session.commands,
   ...desktopCommands.filter(name => !session.commands.some(c => c.name === name)).map(name => ({ name, description: t('completion.command_' + name), source: 'builtin' })),
 ])
+const sessionItems = computed(() => {
+  if (token.value?.kind !== 'file') return []
+  const query = token.value.query.toLowerCase()
+  const seen = new Set<string>()
+  return Object.values(workspace.histories).flat()
+    .filter(row => {
+      if (row.file === session.sessionFile || seen.has(row.file)) return false
+      seen.add(row.file)
+      return `${row.title ?? ''} ${row.preview ?? ''} ${row.id} ${workspace.projectName(row.cwd)}`.toLowerCase().includes(query)
+    })
+    .slice(0, 20)
+    .map(row => ({ kind: 'session' as const, value: row.file, label: row.title || row.preview || row.id,
+      description: workspace.projectName(row.cwd), source: t('chat.sessions') }))
+})
 const items = computed(() => token.value?.kind === 'command'
-  ? commands.value.filter(c => `${c.name} ${c.description ?? ''}`.toLowerCase().includes(token.value!.query.toLowerCase())).map(c => ({ value: c.name, label: `/${c.name}`, description: c.description ?? '', source: t(`completion.${c.source}`) }))
-  : files.value.map(f => ({ value: f.path, label: f.name, description: f.path, source: '' })))
+  ? commands.value.filter(c => `${c.name} ${c.description ?? ''}`.toLowerCase().includes(token.value!.query.toLowerCase())).map(c => ({ kind: 'command' as const, value: c.name, label: `/${c.name}`, description: c.description ?? '', source: t(`completion.${c.source}`) }))
+  : [...sessionItems.value, ...files.value.map(f => ({ kind: 'file' as const, value: f.path, label: f.name, description: f.path, source: t('chat.files') }))])
 
 function syncAccessibility() {
   if (!editor) return
@@ -128,9 +142,11 @@ async function onEditorEvent(event: Event) {
   if (changed || event.type === 'input') dismissed.value = false
   syncAccessibility()
 }
-async function pick(value: string) {
+async function pick(item: (typeof items.value)[number]) {
   if (!token.value) return
-  const result = insertCompletion(textInput.value, token.value, value)
+  const result = item.kind === 'session'
+    ? insertSessionCompletion(textInput.value, token.value, item.value)
+    : insertCompletion(textInput.value, token.value, item.value)
   dismissed.value = true
   setTextInput(result.text)
   caret.value = selectionEnd.value = result.caret
@@ -149,7 +165,7 @@ function onKeydown(event: KeyboardEvent) {
     // Never let Enter submit a partial command while results are loading.
     if (event.key === 'Tab' && !items.value.length) return
     event.preventDefault(); event.stopPropagation()
-    if (!loading.value && !error.value && items.value[active.value]) void pick(items.value[active.value]!.value)
+    if (items.value[active.value] && (items.value[active.value]!.kind === 'session' || (!loading.value && !error.value))) void pick(items.value[active.value]!)
   }
 }
 onMounted(() => {
@@ -168,13 +184,13 @@ defineExpose({ onEditorEvent, onKeydown, initiating })
 <template>
   <Teleport to="body">
     <PromptInputCommand v-if="open" class="fixed z-50 h-auto max-h-[60vh] rounded-xl border shadow-lg" :style="panelStyle" @mousedown.prevent>
-    <PromptInputCommandList :id="id" class="max-h-56" :aria-label="t(token?.kind === 'command' ? 'chat.commands' : 'chat.files')">
-      <PromptInputCommandGroup :heading="t(token?.kind === 'command' ? 'chat.commands' : 'chat.files')">
-        <div v-if="loading" role="status" class="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader :size="14" />{{ t('completion.loading') }}</div>
-        <div v-else-if="error" role="alert" class="p-3 text-xs text-destructive">{{ t('completion.failed') }}: {{ error }} <PromptInputButton size="sm" @click="load(true)">{{ t('completion.retry') }}</PromptInputButton></div>
-        <div v-else-if="!items.length" role="status" class="p-3 text-xs text-muted-foreground">{{ t(token?.kind === 'command' ? 'chat.noMatchingCommand' : 'chat.noMatchingFiles') }}</div>
+    <PromptInputCommandList :id="id" class="max-h-56" :aria-label="t(token?.kind === 'command' ? 'chat.commands' : 'chat.references')">
+      <PromptInputCommandGroup :heading="t(token?.kind === 'command' ? 'chat.commands' : 'chat.references')">
+        <div v-if="loading && !items.length" role="status" class="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader :size="14" />{{ t('completion.loading') }}</div>
+        <div v-else-if="error && !items.length" role="alert" class="p-3 text-xs text-destructive">{{ t('completion.failed') }}: {{ error }} <PromptInputButton size="sm" @click="load(true)">{{ t('completion.retry') }}</PromptInputButton></div>
+        <div v-else-if="!items.length" role="status" class="p-3 text-xs text-muted-foreground">{{ t(token?.kind === 'command' ? 'chat.noMatchingCommand' : 'chat.noMatchingReferences') }}</div>
         <template v-else>
-          <PromptInputCommandItem v-for="(item, index) in items" :key="item.value" :value="item.value" :class="index === active ? 'bg-accent text-accent-foreground' : ''" @pointermove="active = index" @select="pick(item.value)">
+          <PromptInputCommandItem v-for="(item, index) in items" :key="item.value" :value="item.value" :class="index === active ? 'bg-accent text-accent-foreground' : ''" @pointermove="active = index" @select="pick(item)">
             <span class="min-w-0 flex-1"><span class="block truncate font-mono text-xs">{{ item.label }}</span><span class="block truncate text-xs text-muted-foreground">{{ item.description }}</span></span>
             <span v-if="item.source" class="text-xs text-muted-foreground">{{ item.source }}</span>
           </PromptInputCommandItem>

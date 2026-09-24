@@ -66,7 +66,7 @@ import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
-import { withFileReferences, desktopCommands } from "@/lib/completion"
+import { withFileReferences, withSessionReferences, sessionReference, desktopCommands } from "@/lib/completion"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { openPath } from "@/api/piClient"
@@ -97,6 +97,30 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
+const sessionDragOver = ref(false)
+const knownSessions = computed(() => Object.values(workspace.histories).flat())
+function onSessionDragOver(event: DragEvent) {
+  if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'copy'
+  sessionDragOver.value = true
+}
+function onSessionDragLeave(event: DragEvent) {
+  const target = event.currentTarget as HTMLElement
+  if (!(event.relatedTarget instanceof Node) || !target.contains(event.relatedTarget)) sessionDragOver.value = false
+}
+function onSessionDrop(event: DragEvent) {
+  sessionDragOver.value = false
+  if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
+  event.preventDefault()
+  event.stopPropagation()
+  const file = event.dataTransfer.getData('application/x-pix-session')
+  if (!file || file === session.sessionFile || !knownSessions.value.some(row => row.file === file)) return
+  const reference = sessionReference(file)
+  const previous = bridge.value?.textInput ?? ''
+  bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? ' ' : '') + reference + ' ')
+  nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer-dock textarea')?.focus())
+}
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
 async function navigateToQuestion(turn: TimelineTurn) {
@@ -266,7 +290,7 @@ async function resendEditedPrompt() {
   editBusy.value = true
   try {
     await session.resendPrompt(text, images.length ? images as { data: string; mimeType: string }[] : undefined,
-      withFileReferences(text, workspace.projectFolders(props.project).filter(path => path !== props.project)))
+      withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project)))
     editedPrompt.value = null
   } catch (error) {
     ui.pushToast(String(error), "error")
@@ -498,7 +522,7 @@ async function onSubmit(message: {
     }
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(text, workspace.projectFolders(props.project).filter(path => path !== props.project)), runningBehavior.value)
+  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project)), runningBehavior.value)
 }
 
 function thinkingLabel(lv: string) {
@@ -538,7 +562,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 </script>
 
 <template>
-  <div class="chat-review-layout">
+  <div class="chat-review-layout" :class="{ 'session-drop-active': sessionDragOver }" @dragover.capture="onSessionDragOver" @dragleave="onSessionDragLeave" @drop.capture="onSessionDrop">
   <div class="chat-workspace">
     <header class="workspace-header">
       <div class="min-w-0">

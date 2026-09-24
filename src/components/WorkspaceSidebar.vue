@@ -103,12 +103,12 @@ function onProjectDrop(e: DragEvent, path: string) {
   workspace.reorderProjects(next)
 }
 function onSessionDragStart(e: DragEvent, path: string, file: string) {
-  if (disabled.value || query.value || workspace.projectFolders(path).length > 1) { e.preventDefault(); return }
+  if (disabled.value) { e.preventDefault(); return }
   dragSession.value = { path, file }
-  if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", file) }
+  if (e.dataTransfer) { e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("application/x-pix-session", file); e.dataTransfer.setData("text/plain", file) }
 }
 function onSessionDragOver(e: DragEvent, path: string, file: string) {
-  if (!dragSession.value || dragSession.value.path !== path || dragSession.value.file === file) return
+  if (query.value || workspace.projectFolders(path).length > 1 || !dragSession.value || dragSession.value.path !== path || dragSession.value.file === file) return
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
   sessionDrop.value = { path, file, before: dropBefore(e) }
@@ -168,7 +168,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
         <div v-if="!collapsed[path]" class="session-list">
           <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
-            :draggable="!disabled && !query && workspace.projectFolders(path).length === 1" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
+            :draggable="!disabled" @dragstart="onSessionDragStart($event, path, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
             <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
               <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />

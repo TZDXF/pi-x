@@ -856,3 +856,6 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .review-split-head span { padding: 4px 12px; }
 .review-fold { display: block; width: 100%; min-height: 28px; padding: 3px 12px; text-align: left; font-size: 11px; color: var(--muted-foreground); background: var(--muted); cursor: pointer; }
 .review-fold:hover, .review-fold:focus-visible { background: var(--accent); color: var(--accent-foreground); }
+
+/* Sidebar sessions can be dropped anywhere in the conversation to cite them. */
+.chat-review-layout.session-drop-active > .chat-workspace .composer-dock [data-slot="input-group"] { outline: 2px dashed var(--primary); outline-offset: 3px; }

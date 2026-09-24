@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 const source = readFileSync(new URL('../src/lib/completion.ts', import.meta.url), 'utf8')
 const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { completionToken, insertCompletion, fileReference, withFileReferences, mergeWorkspaceFiles } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { completionToken, insertCompletion, insertSessionCompletion, sessionReference, fileReference, withFileReferences, withSessionReferences, mergeWorkspaceFiles } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
 
 test('slash completion is start-only and supports skill, unicode and hyphenated names', () => {
   for (const text of ['/', '/skill:review', '/my-template', '/检查']) {
@@ -65,4 +65,21 @@ test('AI Elements command list forwards slot and editor intercepts keys before s
   const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
   assert.match(chat, /@keydown.capture="completion\?\.onKeydown\(\$event\)"/)
   assert.doesNotMatch(chat, /cmdOpen|fileOpen/)
+})
+
+test('session mentions complete independently of file references and expand only known sessions', () => {
+  const file = 'C:\\Users\\me\\.pi\\agent\\sessions\\one.jsonl'
+  const mention = sessionReference(file)
+  assert.equal(mention, '@session("C:/Users/me/.pi/agent/sessions/one.jsonl")')
+  assert.equal(completionToken(mention, mention.length), null)
+  const text = 'Compare @prev with this session'
+  const completed = insertSessionCompletion(text, completionToken(text, 13), file).text
+  assert.equal(completed, `Compare ${mention} with this session`)
+  assert.equal(withFileReferences(completed), completed)
+  assert.equal(withSessionReferences(completed, []), completed)
+  const expanded = withSessionReferences(completed, [{ file, title: 'Previous work' }])
+  assert.match(expanded, /Previous work/)
+  assert.match(expanded, /JSONL session files/)
+  assert.match(expanded, /C:\/Users\/me/)
+  assert.equal(withSessionReferences(`${mention} ${mention}`, [{ file }]).match(/"file":/g)?.length, 1)
 })
