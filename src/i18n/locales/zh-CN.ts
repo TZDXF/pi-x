@@ -200,6 +200,7 @@ export default {
     timelineImage: "图片提问",
     timelinePending: "暂无文字回答",
 
+    connecting: "正在启动会话…",
     historyLoading: "正在加载历史消息…",
     loadOlderHistory: "加载更早的消息",
     newSession: "新会话",

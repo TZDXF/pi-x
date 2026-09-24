@@ -200,6 +200,7 @@ export default {
     timelineImage: "Image question",
     timelinePending: "No text response yet",
 
+    connecting: "Starting session…",
     historyLoading: "Loading history…",
     loadOlderHistory: "Load earlier messages",
     newSession: "New session",

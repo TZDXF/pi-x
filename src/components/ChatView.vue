@@ -525,7 +525,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- conversation -->
     <div v-if="connecting || session.historyLoading" role="status" class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
-      <Loader :size="16" /> {{ t('chat.historyLoading') }}
+      <Loader :size="16" /> {{ connecting ? t('chat.connecting') : t('chat.historyLoading') }}
     </div>
     <Conversation v-else ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
       class="min-h-0 flex-1" @scroll="onHistoryScroll">
