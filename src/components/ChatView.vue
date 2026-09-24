@@ -69,7 +69,6 @@ import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import { withFileReferences, desktopCommands } from "@/lib/completion"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
-import SessionTree from "@/components/SessionTree.vue"
 import { openPath } from "@/api/piClient"
 import { isDesktop } from "@/api/transport"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
@@ -149,7 +148,6 @@ function isImageUrl(url?: string): boolean {
 // ---- fork (restart from a previous prompt) ----
 const forkOpen = ref(false)
 const forkMessages = ref<{ entryId: string; text: string }[]>([])
-const treeOpen = ref(false)
 
 async function openFork() {
   try {
@@ -205,7 +203,6 @@ async function forkFromAnswer(entryIndex: number) {
 
 async function doFork(entryId: string) {
   forkOpen.value = false
-  treeOpen.value = false
   try {
     const res = await rpcRequest<{ text?: string; cancelled?: boolean }>({
       type: "fork",
@@ -361,11 +358,10 @@ async function copyText(text: string) {
   }
 }
 
-// Sidebar session menu (tree / export) requests forwarded via the ui store.
+// Sidebar session menu export requests forwarded via the ui store.
 watch(() => ui.sessionAction, (action) => {
   if (!action) return
-  if (action.action === "tree") treeOpen.value = true
-  else void exportSession()
+  void exportSession()
 })
 
 // extensions can push text into the editor (set_editor_text))
@@ -529,8 +525,8 @@ async function abort() {
 function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.isComposing) return
   if (ui.activeDialog) return // dialog handles its own cancel
-  // Let our own dialogs (fork / tree / image preview) handle Escape first.
-  if (forkOpen.value || treeOpen.value || previewImage.value || editedPrompt.value) return
+  // Let our own dialogs (fork / image preview) handle Escape first.
+  if (forkOpen.value || previewImage.value || editedPrompt.value) return
   if (session.isStreaming) {
     e.preventDefault()
     void abort()
@@ -891,22 +887,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       :visible="terminalOpen"
       @close="terminalOpen = false"
     />
-
-    <!-- session tree dialog -->
-    <Dialog v-model:open="treeOpen">
-      <DialogContent class="flex max-h-[75dvh] max-w-2xl flex-col overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>{{ t("chat.sessionTreeTitle") }}</DialogTitle>
-        </DialogHeader>
-        <ScrollArea class="min-h-0" viewport-class="max-h-[55dvh]">
-        <SessionTree
-          :open="treeOpen"
-          @fork="doFork"
-          @close="treeOpen = false"
-        />
-        </ScrollArea>
-      </DialogContent>
-    </Dialog>
 
     <!-- fork dialog -->
     <Dialog v-model:open="forkOpen">

@@ -204,7 +204,6 @@ export default {
     loadOlderHistory: "Load earlier messages",
     newSession: "New session",
     compacting: "Compacting…",
-    sessionTree: "Session tree",
     fork: "Fork",
     exporting: "Exporting…",
     export: "Export",
@@ -246,7 +245,6 @@ export default {
       max: "Max",
       ultra: "Ultra",
     },
-    sessionTreeTitle: "Session tree",
     forkTitle: "Fork from an earlier prompt",
     forkDesc: "Continues the conversation from the selected prompt, discarding everything after it.",
     forkEmpty: "No user messages available yet.",
@@ -386,18 +384,6 @@ export default {
     delete: "Delete",
     confirmDelete: "Confirm delete",
     toastModelsSaved: "Saved. Takes effect when the model picker opens.",
-  },
-
-  tree: {
-    loading: "Loading tree…",
-    empty: "Empty session.",
-    entriesHint: "{count} entries · click a user node to fork the conversation from that point.",
-    active: "active",
-    fork: "Fork",
-    forkTitle: "Fork conversation from here",
-    roleMessage: "({role} message)",
-    modelChanged: "model changed",
-    contextCompacted: "context compacted",
   },
 
   blocks: {

@@ -2,7 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, ListTree, FileDown } from "@lucide/vue"
+import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
 import { useSessionStore } from "@/stores/conversations"
@@ -18,7 +18,7 @@ const props = defineProps<{ project: string; ready: boolean; busy: boolean; navi
 const emit = defineEmits<{
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
   removeProject: [project: string]; editProject: [project: string];
-  newSession: [project: string]; settings: []; collapse: []
+  newSession: [project: string]; sessionAction: [file: string, project: string, action: "export"]; settings: []; collapse: []
 }>()
 const session = useSessionStore()
 const ui = useUiStore()
@@ -176,7 +176,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
             </span>
             <div class="session-actions hover-action">
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><template v-if="s.file === session.sessionFile && props.ready"><DropdownMenuSeparator /><DropdownMenuItem @select="ui.requestSessionAction('tree')"><ListTree :size="14" />{{ t('chat.sessionTree') }}</DropdownMenuItem><DropdownMenuItem @select="ui.requestSessionAction('export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></template></DropdownMenuContent>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, s.cwd, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
             </div>
           </div>

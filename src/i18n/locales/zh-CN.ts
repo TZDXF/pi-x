@@ -204,7 +204,6 @@ export default {
     loadOlderHistory: "加载更早的消息",
     newSession: "新会话",
     compacting: "正在压缩…",
-    sessionTree: "会话树",
     fork: "分支",
     exporting: "导出中…",
     export: "导出",
@@ -246,7 +245,6 @@ export default {
       max: "最大",
       ultra: "超强",
     },
-    sessionTreeTitle: "会话树",
     forkTitle: "从较早的提问分支",
     forkDesc: "从所选提问处继续对话，并丢弃之后的所有内容。",
     forkEmpty: "暂无可用的用户消息。",
@@ -386,18 +384,6 @@ export default {
     delete: "删除",
     confirmDelete: "确认删除",
     toastModelsSaved: "已保存，打开模型选择器后生效",
-  },
-
-  tree: {
-    loading: "正在加载会话树…",
-    empty: "会话为空。",
-    entriesHint: "{count} 条记录 · 点击用户节点可从该处分支对话。",
-    active: "当前",
-    fork: "分支",
-    forkTitle: "从此处分支对话",
-    roleMessage: "（{role} 消息）",
-    modelChanged: "模型已切换",
-    contextCompacted: "上下文已压缩",
   },
 
   blocks: {

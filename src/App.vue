@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   detectPi,
@@ -423,6 +423,15 @@ async function resumeSession(file: string, targetProject?: string) {
   finally { connecting.value = false }
 }
 
+/** Sidebar actions must run against the selected session's runtime, not the
+ * previously active one. Wait for ChatView to mount its action listener. */
+async function openSessionAction(file: string, targetProject: string, action: "export") {
+  await resumeSession(file, targetProject)
+  if (phase.value !== "chat" || !session.started || findConversation(file)?.runtimeId !== activeRuntimeId.value) return
+  await nextTick()
+  ui.requestSessionAction(action)
+}
+
 async function newProjectSession(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
@@ -476,6 +485,7 @@ onUnmounted(() => {
       @switch-project="requestNavigation(switchProject)"
       @select-project="path => requestNavigation(() => selectProject(path))"
       @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
+      @session-action="(file, path, action) => requestNavigation(() => openSessionAction(file, path, action))"
       @new-session="path => requestNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
       @edit-project="editProject"

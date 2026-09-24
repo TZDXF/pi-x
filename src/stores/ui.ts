@@ -23,8 +23,8 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
   const pendingEditorText = ref<string | null>(null)
   /** Tail of pi's stderr output, for diagnostics. */
   const stderrLines = ref<string[]>([])
-  /** Sidebar session-menu requests (session tree / export) forwarded to ChatView. */
-  const sessionAction = ref<{ action: "tree" | "export"; nonce: number } | null>(null)
+  /** Sidebar session-menu requests (export) forwarded to ChatView. */
+  const sessionAction = ref<{ action: "export"; nonce: number } | null>(null)
   let sessionActionSeq = 0
 
   function pushStderr(line: string) {
@@ -88,8 +88,8 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
     void rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
   }
 
-  /** Ask ChatView to open the session tree or export the active session. */
-  function requestSessionAction(action: "tree" | "export") {
+  /** Ask ChatView to export the active session. */
+  function requestSessionAction(action: "export") {
     sessionAction.value = { action, nonce: ++sessionActionSeq }
   }
 
