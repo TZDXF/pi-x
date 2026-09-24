@@ -616,8 +616,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                   >
                     <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
                       {{ entry.durationMs == null ? t('chat.durationUnknown') : t('chat.executionDuration', { seconds: (entry.durationMs / 1000).toFixed(1) }) }}
-                      <span class="mx-1.5" aria-hidden="true">·</span>
-                      {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
+                      <template v-if="entry.toolCallCount > 0">
+                        <span class="mx-1.5" aria-hidden="true">·</span>
+                        {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
+                      </template>
                     </summary>
                     <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" :animate="false" />
                   </details>

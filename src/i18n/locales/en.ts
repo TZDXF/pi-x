@@ -371,7 +371,6 @@ export default {
     modelReasoning: "Reasoning",
     modelImage: "Image input",
     modelSize: "Context {ctx} · output {max}",
-    modelSizeHint: "Leave context window / max output empty to use pi defaults (128000 / 16384).",
     modelDeleteConfirm: "Delete this model?",
     modelIdRequired: "Model ID is required",
     modelIdExists: "This model ID already exists",

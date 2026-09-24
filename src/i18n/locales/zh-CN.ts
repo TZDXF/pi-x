@@ -371,7 +371,6 @@ export default {
     modelReasoning: "支持思考",
     modelImage: "支持图片输入",
     modelSize: "上下文 {ctx} · 输出 {max}",
-    modelSizeHint: "上下文窗口与最大输出留空时使用 pi 默认值（128000 / 16384）。",
     modelDeleteConfirm: "删除该模型？",
     modelIdRequired: "请填写模型 ID",
     modelIdExists: "该模型 ID 已存在",

@@ -307,7 +307,7 @@ async function finishDrag() {
             {{ t("settings.modelImage") }}
           </label>
         </div>
-        <p class="text-muted-foreground text-xs">{{ t("settings.modelSizeHint") }}</p>
+
         <div class="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" type="button" @click="editing = null">
             {{ t("common.cancel") }}
@@ -374,7 +374,7 @@ async function finishDrag() {
           {{ t("settings.modelImage") }}
         </label>
       </div>
-      <p class="text-muted-foreground text-xs">{{ t("settings.modelSizeHint") }}</p>
+
       <div class="flex justify-end gap-2 pt-1">
         <Button variant="outline" size="sm" type="button" @click="editing = null">
           {{ t("common.cancel") }}
