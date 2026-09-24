@@ -73,7 +73,7 @@ import { openPath } from "@/api/piClient"
 import { isDesktop } from "@/api/transport"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2, ArrowUp, ArrowDown } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
@@ -617,27 +617,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <span>{{ t("chat.thinking") }}</span>
         </div>
 
-        <QueueSection v-if="session.promptQueue.length" class="mt-2" :aria-label="t('chat.queuedPrompts')">
-          <div class="flex items-center justify-between px-3 py-2 text-xs text-muted-foreground">
-            <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
-            <Button v-if="!session.isStreaming" type="button" size="sm" variant="ghost" @click="session.dispatchQueuedPrompt()">{{ t('chat.resumeQueue') }}</Button>
-          </div>
-          <QueueList>
-            <QueueItem v-for="(item, index) in session.promptQueue" :key="item.id"
-              class="flex items-center gap-2" :class="{ 'opacity-50': draggedPrompt === item.id }"
-              @dragover.prevent @drop.prevent.stop="dropQueuedPrompt(item.id)">
-              <span draggable="true" class="cursor-grab p-1" :title="t('chat.dragQueue')"
-                @dragstart="startQueueDrag($event, item.id)" @dragend="draggedPrompt = null"><GripVertical class="size-4" /></span>
-              <QueueItemContent class="min-w-0 flex-1 whitespace-pre-wrap">{{ item.text }}<span v-if="item.images?.length" class="text-muted-foreground"> · {{ t('chat.queuedImages', { count: item.images.length }) }}</span></QueueItemContent>
-              <div class="flex shrink-0 gap-1">
-                <Button type="button" variant="ghost" size="icon-xs" :disabled="index === 0" :aria-label="t('chat.moveQueueUp')" @click="session.moveQueuedPrompt(item.id, session.promptQueue[index - 1]!.id)"><ArrowUp class="size-3" /></Button>
-                <Button type="button" variant="ghost" size="icon-xs" :disabled="index === session.promptQueue.length - 1" :aria-label="t('chat.moveQueueDown')" @click="session.moveQueuedPrompt(item.id, session.promptQueue[index + 1]!.id)"><ArrowDown class="size-3" /></Button>
-                <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.editQueuedPrompt')" @click="editQueuedPrompt(item.id)"><Pencil class="size-3" /></Button>
-                <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.deleteQueuedPrompt')" @click="session.removeQueuedPrompt(item.id)"><Trash2 class="size-3" /></Button>
-              </div>
-            </QueueItem>
-          </QueueList>
-        </QueueSection>
 
         <!-- pending steering / follow-up -->
         <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
@@ -668,6 +647,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
       <WorkspaceContext v-if="!session.entries.length && !session.isStreaming" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
+      <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
+        <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
+          <Button v-if="!session.isStreaming" type="button" size="sm" variant="ghost" @click="session.dispatchQueuedPrompt()">{{ t('chat.resumeQueue') }}</Button>
+        </div>
+        <ul class="mt-1 max-h-40 overflow-y-auto">
+          <li v-for="item in session.promptQueue" :key="item.id"
+            class="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-muted" :class="{ 'opacity-50': draggedPrompt === item.id }"
+            @dragover.prevent @drop.prevent.stop="dropQueuedPrompt(item.id)">
+            <span draggable="true" class="shrink-0 cursor-grab p-1" :title="t('chat.dragQueue')"
+              @dragstart="startQueueDrag($event, item.id)" @dragend="draggedPrompt = null"><GripVertical class="size-4" /></span>
+            <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="item.text">{{ item.text }}<span v-if="item.images?.length"> · {{ t('chat.queuedImages', { count: item.images.length }) }}</span></span>
+            <div class="flex shrink-0 items-center gap-1">
+              <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.editQueuedPrompt')" @click="editQueuedPrompt(item.id)"><Pencil class="size-3" /></Button>
+              <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.deleteQueuedPrompt')" @click="session.removeQueuedPrompt(item.id)"><Trash2 class="size-3" /></Button>
+            </div>
+          </li>
+        </ul>
+      </section>
       <PromptInput @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
         <PromptInputHeader v-if="attachments.length">

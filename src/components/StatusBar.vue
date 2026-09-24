@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { useI18n } from "vue-i18n"
 import { useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
 
 const session = useSessionStore()
 const ui = useUiStore()
-const { t } = useI18n()
 
 const totalCost = computed(
   () => session.stats?.cost ?? session.lastUsage?.cost?.total ?? 0,
@@ -20,8 +18,5 @@ const statusText = computed(() => Object.values(ui.statusEntries).join(" · "))
   >
     <span v-if="statusText" class="text-foreground">{{ statusText }}</span>
     <span v-if="totalCost">${{ totalCost.toFixed(4) }}</span>
-    <span v-if="session.pendingCount" class="text-amber-500"
-      >{{ t("status.queue") }} {{ session.pendingCount }}</span
-    >
   </div>
 </template>
