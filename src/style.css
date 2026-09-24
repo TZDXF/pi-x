@@ -695,8 +695,8 @@ kbd {
 .session-row:hover .session-actions, .session-row:focus-within .session-actions,
 .session-actions:has([data-state="open"]) { pointer-events: auto; }
 .session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
 }
 .hover-action { opacity: 0; pointer-events: none; }
 .project-heading:is(:hover, :focus-within) > .hover-action,
@@ -736,7 +736,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: var(--composer-shadow); }
 .composer-dock { padding-bottom: 12px; }
 
-@media (hover: none) { .hover-action { opacity: 1; pointer-events: auto; } .session-row .session-link { padding-right: 28px; } }
+@media (hover: none) { .hover-action { opacity: 1; pointer-events: auto; } .session-row .session-link { padding-right: 52px; } }
 @media (max-width: 700px) { .workspace-sidebar { width: 220px; } .workspace-context { margin-inline: 2px; gap: 0; } .context-chip { gap: 4px; } }
 .conversation-column .is-assistant { max-width: 100%; }
 .composer-options { flex: 1; }
@@ -807,8 +807,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   .project-row, .session-row, .session-link { min-height: 36px; }
   .session-actions .icon-button, .project-heading .icon-button { width: 32px; height: 32px; }
   .session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
   }
 }
 

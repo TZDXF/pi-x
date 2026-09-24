@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import PiXLogo from "@/components/PiXLogo.vue"
-import { computed, ref, watch } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
@@ -51,6 +51,20 @@ async function refresh(path: string) {
   finally { loading.value[path] = false }
 }
 function rename(s: SessionMeta) { renaming.value = s; title.value = label(s) }
+let openTimer: ReturnType<typeof setTimeout> | undefined
+function openSession(s: SessionMeta) {
+  clearTimeout(openTimer)
+  openTimer = setTimeout(() => {
+    emit("resumeSession", s.file, s.cwd)
+    openTimer = undefined
+  }, 250)
+}
+function renameOnDoubleClick(s: SessionMeta) {
+  clearTimeout(openTimer)
+  openTimer = undefined
+  if (!navigationDisabled.value) rename(s)
+}
+onBeforeUnmount(() => clearTimeout(openTimer))
 async function saveTitle() {
   if (!renaming.value || !title.value.trim() || saving.value) return
   saving.value = true
@@ -167,14 +181,15 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="s in rows(path)" :key="s.file" class="session-row" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled" @dragstart="onSessionDragStart($event, path, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
+            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
             <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
               <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
               <span v-else class="session-status-dot" aria-hidden="true" />
             </span>
             <div class="session-actions hover-action">
+              <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" /></Button>
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, s.cwd, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, s.cwd, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
             </div>
           </div>
