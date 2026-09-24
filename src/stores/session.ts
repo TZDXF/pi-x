@@ -111,6 +111,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const isCompacting = ref(false)
   const retryInfo = ref<string | null>(null)
   const promptQueue = ref<QueuedPrompt[]>([])
+  const isResending = ref(false)
+  let resendVersion = 0
   let stopping = false
   let queuePaused = false
   const steering = ref<string[]>([])
@@ -504,6 +506,61 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     }
   }
 
+  /** Stop and re-ask on the same session. Never fork, reload history or kill pi. */
+  async function resendPrompt(text: string, images?: { data: string, mimeType: string }[], expandedText?: string) {
+    if ((!text.trim() && !images?.length) || isResending.value) return
+    const operation = ++resendVersion
+    let version = conversationVersion
+    const file = sessionFile.value
+    const assertCurrent = () => {
+      if (version !== conversationVersion || file !== sessionFile.value)
+        throw new Error(i18n.global.t("chat.editSessionChanged"))
+    }
+    isResending.value = true
+    stopping = true
+    queuePaused = true
+    try {
+      if (isStreaming.value || isCompacting.value || pendingCount.value > 0) {
+        // Stop Pi's pending continuations from racing with the replacement question.
+        // Keep them in the local queue rather than dropping the user's work.
+        const queued = await rpcRequest<{ steering?: string[], followUp?: string[] }>({ type: "clear_queue" })
+        assertCurrent()
+        if (!queued.success) throw new Error(queued.error ?? i18n.global.t("chat.editStopFailed"))
+        promptQueue.value.unshift(...[...(queued.data?.steering ?? []), ...(queued.data?.followUp ?? [])]
+          .map(text => ({ id: nextId(), text })))
+        steering.value = []
+        followUp.value = []
+        const aborted = await rpcRequest({ type: "abort" })
+        assertCurrent()
+        if (!aborted.success) throw new Error(aborted.error ?? i18n.global.t("chat.editStopFailed"))
+      }
+      // An abort response alone must not be treated as an idle event. Confirm it
+      // before send(), otherwise the edited question could become steering text.
+      const idle = await rpcRequest<SessionState>({ type: "get_state" })
+      assertCurrent()
+      if (!idle.success) throw new Error(idle.error ?? i18n.global.t("chat.editStopFailed"))
+      if (!idle.data || idle.data.isStreaming || idle.data.isCompacting || idle.data.pendingMessageCount > 0)
+        throw new Error(i18n.global.t("chat.editStopFailed"))
+      if (idle.data.sessionFile !== file)
+        throw new Error(i18n.global.t("chat.editSessionChanged"))
+      // Late completion/rejection of the interrupted prompt cannot mark the new
+      // run failed or clear its streaming state.
+      version = ++conversationVersion
+      state.value = idle.data
+      isStreaming.value = false
+      isCompacting.value = false
+      partialBlocks.value = null
+      streamingTurnId.value = null
+      retryInfo.value = null
+      await send(text, images, expandedText)
+    } finally {
+      if (operation === resendVersion) {
+        stopping = false
+        isResending.value = false
+      }
+    }
+  }
+
   /** Esc: take back queued messages, then abort. Returns text to restore. */
   async function abortAndRestore(): Promise<string> {
     stopping = true
@@ -808,6 +865,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     turnAborted = false
     promptQueue.value = []
     stopping = false
+    ++resendVersion
+    isResending.value = false
     queuePaused = false
     isStreaming.value = false
     isCompacting.value = false
@@ -897,6 +956,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     handleEvent,
     send,
     abortAndRestore,
+    resendPrompt,
+    isResending,
     newSession,
     compact,
     setModel,

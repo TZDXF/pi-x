@@ -76,6 +76,8 @@ import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import type { UserEntry } from "@/stores/session"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
 import SessionChanges from "@/components/SessionChanges.vue"
@@ -220,6 +222,45 @@ async function doFork(entryId: string) {
     ui.pushToast(t("chat.toastForked"), "info")
   } catch (e) {
     ui.pushToast(String(e), "error")
+  }
+}
+
+// Resend the edited question in this session, interrupting the current answer first.
+const editedPrompt = ref<UserEntry | null>(null)
+const editedText = ref("")
+const editBusy = ref(false)
+const editBlocked = computed(() => editBusy.value || props.connecting || !props.connected ||
+  workspace.gitBusy || session.isResending || session.historyLoading)
+
+function startEditPrompt(entry: UserEntry) {
+  if (editBlocked.value) return
+  editedPrompt.value = entry
+  editedText.value = entry.text
+}
+
+watch(() => session.sessionFile, () => {
+  if (!editBusy.value) editedPrompt.value = null
+})
+
+async function resendEditedPrompt() {
+  const entry = editedPrompt.value
+  const text = editedText.value.trim()
+  if (!entry || editBlocked.value || (!text && !entry.images?.length)) return
+  // Validate attachments before stopping the current answer.
+  const images = (entry.images ?? []).map(image => dataUrlToImage(image.url))
+  if (images.some(image => image === null)) {
+    ui.pushToast(t("chat.editAttachmentError"), "error")
+    return
+  }
+  editBusy.value = true
+  try {
+    await session.resendPrompt(text, images.length ? images as { data: string; mimeType: string }[] : undefined,
+      withFileReferences(text, workspace.projectFolders(props.project).filter(path => path !== props.project)))
+    editedPrompt.value = null
+  } catch (error) {
+    ui.pushToast(String(error), "error")
+  } finally {
+    editBusy.value = false
   }
 }
 
@@ -407,7 +448,7 @@ async function onSubmit(message: {
   text?: string
   files?: { url?: string }[]
 }) {
-  if (workspace.gitBusy || props.connecting) return
+  if (workspace.gitBusy || props.connecting || editBusy.value) return
   const text = (message.text ?? "").trim()
   const images = (message.files ?? [])
     .map((f) => f.url)
@@ -475,7 +516,7 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.isComposing) return
   if (ui.activeDialog) return // dialog handles its own cancel
   // Let our own dialogs (fork / tree / image preview) handle Escape first.
-  if (forkOpen.value || treeOpen.value || previewImage.value) return
+  if (forkOpen.value || treeOpen.value || previewImage.value || editedPrompt.value) return
   if (session.isStreaming) {
     e.preventDefault()
     void abort()
@@ -606,6 +647,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 v-else-if="entry.kind === 'user'"
                 class="invisible mt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 focus-within:visible focus-within:opacity-100"
               >
+                <MessageAction :tooltip="t('chat.editPrompt')" :disabled="editBlocked" @click="startEditPrompt(entry)">
+                  <Pencil />
+                </MessageAction>
                 <MessageAction :tooltip="t('chat.copyPrompt')" @click="copyText(entry.text)">
                   <Copy />
                 </MessageAction>
@@ -732,7 +776,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           @compositionend="completion?.onEditorEvent($event)"
           @keydown.capture="completion?.onKeydown($event)"
           :placeholder="t('chat.inputPlaceholder')"
-          :disabled="workspace.gitBusy || (connecting && !completion?.initiating)"
+          :disabled="editBusy || workspace.gitBusy || (connecting && !completion?.initiating)"
           class="min-h-14"
         />
         <div data-align="block-end" class="composer-controls flex items-center justify-between">
@@ -796,7 +840,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               :type="session.isStreaming ? 'button' : 'submit'"
               :title="session.isStreaming ? t('chat.stop') : undefined"
               :aria-label="session.isStreaming ? t('chat.stop') : undefined"
-              :disabled="workspace.gitBusy || connecting"
+              :disabled="editBusy || workspace.gitBusy || connecting"
               @click="session.isStreaming && abort()"
             />
           </div>
@@ -828,6 +872,19 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           @close="treeOpen = false"
         />
         </ScrollArea>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog :open="editedPrompt !== null" @update:open="value => { if (!value && !editBusy) editedPrompt = null }">
+      <DialogContent @escape-key-down="event => { if (editBusy) event.preventDefault() }" @interact-outside="event => { if (editBusy) event.preventDefault() }">
+        <DialogHeader><DialogTitle>{{ t("chat.editPrompt") }}</DialogTitle></DialogHeader>
+        <p class="text-sm text-muted-foreground">{{ t("chat.editPromptDesc") }}</p>
+        <Textarea v-model="editedText" :disabled="editBusy" :aria-label="t('chat.editPrompt')" class="min-h-32 max-h-80" />
+        <p v-if="editedPrompt?.images?.length" class="text-xs text-muted-foreground">{{ t("chat.editKeepImages") }}</p>
+        <div class="flex justify-end gap-2">
+          <Button variant="outline" :disabled="editBusy" @click="editedPrompt = null">{{ t("chat.editCancel") }}</Button>
+          <Button :disabled="editBlocked || (!editedText.trim() && !editedPrompt?.images?.length)" @click="resendEditedPrompt">{{ t("chat.editResend") }}</Button>
+        </div>
       </DialogContent>
     </Dialog>
 

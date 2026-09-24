@@ -262,10 +262,10 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
 async function reloadExternalConversation(file: string) {
   if (disposed || connecting.value || navigating.value) return
   const owner = findConversation(file)
-  if (!owner?.started || !owner.sessionFile || owner.isStreaming) return
+  if (!owner?.started || !owner.sessionFile || owner.isStreaming || owner.isResending) return
   const disk = await sessionMtime(file).catch(() => null)
   // Equal mtime means the write was our own (already synced at agent_end).
-  if (disk == null || disk === owner.syncedSessionMtime) return
+  if (disk == null || disk === owner.syncedSessionMtime || owner.isStreaming || owner.isResending) return
   await rebuildConversation(owner)
 }
 
