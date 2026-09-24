@@ -2,7 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, ArchiveRestore, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, ListTree, FileDown } from "@lucide/vue"
+import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, ListTree, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
 import { useSessionStore } from "@/stores/conversations"
@@ -147,7 +147,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
     </div>
     <ScrollArea class="project-groups" @dragend="clearDrag">
       <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
-        <div class="project-heading" :class="{ selected: path === workspace.projectRoot(project) && !session.entries.length, 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
+        <div class="project-heading" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
           <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
             <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
@@ -155,7 +155,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
           <DropdownMenu>
-            <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more hover-action" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
               <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" /><Pin v-else :size="14" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
               <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
@@ -166,8 +166,8 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           </DropdownMenu>
         </div>
         <div v-if="!collapsed[path]" class="session-list">
-          <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active"><span class="truncate">{{ t('chat.newSession') }}</span></div>
-          <div v-for="s in rows(path)" :key="s.file" class="session-row" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
+          <div v-if="path === workspace.projectRoot(project) && ready && session.entries.length > 0 && !showArchived && !query && !rows(path).some(s => s.file === session.sessionFile)" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-for="s in rows(path)" :key="s.file" class="session-row" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled && !query && workspace.projectFolders(path).length === 1" @dragstart="onSessionDragStart($event, path, s.file)" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
             <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="emit('resumeSession', s.file, s.cwd)">{{ label(s) }}</Button>
             <span v-if="sessionRunStatus(s.file)" class="session-status" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
@@ -178,7 +178,6 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="archive(s)"><Archive :size="14" />{{ s.archived ? t('workspace.restore') : t('workspace.archive') }}</DropdownMenuItem><template v-if="s.file === session.sessionFile && props.ready"><DropdownMenuSeparator /><DropdownMenuItem @select="ui.requestSessionAction('tree')"><ListTree :size="14" />{{ t('chat.sessionTree') }}</DropdownMenuItem><DropdownMenuItem @select="ui.requestSessionAction('export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></template></DropdownMenuContent>
               </DropdownMenu>
-              <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><ArchiveRestore v-if="s.archived" :size="14" /><Archive v-else :size="14" /></Button>
             </div>
           </div>
           <Button v-if="errors[path]" variant="ghost" class="sidebar-empty text-destructive" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</Button>

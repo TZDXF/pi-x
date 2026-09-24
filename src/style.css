@@ -674,32 +674,34 @@ kbd {
 .sidebar-brand { padding: 2px 8px 12px; }
 .sidebar-search { margin-bottom: 6px; padding: 6px 10px; }
 .project-groups { flex: 1; min-height: 0; min-width: 0; }
-.project-group { margin-bottom: 6px; }
-.project-heading { display: flex; align-items: center; border-radius: 6px; padding-right: 4px; }
-.project-heading:hover, .project-heading.selected { background: var(--sidebar-accent); }
-.project-row { min-width: 0; min-height: 30px; padding: 4px 6px; gap: 6px; text-align: left; font-weight: 500; }
+/* Project and session rows share the same hover/selection surface. Only the
+   hierarchy (indent, icon and weight) distinguishes their roles. */
+.project-group { margin-bottom: 4px; }
+.project-heading, .session-row { position: relative; display: flex; align-items: center; min-height: 32px; border-radius: 6px; }
+.project-heading { padding-right: 4px; }
+.session-list { overflow: visible; padding: 0; }
+.session-row { padding: 0 4px 0 28px; gap: 2px; margin: 0; font-size: 12px; }
+.project-heading:hover, .session-row:hover { background: color-mix(in srgb, var(--sidebar-accent) 60%, transparent); }
+.project-heading.selected, .session-row.active,
+.project-heading.selected:hover, .session-row.active:hover { background: var(--sidebar-accent); color: var(--sidebar-accent-foreground); }
+.project-row { min-width: 0; min-height: 32px; padding: 4px 6px; gap: 6px; text-align: left; font-weight: 500; }
 .project-row svg { flex-shrink: 0; }
 .project-chevron { width: 10px; color: var(--muted-foreground); }
-.session-list { overflow: visible; padding: 0; }
-.session-row { position: relative; padding: 0 4px 0 28px; min-height: 28px; gap: 2px; margin: 0; font-size: 12px; border-radius: 5px; }
-.session-row.active, .session-row:hover { background: var(--sidebar-accent); }
-.session-row.active { box-shadow: inset 2px 0 var(--sidebar-primary); }
-.project-heading > .icon-button, .project-more { width: 24px; height: 24px; }
-.session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 0; font-size: 12px; line-height: 20px; }
-.session-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; padding-left: 6px; pointer-events: none; }
-.session-row:hover .session-actions, .session-row:focus-within:has(:focus-visible) .session-actions,
+.project-heading .project-row, .session-row .session-link { background: transparent; color: inherit; }
+.project-heading > .icon-button, .project-more, .session-actions .icon-button { width: 24px; height: 24px; }
+.session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 0; font-size: 12px; line-height: 20px; font-weight: 400; }
+.session-row.active .session-link { font-weight: 500; }
+.session-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; pointer-events: none; }
+.session-row:hover .session-actions, .session-row:focus-within .session-actions,
 .session-actions:has([data-state="open"]) { pointer-events: auto; }
-.session-actions .icon-button { width: 24px; height: 24px; }
-.session-actions .icon-button:hover { background: transparent; color: var(--foreground); }
-.session-row:hover .session-link, .session-row:focus-within:has(:focus-visible) .session-link,
-.session-row:has(.session-actions [data-state="open"]) .session-link {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent);
+.session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 30px), transparent);
 }
-.hover-action { opacity: 0; }
-.project-heading:hover > .hover-action, .project-heading:focus-within:has(:focus-visible) > .hover-action,
-.session-row:hover .hover-action, .session-row:focus-within:has(:focus-visible) .hover-action,
-.hover-action:has([data-state="open"]) { opacity: 1; }
+.hover-action { opacity: 0; pointer-events: none; }
+.project-heading:is(:hover, :focus-within) > .hover-action,
+.session-row:is(:hover, :focus-within) .hover-action,
+.hover-action:has([data-state="open"]) { opacity: 1; pointer-events: auto; }
 .session-status { display: inline-flex; align-items: center; justify-content: center; width: 14px; margin-left: 4px; flex-shrink: 0; color: var(--muted-foreground); }
 .session-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .session-status-completed { color: var(--primary); }
@@ -734,7 +736,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .composer-dock [data-slot="input-group"] { position: relative; background: var(--card); border-radius: 22px; box-shadow: var(--composer-shadow); }
 .composer-dock { padding-bottom: 12px; }
 
-@media (hover: none) { .hover-action:not(.session-actions) { opacity: 1; } }
+@media (hover: none) { .hover-action { opacity: 1; pointer-events: auto; } .session-row .session-link { padding-right: 28px; } }
 @media (max-width: 700px) { .workspace-sidebar { width: 220px; } .workspace-context { margin-inline: 2px; gap: 0; } .context-chip { gap: 4px; } }
 .conversation-column .is-assistant { max-width: 100%; }
 .composer-options { flex: 1; }
@@ -804,10 +806,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 @media (pointer: coarse) {
   .project-row, .session-row, .session-link { min-height: 36px; }
   .session-actions .icon-button, .project-heading .icon-button { width: 32px; height: 32px; }
-  .session-row:hover .session-link, .session-row:focus-within:has(:focus-visible) .session-link,
-  .session-row:has(.session-actions [data-state="open"]) .session-link {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 76px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 76px), transparent);
+  .session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 38px), transparent);
   }
 }
 
