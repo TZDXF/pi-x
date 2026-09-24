@@ -77,14 +77,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function applySessionOrder(path: string) {
     const rows = histories.value[path]
     if (!rows) return
-    const order = (sessionOrder.value[path] || []).filter(f => rows.some(r => r.file === f))
-    sessionOrder.value[path] = order
+    histories.value[path] = sortSessions(rows, sessionOrder.value[path] || [])
+  }
+  function sortSessions(rows: SessionMeta[], order: string[]) {
     const index = new Map(order.map((f, i) => [f, i]))
-    histories.value[path] = [...rows].sort((a, b) => {
+    return [...rows].sort((a, b) => {
       const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
       const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
       return ia - ib || b.mtimeMs - a.mtimeMs
     })
+  }
+  /** A project can span several folders; its sidebar order belongs to the project. */
+  function orderedSessions(path: string) {
+    const folders = projectFolders(path)
+    if (folders.length === 1) return histories.value[folders[0]] || []
+    return sortSessions(folders.flatMap(folder => histories.value[folder] || []), sessionOrder.value[projectRoot(path)] || [])
   }
   /** Persist a manual ordering for the given sessions of a project. */
   function reorderSessions(path: string, orderedFiles: string[]) {
@@ -197,5 +204,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, orderedProjects, reorderProjects, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
+  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, orderedProjects, reorderProjects, orderedSessions, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
 })

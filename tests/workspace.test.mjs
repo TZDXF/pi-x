@@ -130,6 +130,24 @@ test('manual session order persists, merges with archived rows, and refresh keep
   await refresh
   assert.deepEqual(Array.from(h.store.histories.value.project, r => r.file), ['b', 'a', 'c'])
 })
+test('drag order spans every folder in a grouped project and survives refresh', async () => {
+  const h = harness()
+  h.store.createProject({ name: 'Group', folders: ['front', 'back'], primary: 'front' })
+  h.store.histories.value.front = [{ file: 'a', mtimeMs: 30 }, { file: 'c', mtimeMs: 10, archived: true }]
+  h.store.histories.value.back = [{ file: 'b', mtimeMs: 20 }]
+  assert.deepEqual(Array.from(h.store.orderedSessions('front'), r => r.file), ['a', 'b', 'c'])
+  h.store.reorderSessions('front', ['b', 'a'])
+  assert.deepEqual(Array.from(h.store.orderedSessions('front'), r => r.file), ['b', 'a', 'c'])
+  const refresh = h.store.refresh('front')
+  h.requests[0].resolve([{ file: 'a', mtimeMs: 30 }, { file: 'c', mtimeMs: 10, archived: true }])
+  await refresh
+  assert.deepEqual(Array.from(h.store.orderedSessions('front'), r => r.file), ['b', 'a', 'c'])
+  assert.deepEqual(JSON.parse(h.storage.get('pix.sessionOrder')).front, ['b', 'a'])
+  const reopened = harness(h.storage)
+  reopened.store.histories.value.front = h.store.histories.value.front
+  reopened.store.histories.value.back = h.store.histories.value.back
+  assert.deepEqual(Array.from(reopened.store.orderedSessions('front'), r => r.file), ['b', 'a', 'c'])
+})
 test('removing a project also clears its session order', () => {
   const h = harness()
   h.store.remember('one')

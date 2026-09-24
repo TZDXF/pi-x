@@ -37,9 +37,7 @@ const disabled = computed(() => props.busy || workspace.gitBusy || saving.value)
 const name = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
-  const folders = workspace.projectFolders(path)
-  const sessions = folders.length === 1 ? (workspace.histories[path] || [])
-    : folders.flatMap(folder => workspace.histories[folder] || []).sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const sessions = workspace.orderedSessions(path)
   return sessions.filter(s => !!s.archived === showArchived.value && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
 }
 async function openProjectFolder(path: string) {
@@ -108,17 +106,17 @@ function onSessionDragStart(e: DragEvent, path: string, file: string) {
   if (e.dataTransfer) { e.dataTransfer.effectAllowed = "copyMove"; e.dataTransfer.setData("application/x-pix-session", file); e.dataTransfer.setData("text/plain", file) }
 }
 function onSessionDragOver(e: DragEvent, path: string, file: string) {
-  if (query.value || workspace.projectFolders(path).length > 1 || !dragSession.value || dragSession.value.path !== path || dragSession.value.file === file) return
+  if (query.value || !dragSession.value || dragSession.value.path !== path || dragSession.value.file === file) return
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = "move"
   sessionDrop.value = { path, file, before: dropBefore(e) }
 }
 function onSessionDrop(e: DragEvent, path: string, file: string) {
-  e.preventDefault()
   const drag = dragSession.value
-  const before = sessionDrop.value?.before ?? true
+  if (query.value || !drag || drag.path !== path || drag.file === file) return
+  e.preventDefault()
+  const before = dropBefore(e)
   clearDrag()
-  if (!drag || drag.path !== path || drag.file === file) return
   const next = rows(path).map(s => s.file).filter(f => f !== drag.file)
   next.splice(next.indexOf(file) + (before ? 0 : 1), 0, drag.file)
   workspace.reorderSessions(path, next)
