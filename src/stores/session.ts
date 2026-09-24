@@ -217,6 +217,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         setSessionRunStatus(sessionFile.value, "running")
         break
 
+      case "agent_end":
       case "agent_settled":
         isStreaming.value = false
         setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")

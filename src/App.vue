@@ -89,7 +89,7 @@ onMounted(async () => {
         }
         const owner = sessionFor(id)
         owner.handleEvent(ev)
-        if (ev.type === "agent_settled" && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
+        if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
       }),
       onSessionsChanged((files) => handleExternalSessionChanges(files)),
       onPiExit((runtimeId) => {
@@ -256,7 +256,7 @@ async function reloadExternalConversation(file: string) {
   const owner = findConversation(file)
   if (!owner?.started || !owner.sessionFile || owner.isStreaming) return
   const disk = await sessionMtime(file).catch(() => null)
-  // Equal mtime means the write was our own (already synced at agent_settled).
+  // Equal mtime means the write was our own (already synced at agent_end).
   if (disk == null || disk === owner.syncedSessionMtime) return
   await rebuildConversation(owner)
 }
