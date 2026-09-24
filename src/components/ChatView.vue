@@ -502,9 +502,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <Button variant="ghost" size="sm" :aria-expanded="changesOpen" :aria-label="t('changes.title')" @click="changesOpen = !changesOpen">
           {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
         </Button>
-        <span v-if="session.retryInfo" class="text-xs text-amber-500">{{
-          session.retryInfo
-        }}</span>
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
           >{{ t("chat.compacting") }}</span
         >
@@ -626,6 +623,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <span>{{ t("chat.thinking") }}</span>
         </div>
 
+
+        <!-- Keep retry errors next to the conversation, not in the header. -->
+        <Message v-if="session.retryInfo" from="assistant" role="status" aria-live="polite">
+          <MessageContent>
+            <p class="text-xs text-amber-500 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ session.retryInfo }}</p>
+          </MessageContent>
+        </Message>
 
         <!-- pending steering / follow-up -->
         <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
