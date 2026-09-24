@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   id?: string
   triggerClass?: string
+  openAbove?: boolean
 }>(), { triggerClass: "h-8 w-auto min-w-0 max-w-64 text-xs" })
 const emit = defineEmits<{ "update:modelValue": [value: string] }>()
 const { t } = useI18n()
@@ -31,7 +32,13 @@ const groups = computed(() => {
         {{ selectedModel ? `${selectedModel.provider} / ${selectedModel.name || selectedModel.id}` : t('chat.selectModel') }}
       </SelectValue>
     </SelectTrigger>
-    <SelectContent>
+    <SelectContent
+      :position="openAbove ? 'popper' : 'item-aligned'"
+      :side="openAbove ? 'top' : undefined"
+      :align="openAbove ? 'start' : 'center'"
+      :side-offset="openAbove ? 0 : undefined"
+      :side-flip="openAbove ? false : undefined"
+    >
       <SelectGroup v-for="group in groups" :key="group.provider">
         <SelectLabel>{{ group.provider }}</SelectLabel>
         <SelectItem v-for="model in group.models" :key="model.provider + '/' + model.id" :value="model.provider + '/' + model.id" class="text-xs">

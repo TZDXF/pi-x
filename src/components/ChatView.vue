@@ -821,7 +821,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             >
               + {{ t("chat.attachment") }}
             </Button>
-            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" />
+            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" open-above />
 
             <Select
               :model-value="session.thinkingLevel"
@@ -831,7 +831,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               <SelectTrigger class="h-8 w-auto min-w-16 max-w-40 text-xs">
                 <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">
                 <SelectItem
                   v-for="lv in session.availableThinking"
                   :key="lv"
