@@ -47,10 +47,11 @@ test('history prefetches near the top, suppresses duplicates and preserves the r
   assert.equal(viewport.scrollTop, 1650)
 })
 
-test('history is mounted only after loading and uses instant initial positioning', () => {
+test('conversation mounts immediately with instant initial positioning; loading stays silent', () => {
   const chat = source('../src/components/ChatView.vue')
-  assert.match(chat, /v-if="connecting \|\| session.historyLoading"/)
-  assert.match(chat, /<Conversation v-else[^>]+initial="instant"/)
+  assert.match(chat, /<Conversation ref="conversation"[^>]+initial="instant"/)
+  assert.match(chat, /v-if="session.entries.length === 0 && !session.historyLoading && !connecting"/)
+  assert.doesNotMatch(chat, /v-if="connecting \|\| session.historyLoading"/)
   assert.doesNotMatch(chat, /@click="loadOlderHistory"/)
 })
 

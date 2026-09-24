@@ -4,6 +4,7 @@ import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
 import { X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import SessionDiff from "@/components/SessionDiff.vue"
 import type { FileChange } from "@/lib/sessionChanges"
 const props = defineProps<{ changes: FileChange[] }>()
@@ -98,7 +99,6 @@ const selectedPath = ref<string | null>(null)
 // Keep the current file selected during streaming; fall back safely when the session changes.
 const activeFile = computed(() => files.value.find(file => file.path === selectedPath.value) ?? files.value[0] ?? null)
 function fileName(path: string) { return path.split("/").pop() || path }
-function directory(path: string) { const end = path.lastIndexOf("/"); return end < 0 ? "" : path.slice(0, end) }
 </script>
 
 <template>
@@ -130,18 +130,18 @@ function directory(path: string) { const end = path.lastIndexOf("/"); return end
             </div>
           </div>
         </div>
-        <div class="min-h-0 flex-1 overflow-auto" tabindex="0" :aria-label="t('changes.fileDiff')">
+        <ScrollArea class="min-h-0 flex-1" orientation="both" viewport-class="pb-2.5" :aria-label="t('changes.fileDiff')">
           <section v-for="(change, operation) in activeFile.changes" :key="change.id" class="border-b">
             <div class="px-3 py-2 text-xs text-muted-foreground">
               {{ operation + 1 }} · {{ change.tool }}<span v-if="!change.unknownBefore"> · {{ t('changes.snippetLines') }}</span><span v-if="change.unknownBefore"> · {{ t('changes.unknown') }}</span>
             </div>
             <SessionDiff :change="change" :split="splitDiff" :word="wordDiff" />
           </section>
-        </div>
+        </ScrollArea>
       </section>
       <nav class="changes-file-list" :aria-label="t('changes.files')">
         <h3 class="shrink-0 border-b px-3 py-2 text-xs font-medium">{{ t('changes.files') }} · {{ files.length }}</h3>
-        <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
+        <ScrollArea class="min-h-0 flex-1" viewport-class="p-1.5">
           <button
             v-for="file in files" :key="file.path" type="button"
             class="mb-1 block w-full min-w-0 rounded-md px-2 py-2 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-ring"
@@ -150,13 +150,12 @@ function directory(path: string) { const end = path.lastIndexOf("/"); return end
             @click="selectedPath = file.path"
           >
             <span class="block truncate font-medium">{{ fileName(file.path) }}</span>
-            <span v-if="directory(file.path)" class="mt-0.5 block truncate text-[10px] text-muted-foreground">{{ directory(file.path) }}</span>
             <span class="mt-1 flex flex-wrap gap-x-2">
               <span class="text-green-600">+{{ file.added }}</span><span class="text-red-500">−{{ file.removed }}</span>
               <span v-if="file.changes.some(change => change.unknownBefore)" :title="t('changes.unknown')">*</span>
             </span>
           </button>
-        </div>
+        </ScrollArea>
       </nav>
     </div>
     <p v-else class="p-6 text-center text-sm text-muted-foreground">{{ t('changes.empty') }}</p>

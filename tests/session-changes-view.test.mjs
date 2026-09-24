@@ -5,7 +5,7 @@ import { loadTsSource } from './lib/load-ts.mjs'
 const source = readFileSync(new URL('../src/components/SessionChanges.vue', import.meta.url), 'utf8')
 function harness(changes) {
   const props = { changes }
-  const module = loadTsSource(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] + '\nexport { files, activeFile, selectedPath, fileName, directory }', {
+  const module = loadTsSource(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] + '\nexport { files, activeFile, selectedPath, fileName }', {
     defineProps: () => props,
     defineEmits: () => () => {},
     require: id => id === 'vue' ? {
@@ -37,9 +37,22 @@ test('selection survives new operations and falls back on session switch or clea
   h.props.changes = []
   assert.equal(h.activeFile.value, null)
 })
-test('file labels distinguish identical names in different directories', () => {
+test('file list shows basenames while keeping full paths as identities', () => {
   const h = harness([])
   assert.equal(h.fileName('src/lib/index.ts'), 'index.ts')
-  assert.equal(h.directory('src/lib/index.ts'), 'src/lib')
-  assert.equal(h.directory('index.ts'), '')
+  assert.equal(h.fileName('src/components/index.ts'), 'index.ts')
+  assert.equal(h.fileName('index.ts'), 'index.ts')
+  assert.ok(!source.includes('directory(file.path)'))
+  assert.ok(source.includes(':title="file.path"'))
+})
+
+
+test('review panes use themed scroll areas with horizontal diff support', () => {
+  const diff = readFileSync(new URL('../src/components/SessionDiff.vue', import.meta.url), 'utf8')
+  const scrollArea = readFileSync(new URL('../src/components/ui/scroll-area/ScrollArea.vue', import.meta.url), 'utf8')
+  assert.equal((source.match(/<ScrollArea /g) ?? []).length, 2)
+  assert.ok(source.includes('orientation="both"'))
+  assert.ok(!/overflow-(?:x-|y-)?auto/.test(source + diff))
+  assert.ok(scrollArea.includes("orientation: 'vertical'"))
+  assert.ok(scrollArea.includes('<ScrollBar v-if="orientation !== \'vertical\'" orientation="horizontal" />'))
 })

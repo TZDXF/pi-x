@@ -520,11 +520,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       </div>
     </header>
 
-    <!-- conversation -->
-    <div v-if="connecting || session.historyLoading" role="status" class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
-      <Loader :size="16" /> {{ connecting ? t('chat.connecting') : t('chat.historyLoading') }}
-    </div>
-    <Conversation v-else ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
+    <!-- conversation: loading (session start / history load) is kept silent;
+         the area renders immediately and history appears once ready -->
+    <Conversation ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
       class="min-h-0 flex-1" @scroll="onHistoryScroll">
       <ConversationContent
         class="conversation-column mx-auto w-full max-w-3xl gap-5 px-6 py-6"
@@ -535,7 +533,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </div>
         <ConversationEmptyState
           class="chat-empty"
-          v-if="session.entries.length === 0 && !session.historyLoading"
+          v-if="session.entries.length === 0 && !session.historyLoading && !connecting"
           :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
           :description="t('chat.emptyDesc')"
         />
@@ -659,7 +657,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
-      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
+      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming && !connecting && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
         <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>

@@ -41,7 +41,7 @@ onBeforeUnmount(() => { version++ })
 
 <template>
   <div class="review-diff">
-    <div class="overflow-x-auto">
+    <div>
       <div v-if="split && !change.unknownBefore" class="review-split">
         <div class="review-split-head"><span>{{ t('changes.before') }}</span><span>{{ t('changes.after') }}</span></div>
         <template v-for="(row, index) in visibleRows" :key="index">
