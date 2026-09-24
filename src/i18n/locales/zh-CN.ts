@@ -186,6 +186,7 @@ export default {
     queuedImages: "{count} 张图片",
     moveQueueUp: "上移",
     moveQueueDown: "下移",
+    executeQueuedPrompt: "立即执行",
     editQueuedPrompt: "编辑并回到输入框",
     deleteQueuedPrompt: "删除提问",
     runningBehavior: "运行中发送方式",

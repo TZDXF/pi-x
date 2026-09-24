@@ -186,6 +186,7 @@ export default {
     queuedImages: "{count} images",
     moveQueueUp: "Move up",
     moveQueueDown: "Move down",
+    executeQueuedPrompt: "Run now",
     editQueuedPrompt: "Edit in composer",
     deleteQueuedPrompt: "Delete prompt",
     runningBehavior: "Send while running",

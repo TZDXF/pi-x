@@ -749,6 +749,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               @dragstart="startQueueDrag($event, item.id)" @dragend="draggedPrompt = null"><GripVertical class="size-4" /></span>
             <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="item.text">{{ item.text }}<span v-if="item.images?.length"> · {{ t('chat.queuedImages', { count: item.images.length }) }}</span></span>
             <div class="flex shrink-0 items-center gap-1">
+              <Button type="button" variant="ghost" size="sm" :disabled="workspace.gitBusy || props.connecting || !props.connected || editBusy || session.isResending || session.isCompacting" @click="session.executeQueuedPrompt(item.id)">{{ t('chat.executeQueuedPrompt') }}</Button>
               <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.editQueuedPrompt')" @click="editQueuedPrompt(item.id)"><Pencil class="size-3" /></Button>
               <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.deleteQueuedPrompt')" @click="session.removeQueuedPrompt(item.id)"><Trash2 class="size-3" /></Button>
             </div>

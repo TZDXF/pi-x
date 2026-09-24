@@ -203,6 +203,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   })
   const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
+  // A dispatched prompt reserves the next run before its agent_start arrives.
+  let awaitingAgentStart = false
   let agentStartedAt: number | undefined
   /** Reserved entry id for the in-flight assistant turn. Assigned at the
    *  first assistant message_start and reused when the entry is committed, so
@@ -213,6 +215,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   function handleEvent(ev: Record<string, any>) {
     switch (ev.type) {
       case "agent_start":
+        awaitingAgentStart = false
         agentStartedAt = Date.now()
         streamingTurnId.value = null
         isStreaming.value = true
@@ -223,6 +226,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
       case "agent_end":
       case "agent_settled":
+        // agent_end and agent_settled can both describe the previous run.
+        // Do not let the second notification drain another queued prompt.
+        if (awaitingAgentStart && !stopping) break
+        awaitingAgentStart = false
         isStreaming.value = false
         setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")
         void refreshStats()
@@ -440,6 +447,12 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     promptQueue.value.splice(to, 0, promptQueue.value.splice(from, 1)[0])
   }
 
+  function executeQueuedPrompt(id: number) {
+    if (stopping || isResending.value || isCompacting.value) return
+    const item = removeQueuedPrompt(id)
+    if (item) void send(item.text, item.images, item.expandedText, "steer")
+  }
+
   function dispatchQueuedPrompt() {
     if (isStreaming.value || stopping) return
     queuePaused = false
@@ -458,7 +471,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     queuePaused = false
     const wasStreaming = isStreaming.value
     isStreaming.value = true
-    if (!wasStreaming) { turnFailed = false; turnAborted = false }
+    if (!wasStreaming) { awaitingAgentStart = true; turnFailed = false; turnAborted = false }
     setSessionRunStatus(sessionFile.value, "running")
     const version = conversationVersion
     const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
@@ -486,7 +499,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         if (version !== conversationVersion) return
         turnFailed = true
         setSessionRunStatus(sessionFile.value, "error")
-        if (!wasStreaming) isStreaming.value = false
+        if (!wasStreaming) { awaitingAgentStart = false; isStreaming.value = false }
         entries.value.push({
           kind: "assistant",
           id: nextId(),
@@ -882,6 +895,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     agentStartedAt = undefined
     turnFailed = false
     turnAborted = false
+    awaitingAgentStart = false
     promptQueue.value = []
     stopping = false
     ++resendVersion
@@ -971,6 +985,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     promptQueue,
     removeQueuedPrompt,
     moveQueuedPrompt,
+    executeQueuedPrompt,
     dispatchQueuedPrompt,
     handleEvent,
     send,
