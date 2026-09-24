@@ -204,6 +204,13 @@ export const getModelsConfig = () => invoke<ModelsConfig>("models_config_get")
 export const saveModelsConfig = (config: ModelsConfig) =>
   invoke<void>("models_config_save", { config })
 
+/** Model discovered from a provider's `/models` listing endpoint. */
+export interface FetchedModel { id: string; name?: string }
+
+/** Ask a provider for its advertised model list (OpenAI/Anthropic/Google styles). */
+export const fetchProviderModels = (provider: ProviderEntry) =>
+  invoke<FetchedModel[]>("models_fetch", { provider })
+
 /** Returns the resulting session-file mtime so callers can sync change detection. */
 export const updateSession = (file: string, title: string | null, archived: boolean) =>
   invoke<number>("session_update", { file, title, archived })

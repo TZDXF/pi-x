@@ -88,6 +88,7 @@ pub fn run() {
             commands::open_path,
             commands::models_config_get,
             commands::models_config_save,
+            commands::models_fetch,
             packages::package_catalog,
             packages::package_list,
             packages::package_install,

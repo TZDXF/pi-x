@@ -134,6 +134,16 @@ test('edit UI allows a running answer and preserves the draft when stopping fail
   assert.equal((reload.match(/owner\.isResending/g) ?? []).length, 2)
 })
 
+test('only the latest question offers inline editing, and stale edits cannot be resent', () => {
+  const chat = source('../src/components/ChatView.vue')
+  assert.match(chat, /const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
+  assert.match(chat, /v-if="entry\.id === lastUserPromptId && editedPrompt\?\.id !== entry\.id"[^>]*@click="startEditPrompt\(entry\)"/)
+  assert.match(chat, /if \(editBlocked\.value \|\| entry\.id !== lastUserPromptId\.value\) return/)
+  assert.match(chat, /if \(!entry \|\| entry\.id !== lastUserPromptId\.value \|\| editBlocked\.value/)
+  assert.match(chat, /v-if="editedPrompt\?\.id === entry\.id"[\s\S]*<Textarea[\s\S]*v-model="editedText"/)
+  assert.doesNotMatch(chat, /<Dialog :open="editedPrompt !== null"/)
+})
+
 test('starting a new session while aborting releases the resend lock without sending', async () => {
   let finishAbort
   const h = harness({ abort: () => new Promise(resolve => { finishAbort = resolve }) })

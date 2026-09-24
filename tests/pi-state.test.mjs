@@ -4,9 +4,10 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 
-function harness(storage = new Map()) {
+function harness(storage = new Map(), options = {}) {
   const calls = []
-  const state = { model: { provider: 'restored', id: 'session-model', reasoning: true }, thinkingLevel: 'low' }
+  let mtime = 0
+  const state = { model: { provider: 'restored', id: 'session-model', reasoning: true }, thinkingLevel: 'low', ...(options.sessionFile ? { sessionFile: options.sessionFile } : {}) }
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
@@ -16,8 +17,10 @@ function harness(storage = new Map()) {
     '@/api/piClient': {
       getModelsConfig: async () => ({ providers: { pi: { models: [{ id: 'default', reasoning: true }] } } }),
       getPiSettings: async () => ({ defaultProvider: 'pi', defaultModel: 'default', defaultThinkingLevel: 'high', skills: [] }),
+      sessionMtime: async file => { calls.push({ type: 'session_mtime', file }); return mtime },
       rpcRequest: async command => {
         calls.push(command)
+        if (command.type === 'set_model' || command.type === 'set_thinking_level') mtime++
         if (command.type === 'set_model') state.model = { provider: command.provider, id: command.modelId }
         if (command.type === 'set_thinking_level') state.thinkingLevel = command.level
         const data = command.type === 'get_state' ? state
@@ -98,4 +101,52 @@ test('corrupt browser preference does not block loading Pi defaults', async () =
   const h = harness(new Map([['pix.conversationSelection', '{bad']]))
   await h.store.loadOfflineModels()
   assert.equal(h.store.offlineDefaultModelKey.value, 'pi/default')
+})
+
+
+test('model and thinking changes mark their session-file writes before refreshing state', async () => {
+  const { store, calls } = harness(new Map(), { sessionFile: 'session.jsonl' })
+  await store.init('project')
+  calls.length = 0
+  await store.setModel('chosen', 'vendor/model')
+  assert.equal(store.syncedSessionMtime.value, 1)
+  assert.deepEqual(calls.slice(0, 3).map(c => c.type), ['set_model', 'session_mtime', 'get_state'])
+  assert.equal(calls[1].file, 'session.jsonl')
+
+  calls.length = 0
+  await store.setThinkingLevel('high')
+  assert.equal(store.syncedSessionMtime.value, 2)
+  assert.deepEqual(calls.slice(0, 3).map(c => c.type), ['set_thinking_level', 'session_mtime', 'get_state'])
+})
+
+
+test('a model switch is announced before the next question, without changing the prompt sent to Pi', async () => {
+  const { store, calls } = harness()
+  await store.init('project')
+  store.started.value = true
+  await store.setModel('first', 'model-a')
+  await store.setModel('next', 'model-b')
+  store.isStreaming.value = true
+  await store.send('queued question', undefined, undefined, 'queue')
+  assert.equal(store.entries.value.length, 0)
+  store.isStreaming.value = false
+  store.dispatchQueuedPrompt()
+  const first = store.entries.value[0]
+  assert.deepEqual(JSON.parse(JSON.stringify(first.modelChange)), { from: 'restored/session-model', to: 'next/model-b' })
+  assert.equal(calls.findLast(c => c.type === 'prompt').message, 'queued question')
+  await store.send('another question')
+  assert.equal(store.entries.value[1].modelChange, undefined)
+  await store.setModel('next', 'model-b')
+  await store.send('same model')
+  assert.equal(store.entries.value[2].modelChange, undefined)
+})
+
+test('new sessions do not inherit an unconsumed model-change announcement', async () => {
+  const { store } = harness()
+  await store.init('project')
+  store.started.value = true
+  await store.setModel('next', 'model-b')
+  await store.newSession()
+  await store.send('new conversation')
+  assert.equal(store.entries.value[0].modelChange, undefined)
 })

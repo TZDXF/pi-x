@@ -2,9 +2,10 @@
 /** Model list for one provider: edits its `models` array in pi's models.json. */
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { GripVertical, Pencil, Trash2 } from "@lucide/vue"
+import { Check, ChevronDown, GripVertical, Pencil, RefreshCw, Trash2 } from "@lucide/vue"
 import { VueDraggable } from "vue-draggable-plus"
 import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -14,7 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { ModelEntry } from "@/api/piClient"
+import { fetchProviderModels, type FetchedModel, type ModelEntry } from "@/api/piClient"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
@@ -49,6 +55,24 @@ const confirmingDelete = ref<number | null>(null)
 const busy = ref(false)
 let dragSnapshot: ModelEntry[] | null = null
 
+/** Models discovered via the provider "/models" endpoint (null = not fetched yet). */
+const fetched = ref<FetchedModel[] | null>(null)
+const fetching = ref(false)
+const fetchError = ref<string | null>(null)
+const existingIds = computed(() => new Set(models.value.map(m => m.id)))
+const fetchOpen = ref(false)
+const fetchQuery = ref("")
+/** Fetched models filtered by the in-popover search box. */
+const filteredFetched = computed(() => {
+  const list = fetched.value
+  if (!list) return []
+  const q = fetchQuery.value.trim().toLowerCase()
+  if (!q) return list
+  return list.filter(
+    m => m.id.toLowerCase().includes(q) || (m.name ?? "").toLowerCase().includes(q),
+  )
+})
+
 const compactNumber = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -65,6 +89,11 @@ watch(
     editingIndex.value = null
     confirmingDelete.value = null
     dragSnapshot = null
+    fetched.value = null
+    fetching.value = false
+    fetchError.value = null
+    fetchOpen.value = false
+    fetchQuery.value = ""
   },
 )
 
@@ -76,6 +105,44 @@ const apiValue = computed({
     if (editing.value) editing.value.api = v === API_INHERIT ? "" : v
   },
 })
+
+/** Load the provider-advertised model list (once unless forced). */
+async function loadRemoteModels(force = false) {
+  const p = provider.value
+  if (!p || fetching.value) return
+  if (!force && fetched.value !== null) return
+  if (!p.baseUrl?.trim()) {
+    fetched.value = null
+    fetchError.value = t("settings.modelFetchNoBaseUrl")
+    return
+  }
+  fetching.value = true
+  fetchError.value = null
+  try {
+    fetched.value = await fetchProviderModels(p)
+  } catch (e) {
+    fetched.value = null
+    fetchError.value = String(e)
+  } finally {
+    fetching.value = false
+  }
+}
+
+/** Opening the picker resets the search box and loads the list once. */
+watch(fetchOpen, open => {
+  if (!open) return
+  fetchQuery.value = ""
+  loadRemoteModels()
+})
+
+/** Fill the form from a discovered model and close the picker. */
+function pickFetched(m: FetchedModel) {
+  if (editing.value) {
+    editing.value.id = m.id
+    editing.value.name = m.name ?? ""
+  }
+  fetchOpen.value = false
+}
 
 function startAdd() {
   confirmingDelete.value = null
@@ -258,13 +325,75 @@ async function finishDrag() {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="mb-1 block text-xs" for="model-id">{{ t("settings.modelId") }}</label>
-            <Input
-              id="model-id"
-              v-model="editing.id"
-              :placeholder="t('settings.modelIdPlaceholder')"
-              class="font-mono text-xs"
-              :disabled="editingIndex !== null"
-            />
+            <div class="flex items-center gap-1">
+              <Input
+                id="model-id"
+                v-model="editing.id"
+
+                class="font-mono text-xs"
+                :disabled="editingIndex !== null"
+              />
+              <Popover v-if="editingIndex === null" v-model:open="fetchOpen">
+                <PopoverTrigger as-child>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    class="shrink-0"
+                    :title="t('settings.modelFetchHint')"
+                    :aria-label="t('settings.modelFetch')"
+                  >
+                    <RefreshCw v-if="fetching" :size="14" class="animate-spin" />
+                    <ChevronDown v-else :size="14" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" class="w-80 p-2">
+                  <div class="mb-2 flex items-center gap-1">
+                    <Input
+                      v-model="fetchQuery"
+                      :placeholder="t('settings.modelFetchSearch')"
+                      class="h-7 text-xs"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      class="shrink-0"
+                      :disabled="fetching"
+                      :title="t('settings.modelFetchRefresh')"
+                      :aria-label="t('settings.modelFetchRefresh')"
+                      @click="loadRemoteModels(true)"
+                    >
+                      <RefreshCw :size="14" :class="{ 'animate-spin': fetching }" />
+                    </Button>
+                  </div>
+                  <div v-if="fetching" class="text-muted-foreground px-2 py-3 text-xs">
+                    {{ t("settings.modelFetching") }}
+                  </div>
+                  <div v-else-if="fetchError" class="text-destructive break-all px-2 py-3 text-xs">
+                    {{ fetchError }}
+                  </div>
+                  <div v-else-if="fetched && !filteredFetched.length" class="text-muted-foreground px-2 py-3 text-xs">
+                    {{ fetched.length ? t("settings.modelFetchNoMatch") : t("settings.modelFetchEmpty") }}
+                  </div>
+                  <ScrollArea v-else-if="fetched" viewport-class="max-h-60">
+                    <button
+                      v-for="m in filteredFetched"
+                      :key="m.id"
+                      type="button"
+                      :disabled="existingIds.has(m.id)"
+                      :title="m.id"
+                      class="hover:bg-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left disabled:opacity-50"
+                      @click="pickFetched(m)"
+                    >
+                      <Check v-if="existingIds.has(m.id)" :size="14" class="shrink-0" />
+                      <span class="min-w-0">
+                        <span class="block truncate font-mono text-xs">{{ m.id }}</span>
+                        <span v-if="m.name && m.name !== m.id" class="text-muted-foreground block truncate text-[11px]">{{ m.name }}</span>
+                      </span>
+                    </button>
+                  </ScrollArea>
+                </PopoverContent>
+              </Popover>
+            </div>
           </div>
           <div>
             <label class="mb-1 block text-xs" for="model-name">{{ t("settings.modelName") }}</label>
@@ -325,13 +454,75 @@ async function finishDrag() {
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="mb-1 block text-xs" for="model-id">{{ t("settings.modelId") }}</label>
-          <Input
-            id="model-id"
-            v-model="editing.id"
-            :placeholder="t('settings.modelIdPlaceholder')"
-            class="font-mono text-xs"
-            :disabled="editingIndex !== null"
-          />
+          <div class="flex items-center gap-1">
+            <Input
+              id="model-id"
+              v-model="editing.id"
+
+              class="font-mono text-xs"
+              :disabled="editingIndex !== null"
+            />
+            <Popover v-if="editingIndex === null" v-model:open="fetchOpen">
+              <PopoverTrigger as-child>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  class="shrink-0"
+                  :title="t('settings.modelFetchHint')"
+                  :aria-label="t('settings.modelFetch')"
+                >
+                  <RefreshCw v-if="fetching" :size="14" class="animate-spin" />
+                  <ChevronDown v-else :size="14" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" class="w-80 p-2">
+                <div class="mb-2 flex items-center gap-1">
+                  <Input
+                    v-model="fetchQuery"
+                    :placeholder="t('settings.modelFetchSearch')"
+                    class="h-7 text-xs"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    class="shrink-0"
+                    :disabled="fetching"
+                    :title="t('settings.modelFetchRefresh')"
+                    :aria-label="t('settings.modelFetchRefresh')"
+                    @click="loadRemoteModels(true)"
+                  >
+                    <RefreshCw :size="14" :class="{ 'animate-spin': fetching }" />
+                  </Button>
+                </div>
+                <div v-if="fetching" class="text-muted-foreground px-2 py-3 text-xs">
+                  {{ t("settings.modelFetching") }}
+                </div>
+                <div v-else-if="fetchError" class="text-destructive break-all px-2 py-3 text-xs">
+                  {{ fetchError }}
+                </div>
+                <div v-else-if="fetched && !filteredFetched.length" class="text-muted-foreground px-2 py-3 text-xs">
+                  {{ fetched.length ? t("settings.modelFetchNoMatch") : t("settings.modelFetchEmpty") }}
+                </div>
+                <ScrollArea v-else-if="fetched" viewport-class="max-h-60">
+                  <button
+                    v-for="m in filteredFetched"
+                    :key="m.id"
+                    type="button"
+                    :disabled="existingIds.has(m.id)"
+                    :title="m.id"
+                    class="hover:bg-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left disabled:opacity-50"
+                    @click="pickFetched(m)"
+                  >
+                    <Check v-if="existingIds.has(m.id)" :size="14" class="shrink-0" />
+                    <span class="min-w-0">
+                      <span class="block truncate font-mono text-xs">{{ m.id }}</span>
+                      <span v-if="m.name && m.name !== m.id" class="text-muted-foreground block truncate text-[11px]">{{ m.name }}</span>
+                    </span>
+                  </button>
+                </ScrollArea>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
         <div>
           <label class="mb-1 block text-xs" for="model-name">{{ t("settings.modelName") }}</label>

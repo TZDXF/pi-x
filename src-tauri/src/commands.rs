@@ -272,6 +272,119 @@ pub fn models_config_save(config: Value) -> Result<(), String> {
     let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
 }
+/// One model discovered from a provider's `/models` endpoint.
+#[derive(Serialize)]
+pub struct FetchedModel {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Fetch the model list advertised by a provider's `/models` endpoint, so the
+/// settings UI can offer discovered models instead of typing ids by hand.
+/// Supports the OpenAI (`Authorization: Bearer`), Anthropic (`x-api-key`) and
+/// Google (`?key=`) listing styles; unknown api types fall back to OpenAI.
+#[tauri::command]
+pub async fn models_fetch(provider: Value) -> Result<Vec<FetchedModel>, String> {
+    tauri::async_runtime::spawn_blocking(move || models_fetch_blocking(&provider))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> {
+    let base = provider
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('/');
+    if base.is_empty() {
+        return Err("该供应商未配置 Base URL，无法获取模型列表".into());
+    }
+    let api = provider
+        .get("api")
+        .and_then(Value::as_str)
+        .unwrap_or("openai-completions");
+    // pi allows "$ENV_VAR" references in models.json; resolve them here.
+    let mut key = provider
+        .get("apiKey")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if let Some(var) = key.strip_prefix('$') {
+        key = std::env::var(var).unwrap_or_default();
+    }
+
+    let url = format!("{base}/models");
+    let mut req = ureq::get(&url)
+        .set("User-Agent", "pi-x desktop")
+        .timeout(std::time::Duration::from_secs(20));
+    if api == "anthropic-messages" {
+        if !key.is_empty() {
+            req = req.set("x-api-key", &key);
+        }
+        req = req.set("anthropic-version", "2023-06-01");
+        req = req.query("limit", "1000");
+    } else if api == "google-generative-ai" {
+        if !key.is_empty() {
+            req = req.query("key", &key);
+        }
+    } else if !key.is_empty() {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+    // Provider-level custom headers (models.json `headers`) apply to every style.
+    if let Some(headers) = provider.get("headers").and_then(Value::as_object) {
+        for (k, v) in headers {
+            if let Some(v) = v.as_str() {
+                req = req.set(k, v);
+            }
+        }
+    }
+
+    let body = req
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(code, resp) => {
+                let detail = resp.into_string().unwrap_or_default();
+                let detail: String = detail.chars().take(300).collect();
+                format!("获取模型列表失败 (HTTP {code}): {detail}")
+            }
+            other => format!("获取模型列表失败: {other}"),
+        })?
+        .into_string()
+        .map_err(|e| format!("读取模型列表响应失败: {e}"))?;
+    let v: Value =
+        serde_json::from_str(&body).map_err(|e| format!("解析模型列表响应失败: {e}"))?;
+
+    let mut out: Vec<FetchedModel> = Vec::new();
+    if let Some(data) = v.get("data").and_then(Value::as_array) {
+        // OpenAI / Anthropic shape: { "data": [{ "id": ..., "display_name": ... }] }
+        for m in data {
+            if let Some(id) = m.get("id").and_then(Value::as_str) {
+                let name = m
+                    .get("display_name")
+                    .and_then(Value::as_str)
+                    .or_else(|| m.get("displayName").and_then(Value::as_str))
+                    .map(String::from);
+                out.push(FetchedModel { id: id.into(), name });
+            }
+        }
+    } else if let Some(models) = v.get("models").and_then(Value::as_array) {
+        // Google shape: { "models": [{ "name": "models/gemini-...", ... }] }
+        for m in models {
+            if let Some(name) = m.get("name").and_then(Value::as_str) {
+                let id = name.strip_prefix("models/").unwrap_or(name);
+                let disp = m
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .map(String::from);
+                out.push(FetchedModel { id: id.into(), name: disp });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(out)
+}
 
 #[tauri::command]
 pub async fn pi_settings_get() -> Result<Value, String> {

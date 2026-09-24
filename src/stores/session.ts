@@ -39,7 +39,7 @@ export interface QueuedPrompt {
   expandedText?: string
 }
 
-export interface UserEntry { kind: "user", id: number, text: string, images?: { url: string }[], live?: true, timestamp?: number }
+export interface UserEntry { kind: "user", id: number, text: string, modelChange?: { from: string, to: string }, images?: { url: string }[], live?: true, timestamp?: number }
 export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true, startedAt?: number, completedAt?: number, timestamp?: number }
 export type Entry = UserEntry | AssistantEntry
 
@@ -148,6 +148,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   /** Explicit pre-start model choice, consumed once by init. */
   const remembered = ref<RememberedSelection>(readSelection())
   const desiredModelKey = ref<string | null>(null)
+  let pendingModelChange: { from: string, to: string } | null = null
   const piDefaultModelKey = ref<string | null>(null)
   const offlineDefaultModelKey = computed(() => remembered.value.model
     ? `${remembered.value.model.provider}/${remembered.value.model.id}` : piDefaultModelKey.value)
@@ -466,7 +467,11 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const titleProject = cwd.value
     const titleSessionId = state.value?.sessionId
     const promptText = expandedText || trimmed || "(see attached image)"
-    entries.value.push({ kind: "user", id: nextId(), timestamp: Date.now(), text: trimmed, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
+    // Only a real question consumes the notice; queued prompts consume it when
+    // dispatched, and slash commands leave it for the next question.
+    const modelChange = trimmed.startsWith("/") ? undefined : pendingModelChange ?? undefined
+    if (modelChange) pendingModelChange = null
+    entries.value.push({ kind: "user", id: nextId(), timestamp: Date.now(), text: trimmed, modelChange, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
@@ -595,6 +600,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     if (result.data?.cancelled) return
     ++conversationVersion
     invalidateHistory()
+    pendingModelChange = null
     entries.value = []
     runs.value = {}
     partialBlocks.value = null
@@ -619,13 +625,23 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     }
   }
 
-  async function setModel(provider: string, modelId: string) {
+  async function setModel(provider: string, modelId: string, recordChange = true) {
+    const previous = pendingModelChange?.from ?? (state.value?.model && `${state.value.model.provider}/${state.value.model.id}`)
     const result = await rpcRequest({ type: "set_model", provider, modelId })
     if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
     desiredModelKey.value = null
+    // Pi appends a model_change entry to the session file. Mark this as our
+    // own write before the file watcher can mistake it for an external edit
+    // and restart the worker while the picker is still refreshing.
+    await syncSessionFile()
     await refreshState()
     await refreshThinkingLevels()
-    if (state.value?.model) remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
+    if (state.value?.model) {
+      const current = `${state.value.model.provider}/${state.value.model.id}`
+      if (recordChange && started.value && previous)
+        pendingModelChange = previous === current ? null : { from: previous, to: current }
+      remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
+    }
   }
 
   /** Record a model choice made while pi is not running; applied on init. */
@@ -639,6 +655,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const result = await rpcRequest({ type: "set_thinking_level", level })
     if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
     desiredThinkingLevel.value = null
+    // Changing thinking level also appends to the session log.
+    await syncSessionFile()
     await refreshState()
     await refreshThinkingLevels()
     remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? level, rpcThinkingLevels.value)
@@ -836,7 +854,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     desiredThinkingLevel.value = null
     if (modelKey && `${state.value?.model?.provider}/${state.value?.model?.id}` !== modelKey) {
       const [provider, ...rest] = modelKey.split("/")
-      await setModel(provider, rest.join("/")).catch(e => console.warn("[pi] remembered model unavailable:", e))
+      await setModel(provider, rest.join("/"), false).catch(e => console.warn("[pi] remembered model unavailable:", e))
     }
     await refreshThinkingLevels()
     if (level) {
@@ -860,6 +878,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   }
 
   function clear() {
+    pendingModelChange = null
     agentStartedAt = undefined
     turnFailed = false
     turnAborted = false

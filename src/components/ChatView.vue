@@ -229,23 +229,37 @@ async function doFork(entryId: string) {
 const editedPrompt = ref<UserEntry | null>(null)
 const editedText = ref("")
 const editBusy = ref(false)
+const editTextarea = ref<InstanceType<typeof Textarea> | null>(null)
+const lastUserPromptId = computed(() => {
+  for (let i = session.entries.length - 1; i >= 0; i--) {
+    if (session.entries[i]?.kind === "user") return session.entries[i].id
+  }
+  return null
+})
 const editBlocked = computed(() => editBusy.value || props.connecting || !props.connected ||
   workspace.gitBusy || session.isResending || session.historyLoading)
 
-function startEditPrompt(entry: UserEntry) {
-  if (editBlocked.value) return
+async function startEditPrompt(entry: UserEntry) {
+  if (editBlocked.value || entry.id !== lastUserPromptId.value) return
   editedPrompt.value = entry
   editedText.value = entry.text
+  await nextTick()
+  ;(editTextarea.value?.$el as HTMLTextAreaElement | undefined)?.focus()
 }
 
-watch(() => session.sessionFile, () => {
+function cancelEditedPrompt() {
   if (!editBusy.value) editedPrompt.value = null
+}
+
+watch(() => session.sessionFile, () => { editedPrompt.value = null })
+watch(lastUserPromptId, id => {
+  if (editedPrompt.value?.id !== id) cancelEditedPrompt()
 })
 
 async function resendEditedPrompt() {
   const entry = editedPrompt.value
   const text = editedText.value.trim()
-  if (!entry || editBlocked.value || (!text && !entry.images?.length)) return
+  if (!entry || entry.id !== lastUserPromptId.value || editBlocked.value || (!text && !entry.images?.length)) return
   // Validate attachments before stopping the current answer.
   const images = (entry.images ?? []).map(image => dataUrlToImage(image.url))
   if (images.some(image => image === null)) {
@@ -584,14 +598,31 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :data-message-id="entry.id" :enabled="renderedEntries.length > 40"
           :pinned="entryIndex >= renderedEntries.length - 4"
           :live="entry.kind === 'assistant' && !entry.complete" v-slot="{ animate }">
+          <div v-if="entry.kind === 'user' && entry.modelChange" class="text-muted-foreground my-3 text-center text-xs" role="status">
+            {{ t("chat.modelChanged", entry.modelChange) }}
+          </div>
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <div class="flex min-w-0 flex-col" :class="{ 'items-end': entry.kind === 'user' }">
               <MessageContent>
-                <div
-                  v-if="entry.kind === 'user'"
-                  class="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]"
-                >
-                  {{ entry.text }}
+                <div v-if="entry.kind === 'user'" class="text-sm">
+                  <div v-if="editedPrompt?.id === entry.id" class="w-[min(36rem,75vw)] space-y-2">
+                    <Textarea
+                      ref="editTextarea"
+                      v-model="editedText"
+                      :disabled="editBusy"
+                      :aria-label="t('chat.editPrompt')"
+                      class="min-h-32 max-h-80 resize-y"
+                      @keydown.esc.stop="cancelEditedPrompt"
+                      @keydown.ctrl.enter.prevent="resendEditedPrompt"
+                    />
+                    <p class="text-xs text-muted-foreground">{{ t('chat.editPromptDesc') }}</p>
+                    <p v-if="entry.images?.length" class="text-xs text-muted-foreground">{{ t('chat.editKeepImages') }}</p>
+                    <div class="flex justify-end gap-2">
+                      <Button type="button" variant="outline" size="sm" :disabled="editBusy" @click="cancelEditedPrompt">{{ t('chat.editCancel') }}</Button>
+                      <Button type="button" size="sm" :disabled="editBlocked || (!editedText.trim() && !entry.images?.length)" @click="resendEditedPrompt">{{ t('chat.editResend') }}</Button>
+                    </div>
+                  </div>
+                  <div v-else class="whitespace-pre-wrap [overflow-wrap:anywhere]">{{ entry.text }}</div>
                   <div
                     v-if="entry.images?.length"
                     class="mt-1.5 flex flex-wrap gap-1.5"
@@ -649,7 +680,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 v-else-if="entry.kind === 'user'"
                 class="invisible mt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 focus-within:visible focus-within:opacity-100"
               >
-                <MessageAction :tooltip="t('chat.editPrompt')" :disabled="editBlocked" @click="startEditPrompt(entry)">
+                <MessageAction v-if="entry.id === lastUserPromptId && editedPrompt?.id !== entry.id" :tooltip="t('chat.editPrompt')" :disabled="editBlocked" @click="startEditPrompt(entry)">
                   <Pencil />
                 </MessageAction>
                 <MessageAction :tooltip="t('chat.copyPrompt')" @click="copyText(entry.text)">
@@ -874,19 +905,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           @close="treeOpen = false"
         />
         </ScrollArea>
-      </DialogContent>
-    </Dialog>
-
-    <Dialog :open="editedPrompt !== null" @update:open="value => { if (!value && !editBusy) editedPrompt = null }">
-      <DialogContent @escape-key-down="event => { if (editBusy) event.preventDefault() }" @interact-outside="event => { if (editBusy) event.preventDefault() }">
-        <DialogHeader><DialogTitle>{{ t("chat.editPrompt") }}</DialogTitle></DialogHeader>
-        <p class="text-sm text-muted-foreground">{{ t("chat.editPromptDesc") }}</p>
-        <Textarea v-model="editedText" :disabled="editBusy" :aria-label="t('chat.editPrompt')" class="min-h-32 max-h-80" />
-        <p v-if="editedPrompt?.images?.length" class="text-xs text-muted-foreground">{{ t("chat.editKeepImages") }}</p>
-        <div class="flex justify-end gap-2">
-          <Button variant="outline" :disabled="editBusy" @click="editedPrompt = null">{{ t("chat.editCancel") }}</Button>
-          <Button :disabled="editBlocked || (!editedText.trim() && !editedPrompt?.images?.length)" @click="resendEditedPrompt">{{ t("chat.editResend") }}</Button>
-        </div>
       </DialogContent>
     </Dialog>
 
