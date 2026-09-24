@@ -9,10 +9,11 @@ import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 const props = withDefaults(defineProps<{
   blocks: Block[]
   runs: Record<string, ToolRun>
+  animate?: boolean
   /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
    *  keeps the same keys it had while the full block list was streaming. */
   keyOffset?: number
-}>(), { keyOffset: 0 })
+}>(), { keyOffset: 0, animate: true })
 
 function runFor(block: ToolCallBlock): ToolRun | undefined {
   return props.runs[block.callId]
@@ -28,13 +29,14 @@ const { t } = useI18n()
       <MessageResponse
         v-if="block.type === 'text'"
         :content="block.text"
+        :enable-animate="props.animate"
         class="text-sm"
       />
 
       <!-- thinking -->
       <Reasoning v-else-if="block.type === 'thinking'" :is-streaming="block.streaming" :default-open="block.streaming">
         <ReasoningTrigger />
-        <ReasoningContent :content="block.text" />
+        <ReasoningContent :content="block.text" :animate="props.animate" />
       </Reasoning>
 
       <!-- tool call -->

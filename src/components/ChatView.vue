@@ -61,6 +61,7 @@ import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
+import VirtualMessage from "@/components/VirtualMessage.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
@@ -538,7 +539,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :description="t('chat.emptyDesc')"
         />
 
-        <template v-for="entry in renderedEntries" :key="entry.id">
+        <VirtualMessage v-for="(entry, entryIndex) in renderedEntries" :key="entry.id"
+          :data-message-id="entry.id" :enabled="renderedEntries.length > 40"
+          :pinned="entryIndex >= renderedEntries.length - 4"
+          :live="entry.kind === 'assistant' && !entry.complete" v-slot="{ animate }">
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <div class="flex min-w-0 flex-col" :class="{ 'items-end': entry.kind === 'user' }">
               <MessageContent>
@@ -574,9 +578,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                       <span class="mx-1.5" aria-hidden="true">·</span>
                       {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
                     </summary>
-                    <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" />
+                    <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" :animate="false" />
                   </details>
                   <AssistantBlocks
+                    :animate="animate"
                     :blocks="hasSummary(entry) ? entry.summary : entry.blocks"
                     :key-offset="hasSummary(entry) ? entry.blocks.length - entry.summary.length : 0"
                     :runs="session.runs"
@@ -610,7 +615,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               </MessageActions>
             </div>
           </Message>
-        </template>
+        </VirtualMessage>
 
         <!-- waiting indicator before any content arrives -->
         <div

@@ -9,9 +9,10 @@ import 'vue-stream-markdown/index.css'
 interface Props {
   class?: HTMLAttributes['class']
   content: string
+  animate?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { animate: true })
 const slots = useSlots()
 
 const slotContent = computed<string | undefined>(() => {
@@ -40,6 +41,6 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
       props.class,
     )"
   >
-    <Markdown :content="md" />
+    <Markdown :content="md" :enable-animate="props.animate" />
   </CollapsibleContent>
 </template>

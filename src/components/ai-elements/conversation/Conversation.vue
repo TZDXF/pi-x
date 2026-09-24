@@ -3,7 +3,7 @@ import type { HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 import { reactiveOmit } from '@vueuse/core'
 import { useStickToBottom } from 'vue-stick-to-bottom'
-import { onMounted, provide, ref, watch, watchEffect } from 'vue'
+import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { conversationKey } from './context'
@@ -22,11 +22,14 @@ interface Props {
 const emit = defineEmits<{ scroll: [event: Event] }>()
 defineExpose({
   stopScroll: () => context.stopScroll(),
-  scrollToMessage: (id: number) => {
+  scrollToMessage: async (id: number) => {
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
     if (!viewport || !message) return
     context.stopScroll()
+    message.dispatchEvent(new Event('virtual-reveal'))
+    await nextTick()
+    if (!message.isConnected) return
     viewport.scrollTo({
       top: viewport.scrollTop + message.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 24,
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
