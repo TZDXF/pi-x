@@ -70,7 +70,6 @@ import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import { withFileReferences, withSessionReferences, sessionReference, desktopCommands } from "@/lib/completion"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
-import { openPath } from "@/api/piClient"
 import { isDesktop } from "@/api/transport"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -98,18 +97,23 @@ const currentTitle = computed(() => workspace.histories[props.project]?.find(s =
 
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
-const initialDraft = composerDraftText(session.cwd || props.project, session.sessionFile)
+const draftFile = ref<string | null>(session.sessionFile)
+const draftProject = () => session.cwd || props.project
+const draftTarget = () => session.sessionFile ?? draftFile.value
+const initialDraft = composerDraftText(draftProject(), draftTarget())
 watch(() => bridge.value?.textInput, text => {
-  if (text !== undefined) recordComposerDraft(session.cwd || props.project, session.sessionFile, text)
+  if (text !== undefined) recordComposerDraft(draftProject(), draftTarget(), text)
 })
 // Loading an existing session can set its file after the editor has mounted.
+// Reconnecting may briefly clear sessionFile, so keep its last value as the key.
 watch(() => session.sessionFile, file => {
+  if (file) draftFile.value = file
   if (!bridge.value) return
   if (file && !bridge.value.textInput) {
-    const saved = composerDraftText(session.cwd || props.project, file)
+    const saved = composerDraftText(draftProject(), file)
     if (saved) bridge.value.setTextInput(saved)
   }
-  recordComposerDraft(session.cwd || props.project, file, bridge.value.textInput)
+  recordComposerDraft(draftProject(), draftTarget(), bridge.value.textInput)
 })
 const sessionDragOver = ref(false)
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
@@ -314,23 +318,6 @@ async function resendEditedPrompt() {
 }
 
 // ---- settings / export / copy ----
-const exporting = ref(false)
-
-async function exportSession() {
-  exporting.value = true
-  try {
-    const res = await rpcRequest<{ path?: string }>({ type: "export_html" })
-    if (!res.success || !res.data?.path)
-      throw new Error(res.error || "export failed")
-    await openPath(res.data.path)
-    ui.pushToast(t("chat.toastExported"), "info")
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  } finally {
-    exporting.value = false
-  }
-}
-
 function blocksText(blocks: { type: string; text?: string }[]): string {
   return blocks
     .filter((b) => b.type === "text")
@@ -395,12 +382,6 @@ async function copyText(text: string) {
     ui.pushToast(String(e), "error")
   }
 }
-
-// Sidebar session menu export requests forwarded via the ui store.
-watch(() => ui.sessionAction, (action) => {
-  if (!action) return
-  void exportSession()
-})
 
 // extensions can push text into the editor (set_editor_text))
 watch(
@@ -518,11 +499,6 @@ async function onSubmit(message: {
         if (session.isStreaming && commandName === 'compact') await abort()
         if (commandName === 'new') emit('newSession')
         else if (commandName === 'compact') await session.compact(args || undefined)
-        else {
-          const result = await rpcRequest<{ path?: string }>({ type: 'export_html' })
-          if (!result.success || !result.data?.path) throw new Error(result.error ?? 'Export failed')
-          await openPath(result.data.path)
-        }
       } catch (error) {
         ui.pushToast(String(error), 'error')
         throw error
