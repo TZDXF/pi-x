@@ -693,15 +693,15 @@ kbd {
 .session-link { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 4px 0; font-size: 12px; line-height: 20px; font-weight: 400; }
 .session-row.active .session-link { font-weight: 500; }
 .session-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; pointer-events: none; }
-.session-row:hover .session-actions, .session-row:focus-within .session-actions,
+.session-row:hover .session-actions, .session-row:has(:focus-visible) .session-actions,
 .session-actions:has([data-state="open"]) { pointer-events: auto; }
-.session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
+.session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
 }
 .hover-action { opacity: 0; pointer-events: none; }
-.project-heading:is(:hover, :focus-within) > .hover-action,
-.session-row:is(:hover, :focus-within) .hover-action,
+.project-heading:is(:hover, :has(:focus-visible)) > .hover-action,
+.session-row:is(:hover, :has(:focus-visible)) .hover-action,
 .hover-action:has([data-state="open"]) { opacity: 1; pointer-events: auto; }
 .session-status { display: inline-flex; align-items: center; justify-content: center; width: 14px; margin-left: 4px; flex-shrink: 0; color: var(--muted-foreground); }
 .session-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -807,7 +807,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 @media (pointer: coarse) {
   .project-row, .session-row, .session-link { min-height: 36px; }
   .session-actions .icon-button, .project-heading .icon-button { width: 32px; height: 32px; }
-  .session-row:is(:hover, :focus-within, :has(.session-actions [data-state="open"])) .session-link {
+  .session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
   }

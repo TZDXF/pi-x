@@ -90,7 +90,7 @@ const ui = uiFor(runtimeId)
 const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const { t, te } = useI18n()
 
-const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; connected: boolean }>()
+const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; selectingProject?: boolean; connected: boolean }>()
 const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
 const workspace = useWorkspaceStore()
 const currentTitle = computed(() => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title)
@@ -599,7 +599,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </div>
         <ConversationEmptyState
           class="chat-empty"
-          v-if="session.entries.length === 0 && !session.historyLoading && !connecting"
+          v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
           :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
           :description="t('chat.emptyDesc')"
         />
@@ -749,7 +749,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
-      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming && !connecting && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
+      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming && (!connecting || selectingProject) && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
         <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
@@ -820,7 +820,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           @compositionend="completion?.onEditorEvent($event)"
           @keydown.capture="completion?.onKeydown($event)"
           :placeholder="t('chat.inputPlaceholder')"
-          :disabled="editBusy || workspace.gitBusy || (connecting && !completion?.initiating)"
+          :disabled="editBusy || workspace.gitBusy || (connecting && !selectingProject && !completion?.initiating)"
           class="min-h-14"
         />
         <div data-align="block-end" class="composer-controls flex items-center justify-between">

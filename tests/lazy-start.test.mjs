@@ -36,7 +36,7 @@ function harness(group = null) {
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
   })
-  vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
+  vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls, spawnArgs, workspace }
 }
 test('opening the app, selecting projects and drafting a new chat do not start pi', async () => {
@@ -92,4 +92,52 @@ test('a grouped project passes every root to Pi and refreshes context on the nex
   assert.equal(await context.actions.start(), true)
   assert.equal(spawnArgs[1][3].name, 'Renamed')
   assert.deepEqual(calls, ['spawn', 'init', 'spawn', 'init'])
+})
+
+test('cross-project drafts stay visible during checks while sending remains blocked', async () => {
+  const { context, calls } = harness()
+  await context.mount()
+  let resolveTrust
+  context.trustStatus = () => new Promise(resolve => { resolveTrust = resolve })
+  const pending = context.actions.newProjectSession('other')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(context.sessionFor(context.activeRuntimeId.value).cwd, 'other')
+  assert.equal(context.actions.phase.value, 'chat')
+  assert.equal(context.actions.selectingProject.value, true)
+  assert.equal(context.actions.connecting.value, true)
+  assert.equal(await context.actions.start(), false)
+  assert.deepEqual(calls, [])
+  resolveTrust({ needsDecision: true })
+  await pending
+  assert.equal(context.actions.phase.value, 'trust')
+  assert.equal(await context.actions.start(), false)
+  assert.equal(context.actions.selectingProject.value, false)
+  assert.equal(context.actions.connecting.value, false)
+  assert.deepEqual(calls, [])
+  const view = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  assert.equal(view.split('(!connecting || selectingProject)').length - 1, 2)
+  assert.match(view, /:disabled="editBusy \|\| workspace.gitBusy \|\| connecting"/)
+})
+
+
+test('project selection keeps the editor enabled without bypassing other edit guards', () => {
+  const view = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  const editor = view.split('<ComposerRichEditor')[1].split('/>')[0]
+  const expression = editor.match(/:disabled="([^"]+)"/)[1]
+  const disabled = values => vm.runInNewContext(expression, values)
+  const state = { editBusy: false, workspace: { gitBusy: false }, connecting: true, selectingProject: true, completion: null }
+  assert.equal(disabled(state), false)
+  assert.equal(disabled({ ...state, selectingProject: false }), true)
+  assert.equal(disabled({ ...state, editBusy: true }), true)
+  assert.equal(disabled({ ...state, workspace: { gitBusy: true } }), true)
+})
+
+test('disabled accessory buttons do not dim the entire composer', () => {
+  const group = readFileSync(new URL('../src/components/ui/input-group/InputGroup.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(group, /has-disabled:/)
+  for (const style of ['bg-input/50', 'bg-input/80', 'opacity-50']) {
+    assert.ok(group.includes(`has-[[data-slot=input-group-control]:disabled]:${style}`))
+  }
+  const editor = readFileSync(new URL('../src/components/ComposerRichEditor.vue', import.meta.url), 'utf8')
+  assert.ok(editor.includes('aria-disabled:opacity-50'))
 })

@@ -57,6 +57,7 @@ const lastError = ref<string | null>(null)
 
 const started = computed({ get: () => session.started, set: value => { session.started = value } })
 const connecting = ref(false)
+const selectingProject = ref(false)
 // A terminal badge represents an unread result, not a permanent session state.
 watch(() => {
   if (phase.value !== "chat" || route.value.name !== "home" || connecting.value || navigating.value) return null
@@ -273,6 +274,7 @@ async function reloadExternalConversation(file: string) {
 async function selectProject(dir: string) {
   if (workspace.gitBusy || connecting.value) return
   connecting.value = true
+  selectingProject.value = true
   phase.value = "chat"
   try {
     // Selecting a project creates an independent, lazily started draft.
@@ -295,7 +297,10 @@ async function selectProject(dir: string) {
     ui.pushToast(String(e), "error")
     phase.value = "down"
   }
-  finally { connecting.value = false }
+  finally {
+    selectingProject.value = false
+    connecting.value = false
+  }
 }
 
 async function onTrustDecision(trusted: boolean, trustParent: boolean) {
@@ -313,6 +318,8 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
 }
 
 async function start(): Promise<boolean> {
+  // Completion can request a runtime while the draft remains editable.
+  if (selectingProject.value || phase.value !== "chat") return false
   const owner = sessionFor(activeRuntimeId.value)
   if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value)) return true
   if (owner.started && owner.isStreaming) return true // rebuild when the current turn settles
@@ -532,7 +539,7 @@ onUnmounted(() => {
       </div>
 
       <template v-else-if="phase === 'chat'">
-        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" />
+        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :selecting-project="selectingProject" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" />
       </template>
 
       <div
