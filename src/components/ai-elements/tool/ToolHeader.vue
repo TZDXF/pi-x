@@ -39,10 +39,12 @@ const derivedName = computed(() =>
     <div class="flex items-center gap-2">
       <component :is="props.icon ?? WrenchIcon" class="size-4 shrink-0 text-muted-foreground" />
       <span class="font-medium text-sm">{{ props.title ?? derivedName }}</span>
-      <StatusBadge :state="props.state" />
     </div>
-    <ChevronDownIcon
-      class="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
-    />
+    <div class="flex shrink-0 items-center gap-2">
+      <StatusBadge :state="props.state" />
+      <ChevronDownIcon
+        class="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+      />
+    </div>
   </CollapsibleTrigger>
 </template>
