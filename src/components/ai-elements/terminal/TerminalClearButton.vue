@@ -17,7 +17,7 @@ const { onClear, hasClear } = useTerminalContext('TerminalClearButton')
   <Button
     v-if="hasClear"
     :class="cn(
-      'size-7 shrink-0 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100',
+      'size-7 shrink-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground',
       props.class,
     )"
     size="icon"

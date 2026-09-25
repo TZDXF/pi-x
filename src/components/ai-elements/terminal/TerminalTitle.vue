@@ -12,7 +12,7 @@ const props = defineProps<Props>()
 
 <template>
   <div
-    :class="cn('flex items-center gap-2 text-sm text-zinc-400', props.class)"
+    :class="cn('flex items-center gap-2 text-sm text-muted-foreground', props.class)"
     v-bind="$attrs"
   >
     <TerminalIcon class="size-4" />

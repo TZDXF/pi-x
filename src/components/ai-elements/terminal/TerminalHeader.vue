@@ -12,7 +12,7 @@ const props = defineProps<Props>()
 <template>
   <div
     :class="cn(
-      'flex items-center justify-between border-zinc-800 border-b px-4 py-2',
+      'flex items-center justify-between border-border border-b px-4 py-2',
       props.class,
     )"
     v-bind="$attrs"

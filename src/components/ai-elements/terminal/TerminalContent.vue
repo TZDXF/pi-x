@@ -33,7 +33,7 @@ watch(
   <div
     ref="containerRef"
     :class="cn(
-      'max-h-96 overflow-auto p-4 font-mono text-sm leading-relaxed',
+      'terminal-scroll max-h-96 overflow-auto p-4 font-mono text-sm leading-relaxed',
       props.class,
     )"
     v-bind="$attrs"
@@ -41,8 +41,33 @@ watch(
     <slot>
       <pre class="whitespace-pre-wrap wrap-break-word"><Ansi>{{ output }}</Ansi><span
           v-if="isStreaming"
-          class="ml-0.5 inline-block h-4 w-2 animate-pulse bg-zinc-100"
+          class="ml-0.5 inline-block h-4 w-2 animate-pulse bg-foreground"
       /></pre>
     </slot>
   </div>
 </template>
+
+<style scoped>
+/* Match the app's ScrollArea look: thin rounded thumb in the theme border color. */
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.terminal-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.terminal-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+.terminal-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--input);
+  background-clip: content-box;
+}
+</style>

@@ -48,7 +48,7 @@ provide(TerminalKey, {
 <template>
   <div
     :class="cn(
-      'flex flex-col overflow-hidden rounded-lg border bg-zinc-950 text-zinc-100',
+      'flex flex-col overflow-hidden rounded-lg border bg-muted text-foreground',
       props.class,
     )"
     v-bind="$attrs"

@@ -16,7 +16,7 @@ const { isStreaming } = useTerminalContext('TerminalStatus')
 <template>
   <div
     v-if="isStreaming"
-    :class="cn('flex items-center gap-2 text-xs text-zinc-400', props.class)"
+    :class="cn('flex items-center gap-2 text-xs text-muted-foreground', props.class)"
     v-bind="$attrs"
   >
     <slot>
