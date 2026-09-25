@@ -493,7 +493,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     // dispatched, and slash commands leave it for the next question.
     const modelChange = trimmed.startsWith("/") ? undefined : pendingModelChange ?? undefined
     if (modelChange) pendingModelChange = null
-    entries.value.push({ kind: "user", id: replacement?.id ?? nextId(), timestamp: replacement?.timestamp ?? Date.now(), text: trimmed, modelChange: modelChange ?? replacement?.modelChange, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
+    entries.value.push({ kind: "user", id: replacement?.id ?? nextId(), timestamp: Date.now(), text: trimmed, modelChange: modelChange ?? replacement?.modelChange, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))

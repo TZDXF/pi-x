@@ -168,6 +168,16 @@ test('editing removes the superseded answer and keeps the original question posi
   assert.equal(h.store.entries.value[0].text, 'replacement')
 })
 
+test('editing refreshes the question timestamp so turn duration restarts', async () => {
+  const h = harness()
+  const stale = Date.now() - 3_000_000
+  h.store.entries.value[0] = { kind: 'user', id: 1, text: 'original', timestamp: stale }
+  const before = Date.now()
+  await h.store.resendPrompt('replacement')
+  const timestamp = h.store.entries.value[0].timestamp
+  assert.ok(timestamp >= before && timestamp <= Date.now())
+  assert.notEqual(timestamp, stale)
+})
 test('history prepended while rewinding does not shift the replacement target', async () => {
   const h = harness({ rewind_prompt: async () => {
     h.store.entries.value.unshift({ kind: 'user', id: 99, text: 'earlier question' })
