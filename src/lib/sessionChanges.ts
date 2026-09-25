@@ -5,6 +5,9 @@ export interface FileChange {
   id: string; path: string; tool: string; lines: ChangeLine[]
   added: number; removed: number; unknownBefore: boolean
 }
+export const EDIT_TOOLS = new Set(["edit", "edit_file", "str_replace", "str_replace_editor", "multiedit"])
+export const WRITE_TOOLS = new Set(["write", "write_file", "create_file"])
+
 const lines = (text: string): string[] => text ? text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n") : []
 
 // Trim unchanged boundaries; use a bounded LCS table to preserve unchanged interior lines.
@@ -78,8 +81,8 @@ export function changeForCall(id: string, name: string, args: any): FileChange[]
   const tool = name.toLowerCase().split(/[.:/]/).pop()!
   const path = args.path ?? args.file_path ?? args.filePath
   if (typeof path !== "string" || !path.trim()) return changes
-  const edit = ["edit", "edit_file", "str_replace", "str_replace_editor", "multiedit"].includes(tool)
-  const write = ["write", "write_file", "create_file"].includes(tool)
+  const edit = EDIT_TOOLS.has(tool)
+  const write = WRITE_TOOLS.has(tool)
   if (!edit && !write) return changes
   const edits = edit && Array.isArray(args.edits) ? args.edits : [args]
   for (const [index, item] of edits.entries()) {

@@ -5,9 +5,9 @@ import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal } from "@/components/ai-elements/terminal"
-import { ChevronRight, FileCode } from "@lucide/vue"
+import { ChevronRight, FilePen, FilePlus2, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
-import { changeForCall } from "@/lib/sessionChanges"
+import { changeForCall, WRITE_TOOLS } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
 const props = withDefaults(defineProps<{
@@ -29,7 +29,7 @@ function runFor(block: ToolCallBlock): ToolRun | undefined {
 
 const BASH_TOOLS = new Set(["bash", "shell", "sh", "zsh", "powershell", "pwsh", "cmd", "terminal", "run_command", "execute_command"])
 function isBash(block: ToolCallBlock): boolean {
-  return BASH_TOOLS.has(block.name.toLowerCase().split(/[.:/]/).pop()!)
+  return BASH_TOOLS.has(toolBase(block))
 }
 
 function parsedArgs(block: ToolCallBlock): any | null {
@@ -48,6 +48,29 @@ function commandOf(block: ToolCallBlock): string {
   return match[1]!.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"')
 }
 
+const COMMAND_PREVIEW_MAX = 120
+
+/** Single-line, length-capped command preview for the collapsed tool header. */
+function commandPreview(block: ToolCallBlock): string {
+  const collapsed = commandOf(block).replace(/\s+/g, " ").trim()
+  return collapsed.length > COMMAND_PREVIEW_MAX ? collapsed.slice(0, COMMAND_PREVIEW_MAX) + "…" : collapsed
+}
+
+const READ_TOOLS = new Set(["read", "read_file", "cat", "view", "open_file"])
+function isRead(block: ToolCallBlock): boolean {
+  return READ_TOOLS.has(toolBase(block))
+}
+
+/** File path, tolerating still-streaming (unterminated) JSON arguments. */
+function pathOf(block: ToolCallBlock): string {
+  const args = parsedArgs(block)
+  const direct = args?.path ?? args?.file_path ?? args?.filePath
+  if (typeof direct === "string") return direct
+  const match = (block.argsText || "").match(/"(?:path|file_path|filePath)"\s*:\s*"((?:[^"\\]|\\.)*)/)
+  if (!match) return ""
+  return match[1]!.replace(/\\\\/g, "\\").replace(/\\"/g, `"`)
+}
+
 function terminalText(block: ToolCallBlock): string {
   const command = commandOf(block)
   const output = runFor(block)?.outputText ?? ""
@@ -59,7 +82,7 @@ function isRunning(block: ToolCallBlock): boolean {
   return state === "input-streaming" || state === "input-available"
 }
 
-interface FileCard { path: string, added: number, removed: number, unknown: boolean }
+interface FileCard { path: string, added: number, removed: number, written: number }
 
 // Diff results are cached per callId+argsText: streaming re-renders must not
 // re-run the line diff for arguments that have not changed.
@@ -77,12 +100,20 @@ function cardFor(block: ToolCallBlock): FileCard | null {
         path: changes[0]!.path,
         added: changes.reduce((sum, change) => sum + change.added, 0),
         removed: changes.reduce((sum, change) => sum + change.removed, 0),
-        unknown: changes.some(change => change.unknownBefore),
+        // Total lines written, shown when the pre-write baseline is unknown.
+        written: changes.reduce((sum, change) => sum + change.lines.filter(line => line.kind === "add").length, 0),
       }
     }
   }
   cardCache.set(block.callId, { argsText, card })
   return card
+}
+
+function toolBase(block: ToolCallBlock): string {
+  return block.name.toLowerCase().split(/[.:/]/).pop()!
+}
+function cardIcon(block: ToolCallBlock) {
+  return WRITE_TOOLS.has(toolBase(block)) ? FilePlus2 : FilePen
 }
 
 const { t } = useI18n()
@@ -110,7 +141,8 @@ const { t } = useI18n()
         <ToolHeader
           class="gap-2 px-3 py-2 [&>div]:min-w-0 [&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal"
           :type="`tool-${block.name}`"
-          :title="commandOf(block) || undefined"
+          :icon="SquareTerminal"
+          :title="commandPreview(block) || undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
         <ToolContent>
@@ -132,21 +164,25 @@ const { t } = useI18n()
           :aria-label="t('blocks.openInReview')"
           @click="emit('openReview', cardFor(block)!.path)"
         >
-          <FileCode class="size-4 shrink-0 text-muted-foreground" />
+          <component :is="cardIcon(block)" class="size-4 shrink-0 text-muted-foreground" />
           <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{ cardFor(block)!.path }}</span>
-          <span v-if="cardFor(block)!.added" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added }}</span>
+          <span v-if="cardFor(block)!.added || cardFor(block)!.written" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added || cardFor(block)!.written }}</span>
           <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400">-{{ cardFor(block)!.removed }}</span>
-          <span v-if="cardFor(block)!.unknown" class="shrink-0 text-xs text-muted-foreground" :title="t('changes.unknown')">*</span>
           <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
           <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
         </button>
       </div>
 
-      <!-- other tools: generic collapsible input/output -->
+      <!-- other tools: generic collapsible input/output; read shows the file path -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
-          class="gap-2 px-3 py-2 [&>div]:min-w-0 [&>div]:flex-wrap [&>div>span]:break-all"
+          class="gap-2 px-3 py-2 [&>div]:min-w-0"
+          :class="isRead(block)
+            ? '[&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal'
+            : '[&>div]:flex-wrap [&>div>span]:break-all'"
           :type="`tool-${block.name}`"
+          :icon="isRead(block) ? FileText : undefined"
+          :title="isRead(block) ? pathOf(block) || undefined : undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
         <ToolContent>

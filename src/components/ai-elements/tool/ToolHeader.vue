@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DynamicToolUIPart, ToolUIPart } from 'ai'
-import type { HTMLAttributes } from 'vue'
+import type { Component, HTMLAttributes } from 'vue'
 import { ChevronDownIcon, WrenchIcon } from '@lucide/vue'
 import { CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,8 @@ import StatusBadge from './ToolStatusBadge.vue'
 
 type ToolHeaderProps = {
   title?: string
+  /** Leading icon; defaults to a generic wrench. */
+  icon?: Component
   class?: HTMLAttributes['class']
 } & (
   | { type: ToolUIPart['type'], state: ToolUIPart['state'], toolName?: never }
@@ -35,7 +37,7 @@ const derivedName = computed(() =>
     v-bind="$attrs"
   >
     <div class="flex items-center gap-2">
-      <WrenchIcon class="size-4 text-muted-foreground" />
+      <component :is="props.icon ?? WrenchIcon" class="size-4 shrink-0 text-muted-foreground" />
       <span class="font-medium text-sm">{{ props.title ?? derivedName }}</span>
       <StatusBadge :state="props.state" />
     </div>

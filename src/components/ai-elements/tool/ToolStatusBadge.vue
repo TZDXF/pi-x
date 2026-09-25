@@ -58,8 +58,8 @@ const iconClass = computed(() => {
 </script>
 
 <template>
-  <Badge class="gap-1.5 rounded-full text-xs" variant="secondary">
+  <!-- Icon-only status: the text label stays available as tooltip/aria-label. -->
+  <Badge class="rounded-full px-1.5" variant="secondary" :title="label" :aria-label="label">
     <component :is="icon" :class="iconClass" />
-    <span>{{ label }}</span>
   </Badge>
 </template>
