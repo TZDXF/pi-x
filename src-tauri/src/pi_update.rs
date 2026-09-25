@@ -8,6 +8,7 @@ use tauri::AppHandle;
 use crate::{commands, packages, pi_locate};
 
 const LATEST_URL: &str = "https://pi.dev/api/latest-version";
+const RELEASE_TAGS_URL: &str = "https://api.github.com/repos/earendil-works/pi/releases/tags";
 const PACKAGE_NAME: &str = "@earendil-works/pi-coding-agent";
 static UPDATING: AtomicBool = AtomicBool::new(false);
 
@@ -19,12 +20,20 @@ struct LatestResponse {
     package_name: String,
 }
 
+#[derive(Deserialize)]
+struct ReleaseResponse {
+    body: Option<String>,
+    html_url: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PiUpdateStatus {
     current_version: String,
     latest_version: String,
     update_available: bool,
+    release_notes: Option<String>,
+    release_url: Option<String>,
 }
 
 // Pi reports a semver version (sometimes with a leading v or pi prefix).
@@ -38,6 +47,31 @@ fn version_key(text: &str) -> Option<(u64, u64, u64, bool)> {
         parts.get(3)?.as_str().parse().ok()?,
         parts.get(4).is_none(),
     ))
+}
+
+
+// Release notes live on GitHub; failing to fetch them must not break the update check.
+async fn fetch_release_notes(version: &str) -> Option<(Option<String>, Option<String>)> {
+    let tag = format!("v{}", version.trim().trim_start_matches(['v', 'V']));
+    let url = format!("{RELEASE_TAGS_URL}/{tag}");
+    let release = tauri::async_runtime::spawn_blocking(move || -> Option<ReleaseResponse> {
+        let body = ureq::get(&url)
+            .set("User-Agent", "pi-x desktop")
+            .set("Accept", "application/vnd.github+json")
+            .timeout(std::time::Duration::from_secs(15))
+            .call()
+            .ok()?
+            .into_string()
+            .ok()?;
+        serde_json::from_str::<ReleaseResponse>(&body).ok()
+    })
+    .await
+    .ok()??;
+    let notes = release.body.and_then(|b| {
+        let trimmed = b.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    });
+    Some((notes, release.html_url))
 }
 
 #[tauri::command]
@@ -68,10 +102,18 @@ pub async fn pi_update_check(app: AppHandle) -> Result<PiUpdateStatus, String> {
         return Err("Pi 更新信息来源不匹配".into());
     }
     let newest = version_key(&latest.version).ok_or("无法识别最新 Pi 版本")?;
+    let update_available = newest > current;
+    let (release_notes, release_url) = if update_available {
+        fetch_release_notes(&latest.version).await.unwrap_or_default()
+    } else {
+        (None, None)
+    };
     Ok(PiUpdateStatus {
         current_version,
         latest_version: latest.version,
-        update_available: newest > current,
+        update_available,
+        release_notes,
+        release_url,
     })
 }
 

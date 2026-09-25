@@ -75,7 +75,13 @@ export const listDiscoveredSkills = (project?: string) =>
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
-export interface PiUpdateStatus { currentVersion: string; latestVersion: string; updateAvailable: boolean }
+export interface PiUpdateStatus {
+  currentVersion: string
+  latestVersion: string
+  updateAvailable: boolean
+  releaseNotes?: string | null
+  releaseUrl?: string | null
+}
 export const checkPiUpdate = () => invoke<PiUpdateStatus>("pi_update_check")
 export const executePiUpdate = () => invoke<string>("pi_update_execute")
 

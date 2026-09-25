@@ -320,6 +320,8 @@ export default {
     confirm: "将 Pi 更新到 {version}？请先完成进行中的工作，新会话将使用更新后的版本。",
     completed: "更新命令已完成。重开会话后使用新版本。",
     notFound: "未找到 Pi，请在首页指定可执行文件路径。",
+    releaseNotes: "更新内容",
+    viewRelease: "在 GitHub 查看完整发布说明",
   },
   settings: {
     back: "返回",

@@ -320,6 +320,8 @@ export default {
     confirm: "Update Pi to {version}? Finish any ongoing work first. New sessions will use the updated version.",
     completed: "Update command finished. Reopen the session to use the new version.",
     notFound: "Pi not found. Set the executable path on the welcome screen.",
+    releaseNotes: "Release notes",
+    viewRelease: "View the full release notes on GitHub",
   },
   settings: {
     back: "Back",
