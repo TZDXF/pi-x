@@ -44,6 +44,15 @@ window.addEventListener("storage", syncPreference)
 if (import.meta.hot) import.meta.hot.dispose(() => window.removeEventListener("storage", syncPreference))
 
 export const detectEditors = () => invoke<Record<string, boolean>>("detect_editors")
+
+/** IDE 真实图标:kind → data:image/png URL(提取失败无该键或为 null) */
+export type EditorIconMap = Record<string, string | null>
+let iconsPromise: Promise<EditorIconMap> | null = null
+/** 取 IDE 真实图标(后端从本机 exe / .app 提取并缓存;失败返回空表,前端回退纯文本展示) */
+export function detectIcons(): Promise<EditorIconMap> {
+  iconsPromise ??= invoke<EditorIconMap>("editor_icons").catch(() => ({}))
+  return iconsPromise
+}
 export async function openFileInEditor(path: string, project: string) {
   if (!isDesktop) throw new Error("Opening a local editor is available only in the desktop app")
   const { kind, executable } = preference.value

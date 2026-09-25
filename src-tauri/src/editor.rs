@@ -2,7 +2,7 @@
 //! always individual arguments, including paths containing spaces or metacharacters.
 use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
 
-const EDITORS: &[(&str, &str, &str)] = &[
+pub(crate) const EDITORS: &[(&str, &str, &str)] = &[
     ("vscode", "code", "Code.exe"),
     ("cursor", "cursor", "Cursor.exe"),
     ("windsurf", "windsurf", "Windsurf.exe"),
@@ -18,7 +18,7 @@ const EDITORS: &[(&str, &str, &str)] = &[
     ("rustrover", "rustrover", "rustrover64.exe"),
 ];
 
-fn editor_binary(kind: &str) -> Option<PathBuf> {
+pub(crate) fn editor_binary(kind: &str) -> Option<PathBuf> {
     let (_, cli, binary) = EDITORS.iter().find(|(id, _, _)| *id == kind)?;
     let mut candidates = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {

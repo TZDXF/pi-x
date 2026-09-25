@@ -432,6 +432,7 @@ export default {
   blocks: {
     input: "Input",
     output: "Output",
+    openInReview: "View this file in the review page",
   },
 
   status: {

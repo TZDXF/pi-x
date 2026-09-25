@@ -1,0 +1,36 @@
+# 默认：所有文本文件在仓库中统一使用 LF
+* text=auto eol=lf
+
+# 脚本类强制 LF（Windows 上也要可执行）
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Windows 专用文件保留 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制文件不做换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.7z    binary
+*.exe   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
+*.mp3   binary
+*.mp4   binary
+*.wav   binary

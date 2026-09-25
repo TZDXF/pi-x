@@ -1,16 +1,27 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { detectEditors, EDITOR_OPTIONS, isEditorKind, openWithPreference, setOpenWith } from "@/lib/openWith"
+import { detectEditors, detectIcons, EDITOR_OPTIONS, isEditorKind, openWithPreference, setOpenWith, type EditorIconMap } from "@/lib/openWith"
 const { t } = useI18n()
 const availability = ref<Record<string, boolean>>({})
+/** 首次检测成功后置 true;此前(或检测失败,如远程模式)不隐藏任何 IDE */
+const detected = ref(false)
+const icons = ref<EditorIconMap>({})
 const executable = ref(openWithPreference.value.executable)
 const error = ref("")
 const detecting = ref(false)
 watch(() => openWithPreference.value.executable, value => { executable.value = value })
+// 检测不到的 IDE 不显示;当前选中的一条始终保留(未检测到时附带提示,便于察觉并改选)
+const visibleOptions = computed(() =>
+  EDITOR_OPTIONS.filter(option =>
+    !detected.value || availability.value[option.id] !== false || option.id === openWithPreference.value.kind,
+  ),
+)
+const iconOf = (id: string) => icons.value[id] ?? null
+const selectedIcon = computed(() => iconOf(openWithPreference.value.kind))
 function save(value: unknown) {
   if (!isEditorKind(value)) return
   error.value = ""
@@ -19,10 +30,13 @@ function save(value: unknown) {
 async function detect() {
   detecting.value = true
   error.value = ""
-  try { availability.value = await detectEditors() } catch (e) { error.value = String(e) }
+  try { availability.value = await detectEditors(); detected.value = true } catch (e) { error.value = String(e) }
   finally { detecting.value = false }
 }
-onMounted(detect)
+onMounted(() => {
+  detect()
+  detectIcons().then(map => { icons.value = map })
+})
 </script>
 
 <template>
@@ -33,12 +47,19 @@ onMounted(detect)
     </div>
     <div class="flex shrink-0 items-center gap-2">
       <Select :model-value="openWithPreference.kind" @update:model-value="save">
-        <SelectTrigger class="h-8 w-48 text-xs" aria-labelledby="open-with-label"><SelectValue /></SelectTrigger>
+        <SelectTrigger class="h-8 w-48 text-xs" aria-labelledby="open-with-label">
+          <img v-if="selectedIcon" :src="selectedIcon" class="size-4 shrink-0" alt="" />
+          <SelectValue />
+        </SelectTrigger>
         <SelectContent>
-          <SelectItem v-for="option in EDITOR_OPTIONS" :key="option.id" :value="option.id">
-            {{ option.label }}{{ availability[option.id] === false ? ` · ${t('openWith.notDetected')}` : '' }}
+          <SelectItem v-for="option in visibleOptions" :key="option.id" :value="option.id">
+            <img v-if="iconOf(option.id)" :src="iconOf(option.id)!" class="size-4 shrink-0" alt="" />
+            {{ option.label }}{{ detected && availability[option.id] === false ? ` · ${t('openWith.notDetected')}` : '' }}
           </SelectItem>
-          <SelectItem value="system">{{ t('openWith.system') }}</SelectItem>
+          <SelectItem value="system">
+            <img v-if="iconOf('system')" :src="iconOf('system')!" class="size-4 shrink-0" alt="" />
+            {{ t('openWith.system') }}
+          </SelectItem>
           <SelectItem value="custom">{{ t('openWith.custom') }}</SelectItem>
         </SelectContent>
       </Select>

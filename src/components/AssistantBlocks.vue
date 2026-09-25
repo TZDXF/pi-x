@@ -3,7 +3,11 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
+import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
+import { Terminal } from "@/components/ai-elements/terminal"
+import { ChevronRight, FileCode } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
+import { changeForCall } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
 const props = withDefaults(defineProps<{
@@ -15,8 +19,70 @@ const props = withDefaults(defineProps<{
   keyOffset?: number
 }>(), { keyOffset: 0, animate: true })
 
+const emit = defineEmits<{ openReview: [path: string] }>()
+
 function runFor(block: ToolCallBlock): ToolRun | undefined {
   return props.runs[block.callId]
+}
+
+// ---- tool specialization ----
+
+const BASH_TOOLS = new Set(["bash", "shell", "sh", "zsh", "powershell", "pwsh", "cmd", "terminal", "run_command", "execute_command"])
+function isBash(block: ToolCallBlock): boolean {
+  return BASH_TOOLS.has(block.name.toLowerCase().split(/[.:/]/).pop()!)
+}
+
+function parsedArgs(block: ToolCallBlock): any | null {
+  const text = block.argsText || runFor(block)?.argsText
+  if (!text) return null
+  try { return JSON.parse(text) } catch { return null }
+}
+
+/** Command text, tolerating still-streaming (unterminated) JSON arguments. */
+function commandOf(block: ToolCallBlock): string {
+  const args = parsedArgs(block)
+  const direct = args?.command ?? args?.cmd ?? args?.script
+  if (typeof direct === "string") return direct
+  const match = (block.argsText || "").match(/"(?:command|cmd|script)"\s*:\s*"((?:[^"\\]|\\.)*)/)
+  if (!match) return ""
+  return match[1]!.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"')
+}
+
+function terminalText(block: ToolCallBlock): string {
+  const command = commandOf(block)
+  const output = runFor(block)?.outputText ?? ""
+  return (command ? `$ ${command}\n` : "") + output
+}
+
+function isRunning(block: ToolCallBlock): boolean {
+  const state = runFor(block)?.state
+  return state === "input-streaming" || state === "input-available"
+}
+
+interface FileCard { path: string, added: number, removed: number, unknown: boolean }
+
+// Diff results are cached per callId+argsText: streaming re-renders must not
+// re-run the line diff for arguments that have not changed.
+const cardCache = new Map<string, { argsText: string, card: FileCard | null }>()
+function cardFor(block: ToolCallBlock): FileCard | null {
+  const argsText = block.argsText || runFor(block)?.argsText || ""
+  const hit = cardCache.get(block.callId)
+  if (hit && hit.argsText === argsText) return hit.card
+  let card: FileCard | null = null
+  const args = parsedArgs(block)
+  if (args) {
+    const changes = changeForCall(block.callId, block.name, args)
+    if (changes.length) {
+      card = {
+        path: changes[0]!.path,
+        added: changes.reduce((sum, change) => sum + change.added, 0),
+        removed: changes.reduce((sum, change) => sum + change.removed, 0),
+        unknown: changes.some(change => change.unknownBefore),
+      }
+    }
+  }
+  cardCache.set(block.callId, { argsText, card })
+  return card
 }
 
 const { t } = useI18n()
@@ -39,7 +105,44 @@ const { t } = useI18n()
         <ReasoningContent :content="block.text" :animate="props.animate" />
       </Reasoning>
 
-      <!-- tool call -->
+      <!-- bash: header shows the command; expanding reveals a terminal-style run -->
+      <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">
+        <ToolHeader
+          class="gap-2 px-3 py-2 [&>div]:min-w-0 [&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal"
+          :type="`tool-${block.name}`"
+          :title="commandOf(block) || undefined"
+          :state="runFor(block)?.state ?? 'input-streaming'"
+        />
+        <ToolContent>
+          <div class="p-3">
+            <Terminal :output="terminalText(block)" :is-streaming="isRunning(block)" class="text-xs" />
+          </div>
+        </ToolContent>
+      </Tool>
+
+      <!-- edit/write: file + line-count card; clicking opens the review page at that file -->
+      <div
+        v-else-if="block.type === 'toolCall' && cardFor(block)"
+        class="not-prose w-full rounded-md border bg-background/50"
+      >
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-accent/50"
+          :title="t('blocks.openInReview')"
+          :aria-label="t('blocks.openInReview')"
+          @click="emit('openReview', cardFor(block)!.path)"
+        >
+          <FileCode class="size-4 shrink-0 text-muted-foreground" />
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{ cardFor(block)!.path }}</span>
+          <span v-if="cardFor(block)!.added" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added }}</span>
+          <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400">-{{ cardFor(block)!.removed }}</span>
+          <span v-if="cardFor(block)!.unknown" class="shrink-0 text-xs text-muted-foreground" :title="t('changes.unknown')">*</span>
+          <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
+          <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
+        </button>
+      </div>
+
+      <!-- other tools: generic collapsible input/output -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
           class="gap-2 px-3 py-2 [&>div]:min-w-0 [&>div]:flex-wrap [&>div>span]:break-all"

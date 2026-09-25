@@ -82,6 +82,11 @@ import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import SessionChanges from "@/components/SessionChanges.vue"
 
 const changesOpen = ref(false)
+const changesFocus = ref<string | null>(null)
+function openReviewAt(path: string) {
+  changesFocus.value = path
+  changesOpen.value = true
+}
 const changeTotals = computed(() => session.fileChanges.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed, unknown: sum.unknown || change.unknownBefore }), { added: 0, removed: 0, unknown: false }))
 
 const runtimeId = activeRuntimeId.value
@@ -662,13 +667,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                         {{ t('chat.toolCallCount', { count: entry.toolCallCount }) }}
                       </template>
                     </summary>
-                    <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" :animate="false" />
+                    <AssistantBlocks v-if="openedProcesses.has(entry.id)" class="mt-3 border-l pl-3" :blocks="entry.process" :runs="session.runs" :animate="false" @open-review="openReviewAt" />
                   </details>
                   <AssistantBlocks
                     :animate="animate"
                     :blocks="hasSummary(entry) ? entry.summary : entry.blocks"
                     :key-offset="hasSummary(entry) ? entry.blocks.length - entry.summary.length : 0"
                     :runs="session.runs"
+                    @open-review="openReviewAt"
                   />
                 </div>
               </MessageContent>
@@ -941,6 +947,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <ExtensionDialog />
   </div>
-  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" @close="changesOpen = false" />
+  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" :focus="changesFocus" @close="changesOpen = false" />
   </div>
 </template>

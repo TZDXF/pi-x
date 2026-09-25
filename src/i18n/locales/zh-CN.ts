@@ -432,6 +432,7 @@ export default {
   blocks: {
     input: "输入",
     output: "输出",
+    openInReview: "在审查页中查看此文件的变更",
   },
 
   status: {

@@ -65,26 +65,33 @@ export function sessionChanges(history: any[], entries: Entry[], partial: Block[
   const changes: FileChange[] = []
   for (const [id, call] of calls) {
     if (!results.get(id)) continue
-    const args = call.args
-    if (!args || typeof args !== "object") continue
-    const tool = call.name.toLowerCase().split(/[.:/]/).pop()!
-    const path = args.path ?? args.file_path ?? args.filePath
-    if (typeof path !== "string" || !path.trim()) continue
-    const edit = ["edit", "edit_file", "str_replace", "str_replace_editor", "multiedit"].includes(tool)
-    const write = ["write", "write_file", "create_file"].includes(tool)
-    if (!edit && !write) continue
-    const edits = edit && Array.isArray(args.edits) ? args.edits : [args]
-    for (const [index, item] of edits.entries()) {
-      if (!item || typeof item !== "object") continue
-      const before = item.oldText ?? item.old_string ?? item.old_str
-      const after = edit ? item.newText ?? item.new_string ?? item.new_str : item.content ?? item.contents
-      if (typeof after !== "string" || (edit && typeof before !== "string")) continue
-      const unknownBefore = write && typeof before !== "string" && tool !== "create_file"
-      const diff = changedLines(typeof before === "string" ? before : "", after)
-      changes.push({ id: `${id}:${index}`, path: path.replace(/\\/g, "/"), tool: call.name, lines: diff,
-        added: unknownBefore ? 0 : diff.filter(line => line.kind === "add").length,
-        removed: diff.filter(line => line.kind === "remove").length, unknownBefore })
-    }
+    changes.push(...changeForCall(id, call.name, call.args))
+  }
+  return changes
+}
+
+/** Diff a single edit/write tool call into per-file change entries.
+ *  Shared by the review panel and the chat tool cards. */
+export function changeForCall(id: string, name: string, args: any): FileChange[] {
+  const changes: FileChange[] = []
+  if (!args || typeof args !== "object") return changes
+  const tool = name.toLowerCase().split(/[.:/]/).pop()!
+  const path = args.path ?? args.file_path ?? args.filePath
+  if (typeof path !== "string" || !path.trim()) return changes
+  const edit = ["edit", "edit_file", "str_replace", "str_replace_editor", "multiedit"].includes(tool)
+  const write = ["write", "write_file", "create_file"].includes(tool)
+  if (!edit && !write) return changes
+  const edits = edit && Array.isArray(args.edits) ? args.edits : [args]
+  for (const [index, item] of edits.entries()) {
+    if (!item || typeof item !== "object") continue
+    const before = item.oldText ?? item.old_string ?? item.old_str
+    const after = edit ? item.newText ?? item.new_string ?? item.new_str : item.content ?? item.contents
+    if (typeof after !== "string" || (edit && typeof before !== "string")) continue
+    const unknownBefore = write && typeof before !== "string" && tool !== "create_file"
+    const diff = changedLines(typeof before === "string" ? before : "", after)
+    changes.push({ id: `${id}:${index}`, path: path.replace(/\\/g, "/"), tool: name, lines: diff,
+      added: unknownBefore ? 0 : diff.filter(line => line.kind === "add").length,
+      removed: diff.filter(line => line.kind === "remove").length, unknownBefore })
   }
   return changes
 }

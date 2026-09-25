@@ -34,6 +34,13 @@ ureq = { version = "2", default-features = false, features = ["tls", "native-cer
 portable-pty = "0.8"
 base64 = "0.22"
 notify = "8"
+# 编辑器图标提取(image 负责缩放与 PNG 编码;pelite/ico 解析 Windows exe 资源;
+# plist/icns 解析 macOS .app 图标)——均为纯 Rust,参考 RepoMeow 的实现
+image = { version = "0.25", default-features = false, features = ["png"] }
+pelite = "0.10"
+ico = "0.5"
+icns = "0.4"
+plist = "1.10"
 
 [profile.release]
 codegen-units = 1

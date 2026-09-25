@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
 import { ChevronRight, Columns2, ExternalLink, FileCode, Folder, FolderOpen, FolderTree, Highlighter, List, Rows2, X } from "@lucide/vue"
@@ -10,7 +10,7 @@ import { openFileInEditor } from "@/lib/openWith"
 import SessionDiff from "@/components/SessionDiff.vue"
 import { buildFileTree, flatFileRows, flattenVisibleTree } from "@/lib/reviewFileTree"
 import type { FileChange } from "@/lib/sessionChanges"
-const props = defineProps<{ changes: FileChange[]; project?: string }>()
+const props = defineProps<{ changes: FileChange[]; project?: string; focus?: string | null }>()
 defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const sidebar = ref<HTMLElement | null>(null)
@@ -120,6 +120,20 @@ const collapsed = ref(new Set<string>())
 const fileRows = computed(() => treeMode.value
   ? flattenVisibleTree(buildFileTree(files.value.map(file => ({ ...file, path: file.path.replace(/\\/g, "/") }))), collapsed.value)
   : flatFileRows(files.value))
+// Locate a file requested from a chat tool card: select it, reveal its
+// tree ancestors, and scroll its row into view.
+watch(() => props.focus, path => {
+  if (!path) return
+  const normalized = path.replace(/\\/g, "/")
+  const file = files.value.find(file => file.path === normalized)
+  if (!file) return
+  selectedPath.value = file.path
+  const next = new Set(collapsed.value)
+  const parts = normalized.split("/")
+  for (let i = 1; i < parts.length; i++) next.delete(parts.slice(0, i).join("/"))
+  collapsed.value = next
+  nextTick(() => sidebar.value?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" }))
+}, { immediate: true })
 function selectRow(row: (typeof fileRows.value)[number]) {
   if (row.isDir) {
     const next = new Set(collapsed.value)

@@ -312,6 +312,8 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             crate::packages::package_update(app.clone(), a["source"].as_str().map(str::to_owned))
                 .await?,
         )),
+        "detect_editors" => Ok(serde_json::to_value(crate::editor::detect_editors()).unwrap()),
+        "editor_icons" => Ok(serde_json::to_value(crate::editor_icon::editor_icons().await?).unwrap()),
         _ => Err("此操作仅可在桌面端执行".into()),
     }
 }

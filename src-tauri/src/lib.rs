@@ -1,6 +1,7 @@
 mod data_dir;
 mod desktop;
 mod editor;
+mod editor_icon;
 mod commands;
 mod fs_search;
 mod packages;
@@ -90,6 +91,7 @@ pub fn run() {
             commands::open_path,
             editor::open_in_editor,
             editor::detect_editors,
+            editor_icon::editor_icons,
             commands::models_config_get,
             commands::models_config_save,
             commands::models_fetch,
