@@ -68,6 +68,12 @@ watch(() => {
   return status === "completed" || status === "error" ? file : null
 }, file => acknowledgeSessionRunStatus(file), { immediate: true })
 const runtimeWorkspaces = new Map<string, string>()
+/** Runtimes whose worker must restart before the next turn (tool-permission
+ *  change); restarting lazily keeps the change invisible to the user. */
+const staleWorkerRuntimes = new Set<string>()
+/** Runtimes with an intentional restart in flight; their pi exit must not
+ *  flip the phase to "down". */
+const restartingRuntimes = new Set<string>()
 function contextFor(dir: string): WorkspaceContext | undefined {
   const group = workspace.projectGroups[workspace.projectRoot(dir)]
   return group ? { name: group.name, primary: group.primary, roots: [...group.folders] } : undefined
@@ -116,7 +122,7 @@ onMounted(async () => {
         owner.isStreaming = false
         owner.isCompacting = false
         owner.partialBlocks = null
-        if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
+        if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value && !restartingRuntimes.has(runtimeId)) phase.value = "down"
       }),
       onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(line)),
       onReconnected(() => {
@@ -263,18 +269,45 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
   }
 }
 
-/** Tool permissions apply at pi process start; restart the active worker. */
-async function onPermissionChanged() {
-  const owner = sessionFor(activeRuntimeId.value)
-  if (!owner.started) return
-  uiFor(owner.runtimeId).pushToast(t("chat.permissionRestarting"), "info")
-  if (owner.sessionFile) {
-    await rebuildConversation(owner)
-    return
+/**
+ * Restart a worker to pick up a new tool-permission mode. Unlike
+ * rebuildConversation, the session file is known to be unchanged, so the
+ * rendered history stays valid: respawn and re-init without clearing
+ * entries, keeping the restart invisible.
+ */
+async function restartWorker(owner: ReturnType<typeof sessionFor>) {
+  const file = owner.sessionFile
+  const dir = owner.cwd
+  restartingRuntimes.add(owner.runtimeId)
+  try {
+    await killPi(owner.runtimeId)
+    if (!file || !dir) {
+      // Fresh draft without a session file: it respawns lazily in start().
+      owner.started = false
+      return
+    }
+    await spawnWorkspacePi(dir, file, owner.runtimeId)
+    owner.started = true
+    await owner.init(dir)
+    await owner.syncSessionFile()
+  } catch (e) {
+    await killPi(owner.runtimeId).catch(() => {})
+    owner.started = false
+    lastError.value = String(e)
+    uiFor(owner.runtimeId).pushToast(String(e), "error")
+  } finally {
+    restartingRuntimes.delete(owner.runtimeId)
   }
-  // Fresh draft without a session file: drop the worker, it respawns lazily.
-  await killPi(owner.runtimeId).catch(() => {})
-  owner.started = false
+}
+
+/**
+ * Tool permissions apply at pi process start. Mark the worker stale and let
+ * start() restart it lazily on the next turn, so changing the mode never
+ * shows a notice or reloads the conversation.
+ */
+function onPermissionChanged() {
+  const owner = sessionFor(activeRuntimeId.value)
+  if (owner.started) staleWorkerRuntimes.add(owner.runtimeId)
 }
 
 async function reloadExternalConversation(file: string) {
@@ -338,10 +371,18 @@ async function start(): Promise<boolean> {
   // Completion can request a runtime while the draft remains editable.
   if (selectingProject.value || phase.value !== "chat") return false
   const owner = sessionFor(activeRuntimeId.value)
-  if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value)) return true
-  if (owner.started && owner.isStreaming) return true // rebuild when the current turn settles
+  // A stale worker (tool permission changed) restarts on this turn instead of
+  // rebuilding the view, so the user never notices it.
+  const stale = staleWorkerRuntimes.delete(owner.runtimeId)
+  if (owner.started && !stale && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value)) return true
+  if (owner.started && owner.isStreaming) {
+    // Restart once the current turn settles, i.e. on the next start() call.
+    if (stale) staleWorkerRuntimes.add(owner.runtimeId)
+    return true
+  }
   if (owner.started && owner.sessionFile) {
-    await rebuildConversation(owner)
+    if (stale) await restartWorker(owner)
+    else await rebuildConversation(owner)
     return owner.started
   }
   if (owner.started) {

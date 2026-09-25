@@ -339,8 +339,7 @@ export default {
     modelChanged: "模型变化：从 {from} 切换到 {to}",
     selectModel: "选择模型",
     permission: "权限",
-    permissionTitle: "工具权限：请求批准会在每个写文件/执行命令前询问；高风险批准仅在高风险操作时询问；完全访问不询问。更改后会重启会话",
-    permissionRestarting: "权限已更新，正在重启会话以应用…",
+    permissionTitle: "工具权限：请求批准会在每个写文件/执行命令前询问；高风险批准仅在高风险操作时询问；完全访问不询问。更改从下一轮对话开始生效",
     permissions: {
       ask: "请求批准",
       highRisk: "高风险批准",

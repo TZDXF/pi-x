@@ -339,8 +339,7 @@ export default {
     modelChanged: "Model changed from {from} to {to}",
     selectModel: "Select model",
     permission: "Permission",
-    permissionTitle: "Tool permissions: Ask approves every file write and shell command; High-risk asks only for dangerous operations; Full access never asks. Changing it restarts the session",
-    permissionRestarting: "Permission updated. Restarting the session to apply…",
+    permissionTitle: "Tool permissions: Ask approves every file write and shell command; High-risk asks only for dangerous operations; Full access never asks. Changes apply from the next turn",
     permissions: {
       ask: "Ask",
       highRisk: "High-risk ask",

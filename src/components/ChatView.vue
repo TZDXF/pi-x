@@ -568,7 +568,7 @@ function onThinkingChange(v: unknown) {
 }
 
 // ---- tool permission selector ----
-// pi applies the tool allowlist only at process start; changing it restarts the worker via the permissionChanged event.
+// pi applies the tool allowlist only at process start; changing it marks the worker for a lazy restart via the permissionChanged event.
 
 const permission = ref<ToolPermission>(toolPermission(props.project))
 watch(() => props.project, dir => { permission.value = toolPermission(dir) })
