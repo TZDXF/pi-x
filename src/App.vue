@@ -249,8 +249,8 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
     await spawnWorkspacePi(dir, file, owner.runtimeId)
     owner.started = true
     owner.clear()
-    await owner.init(dir)
-    await owner.loadHistory()
+    owner.sessionFile = file
+    await Promise.all([owner.init(dir), owner.loadHistory()])
   } catch (e) {
     await killPi(owner.runtimeId).catch(() => {})
     owner.started = false
@@ -381,13 +381,6 @@ async function saveProject(group: ProjectGroup) {
 /** Resume a stored session: switch in-process when possible, else restart. */
 async function resumeSession(file: string, targetProject?: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
-  if (targetProject && targetProject !== project.value) {
-    await selectProject(targetProject)
-    if (phase.value !== "chat") {
-      if (phase.value === "trust") pendingResume.value = file
-      return
-    }
-  }
   // Clicking the already-active session is a no-op: it is still attached in
   // memory, and appends made elsewhere are picked up by the session-file
   // watcher (scheduleExternalReload), so no reconnect or history reload.
@@ -400,7 +393,25 @@ async function resumeSession(file: string, targetProject?: string) {
   connecting.value = true
   let owner = findConversation(file)
   try {
-    if (owner?.started) {
+    const dir = targetProject || owner?.cwd || project.value
+    const changingProject = dir !== project.value
+    if (!owner) owner = createConversation(dir)
+    // Select the saved identity before any asynchronous work, never a draft.
+    owner.sessionFile = file
+    activateSession(owner.runtimeId)
+    project.value = dir
+    if (changingProject) {
+      config.value.lastProject = dir
+      await saveConfig({ ...config.value })
+      const status = await trustStatus(dir)
+      if (status.needsDecision) {
+        trustInfo.value = status
+        pendingResume.value = file
+        phase.value = "trust"
+        return
+      }
+    }
+    if (owner.started) {
       activateSession(owner.runtimeId)
       project.value = owner.cwd
       // The session may have been continued externally since we last saw it;
@@ -412,13 +423,12 @@ async function resumeSession(file: string, targetProject?: string) {
       return
     }
     // A dormant conversation gets its own worker; other workers are untouched.
-    if (!owner) owner = createConversation(project.value)
-    else activateSession(owner.runtimeId)
-    await spawnWorkspacePi(project.value, file, owner.runtimeId)
-    owner.started = true
     owner.clear()
-    await owner.init(project.value)
-    await owner.loadHistory()
+    owner.sessionFile = file
+    await spawnWorkspacePi(dir, file, owner.runtimeId)
+    // History does not depend on model/command metadata being ready.
+    await Promise.all([owner.init(dir), owner.loadHistory()])
+    owner.started = true
   } catch (e) {
     if (owner) {
       await killPi(owner.runtimeId).catch(() => {})

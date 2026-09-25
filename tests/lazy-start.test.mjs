@@ -141,3 +141,30 @@ test('disabled accessory buttons do not dim the entire composer', () => {
   const editor = readFileSync(new URL('../src/components/ComposerRichEditor.vue', import.meta.url), 'utf8')
   assert.ok(editor.includes('aria-disabled:opacity-50'))
 })
+
+test('resuming across projects selects the saved identity before startup and loads history in parallel', async () => {
+  const { context } = harness()
+  await context.mount()
+  let releaseSpawn
+  context.spawnPi = () => new Promise(resolve => { releaseSpawn = resolve })
+  const pending = context.actions.resumeSession('saved.jsonl', 'other')
+  const owner = context.sessionFor(context.activeRuntimeId.value)
+  assert.equal(owner.sessionFile, 'saved.jsonl')
+  assert.equal(owner.cwd, 'other')
+  assert.equal(context.actions.selectingProject.value, false)
+  // Wait for trust/config checks to reach worker startup.
+  for (let i = 0; i < 20 && !releaseSpawn; i++) await Promise.resolve()
+  assert.ok(releaseSpawn)
+  let releaseInit
+  let historyLoaded = false
+  owner.clear = () => { owner.sessionFile = null }
+  owner.init = () => new Promise(resolve => { releaseInit = resolve })
+  owner.loadHistory = async () => { historyLoaded = true }
+  releaseSpawn()
+  for (let i = 0; i < 20 && !releaseInit; i++) await Promise.resolve()
+  assert.equal(historyLoaded, true)
+  assert.equal(owner.sessionFile, 'saved.jsonl')
+  releaseInit()
+  await pending
+  assert.equal(owner.started, true)
+})
