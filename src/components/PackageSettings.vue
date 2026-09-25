@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { open } from "@tauri-apps/plugin-dialog"
 import { isDesktop } from "@/api/transport"
+import { joinDisplayPath } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -529,7 +530,7 @@ const resourceTypeName = (type: string) => {
       <template v-if="viewedProject">
         <Separator class="my-4" />
         <h3 class="settings-section">{{ t("packages.scopeProject") }}</h3>
-        <p class="text-muted-foreground mb-2 font-mono text-xs">{{ viewedProject }}/.pi/settings.json</p>
+        <p class="text-muted-foreground mb-2 font-mono text-xs">{{ joinDisplayPath(viewedProject, ".pi", "settings.json") }}</p>
         <p v-if="!projectInstalled.length" class="text-muted-foreground py-3 text-sm">
           {{ t("packages.noneProject") }}
         </p>
