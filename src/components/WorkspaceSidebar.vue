@@ -2,7 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, ChevronDown, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
+import { Folder, FolderPlus, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
 import { useSessionStore } from "@/stores/conversations"
@@ -162,7 +162,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
         <div class="project-heading" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
           <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
-            <ChevronDown class="project-chevron" :size="12" :class="{ '-rotate-90': collapsed[path] }" /><Folder :size="15" /><span class="truncate">{{ name(path) }}</span>
+            <FolderOpen v-if="!collapsed[path]" :size="15" /><Folder v-else :size="15" /><span class="truncate">{{ name(path) }}</span>
           </Button>
           <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
