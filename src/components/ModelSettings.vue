@@ -1,5 +1,7 @@
 <script setup lang="ts">
 /** Model list for one provider: edits its `models` array in pi's models.json. */
+import ModelAdvancedSettings from "@/components/ModelAdvancedSettings.vue"
+import { modelAdvancedJson, parseModelAdvanced } from "@/lib/modelAdvanced"
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Check, ChevronDown, GripVertical, Pencil, RefreshCw, Trash2 } from "@lucide/vue"
@@ -39,6 +41,7 @@ const models = computed<ModelEntry[]>({
 })
 
 interface ModelForm {
+  advanced: string
   id: string
   name: string
   api: string
@@ -148,6 +151,7 @@ function startAdd() {
   confirmingDelete.value = null
   editingIndex.value = null
   editing.value = {
+    advanced: "{}",
     id: "",
     name: "",
     api: "",
@@ -162,6 +166,7 @@ function startEdit(index: number, m: ModelEntry) {
   confirmingDelete.value = null
   editingIndex.value = index
   editing.value = {
+    advanced: modelAdvancedJson(m),
     id: m.id,
     name: m.name ?? "",
     api: m.api ?? "",
@@ -196,10 +201,8 @@ async function saveForm() {
   }
   busy.value = true
   try {
-    // Spread the existing entry so unknown fields (cost, compat, headers,
-    // samplingParams, thinkingLevelMap, …) survive the edit.
-    const entry: ModelEntry =
-      editingIndex.value != null ? { ...models.value[editingIndex.value] } : ({} as ModelEntry)
+    // Advanced JSON contains every non-basic field, including unknown pi options.
+    const entry = { ...parseModelAdvanced(f.advanced) } as ModelEntry
     entry.id = id
     if (f.name.trim()) entry.name = f.name.trim()
     else delete entry.name
@@ -218,7 +221,13 @@ async function saveForm() {
     if (editingIndex.value != null) list[editingIndex.value] = entry
     else list.push(entry)
     provider.value.models = list
-    await store.persist()
+    const previous = provider.value.models
+    try {
+      await store.persist()
+    } catch (error) {
+      provider.value.models = previous
+      throw error
+    }
     editing.value = null
     ui.pushToast(t("settings.toastModelsSaved"), "info")
     // pi re-reads models.json when the model picker opens.
@@ -437,6 +446,9 @@ async function finishDrag() {
           </label>
         </div>
 
+        <ModelAdvancedSettings v-model="editing.advanced" :api="editing.api || provider?.api || ''" />
+
+
         <div class="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" type="button" @click="editing = null">
             {{ t("common.cancel") }}
@@ -565,6 +577,9 @@ async function finishDrag() {
           {{ t("settings.modelImage") }}
         </label>
       </div>
+
+      <ModelAdvancedSettings v-model="editing.advanced" :api="editing.api || provider?.api || ''" />
+
 
       <div class="flex justify-end gap-2 pt-1">
         <Button variant="outline" size="sm" type="button" @click="editing = null">
