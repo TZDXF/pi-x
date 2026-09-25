@@ -13,7 +13,7 @@ function harness(storage = new Map(), options = {}) {
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
-    '@/stores/workspace': { useWorkspaceStore: () => ({}) },
+    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
     '@/api/piClient': {
       getModelsConfig: async () => ({ providers: { pi: { models: [{ id: 'default', reasoning: true }] } } }),
       getPiSettings: async () => ({ defaultProvider: 'pi', defaultModel: 'default', defaultThinkingLevel: 'high', skills: [] }),

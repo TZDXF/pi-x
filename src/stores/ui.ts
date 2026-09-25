@@ -2,6 +2,7 @@ import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { rpcNotify } from "@/api/piClient"
 import type { ExtensionUiRequest } from "@/api/protocol"
+import { notifyQuestion } from "@/lib/notifications"
 
 export interface Toast {
   id: number
@@ -38,6 +39,7 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
       case "input":
       case "editor":
         dialogs.value.push(req)
+        notifyQuestion(req.title || req.message || "")
         break
 
       case "notify":

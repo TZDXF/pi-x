@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 function harness(group = null) {
   const calls = [], spawnArgs = []
-  const workspace = { projectRoot: path => path, projectGroups: group ? { project: group } : {} }
+  const workspace = { projectRoot: path => path, projectName: path => path, projectGroups: group ? { project: group } : {} }
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     .split('<script setup lang="ts">')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, '')
@@ -34,7 +34,7 @@ function harness(group = null) {
     spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
-    registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
+    registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {}, notifyPermission: () => {},
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls, spawnArgs, workspace }

@@ -1,5 +1,11 @@
 /** 简体中文语言包 */
 export default {
+  notify: {
+    turnCompleteTitle: "回复已完成",
+    turnFailedTitle: "回复出错",
+    questionTitle: "需要你的输入",
+    permissionTitle: "需要信任确认",
+  },
   openWith: {
     "default": "默认打开方式",
     "description": "审查面板中的文件使用此方式打开。设置会自动保存。",
@@ -75,6 +81,7 @@ export default {
     title: "归档会话",
     description: "恢复或永久删除归档会话。",
     refresh: "刷新",
+    search: "搜索归档会话",
     reload: "重新加载",
     restore: "恢复会话",
     delete: "删除会话",
@@ -86,6 +93,7 @@ export default {
     restored: "会话已恢复",
     count: "{count} 个归档会话",
     projectSessions: "{count} 个会话",
+    noMatch: "没有匹配的归档会话。",
   },
   workspace: {
     projectActions: "项目更多设置",
@@ -121,6 +129,7 @@ export default {
   common: {
     localWorkspace: "本地工作区",
     cancel: "取消",
+    clear: "清除",
     noProject: "未打开项目",
   },
 
@@ -234,7 +243,7 @@ export default {
     copyReply: "复制回复",
     editPrompt: "编辑提问",
     editPromptDesc: "重新发送会修改原提问，移除其后的回答并从原位置重新生成，不追加提问或创建分支。",
-    editCancel: "取消",
+    editcancel: "取消",
     editResend: "重新发送",
     editKeepImages: "原提问中的图片附件将保留。",
     editAttachmentError: "无法保留图片附件，请重新发送该提问。",
@@ -348,6 +357,21 @@ export default {
     general: "常规",
     about: "关于 PiX",
     generalTitle: "常规",
+    notifications: "通知",
+    notificationsDesc: "任务完成、权限确认与提问时的系统提醒。",
+    turnComplete: "轮次完成通知",
+    turnCompleteDesc: "设置 Pi 完成回复后何时提醒你。",
+    notifyNever: "从不",
+    notifyUnfocused: "仅在未聚焦时",
+    notifyAlways: "始终",
+    permissionNotify: "启用权限通知",
+    permissionNotifyDesc: "项目需要信任确认时显示提醒。",
+    questionNotify: "启用问题通知",
+    questionNotifyDesc: "需要输入才能继续时显示提醒。",
+    notifySound: "通知声音",
+    notifySoundDesc: "任务完成、权限请求与提问的提示音。",
+    soundDefault: "默认",
+    soundNone: "无",
     language: "界面语言",
     shortcutsTitle: "键盘快捷操作",
     shortcutSend: "发送消息",

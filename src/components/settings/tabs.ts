@@ -29,6 +29,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./GeneralSettings.vue")),
   },
   {
+    id: "notifications",
+    nav: "settings.notifications",
+    title: "settings.notifications",
+    desc: "settings.notificationsDesc",
+    component: defineAsyncComponent(() => import("./NotificationSettings.vue")),
+  },
+  {
     id: "remote",
     nav: "settings.remote",
     title: "settings.remote",

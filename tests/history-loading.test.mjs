@@ -13,7 +13,7 @@ function harness() {
     '@/api/piClient': { rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
-    '@/stores/workspace': {},
+    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
     '@/lib/content': contentModule(),
     '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
   }

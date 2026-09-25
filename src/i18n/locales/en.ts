@@ -1,5 +1,11 @@
 /** English locale */
 export default {
+  notify: {
+    turnCompleteTitle: "Response complete",
+    turnFailedTitle: "Response failed",
+    questionTitle: "Input needed",
+    permissionTitle: "Trust confirmation needed",
+  },
   openWith: {
     "default": "Default open method",
     "description": "Open review files with this application. Changes are saved automatically.",
@@ -75,6 +81,7 @@ export default {
     title: "Archived sessions",
     description: "Restore or permanently delete archived sessions.",
     refresh: "Refresh",
+    search: "Search archived sessions",
     reload: "Reload",
     restore: "Restore chat",
     delete: "Delete chat",
@@ -86,6 +93,7 @@ export default {
     restored: "Session restored",
     count: "{count} archived session(s)",
     projectSessions: "{count} session(s)",
+    noMatch: "No archived sessions match the search.",
   },
   workspace: {
     projectActions: "Project options",
@@ -121,6 +129,7 @@ export default {
   common: {
     localWorkspace: "Local workspace",
     cancel: "Cancel",
+    clear: "Clear",
     noProject: "No project open",
   },
 
@@ -348,6 +357,21 @@ export default {
     general: "General",
     about: "About PiX",
     generalTitle: "General",
+    notifications: "Notifications",
+    notificationsDesc: "System reminders for finished turns, permission requests, and questions.",
+    turnComplete: "Turn complete notification",
+    turnCompleteDesc: "Choose when to be reminded after Pi finishes responding.",
+    notifyNever: "Never",
+    notifyUnfocused: "Only when unfocused",
+    notifyAlways: "Always",
+    permissionNotify: "Enable permission notifications",
+    permissionNotifyDesc: "Show a reminder when a project requires a trust decision.",
+    questionNotify: "Enable question notifications",
+    questionNotifyDesc: "Show a reminder when input is required to continue.",
+    notifySound: "Notification sound",
+    notifySoundDesc: "Sound for turn completion, permission requests, and questions.",
+    soundDefault: "Default",
+    soundNone: "None",
     language: "Interface language",
     shortcutsTitle: "Keyboard shortcuts",
     shortcutSend: "Send",

@@ -26,6 +26,7 @@ import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
+import { notifyPermission } from "@/lib/notifications"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import { PanelLeft } from "@lucide/vue"
@@ -286,6 +287,7 @@ async function selectProject(dir: string) {
     const status = await trustStatus(dir)
     if (status.needsDecision) {
       trustInfo.value = status
+      notifyPermission(workspace.projectName(dir))
       phase.value = "trust"
       return
     }
@@ -406,6 +408,7 @@ async function resumeSession(file: string, targetProject?: string) {
       const status = await trustStatus(dir)
       if (status.needsDecision) {
         trustInfo.value = status
+      notifyPermission(workspace.projectName(dir))
         pendingResume.value = file
         phase.value = "trust"
         return

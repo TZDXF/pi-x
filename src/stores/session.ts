@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
+import { notifyTurnComplete } from "@/lib/notifications"
 import { sessionChanges } from "@/lib/sessionChanges"
 import { contentText } from "@/lib/content"
 import type {
@@ -235,6 +236,14 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         awaitingAgentStart = false
         isStreaming.value = false
         setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")
+        if (!turnAborted && !stopping) {
+          const workspace = useWorkspaceStore()
+          const file = sessionFile.value
+          const row = file ? workspace.histories[cwd.value]?.find(s => s.file === file) : undefined
+          const project = cwd.value ? workspace.projectName(cwd.value) : ""
+          const name = row?.title || row?.preview || ""
+          notifyTurnComplete(name ? `${project} · ${name}` : project, turnFailed)
+        }
         void refreshStats()
         void refreshState()
         // Our own worker just flushed the file; sync so watcher events for

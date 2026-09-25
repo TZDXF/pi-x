@@ -12,7 +12,7 @@ function harness() {
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/api/piClient': { rpcRequest: () => new Promise(() => {}) },
-    '@/stores/workspace': {},
+    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
     '@/stores/sessionRunStatus': { setSessionRunStatus: (file, status) => {
       if (status) statuses.set(file, status)
       else statuses.delete(file)

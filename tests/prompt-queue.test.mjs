@@ -31,7 +31,7 @@ function sessionHarness() {
     },
   }
   const store = loadStore('session', { ...framework,
-    '@/stores/sessionRunStatus': { setSessionRunStatus() {} }, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/stores/workspace': { useWorkspaceStore: () => ({
+    '@/stores/sessionRunStatus': { setSessionRunStatus() {} }, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/lib/notifications': { notifyTurnComplete() {} }, '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project',
     preview: row => previews.push(row), generatedTitle: (...args) => titles.push(args), refresh: async path => refreshed.push(path),
   }) } })
   store.state.value = { sessionId: 'one', messageCount: 0 }
