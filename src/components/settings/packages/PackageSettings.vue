@@ -1,0 +1,76 @@
+<script setup lang="ts">
+/** Pi package management: browse the official pi.dev/packages catalog and
+ *  install / remove / update packages via the pi CLI. Mounted by the
+ *  #/settings/packages route and remounted on every visit. */
+import { onMounted, ref } from "vue"
+import { useI18n } from "vue-i18n"
+import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { RefreshCw } from "@lucide/vue"
+import type { InstalledPackage } from "@/api/piClient"
+import { usePackages } from "./usePackages"
+import PackageMarketTab from "./PackageMarketTab.vue"
+import PackageInstalledTab from "./PackageInstalledTab.vue"
+import PackageInstallDialog from "./PackageInstallDialog.vue"
+import PackageResourceDialog from "./PackageResourceDialog.vue"
+
+const props = defineProps<{ project?: string }>()
+const { t } = useI18n()
+
+const innerTab = ref("market")
+const ctx = usePackages(() => props.project)
+const resPkg = ref<InstalledPackage | null>(null)
+
+const {
+  installed,
+  catalogLoading,
+  installedLoading,
+  pendingProjectSource,
+  recentProjects,
+  viewedProject,
+  busy,
+} = ctx
+const { activate, loadCatalog, refreshInstalled, confirmProjectInstall } = ctx
+
+onMounted(activate)
+</script>
+
+<template>
+  <Tabs v-model="innerTab" class="min-h-0">
+    <div class="mb-3 flex items-center justify-between gap-2">
+      <TabsList>
+        <TabsTrigger value="market">{{ t("packages.market") }}</TabsTrigger>
+        <TabsTrigger value="installed">
+          {{ t("packages.installed") }}
+          <span v-if="installed.length" class="text-muted-foreground">({{ installed.length }})</span>
+        </TabsTrigger>
+      </TabsList>
+      <Button
+        variant="ghost"
+        size="sm"
+        :disabled="busy !== null || catalogLoading"
+        @click="innerTab === 'market' ? loadCatalog() : refreshInstalled()"
+      >
+        <RefreshCw :size="14" :class="{ 'animate-spin': catalogLoading || installedLoading }" />
+        {{ t("packages.refresh") }}
+      </Button>
+    </div>
+
+    <TabsContent value="market" class="mt-0">
+      <PackageMarketTab :ctx />
+    </TabsContent>
+
+    <TabsContent value="installed" class="mt-0">
+      <PackageInstalledTab :ctx @manage="resPkg = $event" />
+    </TabsContent>
+  </Tabs>
+
+  <PackageInstallDialog
+    :source="pendingProjectSource"
+    :recent-projects="recentProjects"
+    :busy="busy !== null"
+    @confirm="confirmProjectInstall"
+    @cancel="pendingProjectSource = ''"
+  />
+  <PackageResourceDialog :pkg="resPkg" :project="viewedProject" @close="resPkg = null" />
+</template>

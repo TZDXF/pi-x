@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n"
 import { getConfig, saveConfig, getModelsConfig, getPiSettings, savePiSettings } from "@/api/piClient"
 import { useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
-import ConversationModelSelect from "./ConversationModelSelect.vue"
+import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 const { t } = useI18n()
