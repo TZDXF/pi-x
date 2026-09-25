@@ -136,21 +136,57 @@ fn parse_catalog(html: &str) -> Vec<CatalogPackage> {
     out
 }
 
-/// Fetch and parse the official pi package catalog (https://pi.dev/packages).
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPage {
+    pub packages: Vec<CatalogPackage>,
+    pub has_more: bool,
+}
+
+fn parse_catalog_page(html: &str) -> CatalogPage {
+    static NEXT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let next = NEXT.get_or_init(|| {
+        regex::Regex::new(r#"<a\b[^>]*class="pagination-link"[^>]*>\s*Next\s*→\s*</a>"#).unwrap()
+    });
+    CatalogPage {
+        packages: parse_catalog(html),
+        has_more: next.is_match(html),
+    }
+}
+
+fn catalog_request(query: &str, sort: &str, package_type: &str, page: u32) -> ureq::Request {
+    ureq::get(CATALOG_URL)
+        .query("name", query.trim())
+        .query("sort", sort)
+        .query("type", package_type)
+        .query("page", &page.max(1).to_string())
+        .set("User-Agent", "pi-x desktop")
+        .timeout(std::time::Duration::from_secs(30))
+}
+
+/// Search the official catalog server-side; the website only returns one page.
 #[tauri::command]
-pub async fn package_catalog() -> Result<Vec<CatalogPackage>, String> {
-    let html = tauri::async_runtime::spawn_blocking(|| {
-        ureq::get(CATALOG_URL)
-            .set("User-Agent", "pi-x desktop")
-            .timeout(std::time::Duration::from_secs(30))
-            .call()
-            .map_err(|e| format!("获取插件市场失败: {e}"))?
-            .into_string()
-            .map_err(|e| format!("读取插件市场响应失败: {e}"))
+pub async fn package_catalog(
+    query: Option<String>,
+    sort: Option<String>,
+    package_type: Option<String>,
+    page: Option<u32>,
+) -> Result<CatalogPage, String> {
+    let html = tauri::async_runtime::spawn_blocking(move || {
+        catalog_request(
+            query.as_deref().unwrap_or(""),
+            sort.as_deref().unwrap_or("downloads"),
+            package_type.as_deref().unwrap_or(""),
+            page.unwrap_or(1),
+        )
+        .call()
+        .map_err(|e| format!("获取插件市场失败: {e}"))?
+        .into_string()
+        .map_err(|e| format!("读取插件市场响应失败: {e}"))
     })
     .await
     .map_err(|e| e.to_string())??;
-    Ok(parse_catalog(&html))
+    Ok(parse_catalog_page(&html))
 }
 
 // ---------------------------------------------------------------------------
@@ -738,6 +774,25 @@ mod tests {
         assert!(local_project_dir(Some("/nonexistent-pi-x-test-project")).is_err());
         let dir = std::env::current_dir().unwrap();
         assert_eq!(local_project_dir(dir.to_str()), Ok(dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn catalog_search_parameters_are_encoded() {
+        let request = catalog_request(" init & 中文 ", "recent", "skill", 2);
+        let url = request.url();
+        assert!(url.starts_with("https://pi.dev/packages?"));
+        assert!(url.contains("name=init+%26+%E4%B8%AD%E6%96%87"));
+        assert!(url.contains("sort=recent"));
+        assert!(url.contains("type=skill"));
+        assert!(url.contains("page=2"));
+        assert!(catalog_request("", "downloads", "", 0).url().contains("page=1"));
+    }
+
+    #[test]
+    fn catalog_pagination_only_counts_enabled_next_link() {
+        assert!(parse_catalog_page(r#"<nav><a class="pagination-link" href="/packages?name=init&amp;page=2">Next →</a></nav>"#).has_more);
+        assert!(!parse_catalog_page(r#"<a class="pagination-link" href="/packages?page=1">← Previous</a><span class="pagination-link is-disabled">Next →</span>"#).has_more);
+        assert!(!parse_catalog_page("").has_more);
     }
 
     #[test]

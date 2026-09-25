@@ -1,6 +1,6 @@
 /** Shared state for the package settings tabs: catalog browsing, installed
  *  packages, install/remove/update actions, and the project-install flow. */
-import { computed, ref } from "vue"
+import { computed, onScopeDispose, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   packageCatalog,
@@ -25,7 +25,10 @@ export function usePackages(project: () => string | undefined) {
   const catalog = ref<CatalogPackage[]>([])
   const catalogLoading = ref(false)
   const catalogError = ref("")
-  let catalogLoaded = false
+  const catalogHasMore = ref(false)
+  let catalogPage = 0
+  let catalogRequest = 0
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
 
   // ---- installed ----
   const installed = ref<InstalledPackage[]>([])
@@ -57,21 +60,68 @@ export function usePackages(project: () => string | undefined) {
   /** Initial load, called when the packages route mounts. */
   async function activate() {
     void refreshInstalled()
-    if (!catalogLoaded) void loadCatalog()
+    void loadCatalog()
   }
 
-  async function loadCatalog() {
+  function clearSearchTimer() {
+    clearTimeout(searchTimer)
+    searchTimer = undefined
+  }
+
+  async function fetchCatalog(append: boolean) {
+    clearSearchTimer()
+    const request = ++catalogRequest
+    const page = append ? catalogPage + 1 : 1
     catalogLoading.value = true
     catalogError.value = ""
+    if (!append) {
+      catalog.value = []
+      catalogHasMore.value = false
+      catalogPage = 0
+    }
     try {
-      catalog.value = await packageCatalog()
-      catalogLoaded = true
+      const result = await packageCatalog(
+        query.value.trim(),
+        sortBy.value === "updated" ? "recent" : sortBy.value,
+        typeFilter.value === "all" ? "" : typeFilter.value,
+        page,
+      )
+      if (request !== catalogRequest) return
+      const packages = append ? [...catalog.value, ...result.packages] : result.packages
+      catalog.value = [...new Map(packages.map(p => [p.name, p])).values()]
+      catalogHasMore.value = result.hasMore
+      catalogPage = page
     } catch (e) {
-      catalogError.value = String(e)
+      if (request === catalogRequest) catalogError.value = String(e)
     } finally {
-      catalogLoading.value = false
+      if (request === catalogRequest) catalogLoading.value = false
     }
   }
+
+  function loadCatalog() {
+    return fetchCatalog(false)
+  }
+
+  function loadMoreCatalog() {
+    if (catalogLoading.value || !catalogHasMore.value) return
+    return fetchCatalog(true)
+  }
+
+  watch([query, sortBy, typeFilter], () => {
+    // Invalidate immediately, including responses arriving during the debounce.
+    ++catalogRequest
+    clearSearchTimer()
+    catalog.value = []
+    catalogHasMore.value = false
+    catalogError.value = ""
+    catalogLoading.value = true
+    searchTimer = setTimeout(() => { void loadCatalog() }, 250)
+  }, { flush: "sync" })
+
+  onScopeDispose(() => {
+    clearSearchTimer()
+    ++catalogRequest
+  })
 
   async function refreshInstalled() {
     installedLoading.value = true
@@ -97,35 +147,6 @@ export function usePackages(project: () => string | undefined) {
   function scopesOf(name: string): Set<string> {
     return installedScopes.value.get(name) ?? new Set()
   }
-
-  const filteredCatalog = computed(() => {
-    const q = query.value.trim().toLowerCase()
-    let list = catalog.value
-    if (typeFilter.value !== "all") {
-      list = list.filter((p) => p.types.includes(typeFilter.value))
-    }
-    if (q) {
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.description.toLowerCase().includes(q) ||
-          p.author.toLowerCase().includes(q),
-      )
-    }
-    const sorted = [...list]
-    switch (sortBy.value) {
-      case "downloads":
-        sorted.sort((a, b) => b.downloadsMonth - a.downloadsMonth)
-        break
-      case "updated":
-        sorted.sort((a, b) => b.updatedMs - a.updatedMs)
-        break
-      case "name":
-        sorted.sort((a, b) => a.name.localeCompare(b.name))
-        break
-    }
-    return sorted
-  })
 
   function fmtDownloads(n: number): string {
     return new Intl.NumberFormat(currentLocale(), { notation: "compact" }).format(n)
@@ -207,7 +228,6 @@ export function usePackages(project: () => string | undefined) {
       await packageUpdate(source)
       ui.pushToast(t("packages.toastUpdated"), "info")
       await refreshInstalled()
-      catalogLoaded = true
     } catch (e) {
       ui.pushToast(String(e), "error")
     } finally {
@@ -239,6 +259,7 @@ export function usePackages(project: () => string | undefined) {
     catalog,
     catalogLoading,
     catalogError,
+    catalogHasMore,
     installed,
     installedLoading,
     query,
@@ -250,12 +271,12 @@ export function usePackages(project: () => string | undefined) {
     pendingProjectSource,
     busy,
     recentProjects,
-    filteredCatalog,
     installedScopes,
     globalInstalled,
     projectInstalled,
     activate,
     loadCatalog,
+    loadMoreCatalog,
     refreshInstalled,
     scopesOf,
     fmtDownloads,

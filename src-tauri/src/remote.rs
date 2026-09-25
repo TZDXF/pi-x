@@ -284,8 +284,16 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             commands::search_files(text("project")?, text("query")?).await?,
         )
         .unwrap()),
-        "package_catalog" => Ok(serde_json::to_value(crate::packages::package_catalog().await?)
-            .map_err(|e| e.to_string())?),
+        "package_catalog" => Ok(serde_json::to_value(
+            crate::packages::package_catalog(
+                a["query"].as_str().map(str::to_owned),
+                a["sort"].as_str().map(str::to_owned),
+                a["packageType"].as_str().map(str::to_owned),
+                a["page"].as_u64().and_then(|page| u32::try_from(page).ok()),
+            )
+            .await?,
+        )
+        .map_err(|e| e.to_string())?),
         "package_list" => Ok(serde_json::to_value(crate::packages::package_list(
             a["project"].as_str().map(str::to_owned),
         ))

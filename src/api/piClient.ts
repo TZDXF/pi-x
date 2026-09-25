@@ -323,8 +323,14 @@ export interface InstalledPackage {
   filters: Record<string, unknown> | null
 }
 
-/** Fetch the official pi package catalog (pi.dev/packages). */
-export const packageCatalog = () => invoke<CatalogPackage[]>("package_catalog")
+export interface CatalogPage {
+  packages: CatalogPackage[]
+  hasMore: boolean
+}
+
+/** Search the official pi package catalog (pi.dev/packages). */
+export const packageCatalog = (query = "", sort = "downloads", packageType = "", page = 1) =>
+  invoke<CatalogPage>("package_catalog", { query, sort, packageType, page })
 
 /** Installed packages from global settings and the given project's settings. */
 export const packageList = (project?: string) =>

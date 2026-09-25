@@ -456,6 +456,7 @@ export default {
     market: "插件市场",
     installed: "已安装",
     refresh: "刷新",
+    loadMore: "加载更多",
     searchPlaceholder: "按名称、描述或作者搜索…",
     sortDownloads: "按下载量",
     sortUpdated: "按更新时间",

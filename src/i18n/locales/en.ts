@@ -456,6 +456,7 @@ export default {
     market: "Marketplace",
     installed: "Installed",
     refresh: "Refresh",
+    loadMore: "Load more",
     searchPlaceholder: "Filter by name, description, or author…",
     sortDownloads: "Downloads",
     sortUpdated: "Recently updated",

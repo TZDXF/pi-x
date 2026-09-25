@@ -23,7 +23,7 @@ const {
   query,
   sortBy,
   typeFilter,
-  filteredCatalog,
+  catalogHasMore,
   catalog,
   catalogLoading,
   catalogError,
@@ -31,6 +31,7 @@ const {
 } = props.ctx
 const {
   loadCatalog,
+  loadMoreCatalog,
   install,
   chooseProjectForInstall,
   scopesOf,
@@ -70,19 +71,19 @@ const {
     <Spinner class="size-4" />
     <span class="text-muted-foreground text-sm">{{ t("packages.loading") }}</span>
   </div>
-  <div v-else-if="catalogError" class="py-8 text-center">
+  <div v-else-if="catalogError && !catalog.length" class="py-8 text-center">
     <p class="text-destructive text-sm">{{ catalogError }}</p>
     <Button variant="outline" size="sm" class="mt-3" @click="loadCatalog">
       {{ t("packages.retry") }}
     </Button>
   </div>
-  <p v-else-if="!filteredCatalog.length" class="text-muted-foreground py-8 text-center text-sm">
+  <p v-else-if="!catalog.length" class="text-muted-foreground py-8 text-center text-sm">
     {{ t("packages.empty") }}
   </p>
 
   <div v-else class="grid gap-3">
     <div
-      v-for="p in filteredCatalog"
+      v-for="p in catalog"
       :key="p.name"
       class="rounded-md border p-3"
     >
@@ -127,5 +128,12 @@ const {
         </code>
       </div>
     </div>
+  </div>
+  <div v-if="catalog.length && catalogHasMore" class="mt-3 text-center">
+    <p v-if="catalogError" class="text-destructive mb-2 text-sm">{{ catalogError }}</p>
+    <Button variant="outline" size="sm" :disabled="catalogLoading" @click="loadMoreCatalog">
+      <Spinner v-if="catalogLoading" class="size-4" />
+      {{ t(catalogError ? "packages.retry" : "packages.loadMore") }}
+    </Button>
   </div>
 </template>
