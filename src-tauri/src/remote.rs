@@ -75,6 +75,7 @@ pub fn remote_status(app: AppHandle) -> Value {
             let mut ips: Vec<String> = if_addrs::get_if_addrs()
                 .unwrap_or_default()
                 .into_iter()
+                .filter(|i| !is_virtual_interface(&i.name))
                 .filter_map(|i| match i.ip() {
                     std::net::IpAddr::V4(ip) if !ip.is_loopback() && ip.is_private() => {
                         Some(ip.to_string())
@@ -379,6 +380,36 @@ pub fn emit(app: &AppHandle, name: &str, payload: Value) {
         .send(json!({"event": name, "payload": payload}));
 }
 
+/// Hypervisors, container runtimes, and VPN clients create virtual adapters
+/// whose addresses other LAN devices cannot reach; hide them from the
+/// access-link list.
+fn is_virtual_interface(name: &str) -> bool {
+    let n = name.to_lowercase();
+    const VIRTUAL: [&str; 20] = [
+        "vethernet",  // Hyper-V / WSL (Windows)
+        "hyper-v",
+        "wsl",
+        "vmware",
+        "vmnet",
+        "virtualbox",
+        "vboxnet",
+        "docker",
+        "veth",       // Linux containers
+        "virbr",      // libvirt
+        "tap-",       // TAP-Windows / Linux TAP
+        "openvpn",
+        "wireguard",
+        "tailscale",
+        "zerotier",
+        "utun",       // macOS VPN tunnels
+        "teredo",
+        "isatap",
+        "loopback",
+        "bluetooth",
+    ];
+    VIRTUAL.iter().any(|v| n.contains(v))
+}
+
 /// Constant-time byte comparison so token validity cannot be probed via
 /// timing side channels over the network.
 fn constant_time_eq(a: &str, b: &str) -> bool {
@@ -416,6 +447,19 @@ mod tests {
         assert!(!valid_token("secret", "wrong", false));
         assert!(!valid_token("secret", "secret", true));
         assert!(!valid_token("", "", false));
+    }
+    #[test]
+    fn virtual_adapters_are_excluded() {
+        assert!(is_virtual_interface("vEthernet (WSL (Hyper-V firewall))"));
+        assert!(is_virtual_interface("vEthernet (Default Switch)"));
+        assert!(is_virtual_interface("VMware Network Adapter VMnet8"));
+        assert!(is_virtual_interface("VirtualBox Host-Only Network"));
+        assert!(is_virtual_interface("docker0"));
+        assert!(is_virtual_interface("Tailscale"));
+        assert!(!is_virtual_interface("Ethernet"));
+        assert!(!is_virtual_interface("WLAN"));
+        assert!(!is_virtual_interface("en0"));
+        assert!(!is_virtual_interface("Realtek PCIe GbE Family Controller"));
     }
     #[tokio::test]
     async fn embedded_page_and_missing_assets() {
