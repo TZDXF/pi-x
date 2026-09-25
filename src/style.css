@@ -829,7 +829,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 /* Review: selected file on the left, independently scrolling file navigation on the right. */
 .changes-review-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 30%); flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .changes-file-view, .changes-file-list { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.changes-file-list { border-left: 1px solid var(--border); background: var(--muted); }
+.changes-file-list { border-left: 1px solid var(--border); background: var(--background); }
 
 /* RepoMeow-style diff gutters, dual-theme highlighting and paired old/new rows. */
 .review-diff { font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 20px; }
@@ -858,3 +858,17 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Sidebar sessions can be dropped anywhere in the conversation to cite them. */
 .chat-review-layout.session-drop-active > .chat-workspace .composer-dock [data-slot="input-group"] { outline: 2px dashed var(--primary); outline-offset: 3px; }
+
+/* RepoMeow FileTreeList / SplitDiffView presentation. */
+.changes-tool { flex-shrink: 0; padding: 4px; border-radius: 3px; color: var(--muted-foreground); cursor: pointer; }
+.changes-tool:hover { background: var(--accent); color: var(--foreground); }
+.changes-tool svg { width: 14px; height: 14px; }
+.changes-file-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; text-align: left; font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
+.changes-file-row:hover { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.changes-file-row:focus-visible, .changes-tool:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.review-diff { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Microsoft YaHei", monospace; }
+.review-line-number { flex: 0 0 40px; padding: 0 8px 0 0; color: color-mix(in srgb, var(--muted-foreground) 50%, transparent); background: transparent; }
+.review-split-pane { height: clamp(240px, 52vh, 640px); }
+.review-fold-wave { display: block; height: 20px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3 Q3 0.5 6 3 T12 3' fill='none' stroke='%239ca3af' stroke-width='1.2'/%3E%3C/svg%3E") repeat-x center; }
+.commit-diff .diff-hl span { color: var(--shiki-light); }
+.dark .commit-diff .diff-hl span { color: var(--shiki-dark); }

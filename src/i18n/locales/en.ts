@@ -1,6 +1,20 @@
 /** English locale */
 export default {
+  openWith: {
+    "default": "Default open method",
+    "description": "Open review files with this application. Changes are saved automatically.",
+    "notDetected": "Not detected",
+    "system": "System default app",
+    "custom": "Custom IDE",
+    "detect": "Detect again",
+    "executable": "IDE executable",
+    "executableHint": "Enter an absolute executable path (.exe on Windows), without arguments. The file path is passed automatically.",
+    "save": "Save",
+    "open": "Open file with default application",
+    "failed": "Failed to open file: {error}"
+},
   changes: {
+    showFlat: "Flat list", showTree: "File tree",
     unified: "Unified", split: "Split", wordDiff: "Inline diff", before: "Before", after: "After",
     expand: "Expand {count} unchanged lines", loadMore: "Show more ({count} lines remaining)", snippetLines: "Line numbers are relative to the tool's code snippet",
     files: "Files", fileDiff: "File changes",

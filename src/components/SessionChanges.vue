@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
-import { X } from "@lucide/vue"
+import { ChevronRight, Columns2, ExternalLink, FileCode, Folder, FolderOpen, FolderTree, Highlighter, List, Rows2, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { isDesktop } from "@/api/transport"
+import { openFileInEditor } from "@/lib/openWith"
 import SessionDiff from "@/components/SessionDiff.vue"
+import { buildFileTree, flatFileRows, flattenVisibleTree } from "@/lib/reviewFileTree"
 import type { FileChange } from "@/lib/sessionChanges"
-const props = defineProps<{ changes: FileChange[] }>()
+const props = defineProps<{ changes: FileChange[]; project?: string }>()
 defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const sidebar = ref<HTMLElement | null>(null)
@@ -98,7 +101,33 @@ const wordDiff = ref(true)
 const selectedPath = ref<string | null>(null)
 // Keep the current file selected during streaming; fall back safely when the session changes.
 const activeFile = computed(() => files.value.find(file => file.path === selectedPath.value) ?? files.value[0] ?? null)
-function fileName(path: string) { return path.split("/").pop() || path }
+const opening = ref(false)
+const openError = ref("")
+watch(() => activeFile.value?.path, () => { openError.value = "" })
+async function openActiveFile() {
+  const file = activeFile.value
+  if (!file || opening.value) return
+  const path = file.path
+  opening.value = true
+  openError.value = ""
+  try { await openFileInEditor(path, props.project ?? "") }
+  catch (error) {
+    if (activeFile.value?.path === path) openError.value = t("openWith.failed", { error: String(error) })
+  } finally { opening.value = false }
+}
+const treeMode = ref(false)
+const collapsed = ref(new Set<string>())
+const fileRows = computed(() => treeMode.value
+  ? flattenVisibleTree(buildFileTree(files.value.map(file => ({ ...file, path: file.path.replace(/\\/g, "/") }))), collapsed.value)
+  : flatFileRows(files.value))
+function selectRow(row: (typeof fileRows.value)[number]) {
+  if (row.isDir) {
+    const next = new Set(collapsed.value)
+    if (next.has(row.fullPath)) next.delete(row.fullPath)
+    else next.add(row.fullPath)
+    collapsed.value = next
+  } else if (row.data) selectedPath.value = row.data.changes[0]?.path ?? row.fullPath
+}
 </script>
 
 <template>
@@ -118,19 +147,15 @@ function fileName(path: string) { return path.split("/").pop() || path }
     <p class="border-b p-3 text-xs text-muted-foreground">{{ t('changes.description') }}</p>
     <div v-if="activeFile" class="changes-review-body">
       <section :key="activeFile.path" class="changes-file-view" :aria-label="t('changes.fileDiff')">
-        <div class="shrink-0 border-b px-3 py-2">
-          <h3 class="break-all text-xs font-medium" :title="activeFile.path">{{ activeFile.path }}</h3>
-          <div class="mt-1 flex flex-wrap items-center gap-2 text-xs">
-            <span class="text-green-600">+{{ activeFile.added }}</span>
-            <span class="text-red-500">−{{ activeFile.removed }}</span>
-            <div class="ml-auto flex flex-wrap gap-1">
-              <Button variant="ghost" size="sm" :aria-pressed="!splitDiff" :class="{ 'bg-accent': !splitDiff }" @click="splitDiff = false">{{ t('changes.unified') }}</Button>
-              <Button variant="ghost" size="sm" :aria-pressed="splitDiff" :class="{ 'bg-accent': splitDiff }" @click="splitDiff = true">{{ t('changes.split') }}</Button>
-              <Button variant="ghost" size="sm" :aria-pressed="wordDiff" :class="{ 'bg-accent': wordDiff }" @click="wordDiff = !wordDiff">{{ t('changes.wordDiff') }}</Button>
-            </div>
-          </div>
+        <div class="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
+          <h3 class="min-w-0 flex-1 truncate font-mono text-xs" :title="activeFile.path">{{ activeFile.path }}</h3>
+          <button v-if="isDesktop" class="changes-tool disabled:opacity-40" :disabled="opening" :title="t('openWith.open')" :aria-label="t('openWith.open')" @click="openActiveFile"><ExternalLink /></button>
+          <button class="changes-tool" :class="{ 'bg-accent text-foreground': wordDiff }" :title="t('changes.wordDiff')" :aria-label="t('changes.wordDiff')" :aria-pressed="wordDiff" @click="wordDiff = !wordDiff"><Highlighter /></button>
+          <button v-if="activeFile.changes.some(change => !change.unknownBefore)" class="changes-tool" :title="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-label="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-pressed="splitDiff" @click="splitDiff = !splitDiff"><Rows2 v-if="splitDiff" /><Columns2 v-else /></button>
         </div>
-        <ScrollArea class="min-h-0 flex-1" orientation="both" viewport-class="pb-2.5" :aria-label="t('changes.fileDiff')">
+        <p v-if="openError" role="alert" class="shrink-0 break-words border-b px-3 py-2 text-xs text-destructive">{{ openError }}</p>
+        <!-- 换 key 重建:reka-ui 的 ScrollAreaScrollbar 卸载时会同时禁用两个方向,动态改 orientation 会让 overflow-y 卡在 hidden -->
+        <ScrollArea :key="splitDiff ? 'split' : 'unified'" class="min-h-0 flex-1" :orientation="splitDiff ? 'vertical' : 'both'" viewport-class="pb-2.5" :aria-label="t('changes.fileDiff')">
           <section v-for="(change, operation) in activeFile.changes" :key="change.id" class="border-b">
             <div class="px-3 py-2 text-xs text-muted-foreground">
               {{ operation + 1 }} · {{ change.tool }}<span v-if="!change.unknownBefore"> · {{ t('changes.snippetLines') }}</span><span v-if="change.unknownBefore"> · {{ t('changes.unknown') }}</span>
@@ -140,20 +165,24 @@ function fileName(path: string) { return path.split("/").pop() || path }
         </ScrollArea>
       </section>
       <nav class="changes-file-list" :aria-label="t('changes.files')">
-        <h3 class="shrink-0 border-b px-3 py-2 text-xs font-medium">{{ t('changes.files') }} · {{ files.length }}</h3>
-        <ScrollArea class="min-h-0 flex-1" viewport-class="p-1.5">
-          <button
-            v-for="file in files" :key="file.path" type="button"
-            class="mb-1 block w-full min-w-0 rounded-md px-2 py-2 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-ring"
-            :class="activeFile.path === file.path ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'"
-            :aria-current="activeFile.path === file.path ? 'true' : undefined" :title="file.path"
-            @click="selectedPath = file.path"
-          >
-            <span class="block truncate font-medium">{{ fileName(file.path) }}</span>
-            <span class="mt-1 flex flex-wrap gap-x-2">
-              <span class="text-green-600">+{{ file.added }}</span><span class="text-red-500">−{{ file.removed }}</span>
-              <span v-if="file.changes.some(change => change.unknownBefore)" :title="t('changes.unknown')">*</span>
-            </span>
+        <div class="flex shrink-0 items-center justify-between border-b px-3 py-1.5">
+          <h3 class="text-xs text-muted-foreground">{{ t('changes.files') }} · {{ files.length }}</h3>
+          <button class="changes-tool" :title="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" :aria-label="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" @click="treeMode = !treeMode"><List v-if="treeMode" /><FolderTree v-else /></button>
+        </div>
+        <ScrollArea class="min-h-0 flex-1" viewport-class="py-1">
+          <button v-for="row in fileRows" :key="row.key" type="button"
+            class="changes-file-row" :class="{ 'bg-accent': !row.isDir && row.data?.changes[0]?.path === activeFile.path }"
+            :style="{ paddingLeft: treeMode ? `${8 + row.depth * 14}px` : '12px' }"
+            :aria-current="!row.isDir && row.data?.changes[0]?.path === activeFile.path ? 'true' : undefined"
+            :aria-expanded="row.isDir ? row.expanded : undefined" :title="row.fullPath" @click="selectRow(row)">
+            <span v-if="treeMode" class="w-3 shrink-0 text-muted-foreground"><ChevronRight v-if="row.isDir" class="size-3 transition-transform" :class="{ 'rotate-90': row.expanded }" /></span>
+            <component :is="row.isDir ? (row.expanded ? FolderOpen : Folder) : FileCode" class="size-3.5 shrink-0 text-muted-foreground" />
+            <span class="min-w-0 flex-1 truncate">{{ row.name }}</span>
+            <template v-if="row.data">
+              <span v-if="row.data.added" class="shrink-0 text-green-600 dark:text-green-400">+{{ row.data.added }}</span>
+              <span v-if="row.data.removed" class="shrink-0 text-red-600 dark:text-red-400">-{{ row.data.removed }}</span>
+              <span v-if="row.data.changes.some(change => change.unknownBefore)" :title="t('changes.unknown')">*</span>
+            </template>
           </button>
         </ScrollArea>
       </nav>

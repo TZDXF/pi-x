@@ -941,6 +941,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <ExtensionDialog />
   </div>
-  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" @close="changesOpen = false" />
+  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" @close="changesOpen = false" />
   </div>
 </template>

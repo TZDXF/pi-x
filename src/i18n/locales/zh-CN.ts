@@ -1,6 +1,20 @@
 /** 简体中文语言包 */
 export default {
+  openWith: {
+    "default": "默认打开方式",
+    "description": "审查面板中的文件使用此方式打开。设置会自动保存。",
+    "notDetected": "未检测到",
+    "system": "系统默认应用",
+    "custom": "自定义 IDE",
+    "detect": "重新检测",
+    "executable": "IDE 可执行文件",
+    "executableHint": "填写完整路径（Windows 为 .exe），不填写命令参数。文件路径会自动传入。",
+    "save": "保存",
+    "open": "使用默认方式打开文件",
+    "failed": "打开文件失败：{error}"
+},
   changes: {
+    showFlat: "平铺显示", showTree: "树形显示",
     unified: "逐行", split: "并排", wordDiff: "行内差异", before: "修改前", after: "修改后",
     expand: "展开 {count} 行未改动代码", loadMore: "继续显示（剩余 {count} 行）", snippetLines: "行号相对于工具提供的代码片段",
     files: "文件列表", fileDiff: "文件变动",

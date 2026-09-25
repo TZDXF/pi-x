@@ -5,13 +5,13 @@ import { loadTsSource } from './lib/load-ts.mjs'
 const source = readFileSync(new URL('../src/components/SessionChanges.vue', import.meta.url), 'utf8')
 function harness(changes) {
   const props = { changes }
-  const module = loadTsSource(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] + '\nexport { files, activeFile, selectedPath, fileName }', {
+  const module = loadTsSource(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] + '\nexport { files, activeFile, selectedPath, fileRows, treeMode, selectRow }', {
     defineProps: () => props,
     defineEmits: () => () => {},
     require: id => id === 'vue' ? {
       ref: value => ({ value }), computed: get => ({ get value() { return get() } }),
-      onMounted() {}, onBeforeUnmount() {},
-    } : id === 'vue-i18n' ? { useI18n: () => ({ t: key => key }) } : {},
+      onMounted() {}, onBeforeUnmount() {}, watch() {},
+    } : id === '@/lib/reviewFileTree' ? loadTsSource(readFileSync(new URL('../src/lib/reviewFileTree.ts', import.meta.url), 'utf8')) : id === 'vue-i18n' ? { useI18n: () => ({ t: key => key }) } : {},
   })
   return { props, ...module }
 }
@@ -38,21 +38,31 @@ test('selection survives new operations and falls back on session switch or clea
   assert.equal(h.activeFile.value, null)
 })
 test('file list shows basenames while keeping full paths as identities', () => {
-  const h = harness([])
-  assert.equal(h.fileName('src/lib/index.ts'), 'index.ts')
-  assert.equal(h.fileName('src/components/index.ts'), 'index.ts')
-  assert.equal(h.fileName('index.ts'), 'index.ts')
-  assert.ok(!source.includes('directory(file.path)'))
-  assert.ok(source.includes(':title="file.path"'))
+  const h = harness([change('a', 'src/lib/index.ts'), change('b', 'src/components/index.ts')])
+  assert.equal(h.fileRows.value[0].name, 'index.ts')
+  assert.equal(h.fileRows.value[1].name, 'index.ts')
+  h.selectRow(h.fileRows.value[1])
+  assert.equal(h.activeFile.value.path, 'src/components/index.ts')
+  assert.ok(source.includes(':title="row.fullPath"'))
 })
 
 
-test('review panes use themed scroll areas with horizontal diff support', () => {
+test('review panes use themed scroll areas; split mode scrolls horizontally per pane', () => {
   const diff = readFileSync(new URL('../src/components/SessionDiff.vue', import.meta.url), 'utf8')
   const scrollArea = readFileSync(new URL('../src/components/ui/scroll-area/ScrollArea.vue', import.meta.url), 'utf8')
   assert.equal((source.match(/<ScrollArea /g) ?? []).length, 2)
-  assert.ok(source.includes('orientation="both"'))
+  assert.ok(source.includes(`:orientation="splitDiff ? 'vertical' : 'both'"`))
   assert.ok(!/overflow-(?:x-|y-)?auto/.test(source + diff))
   assert.ok(scrollArea.includes("orientation: 'vertical'"))
   assert.ok(scrollArea.includes('<ScrollBar v-if="orientation !== \'vertical\'" orientation="horizontal" />'))
+})
+
+test('tree navigation folds folders and selects Windows paths', () => {
+  const h = harness([change('a', 'src\\lib\\a.ts')])
+  h.treeMode.value = true
+  assert.equal(h.fileRows.value.length, 3)
+  h.selectRow(h.fileRows.value[2])
+  assert.equal(h.activeFile.value.path, 'src\\lib\\a.ts')
+  h.selectRow(h.fileRows.value[0])
+  assert.equal(h.fileRows.value.length, 1)
 })

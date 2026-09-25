@@ -1,5 +1,7 @@
 <script setup lang="ts">
 /** General preferences page: theme, language, and workspace info. */
+import OpenWithSettings from "@/components/settings/OpenWithSettings.vue"
+import { isDesktop } from "@/api/transport"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -25,6 +27,7 @@ function applyLocale(v: Locale) {
 </script>
 
 <template>
+  <OpenWithSettings v-if="isDesktop" />
   <div class="setting-row">
     <div>
       <h3 id="theme-label">{{ t("settings.theme") }}</h3>

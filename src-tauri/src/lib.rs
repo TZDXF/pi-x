@@ -1,5 +1,6 @@
 mod data_dir;
 mod desktop;
+mod editor;
 mod commands;
 mod fs_search;
 mod packages;
@@ -87,6 +88,8 @@ pub fn run() {
             commands::search_files,
             commands::session_export_file,
             commands::open_path,
+            editor::open_in_editor,
+            editor::detect_editors,
             commands::models_config_get,
             commands::models_config_save,
             commands::models_fetch,
