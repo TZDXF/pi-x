@@ -229,6 +229,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         // agent_end and agent_settled can both describe the previous run.
         // Do not let the second notification drain another queued prompt.
         if (awaitingAgentStart && !stopping) break
+        // An attempt ending is not the end of the request during backoff.
+        if (ev.type === "agent_end" && retryInfo.value && !stopping) break
+        retryInfo.value = null
         awaitingAgentStart = false
         isStreaming.value = false
         setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")
@@ -321,16 +324,22 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         break
 
       case "auto_retry_start":
+        isStreaming.value = true
+        setSessionRunStatus(sessionFile.value, "running")
         retryInfo.value = `retrying (${ev.attempt}/${ev.maxAttempts}): ${ev.errorMessage ?? ""}`
         break
 
-      case "auto_retry_end":
+      case "auto_retry_end": {
+        const wasRetrying = retryInfo.value !== null
         retryInfo.value = null
         // A recovered provider error must not leave the turn marked failed.
         turnFailed = !ev.success
         if (!ev.success)
           void refreshState()
+        // The last attempt may already have emitted agent_end.
+        if (wasRetrying) handleEvent({ type: "agent_settled" })
         break
+      }
 
       case "extension_error":
         console.warn("[pi] extension error:", ev.extensionPath, ev.error)
@@ -460,7 +469,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     if (next) void send(next.text, next.images, next.expandedText)
   }
 
-  async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string, behavior: "queue" | "steer" = "steer") {
+  async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string, behavior: "queue" | "steer" = "steer", replacement?: UserEntry) {
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
@@ -484,7 +493,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     // dispatched, and slash commands leave it for the next question.
     const modelChange = trimmed.startsWith("/") ? undefined : pendingModelChange ?? undefined
     if (modelChange) pendingModelChange = null
-    entries.value.push({ kind: "user", id: nextId(), timestamp: Date.now(), text: trimmed, modelChange, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
+    entries.value.push({ kind: "user", id: replacement?.id ?? nextId(), timestamp: replacement?.timestamp ?? Date.now(), text: trimmed, modelChange: modelChange ?? replacement?.modelChange, images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })), live: true })
     const command: Record<string, unknown> = { type: "prompt", message: promptText }
     if (images?.length)
       command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
@@ -524,9 +533,13 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     }
   }
 
-  /** Stop and re-ask on the same session. Never fork, reload history or kill pi. */
+  /** Replace the last question at its original position, without creating a session fork. */
   async function resendPrompt(text: string, images?: { data: string, mimeType: string }[], expandedText?: string) {
     if ((!text.trim() && !images?.length) || isResending.value) return
+    let promptIndex = entries.value.length - 1
+    while (promptIndex >= 0 && entries.value[promptIndex]?.kind !== "user") promptIndex--
+    const original = entries.value[promptIndex] as UserEntry | undefined
+    if (!original) return
     const operation = ++resendVersion
     let version = conversationVersion
     const file = sessionFile.value
@@ -561,6 +574,16 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         throw new Error(i18n.global.t("chat.editStopFailed"))
       if (idle.data.sessionFile !== file)
         throw new Error(i18n.global.t("chat.editSessionChanged"))
+      const rewound = await rpcRequest({ type: "rewind_prompt", sessionFile: file })
+      assertCurrent()
+      if (!rewound.success) throw new Error(rewound.error ?? i18n.global.t("chat.editStopFailed"))
+      const replaceIndex = entries.value.findIndex(entry => entry.id === original.id)
+      if (replaceIndex < 0) throw new Error(i18n.global.t("chat.editSessionChanged"))
+      entries.value.splice(replaceIndex)
+      // Cached history also feeds the file-change summary; omit the old turn.
+      let historyEnd = historyMessages.value.length - 1
+      while (historyEnd >= 0 && historyMessages.value[historyEnd]?.role !== "user") historyEnd--
+      if (!original.live && historyEnd >= historyCursor.value) historyMessages.value = historyMessages.value.slice(0, historyEnd)
       // Late completion/rejection of the interrupted prompt cannot mark the new
       // run failed or clear its streaming state.
       version = ++conversationVersion
@@ -570,7 +593,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       partialBlocks.value = null
       streamingTurnId.value = null
       retryInfo.value = null
-      await send(text, images, expandedText)
+      await send(text, images, expandedText, "steer", original)
     } finally {
       if (operation === resendVersion) {
         stopping = false

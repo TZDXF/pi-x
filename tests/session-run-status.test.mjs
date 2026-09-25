@@ -82,3 +82,36 @@ test('viewing a session acknowledges terminal badges without clearing running or
   set('project/first.jsonl', 'completed')
   assert.equal(get('project/first.jsonl'), 'completed')
 })
+
+for (const success of [true, false]) {
+  test(`retry backoff stays running until retry finishes (success=${success})`, () => {
+    const { statuses, session } = harness()
+    const store = session('retry', 'retry.jsonl')
+    store.handleEvent({ type: 'agent_start' })
+    store.handleEvent({ type: 'agent_end' })
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      store.handleEvent({ type: 'auto_retry_start', attempt, maxAttempts: 3, errorMessage: '503' })
+      assert.equal(store.isStreaming.value, true)
+      assert.equal(statuses.get('retry.jsonl'), 'running')
+      assert.match(store.retryInfo.value, /503/)
+      store.handleEvent({ type: 'agent_start' })
+      store.handleEvent({ type: 'agent_end' })
+      assert.equal(store.isStreaming.value, true)
+      assert.equal(statuses.get('retry.jsonl'), 'running')
+    }
+    store.handleEvent({ type: 'auto_retry_end', success })
+    assert.equal(store.retryInfo.value, null)
+    assert.equal(store.isStreaming.value, false)
+    assert.equal(statuses.get('retry.jsonl'), success ? 'completed' : 'error')
+  })
+}
+
+test('settled request clears retry loading even without retry_end', () => {
+  const { statuses, session } = harness()
+  const store = session('retry', 'retry.jsonl')
+  store.handleEvent({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3 })
+  store.handleEvent({ type: 'agent_settled' })
+  assert.equal(store.retryInfo.value, null)
+  assert.equal(store.isStreaming.value, false)
+  assert.notEqual(statuses.get('retry.jsonl'), 'running')
+})

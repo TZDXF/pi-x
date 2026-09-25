@@ -46,14 +46,15 @@ test('running prompt: waits for abort, then resends in the same session with ima
   assert.equal(h.store.isResending.value, true)
   finishAbort({ success: true })
   await pending
-  assert.deepEqual(h.calls.slice(0, 4).map(call => call.type), ['clear_queue', 'abort', 'get_state', 'prompt'])
+  assert.deepEqual(h.calls.slice(0, 5).map(call => call.type), ['clear_queue', 'abort', 'get_state', 'rewind_prompt', 'prompt'])
   const prompt = h.calls.find(call => call.type === 'prompt')
   assert.equal(prompt.message, 'revised expanded')
   assert.equal(prompt.streamingBehavior, undefined)
   assert.equal(prompt.images[0].data, 'YWJj')
   assert.equal(h.store.sessionFile.value, 'current.jsonl')
-  assert.equal(h.store.entries.value[0].text, 'original')
-  assert.equal(h.store.entries.value[1].text, 'revised')
+  assert.equal(h.store.entries.value.length, 1)
+  assert.equal(h.store.entries.value[0].id, 1)
+  assert.equal(h.store.entries.value[0].text, 'revised')
   assert.equal(h.store.isStreaming.value, true)
   assert.equal(h.store.isResending.value, false)
   assert.ok(h.calls.every(call => !['fork', 'get_fork_messages', 'get_messages', 'new_session', 'switch_session'].includes(call.type)))
@@ -71,6 +72,7 @@ test('agent-end during abort cannot dispatch queued prompts ahead of the edited 
 })
 
 for (const [label, overrides] of [
+  ['rewind rejected', { rewind_prompt: async () => ({ success: false, error: 'cannot rewind' }) }],
   ['abort rejected', { abort: async () => ({ success: false, error: 'cannot abort' }) }],
   ['process exits', { abort: async () => { throw new Error('pi exited before responding') } }],
   ['queue clear rejected', { clear_queue: async () => ({ success: false, error: 'cannot clear queue' }) }],
@@ -93,7 +95,7 @@ test('idle conversation resends without abort; empty text is ignored unless imag
   await h.store.resendPrompt('   ')
   assert.equal(h.calls.length, 0)
   await h.store.resendPrompt('', [{ data: 'YWJj', mimeType: 'image/png' }])
-  assert.deepEqual(h.calls.slice(0, 2).map(call => call.type), ['get_state', 'prompt'])
+  assert.deepEqual(h.calls.slice(0, 3).map(call => call.type), ['get_state', 'rewind_prompt', 'prompt'])
 })
 
 test('duplicate clicks and a session switch during abort never submit a second question', async () => {
@@ -155,4 +157,23 @@ test('starting a new session while aborting releases the resend lock without sen
   await assert.rejects(pending, /editSessionChanged/)
   assert.equal(h.store.isResending.value, false)
   assert.equal(h.calls.some(call => call.type === 'prompt'), false)
+})
+
+test('editing removes the superseded answer and keeps the original question position', async () => {
+  const h = harness()
+  h.store.entries.value.push({ kind: 'assistant', id: 2, blocks: [{ type: 'text', text: 'old answer' }] })
+  await h.store.resendPrompt('replacement')
+  assert.equal(h.store.entries.value.length, 1)
+  assert.equal(h.store.entries.value[0].id, 1)
+  assert.equal(h.store.entries.value[0].text, 'replacement')
+})
+
+test('history prepended while rewinding does not shift the replacement target', async () => {
+  const h = harness({ rewind_prompt: async () => {
+    h.store.entries.value.unshift({ kind: 'user', id: 99, text: 'earlier question' })
+    return { success: true }
+  } })
+  await h.store.resendPrompt('replacement')
+  assert.deepEqual(Array.from(h.store.entries.value, entry => entry.text), ['earlier question', 'replacement'])
+  assert.equal(h.store.entries.value[1].id, 1)
 })

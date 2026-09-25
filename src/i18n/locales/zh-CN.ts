@@ -220,7 +220,7 @@ export default {
     emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",
     editPrompt: "编辑提问",
-    editPromptDesc: "重新发送会先停止当前回答，再在当前会话中发送修改后的问题，不创建分支。",
+    editPromptDesc: "重新发送会修改原提问，移除其后的回答并从原位置重新生成，不追加提问或创建分支。",
     editCancel: "取消",
     editResend: "重新发送",
     editKeepImages: "原提问中的图片附件将保留。",

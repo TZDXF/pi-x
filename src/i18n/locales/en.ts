@@ -220,7 +220,7 @@ export default {
     emptyDesc: "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",
     copyReply: "Copy reply",
     editPrompt: "Edit prompt",
-    editPromptDesc: "Resending stops the current answer, then sends your revised question in this conversation without creating a branch.",
+    editPromptDesc: "Resending replaces the original question and regenerates its answer at the same position, without appending a question or creating a branch.",
     editCancel: "Cancel",
     editResend: "Resend",
     editKeepImages: "Images from the original prompt will be preserved.",
