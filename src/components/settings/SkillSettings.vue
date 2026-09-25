@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue"
+import { onMounted, ref } from "vue"
 import { Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { ask } from "@tauri-apps/plugin-dialog"
@@ -9,7 +9,6 @@ import { useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 
-const props = defineProps<{ project?: string }>()
 const { t } = useI18n()
 const ui = useUiStore()
 const skills = ref<HostedSkill[]>([])
@@ -23,7 +22,7 @@ async function load() {
   try {
     const [hosted, found] = await Promise.all([
       listHostedSkills(),
-      listDiscoveredSkills(props.project),
+      listDiscoveredSkills(),
     ])
     skills.value = hosted
     // Hide skills already managed under ~/.pix/skills.
@@ -63,13 +62,12 @@ function displaySkillPath(path: string): string {
 }
 
 function sourceLabel(skill: DiscoveredSkill): string {
-  if (skill.sourceKind === "packageGlobal" || skill.sourceKind === "packageProject")
+  if (skill.sourceKind === "packageGlobal")
     return t(`skillsConfig.source.${skill.sourceKind}`, { name: skill.sourceName ?? "?" })
   return t(`skillsConfig.source.${skill.sourceKind}`)
 }
 
 onMounted(load)
-watch(() => props.project, load)
 </script>
 
 <template>

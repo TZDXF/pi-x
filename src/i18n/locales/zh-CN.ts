@@ -53,9 +53,8 @@ export default {
     sourceHosted: "本应用托管",
     source: {
       globalPi: "全局 · Pi 目录", globalAgents: "全局 · Agents 目录",
-      projectPi: "项目 · Pi 目录", projectAgents: "项目 · Agents 目录",
-      packageGlobal: "全局插件 · {name}", packageProject: "项目插件 · {name}",
-      settingsGlobal: "全局 · 设置路径", settingsProject: "项目 · 设置路径",
+      packageGlobal: "全局插件 · {name}",
+      settingsGlobal: "全局 · 设置路径",
     },
     noDiscovered: "未发现自动加载的技能。",
   },

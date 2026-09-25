@@ -53,9 +53,8 @@ export default {
     sourceHosted: "Hosted by Pix",
     source: {
       globalPi: "Global · Pi directory", globalAgents: "Global · Agents directory",
-      projectPi: "Project · Pi directory", projectAgents: "Project · Agents directory",
-      packageGlobal: "Global package · {name}", packageProject: "Project package · {name}",
-      settingsGlobal: "Global · configured path", settingsProject: "Project · configured path",
+      packageGlobal: "Global package · {name}",
+      settingsGlobal: "Global · configured path",
     },
     noDiscovered: "No auto-discovered skills found.",
   },

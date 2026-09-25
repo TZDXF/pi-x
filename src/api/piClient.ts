@@ -66,11 +66,11 @@ export interface DiscoveredSkill {
   description: string
   path: string
   hosted: boolean
-  sourceKind: "globalPi" | "globalAgents" | "projectPi" | "projectAgents" | "packageGlobal" | "packageProject" | "settingsGlobal" | "settingsProject"
+  sourceKind: "globalPi" | "globalAgents" | "packageGlobal" | "settingsGlobal"
   sourceName: string | null
 }
-export const listDiscoveredSkills = (project?: string) =>
-  invoke<DiscoveredSkill[]>("skills_discovered_list", { project: project ?? null })
+export const listDiscoveredSkills = () =>
+  invoke<DiscoveredSkill[]>("skills_discovered_list")
 
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })

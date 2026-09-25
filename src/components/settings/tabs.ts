@@ -78,7 +78,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "skillsConfig.title",
     title: "skillsConfig.title",
     desktopOnly: true,
-    needsProject: true,
     component: defineAsyncComponent(() => import("./SkillSettings.vue")),
   },
   {
