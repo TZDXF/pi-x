@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 
 function harness(initial = {}, component = "SkillSettings") {
-  const source = readFileSync(new URL(`../src/components/${component}.vue`, import.meta.url), 'utf8')
+  const source = readFileSync(new URL(`../src/components/settings/${component}.vue`, import.meta.url), 'utf8')
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   let config = initial, mount, failRead = false, failWrite = false, askResult = true
   let promptFile = config.__promptFile ?? ''
@@ -111,9 +111,9 @@ test('prompt page saves and clears prompt without touching hosted skills', async
 })
 
 test('settings exposes separate prompt and skills pages', () => {
-  const settings = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8')
-  assert.match(settings, /selectTab\('skills'\)/)
-  assert.match(settings, /<SkillSettings v-else-if="isDesktop && tab === 'skills'"/)
-  const prompt = readFileSync(new URL('../src/components/AgentSettings.vue', import.meta.url), 'utf8')
+  const tabs = readFileSync(new URL('../src/components/settings/tabs.ts', import.meta.url), 'utf8')
+  assert.match(tabs, /id: "agent-config",[\s\S]*?\.\/AgentSettings\.vue/)
+  assert.match(tabs, /id: "skills",[\s\S]*?\.\/SkillSettings\.vue/)
+  const prompt = readFileSync(new URL('../src/components/settings/AgentSettings.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(prompt, /managedSkills|manage-skills/)
 })

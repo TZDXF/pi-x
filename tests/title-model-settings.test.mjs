@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 
 function harness(runtimeModels = [], custom = {}, saved) {
-  const source = readFileSync(new URL('../src/components/TitleModelSettings.vue', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../src/components/settings/TitleModelSettings.vue', import.meta.url), 'utf8')
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   let mount, config = { titleModel: saved }, settings = {}
   const context = vm.createContext({
@@ -70,7 +70,7 @@ test('default model alone saves without enabling title generation', async () => 
 })
 
 test('a saved follow-main configuration reloads as enabled with the default model', async () => {
-  const source = readFileSync(new URL('../src/components/TitleModelSettings.vue', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../src/components/settings/TitleModelSettings.vue', import.meta.url), 'utf8')
   assert.ok(source.includes('titleFollowMain'))
   const h = harness([], { one: { models: [{ id: 'm' }] } })
   // Simulate stored config by pre-seeding the harness config object.
