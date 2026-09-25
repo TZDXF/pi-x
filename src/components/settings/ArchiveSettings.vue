@@ -2,10 +2,10 @@
 /** Archived sessions page: grouped by project, with search, restore and delete actions. */
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { ask } from "@tauri-apps/plugin-dialog"
 import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -17,6 +17,7 @@ const workspace = useWorkspaceStore()
 const sessions = ref<SessionMeta[]>([])
 const loading = ref(false)
 const busy = ref<string | null>(null) // file currently being restored/deleted
+const pendingDelete = ref<SessionMeta | null>(null) // session awaiting delete confirmation
 const error = ref("")
 const query = ref("")
 
@@ -80,14 +81,14 @@ async function restore(s: SessionMeta) {
   }
 }
 
-async function remove(s: SessionMeta) {
+/** Open the in-app confirm dialog; the native/system dialog is avoided on purpose. */
+function askRemove(s: SessionMeta) {
   if (busy.value) return
-  const confirmed = await ask(t("sessionArchive.deleteConfirm", { name: label(s) }), {
-    title: t("sessionArchive.title"),
-    okLabel: t("sessionArchive.delete"),
-    cancelLabel: t("common.cancel"),
-  })
-  if (!confirmed) return
+  pendingDelete.value = s
+}
+
+async function remove(s: SessionMeta) {
+  pendingDelete.value = null
   busy.value = s.file
   try {
     await deleteSession(s.file)
@@ -193,7 +194,7 @@ onMounted(load)
             :disabled="!!busy"
             :title="t('sessionArchive.delete')"
             :aria-label="t('sessionArchive.delete')"
-            @click="remove(s)"
+            @click="askRemove(s)"
           >
             <Trash2 :size="15" />
           </Button>
@@ -201,4 +202,22 @@ onMounted(load)
       </li>
     </ul>
   </section>
+  <Dialog :open="!!pendingDelete" @update:open="(v: boolean) => { if (!v && !busy) pendingDelete = null }">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ t("sessionArchive.delete") }}</DialogTitle>
+        <DialogDescription>
+          {{ pendingDelete ? t("sessionArchive.deleteConfirm", { name: label(pendingDelete) }) : "" }}
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="outline" :disabled="!!busy" @click="pendingDelete = null">
+          {{ t("common.cancel") }}
+        </Button>
+        <Button variant="destructive" :disabled="!!busy" @click="pendingDelete && remove(pendingDelete)">
+          {{ t("sessionArchive.delete") }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
