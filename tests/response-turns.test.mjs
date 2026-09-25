@@ -55,7 +55,7 @@ test('chat uses an initially closed process disclosure and original index for br
   const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
   const blocks = readFileSync(new URL('../src/components/AssistantBlocks.vue', import.meta.url), 'utf8')
   assert.match(chat, /entry.complete && entry.process.length && blocksText\(entry.summary\).trim\(\)/)
-  assert.match(chat, /<details[\s\S]*?class="response-process"/)
+  assert.match(chat, /<details[\s\S]*?class="response-process(?:\s[^"]*)?"/)
   assert.doesNotMatch(chat, /response-process[^>]*\bopen\b/)
   assert.match(chat, /forkFromAnswer\(entry.lastIndex\)/)
   assert.doesNotMatch(blocks, /<Agent|ai-elements\/agent/)

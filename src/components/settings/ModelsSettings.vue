@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import DragHandle from '@/components/shared/DragHandle.vue'
+import SectionHeading from '@/components/shared/SectionHeading.vue'
 /** Providers & models page: provider list on the left, provider config and its models on the right. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -91,22 +93,22 @@ function onDeleted() {
 <template>
   <p class="text-muted-foreground mb-4 text-xs">{{ t("settings.modelsFileHint") }}</p>
 
-  <div class="provider-layout">
-    <aside class="provider-list">
+  <div class="provider-layout grid [grid-template-columns:196px_minmax(0,_1fr)] gap-5 items-start max-[900px]:[grid-template-columns:minmax(0,_1fr)]">
+    <aside class="provider-list flex flex-col gap-[3px] border-r border-border pr-3 max-[900px]:[border-right:none] max-[900px]:border-b border-border max-[900px]:pr-0 max-[900px]:pb-3">
       <VueDraggable
         v-model="providers"
-        class="provider-sortable"
+        class="provider-sortable flex flex-col gap-[3px]"
         handle=".drag-handle"
         :animation="150"
         :disabled="reorderBusy"
         @start="startDrag"
         @end="finishDrag"
       >
-        <div v-for="[id, p] in providers" :key="id" class="provider-item" :class="{ active: !creating && selected === id }">
-          <span class="drag-handle" :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"><GripVertical :size="14" /></span>
-          <button type="button" class="provider-item-content" @click="selectProvider(id)">
-            <span class="provider-item-name" :title="p.name || id">{{ p.name || id }}</span>
-            <span class="provider-item-meta" :title="id">
+        <div v-for="[id, p] in providers" :key="id" class="provider-item flex items-center min-w-0 rounded-[7px] py-[3px] px-1 hover:bg-border" :class="{ active: !creating && selected === id }">
+          <DragHandle :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"><GripVertical :size="14" /></DragHandle>
+          <button type="button" class="provider-item-content flex flex-1 flex-col min-w-0 gap-[1px] py-[3px] px-[5px] text-left" @click="selectProvider(id)">
+            <span class="provider-item-name text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap" :title="p.name || id">{{ p.name || id }}</span>
+            <span class="provider-item-meta flex justify-between gap-2 text-[10px] text-muted-foreground" :title="id">
               <span v-if="p.name && p.name !== id" class="font-mono">{{ id }}</span>
               <span>{{ t("settings.providerModelCount", { count: p.models?.length ?? 0 }) }}</span>
             </span>
@@ -124,11 +126,11 @@ function onDeleted() {
       </Button>
     </aside>
 
-    <div class="provider-detail">
+    <div class="provider-detail min-w-0 max-[900px]:pt-1">
       <template v-if="creating || selected">
-        <h3 class="settings-section">
+        <SectionHeading>
           {{ creating ? t("settings.providerAdd") : t("settings.providerEdit") }}
-        </h3>
+        </SectionHeading>
         <ProviderSettings
           :provider-id="creating ? null : selected"
           @saved="onSaved"
@@ -136,7 +138,7 @@ function onDeleted() {
         />
         <template v-if="!creating && selected">
           <Separator class="my-6" />
-          <h3 class="settings-section">{{ t("settings.models") }}</h3>
+          <SectionHeading>{{ t("settings.models") }}</SectionHeading>
           <ModelSettings :provider-id="selected" />
         </template>
       </template>
@@ -146,3 +148,18 @@ function onDeleted() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.provider-item.active {
+  background: var(--border);
+}
+.provider-item-meta .font-mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sortable-ghost {
+  opacity: 0.45;
+  background: var(--border);
+}
+</style>

@@ -345,4 +345,7 @@ defineExpose({ scrollToRow });
 .insert-del {
   background-color: rgb(239 68 68 / 0.55);
 }
+.diff-hl :deep(span[style]) {
+  color: light-dark(var(--shiki-light), var(--shiki-dark));
+}
 </style>

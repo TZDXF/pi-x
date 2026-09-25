@@ -557,11 +557,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 </script>
 
 <template>
-  <div class="chat-review-layout" :class="{ 'session-drop-active': sessionDragOver }" @dragover.capture="onSessionDragOver" @dragleave="onSessionDragLeave" @drop.capture="onSessionDrop">
-  <div class="chat-workspace">
-    <header class="workspace-header">
+  <div class="chat-review-layout flex flex-1 min-w-0 min-h-0 relative overflow-hidden" :class="{ 'session-drop-active': sessionDragOver }" @dragover.capture="onSessionDragOver" @dragleave="onSessionDragLeave" @drop.capture="onSessionDrop">
+  <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
+    <header class="workspace-header flex items-center justify-between gap-4 min-h-12 py-2 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border max-[900px]:flex-wrap max-[900px]:gap-1.5">
       <div class="min-w-0">
-        <h1 class="truncate text-sm font-medium">
+        <h1 class="max-w-[42vw] truncate text-sm font-medium leading-[1.8]">
           {{ currentTitle || session.entries.find((e) => e.kind === "user")?.text || t("chat.newSession") }}
         </h1>
         <p class="text-muted-foreground truncate text-xs">
@@ -569,7 +569,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           <span class="mx-1">/</span> {{ t("common.localWorkspace") }}
         </p>
       </div>
-      <div class="header-actions">
+      <div class="header-actions flex items-center gap-1 shrink-0 max-[900px]:flex-wrap max-[640px]:gap-0">
         <Button variant="ghost" size="sm" :aria-expanded="changesOpen" :aria-label="t('changes.title')" @click="changesOpen = !changesOpen">
           {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
         </Button>
@@ -596,14 +596,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     <Conversation ref="conversation" :key="session.sessionFile ?? project" initial="instant" resize="instant"
       class="min-h-0 flex-1" @scroll="onHistoryScroll">
       <ConversationContent
-        class="conversation-column mx-auto w-full max-w-3xl gap-5 px-6 py-6"
-        :class="{ 'has-timeline': session.entries.some(entry => entry.kind === 'user') }"
+        class="conversation-column has-[[data-slot=conversation-empty-state]]:justify-center mx-auto w-full max-w-3xl gap-5 px-6 py-6 min-h-full max-[640px]:pl-4 max-[640px]:pr-4"
+        :class="{ 'pl-[42px] max-[640px]:pl-[42px]': session.entries.some(entry => entry.kind === 'user') }"
       >
         <div v-if="session.hasOlderHistory" class="text-muted-foreground flex h-8 items-center justify-center gap-2 text-sm" role="status">
           <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t('chat.historyLoading') }}</template>
         </div>
         <ConversationEmptyState
-          class="chat-empty"
+          class="chat-empty flex-1 min-h-60"
           v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
           :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
           :description="t('chat.emptyDesc')"
@@ -657,7 +657,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                        markdown below never remounts and re-flashes. -->
                   <details
                     v-if="entry.complete && entry.process.length && blocksText(entry.summary).trim()"
-                    class="response-process"
+                    class="response-process border-b border-border pb-3"
                     @toggle="onProcessToggle(entry.id, $event)"
                   >
                     <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
@@ -754,7 +754,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
     </div>
 
     <!-- composer -->
-    <div class="composer-dock mx-auto w-full max-w-3xl px-6 pb-5 pt-3">
+    <div class="composer-dock mx-auto w-full max-w-3xl px-6 pt-3 shrink-0 pb-3 max-[900px]:pl-4 max-[900px]:pr-4">
       <WorkspaceContext v-if="!session.entries.length && !session.isStreaming && (!connecting || selectingProject) && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
         <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -776,7 +776,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           </li>
         </ul>
       </section>
-      <PromptInput :initial-input="initialDraft" @submit="onSubmit">
+      <PromptInput :group-class="['relative rounded-[22px] bg-card p-2 shadow-[var(--composer-shadow)]', sessionDragOver && 'outline-2 outline-dashed outline-primary outline-offset-[3px]']" :initial-input="initialDraft" @submit="onSubmit">
         <PromptInputBridge ref="bridge" />
         <PromptInputHeader v-if="attachments.length">
           <!-- pending image attachments -->
@@ -829,8 +829,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :disabled="editBusy || workspace.gitBusy || (connecting && !selectingProject && !completion?.initiating)"
           class="min-h-14"
         />
-        <div data-align="block-end" class="composer-controls flex items-center justify-between">
-          <div class="composer-options flex items-center gap-1">
+        <div data-align="block-end" class="composer-controls flex items-center justify-between w-full pt-0 pr-[5px] pb-[5px] pl-[5px] gap-1.5">
+          <div class="composer-options flex items-center gap-1 min-w-0 flex-wrap flex-1">
             <Button
               type="button"
               variant="ghost"
@@ -841,14 +841,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             >
               + {{ t("chat.attachment") }}
             </Button>
-            <ConversationModelSelect v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" open-above />
+            <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" open-above />
 
             <Select
               :model-value="session.thinkingLevel"
               :disabled="!connected && session.models.length === 0"
               @update:model-value="onThinkingChange"
             >
-              <SelectTrigger class="h-8 w-auto min-w-16 max-w-40 text-xs">
+              <SelectTrigger class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35">
                 <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
               </SelectTrigger>
               <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">

@@ -145,9 +145,9 @@ function selectRow(row: (typeof fileRows.value)[number]) {
 </script>
 
 <template>
-  <aside ref="sidebar" class="changes-sidebar" :style="{ width: `${width}px` }" :aria-label="t('changes.title')" @keydown.esc="$emit('close')">
+  <aside ref="sidebar" class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]" :style="{ width: `${width}px` }" :aria-label="t('changes.title')" @keydown.esc="$emit('close')">
     <div
-      class="changes-resize-handle" :class="{ 'is-dragging': dragging }"
+      class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]" :class="{ 'is-dragging': dragging }"
       role="separator" tabindex="0" aria-orientation="vertical"
       :aria-label="t('changes.resize')" :title="t('changes.resize')"
       :aria-valuenow="Math.round(width)" :aria-valuemin="Math.round(bounds.min)" :aria-valuemax="Math.round(bounds.max)"
@@ -159,13 +159,13 @@ function selectRow(row: (typeof fileRows.value)[number]) {
       <Button variant="ghost" size="icon-sm" :aria-label="t('changes.close')" @click="$emit('close')"><X /></Button>
     </div>
     <p class="border-b p-3 text-xs text-muted-foreground">{{ t('changes.description') }}</p>
-    <div v-if="activeFile" class="changes-review-body">
-      <section :key="activeFile.path" class="changes-file-view" :aria-label="t('changes.fileDiff')">
+    <div v-if="activeFile" class="changes-review-body grid [grid-template-columns:minmax(0,_1fr)_minmax(100px,_30%)] flex-1 min-h-0 min-w-0 overflow-hidden">
+      <section :key="activeFile.path" class="changes-file-view flex flex-col min-w-0 min-h-0 overflow-hidden" :aria-label="t('changes.fileDiff')">
         <div class="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
           <h3 class="min-w-0 flex-1 truncate font-mono text-xs" :title="activeFile.path">{{ activeFile.path }}</h3>
-          <button v-if="isDesktop" class="changes-tool disabled:opacity-40" :disabled="opening" :title="t('openWith.open')" :aria-label="t('openWith.open')" @click="openActiveFile"><ExternalLink /></button>
-          <button class="changes-tool" :class="{ 'bg-accent text-foreground': wordDiff }" :title="t('changes.wordDiff')" :aria-label="t('changes.wordDiff')" :aria-pressed="wordDiff" @click="wordDiff = !wordDiff"><Highlighter /></button>
-          <button v-if="activeFile.changes.some(change => !change.unknownBefore)" class="changes-tool" :title="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-label="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-pressed="splitDiff" @click="splitDiff = !splitDiff"><Rows2 v-if="splitDiff" /><Columns2 v-else /></button>
+          <Button variant="quiet" size="review" v-if="isDesktop"  :disabled="opening" :title="t('openWith.open')" :aria-label="t('openWith.open')" @click="openActiveFile"><ExternalLink /></Button>
+          <Button variant="quiet" size="review" :class="{ 'bg-accent text-foreground': wordDiff }" :title="t('changes.wordDiff')" :aria-label="t('changes.wordDiff')" :aria-pressed="wordDiff" @click="wordDiff = !wordDiff"><Highlighter /></Button>
+          <Button variant="quiet" size="review" v-if="activeFile.changes.some(change => !change.unknownBefore)"  :title="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-label="t(splitDiff ? 'changes.unified' : 'changes.split')" :aria-pressed="splitDiff" @click="splitDiff = !splitDiff"><Rows2 v-if="splitDiff" /><Columns2 v-else /></Button>
         </div>
         <p v-if="openError" role="alert" class="shrink-0 break-words border-b px-3 py-2 text-xs text-destructive">{{ openError }}</p>
         <!-- 换 key 重建:reka-ui 的 ScrollAreaScrollbar 卸载时会同时禁用两个方向,动态改 orientation 会让 overflow-y 卡在 hidden -->
@@ -178,14 +178,14 @@ function selectRow(row: (typeof fileRows.value)[number]) {
           </section>
         </ScrollArea>
       </section>
-      <nav class="changes-file-list" :aria-label="t('changes.files')">
+      <nav class="changes-file-list flex flex-col min-w-0 min-h-0 overflow-hidden border-l border-border bg-background" :aria-label="t('changes.files')">
         <div class="flex shrink-0 items-center justify-between border-b px-3 py-1.5">
           <h3 class="text-xs text-muted-foreground">{{ t('changes.files') }} · {{ files.length }}</h3>
-          <button class="changes-tool" :title="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" :aria-label="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" @click="treeMode = !treeMode"><List v-if="treeMode" /><FolderTree v-else /></button>
+          <Button variant="quiet" size="review" :title="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" :aria-label="t(treeMode ? 'changes.showFlat' : 'changes.showTree')" @click="treeMode = !treeMode"><List v-if="treeMode" /><FolderTree v-else /></Button>
         </div>
         <ScrollArea class="min-h-0 flex-1" viewport-class="py-1">
           <button v-for="row in fileRows" :key="row.key" type="button"
-            class="changes-file-row" :class="{ 'bg-accent': !row.isDir && row.data?.changes[0]?.path === activeFile.path }"
+            class="changes-file-row flex items-center gap-1.5 w-full py-1 px-2 text-left font-mono text-xs cursor-pointer hover:[background:color-mix(in_srgb,_var(--accent)_60%,_transparent)] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]" :class="{ 'bg-accent': !row.isDir && row.data?.changes[0]?.path === activeFile.path }"
             :style="{ paddingLeft: treeMode ? `${8 + row.depth * 14}px` : '12px' }"
             :aria-current="!row.isDir && row.data?.changes[0]?.path === activeFile.path ? 'true' : undefined"
             :aria-expanded="row.isDir ? row.expanded : undefined" :title="row.fullPath" @click="selectRow(row)">
@@ -204,3 +204,23 @@ function selectRow(row: (typeof fileRows.value)[number]) {
     <p v-else class="p-6 text-center text-sm text-muted-foreground">{{ t('changes.empty') }}</p>
   </aside>
 </template>
+
+<style scoped>
+.changes-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms;
+}
+.changes-resize-handle:hover::after {
+  background: var(--primary);
+}
+.changes-resize-handle:focus-visible::after {
+  background: var(--primary);
+}
+.changes-resize-handle.is-dragging::after {
+  background: var(--primary);
+}
+</style>

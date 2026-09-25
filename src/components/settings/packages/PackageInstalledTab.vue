@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import SectionHeading from '@/components/shared/SectionHeading.vue'
+import SettingRow from '@/components/shared/SettingRow.vue'
+import SettingHeading from '@/components/shared/SettingHeading.vue'
+import SettingDescription from '@/components/shared/SettingDescription.vue'
 /** Installed tab: custom source install plus global/project package lists. */
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
@@ -34,7 +38,7 @@ const { installCustom, update, remove, filterSummary } = props.ctx
 
 <template>
   <div class="mb-4">
-    <h3 class="settings-section">{{ t("packages.customTitle") }}</h3>
+    <SectionHeading>{{ t("packages.customTitle") }}</SectionHeading>
     <p class="text-muted-foreground mb-2 text-xs">{{ t("packages.customHint") }}</p>
     <div class="flex items-center gap-2">
       <Input
@@ -60,7 +64,7 @@ const { installCustom, update, remove, filterSummary } = props.ctx
   <Separator class="my-4" />
 
   <div class="mb-2 flex items-center justify-between">
-    <h3 class="settings-section !mb-0">{{ t("packages.scopeGlobal") }}</h3>
+    <SectionHeading class="!mb-0">{{ t("packages.scopeGlobal") }}</SectionHeading>
     <Button
       v-if="globalInstalled.length"
       variant="outline"
@@ -76,11 +80,11 @@ const { installCustom, update, remove, filterSummary } = props.ctx
   <p v-if="!globalInstalled.length" class="text-muted-foreground py-3 text-sm">
     {{ t("packages.noneGlobal") }}
   </p>
-  <div v-for="p in globalInstalled" :key="`g:${p.source}`" class="setting-row">
-    <div>
-      <h3 class="!text-sm">{{ packageNameOf(p.source) }}</h3>
-      <p class="font-mono text-xs">{{ p.source }}</p>
-      <p v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</p>
+  <SettingRow v-for="p in globalInstalled" :key="`g:${p.source}`">
+    <div class="min-w-0">
+      <SettingHeading class="!text-sm">{{ packageNameOf(p.source) }}</SettingHeading>
+      <SettingDescription class="font-mono text-xs">{{ p.source }}</SettingDescription>
+      <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
     </div>
     <div class="flex shrink-0 gap-2">
       <Button
@@ -112,20 +116,20 @@ const { installCustom, update, remove, filterSummary } = props.ctx
         {{ t("packages.remove") }}
       </Button>
     </div>
-  </div>
+  </SettingRow>
 
   <template v-if="viewedProject">
     <Separator class="my-4" />
-    <h3 class="settings-section">{{ t("packages.scopeProject") }}</h3>
+    <SectionHeading>{{ t("packages.scopeProject") }}</SectionHeading>
     <p class="text-muted-foreground mb-2 font-mono text-xs">{{ joinDisplayPath(viewedProject, ".pi", "settings.json") }}</p>
     <p v-if="!projectInstalled.length" class="text-muted-foreground py-3 text-sm">
       {{ t("packages.noneProject") }}
     </p>
-    <div v-for="p in projectInstalled" :key="`p:${p.source}`" class="setting-row">
-      <div>
-        <h3 class="!text-sm">{{ packageNameOf(p.source) }}</h3>
-        <p class="font-mono text-xs">{{ p.source }}</p>
-        <p v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</p>
+    <SettingRow v-for="p in projectInstalled" :key="`p:${p.source}`">
+      <div class="min-w-0">
+        <SettingHeading class="!text-sm">{{ packageNameOf(p.source) }}</SettingHeading>
+        <SettingDescription class="font-mono text-xs">{{ p.source }}</SettingDescription>
+        <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
       </div>
       <div class="flex shrink-0 gap-2">
         <Button
@@ -147,7 +151,7 @@ const { installCustom, update, remove, filterSummary } = props.ctx
           {{ t("packages.remove") }}
         </Button>
       </div>
-    </div>
+    </SettingRow>
   </template>
 
   <p class="text-muted-foreground mt-6 text-xs">{{ t("packages.restartHint") }}</p>

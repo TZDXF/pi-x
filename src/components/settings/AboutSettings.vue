@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import SettingRow from '@/components/shared/SettingRow.vue'
+import SettingHeading from '@/components/shared/SettingHeading.vue'
+import SettingDescription from '@/components/shared/SettingDescription.vue'
 /** About page and desktop-only Pi self-update controls. */
 import { onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -65,24 +68,24 @@ onMounted(() => { if (isDesktop) void check() })
 </script>
 
 <template>
-  <div class="setting-row">
-    <div>
-      <h3><PiXLogo /></h3>
-      <p>{{ t("settings.aboutBody") }}</p>
-    </div>
-  </div>
-  <section v-if="isDesktop" class="setting-row" aria-labelledby="pi-update-title">
+  <SettingRow>
     <div class="min-w-0">
-      <h3 id="pi-update-title">{{ t("piUpdate.title") }}</h3>
-      <p v-if="currentVersion" aria-live="polite">
+      <SettingHeading><PiXLogo /></SettingHeading>
+      <SettingDescription>{{ t("settings.aboutBody") }}</SettingDescription>
+    </div>
+  </SettingRow>
+  <SettingRow as="section" v-if="isDesktop" aria-labelledby="pi-update-title">
+    <div class="min-w-0">
+      <SettingHeading id="pi-update-title">{{ t("piUpdate.title") }}</SettingHeading>
+      <SettingDescription v-if="currentVersion" aria-live="polite">
         {{ t("piUpdate.current") }} <span class="font-mono text-foreground">{{ currentVersion }}</span>
         <template v-if="status?.updateAvailable">
           <span aria-hidden="true"> → </span><span class="sr-only">{{ t("piUpdate.latest") }}</span><span class="font-mono text-foreground">{{ status.latestVersion }}</span>
         </template>
         <span v-else-if="status"> · {{ t("piUpdate.upToDate") }}</span>
-      </p>
-      <p v-if="updated" role="status">{{ t("piUpdate.completed") }}</p>
-      <p v-if="error" role="alert" class="break-words !text-destructive">{{ error }}</p>
+      </SettingDescription>
+      <SettingDescription v-if="updated" role="status">{{ t("piUpdate.completed") }}</SettingDescription>
+      <SettingDescription v-if="error" role="alert" class="break-words !text-destructive">{{ error }}</SettingDescription>
     </div>
     <div class="flex shrink-0 flex-wrap gap-2">
       <Button variant="outline" size="sm" :disabled="checking || updating" :aria-label="checking ? t('piUpdate.checking') : undefined" @click="check">
@@ -94,6 +97,6 @@ onMounted(() => { if (isDesktop) void check() })
         {{ t("piUpdate.update") }}
       </Button>
     </div>
-  </section>
+  </SettingRow>
   <p v-if="isDesktop" class="text-muted-foreground mt-5 text-xs">{{ t("settings.dataDirectory") }}: ~/.pix</p>
 </template>

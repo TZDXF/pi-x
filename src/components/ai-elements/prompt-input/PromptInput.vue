@@ -9,6 +9,7 @@ import { PROMPT_INPUT_KEY } from './types'
 
 const props = defineProps<{
   class?: HTMLAttributes['class']
+  groupClass?: HTMLAttributes['class']
   accept?: string
   multiple?: boolean
   globalDrop?: boolean
@@ -138,7 +139,7 @@ function onSubmit(e: Event) {
       @dragover.prevent="handleDragOver"
       @drop.prevent.stop="handleDrop"
     >
-      <InputGroup class="overflow-hidden">
+      <InputGroup :class="cn('overflow-hidden', props.groupClass)">
         <slot />
       </InputGroup>
     </form>

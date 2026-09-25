@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import SettingRow from '@/components/shared/SettingRow.vue'
+import SettingHeading from '@/components/shared/SettingHeading.vue'
+import SettingDescription from '@/components/shared/SettingDescription.vue'
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
@@ -40,10 +43,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="setting-row">
-    <div>
-      <h3 id="open-with-label">{{ t('openWith.default') }}</h3>
-      <p>{{ t('openWith.description') }}</p>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading id="open-with-label">{{ t('openWith.default') }}</SettingHeading>
+      <SettingDescription>{{ t('openWith.description') }}</SettingDescription>
     </div>
     <div class="flex shrink-0 items-center gap-2">
       <Select :model-value="openWithPreference.kind" @update:model-value="save">
@@ -65,16 +68,16 @@ onMounted(() => {
       </Select>
       <Button variant="outline" size="sm" :disabled="detecting" @click="detect">{{ t('openWith.detect') }}</Button>
     </div>
-  </div>
-  <div v-if="openWithPreference.kind === 'custom'" class="setting-row">
-    <div>
+  </SettingRow>
+  <SettingRow v-if="openWithPreference.kind === 'custom'">
+    <div class="min-w-0">
       <label for="editor-executable" class="text-sm font-medium">{{ t('openWith.executable') }}</label>
-      <p>{{ t('openWith.executableHint') }}</p>
+      <SettingDescription>{{ t('openWith.executableHint') }}</SettingDescription>
     </div>
     <div class="flex min-w-0 items-center gap-2">
       <Input id="editor-executable" v-model="executable" class="w-64 text-xs" placeholder="C:\\Program Files\\Editor\\editor.exe" @keydown.enter="save('custom')" />
       <Button variant="outline" size="sm" @click="save('custom')">{{ t('openWith.save') }}</Button>
     </div>
-  </div>
+  </SettingRow>
   <p v-if="error" role="alert" class="text-xs text-destructive">{{ error }}</p>
 </template>

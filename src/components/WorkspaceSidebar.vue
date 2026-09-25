@@ -149,59 +149,147 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
 </script>
 
 <template>
-  <aside class="workspace-sidebar" :aria-label="t('sidebar.ariaLabel')">
-    <div class="sidebar-brand"><PiXLogo /><Button variant="ghost" size="icon" class="icon-button ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" /></Button></div>
-    <Button variant="ghost" class="sidebar-action" :disabled="!ready || navigationDisabled" @click="emit('newSession', project)"><Plus :size="17" />{{ t('sidebar.newSession') }}</Button>
-    <label class="sidebar-search"><Search :size="15" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
-    <div class="sidebar-section-label"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
-      <div class="flex"><Button variant="ghost" size="icon" class="icon-button" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" /></Button>
-      <Button variant="ghost" size="icon" class="icon-button" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" /></Button></div>
+  <aside class="workspace-sidebar w-68 shrink-0 flex flex-col bg-sidebar border-r border-border pt-3.5 pr-[7px] pb-2 pl-[7px] min-h-0 overflow-hidden max-[640px]:absolute max-[640px]:[inset:0_auto_0_0] max-[640px]:z-[30] max-[640px]:shadow-[var(--sidebar-shadow)] max-[700px]:w-55" :aria-label="t('sidebar.ariaLabel')">
+    <div class="sidebar-brand flex items-center gap-[9px] pt-0.5 pr-2 pb-3 pl-2 text-[17px] font-semibold shrink-0"><PiXLogo /><Button variant="quiet" size="toolbar" class="ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" class="size-auto shrink-0" /></Button></div>
+    <Button size="content" variant="sidebar-action" class="sidebar-action" :disabled="!ready || navigationDisabled" @click="emit('newSession', project)"><Plus :size="17" class="size-auto shrink-0" />{{ t('sidebar.newSession') }}</Button>
+    <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"><Search :size="15" class="size-auto shrink-0" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
+    <div class="sidebar-section-label flex items-center justify-between text-muted-foreground text-[11px] py-[5px] px-2.5 font-mono tracking-[0.06em] shrink-0"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
+      <div class="flex"><Button variant="quiet" size="toolbar" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" class="size-auto shrink-0" /></Button>
+      <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" class="size-auto shrink-0" /></Button></div>
     </div>
-    <ScrollArea class="project-groups" @dragend="clearDrag">
-      <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group">
-        <div class="project-heading" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
+    <ScrollArea class="project-groups flex-1 min-h-0 min-w-0" @dragend="clearDrag">
+      <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group mb-1 min-w-0 max-w-full">
+        <div class="project-heading relative flex items-center min-h-8 rounded-md pr-1 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)]" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
-          <Button variant="ghost" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
-            <FolderOpen v-if="!collapsed[path]" :size="15" /><Folder v-else :size="15" /><span class="truncate">{{ name(path) }}</span>
+          <Button size="content" variant="project-row" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
+            <FolderOpen v-if="!collapsed[path]" :size="15" class="size-auto shrink-0" /><Folder v-else :size="15" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span>
           </Button>
-          <Button variant="ghost" size="icon" class="icon-button hover-action" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" /></Button>
-          <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="project-pin" :aria-label="t('workspace.pinned')" />
+          <Button variant="quiet" size="row-action" class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" class="size-auto shrink-0" /></Button>
+          <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="size-auto shrink-0 project-pin shrink-0 text-muted-foreground" :aria-label="t('workspace.pinned')" />
           <DropdownMenu>
-            <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button project-more hover-action" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" /></Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" class="project-more hover-action w-6 h-6.5 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
-              <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" /><Pin v-else :size="14" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
-              <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
-              <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
+              <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" class="size-auto shrink-0" /><Pin v-else :size="14" class="size-auto shrink-0" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
+              <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
+              <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" class="size-auto shrink-0" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem class="text-destructive" :title="t('workspace.removeProjectHint')" @select="emit('removeProject', path)"><X :size="14" />{{ t('workspace.removeProject') }}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div v-if="!collapsed[path]" class="session-list">
-          <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && (session.started || session.entries.length) && !showArchived && !query" class="session-row active" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
-          <div v-for="s in rows(path)" :key="s.file" class="session-row group/session" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
+        <div v-if="!collapsed[path]" class="session-list min-h-0 p-0 overflow-visible">
+          <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && (session.started || session.entries.length) && !showArchived && !query" class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-for="s in rows(path)" :key="s.file" class="session-row group/session flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
             :draggable="!disabled" @dragstart="onSessionDragStart($event, path, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <Button variant="ghost" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
-            <span v-if="sessionRunStatus(s.file)" class="session-status group-hover/session:invisible group-has-[:focus-visible]/session:invisible group-has-[[data-state=open]]/session:invisible" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
-              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
-              <span v-else class="session-status-dot" aria-hidden="true" />
+            <Button size="content" variant="session-link" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
+            <span v-if="sessionRunStatus(s.file)" class="session-status group-hover/session:invisible group-has-[:focus-visible]/session:invisible group-has-[[data-state=open]]/session:invisible inline-flex items-center justify-center w-3.5 ml-1 shrink-0 text-muted-foreground" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
+              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running inline-block w-2.5 h-2.5 [border:1.5px_solid_var(--muted-foreground)] [border-top-color:transparent] rounded-full [animation:spin_1s_linear_infinite]" aria-hidden="true" />
+              <span v-else class="session-status-dot w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
             </span>
-            <div class="session-actions hover-action">
-              <Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" /></Button>
-              <DropdownMenu><DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="icon-button" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
+            <div class="session-actions hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] flex items-center shrink-0 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto">
+              <Button variant="quiet" size="row-action" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" class="size-auto shrink-0" /></Button>
+              <DropdownMenu><DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" class="size-auto shrink-0" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
             </div>
           </div>
-          <Button v-if="errors[path]" variant="ghost" class="sidebar-empty text-destructive" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</Button>
-          <p v-else-if="loading[path] && !workspace.histories[path]" class="sidebar-empty">{{ t('sidebar.loading') }}</p>
-          <p v-else-if="!rows(path).length && (showArchived || query)" class="sidebar-empty">{{ t('sidebar.noMatch') }}</p>
+          <Button v-if="errors[path]" variant="ghost" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</Button>
+          <p v-else-if="loading[path] && !workspace.histories[path]" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.loading') }}</p>
+          <p v-else-if="!rows(path).length && (showArchived || query)" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.noMatch') }}</p>
         </div>
       </section>
     </ScrollArea>
-    <div class="sidebar-footer"><Button variant="ghost" class="sidebar-action" @click="emit('settings')"><Settings :size="17" />{{ t('sidebar.settings') }}</Button></div>
+    <div class="sidebar-footer mt-auto pt-[7px] border-t border-border shrink-0"><Button size="content" variant="sidebar-action" class="sidebar-action" @click="emit('settings')"><Settings :size="17" class="size-auto shrink-0" />{{ t('sidebar.settings') }}</Button></div>
     <Dialog :open="!!renaming" @update:open="v => { if (!v) renaming = null }"><DialogContent class="sm:max-w-md"><DialogHeader><DialogTitle>{{ t('workspace.rename') }}</DialogTitle></DialogHeader>
-      <form @submit.prevent="saveTitle" class="space-y-4"><Input v-model="title" autofocus maxlength="120" :aria-label="t('workspace.title')" class="workspace-text-input h-auto" /><div class="flex justify-end gap-2"><Button variant="ghost" size="sm" class="quiet-button" type="button" @click="renaming = null">{{ t('workspace.cancel') }}</Button><Button size="sm" class="workspace-primary" :disabled="saving || !title.trim()">{{ t('workspace.save') }}</Button></div></form>
+      <form @submit.prevent="saveTitle" class="space-y-4"><Input v-model="title" autofocus maxlength="120" :aria-label="t('workspace.title')" class="w-full rounded-lg border-border bg-background px-3 py-[9px] dark:bg-background h-auto" /><div class="flex justify-end gap-2"><Button variant="quiet" size="quiet" type="button" @click="renaming = null">{{ t('workspace.cancel') }}</Button><Button size="workspace" :disabled="saving || !title.trim()">{{ t('workspace.save') }}</Button></div></form>
     </DialogContent></Dialog>
   </aside>
 </template>
+
+<style scoped>
+.session-row.active {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+.session-row time {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.session-row.active:hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+.session-row:hover .session-actions {
+  pointer-events: auto;
+}
+.session-row:has(:focus-visible) .session-actions {
+  pointer-events: auto;
+}
+.session-actions:has([data-state="open"]) {
+  pointer-events: auto;
+}
+.session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
+}
+.project-heading:is(:hover, :has(:focus-visible)) > .hover-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-row:is(:hover, :has(:focus-visible)) .hover-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+.hover-action:has([data-state="open"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-status-completed {
+  color: var(--primary);
+}
+.session-status-error {
+  color: var(--destructive);
+}
+.project-more[data-state="open"] {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.project-heading[draggable="true"] {
+  cursor: grab;
+}
+.session-row[draggable="true"] {
+  cursor: grab;
+}
+.project-heading[draggable="true"]:active {
+  cursor: grabbing;
+}
+.session-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+.project-heading.drag-source {
+  opacity: 0.45;
+}
+.session-row.drag-source {
+  opacity: 0.45;
+}
+.project-heading.drop-before {
+  box-shadow: inset 0 2px 0 var(--primary);
+}
+.session-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--primary);
+}
+.project-heading.drop-after {
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+.session-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+@media (pointer: coarse) {
+  .session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
+  }
+}
+</style>

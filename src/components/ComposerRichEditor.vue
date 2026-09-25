@@ -138,7 +138,7 @@ function onCompositionEnd() {
     :data-placeholder="placeholder"
     :contenteditable="disabled ? 'false' : 'true'"
     :aria-disabled="disabled"
-    class="composer-rich-editor field-sizing-content max-h-48 min-h-14 w-full flex-1 overflow-y-auto whitespace-pre-wrap wrap-anywhere bg-transparent px-3 py-2 text-sm outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] aria-disabled:opacity-50"
+    class="composer-rich-editor field-sizing-content max-h-48 min-h-14 w-full flex-1 overflow-y-auto whitespace-pre-wrap wrap-anywhere bg-transparent px-3 py-2 text-sm leading-[1.7] outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] aria-disabled:opacity-50"
     @input="onInput"
     @keydown="onKeydown"
     @paste="onPaste"

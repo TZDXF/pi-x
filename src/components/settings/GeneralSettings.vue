@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import SettingRow from '@/components/shared/SettingRow.vue'
+import SettingHeading from '@/components/shared/SettingHeading.vue'
+import SettingDescription from '@/components/shared/SettingDescription.vue'
+import KeyHint from '@/components/shared/KeyHint.vue'
 /** General preferences page: theme, language, and workspace info. */
 import OpenWithSettings from "@/components/settings/OpenWithSettings.vue"
 import { isDesktop } from "@/api/transport"
@@ -28,9 +32,9 @@ function applyLocale(v: Locale) {
 
 <template>
   <OpenWithSettings v-if="isDesktop" />
-  <div class="setting-row">
-    <div>
-      <h3 id="theme-label">{{ t("settings.theme") }}</h3>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading id="theme-label">{{ t("settings.theme") }}</SettingHeading>
     </div>
     <Select
       :model-value="theme"
@@ -48,11 +52,11 @@ function applyLocale(v: Locale) {
         <SelectItem value="system">{{ t("settings.themeSystem") }}</SelectItem>
       </SelectContent>
     </Select>
-  </div>
-  <div class="setting-row">
-    <div>
-      <h3 id="running-behavior-label">{{ t("chat.runningBehavior") }}</h3>
-      <p>{{ t("settings.runningBehaviorDesc") }}</p>
+  </SettingRow>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading id="running-behavior-label">{{ t("chat.runningBehavior") }}</SettingHeading>
+      <SettingDescription>{{ t("settings.runningBehaviorDesc") }}</SettingDescription>
     </div>
     <Select
       :model-value="runningBehavior"
@@ -69,10 +73,10 @@ function applyLocale(v: Locale) {
         <SelectItem value="steer">{{ t("chat.steer") }}</SelectItem>
       </SelectContent>
     </Select>
-  </div>
-  <div class="setting-row">
-    <div>
-      <h3>{{ t("settings.language") }}</h3>
+  </SettingRow>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading>{{ t("settings.language") }}</SettingHeading>
     </div>
     <Select
       :model-value="selectedLocale"
@@ -87,18 +91,18 @@ function applyLocale(v: Locale) {
         </SelectItem>
       </SelectContent>
     </Select>
-  </div>
-  <div class="setting-row">
-    <div>
-      <h3>{{ t("settings.shortcutsTitle") }}</h3>
-      <p>
-        {{ t("settings.shortcutSend") }} <kbd>Enter</kbd> ·
-        {{ t("settings.shortcutNewline") }} <kbd>Shift + Enter</kbd><br />{{
+  </SettingRow>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading>{{ t("settings.shortcutsTitle") }}</SettingHeading>
+      <SettingDescription>
+        {{ t("settings.shortcutSend") }} <KeyHint>Enter</KeyHint> ·
+        {{ t("settings.shortcutNewline") }} <KeyHint>Shift + Enter</KeyHint><br />{{
           t("settings.shortcutStop")
         }}
-        <kbd>Esc</kbd> · {{ t("settings.shortcutFileRef") }} <kbd>@</kbd> ·
-        {{ t("settings.shortcutCommands") }} <kbd>/</kbd>
-      </p>
+        <KeyHint>Esc</KeyHint> · {{ t("settings.shortcutFileRef") }} <KeyHint>@</KeyHint> ·
+        {{ t("settings.shortcutCommands") }} <KeyHint>/</KeyHint>
+      </SettingDescription>
     </div>
-  </div>
+  </SettingRow>
 </template>

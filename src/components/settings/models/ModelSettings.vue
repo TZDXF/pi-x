@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import DragHandle from '@/components/shared/DragHandle.vue'
+import SettingBadge from '@/components/shared/SettingBadge.vue'
 /** Model list for one provider: edits its `models` array in pi's models.json.
  *  The add/edit panel lives in ModelEditForm.vue. */
 import { computed, ref, watch } from "vue"
@@ -169,18 +171,18 @@ async function finishDrag() {
       @start="startDrag"
       @end="finishDrag"
     >
-    <div v-for="(m, i) in models" :key="m.id" class="model-item group">
-      <div class="model-item-summary">
-        <span
-          class="drag-handle"
+    <div v-for="(m, i) in models" :key="m.id" class="model-item group min-w-0 border-b border-border hover:bg-muted focus-within:bg-muted">
+      <div class="model-item-summary flex items-center gap-[7px] min-w-0 py-1.5 px-1">
+        <DragHandle
+
           :title="t('settings.dragToReorder')"
           :aria-label="t('settings.dragToReorder')"
-        ><GripVertical :size="14" /></span>
+        ><GripVertical :size="14" /></DragHandle>
         <div class="min-w-0 flex-1">
           <div class="flex min-w-0 items-center gap-2">
             <span class="truncate font-mono text-xs font-medium" :title="m.id">{{ m.name || m.id }}</span>
-            <span v-if="m.reasoning" class="setting-badge shrink-0">{{ t("settings.modelReasoning") }}</span>
-            <span v-if="(m.input ?? ['text']).includes('image')" class="setting-badge shrink-0">{{ t("settings.modelImage") }}</span>
+            <SettingBadge v-if="m.reasoning" class="shrink-0">{{ t("settings.modelReasoning") }}</SettingBadge>
+            <SettingBadge v-if="(m.input ?? ['text']).includes('image')" class="shrink-0">{{ t("settings.modelImage") }}</SettingBadge>
           </div>
           <p
             class="text-muted-foreground truncate text-[11px]"
@@ -195,7 +197,7 @@ async function finishDrag() {
           <Button variant="destructive" size="sm" :disabled="busy" @click="remove(i)">{{ t("settings.confirmDelete") }}</Button>
           <Button variant="ghost" size="sm" @click="confirmingDelete = null">{{ t("common.cancel") }}</Button>
         </div>
-        <div v-else class="model-item-actions flex shrink-0 items-center gap-0.5">
+        <div v-else class="model-item-actions flex shrink-0 items-center gap-0.5 opacity-[0] [@media(hover:none)]:opacity-[1]">
           <Button variant="ghost" size="icon-xs" :aria-label="t('settings.edit')" :title="t('settings.edit')" :disabled="busy" @click="startEdit(i, m)"><Pencil :size="14" /></Button>
           <Button variant="ghost" size="icon-xs" class="text-destructive" :aria-label="t('settings.delete')" :title="t('settings.delete')" :disabled="busy" @click="confirmingDelete = i"><Trash2 :size="14" /></Button>
         </div>
@@ -235,3 +237,15 @@ async function finishDrag() {
     </Button>
   </template>
 </template>
+<style scoped>
+.sortable-ghost {
+  opacity: 0.45;
+  background: var(--border);
+}
+.model-item:hover .model-item-actions {
+  opacity: 1;
+}
+.model-item:focus-within .model-item-actions {
+  opacity: 1;
+}
+</style>

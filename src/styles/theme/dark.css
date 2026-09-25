@@ -1,0 +1,38 @@
+:root.dark {
+  color-scheme: dark;
+  --composer-shadow: 0 8px 30px rgb(0 0 0 / 0.45);
+  --sidebar-shadow: 12px 0 35px rgb(0 0 0 / 0.5);
+  --selection-background: rgb(106 159 204 / 0.28);
+  --background: #0d1116;
+  --foreground: #ebe7e4;
+  --card: #161d27;
+  --card-foreground: #ebe7e4;
+  --popover: #212730;
+  --popover-foreground: #ebe7e4;
+  --primary: #6a9fcc;
+  --primary-foreground: #0d1116;
+  --secondary: #252f3d;
+  --secondary-foreground: #ebe7e4;
+  --muted: #1c242e;
+  --muted-foreground: #9fa4ab;
+  --accent: #2b3646;
+  --accent-foreground: #ebe7e4;
+  --destructive: #e8704f;
+  --border: rgb(73 80 89 / 0.5);
+  --input: rgb(73 80 89 / 0.55);
+  --ring: #6a9fcc;
+  --chart-1: #6a9fcc;
+  --chart-2: #b86b52;
+  --chart-3: #e1b06e;
+  --chart-4: #a3a473;
+  --chart-5: #5db87a;
+  --radius: 0.625rem;
+  --sidebar: #11161d;
+  --sidebar-foreground: #d5d8db;
+  --sidebar-primary: #6a9fcc;
+  --sidebar-primary-foreground: #0d1116;
+  --sidebar-accent: #212730;
+  --sidebar-accent-foreground: #ebe7e4;
+  --sidebar-border: rgb(73 80 89 / 0.5);
+  --sidebar-ring: #6a9fcc;
+}

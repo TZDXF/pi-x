@@ -74,3 +74,10 @@ onMounted(activate)
   />
   <PackageResourceDialog :pkg="resPkg" :project="viewedProject" @close="resPkg = null" />
 </template>
+<style scoped>
+.recent-projects {
+  padding-top: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+</style>

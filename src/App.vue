@@ -499,7 +499,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="desktop-shell">
+  <div class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground">
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
     <WorkspaceSidebar
       v-show="sidebarOpen && route.name !== 'settings'"
@@ -517,16 +517,16 @@ onUnmounted(() => {
       @settings="navigate('/settings/general')"
       @collapse="sidebarOpen = false"
     />
-    <main class="workspace-main">
+    <main class="workspace-main flex-1 min-w-0 flex flex-col relative overflow-hidden" :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }">
       <template v-if="route.name === 'settings'">
         <SettingsPage :project="project" />
       </template>
       <template v-else>
       <Button
         v-if="!sidebarOpen"
-        variant="ghost"
-        size="icon"
-        class="sidebar-restore icon-button"
+        variant="quiet"
+        size="toolbar"
+        class="sidebar-restore absolute top-[17px] left-2.5 z-[10] bg-sidebar"
         :title="t('app.expandSidebar')"
         :aria-label="t('app.expandSidebar')"
         @click="sidebarOpen = true"
