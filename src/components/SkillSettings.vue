@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue"
+import { onMounted, ref, watch } from "vue"
 import { Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { ask } from "@tauri-apps/plugin-dialog"
@@ -9,6 +9,7 @@ import { useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 
+const props = defineProps<{ project?: string }>()
 const { t } = useI18n()
 const ui = useUiStore()
 const skills = ref<HostedSkill[]>([])
@@ -22,7 +23,7 @@ async function load() {
   try {
     const [hosted, found] = await Promise.all([
       listHostedSkills(),
-      listDiscoveredSkills().catch(() => []),
+      listDiscoveredSkills(props.project),
     ])
     skills.value = hosted
     // Hide skills already managed under ~/.pix/skills.
@@ -57,7 +58,18 @@ async function remove(skill: HostedSkill) {
   } catch (e) { ui.pushToast(String(e), "error") }
 }
 
+function displaySkillPath(path: string): string {
+  return path.replace(/\\/g, "/")
+}
+
+function sourceLabel(skill: DiscoveredSkill): string {
+  if (skill.sourceKind === "packageGlobal" || skill.sourceKind === "packageProject")
+    return t(`skillsConfig.source.${skill.sourceKind}`, { name: skill.sourceName ?? "?" })
+  return t(`skillsConfig.source.${skill.sourceKind}`)
+}
+
 onMounted(load)
+watch(() => props.project, load)
 </script>
 
 <template>
@@ -80,8 +92,12 @@ onMounted(load)
         <p v-if="!skills.length" class="mt-3 text-sm text-muted-foreground">{{ t("skillsConfig.empty") }}</p>
         <div v-for="skill in skills" :key="skill.path" class="mt-3 flex items-center gap-3 rounded-lg border p-3">
           <div class="min-w-0 flex-1 space-y-1">
-            <p class="text-sm font-medium">{{ skill.name }}</p>
-            <p v-if="skill.description" class="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
+            <div class="flex flex-wrap items-center gap-2">
+              <p class="text-sm font-medium">{{ skill.name }}</p>
+              <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ t("skillsConfig.sourceHosted") }}</span>
+            </div>
+            <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">{{ displaySkillPath(skill.path) }}</p>
+            <p v-if="skill.description" class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
           </div>
           <Switch :model-value="skill.enabled" :aria-label="`${t('skillsConfig.enable')} · ${skill.name}`" @update:model-value="v => toggle(skill, Boolean(v))" />
           <Button variant="ghost" size="icon-sm" class="text-destructive hover:text-destructive" :aria-label="`${t('skillsConfig.delete')} · ${skill.name}`" :title="t('skillsConfig.delete')" @click="remove(skill)"><Trash2 :size="15" /></Button>
@@ -93,8 +109,12 @@ onMounted(load)
       <p v-if="!discovered.length" class="text-sm text-muted-foreground">{{ t("skillsConfig.noDiscovered") }}</p>
       <div v-for="skill in discovered" :key="skill.path" class="flex items-start gap-3 rounded-lg border p-3">
         <div class="min-w-0 flex-1 space-y-1">
-          <p class="text-sm font-medium">{{ skill.name }}</p>
-          <p v-if="skill.description" class="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="text-sm font-medium">{{ skill.name }}</p>
+            <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ sourceLabel(skill) }}</span>
+          </div>
+          <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">{{ displaySkillPath(skill.path) }}</p>
+          <p v-if="skill.description" class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
         </div>
       </div>
     </section>

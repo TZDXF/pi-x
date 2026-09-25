@@ -78,7 +78,7 @@ const headings = computed(() => {
           <p v-if="headings?.desc">{{ headings.desc }}</p>
         </header>
         <AgentSettings v-if="isDesktop && tab === 'agent-config'" />
-        <SkillSettings v-else-if="isDesktop && tab === 'skills'" />
+        <SkillSettings v-else-if="isDesktop && tab === 'skills'" :project="props.project" />
         <RemoteSettings v-else-if="tab === 'remote'" />
         <GeneralSettings v-else-if="tab === 'general'" />
         <ArchiveSettings v-else-if="tab === 'archive'" />

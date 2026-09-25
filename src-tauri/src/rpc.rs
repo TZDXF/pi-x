@@ -397,12 +397,85 @@ pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
 
 pub async fn request(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
+    if command["type"] == "rewind_prompt" {
+        return rewind_prompt(&process, &command).await;
+    }
     let exporting = command["type"] == "export_html";
     let mut response = process_request(&process, command).await?;
     if exporting {
         resolve_export_path(&mut response, &process.project)?;
     }
     Ok(response)
+}
+
+/// Rewind the persisted context as well as the UI; a normal prompt must not
+/// see the superseded question or its answer. Keep a backup until reload succeeds.
+async fn rewind_prompt(state: &ProcessState, command: &Value) -> Result<Value, String> {
+    let _navigation = state.navigation.lock().await;
+    let guard = state.inner.lock().await;
+    let inner = guard.as_ref().ok_or("pi is not running")?;
+    let status = name_request(inner, json!({"type": "get_state"})).await?;
+    let data = &status["data"];
+    if data["sessionFile"] != command["sessionFile"] || data["isStreaming"] == true
+        || data["isCompacting"] == true || data["pendingMessageCount"].as_u64().unwrap_or(0) > 0 {
+        return Err("Session changed or is still running".into());
+    }
+    let file = data["sessionFile"].as_str().ok_or("Missing session file")?;
+    let messages = name_request(inner, json!({"type": "get_fork_messages"})).await?;
+    let target = messages["data"]["messages"].as_array().and_then(|m| m.last())
+        .and_then(|m| m["entryId"].as_str()).ok_or("No question to edit")?;
+    let original = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let revised = rewind_log(&original, target)?;
+    replace_session_log(file, &revised)?;
+    let loaded = name_request(inner, json!({"type": "switch_session", "sessionPath": file})).await;
+    match loaded {
+        Ok(response) if response["data"]["cancelled"] != true =>
+            Ok(json!({"success": true, "command": "rewind_prompt"})),
+        result => {
+            replace_session_log(file, &original).map_err(|e| format!("Cannot restore session: {e}"))?;
+            let _ = name_request(inner, json!({"type": "switch_session", "sessionPath": file})).await;
+            Err(result.err().unwrap_or_else(|| "Session reload cancelled".into()))
+        }
+    }
+}
+
+fn replace_session_log(file: &str, content: &str) -> Result<(), String> {
+    let temporary = Path::new(file).with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        std::fs::write(&temporary, content)?;
+        std::fs::rename(&temporary, file)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result.map_err(|e| e.to_string())
+}
+
+fn rewind_log(raw: &str, target: &str) -> Result<String, String> {
+    let entries: Vec<Value> = raw.lines().filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+    let entry = entries.iter().find(|entry| entry["id"] == target)
+        .ok_or("Question no longer exists in the session")?;
+    if entry["type"] != "message" || entry["message"]["role"] != "user" {
+        return Err("Edit target is not a user question".into());
+    }
+    let mut removed = std::collections::HashSet::from([target.to_owned()]);
+    let mut output = String::new();
+    for item in &entries {
+        if item["id"].as_str().is_some_and(|id| removed.contains(id))
+            || item["parentId"].as_str().is_some_and(|id| removed.contains(id)) {
+            if let Some(id) = item["id"].as_str() { removed.insert(id.to_owned()); }
+            continue;
+        }
+        output.push_str(&item.to_string());
+        output.push('\n');
+    }
+    // The last record selects the original parent, without keeping abandoned answers
+    // in the active context. Other branches in the file remain intact.
+    let marker = json!({"type": "custom", "id": format!("edit-{}", uuid::Uuid::new_v4()),
+        "parentId": entry["parentId"], "timestamp": entry["timestamp"],
+        "customType": "pix-edit-position", "data": {}});
+    output.push_str(&marker.to_string());
+    output.push('\n');
+    Ok(output)
 }
 
 /// Pi writes the default HTML export relative to its own working directory,
@@ -486,5 +559,35 @@ mod export_tests {
 
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(project).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+    #[test]
+    fn session_log_replacement_overwrites_existing_file() {
+        let path = std::env::temp_dir().join(format!("pix-edit-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "original").unwrap();
+        replace_session_log(path.to_str().unwrap(), "replacement").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn rewind_removes_replaced_turn_but_preserves_other_branches() {
+        let raw = [
+            json!({"type":"session","id":"session"}),
+            json!({"type":"message","id":"before","parentId":null,"message":{"role":"assistant"}}),
+            json!({"type":"message","id":"question","parentId":"before","message":{"role":"user"}}),
+            json!({"type":"message","id":"answer","parentId":"question","message":{"role":"assistant"}}),
+            json!({"type":"message","id":"sibling","parentId":"before","message":{"role":"user"}}),
+        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        let result = rewind_log(&raw, "question").unwrap();
+        let entries: Vec<Value> = result.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[2]["id"], "sibling");
+        assert_eq!(entries[3]["parentId"], "before");
+        assert!(rewind_log(&raw, "missing").is_err());
+        assert!(rewind_log(&raw, "answer").is_err());
     }
 }

@@ -572,26 +572,56 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
     }
 
     if resource_type == "skills" {
-        // skills load via their SKILL.md; address the skill directory instead
-        let mut dirs: Vec<String> = out
-            .iter()
-            .filter_map(|f| {
-                if f.ends_with("SKILL.md") {
-                    f.rsplit_once('/').map(|(d, _)| d.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        dirs.sort();
-        dirs.dedup();
-        if !dirs.is_empty() {
-            return dirs;
-        }
+        // A package can ship both SKILL.md directories and standalone Markdown
+        // skills. Keep both instead of dropping files whenever a directory exists.
+        out = out.into_iter().filter_map(|rel| {
+            if rel == "SKILL.md" {
+                Some(".".to_string())
+            } else if let Some(dir) = rel.strip_suffix("/SKILL.md") {
+                Some(dir.to_string())
+            } else if rel.to_ascii_lowercase().ends_with(".md") {
+                Some(rel)
+            } else {
+                None
+            }
+        }).filter(|rel| {
+            let path = root.join(rel);
+            let nested_in_skill = path.ancestors().skip(1).take_while(|parent| *parent != root)
+                .any(|parent| parent.join("SKILL.md").is_file());
+            !nested_in_skill && (path.is_dir() && path.join("SKILL.md").is_file()
+                || path.is_file() && crate::skills::valid_skill_markdown(&path))
+        }).collect();
     }
     out.sort();
     out.dedup();
     out
+}
+
+/// Enabled skill locations from installed personal and current-project packages.
+/// Reuse the same manifest and settings filters as the package resources UI.
+pub(crate) struct PackageSkillPath {
+    pub path: std::path::PathBuf,
+    pub source: String,
+    pub scope: String,
+}
+
+pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath> {
+    let mut paths = Vec::new();
+    for package in package_list(project.map(str::to_string)) {
+        let Some(root) = package_root_dir(&package.source, &package.scope, project) else { continue };
+        let patterns = package.filters.as_ref()
+            .and_then(|filters| filters.get("skills"))
+            .and_then(|v| v.as_array())
+            .map(|entries| entries.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>());
+        for rel in collect_resources(&root, "skills") {
+            if resource_enabled(&rel, patterns.as_deref()) {
+                paths.push(PackageSkillPath {
+                    path: root.join(rel), source: package.source.clone(), scope: package.scope.clone(),
+                });
+            }
+        }
+    }
+    paths
 }
 
 /// List an installed package's resources with their enabled state.
@@ -776,6 +806,37 @@ mod tests {
         let pats: Vec<String> = vec!["extensions/*.ts".into()];
         assert!(resource_enabled("extensions/a.ts", Some(&pats)));
         assert!(!resource_enabled("skills/x/SKILL.md", Some(&pats)));
+    }
+
+    #[test]
+    fn package_skills_include_manifest_directories_and_files_and_honor_filters() {
+        let tmp = std::env::temp_dir().join(format!("pix-package-skills-{}", uuid::Uuid::new_v4()));
+        let project = tmp.join("project");
+        let package = project.join("plugin");
+        let skill = package.join("custom").join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::create_dir_all(project.join(".pi")).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: demo\ndescription: Demo\n---\n").unwrap();
+        std::fs::write(package.join("custom").join("single.md"), "---\ndescription: Single\n---\n").unwrap();
+        std::fs::create_dir_all(skill.join("references")).unwrap();
+        std::fs::write(skill.join("references").join("guide.md"),
+            "---\nname: not-a-skill\ndescription: Reference documentation\n---\n").unwrap();
+        std::fs::write(package.join("package.json"), r#"{"pi":{"skills":["./custom"]}}"#).unwrap();
+        std::fs::write(project.join(".pi").join("settings.json"),
+            r#"{"packages":[{"source":"plugin","skills":["-custom/demo"]}]}"#).unwrap();
+
+        let resources = collect_resources(&package, "skills");
+        assert_eq!(resources, vec!["custom/demo", "custom/single.md"]);
+        let paths = package_skill_paths(Some(project.to_str().unwrap()));
+        assert!(!paths.iter().any(|p| p.path == skill));
+        assert!(paths.iter().any(|p| p.path == package.join("custom").join("single.md")));
+
+        std::fs::write(project.join(".pi").join("settings.json"),
+            r#"{"packages":["plugin"]}"#).unwrap();
+        let paths = package_skill_paths(Some(project.to_str().unwrap()));
+        assert!(paths.iter().any(|p| p.path == skill));
+        assert!(paths.iter().any(|p| p.path == package.join("custom").join("single.md")));
+        std::fs::remove_dir_all(tmp).unwrap();
     }
 
     #[test]

@@ -108,6 +108,11 @@ fn read_frontmatter(file: &Path) -> Result<(Option<String>, Option<String>), Str
     Ok(parse_frontmatter(&raw))
 }
 
+pub(crate) fn valid_skill_markdown(file: &Path) -> bool {
+    read_frontmatter(file).ok().and_then(|(_, description)| description)
+        .is_some_and(|description| !description.trim().is_empty())
+}
+
 // ---------------------------------------------------------------------------
 // Scanning
 // ---------------------------------------------------------------------------
@@ -302,10 +307,10 @@ fn skills_set_enabled(root: &Path, paths: &[String]) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-discovered skills (Pi's own discovery dirs, read-only)
+// Auto-discovered skills (user directories and installed packages, read-only)
 // ---------------------------------------------------------------------------
 
-/// A user-level skill Pi auto-discovers outside the hosted root.
+/// A skill Pi discovers outside the hosted root.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredSkill {
@@ -313,8 +318,12 @@ pub struct DiscoveredSkill {
     pub description: String,
     /// Absolute path of the skill directory or Markdown file.
     pub path: String,
-    /// Whether a skill with the same name is already hosted in `~/.pix/skills`.
+    /// Whether this exact path is already managed under `~/.pix/skills`.
     pub hosted: bool,
+    /// globalPi | globalAgents | projectPi | projectAgents | packageGlobal | packageProject | settingsGlobal | settingsProject.
+    pub source_kind: String,
+    /// Package source when source_kind is package.
+    pub source_name: Option<String>,
 }
 
 /// Pi's discovery rules: if `dir` contains `SKILL.md` it is a skill root and
@@ -344,51 +353,101 @@ fn collect_skill_entries(dir: &Path, include_root_files: bool, out: &mut Vec<(Pa
 }
 
 #[tauri::command]
-pub async fn skills_discovered_list() -> Result<Vec<DiscoveredSkill>, String> {
-    tokio::task::spawn_blocking(skills_discovered).await.map_err(|e| e.to_string())?
+pub async fn skills_discovered_list(project: Option<String>) -> Result<Vec<DiscoveredSkill>, String> {
+    tokio::task::spawn_blocking(move || skills_discovered(project.as_deref())).await.map_err(|e| e.to_string())?
 }
 
-fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
-    let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
-    let roots = [
-        home.join(".pi").join("agent").join("skills"),
-        home.join(".agents").join("skills"),
-    ];
+type SkillLocation = (PathBuf, PathBuf, &'static str, &'static str, Option<String>);
 
-    // Names already managed under ~/.pix/skills, to flag duplicates.
+fn add_root_locations(locations: &mut Vec<SkillLocation>, root: &Path, source: &'static str) {
+    let mut found = Vec::new();
+    collect_skill_entries(root, true, &mut found);
+    for (path, kind) in found {
+        locations.push((root.to_path_buf(), path, kind, source, None));
+    }
+}
+
+fn add_explicit_locations(locations: &mut Vec<SkillLocation>, raw: &str, base: &Path, home: &Path, source: &'static str) {
+    let expanded = if raw == "~" { home.to_path_buf() }
+        else if raw.starts_with("~/") || raw.starts_with("~\\") { home.join(&raw[2..]) }
+        else { PathBuf::from(raw) };
+    let path = if expanded.is_absolute() { expanded } else { base.join(expanded) };
+    if path.is_dir() {
+        add_root_locations(locations, &path, source);
+    } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+        locations.push((path.clone(), path, "file", source, None));
+    }
+}
+
+fn skills_discovered(project: Option<&str>) -> Result<Vec<DiscoveredSkill>, String> {
+    let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
+    let agent_dir = crate::trust::agent_dir();
     let hosted_root = skills_root();
-    let hosted_names: HashSet<String> = scan_root(&hosted_root)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|(path, kind)| hosted_entry(&hosted_root, path, kind).ok().map(|s| s.name))
+    let hosted_paths: HashSet<PathBuf> = scan_root(&hosted_root)
+        .unwrap_or_default().iter()
+        .map(|(path, _)| canonicalize(path).unwrap_or_else(|_| path.clone()))
         .collect();
 
-    let mut out: Vec<DiscoveredSkill> = Vec::new();
-    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
-    let mut seen_names: HashSet<String> = HashSet::new();
-    for root in roots {
-        let mut found = Vec::new();
-        collect_skill_entries(&root, true, &mut found);
-        for (path, kind) in found {
-            // Dedupe skills reachable through several roots (e.g. symlinks).
-            let canonical = canonicalize(&path).unwrap_or_else(|_| path.clone());
-            if !seen_paths.insert(canonical) {
-                continue;
-            }
-            let Ok(entry) = hosted_entry(&root, &path, kind) else { continue };
-            // Pi only loads skills with a non-empty description.
-            if entry.description.is_empty() || !seen_names.insert(entry.name.clone()) {
-                continue;
-            }
-            out.push(DiscoveredSkill {
-                hosted: hosted_names.contains(&entry.name),
-                name: entry.name,
-                description: entry.description,
-                path: entry.path,
-            });
+    let mut locations: Vec<SkillLocation> = Vec::new();
+    add_root_locations(&mut locations, &agent_dir.join("skills"), "globalPi");
+    add_root_locations(&mut locations, &home.join(".agents").join("skills"), "globalAgents");
+    if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
+        let project = Path::new(project);
+        add_root_locations(&mut locations, &project.join(".pi").join("skills"), "projectPi");
+        // Shared .agents skills are inherited from parent directories up to
+        // the repository boundary (or the filesystem root outside a repo).
+        for ancestor in project.ancestors() {
+            add_root_locations(&mut locations, &ancestor.join(".agents").join("skills"), "projectAgents");
+            if ancestor.join(".git").exists() { break; }
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    for package in crate::packages::package_skill_paths(project) {
+        let path = package.path;
+        let kind = if path.join("SKILL.md").is_file() { Some("directory") }
+            else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) { Some("file") }
+            else { None };
+        if let Some(kind) = kind {
+            locations.push((path.clone(), path, kind,
+                if package.scope == "project" { "packageProject" } else { "packageGlobal" },
+                Some(package.source)));
+        }
+    }
+    // Pi's explicit settings paths can point outside all discovery directories.
+    // Keep hosted paths out of this list; they already have editable controls above.
+    for raw in pi_skill_paths()? {
+        add_explicit_locations(&mut locations, &raw, &agent_dir, &home, "settingsGlobal");
+    }
+    if let Some(project) = project.filter(|p| !p.trim().is_empty()) {
+        let root = Path::new(project);
+        let settings_file = root.join(".pi").join("settings.json");
+        if let Ok(contents) = std::fs::read_to_string(settings_file) {
+            if let Ok(settings) = serde_json::from_str::<Value>(&contents) {
+                if let Some(paths) = settings.get("skills").and_then(Value::as_array) {
+                    for raw in paths.iter().filter_map(Value::as_str) {
+                        add_explicit_locations(&mut locations, raw, root, &home, "settingsProject");
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for (root, path, kind, source_kind, source_name) in locations {
+        let canonical = canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen_paths.insert(canonical.clone()) { continue; }
+        let Ok(entry) = hosted_entry(&root, &path, kind) else { continue };
+        if entry.description.trim().is_empty() { continue; }
+        out.push(DiscoveredSkill {
+            hosted: hosted_paths.contains(&canonical),
+            name: entry.name,
+            description: entry.description,
+            path: entry.path,
+            source_kind: source_kind.to_string(),
+            source_name,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.path.cmp(&b.path)));
     Ok(out)
 }
 
@@ -481,6 +540,22 @@ mod tests {
         let mut names: Vec<String> = found.iter().map(|(p, _)| dir_name(p)).collect();
         names.sort();
         assert_eq!(names, vec!["a-skill", "b-skill", "single.md"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_settings_paths_keep_their_source() {
+        let root = temp_root("configured");
+        let skill = root.join("custom").join("my-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), SKILL_MD).unwrap();
+        let mut locations = Vec::new();
+        add_explicit_locations(&mut locations, "custom/my-skill", &root, &root, "settingsProject");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].1, skill);
+        assert_eq!(locations[0].3, "settingsProject");
+        let entry = hosted_entry(&locations[0].0, &locations[0].1, locations[0].2).unwrap();
+        assert_eq!(entry.name, "my-skill");
         std::fs::remove_dir_all(root).unwrap();
     }
 

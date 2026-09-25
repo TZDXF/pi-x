@@ -60,15 +60,17 @@ export const deleteHostedSkill = (path: string) => invoke<void>("skills_hosted_d
 export const setHostedSkillsEnabled = (paths: string[]) =>
   invoke<void>("skills_hosted_set_enabled", { paths })
 
-/** A user-level skill Pi auto-discovers outside the hosted skills (read-only). */
+/** A skill Pi discovers outside the hosted skills, including package skills (read-only). */
 export interface DiscoveredSkill {
   name: string
   description: string
   path: string
   hosted: boolean
+  sourceKind: "globalPi" | "globalAgents" | "projectPi" | "projectAgents" | "packageGlobal" | "packageProject" | "settingsGlobal" | "settingsProject"
+  sourceName: string | null
 }
-export const listDiscoveredSkills = () =>
-  invoke<DiscoveredSkill[]>("skills_discovered_list")
+export const listDiscoveredSkills = (project?: string) =>
+  invoke<DiscoveredSkill[]>("skills_discovered_list", { project: project ?? null })
 
 export const detectPi = (customPath?: string) =>
   invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
