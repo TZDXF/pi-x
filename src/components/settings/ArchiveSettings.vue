@@ -6,7 +6,6 @@ import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 
@@ -111,12 +110,13 @@ onMounted(load)
       class="flex h-8 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-muted-foreground focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30"
     >
       <Search :size="14" class="shrink-0" />
-      <Input
+      <input
         v-model="query"
+        type="search"
         :placeholder="t('sessionArchive.search')"
         :aria-label="t('sessionArchive.search')"
-        class="h-auto border-0 bg-transparent px-0 py-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-      />
+        class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+      >
       <button
         v-if="query"
         type="button"
@@ -156,52 +156,54 @@ onMounted(load)
     {{ t("sessionArchive.noMatch") }}
   </p>
 
-  <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
-    <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
-      <Folder :size="15" class="shrink-0 text-muted-foreground" />
-      <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
-      <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-        {{ group.rows.length }}
-      </span>
-    </header>
-    <ul class="divide-y divide-border/60">
-      <li
-        v-for="s in group.rows"
-        :key="s.file"
-        class="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/40"
-      >
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-sm" :title="label(s)">{{ label(s) }}</p>
-          <p class="text-xs text-muted-foreground">{{ when(s) }}</p>
-        </div>
-        <div class="flex shrink-0 items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            class="text-muted-foreground hover:text-foreground"
-            :disabled="!!busy"
-            :title="t('sessionArchive.restore')"
-            :aria-label="t('sessionArchive.restore')"
-            @click="restore(s)"
-          >
-            <RefreshCw v-if="busy === s.file" :size="14" class="animate-spin" />
-            <ArchiveRestore v-else :size="15" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            class="text-muted-foreground hover:text-destructive"
-            :disabled="!!busy"
-            :title="t('sessionArchive.delete')"
-            :aria-label="t('sessionArchive.delete')"
-            @click="askRemove(s)"
-          >
-            <Trash2 :size="15" />
-          </Button>
-        </div>
-      </li>
-    </ul>
-  </section>
+  <div class="space-y-4">
+      <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
+      <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
+        <Folder :size="15" class="shrink-0 text-muted-foreground" />
+        <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
+        <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+          {{ group.rows.length }}
+        </span>
+      </header>
+      <ul class="divide-y divide-border/60">
+        <li
+          v-for="s in group.rows"
+          :key="s.file"
+          class="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/40"
+        >
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm" :title="label(s)">{{ label(s) }}</p>
+            <p class="text-xs text-muted-foreground">{{ when(s) }}</p>
+          </div>
+          <div class="flex shrink-0 items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="text-muted-foreground hover:text-foreground"
+              :disabled="!!busy"
+              :title="t('sessionArchive.restore')"
+              :aria-label="t('sessionArchive.restore')"
+              @click="restore(s)"
+            >
+              <RefreshCw v-if="busy === s.file" :size="14" class="animate-spin" />
+              <ArchiveRestore v-else :size="15" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              class="text-muted-foreground hover:text-destructive"
+              :disabled="!!busy"
+              :title="t('sessionArchive.delete')"
+              :aria-label="t('sessionArchive.delete')"
+              @click="askRemove(s)"
+            >
+              <Trash2 :size="15" />
+            </Button>
+          </div>
+        </li>
+      </ul>
+    </section>
+  </div>
   <Dialog :open="!!pendingDelete" @update:open="(v: boolean) => { if (!v && !busy) pendingDelete = null }">
     <DialogContent class="sm:max-w-md">
       <DialogHeader>

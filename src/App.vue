@@ -27,6 +27,7 @@ import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import { notifyPermission } from "@/lib/notifications"
+import { toolPermission } from "@/lib/permissions"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import { PanelLeft } from "@lucide/vue"
@@ -44,7 +45,7 @@ const workspace = useWorkspaceStore()
 const navigating = ref(false)
 const pendingResume = ref<string | null>(null)
 const ui = useUiStore()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const sidebarOpen = ref(true)
 const projectDialogOpen = ref(false)
@@ -74,7 +75,7 @@ function contextFor(dir: string): WorkspaceContext | undefined {
 function contextSignature(dir: string) { return JSON.stringify(contextFor(dir) ?? null) }
 async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
   const context = contextFor(dir)
-  await spawnPi(dir, file, runtimeId, context)
+  await spawnPi(dir, file, runtimeId, context, toolPermission(dir), locale.value)
   runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
 }
 
@@ -262,6 +263,20 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
   }
 }
 
+/** Tool permissions apply at pi process start; restart the active worker. */
+async function onPermissionChanged() {
+  const owner = sessionFor(activeRuntimeId.value)
+  if (!owner.started) return
+  uiFor(owner.runtimeId).pushToast(t("chat.permissionRestarting"), "info")
+  if (owner.sessionFile) {
+    await rebuildConversation(owner)
+    return
+  }
+  // Fresh draft without a session file: drop the worker, it respawns lazily.
+  await killPi(owner.runtimeId).catch(() => {})
+  owner.started = false
+}
+
 async function reloadExternalConversation(file: string) {
   if (disposed || connecting.value || navigating.value) return
   const owner = findConversation(file)
@@ -378,6 +393,14 @@ async function saveProject(group: ProjectGroup) {
       await selectProject(group.primary)
     }
   } catch (e) { ui.pushToast(String(e), "error") }
+}
+
+async function selectQueuedConversation(runtimeId: string) {
+  if (workspace.gitBusy || connecting.value) return
+  const owner = sessionFor(runtimeId)
+  activateSession(runtimeId)
+  project.value = owner.cwd
+  phase.value = "chat"
 }
 
 /** Resume a stored session: switch in-process when possible, else restart. */
@@ -512,6 +535,7 @@ onUnmounted(() => {
       :navigation-busy="workspace.gitBusy || phase === 'trust'"
       @switch-project="requestNavigation(switchProject)"
       @select-project="path => requestNavigation(() => selectProject(path))"
+      @select-conversation="id => requestNavigation(() => selectQueuedConversation(id))"
       @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
       @session-action="(file, action) => openSessionAction(file, action)"
       @new-session="path => requestNavigation(() => newProjectSession(path))"
@@ -552,7 +576,7 @@ onUnmounted(() => {
       </div>
 
       <template v-else-if="phase === 'chat'">
-        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :selecting-project="selectingProject" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" />
+        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :selecting-project="selectingProject" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" @permission-changed="onPermissionChanged" />
       </template>
 
       <div

@@ -1,4 +1,5 @@
 import { reactive } from "vue"
+import { createUuid } from "../lib/uuid"
 import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
 import { createUiStore } from "./ui"
@@ -32,7 +33,7 @@ export function activateSession(id: string) {
   activeRuntimeId.value = id
 }
 export function createConversation(project: string) {
-  const id = crypto.randomUUID()
+  const id = createUuid()
   pruneDormantConversations()
   const store = sessionFor(id)
   store.cwd = project

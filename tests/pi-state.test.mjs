@@ -3,12 +3,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { loadTsSource } from './lib/load-ts.mjs'
 
 function harness(storage = new Map(), options = {}) {
   const calls = []
   let mtime = 0
   const state = { model: { provider: 'restored', id: 'session-model', reasoning: true }, thinkingLevel: 'low', ...(options.sessionFile ? { sessionFile: options.sessionFile } : {}) }
   const modules = {
+    '@/lib/thinkingLevels': loadTsSource(readFileSync(new URL('../src/lib/thinkingLevels.ts', import.meta.url), 'utf8')),
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },

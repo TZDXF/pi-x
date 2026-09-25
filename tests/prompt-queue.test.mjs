@@ -7,7 +7,7 @@ import { contentModule } from './lib/load-ts.mjs'
 
 function loadStore(name, modules) {
   const source = readFileSync(new URL(`../src/stores/${name}.ts`, import.meta.url), 'utf8')
-  const context = vm.createContext({ exports: {}, console: { warn() {}, error() {} },
+  const context = vm.createContext({ exports: {}, setTimeout, clearTimeout, console: { warn() {}, error() {} },
     require: id => modules[id], localStorage: { getItem: () => null } })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
   const exports = context.exports
@@ -149,4 +149,56 @@ test('queue sends only one message per run despite duplicate completion events',
   assert.deepEqual(sent(), ['first', 'second', 'third'])
   assert.equal(h.store.promptQueue.value.length, 0)
   assert.ok(h.calls.filter(c => c.type === 'prompt').every(c => !c.streamingBehavior))
+})
+
+
+test('delayed prompts wait until due and do not block ready prompts', async () => {
+  const h = sessionHarness()
+  h.store.schedulePrompt('later', 60_000)
+  assert.equal(h.calls.length, 0)
+  h.store.dispatchQueuedPrompt()
+  assert.equal(h.calls.length, 0)
+  h.store.isStreaming.value = true
+  await h.store.send('ready', undefined, undefined, 'queue')
+  h.store.isStreaming.value = false
+  h.store.dispatchQueuedPrompt()
+  assert.equal(h.calls.find(c => c.type === 'prompt').message, 'ready')
+  assert.equal(h.store.promptQueue.value[0].text, 'later')
+  h.store.clear()
+})
+
+test('delayed prompts automatically dispatch with images and expanded text', async () => {
+  const h = sessionHarness()
+  h.store.schedulePrompt('later', 10, [{ data: 'image', mimeType: 'image/png' }], 'expanded')
+  await new Promise(resolve => setTimeout(resolve, 180))
+  const prompt = h.calls.find(c => c.type === 'prompt')
+  assert.equal(prompt.message, 'expanded')
+  assert.equal(prompt.images[0].data, 'image')
+  assert.equal(h.store.promptQueue.value.length, 0)
+})
+
+test('delayed prompts reject invalid delays and can be cancelled or executed early', () => {
+  const h = sessionHarness()
+  for (const delay of [0, -1, NaN, Infinity, 366 * 86400000]) {
+    assert.throws(() => h.store.schedulePrompt('later', delay))
+  }
+  h.store.schedulePrompt('cancel', 60_000)
+  h.store.removeQueuedPrompt(h.store.promptQueue.value[0].id)
+  h.store.schedulePrompt('now', 60_000)
+  h.store.executeQueuedPrompt(h.store.promptQueue.value[0].id)
+  assert.equal(h.calls.find(c => c.type === 'prompt').message, 'now')
+  assert.equal(h.store.promptQueue.value.length, 0)
+})
+
+
+test('a delayed prompt stays queued while busy and clear cancels its timer', async () => {
+  const h = sessionHarness()
+  h.store.isStreaming.value = true
+  h.store.schedulePrompt('later', 10)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(h.calls.filter(c => c.type === 'prompt').length, 0)
+  assert.equal(h.store.promptQueue.value.length, 1)
+  h.store.clear()
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(h.calls.filter(c => c.type === 'prompt').length, 0)
 })

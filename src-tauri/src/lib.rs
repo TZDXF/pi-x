@@ -1,10 +1,12 @@
 mod data_dir;
+mod schedules;
 mod desktop;
 mod editor;
 mod editor_icon;
 mod commands;
 mod fs_search;
 mod packages;
+mod permission;
 mod pi_locate;
 mod pi_update;
 #[cfg(feature = "remote-access")]
@@ -32,9 +34,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(RpcState::default())
+        .manage(schedules::ScheduleState::default())
         .manage(terminal::TerminalState::default())
         .setup(|app| {
             data_dir::initialize()?;
+            schedules::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
             tauri::WebviewWindowBuilder::from_config(app, &config)?
@@ -60,6 +64,9 @@ pub fn run() {
         })
         .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            schedules::schedule_list,
+            schedules::schedule_save,
+            schedules::schedule_delete,
             remote::remote_status,
             remote::remote_set,
             commands::pi_detect,

@@ -10,7 +10,8 @@ const props = withDefaults(defineProps<{
   id?: string
   triggerClass?: string
   openAbove?: boolean
-}>(), { triggerClass: "h-8 w-auto min-w-0 max-w-64 text-xs" })
+  showProvider?: boolean
+}>(), { triggerClass: "h-8 w-auto min-w-0 max-w-64 text-xs", showProvider: true })
 const emit = defineEmits<{ "update:modelValue": [value: string] }>()
 const { t } = useI18n()
 const selectedModel = computed(() => props.models.find(model => `${model.provider}/${model.id}` === props.modelValue))
@@ -29,7 +30,7 @@ const groups = computed(() => {
   <Select :model-value="modelValue" :disabled="disabled" @update:model-value="value => { if (typeof value === 'string') emit('update:modelValue', value) }">
     <SelectTrigger :id="id" :class="triggerClass">
       <SelectValue :placeholder="t('chat.selectModel')">
-        {{ selectedModel ? `${selectedModel.provider} / ${selectedModel.name || selectedModel.id}` : t('chat.selectModel') }}
+        {{ selectedModel ? (showProvider ? `${selectedModel.provider} / ${selectedModel.name || selectedModel.id}` : (selectedModel.name || selectedModel.id)) : t('chat.selectModel') }}
       </SelectValue>
     </SelectTrigger>
     <SelectContent

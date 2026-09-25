@@ -1,3 +1,4 @@
+import { ALL_THINKING_LEVELS, supportedThinkingLevels, clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
 import { computed, ref, shallowRef } from "vue"
 import { i18n } from "@/i18n"
@@ -38,6 +39,7 @@ export interface QueuedPrompt {
   text: string
   images?: { data: string, mimeType: string }[]
   expandedText?: string
+  sendAt?: number
 }
 
 export interface UserEntry { kind: "user", id: number, text: string, modelChange?: { from: string, to: string }, images?: { url: string }[], live?: true, timestamp?: number }
@@ -46,33 +48,8 @@ export type Entry = UserEntry | AssistantEntry
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
 
-const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 /** pi's DEFAULT_THINKING_LEVEL (core/defaults.js). */
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
-
-/** pi's getSupportedThinkingLevels: derive levels from a models.json entry. */
-function supportedThinkingLevels(model: { reasoning?: boolean, thinkingLevelMap?: unknown }): ThinkingLevel[] {
-  if (!model.reasoning) return ["off"]
-  const map = (model.thinkingLevelMap ?? {}) as Record<string, unknown>
-  return ALL_THINKING_LEVELS.filter(level => {
-    const mapped = map[level]
-    if (mapped === null) return false
-    if (level === "xhigh" || level === "max") return mapped !== undefined
-    return true
-  })
-}
-
-/** pi's clampThinkingLevel: nearest available level, upward first. */
-function clampThinkingLevel(level: ThinkingLevel, available: ThinkingLevel[]): ThinkingLevel {
-  if (available.includes(level)) return level
-  const idx = ALL_THINKING_LEVELS.indexOf(level)
-  if (idx === -1) return available[0] ?? "off"
-  for (let i = idx; i < ALL_THINKING_LEVELS.length; i++)
-    if (available.includes(ALL_THINKING_LEVELS[i])) return ALL_THINKING_LEVELS[i]
-  for (let i = idx - 1; i >= 0; i--)
-    if (available.includes(ALL_THINKING_LEVELS[i])) return ALL_THINKING_LEVELS[i]
-  return available[0] ?? "off"
-}
 
 const SELECTION_KEY = "pix.conversationSelection"
 interface RememberedSelection { model?: Model; thinking?: ThinkingLevel; levels?: ThinkingLevel[] }
@@ -452,10 +429,33 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   // ---- actions ----
   let conversationVersion = 0
 
+  let queueTimer: ReturnType<typeof setTimeout> | undefined
+  function armQueueTimer() {
+    if (queueTimer !== undefined) clearTimeout(queueTimer)
+    queueTimer = undefined
+    const times = promptQueue.value.flatMap(item => item.sendAt && (!queuePaused || item.sendAt > Date.now()) ? [item.sendAt] : [])
+    if (!times.length) return
+    queueTimer = setTimeout(() => {
+      queueTimer = undefined
+      if (!queuePaused) dispatchQueuedPrompt()
+      armQueueTimer()
+    }, Math.min(Math.max(100, Math.min(...times) - Date.now()), 2_147_483_647))
+  }
+
+  function schedulePrompt(text: string, delayMs: number, images?: QueuedPrompt["images"], expandedText?: string) {
+    if (!Number.isFinite(delayMs) || delayMs <= 0 || delayMs > 365 * 24 * 60 * 60 * 1000)
+      throw new Error(i18n.global.t("chat.invalidSendDelay"))
+    if (!text.trim() && !images?.length) return
+    promptQueue.value.push({ id: nextId(), text: text.trim(), images, expandedText, sendAt: Date.now() + delayMs })
+    armQueueTimer()
+  }
+
   function removeQueuedPrompt(id: number) {
     const index = promptQueue.value.findIndex(item => item.id === id)
     if (index < 0) return
-    return promptQueue.value.splice(index, 1)[0]
+    const item = promptQueue.value.splice(index, 1)[0]
+    armQueueTimer()
+    return item
   }
 
   function moveQueuedPrompt(id: number, targetId: number) {
@@ -472,9 +472,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   }
 
   function dispatchQueuedPrompt() {
-    if (isStreaming.value || stopping) return
+    if (isStreaming.value || stopping || isResending.value || isCompacting.value) return
     queuePaused = false
-    const next = promptQueue.value.shift()
+    const index = promptQueue.value.findIndex(item => !item.sendAt || item.sendAt <= Date.now())
+    const next = index < 0 ? undefined : removeQueuedPrompt(promptQueue.value[index].id)
     if (next) void send(next.text, next.images, next.expandedText)
   }
 
@@ -929,6 +930,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     turnAborted = false
     awaitingAgentStart = false
     promptQueue.value = []
+    if (queueTimer !== undefined) clearTimeout(queueTimer)
+    queueTimer = undefined
     stopping = false
     ++resendVersion
     isResending.value = false
@@ -1015,6 +1018,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     thinkingLevel,
     pendingCount,
     promptQueue,
+    schedulePrompt,
     removeQueuedPrompt,
     moveQueuedPrompt,
     executeQueuedPrompt,

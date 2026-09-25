@@ -20,7 +20,7 @@ function harness(group = null) {
   const context = vm.createContext({
     watch: () => {}, ref: value => ({ value }), computed: def => ({ get value() { return (typeof def === 'function' ? def : def.get)() } }),
     onMounted: fn => { context.mount = fn }, onUnmounted: () => {},
-    useI18n: () => ({ t: x => x }),
+    useI18n: () => ({ t: x => x, locale: { value: 'en' } }),
     useSessionStore: () => new Proxy({}, { get: (_, k) => sessionFor(activeRuntimeId.value)[k] }),
     useWorkspaceStore: () => workspace, useUiStore: () => ({ clear() {}, pushToast() {} }),
     sessionFor, uiFor: () => ({ pushToast() {}, handleRequest() {}, pushStderr() {} }),
@@ -35,8 +35,9 @@ function harness(group = null) {
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {}, notifyPermission: () => {},
+    toolPermission: () => "full",
   })
-  vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
+  vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, selectQueuedConversation, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls, spawnArgs, workspace }
 }
 test('opening the app, selecting projects and drafting a new chat do not start pi', async () => {
@@ -167,4 +168,20 @@ test('resuming across projects selects the saved identity before startup and loa
   releaseInit()
   await pending
   assert.equal(owner.started, true)
+})
+
+
+test('selecting a queued new conversation reattaches its runtime without clearing or restarting', async () => {
+  const { context, calls } = harness()
+  await context.mount()
+  const pending = context.sessionFor(context.activeRuntimeId.value)
+  pending.started = true
+  pending.promptQueue = [{ text: 'later', sendAt: Date.now() + 60000 }]
+  const id = context.activeRuntimeId.value
+  await context.actions.newProjectSession('project')
+  assert.notEqual(context.activeRuntimeId.value, id)
+  await context.actions.selectQueuedConversation(id)
+  assert.equal(context.activeRuntimeId.value, id)
+  assert.equal(pending.promptQueue.length, 1)
+  assert.deepEqual(calls, [])
 })

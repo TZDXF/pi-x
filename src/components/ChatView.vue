@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { sendCountdown } from "@/lib/sendCountdown"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -37,6 +38,7 @@ import { composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { LanguageModelUsage } from "ai"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
+import { TOOL_PERMISSIONS, toolPermission, setToolPermission, type ToolPermission } from "@/lib/permissions"
 import {
   Dialog,
   DialogContent,
@@ -71,9 +73,8 @@ import { withFileReferences, withSessionReferences, sessionReference, desktopCom
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { isDesktop } from "@/api/transport"
-import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal, GripVertical, Pencil, Trash2 } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { UserEntry } from "@/stores/session"
@@ -96,7 +97,7 @@ const rpcRequest: typeof requestForRuntime = command => requestForRuntime(comman
 const { t, te } = useI18n()
 
 const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; selectingProject?: boolean; connected: boolean }>()
-const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
+const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: []; permissionChanged: [] }>()
 const workspace = useWorkspaceStore()
 const currentTitle = computed(() => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title)
 
@@ -478,6 +479,22 @@ async function editQueuedPrompt(id: number) {
   document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")?.focus()
 }
 
+const queueNow = ref(Date.now())
+let countdownTimer: ReturnType<typeof setInterval> | undefined
+watch(() => session.promptQueue.some(item => item.sendAt !== undefined), (hasScheduled) => {
+  if (countdownTimer !== undefined) clearInterval(countdownTimer)
+  countdownTimer = undefined
+  queueNow.value = Date.now()
+  if (hasScheduled) countdownTimer = setInterval(() => { queueNow.value = Date.now() }, 1000)
+}, { immediate: true })
+onBeforeUnmount(() => {
+  if (countdownTimer !== undefined) clearInterval(countdownTimer)
+})
+
+const delayedSend = ref(false)
+const sendDelay = ref(5)
+const sendDelayUnit = ref("minutes")
+
 async function onSubmit(message: {
   text?: string
   files?: { url?: string }[]
@@ -490,6 +507,14 @@ async function onSubmit(message: {
     .map((u) => dataUrlToImage(u))
     .filter((im): im is { data: string; mimeType: string } => im !== null)
   if (!text && !images.length) return
+  if (delayedSend.value && (!Number.isFinite(Number(sendDelay.value)) || Number(sendDelay.value) <= 0 || Number(sendDelay.value) * (sendDelayUnit.value === "hours" ? 60 : 1) > 525600)) {
+    ui.pushToast(t("chat.invalidSendDelay"), "error")
+    throw new Error(t("chat.invalidSendDelay"))
+  }
+  if (delayedSend.value && text.startsWith("/")) {
+    ui.pushToast(t("chat.delayedCommandUnsupported"), "error")
+    throw new Error(t("chat.delayedCommandUnsupported"))
+  }
   if (!await props.ensureStarted()) {
     bridge.value?.setTextInput(text)
     throw new Error(t("completion.startFailed"))
@@ -517,7 +542,13 @@ async function onSubmit(message: {
     }
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-  await session.send(text, images.length ? images : undefined, extensionCommand ? text : withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project)), runningBehavior.value)
+  const expandedText = extensionCommand ? text : withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project))
+  if (delayedSend.value) {
+    session.schedulePrompt(text, Number(sendDelay.value) * (sendDelayUnit.value === "hours" ? 3_600_000 : 60_000), images.length ? images : undefined, expandedText)
+    delayedSend.value = false
+  } else {
+    await session.send(text, images.length ? images : undefined, expandedText, runningBehavior.value)
+  }
 }
 
 function thinkingLabel(lv: string) {
@@ -534,6 +565,21 @@ function onThinkingChange(v: unknown) {
   }
   session.setThinkingLevel(v as ThinkingLevel)
     .catch(e => ui.pushToast(String(e), "error"))
+}
+
+// ---- tool permission selector ----
+// pi applies the tool allowlist only at process start; changing it restarts the worker via the permissionChanged event.
+
+const permission = ref<ToolPermission>(toolPermission(props.project))
+watch(() => props.project, dir => { permission.value = toolPermission(dir) })
+
+function onPermissionChange(value: unknown) {
+  if (typeof value !== "string" || !TOOL_PERMISSIONS.includes(value as ToolPermission)) return
+  const choice = value as ToolPermission
+  if (choice === permission.value) return
+  permission.value = choice
+  setToolPermission(props.project, choice)
+  emit("permissionChanged")
 }
 
 async function abort() {
@@ -755,7 +801,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pt-3 shrink-0 pb-3 max-[900px]:pl-4 max-[900px]:pr-4">
-      <WorkspaceContext v-if="!session.entries.length && !session.isStreaming && (!connecting || selectingProject) && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
       <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
         <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
@@ -763,12 +808,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </div>
         <ul class="mt-1 max-h-40 overflow-y-auto">
           <li v-for="item in session.promptQueue" :key="item.id"
-            class="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-muted" :class="{ 'opacity-50': draggedPrompt === item.id }"
+            class="flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-1 py-2 text-sm hover:bg-muted" :class="{ 'opacity-50': draggedPrompt === item.id }"
             @dragover.prevent @drop.prevent.stop="dropQueuedPrompt(item.id)">
             <span draggable="true" class="shrink-0 cursor-grab p-1" :title="t('chat.dragQueue')"
               @dragstart="startQueueDrag($event, item.id)" @dragend="draggedPrompt = null"><GripVertical class="size-4" /></span>
-            <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="item.text">{{ item.text }}<span v-if="item.images?.length"> · {{ t('chat.queuedImages', { count: item.images.length }) }}</span></span>
-            <div class="flex shrink-0 items-center gap-1">
+            <div class="min-w-0 flex-1 basis-40 space-y-1">
+              <p class="truncate text-foreground" :title="item.text">{{ item.text || t('chat.queuedImages', { count: item.images?.length ?? 0 }) }}</p>
+              <p v-if="item.text && item.images?.length" class="text-xs text-muted-foreground">{{ t('chat.queuedImages', { count: item.images.length }) }}</p>
+            </div>
+            <div class="ml-auto flex shrink-0 items-center gap-1">
+              <span v-if="item.sendAt !== undefined" class="mr-1 text-xs tabular-nums text-muted-foreground" :title="t('chat.scheduledSendAt', { time: new Date(item.sendAt).toLocaleString() })" :aria-label="t('chat.sendCountdown', { time: sendCountdown(item.sendAt, queueNow) })">{{ sendCountdown(item.sendAt, queueNow) }}</span>
               <Button type="button" variant="ghost" size="sm" :disabled="workspace.gitBusy || props.connecting || !props.connected || editBusy || session.isResending || session.isCompacting" @click="session.executeQueuedPrompt(item.id)">{{ t('chat.executeQueuedPrompt') }}</Button>
               <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.editQueuedPrompt')" @click="editQueuedPrompt(item.id)"><Pencil class="size-3" /></Button>
               <Button type="button" variant="ghost" size="icon-xs" :aria-label="t('chat.deleteQueuedPrompt')" @click="session.removeQueuedPrompt(item.id)"><Trash2 class="size-3" /></Button>
@@ -829,19 +878,36 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :disabled="editBusy || workspace.gitBusy || (connecting && !selectingProject && !completion?.initiating)"
           class="min-h-14"
         />
-        <div data-align="block-end" class="composer-controls flex items-center justify-between w-full pt-0 pr-[5px] pb-[5px] pl-[5px] gap-1.5">
+        <div data-align="block-end" class="composer-controls flex flex-wrap items-center justify-between w-full pt-0 pr-[5px] pb-[5px] pl-[5px] gap-1.5">
           <div class="composer-options flex items-center gap-1 min-w-0 flex-wrap flex-1">
             <Button
               type="button"
               variant="ghost"
-              size="sm"
-              class="text-muted-foreground px-2 py-1.5 text-xs"
+              size="icon"
+              class="text-muted-foreground size-8"
               :title="t('chat.attachImage')"
+              :aria-label="t('chat.attachImage')"
               @click="bridge?.openFileDialog?.()"
             >
-              + {{ t("chat.attachment") }}
+              <Paperclip class="size-4.5" />
             </Button>
-            <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" open-above />
+
+            <Select
+              :model-value="permission"
+              :disabled="session.isStreaming || connecting || workspace.gitBusy"
+              @update:model-value="onPermissionChange"
+            >
+              <SelectTrigger class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" :title="t('chat.permissionTitle')">
+                <SelectValue>{{ t(`chat.permissions.${permission}`) }}</SelectValue>
+              </SelectTrigger>
+              <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">
+                <SelectItem v-for="p in TOOL_PERMISSIONS" :key="p" :value="p" class="text-xs">
+                  {{ t(`chat.permissions.${p}`) }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+
+            <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" :show-provider="false" open-above />
 
             <Select
               :model-value="session.thinkingLevel"
@@ -862,8 +928,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 </SelectItem>
               </SelectContent>
             </Select>
+
           </div>
-          <div class="flex items-center gap-1">
+          <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
             <Context
               v-if="contextUsage"
               :used-tokens="contextUsage.tokens"
@@ -885,11 +952,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 </ContextContentBody>
               </ContextContent>
             </Context>
-            <PromptInputSubmit
+            <label class="flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted" :class="{ 'bg-muted text-foreground': delayedSend }" :title="t('chat.delayedSendHint')">
+              <input v-model="delayedSend" type="checkbox" class="size-3.5 accent-primary" />{{ t('chat.delayedSend') }}
+            </label>
+            <template v-if="delayedSend">
+              <input v-model.number="sendDelay" type="number" min="0.01" step="any" class="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs" :aria-label="t('chat.sendDelay')" />
+              <select v-model="sendDelayUnit" class="h-8 rounded-md border border-border bg-background px-2 text-xs" :aria-label="t('chat.sendDelayUnit')">
+                <option value="minutes">{{ t('chat.delayMinutes') }}</option>
+                <option value="hours">{{ t('chat.delayHours') }}</option>
+              </select>
+              <Button type="submit" size="sm" :disabled="editBusy || workspace.gitBusy || connecting">{{ t('chat.addDelayedPrompt') }}</Button>
+            </template>
+            <PromptInputSubmit v-else
               :status="session.isStreaming ? 'streaming' : undefined"
               :type="session.isStreaming ? 'button' : 'submit'"
               :title="session.isStreaming ? t('chat.stop') : undefined"
-              :aria-label="session.isStreaming ? t('chat.stop') : undefined"
+              :aria-label="session.isStreaming ? t('chat.stop') : t('chat.sendMessage')"
               :disabled="editBusy || workspace.gitBusy || connecting"
               @click="session.isStreaming && abort()"
             />

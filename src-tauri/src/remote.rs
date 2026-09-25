@@ -232,6 +232,8 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 a["sessionFile"].as_str().map(str::to_owned),
                 a["runtimeId"].as_str().map(str::to_owned),
                 serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
+                a["permission"].as_str().map(str::to_owned),
+                a["locale"].as_str().map(str::to_owned),
             )
             .await?;
             Ok(Value::Null)

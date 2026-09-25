@@ -19,6 +19,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+// Scheduled workers are owned by the backend, not interactive UI stores.
+fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
+    if runtime_id.starts_with("schedule-") {
+        use tauri::Emitter;
+        let name = event.replace("pi://", "pi://schedule-");
+        let _ = app.emit(&name, payload);
+    } else {
+        crate::remote::emit(app, event, payload);
+    }
+}
+
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const EVENT: &str = "pi://event";
 const STDERR_EVENT: &str = "pi://stderr";
@@ -165,7 +176,7 @@ pub async fn process_spawn(
             // Only surface it if this reader still belongs to the current session.
             if generation.load(Ordering::Relaxed) == own_gen {
                 pending.lock().await.clear();
-                crate::remote::emit(&app, EXIT_EVENT, json!({ "runtimeId": runtime_id }));
+                emit_process_event(&app, EXIT_EVENT, &runtime_id, json!({ "runtimeId": runtime_id }));
             }
         });
     }
@@ -191,7 +202,7 @@ pub async fn process_spawn(
                     }
                     let text = String::from_utf8_lossy(&line).to_string();
                     if !text.is_empty() {
-                        crate::remote::emit(&app, STDERR_EVENT, json!({ "line": text, "runtimeId": runtime_id }));
+                        emit_process_event(&app, STDERR_EVENT, &runtime_id, json!({ "line": text, "runtimeId": runtime_id }));
                     }
                 }
             }
@@ -218,7 +229,7 @@ async fn dispatch(app: &AppHandle, pending: &PendingMap, runtime_id: &str, mut v
         return;
     }
     value["runtimeId"] = json!(runtime_id);
-    crate::remote::emit(app, EVENT, value);
+    emit_process_event(app, EVENT, runtime_id, value);
 }
 
 async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {
@@ -510,6 +521,7 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     let mut result = Vec::new();
     for process in processes {
+        if process.runtime_id.starts_with("schedule-") { continue; }
         if !process_running(&process).await { continue; }
         let mut probe = json!({"type": "get_state"});
         if let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await {
