@@ -31,7 +31,7 @@ function harness(group = null) {
     getConfig: async () => ({ lastProject: 'project' }),
     onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {}, onReconnected: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
-    spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {},
+    spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {}, pixLog() {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},

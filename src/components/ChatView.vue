@@ -70,12 +70,13 @@ import StatusBar from "@/components/StatusBar.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
+import ComposerText from "@/components/ComposerText.vue"
 import { withFileReferences, withSessionReferences, sessionReference, desktopCommands } from "@/lib/completion"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { isDesktop } from "@/api/transport"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, Trash2, Clock3 } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, RefreshCw, Trash2, Clock3 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { UserEntry } from "@/stores/session"
@@ -338,6 +339,8 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
 }
 
 
+const compactTokens = (n: number) => new Intl.NumberFormat("en-US", { notation: "compact" }).format(n)
+
 const renderedEntries = computed(() => {
   const streaming = session.isStreaming || !!session.partialBlocks
   const turns = responseTurns(session.entries, streaming)
@@ -526,10 +529,6 @@ async function onSubmit(message: {
     ui.pushToast(t("chat.invalidSendDelay"), "error")
     throw new Error(t("chat.invalidSendDelay"))
   }
-  if (delayedSend.value && text.startsWith("/")) {
-    ui.pushToast(t("chat.delayedCommandUnsupported"), "error")
-    throw new Error(t("chat.delayedCommandUnsupported"))
-  }
   if (!await props.ensureStarted()) {
     bridge.value?.setTextInput(text)
     throw new Error(t("completion.startFailed"))
@@ -538,12 +537,18 @@ async function onSubmit(message: {
   if (commandName) {
     await session.refreshCommands()
     if (!session.commands.some(c => c.name === commandName) && desktopCommands.some(name => name === commandName)) {
+      if (delayedSend.value) {
+        const error = t("chat.delayedCommandUnsupported", { commands: desktopCommands.map(name => `/${name}`).join(", ") })
+        ui.pushToast(error, "error")
+        throw new Error(error)
+      }
       const args = text.slice(commandName.length + 1).trim()
       try {
         if (images.length || (args && commandName !== 'compact')) throw new Error(t('completion.invalidArguments'))
-        if (session.isStreaming && commandName === 'compact') await abort()
         if (commandName === 'new') emit('newSession')
-        else if (commandName === 'compact') await session.compact(args || undefined)
+        // /compact queues behind an active run instead of aborting it; the
+        // store executes the command once the queue reaches it.
+        else if (commandName === 'compact') await session.send(text, undefined, undefined, runningBehavior.value)
       } catch (error) {
         ui.pushToast(String(error), 'error')
         throw error
@@ -620,9 +625,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
         </Button>
         <Button variant="ghost" size="sm" :aria-expanded="changesOpen && sidebarTab === 'files'" @click="toggleSidebar('files')">{{ t('sidebarTabs.files') }}</Button>
-        <span v-if="session.isCompacting" class="text-xs animate-pulse"
-          >{{ t("chat.compacting") }}</span
-        >
         <Button
           v-if="isDesktop"
           type="button"
@@ -661,6 +663,22 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :data-message-id="entry.id" :enabled="renderedEntries.length > 40"
           :pinned="entryIndex >= renderedEntries.length - 4"
           :live="entry.kind === 'assistant' && !entry.complete" v-slot="{ animate }">
+          <!-- compaction marker: a divider at the position history collapsed -->
+          <details v-if="entry.kind === 'compaction'" class="group">
+            <summary class="flex cursor-pointer list-none items-center gap-3 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+              <span class="h-px flex-1 bg-border"></span>
+              <span class="flex items-center gap-1.5">
+                {{ t("chat.compacted") }}
+                <template v-if="entry.tokensBefore">
+                  <span aria-hidden="true">&middot;</span>
+                  {{ compactTokens(entry.tokensBefore) }}<template v-if="entry.tokensAfter"> &rarr; {{ compactTokens(entry.tokensAfter) }}</template>
+                </template>
+              </span>
+              <span class="h-px flex-1 bg-border"></span>
+            </summary>
+            <p class="mt-2 whitespace-pre-wrap rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{{ entry.summary }}</p>
+          </details>
+          <template v-else>
           <div v-if="entry.kind === 'user' && entry.modelChange" class="text-muted-foreground my-3 text-center text-xs" role="status">
             {{ t("chat.modelChanged", entry.modelChange) }}
           </div>
@@ -684,7 +702,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                       <Button type="button" size="sm" :disabled="editBlocked || (!editedText.trim() && !entry.images?.length)" @click="resendEditedPrompt">{{ t('chat.editResend') }}</Button>
                     </div>
                   </div>
-                  <div v-else class="whitespace-pre-wrap [overflow-wrap:anywhere]">{{ entry.text }}</div>
+                  <ComposerText v-else :text="entry.text" />
                   <div
                     v-if="entry.images?.length"
                     class="mt-1.5 flex flex-wrap gap-1.5"
@@ -755,6 +773,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               </MessageActions>
             </div>
           </Message>
+          </template>
         </VirtualMessage>
 
         <!-- waiting indicator before any content arrives -->
@@ -769,8 +788,23 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
         <!-- Keep retry errors next to the conversation, not in the header. -->
         <Message v-if="session.retryInfo" from="assistant" role="status" aria-live="polite">
-          <MessageContent>
-            <p class="text-xs text-amber-500 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ session.retryInfo }}</p>
+          <MessageContent class="w-full">
+            <div class="flex w-full items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-3 text-amber-800 shadow-sm dark:border-amber-400/20 dark:bg-amber-400/[0.08] dark:text-amber-200">
+              <span class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400" aria-hidden="true">
+                <RefreshCw :size="14" class="animate-spin" />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <p class="text-sm font-medium">{{ t("chat.retrying") }}</p>
+                  <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                    {{ t("chat.retryAttempt", { attempt: session.retryInfo.attempt, maxAttempts: session.retryInfo.maxAttempts }) }}
+                  </span>
+                </div>
+                <p class="mt-1 whitespace-pre-wrap text-xs leading-5 text-amber-700/85 [overflow-wrap:anywhere] dark:text-amber-200/80">
+                  {{ session.retryInfo.errorMessage || t("chat.retryUnknownError") }}
+                </p>
+              </div>
+            </div>
           </MessageContent>
         </Message>
 
@@ -785,6 +819,16 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </QueueItem>
           </QueueList>
         </QueueSection>
+
+        <!-- compaction progress: a divider inside the conversation -->
+        <div v-if="session.isCompacting" class="mt-2 flex items-center gap-3 text-xs text-muted-foreground" role="status">
+          <span class="h-px flex-1 bg-border"></span>
+          <span class="flex items-center gap-1.5">
+            <Loader :size="12" />
+            {{ t("chat.compacting") }}
+          </span>
+          <span class="h-px flex-1 bg-border"></span>
+        </div>
       </ConversationContent>
       <template #overlay>
         <ConversationTimeline :turns="session.timelineTurns" :partial="session.partialBlocks" @navigate="navigateToQuestion" />

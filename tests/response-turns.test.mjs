@@ -119,3 +119,12 @@ test('missing, invalid and reversed timestamps never produce misleading duration
     assert.equal(result[1].durationMs, null)
   }
 })
+
+test('compaction markers pass through and split assistant turns', () => {
+  const compaction = { kind: 'compaction', id: 9, summary: 'collapsed' }
+  const result = responseTurns([user(1), assistant(2, text('a')), compaction, user(3), assistant(4, text('b'))], false)
+  assert.equal(result.length, 5)
+  assert.equal(result[2], compaction)
+  assert.equal(result[3], result.find(e => e.id === 3))
+  assert.equal(result[4].lastIndex, 4)
+})

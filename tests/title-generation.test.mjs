@@ -72,7 +72,7 @@ test('resumed nonempty sessions do not generate new titles', async () => {
 })
 test('workspace preserves previews before pi persists and does not overwrite manual titles', async () => {
   let disk = []
-  const store = loadStore('workspace', { ...framework, '@/api/piClient': {
+  const store = loadStore('workspace', { ...framework, '@/api/piClient': { pixLog() {}, 
     listSessions: async () => disk, updateSession: async () => {},
   } })
   store.preview({ file: 'one', cwd: 'project', preview: 'first', mtimeMs: 1 })

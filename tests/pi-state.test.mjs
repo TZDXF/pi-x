@@ -16,7 +16,7 @@ function harness(storage = new Map(), options = {}) {
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
-    '@/api/piClient': {
+    '@/api/piClient': { pixLog() {}, 
       getModelsConfig: async () => ({ providers: { pi: { models: [{ id: 'default', reasoning: true }] } } }),
       getPiSettings: async () => ({ defaultProvider: 'pi', defaultModel: 'default', defaultThinkingLevel: 'high', skills: [] }),
       sessionMtime: async file => { calls.push({ type: 'session_mtime', file }); return mtime },

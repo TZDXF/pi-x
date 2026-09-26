@@ -10,7 +10,7 @@ function harness() {
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
-    '@/api/piClient': { rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
+    '@/api/piClient': { pixLog() {},  rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
@@ -124,4 +124,18 @@ test('file change totals remain safe across idle, history loading, completion an
   assert.equal(store.fileChanges.value.length, 1)
   store.clear()
   assert.equal(store.fileChanges.value.length, 0)
+})
+
+test('compaction summaries materialize as in-position markers', async () => {
+  const { store } = harness()
+  await store.loadMessages([
+    { role: 'user', content: 'before' },
+    { role: 'compactionSummary', summary: 'collapsed history', tokensBefore: 120000, timestamp: 42 },
+    { role: 'user', content: 'after' },
+  ])
+  assert.equal(store.entries.value.map(e => e.kind).join(','), 'user,compaction,user')
+  const marker = store.entries.value[1]
+  assert.equal(marker.summary, 'collapsed history')
+  assert.equal(marker.tokensBefore, 120000)
+  assert.equal(marker.timestamp, 42)
 })

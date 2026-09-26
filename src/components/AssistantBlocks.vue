@@ -7,6 +7,7 @@ import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
 import { ChevronRight, FilePen, FilePlus2, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
+import { computed, onUnmounted, ref, watch } from "vue"
 import { changeForCall, WRITE_TOOLS } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
@@ -82,6 +83,46 @@ function isRunning(block: ToolCallBlock): boolean {
   return state === "input-streaming" || state === "input-available"
 }
 
+// ---- elapsed time ----
+// pi's bash tool has NO default timeout (the model may set one explicitly), so
+// a runaway command (e.g. `find /`) can run forever — surface the duration.
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | undefined
+const anyRunning = computed(() => props.blocks.some(b => b.type === "toolCall" && isRunning(b)))
+watch(anyRunning, running => {
+  if (running && clock === undefined) clock = setInterval(() => { now.value = Date.now() }, 1000)
+  if (!running && clock !== undefined) { clearInterval(clock); clock = undefined }
+}, { immediate: true })
+onUnmounted(() => { if (clock !== undefined) clearInterval(clock) })
+
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+function elapsedMs(block: ToolCallBlock): number | null {
+  const run = runFor(block)
+  // Running only: completed tools hide the duration.
+  if (!run?.startedAt || run.completedAt) return null
+  return now.value - run.startedAt
+}
+
+function elapsedText(block: ToolCallBlock): string {
+  const ms = elapsedMs(block)
+  return ms == null ? "" : formatElapsed(ms)
+}
+
+/** Long-running tools stand out: amber past 30s, destructive past 2 minutes. */
+function elapsedClass(block: ToolCallBlock): string {
+  const ms = elapsedMs(block)
+  if (ms != null && ms > 120_000) return "text-destructive"
+  if (ms != null && ms > 30_000) return "text-amber-600 dark:text-amber-400"
+  return "text-muted-foreground"
+}
+
 interface FileCard { path: string, added: number, removed: number, written: number }
 
 // Diff results are cached per callId+argsText: streaming re-renders must not
@@ -145,6 +186,11 @@ const { t } = useI18n()
           :title="commandPreview(block) || undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
+        <div
+          v-if="elapsedText(block)"
+          class="flex items-center justify-end gap-1 px-3 pb-1.5 -mt-1 text-xs tabular-nums"
+          :class="elapsedClass(block)"
+        >{{ elapsedText(block) }}</div>
         <ToolContent>
           <div class="p-3">
             <Terminal
@@ -179,6 +225,7 @@ const { t } = useI18n()
           <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{ cardFor(block)!.path }}</span>
           <span v-if="cardFor(block)!.added || cardFor(block)!.written" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added || cardFor(block)!.written }}</span>
           <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400">-{{ cardFor(block)!.removed }}</span>
+          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{ elapsedText(block) }}</span>
           <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
           <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
         </button>
@@ -196,6 +243,11 @@ const { t } = useI18n()
           :title="isRead(block) ? pathOf(block) || undefined : undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
+        <div
+          v-if="elapsedText(block)"
+          class="flex items-center justify-end gap-1 px-3 pb-1.5 -mt-1 text-xs tabular-nums"
+          :class="elapsedClass(block)"
+        >{{ elapsedText(block) }}</div>
         <ToolContent>
           <div class="space-y-2 p-3 text-xs">
             <div v-if="block.argsText">

@@ -1,4 +1,4 @@
-import type { Block, Entry, UserEntry } from '@/stores/session'
+import type { Block, CompactionEntry, Entry, UserEntry } from '@/stores/session'
 
 export interface AssistantTurn {
   kind: 'assistant'
@@ -14,14 +14,20 @@ export interface AssistantTurn {
 }
 
 /** Group a turn without changing store entries or indices used for branching. */
-export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry | AssistantTurn)[] {
-  const result: (UserEntry | AssistantTurn)[] = []
+export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry | AssistantTurn | CompactionEntry)[] {
+  const result: (UserEntry | AssistantTurn | CompactionEntry)[] = []
   let questionTime: number | undefined
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
     if (entry.kind === 'user') {
       result.push(entry)
       questionTime = entry.timestamp
+      continue
+    }
+    if (entry.kind === 'compaction') {
+      // Compaction markers break turn grouping and cross it no duration flows.
+      result.push(entry)
+      questionTime = undefined
       continue
     }
     const previous = result[result.length - 1]

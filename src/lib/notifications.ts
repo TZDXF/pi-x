@@ -10,6 +10,7 @@
 import { readonly, ref } from "vue"
 import { i18n } from "@/i18n"
 import { isDesktop } from "@/api/transport"
+import { pixLog } from "@/api/piClient"
 
 export type TurnCompleteNotification = "never" | "unfocused" | "always"
 export type NotificationSound = "default" | "none"
@@ -153,6 +154,7 @@ const t = (key: string) => i18n.global.t(key)
 /** Pi finished a turn (or failed); `detail` is "project · session title". */
 export function notifyTurnComplete(detail: string, failed = false) {
   const mode = turnMode.value
+  pixLog(`notify turnComplete failed=${failed} mode=${mode} detail=${detail}`)
   if (mode === "never") return
   if (mode === "unfocused" && !windowUnfocused()) return
   void deliver(t(failed ? "notify.turnFailedTitle" : "notify.turnCompleteTitle"), detail)

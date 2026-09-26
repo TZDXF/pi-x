@@ -102,7 +102,9 @@ test('streaming input reaches command dispatch; the submit button doubles as sto
   assert.match(chat, /<PromptInputSubmit[\s\S]*?:status="showStopButton \? 'streaming' : undefined"/)
   assert.match(chat, /<PromptInputSubmit[\s\S]*?:type="showStopButton \? 'button' : 'submit'"/)
   assert.match(chat, /<PromptInputSubmit[\s\S]*?@click="showStopButton && abort\(\)"/)
-  assert.match(submit, /session.isStreaming && commandName === 'compact'/)
+  // /compact queues behind the active run; the store executes it from the queue.
+  assert.doesNotMatch(submit, /await abort\(\)/)
+  assert.match(submit, /else if \(commandName === 'compact'\) await session\.send\(text, undefined, undefined, runningBehavior\.value\)/)
   assert.match(submit, /if \(commandName === 'new'\) emit\('newSession'\)/)
   const sidebar = source('../src/components/WorkspaceSidebar.vue')
   assert.doesNotMatch(sidebar, /const navigationDisabled = .*session.isStreaming/)

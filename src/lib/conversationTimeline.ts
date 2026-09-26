@@ -32,7 +32,7 @@ export function conversationTurns(entries: Entry[], partial: Block[] | null = nu
   const turns: ConversationTurn[] = []
   for (const entry of entries) {
     if (entry.kind === 'user') turns.push({ id: entry.id, question: excerpt(entry.text), answer: '' })
-    else if (turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
+    else if (entry.kind === 'assistant' && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
   }
   if (partial?.length && turns.length) appendBlockText(turns[turns.length - 1], partial)
   return turns
@@ -64,7 +64,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
     for (const entry of entries) {
       if (entry.kind === 'user')
         turns.push({ id: entry.id, question: excerpt(entry.text), answer: '', entryId: entry.id })
-      else if (turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
+      else if (entry.kind === 'assistant' && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
     }
     return turns
   }
@@ -92,7 +92,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
     if (!entry.live) continue
     if (entry.kind === 'user')
       turns.push({ id: entry.id, question: excerpt(entry.text), answer: '', entryId: entry.id })
-    else if (turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
+    else if (entry.kind === 'assistant' && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
   }
   return turns
 }

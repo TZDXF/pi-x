@@ -4,7 +4,7 @@ import { computed, ref, shallowRef } from "vue"
 import { i18n } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
-import { generateSessionTitle, getModelsConfig, getPiSettings, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, getPiSettings, pixLog, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { notifyTurnComplete } from "@/lib/notifications"
 import { sessionChanges } from "@/lib/sessionChanges"
@@ -27,6 +27,9 @@ export interface ToolRun {
   argsText: string
   outputText: string
   state: "input-streaming" | "input-available" | "output-available" | "output-error"
+  /** Execution start (tool_execution_start); drives the elapsed-time display. */
+  startedAt?: number
+  completedAt?: number
 }
 
 export interface TextBlock { type: "text", text: string }
@@ -44,7 +47,30 @@ export interface QueuedPrompt {
 
 export interface UserEntry { kind: "user", id: number, text: string, modelChange?: { from: string, to: string }, images?: { url: string }[], live?: true, timestamp?: number }
 export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true, startedAt?: number, completedAt?: number, timestamp?: number }
-export type Entry = UserEntry | AssistantEntry
+/** Marks where a compaction collapsed earlier history; summary stays expandable. */
+export interface CompactionEntry { kind: "compaction", id: number, summary: string, tokensBefore?: number, tokensAfter?: number, timestamp?: number, live?: true }
+export type Entry = UserEntry | AssistantEntry | CompactionEntry
+
+export interface RetryInfo {
+  attempt: number
+  maxAttempts: number
+  errorMessage: string
+}
+
+/** Keep the status code but unwrap JSON error payloads emitted by providers. */
+function formatRetryError(value: unknown): string {
+  const raw = typeof value === "string" ? value.trim() : ""
+  if (!raw) return ""
+  const match = raw.match(/^(\d{3})\s*:\s*(\{[\s\S]*\})$/)
+  const status = match?.[1]
+  const json = match?.[2] ?? raw
+  try {
+    const parsed = JSON.parse(json)
+    if (parsed && typeof parsed.message === "string" && parsed.message.trim())
+      return status ? `${status} · ${parsed.message.trim()}` : parsed.message.trim()
+  } catch { /* keep the original provider error */ }
+  return raw
+}
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
 
@@ -87,7 +113,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   let turnFailed = false
   let turnAborted = false
   const isCompacting = ref(false)
-  const retryInfo = ref<string | null>(null)
+  const retryInfo = ref<RetryInfo | null>(null)
   const promptQueue = ref<QueuedPrompt[]>([])
   const isResending = ref(false)
   let resendVersion = 0
@@ -203,16 +229,30 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         break
 
       case "agent_end":
-      case "agent_settled":
-        // agent_end and agent_settled can both describe the previous run.
-        // Do not let the second notification drain another queued prompt.
+        // agent_end only ends one low-level run; auto-retry, overflow
+        // compaction and queued continuations may still follow (pi flags
+        // willRetry on the event). pi always emits agent_settled once it will
+        // not continue on its own — finalize there, never here. Treating
+        // agent_end as final also flips isStreaming off mid-run, which lets
+        // the session-file watcher rebuild (kill) the still-working process.
+        break
+
+      case "agent_settled": {
+        // A dispatched prompt reserves the next run; this settled belongs to
+        // the previous one and must not drain another queued prompt.
         if (awaitingAgentStart && !stopping) break
-        // An attempt ending is not the end of the request during backoff.
-        if (ev.type === "agent_end" && retryInfo.value && !stopping) break
+        // A duplicate settled (pi emits one per prompt, pi-x used to
+        // synthesize more) must not notify or drain the queue a second time.
+        if (!isStreaming.value && !stopping) {
+          pixLog("settled: ignored (not streaming)", runtimeId)
+          break
+        }
         retryInfo.value = null
         awaitingAgentStart = false
         isStreaming.value = false
-        setSessionRunStatus(sessionFile.value, turnAborted || stopping ? null : turnFailed ? "error" : "completed")
+        const finalStatus = turnAborted || stopping ? null : turnFailed ? "error" : "completed"
+        pixLog(`settled: finalize status=${finalStatus ?? "none"} notify=${!turnAborted && !stopping} failed=${turnFailed} aborted=${turnAborted}`, runtimeId)
+        setSessionRunStatus(sessionFile.value, finalStatus)
         if (!turnAborted && !stopping) {
           const workspace = useWorkspaceStore()
           const file = sessionFile.value
@@ -228,6 +268,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         void syncSessionFile()
         if (!stopping && !queuePaused) dispatchQueuedPrompt()
         break
+      }
 
       case "message_start": {
         const msg = ev.message
@@ -252,6 +293,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       case "message_end": {
         const msg = ev.message
         if (msg?.role === "assistant") {
+          // A successful response means the retried request recovered, even if
+          // the runtime's matching auto_retry_end event is delayed.
+          if (msg.stopReason !== "error" && msg.stopReason !== "aborted")
+            retryInfo.value = null
           if (msg.stopReason === "error") turnFailed = true
           if (msg.stopReason === "aborted") turnAborted = true
           // authoritative replace
@@ -273,6 +318,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           argsText: safeJson(ev.args),
           outputText: "",
           state: "input-available",
+          startedAt: Date.now(),
         }
         break
       }
@@ -291,6 +337,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         if (run) {
           run.outputText = ev.result ? contentText(ev.result.content) : run.outputText
           run.state = ev.isError ? "output-error" : "output-available"
+          run.completedAt = Date.now()
         }
         break
       }
@@ -304,26 +351,47 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         isCompacting.value = true
         break
 
-      case "compaction_end":
+      case "compaction_end": {
         isCompacting.value = false
+        // Keep a visible marker at the position where history was collapsed.
+        if (ev.result?.summary)
+          entries.value.push({ kind: "compaction", id: nextId(), summary: String(ev.result.summary),
+            tokensBefore: Number(ev.result.tokensBefore) || undefined,
+            tokensAfter: Number(ev.result.estimatedTokensAfter) || undefined,
+            timestamp: Date.now(), live: true })
         void refreshStats()
+        // Pi flushed the compaction entry to the session file; sync our mtime
+        // so the watcher does not mistake it for an external edit and rebuild.
+        void syncSessionFile()
+        if (!stopping && !queuePaused) dispatchQueuedPrompt()
         break
+      }
 
       case "auto_retry_start":
         isStreaming.value = true
         setSessionRunStatus(sessionFile.value, "running")
-        retryInfo.value = `retrying (${ev.attempt}/${ev.maxAttempts}): ${ev.errorMessage ?? ""}`
+        retryInfo.value = {
+          attempt: Number(ev.attempt) || 1,
+          maxAttempts: Number(ev.maxAttempts) || Number(ev.attempt) || 1,
+          errorMessage: formatRetryError(ev.errorMessage),
+        }
         break
 
       case "auto_retry_end": {
-        const wasRetrying = retryInfo.value !== null
-        retryInfo.value = null
+        if (ev.success) retryInfo.value = null
+        else if (retryInfo.value) {
+          retryInfo.value = {
+            ...retryInfo.value,
+            errorMessage: formatRetryError(ev.finalError ?? retryInfo.value.errorMessage),
+          }
+        }
         // A recovered provider error must not leave the turn marked failed.
         turnFailed = !ev.success
         if (!ev.success)
           void refreshState()
-        // The last attempt may already have emitted agent_end.
-        if (wasRetrying) handleEvent({ type: "agent_settled" })
+        // Do NOT synthesize agent_settled here: pi emits auto_retry_end at
+        // the first healthy assistant message, which is usually mid-run, and
+        // always follows with the real agent_settled when the run is done.
         break
       }
 
@@ -483,6 +551,24 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const trimmed = text.trim()
     if (!trimmed && !images?.length)
       return
+    // The desktop /compact command runs locally between runs; it can never be
+    // steered into an active run, so queue it behind one instead.
+    const compactMatch = /^\/compact(?:\s+([\s\S]*))?$/.exec(trimmed)
+    if (compactMatch && !images?.length && !commands.value.some(command => command.name === "compact")) {
+      if (isStreaming.value || stopping || isResending.value || isCompacting.value) {
+        promptQueue.value.push({ id: nextId(), text: trimmed })
+        return
+      }
+      try {
+        await compact(compactMatch[1]?.trim() || undefined)
+      }
+      catch (e) {
+        entries.value.push({ kind: "assistant", id: nextId(), blocks: [{ type: "text", text: `**Error:** ${String(e)}` }], live: true })
+      }
+      // compaction_end also drains the queue; cover RPC failures that emit none.
+      if (!stopping && !queuePaused) dispatchQueuedPrompt()
+      return
+    }
     if (isStreaming.value && behavior === "queue") {
       promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
       return
@@ -634,6 +720,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       await refreshState()
     } finally {
       turnAborted = true
+      isStreaming.value = false
       setSessionRunStatus(sessionFile.value, null)
       stopping = false
     }
@@ -760,6 +847,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           const blocks = blocksFromMessage(msg)
           if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks, timestamp: msg.timestamp })
         }
+        else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
+          page.push({ kind: "compaction", id: nextId(), summary: msg.summary,
+            tokensBefore: typeof msg.tokensBefore === "number" ? msg.tokensBefore : undefined,
+            timestamp: msg.timestamp })
         else if (msg.role === "toolResult") {
           const callId = String(msg.toolCallId ?? msg.id ?? "")
           if (callId) pageRuns[callId] = {
@@ -993,7 +1084,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     streamingTurnId,
     isStreaming,
     markInterrupted: () => {
-      if (isStreaming.value) setSessionRunStatus(sessionFile.value, "error")
+      pixLog(`interrupted: streaming=${isStreaming.value}`, runtimeId)
+      if (!isStreaming.value) return
+      setSessionRunStatus(sessionFile.value, "error")
+      // The sidebar badge alone does not explain what happened; leave a
+      // visible note in the conversation itself.
+      entries.value.push({
+        kind: "assistant",
+        id: nextId(),
+        blocks: [{ type: "text", text: i18n.global.t("chat.processExited") }],
+        live: true,
+      })
     },
     markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
     isCompacting,
@@ -1049,4 +1150,3 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     clear,
   }
 })
-

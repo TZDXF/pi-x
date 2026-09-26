@@ -44,3 +44,12 @@ test('hover wheel increments up and decrements down within each segment', () => 
   assert.equal(stepSendDelayWheel(10, -10, 30, 59), null)
   assert.equal(stepSendDelayWheel(10, 0, 0, 59), null)
 })
+
+test('delayed send schedules backend slash commands; only desktop commands are rejected', () => {
+  const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  const submit = chat.slice(chat.indexOf('async function onSubmit('), chat.indexOf('function thinkingLabel'))
+  assert.doesNotMatch(submit, /delayedSend\.value && text\.startsWith\("\/"\)/)
+  const desktop = submit.slice(submit.indexOf('desktopCommands.some(name => name === commandName)) {'))
+  assert.match(desktop, /if \(delayedSend\.value\) \{\s*const error = t\(.chat\.delayedCommandUnsupported., \{ commands: desktopCommands\.map/)
+  assert.match(submit, /if \(delayedSend\.value\) \{\s*session\.schedulePrompt\(text, delayMs!/)
+})

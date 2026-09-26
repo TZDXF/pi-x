@@ -9,6 +9,7 @@ import {
   getConfig,
   killPi,
   onPiEvent,
+  pixLog,
   onPiExit,
   onPiStderr,
   onReconnected,
@@ -104,6 +105,7 @@ onMounted(async () => {
       }),
       onSessionsChanged((files) => handleExternalSessionChanges(files)),
       onPiExit((runtimeId) => {
+        pixLog(`pi exit: runtimeId=${runtimeId ?? "<transport>"}`, runtimeId ?? null)
         // An unscoped exit is a transport disconnect; it is not an agent exit.
         if (!runtimeId) {
           if (phase.value === "chat") phase.value = "down"
@@ -247,6 +249,7 @@ async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
   const file = owner.sessionFile
   const dir = owner.cwd
   if (!file || !dir) return
+  pixLog(`rebuild: kill+respawn file=${file} streaming=${owner.isStreaming}`, owner.runtimeId)
   const active = owner.runtimeId === activeRuntimeId.value
   // The scoped pi-exit handler keeps phase "chat" while connecting.
   if (active) connecting.value = true
@@ -274,6 +277,7 @@ async function reloadExternalConversation(file: string) {
   const disk = await sessionMtime(file).catch(() => null)
   // Equal mtime means the write was our own (already synced at agent_end).
   if (disk == null || disk === owner.syncedSessionMtime || owner.isStreaming || owner.isResending) return
+  pixLog(`watcher: external change detected, rebuilding file=${file} streaming=${owner.isStreaming} synced=${owner.syncedSessionMtime} disk=${disk}`, owner.runtimeId)
   await rebuildConversation(owner)
 }
 

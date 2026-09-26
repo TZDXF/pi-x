@@ -6,13 +6,14 @@ import ts from 'typescript'
 
 function harness() {
   const statuses = new Map()
+  const notifications = []
   const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
     '@/i18n': { i18n: { global: { t: key => key } } },
-    '@/api/piClient': { rpcRequest: () => new Promise(() => {}) },
-    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
+    '@/api/piClient': { pixLog() {},  rpcRequest: () => new Promise(() => {}) },
+    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete: (...args) => notifications.push(args) },
     '@/stores/sessionRunStatus': { setSessionRunStatus: (file, status) => {
       if (status) statuses.set(file, status)
       else statuses.delete(file)
@@ -25,7 +26,7 @@ function harness() {
     store.sessionFile.value = file
     return store
   }
-  return { statuses, session }
+  return { statuses, session, notifications }
 }
 
 test('concurrent sessions show independent running, completed and error statuses', () => {
@@ -37,16 +38,27 @@ test('concurrent sessions show independent running, completed and error statuses
   assert.equal(statuses.get('first.jsonl'), 'running')
   assert.equal(statuses.get('second.jsonl'), 'running')
   first.handleEvent({ type: 'agent_end' })
+  // agent_end alone never finishes a run; only agent_settled does.
+  assert.equal(statuses.get('first.jsonl'), 'running')
+  first.handleEvent({ type: 'agent_settled' })
   assert.equal(statuses.get('first.jsonl'), 'completed')
   assert.equal(statuses.get('second.jsonl'), 'running')
   second.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', content: [] } })
   second.handleEvent({ type: 'agent_end' })
+  // A failed run may still be continued by pi (auto-retry / compaction);
+  // agent_end alone must not finish it.
+  assert.equal(statuses.get('second.jsonl'), 'running')
+  second.handleEvent({ type: 'agent_settled' })
   assert.equal(statuses.get('second.jsonl'), 'error')
   second.handleEvent({ type: 'agent_start' })
   assert.equal(statuses.get('second.jsonl'), 'running')
   second.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', content: [] } })
   second.handleEvent({ type: 'auto_retry_end', success: true })
+  // auto_retry_end fires mid-run; pi continues and settles later.
+  assert.equal(statuses.get('second.jsonl'), 'running')
   second.handleEvent({ type: 'agent_end' })
+  assert.equal(statuses.get('second.jsonl'), 'running')
+  second.handleEvent({ type: 'agent_settled' })
   assert.equal(statuses.get('second.jsonl'), 'completed')
 })
 
@@ -56,10 +68,19 @@ test('aborted turns clear status; unexpected process exit marks running turn as 
   store.handleEvent({ type: 'agent_start' })
   store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'aborted', content: [] } })
   store.handleEvent({ type: 'agent_end' })
+  store.handleEvent({ type: 'agent_settled' })
   assert.equal(statuses.has('first.jsonl'), false)
   store.handleEvent({ type: 'agent_start' })
   store.markInterrupted()
   assert.equal(statuses.get('first.jsonl'), 'error')
+  // The interruption must be visible in the conversation, not just the badge.
+  const note = store.entries.value.at(-1)
+  assert.equal(note.kind, 'assistant')
+  assert.match(note.blocks[0].text, /processExited/)
+  // An idle worker exiting silently is not an interruption; no noise added.
+  const idle = session('idle', 'idle.jsonl')
+  idle.markInterrupted()
+  assert.equal(idle.entries.value.length, 0)
 })
 
 test('viewing a session acknowledges terminal badges without clearing running or other sessions', () => {
@@ -93,18 +114,62 @@ for (const success of [true, false]) {
       store.handleEvent({ type: 'auto_retry_start', attempt, maxAttempts: 3, errorMessage: '503' })
       assert.equal(store.isStreaming.value, true)
       assert.equal(statuses.get('retry.jsonl'), 'running')
-      assert.match(store.retryInfo.value, /503/)
+      assert.match(store.retryInfo.value.errorMessage, /503/)
       store.handleEvent({ type: 'agent_start' })
       store.handleEvent({ type: 'agent_end' })
       assert.equal(store.isStreaming.value, true)
       assert.equal(statuses.get('retry.jsonl'), 'running')
     }
     store.handleEvent({ type: 'auto_retry_end', success })
-    assert.equal(store.retryInfo.value, null)
+    if (success) assert.equal(store.retryInfo.value, null)
+    else assert.match(store.retryInfo.value.errorMessage, /503/)
+    // auto_retry_end is not the end of the run; pi settles explicitly.
+    assert.equal(store.isStreaming.value, true)
+    assert.equal(statuses.get('retry.jsonl'), 'running')
+    store.handleEvent({ type: 'agent_settled' })
     assert.equal(store.isStreaming.value, false)
+    assert.equal(store.retryInfo.value, null)
     assert.equal(statuses.get('retry.jsonl'), success ? 'completed' : 'error')
   })
 }
+
+test('failed attempt notifies only after the auto-retry finishes, exactly once', () => {
+  const { statuses, session, notifications } = harness()
+  const store = session('retry', 'retry.jsonl')
+  store.handleEvent({ type: 'agent_start' })
+  store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', content: [] } })
+  // pi emits agent_end BEFORE auto_retry_start; the request is still alive.
+  store.handleEvent({ type: 'agent_end' })
+  assert.equal(statuses.get('retry.jsonl'), 'running')
+  assert.equal(notifications.length, 0)
+  store.handleEvent({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, errorMessage: '503' })
+  store.handleEvent({ type: 'agent_start' })
+  store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } })
+  assert.equal(store.retryInfo.value, null)
+  store.handleEvent({ type: 'agent_end' })
+  assert.equal(notifications.length, 0)
+  store.handleEvent({ type: 'auto_retry_end', success: true })
+  // auto_retry_end(success) arrives mid-run; nothing finishes yet.
+  assert.equal(statuses.get('retry.jsonl'), 'running')
+  assert.equal(notifications.length, 0)
+  store.handleEvent({ type: 'agent_settled' })
+  assert.equal(statuses.get('retry.jsonl'), 'completed')
+  assert.equal(notifications.length, 1)
+  // A duplicate settled must not notify again.
+  store.handleEvent({ type: 'agent_settled' })
+  assert.equal(notifications.length, 1)
+})
+
+test('normal run notifies exactly once across agent_end and agent_settled', () => {
+  const { session, notifications } = harness()
+  const store = session('normal', 'normal.jsonl')
+  store.handleEvent({ type: 'agent_start' })
+  store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } })
+  store.handleEvent({ type: 'agent_end' })
+  assert.equal(notifications.length, 0)
+  store.handleEvent({ type: 'agent_settled' })
+  assert.equal(notifications.length, 1)
+})
 
 test('settled request clears retry loading even without retry_end', () => {
   const { statuses, session } = harness()
@@ -114,6 +179,19 @@ test('settled request clears retry loading even without retry_end', () => {
   assert.equal(store.retryInfo.value, null)
   assert.equal(store.isStreaming.value, false)
   assert.notEqual(statuses.get('retry.jsonl'), 'running')
+})
+
+test('retry status is structured and clears as soon as the retried response succeeds', () => {
+  const { session } = harness()
+  const store = session('retry', 'retry.jsonl')
+  const errorMessage = '503: {"type":"http_error","message":"已尝试所有本地执行候选提供商，但没有任何候选成功完成请求"}'
+  store.handleEvent({ type: 'auto_retry_start', attempt: 2, maxAttempts: 3, errorMessage })
+  assert.equal(store.retryInfo.value.attempt, 2)
+  assert.equal(store.retryInfo.value.maxAttempts, 3)
+  assert.equal(store.retryInfo.value.errorMessage, '503 · 已尝试所有本地执行候选提供商，但没有任何候选成功完成请求')
+
+  store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } })
+  assert.equal(store.retryInfo.value, null)
 })
 
 test('sidebar shows session statuses on the left with animated running and semantic result colors', () => {

@@ -120,3 +120,10 @@ test('empty or image-only raw user messages are skipped, matching materializatio
   assert.equal(imageOnly.length, 1)
   assert.equal(imageOnly[0].question, '')
 })
+
+test('compaction markers are skipped without breaking turn grouping', () => {
+  const compaction = { kind: 'compaction', id: 9, summary: 'collapsed' }
+  const result = turns([user(1, 'first'), assistant(text('one')), compaction, user(2, 'second'), assistant(text('two'))])
+  assert.equal(result.map(t => t.question).join(','), 'first,second')
+  assert.equal(result[1].answer, 'two')
+})

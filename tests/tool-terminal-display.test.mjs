@@ -10,3 +10,14 @@ test('shell tool output has no nested terminal chrome and reveals a copy action 
   assert.match(blocks, /:aria-label="t\('blocks\.copyTerminal'\)"/)
   assert.match(blocks, /:output="terminalText\(block\)"/)
 })
+
+test('tool runs surface elapsed time, highlighted for long-running commands', () => {
+  // pi's bash tool has no default timeout; a stuck command must be visible.
+  assert.match(blocks, /startedAt/)
+  assert.match(blocks, /elapsedText\(block\)/)
+  assert.match(blocks, /text-amber-600 dark:text-amber-400/)
+  assert.match(blocks, /ms > 120_000\?[\s\S]*?text-destructive|text-destructive/)
+  const store = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
+  assert.match(store, /tool_execution_start[\s\S]*?startedAt: Date\.now\(\)/)
+  assert.match(store, /tool_execution_end[\s\S]*?completedAt = Date\.now\(\)/)
+})
