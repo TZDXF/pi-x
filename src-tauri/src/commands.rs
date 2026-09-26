@@ -6,14 +6,27 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::{fs_search, pi_locate, rpc, sessions, trust};
 
+/// A provider/model pair selected in the app configuration.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRef {
+    pub provider: String,
+    pub model_id: String,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
+    /// Default model for auxiliary features such as title generation.
+    /// Independent of pi's own default model in `settings.json`.
+    #[serde(rename = "defaultModel", default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<ModelRef>,
+    /// Custom title model; ignored while `title_follow_main` is set.
     #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
-    pub title_model: Option<crate::title_generation::TitleModel>,
+    pub title_model: Option<ModelRef>,
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
@@ -293,6 +306,7 @@ pub async fn rpc_kill(state: State<'_, rpc::RpcState>, runtime_id: Option<String
 pub async fn rpc_running(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<bool, String> {
     Ok(rpc::running(&state, runtime_id.as_deref()).await)
 }
+
 /// Frontend decision-point logging (notifications, watcher rebuilds, exits).
 /// Best-effort diagnostics; must never fail the caller.
 #[tauri::command]

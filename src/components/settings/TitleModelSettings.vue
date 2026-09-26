@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { getConfig, saveConfig, getModelsConfig, getPiSettings, savePiSettings } from "@/api/piClient"
+import { getConfig, saveConfig, getModelsConfig } from "@/api/piClient"
 import { useSessionStore, useUiStore } from "@/stores/conversations"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import { Button } from "@/components/ui/button"
 
-type DefaultMode = "pi" | "specific"
+type DefaultMode = "none" | "specific"
 type TitleMode = "off" | "default" | "specific"
 
 const { t } = useI18n()
 const session = useSessionStore()
 const ui = useUiStore()
-const defaultMode = ref<DefaultMode>("pi")
+const defaultMode = ref<DefaultMode>("none")
 const titleMode = ref<TitleMode>("off")
 const provider = ref("")
 const modelId = ref("")
@@ -67,13 +67,12 @@ async function load() {
   loadError.value = ""
   try {
     const config = await getConfig()
-    const piSettings = await getPiSettings()
     titleMode.value = config.titleFollowMain ? "default" : config.titleModel ? "specific" : "off"
     provider.value = config.titleModel?.provider ?? ""
     modelId.value = config.titleModel?.modelId ?? ""
-    defaultMode.value = piSettings.defaultModel || piSettings.defaultProvider ? "specific" : "pi"
-    defaultProvider.value = piSettings.defaultProvider ?? ""
-    defaultModelId.value = piSettings.defaultModel ?? ""
+    defaultMode.value = config.defaultModel ? "specific" : "none"
+    defaultProvider.value = config.defaultModel?.provider ?? ""
+    defaultModelId.value = config.defaultModel?.modelId ?? ""
     try {
       const custom = await getModelsConfig()
       customModels.value = Object.entries(custom.providers ?? {}).flatMap(([provider, entry]) =>
@@ -89,14 +88,13 @@ async function save() {
   saving.value = true
   try {
     const config = await getConfig()
-    await savePiSettings({
-      defaultProvider: defaultMode.value === "specific" ? defaultProvider.value.trim() : null,
-      defaultModel: defaultMode.value === "specific" ? defaultModelId.value.trim() : null,
-    })
     // Preserve a dedicated selection when switching to the default model.
     const customValid = !!provider.value.trim() && !!modelId.value.trim()
     await saveConfig({
       ...config,
+      defaultModel: defaultMode.value === "specific"
+        ? { provider: defaultProvider.value.trim(), modelId: defaultModelId.value.trim() }
+        : undefined,
       titleModel: titleMode.value !== "off" && customValid
         ? { provider: provider.value.trim(), modelId: modelId.value.trim() }
         : undefined,
@@ -121,8 +119,8 @@ async function save() {
         <p class="text-muted-foreground text-xs">{{ t('titleGeneration.defaultModelHint') }}</p>
         <div class="space-y-2 text-sm">
           <label class="flex cursor-pointer items-center gap-2">
-            <input v-model="defaultMode" type="radio" name="default-mode" value="pi" class="accent-primary size-4" />
-            {{ t('titleGeneration.usePiModel') }}
+            <input v-model="defaultMode" type="radio" name="default-mode" value="none" class="accent-primary size-4" />
+            {{ t('titleGeneration.noDefault') }}
           </label>
           <label class="flex cursor-pointer items-center gap-2">
             <input v-model="defaultMode" type="radio" name="default-mode" value="specific" class="accent-primary size-4" />
@@ -151,7 +149,7 @@ async function save() {
               <input v-model="titleMode" type="radio" name="title-mode" value="default" class="accent-primary size-4" />
               {{ t('titleGeneration.followMain') }}
             </label>
-            <p v-if="titleMode === 'default' && defaultMode === 'pi'" class="text-destructive mt-1 pl-6 text-xs">
+            <p v-if="titleMode === 'default' && defaultMode === 'none'" class="text-destructive mt-1 pl-6 text-xs">
               {{ t('titleGeneration.followMainHint') }}
             </p>
           </div>

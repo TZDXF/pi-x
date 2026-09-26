@@ -4,7 +4,6 @@ use crate::{
     pi_locate::{self, Launcher},
     sessions, trust,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -13,13 +12,6 @@ use std::{
 };
 use tauri::AppHandle;
 use tokio::{io::AsyncWriteExt, process::Command};
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TitleModel {
-    pub provider: String,
-    pub model_id: String,
-}
 
 // pi allocates the path before persisting the log after its first response.
 // Validate the existing parent, and reject traversal/symlinks outside sessions.
@@ -90,11 +82,10 @@ pub async fn session_generate_title(
     message: String,
 ) -> Result<Option<String>, String> {
     let config = commands::app_config_get(app.clone())?;
-    // Follow the main (default) model when configured to do so.
+    // Follow the app's auxiliary default model when configured to do so.
+    // This is PiX's own setting and is unrelated to pi's default model.
     let model = if config.title_follow_main {
-        let settings = commands::pi_settings_get().await?;
-        settings["defaultProvider"].as_str().zip(settings["defaultModel"].as_str())
-            .map(|(provider, model_id)| TitleModel { provider: provider.into(), model_id: model_id.into() })
+        config.default_model.clone()
     } else {
         config.title_model.clone()
     };

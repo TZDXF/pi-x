@@ -30,6 +30,8 @@ export interface ModelRef {
 export interface AppConfig {
   piPath?: string
   lastProject?: string
+  /** Default model for auxiliary features such as title generation; independent of pi's default model. */
+  defaultModel?: ModelRef
   /** Custom title model; ignored while titleFollowMain is set. */
   titleModel?: ModelRef
   /** Title generation follows the default model instead of titleModel. */
@@ -110,6 +112,11 @@ export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_k
 
 export const piRunning = (runtimeId = activeRuntimeId.value) => invoke<boolean>("rpc_running", { runtimeId })
 
+/** Fire-and-forget diagnostic log line, persisted by the backend to ~/.pix/logs. */
+export const pixLog = (message: string, runtimeId: string | null = null) => {
+  try { void invoke("pix_log", { message, runtimeId }).catch(() => {}) } catch { /* tests / offline */ }
+}
+
 export interface SessionMeta {
   file: string
   id: string
@@ -126,6 +133,9 @@ export const listSessions = (project: string) =>
 
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
+
+/** Duplicate a saved session file with a fresh id; returns the new file path. */
+export const duplicateSessionFile = (file: string) => invoke<string>("session_duplicate", { file })
 
 /** Session files under ~/.pi/agent/sessions changed on disk (possibly externally). */
 export function onSessionsChanged(handler: (files: string[]) => void): Promise<() => void> {

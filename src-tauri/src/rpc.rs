@@ -325,6 +325,16 @@ pub async fn process_request_timeout(state: &ProcessState, command: &mut Value, 
     result
 }
 
+/// pi allocates the path before persisting the log after its first response.
+/// Validate the existing parent, and reject traversal/symlinks outside sessions.
+fn normalize_session_file(reported: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(reported);
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// Serialize name writes with navigation so a delayed title cannot rename a different session.
 pub(crate) async fn process_set_session_name(state: &ProcessState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
     let _navigation = state.navigation.lock().await;
@@ -332,7 +342,7 @@ pub(crate) async fn process_set_session_name(state: &ProcessState, path: &std::p
     if let Some(inner) = guard.as_ref() {
         let response = name_request(inner, json!({"type": "get_state"})).await?;
         let data = &response["data"];
-        let active = data["sessionFile"].as_str().map(|f| dunce::canonicalize(f).unwrap_or_else(|_| f.into()));
+        let active = data["sessionFile"].as_str().map(normalize_session_file);
         if active.as_deref() == Some(path) {
             if only_if_empty {
                 if let Some(name) = data["sessionName"].as_str().filter(|s| !s.is_empty()) { return Ok(Some(name.into())); }
@@ -581,12 +591,37 @@ pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, t
         let mut probe = json!({"type": "get_state"});
         // Time-bounded probe: skip hung runtimes instead of failing the rename.
         let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await else { continue };
-        let active = response["data"]["sessionFile"].as_str().and_then(|f| dunce::canonicalize(f).ok());
+        let active = response["data"]["sessionFile"].as_str().map(normalize_session_file);
         if active.as_deref() == Some(path) {
             return process_set_session_name(&process, path, title, only_if_empty).await;
         }
     }
     process_set_session_name(&ProcessState::default(), path, title, only_if_empty).await
+}
+
+#[cfg(test)]
+mod session_path_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_reported_session_path_before_pi_persists_it() {
+        let dir = std::env::temp_dir().join(format!("pix-title-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let missing = dir.join("not-yet-written.jsonl");
+        // New session logs do not exist until the first assistant reply; the
+        // live process must still match by canonical parent plus file name.
+        let expected = dunce::canonicalize(&dir).unwrap().join("not-yet-written.jsonl");
+        assert_eq!(normalize_session_file(missing.to_str().unwrap()), expected);
+
+        std::fs::write(&missing, "{}").unwrap();
+        assert_eq!(
+            normalize_session_file(missing.to_str().unwrap()),
+            dunce::canonicalize(&missing).unwrap()
+        );
+
+        std::fs::remove_file(missing).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 }
 
 #[cfg(test)]

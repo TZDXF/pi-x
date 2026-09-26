@@ -7,19 +7,18 @@ import ts from 'typescript'
 function harness(runtimeModels = [], custom = {}, saved) {
   const source = readFileSync(new URL('../src/components/settings/TitleModelSettings.vue', import.meta.url), 'utf8')
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
-  let mount, config = { titleModel: saved }, settings = {}, configSaves = 0, settingsSaves = 0, loadFailure = false
+  let mount, config = { titleModel: saved }, configSaves = 0, loadFailure = false
   const context = vm.createContext({
     ref: value => ({ value }),
     computed: definition => ({ get value() { return typeof definition === 'function' ? definition() : definition.get() }, set value(v) { definition.set(v) } }),
     onMounted: callback => { mount = callback },
     useI18n: () => ({ t: key => key }), useUiStore: () => ({ pushToast() {} }),
     useSessionStore: () => ({ models: runtimeModels }),
-    getPiSettings: async () => settings, savePiSettings: async patch => { settingsSaves++; settings = { ...settings, ...patch } },
     getConfig: async () => { if (loadFailure) throw new Error("load failed"); return config }, saveConfig: async value => { configSaves++; config = value },
     getModelsConfig: async () => ({ providers: custom }),
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.api = { models, modelKey, titleMode, save, defaultKey, defaultMode, canSave, load, loadError };', { target: ts.ScriptTarget.ES2022 }), context)
-  return { settings: () => settings, setSettings: value => { settings = value }, api: context.api, mount: () => mount(), config: () => config, setConfig: value => { config = value }, saves: () => [settingsSaves, configSaves], failLoad: value => { loadFailure = value } }
+  return { api: context.api, mount: () => mount(), config: () => config, setConfig: value => { config = value }, saves: () => configSaves, failLoad: value => { loadFailure = value } }
 }
 
 test('title selector uses the conversation model list without appending duplicate custom models', async () => {
@@ -46,15 +45,15 @@ test('a previously saved model remains visible when absent from the runtime list
   assert.equal(h.api.modelKey.value, 'saved/model')
   assert.equal(h.api.models.value[0].id, 'model')
 })
-test('following the main model saves the flag and keeps the custom choice for toggling back', async () => {
+test('following the default model saves the flag and keeps the custom choice for toggling back', async () => {
   const h = harness([], {}, { provider: 'saved', modelId: 'model' })
   await h.mount()
   h.api.titleMode.value = "default"
   h.api.defaultKey.value = 'openrouter/vendor/model'
   await h.api.save()
   assert.equal(h.config().titleFollowMain, true)
-  assert.equal(h.settings().defaultProvider, 'openrouter')
-  assert.equal(h.settings().defaultModel, 'vendor/model')
+  assert.equal(h.config().defaultModel.provider, 'openrouter')
+  assert.equal(h.config().defaultModel.modelId, 'vendor/model')
   assert.equal(h.config().titleModel.provider, 'saved')
 })
 
@@ -63,13 +62,13 @@ test('default model alone saves without enabling title generation', async () => 
   await h.mount()
   h.api.defaultKey.value = 'anthropic/claude'
   await h.api.save()
-  assert.equal(h.settings().defaultProvider, 'anthropic')
-  assert.equal(h.settings().defaultModel, 'claude')
+  assert.equal(h.config().defaultModel.provider, 'anthropic')
+  assert.equal(h.config().defaultModel.modelId, 'claude')
   assert.equal(h.config().titleModel, undefined)
   assert.equal(h.config().titleFollowMain, undefined)
 })
 
-test('a saved follow-main configuration reloads as enabled with the default model', async () => {
+test('a saved follow-default configuration reloads as enabled with the default model', async () => {
   const source = readFileSync(new URL('../src/components/settings/TitleModelSettings.vue', import.meta.url), 'utf8')
   assert.ok(source.includes('titleFollowMain'))
   const h = harness([], { one: { models: [{ id: 'm' }] } })
@@ -80,38 +79,35 @@ test('a saved follow-main configuration reloads as enabled with the default mode
   await h.api.save()
   const h2 = harness([], { one: { models: [{ id: 'm' }] } }, undefined)
   h2.setConfig(h.config())
-  h2.setSettings(h.settings())
   await h2.mount()
   assert.equal(h2.api.titleMode.value, "default")
+  assert.equal(h2.api.defaultMode.value, "specific")
+  assert.equal(h2.api.defaultKey.value, 'one/m')
 })
 
 
-test('default model follows main when no override is configured', async () => {
+test('the default model stays unset until a specific model is chosen', async () => {
   const h = harness()
   await h.mount()
-  assert.equal(h.api.defaultMode.value, "pi")
+  assert.equal(h.api.defaultMode.value, "none")
   await h.api.save()
   assert.equal(h.config().defaultModel, undefined)
-  assert.equal(h.settings().defaultModel, null)
 })
 
-test('following main clears the default override and preserves unrelated settings', async () => {
+test('unsetting the default model clears it and preserves unrelated settings', async () => {
   const h = harness()
-  h.setConfig({ unrelated: 'keep' })
-  h.setSettings({ defaultProvider: 'one', defaultModel: 'model' })
+  h.setConfig({ unrelated: 'keep', defaultModel: { provider: 'one', modelId: 'model' } })
   await h.mount()
   assert.equal(h.api.defaultMode.value, "specific")
-  h.api.defaultMode.value = "pi"
+  h.api.defaultMode.value = "none"
   await h.api.save()
   assert.equal(h.config().defaultModel, undefined)
-  assert.equal(h.settings().defaultModel, null)
   assert.equal(h.config().unrelated, 'keep')
   h.api.defaultMode.value = "specific"
   await h.api.save()
-  assert.equal(h.settings().defaultProvider, 'one')
+  assert.equal(h.config().defaultModel.provider, 'one')
   const reloaded = harness()
   reloaded.setConfig(h.config())
-  reloaded.setSettings(h.settings())
   await reloaded.mount()
   assert.equal(reloaded.api.defaultMode.value, "specific")
   assert.equal(reloaded.api.defaultKey.value, 'one/model')
@@ -123,11 +119,11 @@ test('specific default model requires a selection and never silently clears the 
   h.api.defaultMode.value = 'specific'
   assert.equal(h.api.canSave.value, false)
   await h.api.save()
-  assert.deepEqual(h.saves(), [0, 0])
+  assert.equal(h.saves(), 0)
   h.api.defaultKey.value = 'openrouter/vendor/model'
   assert.equal(h.api.canSave.value, true)
   await h.api.save()
-  assert.equal(h.settings().defaultModel, 'vendor/model')
+  assert.equal(h.config().defaultModel.modelId, 'vendor/model')
 })
 
 test('specific title model requires a selection; switching modes keeps the pending selection', async () => {
@@ -135,7 +131,7 @@ test('specific title model requires a selection; switching modes keeps the pendi
   h.api.titleMode.value = 'specific'
   assert.equal(h.api.canSave.value, false)
   await h.api.save()
-  assert.deepEqual(h.saves(), [0, 0])
+  assert.equal(h.saves(), 0)
   h.api.modelKey.value = 'one/model'
   h.api.defaultKey.value = 'two/default'
   h.api.titleMode.value = 'default'
@@ -146,14 +142,14 @@ test('specific title model requires a selection; switching modes keeps the pendi
 })
 
 test('disabled title generation clears both title settings without changing the default model', async () => {
-  const h = harness([], {}, { provider: 'one', modelId: 'title' })
-  h.setSettings({ defaultProvider: 'two', defaultModel: 'default' })
+  const h = harness()
+  h.setConfig({ titleModel: { provider: 'one', modelId: 'title' }, defaultModel: { provider: 'two', modelId: 'default' } })
   await h.mount()
   h.api.titleMode.value = 'off'
   await h.api.save()
   assert.equal(h.config().titleModel, undefined)
   assert.equal(h.config().titleFollowMain, undefined)
-  assert.equal(h.settings().defaultModel, 'default')
+  assert.equal(h.config().defaultModel.modelId, 'default')
 })
 
 test('load errors can be retried without saving incomplete settings', async () => {
@@ -169,19 +165,19 @@ test('load errors can be retried without saving incomplete settings', async () =
 })
 
 test('duplicate saved selections are only appended once to the runtime model list', async () => {
-  const h = harness([{ provider: 'one', id: 'other' }], {}, { provider: 'one', modelId: 'missing' })
-  h.setSettings({ defaultProvider: 'one', defaultModel: 'missing' })
+  const h = harness([{ provider: 'one', id: 'other' }])
+  h.setConfig({ titleModel: { provider: 'one', modelId: 'missing' }, defaultModel: { provider: 'one', modelId: 'missing' } })
   await h.mount()
   assert.equal(h.api.models.value.length, 2)
 })
 
 
-test('following an unspecified default model cannot be saved as a title strategy', async () => {
+test('following an unset default model cannot be saved as a title strategy', async () => {
   const h = harness(); await h.mount()
   h.api.titleMode.value = 'default'
   assert.equal(h.api.canSave.value, false)
   await h.api.save()
-  assert.deepEqual(h.saves(), [0, 0])
+  assert.equal(h.saves(), 0)
   h.api.defaultKey.value = 'one/model'
   assert.equal(h.api.canSave.value, true)
 })
