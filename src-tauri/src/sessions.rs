@@ -364,6 +364,48 @@ fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Rewrite session content for duplication: fresh id/timestamp in the header,
+/// identical body. Returns the new content along with a file name matching
+/// pi's `<timestamp>_<uuid>.jsonl` convention.
+fn duplicate_content(content: &str, timestamp: &str, id: &str) -> Result<String, String> {
+    let mut lines = content.lines();
+    let header_line = lines.next().ok_or("empty session file")?;
+    let mut header = serde_json::from_str::<serde_json::Value>(header_line)
+        .map_err(|e| format!("invalid session header: {e}"))?;
+    if header.get("type").and_then(|t| t.as_str()) != Some("session") {
+        return Err("not a session file".into());
+    }
+    header["id"] = serde_json::Value::String(id.to_string());
+    header["timestamp"] = serde_json::Value::String(timestamp.to_string());
+    let mut out = serde_json::to_string(&header).map_err(|e| e.to_string())?;
+    for line in lines {
+        out.push('\n');
+        out.push_str(line);
+    }
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Copy a session file with a fresh id and timestamp; returns the new path.
+#[tauri::command]
+pub async fn session_duplicate(file: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let source = validate_session_path(&file)?;
+        let content = std::fs::read_to_string(&source).map_err(|e| e.to_string())?;
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let content = duplicate_content(&content, &timestamp, &id)?;
+        let name = format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-"));
+        let target = source.parent().ok_or("invalid session path")?.join(name);
+        std::fs::write(&target, content).map_err(|e| e.to_string())?;
+        Ok(target.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("session duplicate failed: {e}"))?
+}
+
 /// Permanently delete a session file and its PiX presentation metadata.
 #[tauri::command]
 pub async fn session_delete(file: String) -> Result<(), String> {
@@ -388,6 +430,21 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+    #[test]
+    fn duplicate_rewrites_header_and_keeps_body() {
+        let original = "{\"type\":\"session\",\"version\":3,\"id\":\"old-id\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"cwd\":\"/tmp\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi old-id\"}}\n";
+        let copy = duplicate_content(original, "2026-09-26T01:02:03.456Z", "new-id").unwrap();
+        let mut lines = copy.lines();
+        let header: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(header["id"], "new-id");
+        assert_eq!(header["timestamp"], "2026-09-26T01:02:03.456Z");
+        assert_eq!(header["cwd"], "/tmp");
+        assert_eq!(lines.next().unwrap(), "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi old-id\"}}");
+        assert!(lines.next().is_none());
+        assert!(copy.ends_with('\n'));
+        assert!(duplicate_content("{\"type\":\"message\"}\n", "t", "i").is_err());
+        assert!(duplicate_content("", "t", "i").is_err());
+    }
     #[test]
     fn native_session_names_use_latest_entry_and_support_clearing() {
         let file = std::env::temp_dir().join(format!("pix-name-{}.jsonl", uuid::Uuid::new_v4()));

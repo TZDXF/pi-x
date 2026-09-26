@@ -93,6 +93,7 @@ pub fn run() {
             sessions::session_mtime,
             sessions::session_update,
             sessions::session_delete,
+            sessions::session_duplicate,
             sessions::session_list_archived,
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,

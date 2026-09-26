@@ -434,6 +434,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or("缺少 archived")?).await?;
             Ok(Value::Null)
         }
+        "session_duplicate" => Ok(Value::String(crate::sessions::session_duplicate(text("file")?).await?)),
         "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
         "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or("缺少 worktree")?).await?)),
         "session_list" => {

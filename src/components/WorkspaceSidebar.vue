@@ -2,9 +2,9 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Clock, Folder, FolderPlus, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
+import { Clock, Copy, Folder, FolderPlus, Link, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
-import { openPath, type SessionMeta } from "@/api/piClient"
+import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient"
 import type { QueuedPrompt } from "@/stores/session"
 import { sendCountdown } from "@/lib/sendCountdown"
 import { pendingConversations } from "@/lib/pendingConversations"
@@ -75,6 +75,19 @@ async function refresh(path: string) {
   finally { loading.value[path] = false }
 }
 function rename(s: SessionMeta) { renaming.value = s; title.value = label(s) }
+async function copySessionLink(s: SessionMeta) {
+  try {
+    await navigator.clipboard.writeText(s.file)
+    ui.pushToast(t("workspace.linkCopied"), "info")
+  } catch (e) { ui.pushToast(String(e), "error") }
+}
+async function duplicateSession(s: SessionMeta) {
+  try {
+    await duplicateSessionFile(s.file)
+    ui.pushToast(t("workspace.duplicated"), "info")
+    await workspace.refresh(props.project)
+  } catch (e) { ui.pushToast(String(e), "error") }
+}
 let openTimer: ReturnType<typeof setTimeout> | undefined
 function openSession(s: SessionMeta) {
   clearTimeout(openTimer)
@@ -222,7 +235,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
             <div class="session-actions hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] flex items-center shrink-0 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto">
               <Button variant="quiet" size="row-action" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" class="size-auto shrink-0" /></Button>
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" class="size-auto shrink-0" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="duplicateSession(s)"><Copy :size="14" class="size-auto shrink-0" />{{ t('workspace.duplicate') }}</DropdownMenuItem><DropdownMenuItem @select="copySessionLink(s)"><Link :size="14" class="size-auto shrink-0" />{{ t('workspace.copyLink') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" class="size-auto shrink-0" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
               </DropdownMenu>
             </div>
           </div>
