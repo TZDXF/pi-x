@@ -115,3 +115,37 @@ test('settled request clears retry loading even without retry_end', () => {
   assert.equal(store.isStreaming.value, false)
   assert.notEqual(statuses.get('retry.jsonl'), 'running')
 })
+
+test('sidebar shows session statuses on the left with animated running and semantic result colors', () => {
+  const sidebar = readFileSync(new URL('../src/components/WorkspaceSidebar.vue', import.meta.url), 'utf8')
+  const light = readFileSync(new URL('../src/styles/theme/light.css', import.meta.url), 'utf8')
+  const dark = readFileSync(new URL('../src/styles/theme/dark.css', import.meta.url), 'utf8')
+  const row = sidebar.match(/<div v-for="s in rows\(path\)"[\s\S]*?<div class="session-actions/)?.[0]
+  assert.ok(row, 'session row is present')
+  assert.ok(row.indexOf('class="session-status') < row.indexOf('variant="session-link"'), 'status precedes the title')
+  assert.match(row, /class="session-status absolute left-\[7px\] top-1\/2/)
+  assert.doesNotMatch(row, /session-status group-hover\/session:invisible/)
+  assert.match(sidebar, /animation: session-status-spin 1s linear infinite/)
+  assert.match(sidebar, /@keyframes session-status-spin/)
+  assert.match(sidebar, /\.session-status-completed \{\s*color: var\(--success\)/)
+  assert.match(sidebar, /\.session-status-error \{\s*color: var\(--destructive\)/)
+  for (const theme of [light, dark]) assert.match(theme, /--success: #[0-9a-f]{6}/)
+})
+
+test('queued prompts show a left-hand clock without a count and hover for the live countdown', () => {
+  const sidebar = readFileSync(new URL('../src/components/WorkspaceSidebar.vue', import.meta.url), 'utf8')
+  const pending = sidebar.match(/<div v-for="pending in pendingRows\(path\)"[\s\S]*?<\/div>/)?.[0]
+  const saved = sidebar.match(/<div v-for="s in rows\(path\)"[\s\S]*?<div class="session-actions/)?.[0]
+  assert.ok(pending && saved)
+  assert.match(pending, /session-queue-status absolute left-\[7px\]/)
+  assert.match(saved, /session-queue-status absolute top-1\/2/)
+  assert.match(saved, /sessionRunStatus\(s.file\) \? 'left-\[23px\]' : 'left-\[7px\]'/)
+  assert.match(saved, /'pl-11': !!\(sessionRunStatus\(s.file\)/)
+  for (const row of [pending, saved]) {
+    assert.ok(row.indexOf('session-queue-status') < row.indexOf('variant="session-link"'))
+    assert.doesNotMatch(row, /\{\{ (?:pending|findConversation\(s.file\)\?)\.promptQueue.length \}\}/)
+    assert.match(row, /:title="queueTitle\(/)
+  }
+  assert.match(sidebar, /sendCountdown\(nextSendAt, queueNow.value\)/)
+  assert.match(sidebar, /setInterval\(\(\) => \{ queueNow.value = Date.now\(\) \}, 1000\)/)
+})

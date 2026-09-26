@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n"
 import { Clock, Folder, FolderPlus, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath, type SessionMeta } from "@/api/piClient"
+import type { QueuedPrompt } from "@/stores/session"
+import { sendCountdown } from "@/lib/sendCountdown"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { allConversations, activeRuntimeId, findConversation, useSessionStore } from "@/stores/conversations"
 import { sessionRunStatus } from "@/stores/sessionRunStatus"
@@ -48,6 +50,20 @@ function pendingRows(path: string) {
   if (showArchived.value) return []
   return pendingConversations(allConversations(), workspace.projectFolders(path), workspace.orderedSessions(path).map(row => row.file), query.value)
 }
+const queueNow = ref(Date.now())
+let countdownTimer: ReturnType<typeof setInterval> | undefined
+watch(() => allConversations().some(conversation => conversation.promptQueue.some(item => item.sendAt !== undefined)), hasScheduled => {
+  if (countdownTimer !== undefined) clearInterval(countdownTimer)
+  countdownTimer = undefined
+  queueNow.value = Date.now()
+  if (hasScheduled) countdownTimer = setInterval(() => { queueNow.value = Date.now() }, 1000)
+}, { immediate: true })
+function queueTitle(queue: QueuedPrompt[] | undefined) {
+  const nextSendAt = queue?.reduce((earliest, item) => item.sendAt === undefined ? earliest : Math.min(earliest, item.sendAt), Infinity) ?? Infinity
+  return Number.isFinite(nextSendAt)
+    ? `${t('chat.queuedPrompts')} · ${t('chat.sendCountdown', { time: sendCountdown(nextSendAt, queueNow.value) })}`
+    : t('chat.queuedPrompts')
+}
 async function openProjectFolder(path: string) {
   try { await openPath(path) }
   catch (e) { ui.pushToast(String(e), "error") }
@@ -72,7 +88,10 @@ function renameOnDoubleClick(s: SessionMeta) {
   openTimer = undefined
   if (!navigationDisabled.value) rename(s)
 }
-onBeforeUnmount(() => clearTimeout(openTimer))
+onBeforeUnmount(() => {
+  clearTimeout(openTimer)
+  if (countdownTimer !== undefined) clearInterval(countdownTimer)
+})
 async function saveTitle() {
   if (!renaming.value || !title.value.trim() || saving.value) return
   saving.value = true
@@ -188,18 +207,18 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
         </div>
         <div v-if="!collapsed[path]" class="session-list min-h-0 p-0 overflow-visible">
           <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && !session.promptQueue.length && (session.started || session.entries.length) && !showArchived && !query" class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
-          <div v-for="pending in pendingRows(path)" :key="pending.runtimeId" class="session-row flex min-h-8 min-w-0 items-center gap-1 rounded-md pl-7 pr-2 text-xs" :class="{ active: pending.runtimeId === activeRuntimeId }">
+          <div v-for="pending in pendingRows(path)" :key="pending.runtimeId" class="session-row relative flex min-h-8 min-w-0 items-center gap-1 rounded-md pl-7 pr-2 text-xs" :class="{ active: pending.runtimeId === activeRuntimeId }">
+            <span class="session-queue-status absolute left-[7px] top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" role="status" :title="queueTitle(pending.promptQueue)" :aria-label="queueTitle(pending.promptQueue)"><Clock class="size-3" /></span>
             <Button size="content" variant="session-link" class="session-link" :disabled="navigationDisabled" :aria-current="pending.runtimeId === activeRuntimeId ? 'page' : undefined" :title="pending.promptQueue[0]?.text || t('chat.newSession')" @click="emit('selectConversation', pending.runtimeId)">{{ pending.promptQueue[0]?.text || t('chat.newSession') }}</Button>
-            <span class="inline-flex shrink-0 items-center gap-1 text-muted-foreground" role="status" :title="t('chat.queuedPrompts')" :aria-label="t('chat.queuedPrompts')"><Clock class="size-3" />{{ pending.promptQueue.length }}</span>
           </div>
-          <div v-for="s in rows(path)" :key="s.file" class="session-row group/session flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before }"
+          <div v-for="s in rows(path)" :key="s.file" class="session-row group/session flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === path, 'drop-before': sessionDrop?.path === path && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === path && sessionDrop.file === s.file && !sessionDrop.before, 'pl-11': !!(sessionRunStatus(s.file) && findConversation(s.file)?.promptQueue.length), 'pl-7': !(sessionRunStatus(s.file) && findConversation(s.file)?.promptQueue.length) }"
             :draggable="!disabled" @dragstart="onSessionDragStart($event, path, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, path, s.file)" @drop="onSessionDrop($event, path, s.file)" @dragleave="onRowDragLeave">
-            <Button size="content" variant="session-link" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
-            <span v-if="findConversation(s.file)?.promptQueue.length" class="inline-flex shrink-0 items-center gap-1 text-muted-foreground" role="status" :title="t('chat.queuedPrompts')" :aria-label="t('chat.queuedPrompts')"><Clock class="size-3" />{{ findConversation(s.file)?.promptQueue.length }}</span>
-            <span v-if="sessionRunStatus(s.file)" class="session-status group-hover/session:invisible group-has-[:focus-visible]/session:invisible group-has-[[data-state=open]]/session:invisible inline-flex items-center justify-center w-3.5 ml-1 shrink-0 text-muted-foreground" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
-              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running inline-block w-2.5 h-2.5 [border:1.5px_solid_var(--muted-foreground)] [border-top-color:transparent] rounded-full [animation:spin_1s_linear_infinite]" aria-hidden="true" />
+            <span v-if="sessionRunStatus(s.file)" class="session-status absolute left-[7px] top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
+              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
               <span v-else class="session-status-dot w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
             </span>
+            <span v-if="findConversation(s.file)?.promptQueue.length" class="session-queue-status absolute top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" :class="sessionRunStatus(s.file) ? 'left-[23px]' : 'left-[7px]'" role="status" :title="queueTitle(findConversation(s.file)?.promptQueue)" :aria-label="queueTitle(findConversation(s.file)?.promptQueue)"><Clock class="size-3" /></span>
+            <Button size="content" variant="session-link" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
             <div class="session-actions hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] flex items-center shrink-0 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto">
               <Button variant="quiet" size="row-action" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" class="size-auto shrink-0" /></Button>
               <DropdownMenu><DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
@@ -244,9 +263,8 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
 .session-actions:has([data-state="open"]) {
   pointer-events: auto;
 }
-.session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 54px), transparent);
+.session-row:has(.session-actions):is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
+  margin-right: 48px;
 }
 .project-heading:is(:hover, :has(:focus-visible)) > .hover-action {
   opacity: 1;
@@ -260,8 +278,20 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
   opacity: 1;
   pointer-events: auto;
 }
+.session-running {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: session-status-spin 1s linear infinite;
+}
+@keyframes session-status-spin {
+  to { transform: rotate(360deg); }
+}
 .session-status-completed {
-  color: var(--primary);
+  color: var(--success);
 }
 .session-status-error {
   color: var(--destructive);
@@ -300,10 +330,17 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
 .session-row.drop-after {
   box-shadow: inset 0 -2px 0 var(--primary);
 }
+@media (hover: none) {
+  .session-row:has(.session-actions) .session-link {
+    margin-right: 48px;
+    padding-right: 0;
+  }
+}
 @media (pointer: coarse) {
-  .session-row:is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 70px), transparent);
+  .session-row:has(.session-actions) .session-link,
+  .session-row:has(.session-actions):is(:hover, :has(:focus-visible), :has(.session-actions [data-state="open"])) .session-link {
+    margin-right: 64px;
+    padding-right: 0;
   }
 }
 </style>
