@@ -293,6 +293,13 @@ pub async fn rpc_kill(state: State<'_, rpc::RpcState>, runtime_id: Option<String
 pub async fn rpc_running(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<bool, String> {
     Ok(rpc::running(&state, runtime_id.as_deref()).await)
 }
+/// Frontend decision-point logging (notifications, watcher rebuilds, exits).
+/// Best-effort diagnostics; must never fail the caller.
+#[tauri::command]
+pub fn pix_log(message: String, runtime_id: Option<String>) {
+    crate::logs::write(&runtime_id.unwrap_or_else(|| "ui".into()), &message);
+}
+
 
 // ---- pi models.json (custom provider / model management) ----
 

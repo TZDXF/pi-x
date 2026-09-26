@@ -1,4 +1,5 @@
 mod data_dir;
+mod logs;
 mod schedules;
 mod desktop;
 mod editor;
@@ -37,6 +38,7 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .setup(|app| {
             data_dir::initialize()?;
+            logs::initialize();
             schedules::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
@@ -84,6 +86,7 @@ pub fn run() {
             commands::rpc_request,
             commands::rpc_notify,
             commands::rpc_kill,
+            commands::pix_log,
             commands::rpc_running,
             commands::rpc_sessions,
             commands::session_list,
@@ -125,6 +128,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                logs::write("app", "RunEvent::Exit: killing all pi processes");
                 let state = app.state::<RpcState>();
                 let _ = tauri::async_runtime::block_on(rpc::kill_all(&state));
                 terminal::kill_all(&app.state::<terminal::TerminalState>());

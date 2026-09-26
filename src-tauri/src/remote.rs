@@ -396,6 +396,10 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             rpc::kill(&state, a["runtimeId"].as_str()).await?;
             Ok(Value::Null)
         }
+        "pix_log" => {
+            crate::logs::write(a["runtimeId"].as_str().unwrap_or("ui"), a["message"].as_str().unwrap_or(""));
+            Ok(Value::Null)
+        }
         "rpc_request" => rpc::request(&state, a["command"].clone(), a["runtimeId"].as_str()).await,
         // A remote browser cannot open host files. Export either the requested
         // saved session directly or the active runtime, then return its HTML.
