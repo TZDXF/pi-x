@@ -558,6 +558,7 @@ export default {
     input: "输入",
     output: "输出",
     openInReview: "在审查页中查看此文件的变更",
+    copyTerminal: "复制终端内容",
   },
 
   status: {

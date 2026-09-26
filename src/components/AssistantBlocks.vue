@@ -4,7 +4,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-e
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
-import { Terminal } from "@/components/ai-elements/terminal"
+import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
 import { ChevronRight, FilePen, FilePlus2, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall, WRITE_TOOLS } from "@/lib/sessionChanges"
@@ -147,7 +147,18 @@ const { t } = useI18n()
         />
         <ToolContent>
           <div class="p-3">
-            <Terminal :output="terminalText(block)" :is-streaming="isRunning(block)" class="text-xs" />
+            <Terminal
+              :output="terminalText(block)"
+              :is-streaming="isRunning(block)"
+              class="group/terminal-output relative rounded-none border-0 bg-transparent text-xs"
+            >
+              <TerminalContent class="p-0 pr-9 text-xs" />
+              <TerminalCopyButton
+                class="absolute top-0 right-0 opacity-0 transition-opacity group-hover/terminal-output:opacity-100 focus-visible:opacity-100"
+                :title="t('blocks.copyTerminal')"
+                :aria-label="t('blocks.copyTerminal')"
+              />
+            </Terminal>
           </div>
         </ToolContent>
       </Tool>

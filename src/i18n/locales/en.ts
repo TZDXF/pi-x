@@ -558,6 +558,7 @@ export default {
     input: "Input",
     output: "Output",
     openInReview: "View this file in the review page",
+    copyTerminal: "Copy terminal content",
   },
 
   status: {
