@@ -235,6 +235,11 @@ pub async fn search_files(project: String, query: String) -> Result<Vec<fs_searc
     fs_search::search(project, query).await
 }
 
+#[tauri::command]
+pub async fn list_project_directory(project: String, path: String) -> Result<Vec<fs_search::ProjectEntry>, String> {
+    fs_search::list_directory(project, path).await
+}
+
 /// Export a stored Pi session without activating or switching any runtime.
 /// When no output path is supplied (remote browser download), use a temporary
 /// HTML file which the remote handler removes after reading it.

@@ -95,6 +95,7 @@ pub fn run() {
             workspace_git::workspace_git_info,
             workspace_git::workspace_git_create,
             commands::search_files,
+            commands::list_project_directory,
             commands::session_export_file,
             commands::open_path,
             editor::open_in_editor,

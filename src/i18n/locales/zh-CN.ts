@@ -71,6 +71,8 @@ export default {
     "open": "使用默认方式打开文件",
     "failed": "打开文件失败：{error}"
 },
+  sidebarTabs: { title: "右侧面板", review: "代码审查", files: "项目文件", terminal: "终端" },
+  projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", desktopOnly: "仅桌面端可在编辑器中打开文件" },
   changes: {
     showFlat: "平铺显示", showTree: "树形显示",
     unified: "逐行", split: "并排", wordDiff: "行内差异", before: "修改前", after: "修改后",

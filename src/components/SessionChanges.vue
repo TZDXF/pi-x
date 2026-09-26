@@ -2,16 +2,25 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
-import { ChevronRight, Columns2, ExternalLink, FileCode, Folder, FolderOpen, FolderTree, Highlighter, List, Rows2, X } from "@lucide/vue"
+import { ChevronRight, Columns2, ExternalLink, FileCode, Folder, FolderOpen, FolderTree, Highlighter, List, Rows2, X, SquareTerminal } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import SessionDiff from "@/components/SessionDiff.vue"
+import ProjectFiles from "@/components/ProjectFiles.vue"
+import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import { buildFileTree, flatFileRows, flattenVisibleTree } from "@/lib/reviewFileTree"
 import type { FileChange } from "@/lib/sessionChanges"
-const props = defineProps<{ changes: FileChange[]; project?: string; focus?: string | null }>()
-defineEmits<{ close: [] }>()
+export type SidebarTab = "review" | "files" | "terminal"
+const props = defineProps<{ changes: FileChange[]; project: string; focus?: string | null; tab: SidebarTab; visible: boolean }>()
+const emit = defineEmits<{ close: []; "update:tab": [tab: SidebarTab] }>()
+const terminalPanel = ref<InstanceType<typeof TerminalPanel> | null>(null)
+watch(() => [props.tab, props.visible] as const, ([tab, visible]) => {
+  if (tab === "terminal" && visible && isDesktop) nextTick(() => {
+    if (!terminalPanel.value?.hasTerminals()) void terminalPanel.value?.openTerminal()
+  })
+}, { immediate: true })
 const { t } = useI18n()
 const sidebar = ref<HTMLElement | null>(null)
 const containerWidth = ref(1200)
@@ -145,7 +154,7 @@ function selectRow(row: (typeof fileRows.value)[number]) {
 </script>
 
 <template>
-  <aside ref="sidebar" class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]" :style="{ width: `${width}px` }" :aria-label="t('changes.title')" @keydown.esc="$emit('close')">
+  <aside ref="sidebar" class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]" :style="{ width: `${width}px` }" :aria-label="t('sidebarTabs.title')" @keydown.esc="$emit('close')">
     <div
       class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]" :class="{ 'is-dragging': dragging }"
       role="separator" tabindex="0" aria-orientation="vertical"
@@ -154,11 +163,16 @@ function selectRow(row: (typeof fileRows.value)[number]) {
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize"
       @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeWithKeyboard"
     />
-    <div class="flex items-center justify-between border-b p-3">
-      <h2 class="text-sm font-medium">{{ t('changes.title') }} · {{ files.length }}</h2>
+    <div class="flex items-center justify-between gap-1 border-b px-2 py-1.5" role="tablist" :aria-label="t('sidebarTabs.title')">
+      <div class="flex min-w-0 items-center gap-0.5 overflow-hidden">
+        <Button v-for="item in (['review', 'files', ...(isDesktop ? ['terminal'] : [])] as SidebarTab[])" :key="item" variant="ghost" size="sm" role="tab" :aria-selected="tab === item" :class="{ 'bg-accent text-accent-foreground': tab === item }" @click="emit('update:tab', item)">
+          <SquareTerminal v-if="item === 'terminal'" class="size-3.5" />{{ t(`sidebarTabs.${item}`) }}
+        </Button>
+      </div>
       <Button variant="ghost" size="icon-sm" :aria-label="t('changes.close')" @click="$emit('close')"><X /></Button>
     </div>
-    <p class="border-b p-3 text-xs text-muted-foreground">{{ t('changes.description') }}</p>
+    <template v-if="tab === 'review'">
+      <p class="border-b p-3 text-xs text-muted-foreground">{{ t('changes.description') }}</p>
     <div v-if="activeFile" class="changes-review-body grid [grid-template-columns:minmax(0,_1fr)_minmax(100px,_30%)] flex-1 min-h-0 min-w-0 overflow-hidden">
       <section :key="activeFile.path" class="changes-file-view flex flex-col min-w-0 min-h-0 overflow-hidden" :aria-label="t('changes.fileDiff')">
         <div class="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
@@ -202,6 +216,9 @@ function selectRow(row: (typeof fileRows.value)[number]) {
       </nav>
     </div>
     <p v-else class="p-6 text-center text-sm text-muted-foreground">{{ t('changes.empty') }}</p>
+    </template>
+    <ProjectFiles v-show="tab === 'files'" :project="project" />
+    <TerminalPanel v-if="isDesktop" ref="terminalPanel" v-show="tab === 'terminal' && visible" :project="project" :visible="tab === 'terminal' && visible" embedded @close="emit('close')" />
   </aside>
 </template>
 

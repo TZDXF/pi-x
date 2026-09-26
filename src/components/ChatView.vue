@@ -4,6 +4,7 @@ import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { averageCacheRate } from "@/lib/cacheRate"
 import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
+import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -78,14 +79,19 @@ import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, Trash
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { UserEntry } from "@/stores/session"
-import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 
-import SessionChanges from "@/components/SessionChanges.vue"
+import SessionChanges, { type SidebarTab } from "@/components/SessionChanges.vue"
 
 const changesOpen = ref(false)
+const sidebarTab = ref<SidebarTab>("review")
+function toggleSidebar(tab: SidebarTab) {
+  if (changesOpen.value && sidebarTab.value === tab) changesOpen.value = false
+  else { sidebarTab.value = tab; changesOpen.value = true }
+}
 const changesFocus = ref<string | null>(null)
 function openReviewAt(path: string) {
   changesFocus.value = path
+  sidebarTab.value = "review"
   changesOpen.value = true
 }
 const changeTotals = computed(() => session.fileChanges.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed, unknown: sum.unknown || change.unknownBefore }), { added: 0, removed: 0, unknown: false }))
@@ -400,16 +406,6 @@ watch(
   },
 )
 
-// ---- built-in terminal (desktop only) ----
-const terminalOpen = ref(false)
-const terminalPanel = ref<InstanceType<typeof TerminalPanel> | null>(null)
-function toggleTerminal() {
-  terminalOpen.value = !terminalOpen.value
-  if (terminalOpen.value && !terminalPanel.value?.hasTerminals()) {
-    terminalPanel.value?.openTerminal()
-  }
-}
-
 // ---- context usage and session-wide weighted cache hit rate ----
 const contextUsage = computed(() => session.stats?.contextUsage ?? null)
 const cacheRate = computed(() => averageCacheRate(session.stats?.tokens))
@@ -620,9 +616,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         </p>
       </div>
       <div class="header-actions flex items-center gap-1 shrink-0 max-[900px]:flex-wrap max-[640px]:gap-0">
-        <Button variant="ghost" size="sm" :aria-expanded="changesOpen" :aria-label="t('changes.title')" @click="changesOpen = !changesOpen">
+        <Button variant="ghost" size="sm" :aria-expanded="changesOpen && sidebarTab === 'review'" :aria-label="t('changes.title')" @click="toggleSidebar('review')">
           {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
         </Button>
+        <Button variant="ghost" size="sm" :aria-expanded="changesOpen && sidebarTab === 'files'" @click="toggleSidebar('files')">{{ t('sidebarTabs.files') }}</Button>
         <span v-if="session.isCompacting" class="text-xs animate-pulse"
           >{{ t("chat.compacting") }}</span
         >
@@ -633,8 +630,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           size="icon-sm"
           class="text-muted-foreground"
           :title="t('terminal.toggle')"
-          :class="{ 'bg-accent text-accent-foreground': terminalOpen }"
-          @click="toggleTerminal"
+          :class="{ 'bg-accent text-accent-foreground': changesOpen && sidebarTab === 'terminal' }"
+          :aria-expanded="changesOpen && sidebarTab === 'terminal'"
+          @click="toggleSidebar('terminal')"
         >
           <SquareTerminal />
         </Button>
@@ -805,7 +803,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <!-- composer -->
     <div class="composer-dock mx-auto w-full max-w-3xl px-6 pt-3 shrink-0 pb-3 max-[900px]:pl-4 max-[900px]:pr-4">
-      <section v-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
+      <WorkspaceContext v-if="!session.promptQueue.length && !session.entries.length && !session.isStreaming && (!connecting || selectingProject) && !session.historyLoading" :project="project" @select-project="emit('selectProject', $event)" @open-project="emit('openProject')" />
+      <section v-else-if="session.promptQueue.length" class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2" :aria-label="t('chat.queuedPrompts')">
         <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>{{ t('chat.queuedPrompts') }} · {{ session.promptQueue.length }}</span>
           <Button v-if="!session.isStreaming" type="button" size="sm" variant="ghost" @click="session.dispatchQueuedPrompt()">{{ t('chat.resumeQueue') }}</Button>
@@ -968,16 +967,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
       <StatusBar />
     </div>
 
-    <!-- built-in terminal (desktop only), expanded below the composer -->
-    <TerminalPanel
-      v-if="isDesktop"
-      ref="terminalPanel"
-      v-show="terminalOpen"
-      :project="project"
-      :visible="terminalOpen"
-      @close="terminalOpen = false"
-    />
-
     <!-- fork dialog -->
     <Dialog v-model:open="forkOpen">
       <DialogContent class="flex max-h-[70dvh] max-w-lg flex-col overflow-hidden">
@@ -1016,6 +1005,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <ExtensionDialog />
   </div>
-  <SessionChanges v-if="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" :focus="changesFocus" @close="changesOpen = false" />
+  <SessionChanges v-show="changesOpen" v-model:tab="sidebarTab" :visible="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" :focus="changesFocus" @close="changesOpen = false" />
   </div>
 </template>

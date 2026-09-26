@@ -16,7 +16,7 @@ interface TermTab {
   exitCode?: number
 }
 
-const props = defineProps<{ project: string; visible: boolean }>()
+const props = defineProps<{ project: string; visible: boolean; embedded?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 
@@ -145,7 +145,7 @@ async function closeTab(id: number) {
     await nextTick()
     fitActive()
   }
-  if (!tabs.value.length) emit("close")
+  if (!tabs.value.length && !props.embedded) emit("close")
   void invoke("term_kill", { id }).catch(() => {})
 }
 
@@ -206,7 +206,9 @@ watch(
   () => props.project,
   () => {
     // Workspace changed: close stale shells so new ones spawn in the new cwd.
-    for (const tab of [...tabs.value]) void closeTab(tab.id)
+    void Promise.all([...tabs.value].map(tab => closeTab(tab.id))).then(() => {
+      if (props.embedded && props.visible) void openTerminal()
+    })
   },
 )
 
@@ -234,9 +236,10 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
 </script>
 
 <template>
-  <div class="terminal-dock border-border flex flex-col border-t" :style="{ height: `${panelHeight}px` }">
+  <div class="terminal-dock border-border flex min-h-0 flex-col" :class="embedded ? 'flex-1' : 'border-t'" :style="embedded ? undefined : { height: `${panelHeight}px` }">
     <!-- drag handle -->
     <div
+      v-if="!embedded"
       class="border-border hover:bg-primary/10 relative -mt-1 h-2 shrink-0 cursor-row-resize border-t border-transparent"
       @mousedown="onDividerDown"
       @dblclick="onPanelDblClick"
@@ -277,6 +280,7 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
         </Button>
       </div>
       <Button
+        v-if="!embedded"
         type="button"
         variant="ghost"
         size="icon-xs"

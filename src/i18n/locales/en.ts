@@ -71,6 +71,8 @@ export default {
     "open": "Open file with default application",
     "failed": "Failed to open file: {error}"
 },
+  sidebarTabs: { title: "Right panel", review: "Review", files: "Project files", terminal: "Terminal" },
+  projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", desktopOnly: "Open files in an editor from the desktop app" },
   changes: {
     showFlat: "Flat list", showTree: "File tree",
     unified: "Unified", split: "Split", wordDiff: "Inline diff", before: "Before", after: "After",
