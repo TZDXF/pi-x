@@ -89,10 +89,12 @@ export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
 
-export const getGlobalPrompt = () => invoke<string>("global_prompt_get")
+export interface GlobalPromptFile { fileName: string; content: string; exists: boolean }
 
-export const saveGlobalPrompt = (prompt: string) =>
-  invoke<void>("global_prompt_save", { prompt })
+export const listGlobalPrompts = () => invoke<GlobalPromptFile[]>("global_prompt_list")
+
+export const saveGlobalPrompt = (fileName: string, prompt: string) =>
+  invoke<void>("global_prompt_save", { fileName, prompt })
 
 export const trustStatus = (project: string) => invoke<TrustStatus>("trust_status", { project })
 

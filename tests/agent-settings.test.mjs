@@ -8,8 +8,11 @@ function harness(initial = {}, component = "SkillSettings") {
   const source = readFileSync(new URL(`../src/components/settings/${component}.vue`, import.meta.url), 'utf8')
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*$/gm, '')
   let config = initial, mount, failRead = false, failWrite = false, askResult = true
-  let promptFile = config.__promptFile ?? ''
-  delete config.__promptFile
+  const promptFiles = {
+    'AGENTS.md': '', 'SYSTEM.md': '', 'APPEND_SYSTEM.md': '',
+    ...config.__promptFiles,
+  }
+  delete config.__promptFiles
   const toasts = []
   const hosted = config.__hosted ?? []
   delete config.__hosted
@@ -28,13 +31,16 @@ function harness(initial = {}, component = "SkillSettings") {
     ask: async () => askResult,
     getConfig: async () => { if (failRead) throw Error('read failure'); return config },
     saveConfig: async value => { if (failWrite) throw Error('write failure'); config = value },
-    getGlobalPrompt: async () => { if (failRead) throw Error('read failure'); return promptFile },
-    saveGlobalPrompt: async value => { if (failWrite) throw Error('write failure'); promptFile = value },
+    listGlobalPrompts: async () => {
+      if (failRead) throw Error('read failure')
+      return Object.entries(promptFiles).map(([fileName, content]) => ({ fileName, content, exists: !!content }))
+    },
+    saveGlobalPrompt: async (fileName, value) => { if (failWrite) throw Error('write failure'); promptFiles[fileName] = value },
   })
-  const fields = component === 'AgentSettings' ? 'prompt, error, dirty, saving, load, save' : 'skills, error, load, toggle, remove, openDirectory'
+  const fields = component === 'AgentSettings' ? 'files, selectedName, selectedFile, error, saving, load, save, updatePrompt' : 'skills, error, load, toggle, remove, openDirectory'
   vm.runInContext(ts.transpile(source + `\nglobalThis.api = { ${fields} };`, { target: ts.ScriptTarget.ES2022 }), context)
   return {
-    api: context.api, mount: () => mount(), config: () => config, prompt: () => promptFile, setPrompt: value => { promptFile = value }, toasts,
+    api: context.api, mount: () => mount(), config: () => config, prompts: () => promptFiles, toasts,
     failRead: value => { failRead = value }, failWrite: value => { failWrite = value },
     hosted, askResult: value => { askResult = value }, savedEnabled: () => savedEnabled,
     opened: () => opened, failOpen: value => { failOpen = value }, deletedPaths: () => deletedPaths,
@@ -97,17 +103,41 @@ test('load failures support retry', async () => {
   assert.equal(h.api.error.value, '')
 })
 
-test('prompt page saves and clears prompt without touching hosted skills', async () => {
-  const h = harness({ __promptFile: 'old', piPath: 'pi' }, 'AgentSettings')
+test('prompt page shows missing files, creates edits, and preserves drafts across selection', async () => {
+  const h = harness({ __promptFiles: { 'SYSTEM.md': 'old' }, piPath: 'pi' }, 'AgentSettings')
   await h.mount()
-  assert.equal(h.api.prompt.value, 'old')
-  h.api.prompt.value = '中文'
+  assert.deepEqual(Array.from(h.api.files.value, file => file.fileName), ['AGENTS.md', 'SYSTEM.md', 'APPEND_SYSTEM.md'])
+  assert.equal(h.api.selectedFile.value.content, 'old')
+  assert.equal(h.api.selectedFile.value.exists, true)
+  h.api.selectedName.value = 'AGENTS.md'
+  assert.equal(h.api.selectedFile.value.exists, false)
+  h.api.updatePrompt('中文')
+  h.api.selectedName.value = 'SYSTEM.md'
+  h.api.updatePrompt('new system prompt')
+  h.api.selectedName.value = 'AGENTS.md'
+  assert.equal(h.api.selectedFile.value.content, '中文', 'switching files preserves unsaved edits')
   await h.api.save()
-  assert.equal(h.prompt(), '中文')
+  assert.equal(h.prompts()['AGENTS.md'], '中文')
+  assert.equal(h.api.selectedFile.value.exists, true)
+  assert.equal(h.api.selectedFile.value.savedContent, '中文')
+  assert.equal(h.prompts()['SYSTEM.md'], 'old', 'only the selected file was saved')
   assert.equal(h.config().piPath, 'pi')
-  h.api.prompt.value = ''
+  h.api.updatePrompt('')
   await h.api.save()
-  assert.equal(h.prompt(), '')
+  assert.equal(h.prompts()['AGENTS.md'], '')
+  assert.equal(h.api.selectedFile.value.exists, false)
+})
+
+test('failed prompt save retains the draft and file status', async () => {
+  const h = harness({}, 'AgentSettings')
+  await h.mount()
+  h.api.updatePrompt('new content')
+  h.failWrite(true)
+  await h.api.save()
+  assert.equal(h.api.selectedFile.value.savedContent, '')
+  assert.equal(h.api.selectedFile.value.exists, false)
+  assert.equal(h.api.selectedFile.value.content, 'new content')
+  assert.equal(h.toasts.at(-1)[1], 'error')
 })
 
 test('settings exposes separate prompt and skills pages', () => {

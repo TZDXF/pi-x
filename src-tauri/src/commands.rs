@@ -28,8 +28,35 @@ fn config_path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
-fn global_prompt_path() -> std::path::PathBuf {
-    trust::agent_dir().join("SYSTEM.md")
+const GLOBAL_PROMPT_FILES: [&str; 3] = ["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md"];
+
+fn global_prompt_path(file_name: &str) -> Result<std::path::PathBuf, String> {
+    if !GLOBAL_PROMPT_FILES.contains(&file_name) {
+        return Err(format!("Unsupported global prompt file: {file_name}"));
+    }
+    Ok(trust::agent_dir().join(file_name))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalPromptFile {
+    file_name: String,
+    content: String,
+    exists: bool,
+}
+
+fn list_global_prompts(dir: &Path) -> Result<Vec<GlobalPromptFile>, String> {
+    GLOBAL_PROMPT_FILES
+        .iter()
+        .map(|file_name| {
+            let path = dir.join(file_name);
+            Ok(GlobalPromptFile {
+                file_name: (*file_name).to_string(),
+                content: read_global_prompt(&path)?,
+                exists: path.exists(),
+            })
+        })
+        .collect()
 }
 
 fn write_config(path: &std::path::Path, config: &AppConfig) -> Result<(), String> {
@@ -56,8 +83,8 @@ pub fn app_config_save(app: AppHandle, config: AppConfig) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn global_prompt_get() -> Result<String, String> {
-    read_global_prompt(&global_prompt_path())
+pub fn global_prompt_list() -> Result<Vec<GlobalPromptFile>, String> {
+    list_global_prompts(&trust::agent_dir())
 }
 
 fn read_global_prompt(path: &std::path::Path) -> Result<String, String> {
@@ -70,8 +97,8 @@ fn read_global_prompt(path: &std::path::Path) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn global_prompt_save(prompt: String) -> Result<(), String> {
-    save_global_prompt(&global_prompt_path(), &prompt)
+pub fn global_prompt_save(file_name: String, prompt: String) -> Result<(), String> {
+    save_global_prompt(&global_prompt_path(&file_name)?, &prompt)
 }
 
 fn save_global_prompt(path: &std::path::Path, prompt: &str) -> Result<(), String> {
@@ -443,6 +470,31 @@ mod tests {
         assert!(value.get("managedSkills").is_none());
         assert!(value.get("defaultModel").is_none());
     }
+    #[test]
+    fn global_prompt_list_includes_missing_files_and_reads_existing_content() {
+        let root = std::env::temp_dir().join(format!("pix-prompts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = list_global_prompts(&root).unwrap();
+        assert_eq!(missing.len(), GLOBAL_PROMPT_FILES.len());
+        assert!(missing.iter().all(|file| !file.exists && file.content.is_empty()));
+        assert_eq!(missing[0].file_name, "AGENTS.md");
+        assert_eq!(missing[1].file_name, "SYSTEM.md");
+        assert_eq!(missing[2].file_name, "APPEND_SYSTEM.md");
+
+        save_global_prompt(&root.join("APPEND_SYSTEM.md"), "additional instructions").unwrap();
+        let files = list_global_prompts(&root).unwrap();
+        assert!(files[2].exists);
+        assert_eq!(files[2].content, "additional instructions");
+        assert!(!files[0].exists);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn global_prompt_path_rejects_arbitrary_files() {
+        assert!(global_prompt_path("../auth.json").is_err());
+        assert!(global_prompt_path("settings.json").is_err());
+    }
+
     #[test]
     fn saving_blank_global_prompt_removes_pi_file() {
         let root = std::env::temp_dir().join(format!("pix-prompt-{}", uuid::Uuid::new_v4()));

@@ -76,7 +76,7 @@ pub fn run() {
             commands::pi_settings_save,
             commands::app_config_get,
             commands::app_config_save,
-            commands::global_prompt_get,
+            commands::global_prompt_list,
             commands::global_prompt_save,
             commands::trust_status,
             commands::trust_save,
