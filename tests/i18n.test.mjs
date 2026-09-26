@@ -20,4 +20,8 @@ for (const locale of ['zh-CN', 'en']) {
       : '支持 npm:包名@版本、git:仓库地址、https:// 或本地路径。'
     assert.equal(i18n.global.t('packages.customHint'), expected)
   })
+
+  test(`${locale}: edit prompt cancel button has a translation`, () => {
+    assert.equal(i18n.global.t('chat.editCancel'), locale === 'en' ? 'Cancel' : '取消')
+  })
 }

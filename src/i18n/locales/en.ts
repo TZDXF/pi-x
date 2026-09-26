@@ -319,7 +319,6 @@ export default {
     emptyDesc: "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",
     copyReply: "Copy reply",
     editPrompt: "Edit prompt",
-    editPromptDesc: "Resending replaces the original question and regenerates its answer at the same position, without appending a question or creating a branch.",
     editCancel: "Cancel",
     editResend: "Resend",
     editKeepImages: "Images from the original prompt will be preserved.",
@@ -569,6 +568,10 @@ export default {
   ext: {
     yes: "Yes",
     no: "No",
+    approve: "Approve",
+    deny: "Deny",
+    approved: "Approved",
+    rejected: "Rejected",
     cancel: "Cancel",
     ok: "OK",
     save: "Save",

@@ -678,7 +678,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                       @keydown.esc.stop="cancelEditedPrompt"
                       @keydown.ctrl.enter.prevent="resendEditedPrompt"
                     />
-                    <p class="text-xs text-muted-foreground">{{ t('chat.editPromptDesc') }}</p>
                     <p v-if="entry.images?.length" class="text-xs text-muted-foreground">{{ t('chat.editKeepImages') }}</p>
                     <div class="flex justify-end gap-2">
                       <Button type="button" variant="outline" size="sm" :disabled="editBusy" @click="cancelEditedPrompt">{{ t('chat.editCancel') }}</Button>
