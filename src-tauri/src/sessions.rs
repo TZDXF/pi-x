@@ -333,6 +333,141 @@ pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Re
     std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
 }
+/// Error details of the last failed assistant message recorded in a session
+/// file. pi drops most retry failures from the RPC message projection via
+/// `context_edit`, so clients read the file to surface the final failure.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLastError {
+    /// `message.timestamp` (milliseconds since epoch), when present.
+    pub timestamp: Option<u64>,
+    pub error_message: String,
+}
+
+/// Scan a session file backwards for the last assistant message that ended
+/// with `stopReason: "error"` and a non-empty `errorMessage`.
+fn last_session_error(path: &Path) -> Result<Option<SessionLastError>, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    for line in content.lines().rev() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        let Some(msg) = v.get("message") else { continue };
+        if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        if msg.get("stopReason").and_then(|r| r.as_str()) != Some("error") {
+            continue;
+        }
+        let error_message = msg
+            .get("errorMessage")
+            .and_then(|m| m.as_str())
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        if error_message.is_empty() {
+            continue;
+        }
+        let timestamp = msg.get("timestamp").and_then(|t| t.as_u64());
+        return Ok(Some(SessionLastError { timestamp, error_message }));
+    }
+    Ok(None)
+}
+
+/// Last provider error recorded in a session file; `None` when the session
+/// never failed. Used to supplement RPC history, which omits retried errors.
+#[tauri::command]
+pub async fn session_last_error(file: String) -> Result<Option<SessionLastError>, String> {
+    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    tokio::task::spawn_blocking(move || last_session_error(&path))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Read the full current-branch transcript from the session file, including
+/// turns collapsed by compaction (pi's RPC `get_messages` only returns the
+/// projected post-compaction context). Compaction entries are mapped to
+/// `compactionSummary` messages matching the RPC shape.
+#[tauri::command]
+pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, String> {
+    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    tokio::task::spawn_blocking(move || read_session_history(&path))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("无法读取会话文件: {e}"))?;
+    // First pass: index every entry's parent so the current branch can be
+    // reconstructed by walking parentIds from the last entry.
+    let mut parents: HashMap<String, Option<String>> = HashMap::new();
+    let mut leaf: Option<String> = None;
+    for line in text.lines() {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else { continue };
+        let parent = entry.get("parentId").and_then(|v| v.as_str()).map(str::to_string);
+        parents.insert(id.to_string(), parent);
+        leaf = Some(id.to_string());
+    }
+    let mut branch: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cursor = leaf;
+    while let Some(id) = cursor {
+        if !branch.insert(id.clone()) {
+            break; // cycle guard
+        }
+        cursor = parents.get(&id).cloned().flatten();
+    }
+    // Second pass: keep current-branch entries in file order, as messages.
+    let mut messages = Vec::new();
+    for line in text.lines() {
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else { continue };
+        if !branch.contains(id) {
+            continue;
+        }
+        match entry.get("type").and_then(|v| v.as_str()) {
+            Some("message") => {
+                let Some(message) = entry.get("message") else { continue };
+                if message.get("role").and_then(|v| v.as_str()) == Some("system") {
+                    continue;
+                }
+                let mut message = message.clone();
+                // Lets the frontend estimate the context kept at each marker.
+                message["_entryId"] = id.into();
+                messages.push(message);
+            }
+            Some("compaction") => {
+                let mut msg = serde_json::json!({
+                    "role": "compactionSummary",
+                    "summary": entry.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
+                    "_entryId": id,
+                });
+                if let Some(kept) = entry.get("firstKeptEntryId").and_then(|v| v.as_str()) {
+                    msg["firstKeptEntryId"] = kept.into();
+                }
+                if let Some(tokens) = entry.get("tokensBefore").and_then(|v| v.as_u64()) {
+                    msg["tokensBefore"] = tokens.into();
+                }
+                if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                {
+                    msg["timestamp"] = ts.timestamp_millis().into();
+                }
+                messages.push(msg);
+            }
+            _ => {}
+        }
+    }
+    Ok(messages)
+}
+
 #[tauri::command]
 pub async fn session_mtime(file: String) -> Result<u64, String> {
     let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
@@ -431,6 +566,29 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
 mod presentation_tests {
     use super::*;
     #[test]
+    fn last_session_error_finds_latest_failure() {
+        let file = std::env::temp_dir().join(format!("pix-last-error-{}.jsonl", uuid::Uuid::new_v4()));
+        let content = concat!(
+            "{\"type\":\"session\",\"id\":\"s\"}\n",
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"error\",\"timestamp\":1000,\"errorMessage\":\"first\"}}\n",
+            "{\"type\":\"context_edit\",\"targetId\":\"a\",\"replacement\":null}\n",
+            "{\"type\":\"message\",\"message\":{\"role\":\"toolResult\",\"content\":\"ok\"}}\n",
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"error\",\"timestamp\":2000,\"errorMessage\":\"last 503\"}}\n",
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}],\"stopReason\":\"toolUse\",\"timestamp\":3000}}\n",
+        );
+        std::fs::write(&file, content).unwrap();
+        let last = last_session_error(&file).unwrap().unwrap();
+        assert_eq!(last.error_message, "last 503");
+        assert_eq!(last.timestamp, Some(2000));
+        // No error at all, and errors without a message are skipped.
+        std::fs::write(&file, "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"error\",\"timestamp\":1}}\n").unwrap();
+        assert!(last_session_error(&file).unwrap().is_none());
+        std::fs::write(&file, "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"stop\"}}\n").unwrap();
+        assert!(last_session_error(&file).unwrap().is_none());
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
     fn duplicate_rewrites_header_and_keeps_body() {
         let original = "{\"type\":\"session\",\"version\":3,\"id\":\"old-id\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"cwd\":\"/tmp\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi old-id\"}}\n";
         let copy = duplicate_content(original, "2026-09-26T01:02:03.456Z", "new-id").unwrap();
@@ -469,6 +627,33 @@ mod presentation_tests {
         invalidate_meta_cache(&file);
         assert!(read_session_meta(&file, mtime).is_err());
     }
+    #[test]
+    fn history_reconstructs_current_branch_and_keeps_compactions() {
+        let file = std::env::temp_dir().join(format!("pix-history-{}.jsonl", uuid::Uuid::new_v4()));
+        let content = concat!(
+            "{\"type\":\"session\",\"id\":\"h\",\"parentId\":null}\n",
+            "{\"type\":\"message\",\"id\":\"m1\",\"parentId\":\"h\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
+            "{\"type\":\"message\",\"id\":\"m2\",\"parentId\":\"m1\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+            "{\"type\":\"compaction\",\"id\":\"c1\",\"parentId\":\"m2\",\"timestamp\":\"2026-09-26T11:20:02.479Z\",\"summary\":\"collapsed\",\"tokensBefore\":222767,\"firstKeptEntryId\":\"m2\"}\n",
+            "{\"type\":\"message\",\"id\":\"m3\",\"parentId\":\"c1\",\"message\":{\"role\":\"user\",\"content\":\"second\"}}\n",
+            // A forked branch off m1 must not leak into the current branch.
+            "{\"type\":\"message\",\"id\":\"fork\",\"parentId\":\"m1\",\"message\":{\"role\":\"user\",\"content\":\"forked\"}}\n",
+            "{\"type\":\"message\",\"id\":\"m4\",\"parentId\":\"m3\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+        );
+        std::fs::write(&file, content).unwrap();
+        let messages = read_session_history(&file).unwrap();
+        let roles: Vec<&str> = messages.iter().filter_map(|m| m["role"].as_str()).collect();
+        assert_eq!(roles, ["user", "assistant", "compactionSummary", "user", "assistant"]);
+        assert_eq!(messages[0]["content"], "first");
+        assert_eq!(messages[2]["summary"], "collapsed");
+        assert_eq!(messages[2]["tokensBefore"], 222767);
+        assert_eq!(messages[2]["timestamp"], 1790421602479i64);
+        assert_eq!(messages[2]["firstKeptEntryId"], "m2");
+        assert_eq!(messages[0]["_entryId"], "m1");
+        assert_eq!(messages[3]["content"], "second");
+        std::fs::remove_file(file).unwrap();
+    }
+
     #[test]
     fn rename_archive_restore() {
         let dir = std::env::temp_dir().join(format!("pix-metadata-{}", uuid::Uuid::new_v4()));

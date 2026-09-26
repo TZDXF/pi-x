@@ -18,6 +18,7 @@ const require = (id) => {
 const context = { exports: {}, require }
 vm.runInNewContext(tsCompile(source), context)
 const turns = context.exports.conversationTurns
+const buildTimelineTurns = context.exports.buildTimelineTurns
 const user = (id, text = '') => ({ kind: 'user', id, text })
 const text = value => ({ type: 'text', text: value })
 const assistant = (...blocks) => ({ kind: 'assistant', blocks })
@@ -126,4 +127,47 @@ test('compaction markers are skipped without breaking turn grouping', () => {
   const result = turns([user(1, 'first'), assistant(text('one')), compaction, user(2, 'second'), assistant(text('two'))])
   assert.equal(result.map(t => t.question).join(','), 'first,second')
   assert.equal(result[1].answer, 'two')
+})
+
+test('timeline includes compaction nodes with materialized entry ids', () => {
+  const messages = [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: [{ type: 'text', text: 'one' }] },
+    { role: 'compactionSummary', summary: 'collapsed', tokensBefore: 100000, estimatedTokensAfter: 30000 },
+    { role: 'user', content: 'second' },
+    { role: 'assistant', content: [{ type: 'text', text: 'two' }] },
+  ]
+  // Nothing materialized yet: the node is positioned but has no entry id.
+  let timeline = buildTimelineTurns(messages, 5, [])
+  assert.equal(timeline.length, 3)
+  assert.equal(timeline[1].compaction.tokensBefore, 100000)
+  assert.equal(timeline[1].compaction.tokensAfter, 30000)
+  assert.equal(timeline[1].entryId, null)
+  assert.equal(timeline[1].id, -3)
+  // Materialize the page: the compaction entry lines up with its message.
+  const entries = [
+    { kind: 'user', id: 11, text: 'first' },
+    { kind: 'assistant', id: 12, blocks: [{ type: 'text', text: 'one' }] },
+    { kind: 'compaction', id: 13, summary: 'collapsed', tokensBefore: 100000, tokensAfter: 30000 },
+    { kind: 'user', id: 14, text: 'second' },
+    { kind: 'assistant', id: 15, blocks: [{ type: 'text', text: 'two' }] },
+  ]
+  timeline = buildTimelineTurns(messages, 0, entries)
+  assert.equal(timeline.map(t => t.entryId).join(','), '11,13,14')
+  assert.equal(timeline[2].answer, 'two')
+  // A live compaction appended after the snapshot appears at the end.
+  timeline = buildTimelineTurns(messages, 0, [...entries, { kind: 'compaction', id: 16, summary: 'live', live: true }])
+  assert.equal(timeline.at(-1).entryId, 16)
+  assert.equal(timeline.at(-1).compaction.tokensBefore, undefined)
+})
+
+test('timeline without a snapshot keeps compaction nodes from entries', () => {
+  const timeline = buildTimelineTurns([], 0, [
+    { kind: 'user', id: 1, text: 'q' },
+    { kind: 'compaction', id: 2, summary: 's', tokensBefore: 10 },
+    { kind: 'assistant', id: 3, blocks: [{ type: 'text', text: 'a' }] },
+  ])
+  assert.equal(timeline.length, 2)
+  assert.equal(timeline[1].compaction.tokensBefore, 10)
+  assert.equal(timeline[1].entryId, 2)
 })

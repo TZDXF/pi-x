@@ -16,6 +16,7 @@ function harness() {
     '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },
     '@/lib/content': contentModule(),
     '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
+    '@/lib/contextBreakdown': loadTsSource(readFileSync(new URL('../src/lib/contextBreakdown.ts', import.meta.url), 'utf8')),
   }
   const context = vm.createContext({ exports: {}, setTimeout, require: id => modules[id] })
   const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')

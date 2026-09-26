@@ -91,6 +91,8 @@ pub fn run() {
             commands::rpc_sessions,
             commands::session_list,
             sessions::session_mtime,
+            sessions::session_history,
+            sessions::session_last_error,
             sessions::session_update,
             sessions::session_delete,
             sessions::session_duplicate,

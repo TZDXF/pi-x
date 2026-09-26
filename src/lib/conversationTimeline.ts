@@ -4,8 +4,12 @@ import type { Block, Entry, UserEntry } from '@/stores/session'
 export interface ConversationTurn { id: number; question: string; answer: string }
 /** Turn with the id of its materialized user entry (null while history pages
  * are not loaded yet). Unmaterialized turns use a synthetic negative id
- * derived from their raw-message index: -(msgIndex + 1). */
-export interface TimelineTurn extends ConversationTurn { entryId: number | null }
+ * derived from their raw-message index: -(msgIndex + 1). Compaction nodes
+ * (compaction set) mark where history was collapsed and are not questions. */
+export interface TimelineTurn extends ConversationTurn {
+  entryId: number | null
+  compaction?: { tokensBefore?: number, tokensAfter?: number }
+}
 
 const excerpt = (text: string) => {
   const normalized = text.replace(/\s+/g, ' ').trim()
@@ -59,17 +63,23 @@ const rawAssistantText = (content: unknown): string => {
  * k-th non-live user entry). */
 export function buildTimelineTurns(messages: any[], cursor: number, entries: Entry[]): TimelineTurn[] {
   const turns: TimelineTurn[] = []
+  const compactionNode = (id: number, entryId: number | null, tokensBefore?: number, tokensAfter?: number): TimelineTurn =>
+    ({ id, question: '', answer: '', entryId, compaction: { tokensBefore, tokensAfter } })
   if (!messages.length) {
     // Snapshot released: everything is materialized (or live) in entries.
     for (const entry of entries) {
       if (entry.kind === 'user')
         turns.push({ id: entry.id, question: excerpt(entry.text), answer: '', entryId: entry.id })
+      else if (entry.kind === 'compaction')
+        turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
       else if (entry.kind === 'assistant' && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
     }
     return turns
   }
   const userEntries = entries.filter(e => e.kind === 'user' && !e.live) as UserEntry[]
+  const compactionEntries = entries.filter(e => e.kind === 'compaction' && !e.live)
   let materialized = 0
+  let materializedCompactions = 0
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     if (msg?.role === 'user') {
@@ -78,6 +88,12 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
       // Same acceptance rule as page materialization, so ranks stay aligned.
       const entryId = i >= cursor ? userEntries[materialized++]?.id ?? null : null
       turns.push({ id: entryId ?? -(i + 1), question: excerpt(text), answer: '', entryId })
+    }
+    else if (msg?.role === 'compactionSummary' && typeof msg.summary === 'string') {
+      // Materialized compaction entries line up with compactionSummary
+      // messages in order, the same way user entries line up with turns.
+      const entryId = i >= cursor ? compactionEntries[materializedCompactions++]?.id ?? null : null
+      turns.push(compactionNode(entryId ?? -(i + 1), entryId, msg.tokensBefore, msg.estimatedTokensAfter))
     }
     else if (msg?.role === 'assistant' && turns.length) {
       const text = rawAssistantText(msg.content)
@@ -92,6 +108,8 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
     if (!entry.live) continue
     if (entry.kind === 'user')
       turns.push({ id: entry.id, question: excerpt(entry.text), answer: '', entryId: entry.id })
+    else if (entry.kind === 'compaction')
+      turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
     else if (entry.kind === 'assistant' && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
   }
   return turns

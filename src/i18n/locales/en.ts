@@ -302,6 +302,7 @@ export default {
     timelineQuestion: "Question",
     timelineAnswer: "Answer",
     timelineImage: "Image question",
+    timelineCompaction: "Compaction marker",
     timelinePending: "No text response yet",
 
     historyLoading: "Loading history…",

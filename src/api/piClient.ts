@@ -134,6 +134,24 @@ export const listSessions = (project: string) =>
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
 
+/** Full current-branch transcript from the session file. Unlike RPC
+ *  get_messages (projected context), this keeps turns collapsed by
+ *  compaction and the compaction entries themselves. */
+export const sessionHistory = (file: string) => invoke<unknown[]>("session_history", { file })
+
+export interface SessionLastError {
+  /** `message.timestamp` (ms since epoch) of the failed assistant message. */
+  timestamp?: number
+  errorMessage: string
+}
+
+/**
+ * Last provider error recorded in the session file. pi drops most retried
+ * failures from the RPC message projection, so history supplements the final
+ * failure from disk.
+ */
+export const sessionLastError = (file: string) => invoke<SessionLastError | null>("session_last_error", { file })
+
 /** Duplicate a saved session file with a fresh id; returns the new file path. */
 export const duplicateSessionFile = (file: string) => invoke<string>("session_duplicate", { file })
 

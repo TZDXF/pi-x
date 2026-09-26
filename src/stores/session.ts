@@ -4,10 +4,11 @@ import { computed, ref, shallowRef } from "vue"
 import { i18n } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
-import { generateSessionTitle, getModelsConfig, getPiSettings, pixLog, rpcRequest as requestForRuntime, sessionMtime } from "@/api/piClient"
+import { generateSessionTitle, getModelsConfig, getPiSettings, pixLog, rpcRequest as requestForRuntime, sessionHistory, sessionLastError, sessionMtime, type SessionLastError } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { notifyTurnComplete } from "@/lib/notifications"
 import { sessionChanges } from "@/lib/sessionChanges"
+import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
 import type {
   AssistantMessageEvent,
@@ -71,6 +72,11 @@ function formatRetryError(value: unknown): string {
       return status ? `${status} · ${inner.trim()}` : inner.trim()
   } catch { /* keep the original provider error */ }
   return raw
+}
+
+/** Shared phrasing between the live settle entry and history rendering. */
+function errorBlockText(message: string): string {
+  return `**${i18n.global.t("chat.errorLabel")}:** ${formatRetryError(message)}`
 }
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
@@ -178,6 +184,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   // Raw history snapshot outside Vue's deep reactive graph; emptied once fully materialized.
   const historyMessages = shallowRef<any[]>([])
+  /** Stop reason of the session's final turn, appended after history loads. */
+  const pendingHistoryError = shallowRef<SessionLastError | null>(null)
   let historyVersion = 0
   const historyCursor = ref(0)
   const historyLoading = ref(false)
@@ -188,6 +196,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   function invalidateHistory() {
     historyVersion++
     historyMessages.value = []
+    pendingHistoryError.value = null
     historyCursor.value = 0
     historyLoading.value = false
     olderHistoryLoading.value = false
@@ -264,7 +273,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           entries.value.push({
             kind: "assistant",
             id: nextId(),
-            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${formatRetryError(lastErrorMessage)}` }],
+            blocks: [{ type: "text", text: errorBlockText(lastErrorMessage) }],
             live: true,
           })
         }
@@ -859,13 +868,16 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
             page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
         }
         else if (msg.role === "assistant") {
+          // Failed responses persist with empty content and are dropped here;
+          // loadHistory surfaces the final turn's failure separately at the end.
           const blocks = blocksFromMessage(msg)
           if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks, timestamp: msg.timestamp })
         }
         else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
           page.push({ kind: "compaction", id: nextId(), summary: msg.summary,
             tokensBefore: typeof msg.tokensBefore === "number" ? msg.tokensBefore : undefined,
-            timestamp: msg.timestamp })
+            tokensAfter: typeof msg.estimatedTokensAfter === "number" ? msg.estimatedTokensAfter : undefined,
+            timestamp: typeof msg.timestamp === "number" ? msg.timestamp : undefined })
         else if (msg.role === "toolResult") {
           const callId = String(msg.toolCallId ?? msg.id ?? "")
           if (callId) pageRuns[callId] = {
@@ -888,6 +900,39 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     }
   }
 
+  /** Append the file-recorded stop reason after the loaded conversation. */
+  function placePendingHistoryError() {
+    const pending = pendingHistoryError.value
+    if (!pending) return
+    pendingHistoryError.value = null
+    entries.value = [...entries.value, {
+      kind: "assistant",
+      id: nextId(),
+      blocks: [{ type: "text", text: errorBlockText(pending.errorMessage) }],
+      timestamp: typeof pending.timestamp === "number" ? pending.timestamp : undefined,
+    }]
+  }
+
+  /**
+   * Supplement history with the last provider error from the session file.
+   * pi removes retried failures from the RPC message projection, so a session
+   * whose run was interrupted would otherwise show no trace of the failure.
+   */
+  async function fetchLastSessionError(version: number) {
+    const file = sessionFile.value
+    if (!file) return
+    let last: SessionLastError | null
+    try { last = await sessionLastError(file) }
+    catch { return } // file unreadable (e.g. browser preview); history still works
+    if (version !== historyVersion || !last?.errorMessage) return
+    // Only a failure from the final turn counts as the stop reason; once the
+    // user prompted again, older errors are just history and stay hidden.
+    const ts = last.timestamp
+    if (typeof ts === "number" && historyMessages.value.some(m =>
+      m?.role === "user" && typeof m.timestamp === "number" && m.timestamp > ts)) return
+    pendingHistoryError.value = last
+  }
+
   async function loadMessages(msgs: any[]) {
     ++conversationVersion
     invalidateHistory()
@@ -906,16 +951,37 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     const version = historyVersion
     historyLoading.value = true
     try {
-      const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
+      // Read the raw session file when available: pi's get_messages returns
+      // the projected post-compaction context, which would hide earlier turns.
+      let msgs: any[] | null = null
+      const file = sessionFile.value
+      if (file) {
+        try {
+          const raw = await sessionHistory(file)
+          if (Array.isArray(raw)) msgs = raw
+        }
+        catch { /* fall back to the RPC projection below */ }
+      }
       if (version !== historyVersion) return
-      if (!res.success) throw new Error(res.error || "Failed to load history")
+      if (!msgs) {
+        const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
+        if (version !== historyVersion) return
+        if (!res.success) throw new Error(res.error || "Failed to load history")
+        msgs = res.data?.messages ?? []
+      }
+      // History markers only know tokensBefore; estimate the after size.
+      annotateCompactionEstimates(msgs)
       entries.value = []
       runs.value = {}
       partialBlocks.value = null
       streamingTurnId.value = null
-      historyMessages.value = res.data?.messages ?? []
-      historyCursor.value = historyMessages.value.length
+      historyMessages.value = msgs
+      historyCursor.value = msgs.length
+      // Fetch before paging: loadOlderHistory releases historyMessages once the
+      // oldest page is reached, and the final-turn check needs the full list.
+      await fetchLastSessionError(version)
       await loadOlderHistory()
+      placePendingHistoryError()
       void syncSessionFile()
     }
     finally {

@@ -10,10 +10,17 @@ const emit = defineEmits<{ navigate: [turn: TimelineTurn] }>()
 const { t } = useI18n()
 const turns = computed(() => {
   const list = props.turns.map(turn => ({ ...turn }))
-  if (props.partial?.length && list.length) appendPartial(list[list.length - 1], props.partial)
-  return list
+  if (props.partial?.length && list.length) {
+    // Streaming text belongs to the current question, never a compaction node.
+    const last = [...list].reverse().find(turn => !turn.compaction)
+    if (last) appendPartial(last, props.partial)
+  }
+  // Compaction nodes are not questions; keep question numbering stable.
+  let rank = 0
+  return list.map(turn => ({ ...turn, rank: turn.compaction ? 0 : ++rank }))
 })
 const selected = ref<number | null>(null)
+const compactTokens = (n: number) => new Intl.NumberFormat('en-US', { notation: 'compact' }).format(n)
 // 当轮次很多时压缩节点高度，保证时间线在可视区内完整显示：
 // 默认 20px，最多压缩到 6px（圆点同步缩小）；仍放不下（超多
 // 轮次）时回退为内部滚动，并以边缘渐隐提示还有更多节点。
@@ -48,17 +55,24 @@ function navigate(turn: TimelineTurn) {
   <nav ref="navRef" v-if="turns.length" class="conversation-timeline" :class="{ 'is-scrollable': scrollable }" :aria-label="t('chat.timeline')">
     <TooltipProvider :delay-duration="120">
       <ol class="timeline-track" :style="{ '--node-h': nodeHeight + 'px' }">
-        <li v-for="(turn, index) in turns" :key="turn.id" class="timeline-item">
+        <li v-for="turn in turns" :key="turn.id" class="timeline-item">
           <Tooltip>
             <TooltipTrigger as-child>
-              <button type="button" class="timeline-node" :class="{ 'is-selected': selected === turn.id }"
-                :aria-label="t('chat.timelineJump', { number: index + 1 }) + ': ' + (turn.question || t('chat.timelineImage'))"
+              <button type="button" class="timeline-node" :class="{ 'is-selected': selected === turn.id, 'is-compaction': !!turn.compaction }"
+                :aria-label="turn.compaction ? t('chat.timelineCompaction') : t('chat.timelineJump', { number: turn.rank }) + ': ' + (turn.question || t('chat.timelineImage'))"
                 @click="navigate(turn)">
-                <span class="timeline-dot" /><span class="timeline-number" aria-hidden="true">{{ index + 1 }}</span>
+                <template v-if="turn.compaction"><span class="timeline-dash" /></template>
+                <template v-else><span class="timeline-dot" /><span class="timeline-number" aria-hidden="true">{{ turn.rank }}</span></template>
               </button>
             </TooltipTrigger>
             <TooltipContent side="right" :side-offset="6" :collision-padding="16" class="timeline-preview">
-              <div class="space-y-2">
+              <div v-if="turn.compaction" class="space-y-2">
+                <p class="line-clamp-1 font-medium leading-snug">{{ t('chat.compacted') }}</p>
+                <p v-if="turn.compaction.tokensBefore" class="leading-snug opacity-80">
+                  {{ compactTokens(turn.compaction.tokensBefore) }}<template v-if="turn.compaction.tokensAfter"> → {{ compactTokens(turn.compaction.tokensAfter) }}</template>
+                </p>
+              </div>
+              <div v-else class="space-y-2">
                 <p v-if="turn.question || !turn.answer" class="line-clamp-1 font-medium leading-snug">{{ turn.question || t('chat.timelineImage') }}</p>
                 <p v-if="turn.answer" class="line-clamp-3 leading-snug opacity-80">{{ turn.answer }}</p>
               </div>
@@ -85,6 +99,9 @@ function navigate(turn: TimelineTurn) {
 .timeline-node:hover .timeline-number, .timeline-node:focus-visible .timeline-number { opacity: 1; }
 .timeline-node.is-selected .timeline-dot { background: var(--primary); }
 .timeline-node.is-selected:hover .timeline-dot, .timeline-node.is-selected:focus-visible .timeline-dot { background: var(--accent); }
+.timeline-dash { width: clamp(6px, calc(var(--node-h, 20px) * 0.6), 12px); height: 2px; border-radius: 1px; background: var(--muted-foreground); box-shadow: 0 0 0 3px var(--background); transition: transform 200ms ease, background 200ms ease, box-shadow 200ms ease; }
+.timeline-node:hover .timeline-dash, .timeline-node:focus-visible .timeline-dash { transform: scaleX(1.5); background: var(--accent); box-shadow: none; }
+.timeline-node.is-selected .timeline-dash { background: var(--primary); }
 .timeline-preview { width: min(280px, calc(100vw - 64px)); max-width: 280px; padding: 12px; overflow-wrap: anywhere; animation-duration: 180ms; }
 @media (prefers-reduced-motion: reduce) { *, *::after { transition: none !important; animation: none !important; } }
 </style>

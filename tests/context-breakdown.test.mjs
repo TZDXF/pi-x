@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { loadTsSource } from './lib/load-ts.mjs'
 
-const { estimateContextBreakdown, contextBreakdownParts } = loadTsSource(
+const { estimateContextBreakdown, contextBreakdownParts, annotateCompactionEstimates } = loadTsSource(
   readFileSync(new URL('../src/lib/contextBreakdown.ts', import.meta.url), 'utf8'),
 )
 
@@ -109,4 +109,32 @@ test('empty input yields no parts', () => {
   assert.equal(estimateContextBreakdown([]).total, 0)
   assert.equal(contextBreakdownParts(estimateContextBreakdown([])).length, 0)
   assert.equal(contextBreakdownParts(estimateContextBreakdown(null)).length, 0)
+})
+
+test('annotateCompactionEstimates estimates the size kept after each compaction', () => {
+  const messages = [
+    user('x'.repeat(40000)),
+    { role: 'compactionSummary', summary: 's'.repeat(400), tokensBefore: 10000 },
+    user('y'.repeat(3600)),
+    assistant('z'.repeat(4000)),
+    { role: 'compactionSummary', summary: 's'.repeat(800), tokensBefore: 5000, estimatedTokensAfter: 999 },
+    user('kept'),
+  ]
+  annotateCompactionEstimates(messages)
+  // summary (400) + 3600 + 4000 chars -> 8000 / 4 = 2000 tokens
+  assert.equal(messages[1].estimatedTokensAfter, 2000)
+  // An existing estimate (e.g. live event data) is never overwritten.
+  assert.equal(messages[4].estimatedTokensAfter, 999)
+})
+
+test('annotateCompactionEstimates uses firstKeptEntryId so later turns do not inflate the estimate', () => {
+  const messages = [
+    { ...user('dropped'), _entryId: 'm1' },
+    { ...user('k'.repeat(3600)), _entryId: 'm2' },
+    { role: 'compactionSummary', summary: 's'.repeat(400), tokensBefore: 10000, firstKeptEntryId: 'm2', _entryId: 'c1' },
+    { ...user('later turn '.repeat(40000)), _entryId: 'm3' },
+  ]
+  annotateCompactionEstimates(messages)
+  // summary (400) + kept m2 (3600) -> 4000 / 4 = 1000; the later m3 is excluded.
+  assert.equal(messages[2].estimatedTokensAfter, 1000)
 })

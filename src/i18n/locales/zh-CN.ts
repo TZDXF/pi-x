@@ -302,6 +302,7 @@ export default {
     timelineQuestion: "提问",
     timelineAnswer: "回答",
     timelineImage: "图片提问",
+    timelineCompaction: "压缩节点",
     timelinePending: "暂无文字回答",
 
     historyLoading: "正在加载历史消息…",

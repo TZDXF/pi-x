@@ -79,6 +79,39 @@ function messageChars(message: any): number {
 const toTokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN)
 
 /**
+ * History-loaded compaction markers only record `tokensBefore`. Estimate the
+ * post-compaction size (summary plus everything kept after it, up to the next
+ * compaction) so markers can show both sides. Mutates the messages in place.
+ */
+export function annotateCompactionEstimates(messages: any[]): void {
+  const indexByEntryId = new Map<string, number>()
+  messages.forEach((msg, index) => {
+    if (typeof msg?._entryId === "string") indexByEntryId.set(msg._entryId, index)
+  })
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (msg?.role !== "compactionSummary" || typeof msg.summary !== "string") continue
+    if (typeof msg.estimatedTokensAfter === "number") continue
+    let chars = msg.summary.length
+    // Kept context = messages retained at the marker (firstKeptEntryId up to
+    // the marker). Later turns must not inflate the estimate. Without entry
+    // ids (RPC projection fallback), count what follows until the next marker.
+    const keptStart = typeof msg.firstKeptEntryId === "string" ? indexByEntryId.get(msg.firstKeptEntryId) : undefined
+    if (keptStart !== undefined && keptStart < i) {
+      for (let j = keptStart; j < i; j++) chars += messageChars(messages[j])
+    }
+    else {
+      for (let j = i + 1; j < messages.length; j++) {
+        const next = messages[j]
+        if (next?.role === "compactionSummary") break
+        chars += messageChars(next)
+      }
+    }
+    msg.estimatedTokensAfter = toTokens(chars)
+  }
+}
+
+/**
  * Replay the projected system messages: `sections` patch by name (null
  * removes), tools accumulate via toolsAdded/toolsRemoved. The merged result
  * is the prompt and tool loadout the next request would use.
