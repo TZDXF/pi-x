@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 #[tauri::command]
 pub fn remote_status() -> Value {
-    json!({"enabled": false, "port": 1421, "urls": []})
+    json!({"enabled": false, "port": 1421, "urls": [], "passwordEnabled": false})
 }
 
 #[tauri::command]
@@ -18,4 +18,10 @@ pub async fn remote_set(enabled: bool, port: u16) -> Result<Value, String> {
 pub fn emit(app: &AppHandle, name: &str, payload: Value) {
     use tauri::Emitter;
     let _ = app.emit(name, payload);
+}
+
+#[tauri::command]
+pub async fn remote_password_set(password: Option<String>) -> Result<Value, String> {
+    let _ = password;
+    Err("当前构建未启用远程访问".into())
 }

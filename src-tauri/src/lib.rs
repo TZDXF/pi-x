@@ -68,6 +68,7 @@ pub fn run() {
             schedules::schedule_delete,
             remote::remote_status,
             remote::remote_set,
+            remote::remote_password_set,
             commands::pi_detect,
             pi_update::pi_update_check,
             pi_update::pi_update_execute,

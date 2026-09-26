@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 
-function harness(desktop = false) {
+function harness(desktop = false, fragment = '#token=test-key') {
   const source = readFileSync(new URL('../src/api/transport.ts', import.meta.url), 'utf8')
     .replace(/^import .*$/gm, '')
-    .replace(/export /g, '') + '\nglobalThis.api = { invoke, listen, isDesktop };'
+    .replace(/export /g, '') + '\nglobalThis.api = { invoke, listen, isDesktop, hasRemoteToken, remoteAuthStatus, loginRemote };'
   const stored = new Map()
   const requests = []
   const sockets = []
@@ -31,8 +31,8 @@ function harness(desktop = false) {
     isTauri: () => desktop,
     desktopInvoke: async () => 'desktop',
     desktopListen: async () => () => {},
-    sessionStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
-    location: { hash: '#token=test-key', pathname: '/', search: '', protocol: 'http:', host: 'localhost:1421' },
+    sessionStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) },
+    location: { hash: fragment, pathname: '/', search: '', protocol: 'http:', host: 'localhost:1421' },
     history: { replaceState: (...args) => requests.push(args) },
     fetch: async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, json: async () => ({ data: 42 }) } },
   })
@@ -72,7 +72,7 @@ test('event subscribers share one socket and release their handlers', async () =
 test('invalid access keys produce a useful error', async () => {
   const h = harness()
   h.context.fetch = async () => ({ status: 401 })
-  await assert.rejects(h.api.invoke('rpc_running'), /访问密钥无效/)
+  await assert.rejects(h.api.invoke('rpc_running'), /访问凭据已失效/)
 })
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -128,4 +128,32 @@ test('stale socket events cannot clobber a newer connection', async () => {
   await flush()
   assert.equal(h.sockets.length, 2)
   assert.equal(reconnected.length, 1)
+})
+
+test('tokenless access can authenticate with a password without placing the key in the URL', async () => {
+  const h = harness(false, '')
+  assert.equal(h.api.hasRemoteToken(), false)
+  h.context.fetch = async (url, options) => {
+    h.requests.push({ url, options })
+    if (url === '/api/auth') return { ok: true, json: async () => ({ passwordEnabled: true, authenticated: false }) }
+    if (url === '/api/auth/login') return { ok: true, status: 200, json: async () => ({ token: 'session-key' }) }
+    return { ok: true, status: 200, json: async () => ({ data: true }) }
+  }
+  assert.equal((await h.api.remoteAuthStatus()).passwordEnabled, true)
+  assert.equal(await h.api.loginRemote('test-password'), 'ok')
+  assert.equal(h.api.hasRemoteToken(), true)
+  assert.equal(h.stored.get('pi-remote-token'), 'session-key')
+  assert.equal(h.requests.find(r => r.url === '/api/auth/login').options.body, JSON.stringify({ password: 'test-password' }))
+  await h.api.invoke('rpc_running')
+  assert.equal(h.requests.at(-1).options.headers.Authorization, 'Bearer session-key')
+  assert.equal(h.requests.some(r => r.url?.includes('test-password')), false)
+})
+
+test('invalid and rate-limited password attempts do not store a token', async () => {
+  const h = harness(false, '')
+  h.context.fetch = async () => ({ status: 401 })
+  assert.equal(await h.api.loginRemote('wrong-password'), 'invalid')
+  h.context.fetch = async () => ({ status: 429 })
+  assert.equal(await h.api.loginRemote('wrong-password'), 'limited')
+  assert.equal(h.api.hasRemoteToken(), false)
 })

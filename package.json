@@ -21,6 +21,7 @@
     "package:msi": "tauri build --features remote-access --bundles msi"
   },
   "dependencies": {
+    "@internationalized/date": "^3.12.4",
     "@lucide/vue": "^1.47.0",
     "@rive-app/webgl2": "^2.42.2",
     "@tailwindcss/vite": "^4.3.3",
@@ -44,6 +45,7 @@
     "motion-v": "^2.4.4",
     "nanoid": "^6.0.1",
     "pinia": "^4.0.3",
+    "qrcode.vue": "^3.11.0",
     "reka-ui": "^2.10.4",
     "shadcn-vue": "^2.8.2",
     "shiki": "^4.4.3",

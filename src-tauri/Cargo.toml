@@ -11,7 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-remote-access = []
+remote-access = ["dep:argon2", "dep:rand_core"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -44,6 +44,8 @@ pelite = "0.10"
 ico = "0.5"
 icns = "0.4"
 plist = "1.10"
+argon2 = { version = "0.5.3", optional = true }
+rand_core = { version = "0.6", features = ["getrandom"], optional = true }
 
 [profile.release]
 codegen-units = 1

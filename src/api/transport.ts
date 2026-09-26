@@ -8,6 +8,37 @@ if (fragment.has("token")) {
   sessionStorage.setItem("pi-remote-token", token)
   history.replaceState(null, "", location.pathname + location.search)
 }
+export const REMOTE_UNAUTHORIZED_EVENT = "pi:remote-unauthorized"
+export const hasRemoteToken = () => !!token
+
+function clearRemoteToken() {
+  token = ""
+  sessionStorage.removeItem("pi-remote-token")
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(REMOTE_UNAUTHORIZED_EVENT))
+}
+
+export async function remoteAuthStatus(): Promise<{ passwordEnabled: boolean; authenticated: boolean }> {
+  const res = await fetch("/api/auth", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const status = await res.json()
+  if (!status.authenticated && token) clearRemoteToken()
+  return status
+}
+
+export async function loginRemote(password: string): Promise<"ok" | "invalid" | "limited"> {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  })
+  if (res.status === 401 || res.status === 403) return "invalid"
+  if (res.status === 429) return "limited"
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  token = (await res.json()).token
+  sessionStorage.setItem("pi-remote-token", token)
+  return "ok"
+}
+
 export async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (isDesktop) return desktopInvoke<T>(command, args)
   const res = await fetch("/api/invoke", {
@@ -15,7 +46,10 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ command, args }),
   })
-  if (res.status === 401) throw new Error("访问密钥无效，请从桌面设置重新复制访问链接。")
+  if (res.status === 401) {
+    clearRemoteToken()
+    throw new Error("访问凭据已失效，请重新登录。")
+  }
   const result = await res.json()
   if (!res.ok) throw new Error(result.error ?? `HTTP ${res.status}`)
   return result.data

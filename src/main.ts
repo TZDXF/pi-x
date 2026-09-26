@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
-import App from "./App.vue";
+import RemoteEntry from "./components/RemoteEntry.vue";
 import { i18n } from "./i18n";
 import "./style.css";
 import "./lib/theme";
@@ -10,4 +10,4 @@ if (import.meta.env.DEV) {
   elementDev();
 }
 
-createApp(App).use(createPinia()).use(i18n).mount("#app");
+createApp(RemoteEntry).use(createPinia()).use(i18n).mount("#app");

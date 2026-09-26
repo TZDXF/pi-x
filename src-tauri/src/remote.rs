@@ -1,6 +1,10 @@
 use crate::{commands, rpc};
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use axum::{
-    extract::{ws::Message, Query, State, WebSocketUpgrade},
+    extract::{connect_info::ConnectInfo, ws::Message, Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -8,9 +12,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Mutex;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Manager};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, Semaphore};
 
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 
@@ -19,12 +28,15 @@ include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 pub struct Settings {
     pub enabled: bool,
     pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password_hash: Option<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
             port: 1421,
+            password_hash: None,
         }
     }
 }
@@ -52,6 +64,14 @@ struct WebState {
     app: AppHandle,
     token: String,
     stop: watch::Receiver<bool>,
+    password_hash: Option<String>,
+    login_attempts: Arc<Mutex<HashMap<IpAddr, LoginAttempt>>>,
+    login_slots: Arc<Semaphore>,
+}
+
+struct LoginAttempt {
+    count: u8,
+    since: Instant,
 }
 fn path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(crate::data_dir::root().join("remote.json"))
@@ -65,12 +85,24 @@ pub fn load(app: &AppHandle) -> Settings {
         .unwrap_or_default()
 }
 
+fn access_url(ip: &str, port: u16, token: &str, password_enabled: bool) -> String {
+    let base = format!("http://{ip}:{port}/");
+    if password_enabled {
+        base
+    } else {
+        format!("{base}#token={token}")
+    }
+}
+
 #[tauri::command]
 pub fn remote_status(app: AppHandle) -> Value {
     let state = app.state::<RemoteState>();
     let guard = state.server.lock().unwrap();
     match guard.as_ref() {
-        None => json!({"enabled": false, "port": load(&app).port, "urls": []}),
+        None => {
+            let cfg = load(&app);
+            json!({"enabled": false, "port": cfg.port, "urls": [], "passwordEnabled": cfg.password_hash.is_some()})
+        }
         Some(s) => {
             let mut ips: Vec<String> = if_addrs::get_if_addrs()
                 .unwrap_or_default()
@@ -87,9 +119,16 @@ pub fn remote_status(app: AppHandle) -> Value {
             ips.dedup();
             let urls: Vec<String> = ips
                 .iter()
-                .map(|ip| format!("http://{}:{}/#token={}", ip, s.settings.port, s.token))
+                .map(|ip| {
+                    access_url(
+                        ip,
+                        s.settings.port,
+                        &s.token,
+                        s.settings.password_hash.is_some(),
+                    )
+                })
                 .collect();
-            json!({"enabled": true, "port": s.settings.port, "urls": urls})
+            json!({"enabled": true, "port": s.settings.port, "urls": urls, "passwordEnabled": s.settings.password_hash.is_some()})
         }
     }
 }
@@ -101,7 +140,11 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
     if port == 0 {
         return Err("端口必须在 1–65535 之间".into());
     }
-    let settings = Settings { enabled, port };
+    let settings = Settings {
+        enabled,
+        port,
+        password_hash: load(&app).password_hash,
+    };
     let same = state
         .server
         .lock()
@@ -138,8 +181,13 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
             app: app.clone(),
             token: token.clone(),
             stop: stop.subscribe(),
+            password_hash: settings.password_hash.clone(),
+            login_attempts: Arc::new(Mutex::new(HashMap::new())),
+            login_slots: Arc::new(Semaphore::new(4)),
         };
         let router = Router::new()
+            .route("/api/auth", get(auth_status))
+            .route("/api/auth/login", post(password_login))
             .route("/api/invoke", post(invoke))
             .route("/api/events", get(events))
             .fallback(asset)
@@ -150,14 +198,124 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
             stop,
         });
         tauri::async_runtime::spawn(async move {
-            let _ = axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = stopped.changed().await;
-                })
-                .await;
+            let _ = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = stopped.changed().await;
+            })
+            .await;
         });
     }
     Ok(remote_status(app.clone()))
+}
+
+#[tauri::command]
+pub async fn remote_password_set(
+    app: AppHandle,
+    password: Option<String>,
+) -> Result<Value, String> {
+    let state = app.state::<RemoteState>();
+    let _operation = state.operation.lock().await;
+    if state.server.lock().unwrap().is_some() {
+        return Err("请先关闭局域网访问，再修改密码".into());
+    }
+    let password_hash = match password {
+        Some(password) => {
+            if password.chars().count() < 8 || password.len() > 128 {
+                return Err("密码至少 8 个字符，且不超过 128 字节".into());
+            }
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    let salt = SaltString::generate(&mut OsRng);
+                    Argon2::default()
+                        .hash_password(password.as_bytes(), &salt)
+                        .map(|hash| hash.to_string())
+                        .map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())??,
+            )
+        }
+        None => None,
+    };
+    let mut settings = load(&app);
+    settings.password_hash = password_hash;
+    let p = path(&app)?;
+    std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(p, serde_json::to_vec(&settings).unwrap()).map_err(|e| e.to_string())?;
+    Ok(remote_status(app.clone()))
+}
+
+fn bearer(headers: &HeaderMap) -> &str {
+    headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .unwrap_or("")
+}
+
+async fn auth_status(State(web): State<WebState>, headers: HeaderMap) -> impl IntoResponse {
+    ([("cache-control", "no-store")], Json(json!({
+        "passwordEnabled": web.password_hash.is_some(),
+        "authenticated": authorized(&web, bearer(&headers)),
+    })))
+}
+
+#[derive(Deserialize)]
+struct LoginInput {
+    password: String,
+}
+
+// Bound both the number of password guesses and the number of tracked clients.
+fn login_allowed(attempts: &mut HashMap<IpAddr, LoginAttempt>, ip: IpAddr, now: Instant) -> bool {
+    const WINDOW: Duration = Duration::from_secs(60);
+    attempts.retain(|_, entry| now.duration_since(entry.since) < WINDOW);
+    if !attempts.contains_key(&ip) && attempts.len() >= 256 {
+        return false;
+    }
+    let entry = attempts.entry(ip).or_insert(LoginAttempt { count: 0, since: now });
+    if entry.count >= 5 { return false; }
+    entry.count += 1;
+    true
+}
+
+async fn password_login(
+    State(web): State<WebState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(input): Json<LoginInput>,
+) -> Response {
+    let Some(hash) = &web.password_hash else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    if input.password.len() > 128 {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    {
+        let mut attempts = web.login_attempts.lock().unwrap();
+        if !login_allowed(&mut attempts, addr.ip(), Instant::now()) {
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+    }
+    let Ok(_slot) = web.login_slots.clone().try_acquire_owned() else {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    };
+    let hash = hash.clone();
+    let valid = tokio::task::spawn_blocking(move || {
+        PasswordHash::new(&hash).ok().is_some_and(|parsed| {
+            Argon2::default()
+                .verify_password(input.password.as_bytes(), &parsed)
+                .is_ok()
+        })
+    })
+    .await
+    .unwrap_or(false);
+    if !valid || *web.stop.borrow() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    web.login_attempts.lock().unwrap().remove(&addr.ip());
+    ([("cache-control", "no-store")], Json(json!({"token": web.token}))).into_response()
 }
 
 fn authorized(state: &WebState, token: &str) -> bool {
@@ -174,11 +332,7 @@ async fn invoke(
     headers: HeaderMap,
     Json(call): Json<Call>,
 ) -> Response {
-    let token = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .unwrap_or("");
+    let token = bearer(&headers);
     if !authorized(&web, token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -281,6 +435,9 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
         }
+        "list_project_directory" => Ok(serde_json::to_value(
+            commands::list_project_directory(text("project")?, text("path")?).await?,
+        ).map_err(|e| e.to_string())?),
         "search_files" => Ok(serde_json::to_value(
             commands::search_files(text("project")?, text("query")?).await?,
         )
@@ -427,6 +584,50 @@ fn valid_token(expected: &str, supplied: &str, stopped: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn password_links_do_not_include_bearer_tokens() {
+        assert_eq!(
+            access_url("192.168.1.5", 1421, "secret", true),
+            "http://192.168.1.5:1421/"
+        );
+        assert_eq!(
+            access_url("192.168.1.5", 1421, "secret", false),
+            "http://192.168.1.5:1421/#token=secret"
+        );
+    }
+    #[test]
+    fn login_rate_limit_is_per_address() {
+        let mut attempts = HashMap::new();
+        let now = Instant::now();
+        let first = "192.168.1.5".parse().unwrap();
+        let second = "192.168.1.6".parse().unwrap();
+        for _ in 0..5 {
+            assert!(login_allowed(&mut attempts, first, now));
+        }
+        assert!(!login_allowed(&mut attempts, first, now));
+        assert!(login_allowed(&mut attempts, second, now));
+        assert!(login_allowed(
+            &mut attempts,
+            first,
+            now + Duration::from_secs(61)
+        ));
+    }
+    #[test]
+    fn password_hash_verifies_only_the_original_password() {
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = Argon2::default()
+            .hash_password(b"test-password", &salt)
+            .unwrap()
+            .to_string();
+        let parsed = PasswordHash::new(&hash).unwrap();
+        assert!(Argon2::default()
+            .verify_password(b"test-password", &parsed)
+            .is_ok());
+        assert!(Argon2::default()
+            .verify_password(b"wrong-password", &parsed)
+            .is_err());
+        assert!(!hash.contains("test-password"));
+    }
     #[test]
     fn default_is_private() {
         let cfg = Settings::default();
