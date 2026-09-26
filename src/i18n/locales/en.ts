@@ -329,6 +329,7 @@ export default {
     editKeepImages: "Images from the original prompt will be preserved.",
     editAttachmentError: "Unable to preserve the attachments. Please send the prompt again.",
     editStopFailed: "Could not confirm that the current answer has stopped. Please try again.",
+    errorLabel: "Error",
     processExited: "**The pi process exited unexpectedly; the run was interrupted.** The conversation is saved — send your message again to continue. If the last action killed processes by matching the project name, target exact PIDs instead.",
     editSessionChanged: "The conversation has changed. Please edit the prompt in the current conversation.",
     copyPrompt: "Copy prompt",

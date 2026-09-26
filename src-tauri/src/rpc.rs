@@ -75,12 +75,10 @@ pub async fn process_spawn(
     }
 
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
-    if let Some(sf) = session_file {
+    if let Some(sf) = &session_file {
         args.push("--session".into());
-        args.push(sf);
+        args.push(sf.clone());
     }
-
-    args.extend(extra_args);
 
     // Prefer the resolved launcher (node + cli.js); never route npm .cmd
     // shims through cmd.exe — its shim trick can exit silently under pipes.

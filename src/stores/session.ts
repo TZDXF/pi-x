@@ -66,8 +66,9 @@ function formatRetryError(value: unknown): string {
   const json = match?.[2] ?? raw
   try {
     const parsed = JSON.parse(json)
-    if (parsed && typeof parsed.message === "string" && parsed.message.trim())
-      return status ? `${status} · ${parsed.message.trim()}` : parsed.message.trim()
+    const inner = typeof parsed?.error?.message === "string" ? parsed.error.message : parsed?.message
+    if (typeof inner === "string" && inner.trim())
+      return status ? `${status} · ${inner.trim()}` : inner.trim()
   } catch { /* keep the original provider error */ }
   return raw
 }
@@ -112,6 +113,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const isStreaming = ref(false)
   let turnFailed = false
   let turnAborted = false
+  /** errorMessage of the last failed assistant message; surfaced at settle. */
+  let lastErrorMessage: string | null = null
   const isCompacting = ref(false)
   const retryInfo = ref<RetryInfo | null>(null)
   const promptQueue = ref<QueuedPrompt[]>([])
@@ -225,6 +228,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         isStreaming.value = true
         turnFailed = false
         turnAborted = false
+        lastErrorMessage = null
         setSessionRunStatus(sessionFile.value, "running")
         break
 
@@ -253,6 +257,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         const finalStatus = turnAborted || stopping ? null : turnFailed ? "error" : "completed"
         pixLog(`settled: finalize status=${finalStatus ?? "none"} notify=${!turnAborted && !stopping} failed=${turnFailed} aborted=${turnAborted}`, runtimeId)
         setSessionRunStatus(sessionFile.value, finalStatus)
+        // Error messages carry an empty content array, so a finally-failed run
+        // would otherwise leave no trace in the conversation. Transient errors
+        // that a retry recovered from never reach this point.
+        if (finalStatus === "error" && lastErrorMessage) {
+          entries.value.push({
+            kind: "assistant",
+            id: nextId(),
+            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${formatRetryError(lastErrorMessage)}` }],
+            live: true,
+          })
+        }
         if (!turnAborted && !stopping) {
           const workspace = useWorkspaceStore()
           const file = sessionFile.value
@@ -297,7 +312,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
           // the runtime's matching auto_retry_end event is delayed.
           if (msg.stopReason !== "error" && msg.stopReason !== "aborted")
             retryInfo.value = null
-          if (msg.stopReason === "error") turnFailed = true
+          if (msg.stopReason === "error") { turnFailed = true; lastErrorMessage = msg.errorMessage ?? null }
           if (msg.stopReason === "aborted") turnAborted = true
           // authoritative replace
           const blocks = blocksFromMessage(msg)
@@ -1019,6 +1034,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     agentStartedAt = undefined
     turnFailed = false
     turnAborted = false
+    lastErrorMessage = null
     awaitingAgentStart = false
     promptQueue.value = []
     if (queueTimer !== undefined) clearTimeout(queueTimer)

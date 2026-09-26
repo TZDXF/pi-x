@@ -329,6 +329,7 @@ export default {
     editKeepImages: "原提问中的图片附件将保留。",
     editAttachmentError: "无法保留图片附件，请重新发送该提问。",
     editStopFailed: "未能确认当前回答已停止，请稍后重试。",
+    errorLabel: "错误",
     processExited: "**pi 进程意外退出，运行已中断。**会话内容已保存，重新发送消息即可继续。如果中断前最后的操作是杀进程类命令（如按项目名匹配进程），请改用精确 PID。",
     editSessionChanged: "会话已切换，请在当前会话重新编辑提问。",
     copyPrompt: "复制提问",

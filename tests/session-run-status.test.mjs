@@ -171,6 +171,30 @@ test('normal run notifies exactly once across agent_end and agent_settled', () =
   assert.equal(notifications.length, 1)
 })
 
+test('finally-failed run surfaces the provider error in the conversation', () => {
+  const { statuses, session } = harness()
+  const store = session('fail', 'fail.jsonl')
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    store.handleEvent({ type: 'agent_start' })
+    store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '503: {"type":"http_error","message":"provider overloaded"}', content: [] } })
+    store.handleEvent({ type: 'agent_end', willRetry: true })
+    store.handleEvent({ type: 'auto_retry_start', attempt, maxAttempts: 3, errorMessage: '503' })
+  }
+  // Transient failures must not leave error text behind.
+  assert.equal(store.entries.value.some(e => e.blocks?.some(b => b.text?.includes('503'))), false)
+  store.handleEvent({ type: 'agent_start' })
+  store.handleEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '503: {"type":"http_error","message":"provider overloaded"}', content: [] } })
+  store.handleEvent({ type: 'agent_end', willRetry: false })
+  store.handleEvent({ type: 'auto_retry_end', success: false })
+  store.handleEvent({ type: 'agent_settled' })
+  assert.equal(statuses.get('fail.jsonl'), 'error')
+  const note = store.entries.value.at(-1)
+  assert.match(note.blocks[0].text, /chat\.errorLabel/)
+  // The JSON payload is humanized: status code + inner message, no raw body.
+  assert.match(note.blocks[0].text, /503 · provider overloaded/)
+  assert.doesNotMatch(note.blocks[0].text, /http_error/)
+})
+
 test('settled request clears retry loading even without retry_end', () => {
   const { statuses, session } = harness()
   const store = session('retry', 'retry.jsonl')
