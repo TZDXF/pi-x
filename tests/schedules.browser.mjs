@@ -9,9 +9,14 @@ import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import messages from '/src/i18n/locales/zh-CN.ts'
 import WorkspaceSidebar from '/src/components/WorkspaceSidebar.vue'
+import ScheduledTasksPage from '/src/components/ScheduledTasksPage.vue'
+import { useRoute, navigate } from '/src/lib/router.ts'
 import { useWorkspaceStore } from '/src/stores/workspace.ts'
 import '/src/style.css'
-const app = createApp({render:()=>h(WorkspaceSidebar,{project:'C:/demo',ready:true,busy:false})})
+const app = createApp({setup() { const route = useRoute(); return () => h('div', { class: 'flex h-screen' }, [
+  h(WorkspaceSidebar, { project: 'C:/demo', ready: true, busy: false, onSchedules: () => navigate('/schedules') }),
+  route.value.name === 'schedules' ? h('main', { class: 'flex flex-1 min-h-0' }, [h(ScheduledTasksPage, { project: 'C:/demo' })]) : h('main', 'Workspace'),
+]) }})
 app.use(createPinia()).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':messages}}))
 useWorkspaceStore().projects = ['C:/demo']
 app.mount('#app')
@@ -53,15 +58,31 @@ try {
   await entry.waitFor()
   assert.ok(await entry.evaluate(el => el.previousElementSibling.textContent.includes('新会话')))
   await entry.click()
+  await page.getByRole('heading', { name: '定时任务' }).waitFor()
+  assert.equal(new URL(page.url()).hash, '#/schedules')
+  assert.equal(await page.getByRole('dialog').count(), 0)
   await page.getByRole('button', { name: '新建定时任务', exact: true }).click()
   await page.getByLabel('标题', { exact: true }).fill('每周项目巡检')
-  await page.getByLabel('任务指令', { exact: true }).fill('检查项目测试与待办事项，汇总结果，不修改文件。')
   await page.getByRole('combobox', { name: '重复频率' }).click()
   for (const name of ['每小时', '每天', '工作日（周一至周五）', '每周', '每月', '自定义']) assert.equal(await page.getByRole('option', { name, exact: true }).count(), 1)
   await page.getByRole('option', { name: '每周', exact: true }).click()
   await page.getByRole('combobox', { name: '星期', exact: true }).click()
   await page.getByRole('option', { name: '周五', exact: true }).click()
-  await page.getByLabel('执行时间', { exact: true }).fill('10:30')
+  await page.getByRole('combobox', { name: '项目', exact: true }).click()
+  assert.equal(await page.getByRole('option', { name: 'demo', exact: true }).count(), 1)
+  assert.equal(await page.getByRole('option', { name: /C:\/demo/ }).count(), 0)
+  await page.keyboard.press('Escape')
+  const hour = page.getByRole('spinbutton').first()
+  const minute = page.getByRole('spinbutton').last()
+  await hour.focus()
+  await hour.press('1')
+  await hour.press('0')
+  await minute.focus()
+  await minute.press('3')
+  await minute.press('0')
+  assert.equal(await hour.innerText(), '10')
+  assert.equal(await minute.innerText(), '30')
+  await page.getByLabel('任务指令', { exact: true }).fill('检查项目测试与待办事项，汇总结果，不修改文件。')
   if (process.env.PI_SCHEDULE_SCREENSHOT) await page.screenshot({ path: process.env.PI_SCHEDULE_SCREENSHOT })
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await page.getByRole('heading', { name: '每周项目巡检' }).waitFor()
@@ -70,7 +91,8 @@ try {
   assert.equal(saved.provider, 'test')
   assert.equal(saved.model, 'test-model')
   await page.getByRole('button', { name: '编辑', exact: true }).click()
-  assert.equal(await page.getByLabel('执行时间', { exact: true }).inputValue(), '10:30')
+  assert.equal(await page.getByRole('spinbutton').first().getAttribute('aria-valuenow'), '10')
+  assert.equal(await page.getByRole('spinbutton').last().getAttribute('aria-valuenow'), '30')
   await page.getByRole('combobox', { name: '重复频率' }).click()
   await page.getByRole('option', { name: '自定义', exact: true }).click()
   await page.getByLabel('Cron 表达式').fill('*/15 9-17 * * MON-FRI')

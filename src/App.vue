@@ -28,6 +28,7 @@ import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
+import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
@@ -167,6 +168,11 @@ function requestNavigation(action: () => Promise<unknown>) {
   if (workspace.gitBusy || phase.value === "trust") return
   queuedNavigation = action
   void drainNavigation()
+}
+function requestWorkspaceNavigation(action: () => Promise<unknown>) {
+  if (workspace.gitBusy || phase.value === "trust") return
+  navigate("/")
+  requestNavigation(action)
 }
 async function drainNavigation() {
   if (navigationRunning.value || connecting.value || navigating.value || disposed) return
@@ -517,15 +523,16 @@ onUnmounted(() => {
       :ready="phase === 'chat'"
       :busy="navigating || workspace.gitBusy || connecting || phase === 'trust'"
       :navigation-busy="workspace.gitBusy || phase === 'trust'"
-      @switch-project="requestNavigation(switchProject)"
-      @select-project="path => requestNavigation(() => selectProject(path))"
-      @select-conversation="id => requestNavigation(() => selectQueuedConversation(id))"
-      @resume-session="(file, path) => requestNavigation(() => resumeSession(file, path))"
+      @switch-project="requestWorkspaceNavigation(switchProject)"
+      @select-project="path => requestWorkspaceNavigation(() => selectProject(path))"
+      @select-conversation="id => requestWorkspaceNavigation(() => selectQueuedConversation(id))"
+      @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
       @session-action="(file, action) => openSessionAction(file, action)"
-      @new-session="path => requestNavigation(() => newProjectSession(path))"
+      @new-session="path => requestWorkspaceNavigation(() => newProjectSession(path))"
       @remove-project="removeProject"
       @edit-project="editProject"
       @settings="navigate('/settings/general')"
+      @schedules="navigate('/schedules')"
       @collapse="sidebarOpen = false"
     />
     <main class="workspace-main flex-1 min-w-0 flex flex-col relative overflow-hidden" :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }">
@@ -544,8 +551,9 @@ onUnmounted(() => {
       >
         <PanelLeft :size="18" />
       </Button>
+      <ScheduledTasksPage v-if="route.name === 'schedules'" :project="project" @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))" />
       <WelcomeView
-        v-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
+        v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
         :phase
         :config
         @configured="phase = 'pick'"

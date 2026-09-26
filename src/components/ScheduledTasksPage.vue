@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Pencil, Trash2, Pause, Play, Clock } from '@lucide/vue'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { TimeFieldInput, TimeFieldRoot, type TimeValue } from 'reka-ui'
+import { Time } from '@internationalized/date'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -16,9 +18,9 @@ import { scheduleExpression, parseScheduleExpression, scheduleFrequencies, sched
 import { supportedThinkingLevels } from '@/lib/thinkingLevels'
 import type { ThinkingLevel } from '@/api/protocol'
 
-const props = defineProps<{ open: boolean; project: string }>()
-const emit = defineEmits<{ 'update:open': [value: boolean]; resumeSession: [file: string, project: string] }>()
-const { t } = useI18n()
+const props = defineProps<{ project: string }>()
+const emit = defineEmits<{ resumeSession: [file: string, project: string] }>()
+const { t, locale } = useI18n()
 const workspace = useWorkspaceStore()
 const session = useSessionStore()
 const tasks = ref<ScheduledTask[]>([])
@@ -28,7 +30,8 @@ const error = ref('')
 const editing = ref(false)
 const deleting = ref<string | null>(null)
 const frequency = ref<ScheduleFrequency>('daily')
-const time = ref('09:00')
+const timeValue = shallowRef<TimeValue>(new Time(9, 0))
+const time = computed(() => `${String(timeValue.value.hour).padStart(2, '0')}:${String(timeValue.value.minute).padStart(2, '0')}`)
 const weekday = ref('MON')
 const day = ref(1)
 const custom = ref('0 9 * * *')
@@ -55,10 +58,8 @@ async function refresh() {
   const result = await listScheduledTasks()
   if (own === generation) tasks.value = result
 }
-watch(() => props.open, async open => {
+async function initialize() {
   generation++
-  clearInterval(timer)
-  if (!open) return
   const own = generation
   error.value = ''
   editing.value = false
@@ -81,14 +82,16 @@ watch(() => props.open, async open => {
     timer = setInterval(() => { if (!busy.value) void refresh().catch(e => { error.value = String(e) }) }, 5000)
   } catch (e) { if (own === generation) error.value = String(e) }
   finally { if (own === generation) loading.value = false }
-})
+}
+void initialize()
 onBeforeUnmount(() => { generation++; clearInterval(timer) })
 function edit(task?: ScheduledTask) {
   error.value = ''
   draft.value = task ? { ...task } : emptyDraft()
   const parsed = parseScheduleExpression(draft.value.expression)
   frequency.value = parsed.frequency
-  time.value = parsed.time
+  const [hour, minute] = parsed.time.split(':').map(Number)
+  timeValue.value = new Time(hour, minute)
   weekday.value = parsed.weekday
   day.value = parsed.day
   custom.value = parsed.custom
@@ -116,29 +119,32 @@ async function save() {
 function formatDate(value: number) { return new Date(value).toLocaleString() }
 function openResult(task: ScheduledTask) {
   if (!task.sessionFile) return
-  emit('update:open', false)
   emit('resumeSession', task.sessionFile, task.project)
 }
 </script>
 
 <template>
-  <Dialog :open="open" @update:open="value => { if (!busy) emit('update:open', value) }">
-    <DialogContent class="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
-      <DialogHeader>
-        <DialogTitle class="flex items-center gap-2"><Clock :size="18" />{{ t('schedules.title') }}</DialogTitle>
-        <DialogDescription>{{ t('schedules.description') }}</DialogDescription>
-      </DialogHeader>
+  <ScrollArea class="flex-1 min-h-0 h-full" viewport-class="h-full">
+    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8 max-[640px]:px-4">
+      <header class="space-y-1">
+        <h1 class="flex items-center gap-2 text-lg font-semibold"><Clock :size="18" />{{ t('schedules.title') }}</h1>
+        <p class="text-xs text-muted-foreground">{{ t('schedules.description') }}</p>
+      </header>
       <p v-if="error" role="alert" class="text-sm text-destructive break-words">{{ error }}</p>
       <form v-if="editing" class="grid gap-4" @submit.prevent="save">
         <label class="grid gap-1.5 text-sm">{{ t('schedules.taskTitle') }}<Input v-model="draft.title" required maxlength="100" /></label>
-        <label class="grid gap-1.5 text-sm">{{ t('schedules.prompt') }}<Textarea v-model="draft.prompt" required maxlength="30000" class="min-h-24" :placeholder="t('schedules.promptHint')" /></label>
         <div class="grid grid-cols-2 gap-3">
           <div class="grid gap-1.5 text-sm"><label for="schedule-frequency">{{ t('schedules.frequency') }}</label>
             <Select v-model="frequency"><SelectTrigger id="schedule-frequency" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
               <SelectItem v-for="item in scheduleFrequencies" :key="item" :value="item">{{ t(`schedules.${item}`) }}</SelectItem>
             </SelectContent></Select>
           </div>
-          <label v-if="frequency !== 'custom'" class="grid gap-1.5 text-sm">{{ t(frequency === 'hourly' ? 'schedules.minuteHint' : 'schedules.time') }}<Input v-model="time" type="time" required /></label>
+          <div v-if="frequency !== 'custom'" class="grid gap-1.5 text-sm">
+            <span id="schedule-time-label">{{ t(frequency === 'hourly' ? 'schedules.minuteHint' : 'schedules.time') }}</span>
+            <TimeFieldRoot v-slot="{ segments }" v-model="timeValue" :locale="locale" aria-labelledby="schedule-time-label" :hour-cycle="24" granularity="minute" class="flex h-8 w-full items-center rounded-lg border border-input bg-transparent px-2.5 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30">
+              <TimeFieldInput v-for="(segment, index) in segments" :key="index" :part="segment.part" :class="segment.part === 'literal' ? 'text-muted-foreground' : 'rounded-sm px-0.5 tabular-nums focus:bg-accent focus:outline-none'">{{ segment.value }}</TimeFieldInput>
+            </TimeFieldRoot>
+          </div>
           <div v-if="frequency === 'weekly'" class="grid gap-1.5 text-sm"><label for="schedule-weekday">{{ t('schedules.weekday') }}</label>
             <Select v-model="weekday"><SelectTrigger id="schedule-weekday" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
               <SelectItem v-for="value in scheduleWeekdays" :key="value" :value="value">{{ t(`schedules.days.${value}`) }}</SelectItem>
@@ -150,7 +156,7 @@ function openResult(task: ScheduledTask) {
         <p v-if="frequency === 'monthly'" class="text-xs text-muted-foreground">{{ t('schedules.monthHint') }}</p>
         <div class="grid gap-1.5 text-sm"><label for="schedule-project">{{ t('schedules.project') }}</label>
           <Select v-model="draft.project"><SelectTrigger id="schedule-project" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
-            <SelectItem v-for="path in projects" :key="path" :value="path">{{ workspace.projectName(path) }} · {{ path }}</SelectItem>
+            <SelectItem v-for="path in projects" :key="path" :value="path">{{ workspace.projectName(path) }}</SelectItem>
           </SelectContent></Select>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -161,6 +167,7 @@ function openResult(task: ScheduledTask) {
             </SelectContent></Select>
           </div>
         </div>
+        <label class="grid gap-1.5 text-sm">{{ t('schedules.prompt') }}<Textarea v-model="draft.prompt" required maxlength="30000" class="min-h-32" :placeholder="t('schedules.promptHint')" /></label>
         <div class="flex justify-end gap-2"><Button type="button" variant="outline" :disabled="busy" @click="editing = false">{{ t('schedules.cancel') }}</Button><Button type="submit" :disabled="busy || !modelKey || !draft.project">{{ t(busy ? 'schedules.saving' : 'schedules.save') }}</Button></div>
       </form>
       <template v-else>
@@ -182,6 +189,6 @@ function openResult(task: ScheduledTask) {
           <div v-if="deleting === task.id" class="flex items-center justify-end gap-2 text-sm"><span>{{ t('schedules.deleteConfirm') }}</span><Button variant="outline" size="sm" :disabled="busy" @click="deleting = null">{{ t('schedules.cancel') }}</Button><Button variant="destructive" size="sm" :disabled="busy" @click="action(async () => { await deleteScheduledTask(task.id!); deleting = null })">{{ t('schedules.delete') }}</Button></div>
         </div>
       </template>
-    </DialogContent>
-  </Dialog>
+    </div>
+  </ScrollArea>
 </template>

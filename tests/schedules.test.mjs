@@ -33,3 +33,17 @@ test('shared thinking levels respect model capability maps', () => {
   assert.deepEqual([...supportedThinkingLevels({ reasoning: false })], ['off'])
   assert.deepEqual([...supportedThinkingLevels({ reasoning: true, thinkingLevelMap: { low: null, xhigh: 'xhigh', max: null } })], ['off', 'minimal', 'medium', 'high', 'xhigh'])
 })
+
+test('scheduled tasks use a workspace route and a page with the instructions last', () => {
+  const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+  const sidebar = readFileSync(new URL('../src/components/WorkspaceSidebar.vue', import.meta.url), 'utf8')
+  const page = readFileSync(new URL('../src/components/ScheduledTasksPage.vue', import.meta.url), 'utf8')
+  const router = readFileSync(new URL('../src/lib/router.ts', import.meta.url), 'utf8')
+  assert.match(router, /name: "schedules"/)
+  assert.match(app, /<ScheduledTasksPage v-if="route.name === 'schedules'"/)
+  assert.match(sidebar, /@click="emit\('schedules'\)"/)
+  assert.doesNotMatch(sidebar, /ScheduledTasksDialog/)
+  assert.match(page, /<TimeFieldRoot[^>]*v-model="timeValue"/)
+  assert.match(page, /<SelectItem v-for="path in projects"[^>]*>{{ workspace.projectName\(path\) }}<\/SelectItem>/)
+  assert.ok(page.indexOf("t('schedules.prompt') }}<Textarea") > page.indexOf('id="schedule-thinking"'))
+})

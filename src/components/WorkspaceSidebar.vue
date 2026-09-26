@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import ScheduledTasksDialog from "@/components/ScheduledTasksDialog.vue"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -16,18 +15,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
+import { useRoute } from "@/lib/router"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string];
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
   removeProject: [project: string]; editProject: [project: string];
-  newSession: [project: string]; sessionAction: [file: string, action: "export"]; settings: []; collapse: []
+  newSession: [project: string]; sessionAction: [file: string, action: "export"]; schedules: []; settings: []; collapse: []
 }>()
 const session = useSessionStore()
 const ui = useUiStore()
 const workspace = useWorkspaceStore()
 const { t } = useI18n()
-const showSchedules = ref(false)
+const route = useRoute()
 const query = ref("")
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
@@ -160,8 +160,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
   <aside class="workspace-sidebar w-68 shrink-0 flex flex-col bg-sidebar border-r border-border pt-3.5 pr-[7px] pb-2 pl-[7px] min-h-0 overflow-hidden max-[640px]:absolute max-[640px]:[inset:0_auto_0_0] max-[640px]:z-[30] max-[640px]:shadow-[var(--sidebar-shadow)] max-[700px]:w-55" :aria-label="t('sidebar.ariaLabel')">
     <div class="sidebar-brand flex items-center gap-[9px] pt-0.5 pr-2 pb-3 pl-2 text-[17px] font-semibold shrink-0"><PiXLogo /><Button variant="quiet" size="toolbar" class="ml-auto" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><PanelLeft :size="17" class="size-auto shrink-0" /></Button></div>
     <Button size="content" variant="sidebar-action" class="sidebar-action" :disabled="!ready || navigationDisabled" @click="emit('newSession', project)"><Plus :size="17" class="size-auto shrink-0" />{{ t('sidebar.newSession') }}</Button>
-    <Button v-if="isDesktop" size="content" variant="sidebar-action" class="sidebar-action" @click="showSchedules = true"><Clock :size="17" class="size-auto shrink-0" />{{ t('schedules.title') }}</Button>
-    <ScheduledTasksDialog v-if="isDesktop" v-model:open="showSchedules" :project="project" @resume-session="(file, path) => emit('resumeSession', file, path)" />
+    <Button v-if="isDesktop" size="content" variant="sidebar-action" class="sidebar-action" :aria-current="route.name === 'schedules' ? 'page' : undefined" @click="emit('schedules')"><Clock :size="17" class="size-auto shrink-0" />{{ t('schedules.title') }}</Button>
     <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"><Search :size="15" class="size-auto shrink-0" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
     <div class="sidebar-section-label flex items-center justify-between text-muted-foreground text-[11px] py-[5px] px-2.5 font-mono tracking-[0.06em] shrink-0"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
       <div class="flex"><Button variant="quiet" size="toolbar" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" class="size-auto shrink-0" /></Button>
