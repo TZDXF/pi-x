@@ -13,7 +13,11 @@ function harness({ messages = [], lastError = null } = {}) {
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/api/piClient': {
       pixLog() {},
-      rpcRequest: async () => ({ success: true, data: { messages } }),
+      rpcRequest: async cmd => {
+        if (cmd.type === 'get_messages') return { success: true, data: { messages } }
+        if (cmd.type === 'get_state') return { success: true, data: { sessionFile: 'test.jsonl' } }
+        return { success: true, data: {} }
+      },
       sessionHistory: async () => null, // fall back to the RPC projection
       sessionLastError: async () => lastError,
       sessionMtime: async () => 0,
@@ -90,6 +94,22 @@ test('a failure followed by a newer user prompt is not a stop reason', async () 
   await store.loadHistory()
   assert.equal(store.entries.value.length, 4)
   assert.equal(errorEntries(store).length, 0)
+})
+
+test('an in-progress turn never gets a mid-conversation stop reason', async () => {
+  const store = harness({
+    messages: [user('hi', 1000), assistant('working', 2000)],
+    lastError: { timestamp: 1500, errorMessage: '503 boom' },
+  })
+  // Viewing a session while its turn is still running: retry may recover, and
+  // later live events append after whatever loadHistory added.
+  store.handleEvent({ type: 'agent_start' })
+  await store.loadHistory()
+  assert.equal(errorEntries(store).length, 0)
+  // Once the turn is over, the same history surfaces the stop reason again.
+  store.handleEvent({ type: 'agent_settled' })
+  await store.loadHistory()
+  assert.equal(errorEntries(store).length, 1)
 })
 
 test('history without errors loads unchanged', async () => {

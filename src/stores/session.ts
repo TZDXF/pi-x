@@ -920,7 +920,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
    */
   async function fetchLastSessionError(version: number) {
     const file = sessionFile.value
-    if (!file) return
+    // A running turn may still recover from its latest failure; the settle
+    // path reports a final failure live. Supplement only idle sessions.
+    if (!file || isStreaming.value) return
     let last: SessionLastError | null
     try { last = await sessionLastError(file) }
     catch { return } // file unreadable (e.g. browser preview); history still works
