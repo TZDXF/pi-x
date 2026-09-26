@@ -1,20 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { usePromptInput } from '@/components/ai-elements/prompt-input/context'
-import { useWorkspaceStore } from '@/stores/workspace'
-import { composerParts, editorSelection, editorText, normalizedPath, setEditorCaret } from '@/lib/composerTokens'
+import { useSessionLabels } from '@/composables/useSessionLabels'
+import { composerChipClass, composerChipText, composerParts, editorSelection, editorText, setEditorCaret } from '@/lib/composerTokens'
 
 defineProps<{ placeholder: string; disabled?: boolean }>()
 const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput()
-const workspace = useWorkspaceStore()
-const sessionLabels = computed(() => {
-  const labels: Record<string, string> = {}
-  for (const row of Object.values(workspace.histories).flat()) {
-    const label = row.title || row.preview
-    if (label) labels[normalizedPath(row.file)] = label
-  }
-  return labels
-})
+const sessionLabels = useSessionLabels()
 const editor = ref<HTMLElement | null>(null)
 const composing = ref(false)
 
@@ -31,10 +23,10 @@ function render(value: string, caret?: number) {
     chip.dataset.raw = part.raw
     chip.contentEditable = 'false'
     chip.setAttribute('aria-label', part.label)
-    chip.className = 'inline-flex max-w-52 items-center align-baseline rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary'
+    chip.className = composerChipClass
     const label = document.createElement('span')
     label.className = 'truncate'
-    label.textContent = `${part.kind === 'command' ? '⌘ ' : '▣ '}${part.label}`
+    label.textContent = composerChipText(part)
     chip.append(label)
     root.append(chip)
   }

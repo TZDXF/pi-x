@@ -37,8 +37,22 @@ test('known session references display their current title', () => {
 
 test('rich editor wires workspace session titles into chip rendering', () => {
   const editor = readFileSync(new URL('../src/components/ComposerRichEditor.vue', import.meta.url), 'utf8')
-  assert.match(editor, /useWorkspaceStore/)
-  assert.match(editor, /row\.title \|\| row\.preview/)
+  const composable = readFileSync(new URL('../src/composables/useSessionLabels.ts', import.meta.url), 'utf8')
+  assert.match(editor, /useSessionLabels/)
+  assert.match(composable, /row\.title \|\| row\.preview/)
   assert.match(editor, /composerParts\(value, sessionLabels\.value\)/)
   assert.match(editor, /watch\(sessionLabels/)
+})
+
+test('rendered user messages reuse the composer chip styling', () => {
+  const view = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
+  const display = readFileSync(new URL('../src/components/ComposerText.vue', import.meta.url), 'utf8')
+  const editor = readFileSync(new URL('../src/components/ComposerRichEditor.vue', import.meta.url), 'utf8')
+  assert.match(view, /<ComposerText v-else :text="entry\.text" \/>/)
+  assert.match(display, /composerParts\(props\.text, sessionLabels\.value\)/)
+  assert.match(display, /composerChipClass/)
+  assert.match(display, /composerChipText\(part\)/)
+  for (const source of [display, editor]) {
+    assert.doesNotMatch(source, /inline-flex max-w-52 items-center/)
+  }
 })

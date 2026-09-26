@@ -1,5 +1,12 @@
 export interface ComposerPart { kind: 'text' | 'file' | 'session' | 'command'; raw: string; label: string }
 
+/** Shared chip look so the composer and rendered messages stay visually identical. */
+export const composerChipClass = 'inline-flex max-w-52 items-center align-baseline rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary'
+
+export function composerChipText(part: ComposerPart): string {
+  return `${part.kind === 'command' ? '⌘ ' : '▣ '}${part.label}`
+}
+
 export function normalizedPath(path: string): string {
   return path.replace(/\\/g, '/')
 }
