@@ -183,17 +183,9 @@ pub async fn rpc_spawn(
     session_file: Option<String>,
     runtime_id: Option<String>,
     workspace: Option<WorkspaceContext>,
-    permission: Option<String>,
-    locale: Option<String>,
 ) -> Result<(), String> {
     let cfg = app_config_get(app.clone())?;
-    let mut extra_args = workspace_args(&project, workspace).await?;
-    // Composer tool-permission modes load a bundled gating extension;
-    // "full" (or unset) runs pi without it.
-    if let Some(mode) = permission.as_deref().filter(|m| *m != "full") {
-        let path = crate::permission::extension_file(mode, locale.as_deref().unwrap_or("en"))?;
-        extra_args.extend(["-e".into(), path.to_string_lossy().into_owned()]);
-    }
+    let extra_args = workspace_args(&project, workspace).await?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
         return Err(

@@ -1,14 +1,11 @@
 import { invoke } from './transport'
 import type { ThinkingLevel } from './protocol'
-import type { ToolPermission } from '@/lib/permissions'
 
 export interface ScheduledTaskInput {
   id: string | null
   title: string
   prompt: string
   project: string
-  permission: 'inherit' | 'trust' | 'untrust'
-  toolPermission: ToolPermission
   provider: string
   model: string
   thinking: ThinkingLevel

@@ -15,8 +15,6 @@ pub struct TaskInput {
     pub title: String,
     pub prompt: String,
     pub project: String,
-    pub permission: String,
-    pub tool_permission: String,
     pub provider: String,
     pub model: String,
     pub thinking: String,
@@ -54,18 +52,6 @@ fn next_run(expression: &str, after: i64) -> Result<i64, String> {
         .map(|d| d.timestamp_millis())
         .ok_or("Schedule has no future occurrence".into())
 }
-fn tool_args(permission: &str) -> Result<Vec<String>, String> {
-    // Same allowlists as src/lib/permissions.ts; never accept arbitrary tool lists from stored tasks.
-    match permission {
-        "readonly" => Ok(vec!["--tools".into(), "read,grep,find,ls".into()]),
-        "edit" => Ok(vec![
-            "--tools".into(),
-            "read,grep,find,ls,edit,write".into(),
-        ]),
-        "full" => Ok(Vec::new()),
-        _ => Err("Invalid tool permission".into()),
-    }
-}
 fn validate(input: &TaskInput) -> Result<(), String> {
     if input.title.trim().is_empty()
         || input.title.len() > 300
@@ -77,10 +63,6 @@ fn validate(input: &TaskInput) -> Result<(), String> {
         return Err(
             "Title, prompt and model are required (title ≤ 300 bytes, prompt ≤ 100 KB)".into(),
         );
-    }
-    tool_args(&input.tool_permission)?;
-    if !["inherit", "trust", "untrust"].contains(&input.permission.as_str()) {
-        return Err("Invalid permission".into());
     }
     if !["off", "minimal", "low", "medium", "high", "xhigh", "max"]
         .contains(&input.thinking.as_str())
@@ -221,19 +203,10 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     validate(input)?;
     // Never change global trust; recheck on each run so revocation takes effect.
     let trust = trust::status(&input.project).await?;
-    let approved = match input.permission.as_str() {
-        "untrust" => false,
-        "trust" if trust["decision"] != true => {
-            return Err(
-                "Project must already be trusted; approve it in a conversation first".into(),
-            )
-        }
-        "trust" => true,
-        _ if trust["needsDecision"] == true => {
-            return Err("Project trust requires a decision".into())
-        }
-        _ => trust["decision"] == true,
-    };
+    if trust["needsDecision"] == true {
+        return Err("Project trust requires a decision".into());
+    }
+    let approved = trust["decision"] == true;
     let pi = pi_locate::detect(commands::app_config_get(app.clone())?.pi_path).await;
     let state = app.state::<rpc::RpcState>();
     let id = format!("schedule-{}", input.id.as_deref().ok_or("Missing task ID")?);
@@ -255,7 +228,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             }
         }
     });
-    let mut args = vec![
+    let args = vec![
         if approved {
             "--approve"
         } else {
@@ -269,7 +242,6 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         "--thinking".into(),
         input.thinking.clone(),
     ];
-    args.extend(tool_args(&input.tool_permission)?);
     let outcome = tokio::time::timeout(Duration::from_secs(3600), async {
         rpc::spawn(
             app.clone(),
@@ -438,19 +410,6 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn tool_permissions_are_enforced_with_explicit_allowlists() {
-        assert_eq!(
-            tool_args("readonly").unwrap(),
-            vec!["--tools", "read,grep,find,ls"]
-        );
-        assert_eq!(
-            tool_args("edit").unwrap(),
-            vec!["--tools", "read,grep,find,ls,edit,write"]
-        );
-        assert!(tool_args("full").unwrap().is_empty());
-        assert!(tool_args("unknown").is_err());
-    }
     fn fixture() -> Task {
         Task {
             input: TaskInput {
@@ -458,8 +417,6 @@ mod tests {
                 title: "Test".into(),
                 prompt: "Work".into(),
                 project: "unused".into(),
-                permission: "inherit".into(),
-                tool_permission: "readonly".into(),
                 provider: "test".into(),
                 model: "test".into(),
                 thinking: "off".into(),
@@ -472,6 +429,18 @@ mod tests {
             error: None,
             session_file: None,
         }
+    }
+    #[test]
+    fn legacy_permission_fields_do_not_restore_schedule_permissions() {
+        let old = serde_json::json!({
+            "id": "old", "title": "Old task", "prompt": "Work", "project": "unused",
+            "permission": "trust", "toolPermission": "readonly", "provider": "test",
+            "model": "test", "thinking": "off", "expression": "* * * * *", "enabled": true,
+        });
+        let task: TaskInput = serde_json::from_value(old).unwrap();
+        let saved = serde_json::to_value(task).unwrap();
+        assert!(saved.get("permission").is_none());
+        assert!(saved.get("toolPermission").is_none());
     }
     #[test]
     fn claims_once_and_never_overlaps_or_runs_paused_tasks() {

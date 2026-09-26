@@ -34,8 +34,7 @@ function harness(group = null) {
     spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {},
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
-    registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {}, notifyPermission: () => {},
-    toolPermission: () => "full",
+    registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, selectQueuedConversation, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls, spawnArgs, workspace }
@@ -86,6 +85,7 @@ test('a grouped project passes every root to Pi and refreshes context on the nex
   await context.actions.selectProject('project')
   assert.equal(await context.actions.start(), true)
   assert.ok(spawnArgs[0][3], JSON.stringify(spawnArgs))
+  assert.equal(spawnArgs[0].length, 4, 'worker startup has no tool-permission arguments')
   assert.deepEqual(Array.from(spawnArgs[0][3].roots), ['project', 'other'])
   assert.equal(spawnArgs[0][3].name, 'Both')
   context.sessionFor(context.activeRuntimeId.value).sessionFile = 'saved.jsonl'

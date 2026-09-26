@@ -6,7 +6,6 @@ mod editor_icon;
 mod commands;
 mod fs_search;
 mod packages;
-mod permission;
 mod pi_locate;
 mod pi_update;
 #[cfg(feature = "remote-access")]

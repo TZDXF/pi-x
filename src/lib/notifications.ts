@@ -1,6 +1,6 @@
 /**
  * System notifications, modeled after the Codex desktop settings: turn
- * completion (never / only when unfocused / always), permission requests,
+ * completion (never / only when unfocused / always),
  * questions awaiting input, and an optional sound.
  *
  * Desktop uses tauri-plugin-notification; the web build falls back to the
@@ -15,7 +15,6 @@ export type TurnCompleteNotification = "never" | "unfocused" | "always"
 export type NotificationSound = "default" | "none"
 
 const TURN_KEY = "pix.notify.turnComplete"
-const PERMISSION_KEY = "pix.notify.permission"
 const QUESTION_KEY = "pix.notify.question"
 const SOUND_KEY = "pix.notify.sound"
 
@@ -48,12 +47,10 @@ function readSound(): NotificationSound {
 }
 
 const turnMode = ref<TurnCompleteNotification>(readTurnMode())
-const permissionEnabled = ref(readBool(PERMISSION_KEY, true))
 const questionEnabled = ref(readBool(QUESTION_KEY, true))
 const soundSetting = ref<NotificationSound>(readSound())
 
 export const turnCompleteNotification = readonly(turnMode)
-export const permissionNotification = readonly(permissionEnabled)
 export const questionNotification = readonly(questionEnabled)
 export const notificationSound = readonly(soundSetting)
 
@@ -66,11 +63,6 @@ export function setTurnCompleteNotification(value: TurnCompleteNotification) {
   turnMode.value = value
   write(TURN_KEY, value)
   if (value !== "never") void ensurePermission()
-}
-export function setPermissionNotification(value: boolean) {
-  permissionEnabled.value = value
-  write(PERMISSION_KEY, value ? "1" : "0")
-  if (value) void ensurePermission()
 }
 export function setQuestionNotification(value: boolean) {
   questionEnabled.value = value
@@ -86,7 +78,6 @@ export function setNotificationSound(value: NotificationSound) {
 
 function syncPrefs(event: StorageEvent) {
   if (event.key === null || event.key === TURN_KEY) turnMode.value = readTurnMode()
-  if (event.key === null || event.key === PERMISSION_KEY) permissionEnabled.value = readBool(PERMISSION_KEY, true)
   if (event.key === null || event.key === QUESTION_KEY) questionEnabled.value = readBool(QUESTION_KEY, true)
   if (event.key === null || event.key === SOUND_KEY) soundSetting.value = readSound()
 }
@@ -172,11 +163,4 @@ export function notifyQuestion(detail: string) {
   if (!questionEnabled.value) return
   if (!windowUnfocused()) return
   void deliver(t("notify.questionTitle"), detail)
-}
-
-/** A project needs a trust decision before pi can start. */
-export function notifyPermission(detail: string) {
-  if (!permissionEnabled.value) return
-  if (!windowUnfocused()) return
-  void deliver(t("notify.permissionTitle"), detail)
 }

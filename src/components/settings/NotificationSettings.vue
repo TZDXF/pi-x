@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Notifications page: system notification preferences for turn completion,
- *  permission requests, questions, and sound. */
+ *  questions and sound. */
 import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
@@ -17,8 +17,6 @@ import type { AcceptableValue } from "reka-ui"
 import {
   turnCompleteNotification,
   setTurnCompleteNotification,
-  permissionNotification,
-  setPermissionNotification,
   questionNotification,
   setQuestionNotification,
   notificationSound,
@@ -52,17 +50,6 @@ const { t } = useI18n()
         <SelectItem value="always">{{ t("settings.notifyAlways") }}</SelectItem>
       </SelectContent>
     </Select>
-  </SettingRow>
-  <SettingRow>
-    <div class="min-w-0">
-      <SettingHeading id="permission-notify-label">{{ t("settings.permissionNotify") }}</SettingHeading>
-      <SettingDescription>{{ t("settings.permissionNotifyDesc") }}</SettingDescription>
-    </div>
-    <Switch
-      :model-value="permissionNotification"
-      aria-labelledby="permission-notify-label"
-      @update:model-value="(v: boolean) => setPermissionNotification(v)"
-    />
   </SettingRow>
   <SettingRow>
     <div class="min-w-0">

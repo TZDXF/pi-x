@@ -38,7 +38,6 @@ import { composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { LanguageModelUsage } from "ai"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
-import { TOOL_PERMISSIONS, toolPermission, setToolPermission, type ToolPermission } from "@/lib/permissions"
 import {
   Dialog,
   DialogContent,
@@ -97,7 +96,7 @@ const rpcRequest: typeof requestForRuntime = command => requestForRuntime(comman
 const { t, te } = useI18n()
 
 const props = defineProps<{ project: string; ensureStarted: () => Promise<boolean>; connecting: boolean; selectingProject?: boolean; connected: boolean }>()
-const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: []; permissionChanged: [] }>()
+const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
 const workspace = useWorkspaceStore()
 const currentTitle = computed(() => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title)
 
@@ -567,21 +566,6 @@ function onThinkingChange(v: unknown) {
     .catch(e => ui.pushToast(String(e), "error"))
 }
 
-// ---- tool permission selector ----
-// pi applies the tool allowlist only at process start; changing it marks the worker for a lazy restart via the permissionChanged event.
-
-const permission = ref<ToolPermission>(toolPermission(props.project))
-watch(() => props.project, dir => { permission.value = toolPermission(dir) })
-
-function onPermissionChange(value: unknown) {
-  if (typeof value !== "string" || !TOOL_PERMISSIONS.includes(value as ToolPermission)) return
-  const choice = value as ToolPermission
-  if (choice === permission.value) return
-  permission.value = choice
-  setToolPermission(props.project, choice)
-  emit("permissionChanged")
-}
-
 async function abort() {
   const restored = await session.abortAndRestore()
   if (restored) bridge.value?.setTextInput(restored)
@@ -891,21 +875,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             >
               <Paperclip class="size-4.5" />
             </Button>
-
-            <Select
-              :model-value="permission"
-              :disabled="session.isStreaming || connecting || workspace.gitBusy"
-              @update:model-value="onPermissionChange"
-            >
-              <SelectTrigger class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" :title="t('chat.permissionTitle')">
-                <SelectValue>{{ t(`chat.permissions.${permission}`) }}</SelectValue>
-              </SelectTrigger>
-              <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">
-                <SelectItem v-for="p in TOOL_PERMISSIONS" :key="p" :value="p" class="text-xs">
-                  {{ t(`chat.permissions.${p}`) }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
 
             <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" :show-provider="false" open-above />
 

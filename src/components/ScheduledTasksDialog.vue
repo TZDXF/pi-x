@@ -14,7 +14,6 @@ import { getModelsConfig } from '@/api/piClient'
 import { listScheduledTasks, saveScheduledTask, deleteScheduledTask, type ScheduledTask, type ScheduledTaskInput } from '@/api/schedules'
 import { scheduleExpression, parseScheduleExpression, scheduleFrequencies, scheduleWeekdays, type ScheduleFrequency } from '@/lib/schedules'
 import { supportedThinkingLevels } from '@/lib/thinkingLevels'
-import { TOOL_PERMISSIONS, toolPermission } from '@/lib/permissions'
 import type { ThinkingLevel } from '@/api/protocol'
 
 const props = defineProps<{ open: boolean; project: string }>()
@@ -37,7 +36,7 @@ const modelKey = ref('')
 const modelLevels = ref<Record<string, ThinkingLevel[]>>({})
 const draft = ref<ScheduledTaskInput>(emptyDraft())
 function emptyDraft(): ScheduledTaskInput {
-  return { id: null, title: '', prompt: '', project: props.project || workspace.projects[0] || '', permission: 'inherit', toolPermission: toolPermission(props.project), provider: '', model: '', thinking: 'medium', expression: '0 9 * * *', enabled: true }
+  return { id: null, title: '', prompt: '', project: props.project || workspace.projects[0] || '', provider: '', model: '', thinking: 'medium', expression: '0 9 * * *', enabled: true }
 }
 const projects = computed(() => [...new Set([...workspace.projects, draft.value.project].filter(Boolean))])
 const models = computed(() => {
@@ -153,18 +152,6 @@ function openResult(task: ScheduledTask) {
           <Select v-model="draft.project"><SelectTrigger id="schedule-project" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
             <SelectItem v-for="path in projects" :key="path" :value="path">{{ workspace.projectName(path) }} · {{ path }}</SelectItem>
           </SelectContent></Select>
-        </div>
-        <div class="grid gap-1.5 text-sm"><label for="schedule-tools">{{ t('schedules.tools') }}</label>
-          <Select v-model="draft.toolPermission"><SelectTrigger id="schedule-tools" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
-            <SelectItem v-for="value in TOOL_PERMISSIONS" :key="value" :value="value">{{ t(`chat.permissions.${value}`) }}</SelectItem>
-          </SelectContent></Select>
-        </div>
-        <div class="grid gap-1.5 text-sm"><label for="schedule-permission">{{ t('schedules.permission') }}</label>
-          <Select v-model="draft.permission"><SelectTrigger id="schedule-permission" class="w-full"><SelectValue /></SelectTrigger><SelectContent>
-            <SelectItem value="inherit">{{ t('schedules.inherit') }}</SelectItem>
-            <SelectItem value="trust">{{ t('schedules.trusted') }}</SelectItem>
-            <SelectItem value="untrust">{{ t('trust.dontTrust') }}</SelectItem>
-          </SelectContent></Select><p class="text-xs text-muted-foreground">{{ t('schedules.permissionHint') }}</p>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div class="grid gap-1.5 text-sm"><label for="schedule-model">{{ t('schedules.model') }}</label><ConversationModelSelect id="schedule-model" v-model="modelKey" :models="models" trigger-class="h-9 w-full min-w-0 text-xs" /></div>
