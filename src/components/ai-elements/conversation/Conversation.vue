@@ -6,6 +6,7 @@ import { useStickToBottom } from 'vue-stick-to-bottom'
 import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
+import { pinToBottom } from '@/lib/bottomPin'
 import { conversationKey } from './context'
 
 interface Props {
@@ -51,6 +52,19 @@ const { scrollRef, contentRef } = context
 const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
 watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
+// With resize="instant", pin scrollTop synchronously in the ResizeObserver
+// callback (after layout, before paint). The library defers its correction to
+// the next animation frame, which paints one frame per streaming chunk with a
+// stale scrollTop and makes the scrollbar bounce.
+watchEffect((onCleanup) => {
+  const scroll = scrollRef.value
+  const content = contentRef.value
+  if (!scroll || !content || props.resize !== 'instant') return
+  const pin = () => pinToBottom(scroll, context.isAtBottom.value, context.escapedFromLock.value)
+  const observer = new ResizeObserver(pin)
+  observer.observe(content)
+  onCleanup(() => observer.disconnect())
+})
 provide(conversationKey, context)
 onMounted(() => {
   if (props.initial === 'instant' && scrollRef.value)
