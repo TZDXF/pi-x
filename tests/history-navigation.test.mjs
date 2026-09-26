@@ -66,13 +66,42 @@ test('streaming navigation switches without aborting the running generation', as
   assert.deepEqual(calls, ['switch'])
 })
 
+test('streaming composer shows send for text or attachments and stop only when empty', () => {
+  const chat = source('../src/components/ChatView.vue')
+  const declaration = chat.match(/^const showStopButton = .*$/m)?.[0]
+  assert.ok(declaration)
+  const session = { isStreaming: true }
+  const delayedSend = { value: false }
+  const bridge = { value: { textInput: '', files: [] } }
+  const attachments = { get value() { return bridge.value.files } }
+  const context = {
+    session, delayedSend, bridge, attachments,
+    computed: getter => ({ get value() { return getter() } }),
+  }
+  run(`${declaration}\nglobalThis.shouldStop = () => showStopButton.value`, context)
+  assert.equal(context.shouldStop(), true)
+  bridge.value.textInput = 'hello'
+  assert.equal(context.shouldStop(), false)
+  bridge.value.textInput = '   '
+  assert.equal(context.shouldStop(), true)
+  bridge.value.files.push({ id: 'image' })
+  assert.equal(context.shouldStop(), false)
+  bridge.value.files.length = 0
+  delayedSend.value = true
+  assert.equal(context.shouldStop(), false)
+  delayedSend.value = false
+  session.isStreaming = false
+  assert.equal(context.shouldStop(), false)
+  assert.match(chat, /:aria-label="showStopButton \? t\('chat\.stop'\) : delayedSend \? t\('chat\.delayedSend'\) : t\('chat\.sendMessage'\)"/)
+})
+
 test('streaming input reaches command dispatch; the submit button doubles as stop while streaming', () => {
   const chat = source('../src/components/ChatView.vue')
   const submit = chat.slice(chat.indexOf('async function onSubmit('), chat.indexOf('function thinkingLabel'))
   assert.doesNotMatch(submit, /if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?:status="session\.isStreaming \? 'streaming' : undefined"/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?:type="session\.isStreaming \? 'button' : 'submit'"/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?@click="session\.isStreaming && abort\(\)"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?:status="showStopButton \? 'streaming' : undefined"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?:type="showStopButton \? 'button' : 'submit'"/)
+  assert.match(chat, /<PromptInputSubmit[\s\S]*?@click="showStopButton && abort\(\)"/)
   assert.match(submit, /session.isStreaming && commandName === 'compact'/)
   assert.match(submit, /if \(commandName === 'new'\) emit\('newSession'\)/)
   const sidebar = source('../src/components/WorkspaceSidebar.vue')

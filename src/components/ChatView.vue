@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { sendCountdown } from "@/lib/sendCountdown"
+import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { averageCacheRate } from "@/lib/cacheRate"
 import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { NumberFieldInput, NumberFieldRoot } from "reka-ui"
 import {
   Conversation,
   ConversationContent,
@@ -72,7 +74,7 @@ import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { isDesktop } from "@/api/transport"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, Trash2 } from "@lucide/vue"
+import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, Trash2, Clock3 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import type { UserEntry } from "@/stores/session"
@@ -496,8 +498,20 @@ onBeforeUnmount(() => {
 })
 
 const delayedSend = ref(false)
-const sendDelay = ref(5)
-const sendDelayUnit = ref("minutes")
+const showStopButton = computed(() => session.isStreaming && !delayedSend.value && !bridge.value?.textInput?.trim() && !attachments.value.length)
+const sendDelayMinutes = ref<number | null>(10)
+const sendDelaySeconds = ref<number | null>(0)
+const sendDelay = computed(() => sendDelayMinutes.value === null || sendDelaySeconds.value === null
+  ? ""
+  : `${sendDelayMinutes.value}:${String(sendDelaySeconds.value).padStart(2, "0")}`)
+
+function onSendDelayWheel(event: WheelEvent, unit: "minutes" | "seconds") {
+  const target = unit === "minutes" ? sendDelayMinutes : sendDelaySeconds
+  const next = stepSendDelayWheel(target.value, event.deltaY, event.deltaX, unit === "minutes" ? 525600 : 59)
+  if (next === null) return
+  event.preventDefault()
+  target.value = next
+}
 
 async function onSubmit(message: {
   text?: string
@@ -511,7 +525,8 @@ async function onSubmit(message: {
     .map((u) => dataUrlToImage(u))
     .filter((im): im is { data: string; mimeType: string } => im !== null)
   if (!text && !images.length) return
-  if (delayedSend.value && (!Number.isFinite(Number(sendDelay.value)) || Number(sendDelay.value) <= 0 || Number(sendDelay.value) * (sendDelayUnit.value === "hours" ? 60 : 1) > 525600)) {
+  const delayMs = delayedSend.value ? parseSendDelay(sendDelay.value) : null
+  if (delayedSend.value && delayMs === null) {
     ui.pushToast(t("chat.invalidSendDelay"), "error")
     throw new Error(t("chat.invalidSendDelay"))
   }
@@ -548,7 +563,7 @@ async function onSubmit(message: {
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
   const expandedText = extensionCommand ? text : withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project))
   if (delayedSend.value) {
-    session.schedulePrompt(text, Number(sendDelay.value) * (sendDelayUnit.value === "hours" ? 3_600_000 : 60_000), images.length ? images : undefined, expandedText)
+    session.schedulePrompt(text, delayMs!, images.length ? images : undefined, expandedText)
     delayedSend.value = false
   } else {
     await session.send(text, images.length ? images : undefined, expandedText, runningBehavior.value)
@@ -905,6 +920,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
           </div>
           <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
+            <div v-if="delayedSend" class="flex h-8 items-center rounded-md border border-border bg-background px-1 text-sm font-mono tabular-nums text-foreground focus-within:ring-1 focus-within:ring-ring" role="group" :aria-label="t('chat.sendDelay')">
+              <NumberFieldRoot v-model="sendDelayMinutes" :min="0" :max="525600" disable-wheel-change :format-options="{ minimumIntegerDigits: 2, useGrouping: false }" @wheel="onSendDelayWheel($event, 'minutes')">
+                <NumberFieldInput class="min-w-0 bg-transparent text-right outline-none" :style="{ width: `${Math.max(2, String(sendDelayMinutes ?? 0).length) + 0.5}ch` }" :aria-label="t('chat.sendDelayMinutes')" />
+              </NumberFieldRoot>
+              <span aria-hidden="true">:</span>
+              <NumberFieldRoot v-model="sendDelaySeconds" :min="0" :max="59" disable-wheel-change :format-options="{ minimumIntegerDigits: 2, useGrouping: false }" @wheel="onSendDelayWheel($event, 'seconds')">
+                <NumberFieldInput class="w-[2.5ch] bg-transparent text-left outline-none" :aria-label="t('chat.sendDelaySeconds')" />
+              </NumberFieldRoot>
+            </div>
+            <Button type="button" variant="ghost" size="icon" class="size-8 shrink-0 text-muted-foreground" :class="{ 'bg-muted text-foreground': delayedSend }" :title="t('chat.delayedSendHint')" :aria-label="t('chat.delayedSend')" :aria-pressed="delayedSend" @click="delayedSend = !delayedSend">
+              <Clock3 class="size-4" />
+            </Button>
             <Context
               v-if="contextUsage"
               :used-tokens="contextUsage.tokens"
@@ -927,24 +954,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                 </ContextContentBody>
               </ContextContent>
             </Context>
-            <label class="flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted" :class="{ 'bg-muted text-foreground': delayedSend }" :title="t('chat.delayedSendHint')">
-              <input v-model="delayedSend" type="checkbox" class="size-3.5 accent-primary" />{{ t('chat.delayedSend') }}
-            </label>
-            <template v-if="delayedSend">
-              <input v-model.number="sendDelay" type="number" min="0.01" step="any" class="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs" :aria-label="t('chat.sendDelay')" />
-              <select v-model="sendDelayUnit" class="h-8 rounded-md border border-border bg-background px-2 text-xs" :aria-label="t('chat.sendDelayUnit')">
-                <option value="minutes">{{ t('chat.delayMinutes') }}</option>
-                <option value="hours">{{ t('chat.delayHours') }}</option>
-              </select>
-              <Button type="submit" size="sm" :disabled="editBusy || workspace.gitBusy || connecting">{{ t('chat.addDelayedPrompt') }}</Button>
-            </template>
-            <PromptInputSubmit v-else
-              :status="session.isStreaming ? 'streaming' : undefined"
-              :type="session.isStreaming ? 'button' : 'submit'"
-              :title="session.isStreaming ? t('chat.stop') : undefined"
-              :aria-label="session.isStreaming ? t('chat.stop') : t('chat.sendMessage')"
+            <PromptInputSubmit
+              :status="showStopButton ? 'streaming' : undefined"
+              :type="showStopButton ? 'button' : 'submit'"
+              :title="showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : undefined"
+              :aria-label="showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : t('chat.sendMessage')"
               :disabled="editBusy || workspace.gitBusy || connecting"
-              @click="session.isStreaming && abort()"
+              @click="showStopButton && abort()"
             />
           </div>
         </div>
