@@ -302,6 +302,12 @@ export default {
     export: "导出",
     exportDirectory: "选择会话导出目录",
     compactContext: "压缩上下文",
+    averageCacheRate: "平均缓存率",
+    contextParts: {
+      systemPrompt: "系统提示词",
+      toolDefinitions: "工具定义",
+      messageHistory: "消息历史",
+    },
     emptyTitle: "今天想构建什么？",
     emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",

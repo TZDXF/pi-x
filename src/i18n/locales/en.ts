@@ -302,6 +302,12 @@ export default {
     export: "Export",
     exportDirectory: "Choose export directory",
     compactContext: "Compact context",
+    averageCacheRate: "Average cache rate",
+    contextParts: {
+      systemPrompt: "System prompt",
+      toolDefinitions: "Tool definitions",
+      messageHistory: "Message history",
+    },
     emptyTitle: "What do you want to build today?",
     emptyDesc: "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",
     copyReply: "Copy reply",

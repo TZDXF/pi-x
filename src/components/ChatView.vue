@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { sendCountdown } from "@/lib/sendCountdown"
+import { averageCacheRate } from "@/lib/cacheRate"
+import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
+import ContextBreakdown from "@/components/ContextBreakdown.vue"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -36,7 +39,6 @@ import {
 import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
 import { composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
 import type { ThinkingLevel } from "@/api/protocol"
-import type { LanguageModelUsage } from "ai"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
 import {
   Dialog,
@@ -49,13 +51,10 @@ import {
 } from "@/components/ai-elements/prompt-input"
 import {
   Context,
-  ContextCacheUsage,
   ContextContent,
   ContextContentBody,
   ContextContentHeader,
   ContextIcon,
-  ContextInputUsage,
-  ContextOutputUsage,
   ContextTrigger,
 } from "@/components/ai-elements/context"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
@@ -409,26 +408,32 @@ function toggleTerminal() {
   }
 }
 
-// ---- context usage (ai-elements Context) ----
+// ---- context usage and session-wide weighted cache hit rate ----
 const contextUsage = computed(() => session.stats?.contextUsage ?? null)
-const contextTokenUsage = computed<LanguageModelUsage | undefined>(() => {
-  const u = session.lastUsage
-  if (!u) return undefined
-  return {
-    inputTokens: u.input,
-    outputTokens: u.output,
-    totalTokens: u.totalTokens,
-    inputTokenDetails: {
-      noCacheTokens: undefined,
-      cacheReadTokens: u.cacheRead,
-      cacheWriteTokens: u.cacheWrite,
-    },
-    outputTokenDetails: {
-      textTokens: undefined,
-      reasoningTokens: undefined,
-    },
+const cacheRate = computed(() => averageCacheRate(session.stats?.tokens))
+const cacheRateText = computed(() => cacheRate.value === null
+  ? "—"
+  : new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(cacheRate.value))
+
+const contextBreakdown = ref<ContextBreakdownPart[] | null>(null)
+let breakdownFetchedKey: string | null = null
+let breakdownLoading = false
+async function refreshContextBreakdown() {
+  const key = `${session.stats?.sessionId ?? ""}:${contextUsage.value?.tokens ?? ""}`
+  if (breakdownLoading || breakdownFetchedKey === key) return
+  breakdownLoading = true
+  contextBreakdown.value = null
+  try {
+    const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
+    if (!res.success) return
+    if (key !== `${session.stats?.sessionId ?? ""}:${contextUsage.value?.tokens ?? ""}`) return
+    breakdownFetchedKey = key
+    contextBreakdown.value = contextBreakdownParts(estimateContextBreakdown(res.data?.messages ?? []), contextUsage.value?.tokens)
   }
-})
+  finally {
+    breakdownLoading = false
+  }
+}
 
 const modelKey = computed({
   get: () => {
@@ -904,8 +909,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               v-if="contextUsage"
               :used-tokens="contextUsage.tokens"
               :max-tokens="contextUsage.contextWindow"
-              :usage="contextTokenUsage"
-              :model-id="session.currentModel?.id"
+              @update:open="(open: boolean) => open && refreshContextBreakdown()"
             >
               <ContextTrigger>
                 <Button type="button" variant="ghost" class="h-8 px-2 text-xs">
@@ -915,9 +919,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               <ContextContent>
                 <ContextContentHeader />
                 <ContextContentBody class="space-y-2">
-                  <ContextInputUsage />
-                  <ContextOutputUsage />
-                  <ContextCacheUsage />
+                  <ContextBreakdown v-if="contextBreakdown?.length" :parts="contextBreakdown" />
+                  <div class="flex items-center justify-between gap-3 text-xs">
+                    <span class="text-muted-foreground">{{ t("chat.averageCacheRate") }}</span>
+                    <span class="font-mono">{{ cacheRateText }}</span>
+                  </div>
                 </ContextContentBody>
               </ContextContent>
             </Context>
