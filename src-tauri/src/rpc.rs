@@ -58,6 +58,16 @@ pub struct ProcessState {
     generation: Arc<AtomicU64>,
 }
 
+fn build_spawn_args(session_file: Option<&str>, extra_args: Vec<String>) -> Vec<String> {
+    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
+    if let Some(sf) = session_file {
+        args.push("--session".into());
+        args.push(sf.into());
+    }
+    args.extend(extra_args);
+    args
+}
+
 /// Spawn `pi --mode rpc` inside `project` and wire up the stdio bridge.
 /// `session_file` resumes a stored session (`--session <path>`).
 pub async fn process_spawn(
@@ -74,11 +84,7 @@ pub async fn process_spawn(
         let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
     }
 
-    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
-    if let Some(sf) = &session_file {
-        args.push("--session".into());
-        args.push(sf.clone());
-    }
+    let args = build_spawn_args(session_file.as_deref(), extra_args);
 
     // Prefer the resolved launcher (node + cli.js); never route npm .cmd
     // shims through cmd.exe — its shim trick can exit silently under pipes.
@@ -595,6 +601,39 @@ pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, t
         }
     }
     process_set_session_name(&ProcessState::default(), path, title, only_if_empty).await
+}
+
+#[cfg(test)]
+mod spawn_args_tests {
+    use super::build_spawn_args;
+
+    #[test]
+    fn includes_session_and_extra_args() {
+        let args = build_spawn_args(
+            Some("C:\\tmp\\s.jsonl"),
+            vec![
+                "--provider".into(),
+                "home".into(),
+                "--model".into(),
+                "agnes-3.0-flash".into(),
+                "--thinking".into(),
+                "medium".into(),
+            ],
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--mode", "rpc", "--session", "C:\\tmp\\s.jsonl", "--provider", "home",
+                "--model", "agnes-3.0-flash", "--thinking", "medium",
+            ]
+        );
+    }
+
+    #[test]
+    fn omits_session_flag_without_session_file() {
+        let args = build_spawn_args(None, vec!["--approve".into()]);
+        assert_eq!(args, vec!["--mode", "rpc", "--approve"]);
+    }
 }
 
 #[cfg(test)]
