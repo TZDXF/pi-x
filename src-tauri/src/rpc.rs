@@ -71,7 +71,7 @@ pub async fn process_spawn(
     let mut guard = state.inner.lock().await;
     state.generation.fetch_add(1, Ordering::Relaxed);
     if let Some(mut old) = guard.take() {
-        let _ = kill_inner(&mut old).await;
+        let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
     }
 
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
@@ -119,6 +119,17 @@ pub async fn process_spawn(
     cmd.creation_flags(CREATE_NO_WINDOW);
 
     let mut child = cmd.spawn().map_err(|e| format!("failed to spawn pi: {e}"))?;
+    let session_label = session_file.clone().unwrap_or_else(|| "<new>".into());
+    crate::logs::write(
+        &state.runtime_id,
+        &format!(
+            "spawn pid={} project={} session={} args={:?}",
+            child.id().map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+            project,
+            session_label,
+            args
+        ),
+    );
 
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
@@ -129,17 +140,21 @@ pub async fn process_spawn(
     let next_id = Arc::new(AtomicU64::new(1));
 
     // stdin writer
-    tokio::spawn(async move {
-        let mut stdin = stdin;
-        while let Some(line) = stdin_rx.recv().await {
-            if stdin.write_all(line.as_bytes()).await.is_err()
-                || stdin.write_all(b"\n").await.is_err()
-                || stdin.flush().await.is_err()
-            {
-                break;
+    {
+        let runtime_id = state.runtime_id.clone();
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(line) = stdin_rx.recv().await {
+                if stdin.write_all(line.as_bytes()).await.is_err()
+                    || stdin.write_all(b"\n").await.is_err()
+                    || stdin.flush().await.is_err()
+                {
+                    crate::logs::write(&runtime_id, "stdin write failed (pi process gone)");
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
 
     // stdout reader: strict LF framing at the byte level
     {
@@ -175,6 +190,7 @@ pub async fn process_spawn(
             // stdout closed => process exited (or is gone).
             // Only surface it if this reader still belongs to the current session.
             if generation.load(Ordering::Relaxed) == own_gen {
+                crate::logs::write(&runtime_id, "unexpected exit: stdout closed (pi process exited)");
                 pending.lock().await.clear();
                 emit_process_event(&app, EXIT_EVENT, &runtime_id, json!({ "runtimeId": runtime_id }));
             }
@@ -202,6 +218,7 @@ pub async fn process_spawn(
                     }
                     let text = String::from_utf8_lossy(&line).to_string();
                     if !text.is_empty() {
+                        crate::logs::write(&runtime_id, &format!("stderr: {text}"));
                         emit_process_event(&app, STDERR_EVENT, &runtime_id, json!({ "line": text, "runtimeId": runtime_id }));
                     }
                 }
@@ -218,6 +235,31 @@ pub async fn process_spawn(
     Ok(())
 }
 
+/// Log run-lifecycle events so notification/kill decisions can be audited
+/// against the exact event stream pi produced. Streaming deltas and tool
+/// chatter are deliberately excluded.
+fn log_lifecycle_event(runtime_id: &str, value: &Value) {
+    let ty = value["type"].as_str().unwrap_or("");
+    let detail = match ty {
+        "agent_start" | "agent_settled" => String::new(),
+        "agent_end" => format!(" willRetry={}", value["willRetry"].as_bool().unwrap_or(false)),
+        "auto_retry_start" => format!(
+            " attempt={}/{}",
+            value["attempt"].as_u64().unwrap_or(0),
+            value["maxAttempts"].as_u64().unwrap_or(0)
+        ),
+        "auto_retry_end" => format!(" success={}", value["success"].as_bool().unwrap_or(false)),
+        "message_end" => match value["message"]["stopReason"].as_str() {
+            Some(reason @ ("error" | "aborted")) => format!(" stopReason={reason}"),
+            _ => return,
+        },
+        "compaction_start" => format!(" reason={}", value["reason"].as_str().unwrap_or("?")),
+        "compaction_end" => format!(" willRetry={}", value["willRetry"].as_bool().unwrap_or(false)),
+        _ => return,
+    };
+    crate::logs::write(runtime_id, &format!("event {ty}{detail}"));
+}
+
 async fn dispatch(app: &AppHandle, pending: &PendingMap, runtime_id: &str, mut value: Value) {
     if value.get("type").and_then(|t| t.as_str()) == Some("response") {
         if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
@@ -228,6 +270,7 @@ async fn dispatch(app: &AppHandle, pending: &PendingMap, runtime_id: &str, mut v
         }
         return;
     }
+    log_lifecycle_event(runtime_id, &value);
     value["runtimeId"] = json!(runtime_id);
     emit_process_event(app, EVENT, runtime_id, value);
 }
@@ -335,7 +378,8 @@ pub async fn process_running(state: &ProcessState) -> bool {
     guard.as_mut().is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
 }
 
-async fn kill_inner(inner: &mut SessionInner) -> Result<(), String> {
+async fn kill_inner(runtime_id: &str, inner: &mut SessionInner, reason: &str) -> Result<(), String> {
+    crate::logs::write(runtime_id, &format!("kill pid={:?} reason={reason}", inner.child.id()));
     // Drop pending response waiters first so callers fail fast.
     inner.pending.lock().await.clear();
     if let Some(pid) = inner.child.id() {
@@ -355,11 +399,11 @@ async fn kill_inner(inner: &mut SessionInner) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn process_kill(state: &ProcessState) -> Result<(), String> {
+pub async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
     state.generation.fetch_add(1, Ordering::Relaxed);
     let mut guard = state.inner.lock().await;
     if let Some(mut inner) = guard.take() {
-        kill_inner(&mut inner).await?;
+        kill_inner(&state.runtime_id, &mut inner, reason).await?;
     }
     Ok(())
 }
@@ -509,12 +553,12 @@ pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
 }
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
     let process = state.processes.lock().await.remove(runtime_id.unwrap_or("default"));
-    if let Some(process) = process { process_kill(&process).await?; }
+    if let Some(process) = process { process_kill(&process, "rpc_kill").await?; }
     Ok(())
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
-    for process in processes.values() { process_kill(process).await?; }
+    for process in processes.values() { process_kill(process, "kill_all (app exit)").await?; }
     Ok(())
 }
 pub async fn list(state: &RpcState) -> Vec<Value> {
