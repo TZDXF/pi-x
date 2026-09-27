@@ -64,6 +64,11 @@ import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
+import TurnChangesCard from "@/components/TurnChangesCard.vue"
+import { turnFileChanges, type TurnFileChange } from "@/lib/turnChanges"
+import type { TurnCheckpointRecord } from "@/lib/checkpoints"
+import { formatCodedError } from "@/lib/backendError"
+import type { RevertFileResult } from "@/lib/revertChanges"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
@@ -71,30 +76,51 @@ import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import ComposerText from "@/components/ComposerText.vue"
-import { withFileReferences, withSessionReferences, sessionReference, desktopCommands } from "@/lib/completion"
+import { withFileReferences, withSessionReferences, desktopCommands } from "@/lib/completion"
+import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { useSessionFork } from "@/composables/useSessionFork"
+import { usePromptEdit, type PromptEditTextarea } from "@/composables/usePromptEdit"
+import { useSessionDrop } from "@/composables/useSessionDrop"
 import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
-import { isDesktop } from "@/api/transport"
+
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, SquareTerminal, GripVertical, Paperclip, Pencil, RefreshCw, Trash2, Clock3 } from "@lucide/vue"
+import { Copy, GitBranch, PanelRight, GripVertical, Paperclip, Pencil, RefreshCw, Trash2, Clock3 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import type { UserEntry } from "@/stores/session"
 
-import SessionChanges, { type SidebarTab } from "@/components/SessionChanges.vue"
+import RightSidebar, { type SidebarTabItem, type SidebarTabType } from "@/components/RightSidebar.vue"
 
-const changesOpen = ref(false)
-const sidebarTab = ref<SidebarTab>("review")
-function toggleSidebar(tab: SidebarTab) {
-  if (changesOpen.value && sidebarTab.value === tab) changesOpen.value = false
-  else { sidebarTab.value = tab; changesOpen.value = true }
+const sidebarOpen = ref(false)
+const sidebarTabs = ref<SidebarTabItem[]>([])
+const activeTabId = ref<number | null>(null)
+let nextTabId = 1
+const reviewFocus = ref<string | null>(null)
+function addSidebarTab(type: SidebarTabType) {
+  const id = nextTabId++
+  sidebarTabs.value.push({ id, type })
+  activeTabId.value = id
+  sidebarOpen.value = true
 }
-const changesFocus = ref<string | null>(null)
+function closeSidebarTab(id: number) {
+  const index = sidebarTabs.value.findIndex(tab => tab.id === id)
+  if (index < 0) return
+  sidebarTabs.value.splice(index, 1)
+  if (activeTabId.value === id)
+    activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
+}
 function openReviewAt(path: string) {
-  changesFocus.value = path
-  sidebarTab.value = "review"
-  changesOpen.value = true
+  reviewFocus.value = path
+  const existing = sidebarTabs.value.find(tab => tab.type === "review")
+  if (existing) activeTabId.value = existing.id
+  else addSidebarTab("review")
 }
+
+
+
+
+
+
 const changeTotals = computed(() => session.fileChanges.reduce((sum, change) => ({ added: sum.added + change.added, removed: sum.removed + change.removed, unknown: sum.unknown || change.unknownBefore }), { added: 0, removed: 0, unknown: false }))
 
 const runtimeId = activeRuntimeId.value
@@ -128,30 +154,9 @@ watch(() => session.sessionFile, file => {
   }
   recordComposerDraft(draftProject(), draftTarget(), bridge.value.textInput)
 })
-const sessionDragOver = ref(false)
+// Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
-function onSessionDragOver(event: DragEvent) {
-  if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
-  event.preventDefault()
-  event.dataTransfer.dropEffect = 'copy'
-  sessionDragOver.value = true
-}
-function onSessionDragLeave(event: DragEvent) {
-  const target = event.currentTarget as HTMLElement
-  if (!(event.relatedTarget instanceof Node) || !target.contains(event.relatedTarget)) sessionDragOver.value = false
-}
-function onSessionDrop(event: DragEvent) {
-  sessionDragOver.value = false
-  if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
-  event.preventDefault()
-  event.stopPropagation()
-  const file = event.dataTransfer.getData('application/x-pix-session')
-  if (!file || file === session.sessionFile || !knownSessions.value.some(row => row.file === file)) return
-  const reference = sessionReference(file)
-  const previous = bridge.value?.textInput ?? ''
-  bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? ' ' : '') + reference + ' ')
-  nextTick(() => document.querySelector<HTMLElement>('.composer-dock .composer-rich-editor')?.focus())
-}
+const { sessionDragOver, onSessionDragOver, onSessionDragLeave, onSessionDrop } = useSessionDrop(session, bridge, knownSessions)
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
 async function navigateToQuestion(turn: TimelineTurn) {
@@ -187,148 +192,21 @@ const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 const attachments = computed(() => bridge.value?.files ?? [])
 const previewImage = ref<string | null>(null)
 
-function dataUrlToImage(d: string): { data: string; mimeType: string } | null {
-  const m = /^data:([^;]+);base64,(.+)$/.exec(d)
-  return m ? { data: m[2]!, mimeType: m[1]! } : null
-}
-
-function isImageUrl(url?: string): boolean {
-  return (
-    !!url &&
-    (url.startsWith("data:image/") ||
-      /^https?:\/\/.*\.(png|jpe?g|gif|webp)/i.test(url))
-  )
-}
-
 // ---- fork (restart from a previous prompt) ----
-const forkOpen = ref(false)
-const forkMessages = ref<{ entryId: string; text: string }[]>([])
-
-async function openFork() {
-  try {
-    const res = await rpcRequest<{
-      messages: { entryId: string; text: string }[]
-    }>({ type: "get_fork_messages" })
-    if (!res.success) throw new Error(res.error ?? "fork list failed")
-    forkMessages.value = (res.data?.messages ?? []).slice().reverse()
-    forkOpen.value = true
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
-}
-
-/**
- * Branch right AFTER the answer at entryIndex: the new branch keeps this
- * answer and drops the questions (and everything else) that follow it.
- * pi forks *before* a user message, so we fork at the next question.
- */
-async function forkFromAnswer(entryIndex: number) {
-  const list = session.entries
-  let questionText: string | null = null
-  let questionIndex = -1
-  for (let i = entryIndex + 1; i < list.length; i++) {
-    const e = list[i]
-    if (e.kind === "user") { questionText = e.text; questionIndex = i; break }
-  }
-  if (questionText === null) {
-    ui.pushToast(t("chat.toastForkNoLater"), "info")
-    return
-  }
-  try {
-    const res = await rpcRequest<{
-      messages: { entryId: string; text: string }[]
-    }>({ type: "get_fork_messages" })
-    if (!res.success) throw new Error(res.error ?? "fork list failed")
-    const chronological = res.data?.messages ?? []
-    // Resolve duplicates by occurrence rank: the n-th identical question on
-    // this branch maps to the n-th identical entry in the fork list.
-    let rank = 0
-    for (let i = 0; i <= questionIndex; i++) {
-      const e = list[i]
-      if (e.kind === "user" && e.text === questionText) rank++
-    }
-    const matches = chronological.filter(m => m.text === questionText)
-    const target = matches[rank - 1] ?? matches[matches.length - 1]
-    if (target) await doFork(target.entryId)
-    else await openFork() // fall back to the prompt picker
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
-}
-
-async function doFork(entryId: string) {
-  forkOpen.value = false
-  try {
-    const res = await rpcRequest<{ text?: string; cancelled?: boolean }>({
-      type: "fork",
-      entryId,
-    })
-    if (!res.success) throw new Error(res.error ?? "fork failed")
-    if (res.data?.cancelled) {
-      ui.pushToast(t("chat.toastForkCancelled"), "info")
-      return
-    }
-    session.clear()
-    await session.refreshState()
-    await session.loadHistory()
-    ui.pushToast(t("chat.toastForked"), "info")
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
-}
+const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest)
 
 // Resend the edited question in this session, interrupting the current answer first.
-const editedPrompt = ref<UserEntry | null>(null)
-const editedText = ref("")
-const editBusy = ref(false)
-const editTextarea = ref<InstanceType<typeof Textarea> | null>(null)
-const lastUserPromptId = computed(() => {
-  for (let i = session.entries.length - 1; i >= 0; i--) {
-    if (session.entries[i]?.kind === "user") return session.entries[i].id
-  }
-  return null
+const editTextarea = ref<PromptEditTextarea | null>(null)
+const {
+  editedPrompt, editedText, editBusy, lastUserPromptId, editBlocked,
+  startEditPrompt, cancelEditedPrompt, resendEditedPrompt,
+} = usePromptEdit({
+  session, ui, workspace, editTextarea,
+  project: () => props.project,
+  connecting: () => props.connecting,
+  connected: () => props.connected,
+  knownSessions: () => knownSessions.value,
 })
-const editBlocked = computed(() => editBusy.value || props.connecting || !props.connected ||
-  workspace.gitBusy || session.isResending || session.historyLoading)
-
-async function startEditPrompt(entry: UserEntry) {
-  if (editBlocked.value || entry.id !== lastUserPromptId.value) return
-  editedPrompt.value = entry
-  editedText.value = entry.text
-  await nextTick()
-  ;(editTextarea.value?.$el as HTMLTextAreaElement | undefined)?.focus()
-}
-
-function cancelEditedPrompt() {
-  if (!editBusy.value) editedPrompt.value = null
-}
-
-watch(() => session.sessionFile, () => { editedPrompt.value = null })
-watch(lastUserPromptId, id => {
-  if (editedPrompt.value?.id !== id) cancelEditedPrompt()
-})
-
-async function resendEditedPrompt() {
-  const entry = editedPrompt.value
-  const text = editedText.value.trim()
-  if (!entry || entry.id !== lastUserPromptId.value || editBlocked.value || (!text && !entry.images?.length)) return
-  // Validate attachments before stopping the current answer.
-  const images = (entry.images ?? []).map(image => dataUrlToImage(image.url))
-  if (images.some(image => image === null)) {
-    ui.pushToast(t("chat.editAttachmentError"), "error")
-    return
-  }
-  editBusy.value = true
-  try {
-    await session.resendPrompt(text, images.length ? images as { data: string; mimeType: string }[] : undefined,
-      withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project)))
-    editedPrompt.value = null
-  } catch (error) {
-    ui.pushToast(String(error), "error")
-  } finally {
-    editBusy.value = false
-  }
-}
 
 // ---- settings / export / copy ----
 function blocksText(blocks: { type: string; text?: string }[]): string {
@@ -372,6 +250,53 @@ const renderedEntries = computed(() => {
 /** Completed turns show only the trailing answer; the process collapses. */
 function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
+}
+
+// ---- per-turn file changes (summary card with git revert) ----
+// Streaming re-renders this list constantly; the cache keeps the line diffs
+// from being recomputed while the turn's calls and their run states stand still.
+const turnChangesCache = new Map<number, { signature: string; files: TurnFileChange[] }>()
+function changesForTurn(entry: AssistantTurn): TurnFileChange[] {
+  // 有 Git 快照记录的轮次以快照差异为准（覆盖 bash 等工具的文件修改）。
+  const checkpoint = checkpointForTurn(entry)
+  if (checkpoint) return checkpoint.files.map(file => ({
+    path: file.path, added: file.added, removed: file.removed, unknown: false, ops: [], revertible: true,
+  }))
+  const signature = entry.blocks.flatMap(block => block.type === "toolCall"
+    ? [`${block.callId}:${block.argsText.length}:${session.runs[block.callId]?.state ?? "-"}`]
+    : []).join("|")
+  const hit = turnChangesCache.get(entry.id)
+  if (hit && hit.signature === signature) return hit.files
+  const files = turnFileChanges(entry.blocks, session.runs)
+  turnChangesCache.set(entry.id, { signature, files })
+  return files
+}
+watch(() => session.sessionFile, () => turnChangesCache.clear())
+
+/** 渲染轮次对应的用户消息时间戳，与会话清单里的快照记录精确匹配。 */
+function turnUserTimestamp(entry: AssistantTurn): number | undefined {
+  for (let index = Math.min(entry.lastIndex, session.entries.length - 1); index >= 0; index--) {
+    const candidate = session.entries[index]
+    if (candidate?.kind === "user") return candidate.timestamp
+  }
+  return undefined
+}
+
+function checkpointForTurn(entry: AssistantTurn): TurnCheckpointRecord | null {
+  const timestamp = turnUserTimestamp(entry)
+  if (timestamp === undefined) return null
+  return session.turnCheckpointRecords.find(record => record.userTimestamp === timestamp) ?? null
+}
+
+function onTurnReverted(results: RevertFileResult[]) {
+  const ok = results.filter(result => result.ok).length
+  if (ok) ui.pushToast(t("turnChanges.toastReverted", { count: ok }), "info")
+  for (const result of results) if (!result.ok) ui.pushToast(formatCodedError(t, result.error ?? ""), "error")
+}
+
+function onTurnRevertedAll(entry: AssistantTurn) {
+  const checkpoint = checkpointForTurn(entry)
+  if (checkpoint) session.markTurnReverted(checkpoint.userTimestamp ?? -1)
 }
 
 // Process blocks render lazily on first expand: they are hidden anyway, and
@@ -610,33 +535,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 <template>
   <div class="chat-review-layout flex flex-1 min-w-0 min-h-0 relative overflow-hidden" :class="{ 'session-drop-active': sessionDragOver }" @dragover.capture="onSessionDragOver" @dragleave="onSessionDragLeave" @drop.capture="onSessionDrop">
   <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
-    <header class="workspace-header flex items-center justify-between gap-4 min-h-12 py-2 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border max-[900px]:flex-wrap max-[900px]:gap-1.5">
+    <header class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border max-[900px]:flex-wrap max-[900px]:gap-1.5">
       <div class="min-w-0">
         <h1 class="max-w-[42vw] truncate text-sm font-medium leading-[1.8]">
           {{ currentTitle || session.entries.find((e) => e.kind === "user")?.text || t("chat.newSession") }}
         </h1>
-        <p class="text-muted-foreground truncate text-xs">
-          {{ project.split(/[\\/]/).filter(Boolean).pop() }}
-          <span class="mx-1">/</span> {{ t("common.localWorkspace") }}
-        </p>
       </div>
       <div class="header-actions flex items-center gap-1 shrink-0 max-[900px]:flex-wrap max-[640px]:gap-0">
-        <Button variant="ghost" size="sm" :aria-expanded="changesOpen && sidebarTab === 'review'" :aria-label="t('changes.title')" @click="toggleSidebar('review')">
-          {{ t("changes.review") }} <span class="text-green-600">+{{ changeTotals.added }}</span> <span class="text-red-500">−{{ changeTotals.removed }}</span><span v-if="changeTotals.unknown" :title="t('changes.unknown')">*</span>
-        </Button>
-        <Button variant="ghost" size="sm" :aria-expanded="changesOpen && sidebarTab === 'files'" @click="toggleSidebar('files')">{{ t('sidebarTabs.files') }}</Button>
         <Button
-          v-if="isDesktop"
+          v-if="!sidebarOpen"
           type="button"
           variant="ghost"
           size="icon-sm"
           class="text-muted-foreground"
-          :title="t('terminal.toggle')"
-          :class="{ 'bg-accent text-accent-foreground': changesOpen && sidebarTab === 'terminal' }"
-          :aria-expanded="changesOpen && sidebarTab === 'terminal'"
-          @click="toggleSidebar('terminal')"
+          :title="t('sidebarTabs.toggle')"
+          :aria-label="t('sidebarTabs.toggle')"
+          :aria-expanded="sidebarOpen"
+          @click="sidebarOpen = !sidebarOpen"
         >
-          <SquareTerminal />
+          <PanelRight />
         </Button>
       </div>
     </header>
@@ -740,6 +657,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
                     :key-offset="hasSummary(entry) ? entry.blocks.length - entry.summary.length : 0"
                     :runs="session.runs"
                     @open-review="openReviewAt"
+                  />
+                  <TurnChangesCard
+                    v-if="entry.complete && changesForTurn(entry).length"
+                    :files="changesForTurn(entry)"
+                    :project="session.cwd || project"
+                    :checkpoint="checkpointForTurn(entry)"
+                    @open-review="openReviewAt"
+                    @reverted="onTurnReverted"
+                    @reverted-all="onTurnRevertedAll(entry)"
                   />
                 </div>
               </MessageContent>
@@ -1048,6 +974,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <ExtensionDialog />
   </div>
-  <SessionChanges v-show="changesOpen" v-model:tab="sidebarTab" :visible="changesOpen" :changes="session.fileChanges" :project="session.cwd || project" :focus="changesFocus" @close="changesOpen = false" />
+  <RightSidebar v-show="sidebarOpen" :open="sidebarOpen" :tabs="sidebarTabs" :active-id="activeTabId" :changes="session.fileChanges" :project="session.cwd || project" :focus="reviewFocus" :totals="changeTotals" @update:active-id="activeTabId = $event" @add-tab="addSidebarTab" @close-tab="closeSidebarTab" @close="sidebarOpen = false" />
   </div>
 </template>
