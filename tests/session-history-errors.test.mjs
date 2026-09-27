@@ -59,7 +59,26 @@ test('history does not render mid-conversation error messages', async () => {
   assert.equal(entries[1].blocks[0].text, 'recovered')
 })
 
-test('the final turn stop reason is appended after the conversation', async () => {
+test('a final failure is appended after the conversation', async () => {
+  const store = harness({
+    messages: [
+      user('hi', 1000),
+      assistant('working', 2000),
+    ],
+    lastError: { timestamp: 2500, errorMessage: '503: {"type":"http_error","message":"provider overloaded"}' },
+  })
+  await store.loadHistory()
+  const entries = store.entries.value
+  assert.equal(entries.length, 3)
+  const last = entries.at(-1)
+  assert.equal(last.kind, 'assistant')
+  assert.match(last.blocks[0].text, /chat\.errorLabel/)
+  // Provider JSON payloads unwrap to "status · message".
+  assert.match(last.blocks[0].text, /503 · provider overloaded/)
+  assert.equal(entries[1].blocks[0].text, 'working')
+})
+
+test('a recovered retry is not a stop reason', async () => {
   const store = harness({
     messages: [
       user('hi', 1000),
@@ -70,15 +89,9 @@ test('the final turn stop reason is appended after the conversation', async () =
     lastError: { timestamp: 3500, errorMessage: '503: {"type":"http_error","message":"provider overloaded"}' },
   })
   await store.loadHistory()
-  const entries = store.entries.value
-  assert.equal(entries.length, 4)
-  const last = entries.at(-1)
-  assert.equal(last.kind, 'assistant')
-  assert.match(last.blocks[0].text, /chat\.errorLabel/)
-  // Provider JSON payloads unwrap to "status · message".
-  assert.match(last.blocks[0].text, /503 · provider overloaded/)
-  // Appended at the end, even though its timestamp is older.
-  assert.equal(entries[2].blocks[0].text, 'done')
+  assert.equal(store.entries.value.length, 3)
+  assert.equal(errorEntries(store).length, 0)
+  assert.equal(store.entries.value.at(-1).blocks[0].text, 'done')
 })
 
 test('a failure followed by a newer user prompt is not a stop reason', async () => {
@@ -99,7 +112,7 @@ test('a failure followed by a newer user prompt is not a stop reason', async () 
 test('an in-progress turn never gets a mid-conversation stop reason', async () => {
   const store = harness({
     messages: [user('hi', 1000), assistant('working', 2000)],
-    lastError: { timestamp: 1500, errorMessage: '503 boom' },
+    lastError: { timestamp: 2500, errorMessage: '503 boom' },
   })
   // Viewing a session while its turn is still running: retry may recover, and
   // later live events append after whatever loadHistory added.

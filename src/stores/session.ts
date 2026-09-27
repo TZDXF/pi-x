@@ -945,11 +945,12 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     try { last = await sessionLastError(file) }
     catch { return } // file unreadable (e.g. browser preview); history still works
     if (version !== historyVersion || !last?.errorMessage) return
-    // Only a failure from the final turn counts as the stop reason; once the
-    // user prompted again, older errors are just history and stay hidden.
+    // Only a failure at the end of the current transcript counts as the stop
+    // reason. A later message means the retry recovered and the turn continued
+    // (or the user prompted again), so the failure is historical.
     const ts = last.timestamp
     if (typeof ts === "number" && historyMessages.value.some(m =>
-      m?.role === "user" && typeof m.timestamp === "number" && m.timestamp > ts)) return
+      typeof m?.timestamp === "number" && m.timestamp > ts)) return
     pendingHistoryError.value = last
   }
 
