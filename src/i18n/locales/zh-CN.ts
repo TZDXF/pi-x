@@ -93,7 +93,7 @@ export default {
     clearAnnotations: "清除标注",
     export: "导出标注",
   },
-  projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", preview: "文件预览", closePreview: "关闭预览", binary: "二进制文件，无法预览", truncated: "文件过大，仅显示前 512 KB 内容", rendered: "渲染视图", source: "查看源码", wrap: "自动换行", imageBroken: "图片加载失败" },
+  projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", preview: "文件预览", closePreview: "关闭预览", binary: "二进制文件，无法预览", truncated: "文件过大，仅显示前 512 KB 内容", rendered: "渲染视图", source: "查看源码", wrap: "自动换行", imageBroken: "图片加载失败", annotate: "批注", annotateHint: "批注将随下一条消息一起发送", annotateNoSelection: "未选中代码行，请先在下方代码中选中要批注的内容", annotateLine: "第 {line} 行", annotateRange: "第 {start}-{end} 行", annotatePlaceholder: "输入批注内容…", annotateConfirm: "添加批注", annotateCancel: "取消", annotateRemove: "移除批注" },
   changes: {
     showFlat: "平铺显示", showTree: "树形显示",
     unified: "逐行", split: "并排", wordDiff: "行内差异", before: "修改前", after: "修改后",

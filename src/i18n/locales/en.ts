@@ -93,7 +93,7 @@ export default {
     clearAnnotations: "Clear annotations",
     export: "Export annotations",
   },
-  projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", preview: "File preview", closePreview: "Close preview", binary: "Binary file — not previewable", truncated: "File too large — showing the first 512 KB", rendered: "Rendered view", source: "View source", wrap: "Wrap lines", imageBroken: "Failed to load image" },
+  projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", preview: "File preview", closePreview: "Close preview", binary: "Binary file — not previewable", truncated: "File too large — showing the first 512 KB", rendered: "Rendered view", source: "View source", wrap: "Wrap lines", imageBroken: "Failed to load image", annotate: "Annotate", annotateHint: "Comments are attached to your next message", annotateNoSelection: "No lines selected — select lines in the code below first", annotateLine: "Line {line}", annotateRange: "Lines {start}-{end}", annotatePlaceholder: "Write a comment…", annotateConfirm: "Add comment", annotateCancel: "Cancel", annotateRemove: "Remove comment" },
   changes: {
     showFlat: "Flat list", showTree: "File tree",
     unified: "Unified", split: "Split", wordDiff: "Inline diff", before: "Before", after: "After",

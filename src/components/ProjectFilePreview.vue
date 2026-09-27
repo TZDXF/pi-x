@@ -110,10 +110,10 @@ const annotatedLines = computed(() => {
 })
 
 function onSelectionChange() {
-  const selection = window.getSelection()
-  const range = selectionLineRange(codeRoot.value, selection)
+  const range = selectionLineRange(codeRoot.value, window.getSelection())
   commentRange.value = range
-  if (range) commentSelected.value = (selection?.toString() ?? "").slice(0, MAX_SELECTED_TEXT_LENGTH)
+  // 引用文本按行取自文件内容，避免选区字符串混入行号栏等界面文本。
+  if (range) commentSelected.value = codeLines.value.slice(range.start - 1, range.end).join("\n").slice(0, MAX_SELECTED_TEXT_LENGTH)
 }
 function toggleComment() {
   if (commentOpen.value) {

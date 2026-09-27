@@ -78,6 +78,8 @@ import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import ComposerText from "@/components/ComposerText.vue"
 import { withFileReferences, withSessionReferences, desktopCommands } from "@/lib/completion"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { buildPromptWithCodeComments } from "@/lib/codeComments"
+import { useCodeCommentsStore } from "@/stores/codeComments"
 import { useSessionFork } from "@/composables/useSessionFork"
 import { usePromptEdit, type PromptEditTextarea } from "@/composables/usePromptEdit"
 import { useSessionDrop } from "@/composables/useSessionDrop"
@@ -85,7 +87,7 @@ import { runningBehavior } from "@/lib/runningBehavior"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 
 import { useWorkspaceStore } from "@/stores/workspace"
-import { Copy, GitBranch, PanelRight, GripVertical, Paperclip, Pencil, RefreshCw, Trash2, Clock3 } from "@lucide/vue"
+import { Copy, GitBranch, MessageSquareQuote, PanelRight, GripVertical, Paperclip, Pencil, RefreshCw, Trash2, Clock3 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -187,6 +189,13 @@ async function onHistoryScroll(event: Event) {
 }
 
 const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
+
+// ---- 代码批注（项目文件页添加，随下一条消息发出） ----
+const codeComments = useCodeCommentsStore()
+const pendingComments = computed(() => codeComments.project === props.project ? codeComments.comments : [])
+function commentFile(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
+}
 
 // ---- attachments (images) ----
 const attachments = computed(() => bridge.value?.files ?? [])
@@ -488,11 +497,16 @@ async function onSubmit(message: {
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
   const expandedText = extensionCommand ? text : withFileReferences(withSessionReferences(text, knownSessions.value), workspace.projectFolders(props.project).filter(path => path !== props.project))
+  // 批注只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
+  const comments = [...pendingComments.value]
+  const promptWithComments = comments.length ? buildPromptWithCodeComments(expandedText, comments) : expandedText
   if (delayedSend.value) {
-    session.schedulePrompt(text, delayMs!, images.length ? images : undefined, expandedText)
+    session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithComments)
     delayedSend.value = false
+    if (comments.length) codeComments.clear()
   } else {
-    await session.send(text, images.length ? images : undefined, expandedText, runningBehavior.value)
+    if (comments.length) codeComments.clear()
+    await session.send(text, images.length ? images : undefined, promptWithComments, runningBehavior.value)
   }
 }
 
@@ -834,6 +848,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </div>
           </div>
 
+        </PromptInputHeader>
+        <PromptInputHeader v-if="pendingComments.length">
+          <!-- 待发送的代码批注，随下一条消息一并发给 agent -->
+          <div class="flex flex-wrap gap-1.5 px-1">
+            <div v-for="c in pendingComments" :key="c.id" class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-1 pl-2 text-xs">
+              <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
+              <span class="shrink-0 font-mono">{{ commentFile(c.path) }}:{{ c.startLine }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span>
+              <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
+              <Button type="button" variant="ghost" size="icon-xs" class="size-4 shrink-0 rounded-full text-[10px] leading-none" :title="t('projectFiles.annotateRemove')" :aria-label="t('projectFiles.annotateRemove')" @click="codeComments.remove(c.id)">×</Button>
+            </div>
+          </div>
         </PromptInputHeader>
         <ComposerCompletion ref="completion" :project="project" :connected="connected" :ensure-started="ensureStarted" />
         <ComposerRichEditor

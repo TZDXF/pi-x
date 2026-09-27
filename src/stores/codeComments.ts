@@ -1,0 +1,41 @@
+import { defineStore } from "pinia"
+import { ref } from "vue"
+
+/** 已确认、等待随下一条消息发出的代码批注。 */
+export interface PendingCodeComment {
+  id: string
+  path: string
+  startLine: number
+  endLine: number
+  selectedText: string
+  comment: string
+}
+
+const MAX_COMMENTS = 20
+
+/**
+ * 挂在 composer 上的待发送批注（参考 ZCode 的 code-comment contexts）。
+ * 批注按项目归属：切换项目即重置，避免把 A 项目的批注发进 B 项目的会话。
+ */
+export const useCodeCommentsStore = defineStore("codeComments", () => {
+  const project = ref("")
+  const comments = ref<PendingCodeComment[]>([])
+  let seq = 0
+
+  function add(forProject: string, draft: Omit<PendingCodeComment, "id">) {
+    if (project.value !== forProject) {
+      project.value = forProject
+      comments.value = []
+    }
+    if (comments.value.length >= MAX_COMMENTS) return false
+    comments.value.push({ ...draft, id: `code-comment-${++seq}` })
+    return true
+  }
+  function remove(id: string) {
+    comments.value = comments.value.filter(comment => comment.id !== id)
+  }
+  function clear() {
+    comments.value = []
+  }
+  return { project, comments, add, remove, clear }
+})

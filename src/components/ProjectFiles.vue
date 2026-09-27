@@ -82,7 +82,8 @@ const rows = computed(() => {
       <span class="truncate text-xs text-muted-foreground" :title="project">{{ project.split(/[\\/]/).filter(Boolean).pop() }}</span>
       <Button variant="ghost" size="icon-xs" :title="t('projectFiles.refresh')" :aria-label="t('projectFiles.refresh')" @click="reset"><RefreshCw /></Button>
     </div>
-    <div class="grid min-h-0 flex-1 overflow-hidden" :class="selected ? 'grid-cols-[minmax(0,2fr)_minmax(0,3fr)]' : 'grid-cols-1'">
+    <div class="grid min-h-0 flex-1 overflow-hidden" :class="selected ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'">
+      <ProjectFilePreview v-if="selected" :project="project" :path="selected" @close="selected = null" />
       <ScrollArea class="min-h-0 min-w-0" viewport-class="py-1">
         <p v-if="errors['']" class="px-3 py-2 text-xs text-destructive" role="alert">{{ errors[''] }}</p>
         <p v-else-if="loading.has('')" class="px-3 py-2 text-xs text-muted-foreground">{{ t('completion.loading') }}</p>
@@ -100,7 +101,6 @@ const rows = computed(() => {
           <p v-else-if="entry.is_dir && expanded.has(entry.path) && loading.has(entry.path)" class="px-3 py-1 text-xs text-muted-foreground">{{ t('completion.loading') }}</p>
         </template>
       </ScrollArea>
-      <ProjectFilePreview v-if="selected" :project="project" :path="selected" @close="selected = null" />
     </div>
   </div>
 </template>
