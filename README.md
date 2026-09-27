@@ -109,7 +109,9 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `npm run dev` | 仅前端（浏览器预览，无 pi 进程） |
 | `npm run build` | 前端构建（vite build） |
 | `npm run typecheck` | 前端类型检查（vue-tsc） |
-| `npm run lint` | ESLint（src + tests，vendored ui/ai-elements 已排除） |
+| `npm run lint` | oxlint（整个仓库，vendored ui/ai-elements 已排除） |
+| `npm run lint:fix` | oxlint 自动修复 |
+| `npm run fmt` / `fmt:check` | oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`） |
 | `npm run check` | lint + typecheck + 前端构建 + cargo check |
 | `npm run test` | Rust 单元测试（cargo test） |
 | `npm run test:web` | 前端/协议单元测试（node --test tests） |

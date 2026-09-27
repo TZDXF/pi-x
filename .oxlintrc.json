@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "vue"],
+  "env": {
+    "browser": true
+  },
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "src-tauri",
+    ".playwright-cli",
+    // Vendored component libraries (shadcn-vue / ai-elements) — fork-maintained in this repo, lint skipped.
+    "src/components/ui",
+    "src/components/ai-elements"
+  ],
+  "rules": {
+    // The codebase deliberately uses `any` at protocol boundaries (pi RPC
+    // payloads are untyped JSON); tighten incrementally.
+    "@typescript-eslint/no-explicit-any": "off",
+    "no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["tests/**"],
+      "env": {
+        "node": true
+      }
+    }
+  ]
+}

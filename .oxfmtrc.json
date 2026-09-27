@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "semi": false,
+  "arrowParens": "avoid",
+  "endOfLine": "lf",
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "src-tauri",
+    ".playwright-cli",
+    // Vendored component libraries (shadcn-vue / ai-elements) — fork-maintained, not reformatted here.
+    "src/components/ui",
+    "src/components/ai-elements"
+  ]
+}

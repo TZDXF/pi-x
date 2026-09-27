@@ -13,14 +13,16 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run dev:desktop`：桌面开发，支持前端热更新。
 - `pnpm run dev`：仅浏览器预览，不启动 pi 进程。
 - `pnpm run dev:desktop:remote`：先构建前端，再启用远程访问；远程页面不支持热更新。
-- `pnpm run check`：依次执行 ESLint、类型检查、前端构建与 Rust 检查，**不含测试**。
+- `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
+- `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
+- `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
 - `pnpm run test:web` / `pnpm test`：分别运行 Node / Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
 
 ## 代码风格与命名
 遵循邻近代码：Vue/TypeScript 通常使用两空格缩进、省略分号；Rust 使用四空格缩进。组件采用 PascalCase（如 `ChatView.vue`），变量与函数使用 camelCase，Rust 模块与函数使用 snake_case。前端内部导入可使用 `@/` 别名。
 
-TypeScript 启用严格检查；使用 `pnpm run lint` 验证 ESLint 规则，不进行无关的大规模格式化。`src/components/ui/` 与 `src/components/ai-elements/` 是 vendored 进仓库的组件库，本项目以 fork 模式直接修改维护（历史提交亦如此），可按需改动；改动保持小步、贴近原有写法，便于日后与上游同步时对照。ESLint 忽略这两个目录，其代码风格需手动与邻近代码保持一致。遵守 `.gitattributes`：文本默认 LF，Windows 脚本使用 CRLF。用户可见文案必须通过 i18n，并同步 `zh-CN` 与 `en`。
+TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（默认 correctness 分类，规则迁移自原 ESLint 配置），不进行无关的大规模格式化。格式化使用 oxfmt（printWidth 120、无分号、双引号、箭头函数单参不加括号、LF），尚未整体套用到存量代码，按需对改动的文件执行 `pnpm run fmt`。`src/components/ui/` 与 `src/components/ai-elements/` 是 vendored 进仓库的组件库，本项目以 fork 模式直接修改维护（历史提交亦如此），可按需改动；改动保持小步、贴近原有写法，便于日后与上游同步时对照。oxlint 与 oxfmt 均忽略这两个目录，其代码风格需手动与邻近代码保持一致。遵守 `.gitattributes`：文本默认 LF，Windows 脚本使用 CRLF。用户可见文案必须通过 i18n，并同步 `zh-CN` 与 `en`。
 
 ## 测试要求
 Node 测试使用 `node:test` 与 `node:assert/strict`，文件命名为 `tests/<feature>.test.mjs`；修复缺陷时补充回归用例。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
