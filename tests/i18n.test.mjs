@@ -34,7 +34,7 @@ for (const locale of ['zh-CN', 'en']) {
       'browse', 'browseHint', 'drawMode', 'inspect', 'inspectHint', 'emptyHint', 'loading',
       'proxyUnavailable', 'addAnnotation', 'textTool', 'commentPlaceholder', 'save', 'cancel',
       'annotations', 'annotationsEmpty', 'insertToChat', 'copyAnnotations', 'deleteAnnotation',
-      'area', 'console', 'consoleEmpty', 'chatPage', 'chatElement', 'chatArea', 'chatComment',
+      'area', 'console', 'consoleEmpty', 'resizeDrawer', 'chatPage', 'chatElement', 'chatArea', 'chatComment',
     ]) {
       const rendered = i18n.global.t(`browser.${key}`)
       assert.notEqual(rendered, `browser.${key}`, `browser.${key} is missing`)

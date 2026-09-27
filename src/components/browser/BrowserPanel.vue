@@ -221,6 +221,44 @@ function toggleDrawer(drawer: "annotations" | "console") {
   if (target.value) other.value = false
 }
 
+// ---- drawer resizing ----------------------------------------------------------
+
+type DrawerName = "annotations" | "console"
+
+const DRAWER_MIN_HEIGHT = 96
+/** Space kept visible above an open drawer so the page stays usable. */
+const DRAWER_PAGE_RESERVE = 96
+
+const drawerHeights = ref<Record<DrawerName, number>>({ annotations: 192, console: 160 })
+let resizingDrawer: DrawerName | null = null
+let resizeStartY = 0
+let resizeStartHeight = 0
+
+function clampDrawerHeight(height: number) {
+  const stageHeight = stageRef.value?.clientHeight ?? Number.POSITIVE_INFINITY
+  const max = Math.max(DRAWER_MIN_HEIGHT, stageHeight - DRAWER_PAGE_RESERVE)
+  return Math.min(Math.max(height, DRAWER_MIN_HEIGHT), max)
+}
+
+function onDrawerResizeStart(drawer: DrawerName, event: PointerEvent) {
+  event.preventDefault()
+  resizingDrawer = drawer
+  resizeStartY = event.clientY
+  resizeStartHeight = drawerHeights.value[drawer]
+  const handle = event.currentTarget as HTMLElement
+  handle.setPointerCapture(event.pointerId)
+}
+
+function onDrawerResizeMove(event: PointerEvent) {
+  if (!resizingDrawer) return
+  const height = resizeStartHeight + (resizeStartY - event.clientY)
+  drawerHeights.value[resizingDrawer] = clampDrawerHeight(height)
+}
+
+function onDrawerResizeEnd() {
+  resizingDrawer = null
+}
+
 const selectionSummary = computed(() => {
   const selection = pendingSelection.value
   if (!selection) return ""
@@ -814,7 +852,21 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 标注列表抽屉 -->
-      <div v-if="showAnnotations" class="absolute inset-x-0 bottom-0 z-20 flex h-48 flex-col border-t bg-background">
+      <div
+        v-if="showAnnotations"
+        class="absolute inset-x-0 bottom-0 z-20 flex flex-col border-t bg-background"
+        :style="{ height: `${drawerHeights.annotations}px` }"
+      >
+        <div
+          class="absolute inset-x-0 -top-1.5 z-20 h-3 cursor-row-resize touch-none"
+          :title="t('browser.resizeDrawer')"
+          @pointerdown="onDrawerResizeStart('annotations', $event)"
+          @pointermove="onDrawerResizeMove"
+          @pointerup="onDrawerResizeEnd"
+          @pointercancel="onDrawerResizeEnd"
+        >
+          <div class="mx-auto h-1 w-10 translate-y-1 rounded-full bg-muted-foreground/30"></div>
+        </div>
         <div class="flex items-center gap-2 border-b px-2 py-1.5">
           <span class="text-xs font-medium">{{ t("browser.annotations") }}</span>
           <span class="text-xs text-muted-foreground">{{ annotations.length }}</span>
@@ -886,8 +938,19 @@ onBeforeUnmount(() => {
       <!-- 控制台抽屉 -->
       <div
         v-if="showConsole"
-        class="absolute inset-x-0 bottom-0 z-20 flex h-40 flex-col border-t bg-background font-mono text-[11px]"
+        class="absolute inset-x-0 bottom-0 z-20 flex flex-col border-t bg-background font-mono text-[11px]"
+        :style="{ height: `${drawerHeights.console}px` }"
       >
+        <div
+          class="absolute inset-x-0 -top-1.5 z-20 h-3 cursor-row-resize touch-none"
+          :title="t('browser.resizeDrawer')"
+          @pointerdown="onDrawerResizeStart('console', $event)"
+          @pointermove="onDrawerResizeMove"
+          @pointerup="onDrawerResizeEnd"
+          @pointercancel="onDrawerResizeEnd"
+        >
+          <div class="mx-auto h-1 w-10 translate-y-1 rounded-full bg-muted-foreground/30"></div>
+        </div>
         <div class="flex items-center gap-2 border-b px-2 py-1.5">
           <span class="font-sans text-xs font-medium">{{ t("browser.console") }}</span>
           <div class="ml-auto flex items-center gap-1">

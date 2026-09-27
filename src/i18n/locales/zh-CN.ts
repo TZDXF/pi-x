@@ -101,6 +101,7 @@ export default {
     area: "区域",
     console: "控制台",
     consoleEmpty: "暂无输出",
+    resizeDrawer: "拖拽调整高度",
     chatPage: "网页标注",
     chatElement: "元素",
     chatArea: "区域",

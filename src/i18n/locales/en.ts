@@ -101,6 +101,7 @@ export default {
     area: "Area",
     console: "Console",
     consoleEmpty: "No output yet",
+    resizeDrawer: "Drag to resize",
     chatPage: "Web page annotations",
     chatElement: "Element",
     chatArea: "Area",
