@@ -73,7 +73,26 @@ export default {
     "open": "Open file with default application",
     "failed": "Failed to open file: {error}"
 },
-  sidebarTabs: { title: "Right panel", review: "Review", files: "Project files", terminal: "Terminal" },
+  sidebarTabs: { title: "Right panel", toggle: "Toggle right panel", add: "Add tab", closeTab: "Close tab", review: "Review", files: "Project files", terminal: "Terminal", newReview: "Review", newFiles: "Project files", newTerminal: "Terminal", newBrowser: "Browser" },
+  browser: {
+    back: "Back",
+    forward: "Forward",
+    reload: "Reload",
+    urlPlaceholder: "Enter URL…",
+    openExternal: "Open",
+    toggleAnnotation: "Annotation mode",
+    select: "Select",
+    pen: "Pen",
+    arrow: "Arrow",
+    rect: "Rectangle",
+    circle: "Circle",
+    text: "Text",
+    eraser: "Eraser",
+    undo: "Undo",
+    redo: "Redo",
+    clearAnnotations: "Clear annotations",
+    export: "Export annotations",
+  },
   projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", preview: "File preview", closePreview: "Close preview", binary: "Binary file — not previewable", truncated: "File too large — showing the first 512 KB", rendered: "Rendered view", source: "View source", wrap: "Wrap lines", imageBroken: "Failed to load image" },
   changes: {
     showFlat: "Flat list", showTree: "File tree",
@@ -82,8 +101,20 @@ export default {
     files: "Files", fileDiff: "File changes",
     resize: "Drag to resize code review (or use left/right arrow keys)",
     title: "Session changes", review: "Review", close: "Close code review",
-    description: "Successful file tools only. Counts accumulate per operation, not a Git net diff. Writes without original content are excluded.",
+    description: "Successful file tools only. Counts accumulate per operation, not a Git net diff.",
     empty: "No successful file changes in this session.", unknown: "Original content unknown · write preview only, excluded from totals",
+  },
+  turnChanges: {
+    filesCount: "{count} files",
+    title: "Files changed in this turn",
+    expand: "Expand the list of files changed in this turn", collapse: "Collapse file list",
+    view: "View", viewFile: "Review {path}",
+    revert: "Roll back", revertAll: "Roll back all changes from this turn", revertFile: "Roll back this file",
+    reverted: "Rolled back", notRevertible: "Original content was not recorded; cannot roll back automatically", busy: "Rolling back…",
+    toastReverted: "Rolled back changes in {count} files",
+    confirmTitle: "Roll back this turn",
+    confirmDesc: "The files below will be restored to their state before this turn. Files changed again after the turn are skipped.",
+    confirmAction: "Roll back",
   },
   completion: {
     builtin: "Built-in",
@@ -129,12 +160,14 @@ export default {
     "exists": "Created",
     "missing": "Not created",
     "hints": {
-      "AGENTS.md": "User instructions added as context across projects.",
-      "SYSTEM.md": "Replaces Pi's default system prompt.",
-      "APPEND_SYSTEM.md": "Appends instructions to Pi's system prompt.",
+      "AGENTS.md": "User instructions added as context across projects. Suitable for coding standards, project conventions, and common commands.",
+      "SYSTEM.md": "Replaces Pi's default system prompt. Suitable for role definitions, behavior constraints, and output formats.",
+      "APPEND_SYSTEM.md": "Appends instructions to the end of Pi's system prompt. Suitable for additional supplementary rules or scenario-specific overrides.",
     },
-    "promptHint": "Files live in Pi's global agent directory (default ~/.pi/agent). Save edits to create a file; clear and save to delete it.",
-    "placeholder": "For example: Run relevant tests after code changes.",
+
+
+    "defaultPromptHint": "Currently using Pi's built-in default system prompt. Enter content to replace it.",
+
     "save": "Save configuration",
     "saving": "Saving…",
     "unsaved": "Unsaved changes",
@@ -395,6 +428,7 @@ export default {
     closeTab: "Close terminal",
     hide: "Hide terminal",
     exited: "Process exited (code {code}). Click + to open a new terminal.",
+    empty: "No terminal yet",
   },
 
   titleGeneration: {
@@ -764,5 +798,24 @@ export default {
     previewPathInvalid: "Invalid file path: {detail}",
     previewReadFailed: "Failed to read file: {detail}",
     previewImageTooLarge: "Image too large to preview (limit {limit} MB)",
+    revertPathInvalid: "Invalid file path: {detail}",
+    revertReadFailed: "Failed to read file: {detail}",
+    revertWriteFailed: "Failed to write file: {detail}",
+    revertNotUtf8: "File is not UTF-8 text; cannot revert automatically: {detail}",
+    revertContentChanged: "File content has changed; cannot revert automatically: {detail}",
+    revertNotRevertible: "No revertable changes recorded for this file",
+    missingFiles: "Missing the files field: {detail}",
+    gitRepoMissing: "The project is not a Git repository; snapshots are unavailable",
+    checkpointConflict: "File changed after the turn; skipped during rollback: {detail}",
+    checkpointRestoreVerifyFailed: "Snapshot restore verification failed",
+    checkpointManifestInvalid: "Checkpoint manifest is corrupted: {detail}",
+    checkpointManifestWriteFailed: "Failed to write checkpoint manifest: {detail}",
   },
 }
+
+
+
+
+
+
+

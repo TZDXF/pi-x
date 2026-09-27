@@ -73,7 +73,26 @@ export default {
     "open": "使用默认方式打开文件",
     "failed": "打开文件失败：{error}"
 },
-  sidebarTabs: { title: "右侧面板", review: "代码审查", files: "项目文件", terminal: "终端" },
+  sidebarTabs: { title: "右侧面板", toggle: "展开或收起右侧面板", add: "添加标签页", closeTab: "关闭标签页", review: "代码审查", files: "项目文件", terminal: "终端", newReview: "代码审查", newFiles: "项目文件", newTerminal: "终端", newBrowser: "浏览器" },
+  browser: {
+    back: "后退",
+    forward: "前进",
+    reload: "刷新",
+    urlPlaceholder: "输入网址…",
+    openExternal: "打开",
+    toggleAnnotation: "标注模式",
+    select: "选择",
+    pen: "画笔",
+    arrow: "箭头",
+    rect: "矩形",
+    circle: "圆形",
+    text: "文字",
+    eraser: "橡皮擦",
+    undo: "撤销",
+    redo: "重做",
+    clearAnnotations: "清除标注",
+    export: "导出标注",
+  },
   projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", preview: "文件预览", closePreview: "关闭预览", binary: "二进制文件，无法预览", truncated: "文件过大，仅显示前 512 KB 内容", rendered: "渲染视图", source: "查看源码", wrap: "自动换行", imageBroken: "图片加载失败" },
   changes: {
     showFlat: "平铺显示", showTree: "树形显示",
@@ -82,8 +101,20 @@ export default {
     files: "文件列表", fileDiff: "文件变动",
     resize: "拖拽调整审查栏宽度（也可使用左右方向键）",
     title: "会话代码变动", review: "审查", close: "关闭代码审查",
-    description: "仅统计成功的文件修改工具，按操作累计增删行（非 Git 净变动）。未记录原内容的写入不计入增删。",
+    description: "仅统计成功的文件修改工具，按操作累计增删行（非 Git 净变动）。",
     empty: "当前会话暂无成功的文件修改。", unknown: "原内容未知 · 仅展示写入内容，未计入统计",
+  },
+  turnChanges: {
+    filesCount: "{count} 个文件",
+    title: "本轮修改的文件",
+    expand: "展开本轮修改的文件列表", collapse: "收起文件列表",
+    view: "查看", viewFile: "在审查面板查看 {path}",
+    revert: "回滚", revertAll: "回滚本轮全部修改", revertFile: "回滚该文件的修改",
+    reverted: "已回滚", notRevertible: "未记录原内容，无法自动回滚", busy: "回滚中…",
+    toastReverted: "已回滚 {count} 个文件的修改",
+    confirmTitle: "回滚本轮修改",
+    confirmDesc: "将把以下文件恢复到本轮对话开始前的状态；回滚前被再次修改的文件会跳过。",
+    confirmAction: "确认回滚",
   },
   completion: {
     builtin: "内置",
@@ -129,12 +160,14 @@ export default {
     "exists": "已创建",
     "missing": "尚未创建",
     "hints": {
-      "AGENTS.md": "跨项目生效的用户指令，作为上下文加入提示词。",
-      "SYSTEM.md": "替换 Pi 的默认系统提示词。",
-      "APPEND_SYSTEM.md": "追加到 Pi 的系统提示词。",
+      "AGENTS.md": "跨项目生效的用户指令，作为上下文加入提示词。适合放置编码规范、项目约定、常用命令等。",
+      "SYSTEM.md": "替换 Pi 的默认系统提示词。适合放置角色定义、行为约束、输出格式等全局规则。",
+      "APPEND_SYSTEM.md": "追加到 Pi 的系统提示词末尾。适合放置额外的补充说明或覆盖特定场景的规则。",
     },
-    "promptHint": "文件位于 Pi 的全局 agent 目录（默认 ~/.pi/agent）。编辑后保存会创建文件；清空并保存会删除该文件。",
-    "placeholder": "例如：使用中文回答；修改代码后运行相关测试。",
+
+
+    "defaultPromptHint": "当前使用 Pi 内置的默认系统提示词。输入内容将替换默认提示词。",
+
     "save": "保存配置",
     "saving": "保存中…",
     "unsaved": "有未保存的修改",
@@ -395,6 +428,7 @@ export default {
     closeTab: "关闭终端",
     hide: "收起终端",
     exited: "进程已退出（退出码 {code}），点击 + 新建终端",
+    empty: "暂无终端",
   },
 
   titleGeneration: {
@@ -763,5 +797,25 @@ export default {
     previewPathInvalid: "无效的文件路径: {detail}",
     previewReadFailed: "读取文件失败: {detail}",
     previewImageTooLarge: "图片过大，无法预览（上限 {limit} MB）",
+    revertPathInvalid: "无效的文件路径: {detail}",
+    revertReadFailed: "读取文件失败: {detail}",
+    revertWriteFailed: "写入文件失败: {detail}",
+    revertNotUtf8: "文件不是 UTF-8 文本，无法自动撤销: {detail}",
+    revertContentChanged: "文件内容已变化，无法自动撤销: {detail}",
+    revertNotRevertible: "该文件没有可自动撤销的修改记录",
+    missingFiles: "缺少 files 参数: {detail}",
+    gitRepoMissing: "项目不是 Git 仓库，无法创建快照",
+    checkpointConflict: "文件在回滚前被再次修改，已跳过: {detail}",
+    checkpointRestoreVerifyFailed: "快照恢复后校验失败",
+    checkpointManifestInvalid: "快照清单损坏: {detail}",
+    checkpointManifestWriteFailed: "写入快照清单失败: {detail}",
   },
 }
+
+
+
+
+
+
+
+
