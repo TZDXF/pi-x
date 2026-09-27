@@ -12,7 +12,7 @@ function loadStore(name, modules) {
 }
 const framework = {
   pinia: { defineStore: (_, setup) => setup },
-  vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
+  vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }), watch: (source, cb, options) => { if (options?.immediate) cb(typeof source === 'function' ? source() : source); return () => {} } },
 }
 function sessionHarness() {
   const calls = [], previews = [], titles = [], refreshed = []
@@ -25,7 +25,7 @@ function sessionHarness() {
     },
   }
   const store = loadStore('session', { ...framework,
-    '@/stores/sessionRunStatus': { setSessionRunStatus() {} }, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/api/piClient': api, '@/lib/notifications': { notifyTurnComplete() {} }, '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project',
+    '@/stores/sessionRunStatus': { setSessionRunStatus() {} }, '@/i18n': { i18n: { global: { t: key => key } } }, '@/lib/content': contentModule(), '@/lib/checkpoints': { createCheckpoint: async () => ({ refName: 'r', commitOid: 'oid' }), diffCheckpoints: async () => [], loadCheckpointManifest: async () => null, saveCheckpointManifest: async () => {} }, '@/api/piClient': api, '@/lib/notifications': { notifyTurnComplete() {} }, '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project',
     preview: row => previews.push(row), generatedTitle: (...args) => titles.push(args), refresh: async path => refreshed.push(path),
   }) } })
   store.state.value = { sessionId: 'one', messageCount: 0 }
@@ -66,7 +66,7 @@ test('resumed nonempty sessions do not generate new titles', async () => {
 })
 test('workspace preserves previews before pi persists and does not overwrite manual titles', async () => {
   let disk = []
-  const store = loadStore('workspace', { ...framework, '@/api/piClient': { pixLog() {}, 
+  const store = loadStore('workspace', { ...framework, '@/api/piClient': { sessionHistory: async () => [], pixLog() {}, 
     listSessions: async () => disk, updateSession: async () => {},
   } })
   store.preview({ file: 'one', cwd: 'project', preview: 'first', mtimeMs: 1 })

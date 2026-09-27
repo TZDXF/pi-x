@@ -88,6 +88,14 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./SkillSettings.vue")),
   },
   {
+    id: "retry",
+    nav: "retrySettings.title",
+    title: "retrySettings.title",
+    desc: "retrySettings.description",
+    desktopOnly: true,
+    component: defineAsyncComponent(() => import("./RetrySettings.vue")),
+  },
+  {
     id: "about",
     nav: "settings.about",
     title: "settings.aboutTitle",

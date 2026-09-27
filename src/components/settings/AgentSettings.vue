@@ -14,6 +14,7 @@ const files = ref<PromptDraft[]>([])
 const selectedName = ref("SYSTEM.md")
 const selectedFile = computed(() => files.value.find(file => file.fileName === selectedName.value))
 const loading = ref(true)
+const showDefaultHint = computed(() => selectedFile.value?.fileName === 'SYSTEM.md' && !selectedFile.value?.content.trim())
 const saving = ref(false)
 const error = ref("")
 
@@ -73,12 +74,12 @@ onMounted(load)
           <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ t(selectedFile.exists ? 'agentConfig.exists' : 'agentConfig.missing') }}</span>
         </div>
         <p class="text-xs text-muted-foreground">{{ t(`agentConfig.hints.${selectedFile.fileName}`) }}</p>
-        <p class="text-xs text-muted-foreground">{{ t("agentConfig.promptHint") }}</p>
+        <p v-if="showDefaultHint" class="text-xs text-blue-600 dark:text-blue-400">{{ t('agentConfig.defaultPromptHint') }}</p>
+
         <Textarea
           id="global-agent-prompt"
           :model-value="selectedFile.content"
           class="min-h-64 font-mono text-sm"
-          :placeholder="t('agentConfig.placeholder')"
           @update:model-value="updatePrompt"
         />
         <div class="flex items-center gap-3">
@@ -89,3 +90,6 @@ onMounted(load)
     </div>
   </fieldset>
 </template>
+
+
+

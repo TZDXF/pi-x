@@ -29,3 +29,6 @@ src-tauri/gen/schemas
 
 # Local browser verification artifacts
 .playwright-cli/
+
+# ZCode session workspace
+.zcode/

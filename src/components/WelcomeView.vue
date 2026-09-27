@@ -2,6 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
+import { MessagesSquare } from "@lucide/vue"
 import { detectPi, saveConfig } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   configured: []
   openProject: []
+  openProjectless: []
 }>()
 
 const customPath = ref(props.config.piPath ?? "")
@@ -98,8 +100,16 @@ async function saveAndDetect() {
         >
           {{ t("welcome.openFolder") }}
         </Button>
+        <Button
+          variant="outline"
+          class="h-11 w-full"
+          @click="emit('openProjectless')"
+        >
+          <MessagesSquare :size="16" class="size-auto shrink-0" />
+          {{ t("projectless.name") }}
+        </Button>
         <p class="text-muted-foreground text-center text-xs">
-          {{ t("welcome.pickHint") }}
+          {{ t("welcome.pickHint") }}<br />{{ t("projectless.description") }}
         </p>
       </div>
     </div>

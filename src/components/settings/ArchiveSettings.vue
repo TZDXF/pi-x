@@ -20,7 +20,7 @@ const pendingDelete = ref<SessionMeta | null>(null) // session awaiting delete c
 const error = ref("")
 const query = ref("")
 
-const projectName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
+const projectName = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 const when = (s: SessionMeta) => new Date(s.mtimeMs).toLocaleString()
 

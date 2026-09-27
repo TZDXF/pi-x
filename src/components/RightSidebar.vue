@@ -9,8 +9,9 @@ import { isDesktop } from "@/api/transport"
 import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
-import BrowserPanel from "@/components/BrowserPanel.vue"
+import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import type { FileChange } from "@/lib/sessionChanges"
+import type { TurnCheckpointRecord } from "@/lib/checkpoints"
 
 export type SidebarTabType = "review" | "files" | "terminal" | "browser"
 export interface SidebarTabItem {
@@ -26,12 +27,14 @@ const props = defineProps<{
   project: string
   focus?: string | null
   totals: { added: number; removed: number; unknown: boolean }
+  checkpoints?: TurnCheckpointRecord[]
 }>()
 const emit = defineEmits<{
   close: []
   "update:activeId": [id: number | null]
   "add-tab": [type: SidebarTabType]
   "close-tab": [id: number]
+  "send-to-chat": [text: string]
 }>()
 
 const { t } = useI18n()
@@ -185,7 +188,7 @@ onBeforeUnmount(() => {
             <Button v-if="isDesktop" type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('terminal')">
               <SquareTerminal class="size-4 shrink-0" />{{ t('sidebarTabs.newTerminal') }}
             </Button>
-            <Button v-if="isDesktop" type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('browser')">
+            <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('browser')">
               <Globe class="size-4 shrink-0" />{{ t('sidebarTabs.newBrowser') }}
             </Button>
           </PopoverContent>
@@ -194,10 +197,10 @@ onBeforeUnmount(() => {
       <Button variant="ghost" size="icon-sm" class="shrink-0" :aria-label="t('sidebarTabs.toggle')" @click="$emit('close')"><PanelRight /></Button>
     </div>
     <template v-for="tab in tabs" :key="tab.id">
-      <ReviewPanel v-if="tab.type === 'review'" v-show="tab.id === activeId" :changes="changes" :project="project" :focus="tab.id === activeId ? focus : null" />
+      <ReviewPanel v-if="tab.type === 'review'" v-show="tab.id === activeId" :changes="changes" :project="project" :focus="tab.id === activeId ? focus : null" :checkpoints="checkpoints" />
       <ProjectFiles v-else-if="tab.type === 'files'" v-show="tab.id === activeId" :project="project" />
       <TerminalPanel v-else-if="tab.type === 'terminal' && isDesktop" v-show="tab.id === activeId" :project="project" :visible="open && tab.id === activeId" embedded />
-    <BrowserPanel v-else-if="tab.type === 'browser' && isDesktop" v-show="tab.id === activeId" :visible="open && tab.id === activeId" />`</template>
+      <BrowserPanel v-else-if="tab.type === 'browser'" v-show="tab.id === activeId" :visible="open && tab.id === activeId" @send-to-chat="$emit('send-to-chat', $event)" /></template>
     <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
       <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('review')">
         <FileCode class="size-6 shrink-0" />{{ t('sidebarTabs.newReview') }}
@@ -208,7 +211,7 @@ onBeforeUnmount(() => {
       <Button v-if="isDesktop" type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('terminal')">
         <SquareTerminal class="size-6 shrink-0" />{{ t('sidebarTabs.newTerminal') }}
       </Button>
-      <Button v-if="isDesktop" type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('browser')">
+      <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('browser')">
         <Globe class="size-6 shrink-0" />{{ t('sidebarTabs.newBrowser') }}
       </Button>
     </div>

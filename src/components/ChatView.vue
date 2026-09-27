@@ -117,6 +117,13 @@ function openReviewAt(path: string) {
   if (existing) activeTabId.value = existing.id
   else addSidebarTab("review")
 }
+// Browser panel annotations are appended to the composer as a structured block.
+function insertIntoComposer(text: string) {
+  if (!bridge.value) return
+  const existing = bridge.value.textInput || ""
+  const separator = existing ? (existing.endsWith("\n") ? "\n" : "\n\n") : ""
+  bridge.value.setTextInput(existing + separator + text)
+}
 
 
 
@@ -586,7 +593,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
         <ConversationEmptyState
           class="chat-empty flex-1 min-h-60"
           v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
-          :title="t('workspace.emptyTitle', { project: project.split(/[\\/]/).filter(Boolean).pop() })"
+          :title="t('workspace.emptyTitle', { project: workspace.projectName(project) })"
           :description="t('chat.emptyDesc')"
         />
 
@@ -999,6 +1006,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
 
     <ExtensionDialog />
   </div>
-  <RightSidebar v-show="sidebarOpen" :open="sidebarOpen" :tabs="sidebarTabs" :active-id="activeTabId" :changes="session.fileChanges" :project="session.cwd || project" :focus="reviewFocus" :totals="changeTotals" @update:active-id="activeTabId = $event" @add-tab="addSidebarTab" @close-tab="closeSidebarTab" @close="sidebarOpen = false" />
+  <RightSidebar v-show="sidebarOpen" :open="sidebarOpen" :tabs="sidebarTabs" :active-id="activeTabId" :changes="session.fileChanges" :project="session.cwd || project" :focus="reviewFocus" :totals="changeTotals" :checkpoints="session.turnCheckpointRecords" @update:active-id="activeTabId = $event" @add-tab="addSidebarTab" @close-tab="closeSidebarTab" @close="sidebarOpen = false" @send-to-chat="insertIntoComposer" />
   </div>
 </template>

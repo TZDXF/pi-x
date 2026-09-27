@@ -225,6 +225,9 @@ async fn probe_version(path: &str, launcher: Option<&Launcher>) -> Option<String
 mod tests {
     use super::*;
 
+    // Parses an npm `.cmd` shim with Windows separators; unreachable on other
+    // platforms (build_launcher only resolves shims under cfg(windows)).
+    #[cfg(windows)]
     #[test]
     fn resolves_npm_cmd_shim() {
         let dir = std::env::temp_dir().join("pix-shim-test");

@@ -40,16 +40,27 @@ export interface AppConfig {
   titleFollowMain?: boolean
 }
 
+/** 自动重试策略，来自 pi 全局 settings.json 的 `retry` 段。 */
+export interface RetrySettings {
+  enabled: boolean
+  maxRetries: number
+  baseDelayMs: number
+  maxAgentDelayMs: number
+}
+
 export interface PiSettings {
   defaultProvider?: string | null
   defaultModel?: string | null
   defaultThinkingLevel?: import("./protocol").ThinkingLevel
   modelThinkingLevels?: Record<string, import("./protocol").ThinkingLevel>
   skills: string[]
+  /** 旧版 pi 不返回该段，此时为 null。 */
+  retry?: RetrySettings | null
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
-export const savePiSettings = (settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">>) =>
-  invoke<void>("pi_settings_save", { settings })
+export const savePiSettings = (
+  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & { retry?: Partial<RetrySettings> },
+) => invoke<void>("pi_settings_save", { settings })
 
 /** 原生托盘菜单读不到 webview 的语言包，由前端把当前语言的菜单文案同步给 Rust。 */
 export function setTrayLabels(show: string, quit: string): Promise<void> {

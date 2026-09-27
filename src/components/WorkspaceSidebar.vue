@@ -2,7 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Clock, Copy, Folder, FolderPlus, Link, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
+import { Clock, Copy, Folder, FolderPlus, Link, MessagesSquare, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient"
 import type { QueuedPrompt } from "@/stores/session"
@@ -22,7 +22,7 @@ const props = defineProps<{ project: string; ready: boolean; busy: boolean; navi
 const emit = defineEmits<{
   selectConversation: [runtimeId: string];
   switchProject: []; selectProject: [path: string]; resumeSession: [file: string, project: string]
-  removeProject: [project: string]; editProject: [project: string];
+  removeProject: [project: string]; editProject: [project: string]; projectless: [];
   newSession: [project: string]; sessionAction: [file: string, action: "export"]; schedules: []; settings: []; collapse: []
 }>()
 const session = useSessionStore()
@@ -196,6 +196,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
     <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"><Search :size="15" class="size-auto shrink-0" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
     <div class="sidebar-section-label flex items-center justify-between text-muted-foreground text-[11px] py-[5px] px-2.5 font-mono tracking-[0.06em] shrink-0"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
       <div class="flex"><Button variant="quiet" size="toolbar" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" class="size-auto shrink-0" /></Button>
+      <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('projectless.name')" :aria-label="t('projectless.name')" @click="emit('projectless')"><MessagesSquare :size="15" class="size-auto shrink-0" /></Button>
       <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" class="size-auto shrink-0" /></Button></div>
     </div>
     <ScrollArea class="project-groups flex-1 min-h-0 min-w-0" @dragend="clearDrag">
@@ -203,7 +204,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
         <div class="project-heading relative flex items-center min-h-8 rounded-md pr-1 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)]" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
           <Button size="content" variant="project-row" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
-            <FolderOpen v-if="!collapsed[path]" :size="15" class="size-auto shrink-0" /><Folder v-else :size="15" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span>
+            <MessagesSquare v-if="workspace.isProjectless(path)" :size="15" class="size-auto shrink-0" /><FolderOpen v-else-if="!collapsed[path]" :size="15" class="size-auto shrink-0" /><Folder v-else :size="15" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span>
           </Button>
           <Button variant="quiet" size="row-action" class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" class="size-auto shrink-0" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="size-auto shrink-0 project-pin shrink-0 text-muted-foreground" :aria-label="t('workspace.pinned')" />
@@ -211,7 +212,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
             <DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" class="project-more hover-action w-6 h-6.5 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
               <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" class="size-auto shrink-0" /><Pin v-else :size="14" class="size-auto shrink-0" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
-              <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
+              <DropdownMenuItem v-if="!workspace.isProjectless(path)" @select="emit('editProject', path)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
               <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" class="size-auto shrink-0" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem class="text-destructive" :title="t('workspace.removeProjectHint')" @select="emit('removeProject', path)"><X :size="14" />{{ t('workspace.removeProject') }}</DropdownMenuItem>

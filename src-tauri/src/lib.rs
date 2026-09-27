@@ -12,12 +12,15 @@ mod file_preview;
 mod packages;
 mod pi_locate;
 mod pi_update;
+mod preview_proxy;
 #[cfg(feature = "remote-access")]
 mod remote;
 #[cfg(not(feature = "remote-access"))]
 #[path = "remote_disabled.rs"]
 mod remote;
 mod rpc;
+mod session_checkpoint;
+mod session_revert;
 mod session_watch;
 mod sessions;
 mod skills;
@@ -86,6 +89,7 @@ pub fn run() {
             commands::pi_settings_save,
             commands::app_config_get,
             commands::app_config_save,
+            commands::projectless_dir_resolve,
             commands::global_prompt_list,
             commands::global_prompt_save,
             commands::trust_status,
@@ -108,6 +112,13 @@ pub fn run() {
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,
             workspace_git::workspace_git_create,
+            session_revert::session_revert_changes,
+            session_checkpoint::session_checkpoint_create,
+            session_checkpoint::session_checkpoint_diff,
+            session_checkpoint::session_checkpoint_restore,
+            session_checkpoint::session_checkpoint_manifest_get,
+            session_checkpoint::session_checkpoint_manifest_set,
+            session_checkpoint::session_checkpoint_content,
             commands::search_files,
             commands::list_project_directory,
             commands::read_file_preview,
@@ -135,6 +146,7 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_kill,
+            preview_proxy::preview_proxy_info,
             desktop::set_tray_labels,
         ])
         .build(tauri::generate_context!())

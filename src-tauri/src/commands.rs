@@ -42,6 +42,9 @@ pub struct AppConfig {
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
+    /// 无项目会话的工作目录；缺省为 `~/.pix/workspace`。
+    #[serde(rename = "projectlessDir", default, skip_serializing_if = "Option::is_none")]
+    pub projectless_dir: Option<String>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -105,6 +108,34 @@ pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
 #[tauri::command]
 pub fn app_config_save(app: AppHandle, config: AppConfig) -> Result<(), String> {
     write_config(&config_path(&app)?, &config)
+}
+
+/// 无项目会话的工作目录：`dir` 为实际使用路径，`default_dir` 用于设置页展示与「恢复默认」。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectlessDirInfo {
+    pub dir: String,
+    pub default_dir: String,
+    pub is_default: bool,
+}
+
+/// 解析并确保无项目会话目录存在；会话在该目录中运行，pi 的会话记录仍按 cwd 归档。
+#[tauri::command]
+pub fn projectless_dir_resolve(app: AppHandle) -> Result<ProjectlessDirInfo, String> {
+    let configured = app_config_get(app)?.projectless_dir;
+    let dir = crate::data_dir::resolve_projectless_dir(configured.as_deref());
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        pix_error_detail("projectlessDirUnusable", format!("无法使用无项目会话目录 {}: {e}", dir.display()), e)
+    })?;
+    // 规范化后再返回：会话列表按 cwd 精确匹配，短路径/符号链接会造成两份记录。
+    let resolved = dunce::canonicalize(&dir).unwrap_or(dir);
+    let default_dir = crate::data_dir::default_projectless_dir();
+    let is_default = resolved == dunce::canonicalize(&default_dir).unwrap_or_else(|_| default_dir.clone());
+    Ok(ProjectlessDirInfo {
+        dir: resolved.to_string_lossy().into_owned(),
+        default_dir: default_dir.to_string_lossy().into_owned(),
+        is_default,
+    })
 }
 
 #[tauri::command]
@@ -517,6 +548,19 @@ mod tests {
         assert_eq!(value["piPath"], "pi");
         assert!(value.get("managedSkills").is_none());
         assert!(value.get("defaultModel").is_none());
+    }
+
+    #[test]
+    fn app_config_round_trips_projectless_dir_and_stays_compatible() {
+        let config = AppConfig { projectless_dir: Some("D:/pix/scratch".into()), ..Default::default() };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["projectlessDir"], "D:/pix/scratch");
+        let parsed: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.projectless_dir.as_deref(), Some("D:/pix/scratch"));
+        // 未配置时不写入该字段；旧配置缺少它也应正常加载（用默认目录）。
+        assert!(serde_json::to_value(AppConfig::default()).unwrap().get("projectlessDir").is_none());
+        let legacy: AppConfig = serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
+        assert_eq!(legacy.projectless_dir, None);
     }
     #[test]
     fn global_prompt_list_includes_missing_files_and_reads_existing_content() {

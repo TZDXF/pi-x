@@ -92,6 +92,8 @@ onMounted(async () => {
   } catch {
     config.value = {}
   }
+  // 解析（并由后端按需创建）无项目会话目录，让欢迎页与侧栏入口随时可用。
+  void workspace.ensureProjectless().catch(e => console.warn("[pi] failed to resolve the no-project directory:", e))
   void setTrayLabels(t("tray.show"), t("tray.quit")).catch(() => {})
 
   try {
@@ -377,6 +379,19 @@ async function switchProject() {
   projectDialogOpen.value = true
 }
 
+/** 无项目会话：不选文件夹，直接在 PiX 的工作目录（默认 ~/.pix/workspace）中开始。 */
+async function openProjectless() {
+  if (workspace.gitBusy || navigating.value || connecting.value || phase.value === "trust") return
+  navigating.value = true
+  try {
+    await selectProject(await workspace.ensureProjectless())
+  } catch (e) {
+    ui.pushToast(tBackendError(e), "error")
+  } finally {
+    navigating.value = false
+  }
+}
+
 function editProject(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
   editingProjectPath.value = path
@@ -563,6 +578,7 @@ onUnmounted(() => {
       @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
       @session-action="(file, action) => openSessionAction(file, action)"
       @new-session="path => requestWorkspaceNavigation(() => newProjectSession(path))"
+      @projectless="requestWorkspaceNavigation(openProjectless)"
       @remove-project="removeProject"
       @edit-project="editProject"
       @settings="navigate('/settings/general')"
@@ -592,6 +608,7 @@ onUnmounted(() => {
         :config
         @configured="phase = 'pick'"
         @open-project="switchProject"
+        @open-projectless="openProjectless"
       />
 
       <div

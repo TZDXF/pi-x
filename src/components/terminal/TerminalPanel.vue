@@ -196,6 +196,8 @@ watch(
   visible => {
     if (!visible) return
     nextTick(() => {
+      // Embedded sidebar tab: open a shell automatically on first show.
+      if (props.embedded && !tabs.value.length) void openTerminal()
       fitActive()
       instances.get(activeId.value ?? -1)?.term.focus()
     })
@@ -245,62 +247,73 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
       @dblclick="onPanelDblClick"
     />
 
-    <!-- tab bar -->
-    <div class="bg-background/95 flex h-9 shrink-0 items-center gap-1 border-b px-2">
-      <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        <button
-          v-for="tab in tabs"
-          :key="tab.id"
-          type="button"
-          class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs"
-          :class="
-            tab.id === activeId
-              ? 'bg-accent text-accent-foreground font-medium'
-              : 'text-muted-foreground hover:bg-accent/50'
-          "
-          @click="switchTab(tab.id)"
-        >
-          <SquareTerminal class="size-3.5" :class="tab.exited ? 'text-muted-foreground/50' : ''" />
-          <span :class="{ 'line-through opacity-60': tab.exited }">{{ tab.title }}</span>
-          <X
-            class="size-3 opacity-0 transition-opacity group-hover:opacity-100"
-            :title="t('terminal.closeTab')"
-            @click.stop="closeTab(tab.id)"
-          />
-        </button>
+    <!-- empty state -->
+    <div v-if="!tabs.length" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-zinc-950 p-4">
+      <SquareTerminal class="size-8 text-zinc-600" />
+      <p class="text-xs text-zinc-500">{{ t('terminal.empty') }}</p>
+      <Button type="button" variant="ghost" size="sm" class="text-zinc-300" @click="openTerminal">
+        <Plus class="size-3.5" />{{ t('terminal.new') }}
+      </Button>
+    </div>
+
+    <template v-else>
+      <!-- tab bar -->
+      <div class="bg-background/95 flex h-9 shrink-0 items-center gap-1 border-b px-2">
+        <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            type="button"
+            class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs"
+            :class="
+              tab.id === activeId
+                ? 'bg-accent text-accent-foreground font-medium'
+                : 'text-muted-foreground hover:bg-accent/50'
+            "
+            @click="switchTab(tab.id)"
+          >
+            <SquareTerminal class="size-3.5" :class="tab.exited ? 'text-muted-foreground/50' : ''" />
+            <span :class="{ 'line-through opacity-60': tab.exited }">{{ tab.title }}</span>
+            <X
+              class="size-3 opacity-0 transition-opacity group-hover:opacity-100"
+              :title="t('terminal.closeTab')"
+              @click.stop="closeTab(tab.id)"
+            />
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            class="text-muted-foreground"
+            :title="t('terminal.new')"
+            @click="openTerminal"
+          >
+            <Plus />
+          </Button>
+        </div>
         <Button
+          v-if="!embedded"
           type="button"
           variant="ghost"
           size="icon-xs"
           class="text-muted-foreground"
-          :title="t('terminal.new')"
-          @click="openTerminal"
+          :title="t('terminal.hide')"
+          @click="emit('close')"
         >
-          <Plus />
+          <X />
         </Button>
       </div>
-      <Button
-        v-if="!embedded"
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        class="text-muted-foreground"
-        :title="t('terminal.hide')"
-        @click="emit('close')"
-      >
-        <X />
-      </Button>
-    </div>
 
-    <!-- terminal containers (kept mounted, hidden per tab) -->
-    <div class="bg-zinc-950 min-h-0 flex-1 p-1">
-      <div
-        v-for="tab in tabs"
-        :key="tab.id"
-        :ref="el => setTabEl(tab.id, el)"
-        class="h-full w-full"
-        :style="{ display: tab.id === activeId ? 'block' : 'none' }"
-      />
-    </div>
+      <!-- terminal containers (kept mounted, hidden per tab) -->
+      <div class="bg-zinc-950 min-h-0 flex-1 p-1">
+        <div
+          v-for="tab in tabs"
+          :key="tab.id"
+          :ref="el => setTabEl(tab.id, el)"
+          class="h-full w-full"
+          :style="{ display: tab.id === activeId ? 'block' : 'none' }"
+        />
+      </div>
+    </template>
   </div>
 </template>

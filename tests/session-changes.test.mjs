@@ -15,10 +15,11 @@ test('counts only successful edits and ignores reads', () => {
   assert.equal(collect([history(c)[0]]).length, 0)
   assert.equal(collect(history(call('r', 'read', { path: 'a' }))).length, 0)
 })
-test('write without a baseline does not claim new lines', () => {
+test('write without a baseline counts all lines as additions', () => {
   const [change] = collect(history(call('w', 'write', { path: 'a', content: 'hello\nworld' })))
   assert.equal(change.unknownBefore, true)
-  assert.equal(change.added, 0)
+  // 未知原内容按"全部为新增"统计（与 ZCode 的 before ?? "" 口径一致）。
+  assert.equal(change.added, 2)
   assert.equal(change.lines.length, 2)
 })
 test('history and materialized live calls deduplicate by call id', () => {

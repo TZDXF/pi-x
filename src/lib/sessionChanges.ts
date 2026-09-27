@@ -93,7 +93,9 @@ export function changeForCall(id: string, name: string, args: any): FileChange[]
     const unknownBefore = write && typeof before !== "string" && tool !== "create_file"
     const diff = changedLines(typeof before === "string" ? before : "", after)
     changes.push({ id: `${id}:${index}`, path: path.replace(/\\/g, "/"), tool: name, lines: diff,
-      added: unknownBefore ? 0 : diff.filter(line => line.kind === "add").length,
+      // 未知原内容按"全部为新增"统计（与 ZCode 的 before ?? "" 口径一致）；
+      // unknownBefore 仅保留用于判断内容回放是否可撤销。
+      added: diff.filter(line => line.kind === "add").length,
       removed: diff.filter(line => line.kind === "remove").length, unknownBefore })
   }
   return changes

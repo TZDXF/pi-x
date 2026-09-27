@@ -107,6 +107,16 @@ test('every Rust and transport error code is present in both catalogs, with no o
   for (const match of transport.matchAll(/encodeCodedError\(\s*"([A-Za-z0-9_]+)"/g)) {
     codes.add(match[1])
   }
+  // 前端组件/库也会编码错误（如回滚冲突），统一纳入扫描保证清单完整。
+  const frontendFiles = [
+    'src/components/TurnChangesCard.vue',
+  ]
+  for (const relative of frontendFiles) {
+    const source = readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8')
+    for (const match of source.matchAll(/encodeCodedError\(\s*"([A-Za-z0-9_]+)"/g)) {
+      codes.add(match[1])
+    }
+  }
 
   assert.ok(codes.size > 50, `expected the full error inventory, found ${codes.size}`)
 

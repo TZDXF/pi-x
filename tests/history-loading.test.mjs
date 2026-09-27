@@ -7,8 +7,9 @@ function harness() {
   const requests = []
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
-    vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
-    '@/api/piClient': { pixLog() {},  rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
+    vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }), watch: (source, cb, options) => { if (options?.immediate) cb(typeof source === 'function' ? source() : source); return () => {} } },
+    '@/lib/checkpoints': { createCheckpoint: async () => ({ refName: 'r', commitOid: 'oid' }), diffCheckpoints: async () => [], loadCheckpointManifest: async () => null, saveCheckpointManifest: async () => {} },
+    '@/api/piClient': { sessionHistory: async () => [], pixLog() {},  rpcRequest: () => new Promise(resolve => requests.push(resolve)) },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
     '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project' }) },'@/lib/notifications': { notifyTurnComplete() {} },

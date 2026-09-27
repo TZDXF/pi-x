@@ -5,7 +5,9 @@ import vm from 'node:vm'
 import ts from 'typescript'
 function harness(group = null) {
   const calls = [], spawnArgs = []
-  const workspace = { projectRoot: path => path, projectName: path => path, projectGroups: group ? { project: group } : {} }
+  const workspace = { projectRoot: path => path, projectName: path => path, projectGroups: group ? { project: group } : {},
+    // App 挂载即解析无项目会话目录（不阻塞启动），桩掉即可。
+    ensureProjectless: async () => "", projectlessDefault: "", isProjectless: () => false }
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
     .split('<script setup lang="ts">')[1].split('</script>')[0]
     .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, '')

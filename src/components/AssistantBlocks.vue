@@ -5,11 +5,12 @@ import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
-import { ChevronRight, FilePen, FilePlus2, FileText, SquareTerminal } from "@lucide/vue"
+import { ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
-import { computed, onUnmounted, ref, watch } from "vue"
-import { changeForCall, WRITE_TOOLS } from "@/lib/sessionChanges"
+import { computed, h, onUnmounted, ref, watch } from "vue"
+import { changeForCall } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
+import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
 const props = withDefaults(defineProps<{
   blocks: Block[]
@@ -153,8 +154,10 @@ function cardFor(block: ToolCallBlock): FileCard | null {
 function toolBase(block: ToolCallBlock): string {
   return block.name.toLowerCase().split(/[.:/]/).pop()!
 }
-function cardIcon(block: ToolCallBlock) {
-  return WRITE_TOOLS.has(toolBase(block)) ? FilePlus2 : FilePen
+
+/** read 工具头部按文件路径显示 vscode-icons 类型图标 */
+function readIcon(block: ToolCallBlock) {
+  return h(FileTypeIcon, { name: pathOf(block) })
 }
 
 const { t } = useI18n()
@@ -221,7 +224,7 @@ const { t } = useI18n()
           :aria-label="t('blocks.openInReview')"
           @click="emit('openReview', cardFor(block)!.path)"
         >
-          <component :is="cardIcon(block)" class="size-4 shrink-0 text-muted-foreground" />
+          <FileTypeIcon :name="cardFor(block)!.path" class="size-4" />
           <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{ cardFor(block)!.path }}</span>
           <span v-if="cardFor(block)!.added || cardFor(block)!.written" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added || cardFor(block)!.written }}</span>
           <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400">-{{ cardFor(block)!.removed }}</span>
@@ -239,7 +242,7 @@ const { t } = useI18n()
             ? '[&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal'
             : '[&>div]:flex-wrap [&>div>span]:break-all'"
           :type="`tool-${block.name}`"
-          :icon="isRead(block) ? FileText : undefined"
+          :icon="isRead(block) ? readIcon(block) : undefined"
           :title="isRead(block) ? pathOf(block) || undefined : undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />

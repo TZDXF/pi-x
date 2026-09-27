@@ -33,6 +33,7 @@ export const SETTINGS_TABS = [
   "packages",
   "about",
   "model-config",
+  "retry",
 ] as const
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]

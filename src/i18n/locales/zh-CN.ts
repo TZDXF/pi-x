@@ -93,6 +93,15 @@ export default {
     clearAnnotations: "清除标注",
     export: "导出标注",
   },
+  projectless: {
+    name: "无项目会话",
+    description: "不选择文件夹，直接在 PiX 的工作目录中开始对话。",
+    settingsLabel: "无项目会话目录",
+    settingsDesc: "不打开项目时，对话使用以下目录：{path}。留空或重置将恢复默认位置。",
+    choose: "选择目录…",
+    reset: "恢复默认",
+    invalidPath: "请输入绝对路径。",
+  },
   projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", preview: "文件预览", closePreview: "关闭预览", binary: "二进制文件，无法预览", truncated: "文件过大，仅显示前 512 KB 内容", rendered: "渲染视图", source: "查看源码", wrap: "自动换行", imageBroken: "图片加载失败", annotate: "批注", annotateHint: "批注将随下一条消息一起发送", annotateNoSelection: "未选中代码行，请先在下方代码中选中要批注的内容", annotateLine: "第 {line} 行", annotateRange: "第 {start}-{end} 行", annotatePlaceholder: "输入批注内容…", annotateConfirm: "添加批注", annotateCancel: "取消", annotateRemove: "移除批注" },
   changes: {
     showFlat: "平铺显示", showTree: "树形显示",
@@ -173,6 +182,22 @@ export default {
     "unsaved": "有未保存的修改",
     "saved": "配置已保存，下次启动会话时生效"
 },
+  retrySettings: {
+    title: "自动重试",
+    description: "Pi 遇到超载、限流等临时错误时自动重试。全局生效，下次启动会话时应用。",
+    enabled: "自动重试",
+    enabledDesc: "关闭后请求失败不再自动重试，需要手动重新发送。",
+    maxRetries: "重试次数",
+    maxRetriesDesc: "每轮对话最多自动重试的次数，0 表示不重试。",
+    baseDelayMs: "首次重试等待（毫秒）",
+    baseDelayMsDesc: "指数退避的起始间隔，之后每次重试翻倍。",
+    maxAgentDelayMs: "单次等待上限（毫秒）",
+    maxAgentDelayMsDesc: "指数退避的最大间隔，超过后按该值等待。",
+    invalidNumber: "请输入 {min}–{max} 之间的整数。",
+    saved: "已保存，下次启动会话时生效",
+    unsupported: "当前安装的 Pi 版本不支持重试设置，请先升级 Pi。",
+    hint: "仅超载、限流、5xx 等临时错误会重试；额度不足、上下文超限等不会重试。",
+  },
   sessionArchive: {
     title: "归档会话",
     description: "恢复或永久删除归档会话。",

@@ -7,7 +7,7 @@ use axum::{
     extract::{connect_info::ConnectInfo, ws::Message, Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -190,6 +190,11 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
             .route("/api/auth/login", post(password_login))
             .route("/api/invoke", post(invoke))
             .route("/api/events", get(events))
+            // Built-in browser panel proxy. Auth rides on the per-boot proxy
+            // secret embedded in the path (returned only through authorized
+            // invoke calls); it is scoped to these routes and cannot be used
+            // against /api/invoke.
+            .route("/api/preview/{*rest}", any(crate::preview_proxy::remote_handle))
             .fallback(asset)
             .with_state(web);
         *state.server.lock().unwrap() = Some(Server {
@@ -362,9 +367,13 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "app_config_save" => {
             let mut cfg = commands::app_config_get(app.clone())?;
             cfg.last_project = a["config"]["lastProject"].as_str().map(str::to_owned);
+            // 远程端只能改工作区偏好，其余应用配置（如 piPath）保持主机现状。
+            cfg.projectless_dir = a["config"]["projectlessDir"].as_str().map(str::to_owned);
             commands::app_config_save(app.clone(), cfg)?;
             Ok(Value::Null)
         }
+        "projectless_dir_resolve" => Ok(serde_json::to_value(commands::projectless_dir_resolve(app.clone())?)
+            .map_err(|e| e.to_string())?),
         "pi_detect" => Ok(serde_json::to_value(
             commands::pi_detect(commands::app_config_get(app.clone())?.pi_path).await,
         )
@@ -439,6 +448,35 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "session_history" => Ok(Value::Array(crate::sessions::session_history(text("file")?).await?)),
         "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
         "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
+        "session_revert_changes" => {
+            let files: Vec<crate::session_revert::RevertFile> = serde_json::from_value(a["files"].clone())
+                .map_err(|e| pix_error_with("missingFiles", format!("缺少 files 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
+            Ok(serde_json::to_value(crate::session_revert::session_revert_changes(text("project")?, files).await?).map_err(|e| e.to_string())?)
+        }
+        "session_checkpoint_create" => Ok(serde_json::to_value(
+            crate::session_checkpoint::session_checkpoint_create(text("project")?, text("checkpointId")?).await?,
+        ).map_err(|e| e.to_string())?),
+        "session_checkpoint_diff" => Ok(serde_json::to_value(
+            crate::session_checkpoint::session_checkpoint_diff(text("project")?, text("from")?, text("to")?).await?,
+        ).map_err(|e| e.to_string())?),
+        "session_checkpoint_restore" => {
+            let paths = a["paths"].as_array().map(|list| {
+                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+            });
+            Ok(serde_json::to_value(
+                crate::session_checkpoint::session_checkpoint_restore(text("project")?, text("from")?, text("to")?, paths).await?,
+            ).map_err(|e| e.to_string())?)
+        }
+        "session_checkpoint_manifest_get" => Ok(serde_json::to_value(
+            crate::session_checkpoint::session_checkpoint_manifest_get(text("file")?).await?,
+        ).map_err(|e| e.to_string())?),
+        "session_checkpoint_manifest_set" => {
+            crate::session_checkpoint::session_checkpoint_manifest_set(text("file")?, a["manifest"].clone()).await?;
+            Ok(Value::Null)
+        }
+        "session_checkpoint_content" => Ok(serde_json::to_value(
+            crate::session_checkpoint::session_checkpoint_content(text("project")?, text("oid")?, text("path")?).await?,
+        ).map_err(|e| e.to_string())?),
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
         }
@@ -490,6 +528,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         )),
         "detect_editors" => Ok(serde_json::to_value(crate::editor::detect_editors()).unwrap()),
         "editor_icons" => Ok(serde_json::to_value(crate::editor_icon::editor_icons().await?).unwrap()),
+        "preview_proxy_info" => Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) })),
         _ => Err(pix_error("desktopOnlyAction", "此操作仅可在桌面端执行")),
     }
 }

@@ -93,6 +93,15 @@ export default {
     clearAnnotations: "Clear annotations",
     export: "Export annotations",
   },
+  projectless: {
+    name: "No-project chat",
+    description: "Start chatting in PiX's own workspace without picking a folder.",
+    settingsLabel: "No-project workspace",
+    settingsDesc: "Conversations without an opened project use this directory: {path}. Leave empty or reset to restore the default location.",
+    choose: "Choose folder…",
+    reset: "Reset to default",
+    invalidPath: "Enter an absolute path.",
+  },
   projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", preview: "File preview", closePreview: "Close preview", binary: "Binary file — not previewable", truncated: "File too large — showing the first 512 KB", rendered: "Rendered view", source: "View source", wrap: "Wrap lines", imageBroken: "Failed to load image", annotate: "Annotate", annotateHint: "Comments are attached to your next message", annotateNoSelection: "No lines selected — select lines in the code below first", annotateLine: "Line {line}", annotateRange: "Lines {start}-{end}", annotatePlaceholder: "Write a comment…", annotateConfirm: "Add comment", annotateCancel: "Cancel", annotateRemove: "Remove comment" },
   changes: {
     showFlat: "Flat list", showTree: "File tree",
@@ -173,6 +182,22 @@ export default {
     "unsaved": "Unsaved changes",
     "saved": "Configuration saved. Applies on the next session start."
 },
+  retrySettings: {
+    title: "Auto-retry",
+    description: "Automatically retries transient Pi errors such as overload or rate limits. Applies globally on the next session start.",
+    enabled: "Auto-retry",
+    enabledDesc: "When off, failed requests are not retried automatically and must be resent manually.",
+    maxRetries: "Retry count",
+    maxRetriesDesc: "Maximum automatic retries per turn; 0 disables retrying.",
+    baseDelayMs: "First retry delay (ms)",
+    baseDelayMsDesc: "Starting interval for exponential backoff; each retry doubles it.",
+    maxAgentDelayMs: "Per-wait cap (ms)",
+    maxAgentDelayMsDesc: "Maximum interval for exponential backoff; waits are capped at this value.",
+    invalidNumber: "Enter an integer between {min} and {max}.",
+    saved: "Saved; takes effect on the next session start",
+    unsupported: "The installed Pi version does not support retry settings. Please upgrade Pi first.",
+    hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
+  },
   sessionArchive: {
     title: "Archived sessions",
     description: "Restore or permanently delete archived sessions.",

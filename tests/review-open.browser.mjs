@@ -7,7 +7,7 @@ const html = `<!doctype html><html><body><div id="app"></div><script type="modul
 import { createApp, h } from 'vue'
 import { createI18n } from 'vue-i18n'
 import messages from '/src/i18n/locales/en.ts'
-import SessionChanges from '/src/components/SessionChanges.vue'
+import ReviewPanel from '/src/components/ReviewPanel.vue'
 import OpenWithSettings from '/src/components/settings/OpenWithSettings.vue'
 import '/src/style.css'
 const lines = Array.from({length: 100}, (_, i) => [
@@ -16,7 +16,7 @@ const lines = Array.from({length: 100}, (_, i) => [
 ]).flat()
 createApp({render:()=>h('div',{},[
   h('div',{style:'padding:24px'},[h(OpenWithSettings)]),
-  h('div',{style:'display:flex;height:650px;width:1100px'},[h(SessionChanges,{project:'C:/demo project',changes:[{id:'1',path:'src/demo & 中文.ts',tool:'edit',lines,added:100,removed:100,unknownBefore:false}]})])
+  h('div',{style:'display:flex;height:650px;width:1100px'},[h(ReviewPanel,{project:'C:/demo project',changes:[{id:'1',path:'src/demo & 中文.ts',tool:'edit',lines,added:100,removed:100,unknownBefore:false}]})])
 ])}).use(createI18n({legacy:false,locale:'en',messages:{en:messages}})).mount('#app')
 </script></body></html>`
 const server = await createServer({ server: { port: 1441, strictPort: true }, plugins: [{

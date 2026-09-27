@@ -2,14 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { loadTsSource } from './lib/load-ts.mjs'
-const source = readFileSync(new URL('../src/components/SessionChanges.vue', import.meta.url), 'utf8')
+const source = readFileSync(new URL('../src/components/ReviewPanel.vue', import.meta.url), 'utf8')
 function harness(changes) {
-  const props = { changes }
+  const props = { changes, checkpoints: [] }
   const module = loadTsSource(source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] + '\nexport { files, activeFile, selectedPath, fileRows, treeMode, selectRow }', {
     defineProps: () => props,
     defineEmits: () => () => {},
     require: id => id === 'vue' ? {
-      ref: value => ({ value }), computed: get => ({ get value() { return get() } }),
+      ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }),
       onMounted() {}, onBeforeUnmount() {}, watch() {},
     } : id === '@/lib/reviewFileTree' ? loadTsSource(readFileSync(new URL('../src/lib/reviewFileTree.ts', import.meta.url), 'utf8')) : id === 'vue-i18n' ? { useI18n: () => ({ t: key => key }) } : {},
   })

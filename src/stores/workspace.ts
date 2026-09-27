@@ -1,6 +1,8 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
-import { listSessions, updateSession, type SessionMeta } from "@/api/piClient"
+import { i18n } from "@/i18n"
+import { samePath } from "@/lib/paths"
+import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
  *  the resulting mtime; lets the session watcher tell its own writes from
@@ -22,6 +24,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
+  /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
+  const projectless = ref("")
+  const projectlessDefault = ref("")
+  let projectlessRequest: Promise<string> | null = null
   const pending = new Map<string, SessionMeta>()
   const versions: Record<string, number> = {}
   try {
@@ -113,6 +119,30 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function projectRoot(path: string) {
     return Object.values(projectGroups.value).find(group => group.folders.includes(path))?.primary || path
   }
+  // ---- 无项目会话：未打开项目时使用的固定工作目录 ----
+  /** 解析（并由后端按需创建）无项目会话目录；并发调用共享同一次请求。 */
+  function ensureProjectless() {
+    if (projectless.value) return Promise.resolve(projectless.value)
+    if (!projectlessRequest) {
+      projectlessRequest = resolveProjectlessDir()
+        .then((info) => {
+          projectlessDefault.value = info.defaultDir
+          projectless.value = info.dir
+          return info.dir
+        })
+        .catch((error) => { projectlessRequest = null; throw error })
+    }
+    return projectlessRequest
+  }
+  /** 设置中的目录改动后重新解析，下一次无项目会话使用新目录。 */
+  async function refreshProjectless() {
+    projectlessRequest = null
+    projectless.value = ""
+    return ensureProjectless()
+  }
+  function isProjectless(path: string) {
+    return !!projectless.value && samePath(path, projectless.value)
+  }
   function updateProject(oldPrimary: string, group: ProjectGroup) {
     if (!projects.value.includes(oldPrimary)) throw new Error("Project not found")
     const { primary, folders, name } = group
@@ -128,6 +158,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
   }
   function projectName(path: string) {
+    if (isProjectless(path)) return i18n.global.t("projectless.name")
     return projectGroups.value[projectRoot(path)]?.name || path.split(/[\\/]/).filter(Boolean).pop() || path
   }
   function projectFolders(path: string) {
@@ -204,5 +235,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       }
     }
   }
-  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, orderedProjects, reorderProjects, orderedSessions, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
+  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, projectless, projectlessDefault, ensureProjectless, refreshProjectless, isProjectless, orderedProjects, reorderProjects, orderedSessions, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
 })

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ChevronRight, File, Folder, FolderOpen, RefreshCw } from "@lucide/vue"
+import { ChevronRight, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { invoke } from "@/api/transport"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
+import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
 interface Entry { name: string; path: string; is_dir: boolean }
 const props = defineProps<{ project: string }>()
@@ -92,9 +93,7 @@ const rows = computed(() => {
           <button type="button" class="flex w-full items-center gap-1.5 py-1 pr-2 text-left font-mono text-xs hover:bg-accent/60 focus-visible:outline-ring" :class="{ 'bg-accent': entry.path === selected }" :style="{ paddingLeft: `${8 + depth * 16}px` }" :title="entry.path" @click="toggle(entry)">
             <ChevronRight v-if="entry.is_dir" class="size-3.5 shrink-0" :class="{ 'rotate-90': expanded.has(entry.path) }" />
             <span v-else class="w-3.5 shrink-0" />
-            <FolderOpen v-if="entry.is_dir && expanded.has(entry.path)" class="size-3.5 shrink-0" />
-            <Folder v-else-if="entry.is_dir" class="size-3.5 shrink-0" />
-            <File v-else class="size-3.5 shrink-0" />
+            <FileTypeIcon :name="entry.name" :dir="entry.is_dir" :open="expanded.has(entry.path)" class="size-3.5" />
             <span class="truncate">{{ entry.name }}</span>
           </button>
           <p v-if="errors[entry.path]" class="px-3 py-1 text-xs text-destructive" role="alert">{{ errors[entry.path] }}</p>

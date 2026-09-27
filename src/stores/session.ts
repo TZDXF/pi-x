@@ -12,6 +12,7 @@ import { contentText } from "@/lib/content"
 import type { CommandInfo, Model, SessionState, SessionStats, ThinkingLevel, Usage } from "@/api/protocol"
 import { blocksFromMessage, createEventHandler, errorBlockText } from "./session/events"
 import { createPromptQueue } from "./session/promptQueue"
+import { createTurnCheckpoints } from "./session/checkpoints"
 import type { Block, Entry, QueuedPrompt, RetryInfo, SessionFlow, ToolRun, UserEntry } from "./session/types"
 
 export type { AssistantEntry, Block, CompactionEntry, Entry, QueuedPrompt, RetryInfo, TextBlock, ThinkingBlock, ToolCallBlock, ToolRun, UserEntry } from "./session/types"
@@ -170,10 +171,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   const { schedulePrompt, removeQueuedPrompt, moveQueuedPrompt, executeQueuedPrompt, dispatchQueuedPrompt, clearQueueTimer }
     = createPromptQueue({ promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send })
 
+  const turnCheckpoints = createTurnCheckpoints({
+    cwd, sessionFile,
+    userTurnCount: () => entries.value.reduce((count, entry) => entry.kind === "user" ? count + 1 : count, 0),
+  })
+
   const handleEvent = createEventHandler({
     runtimeId, entries, runs, partialBlocks, isStreaming, isCompacting, retryInfo,
     steering, followUp, lastUsage, streamingTurnId, sessionFile, cwd, flow, nextId,
     refreshStats, refreshState, syncSessionFile, dispatchQueuedPrompt,
+    checkpointStart: turnCheckpoints.onAgentStart,
+    checkpointSettle: turnCheckpoints.onAgentSettled,
   })
 
   // ---- actions ----
@@ -769,6 +777,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     started,
     entries,
     fileChanges: computed(() => sessionChanges(historyMessages.value, entries.value, partialBlocks.value, runs.value)),
+    /** 轮次 Git 快照回滚记录（按 turnIndex 关联）。 */
+    turnCheckpointRecords: turnCheckpoints.records,
+    markTurnReverted: turnCheckpoints.markReverted,
     timelineTurns,
     revealTimelineTurn,
     runs,

@@ -265,11 +265,18 @@ pub async fn skills_hosted_delete(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-fn skills_delete(root: &Path, path: &str) -> Result<(), String> {
+/// Reject paths outside the hosted skills root and return the delete target.
+/// Split from `skills_delete` so the guard stays testable without an installed
+/// Pi SDK (`skills_delete` also syncs Pi settings, which shells out to Pi).
+fn hosted_delete_target(root: &Path, path: &str) -> Result<PathBuf, String> {
     if !is_inside_root(root, path) {
         return Err(format!("Not a hosted skill path: {path}"));
     }
-    let target = PathBuf::from(path);
+    Ok(PathBuf::from(path))
+}
+
+fn skills_delete(root: &Path, path: &str) -> Result<(), String> {
+    let target = hosted_delete_target(root, path)?;
     if target.exists() {
         remove_path(&target)?;
     }
@@ -542,10 +549,11 @@ mod tests {
         let root = temp_root("delete");
         let outside = temp_root("outside");
         std::fs::write(outside.join("x.md"), "x").unwrap();
-        assert!(skills_delete(&root, outside.join("x.md").to_str().unwrap()).is_err());
+        assert!(hosted_delete_target(&root, outside.join("x.md").to_str().unwrap()).is_err());
         assert!(outside.join("x.md").exists());
         std::fs::write(root.join("y.md"), "y").unwrap();
-        assert!(skills_delete(&root, root.join("y.md").to_str().unwrap()).is_ok());
+        let target = hosted_delete_target(&root, root.join("y.md").to_str().unwrap()).unwrap();
+        remove_path(&target).unwrap();
         assert!(!root.join("y.md").exists());
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(outside).unwrap();

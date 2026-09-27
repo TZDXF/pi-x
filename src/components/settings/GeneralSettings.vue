@@ -5,6 +5,7 @@ import SettingDescription from '@/components/shared/SettingDescription.vue'
 import KeyHint from '@/components/shared/KeyHint.vue'
 /** General preferences page: theme, language, and workspace info. */
 import OpenWithSettings from "@/components/settings/OpenWithSettings.vue"
+import ProjectlessSettings from "@/components/settings/ProjectlessSettings.vue"
 import { isDesktop } from "@/api/transport"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -34,6 +35,7 @@ function applyLocale(v: Locale) {
 
 <template>
   <OpenWithSettings v-if="isDesktop" />
+  <ProjectlessSettings />
   <SettingRow>
     <div class="min-w-0">
       <SettingHeading id="theme-label">{{ t("settings.theme") }}</SettingHeading>
