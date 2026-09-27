@@ -4,7 +4,7 @@ use std::path::Path;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{fs_search, pi_locate, rpc, sessions, trust};
+use crate::{errors::{pix_error, pix_error_detail, pix_error_with}, fs_search, pi_locate, rpc, sessions, trust};
 
 /// A provider/model pair selected in the app configuration.
 #[derive(Clone, Serialize, Deserialize)]
@@ -332,7 +332,7 @@ pub fn models_config_get() -> Result<Value, String> {
         return Ok(serde_json::json!({ "providers": {} }));
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut v: Value = serde_json::from_str(&raw).map_err(|e| format!("models.json 解析失败: {e}"))?;
+    let mut v: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("modelsJsonParseFailed", format!("models.json 解析失败: {e}"), e))?;
     if v.get("providers").is_none() {
         v["providers"] = serde_json::json!({});
     }
@@ -378,7 +378,7 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
         .trim()
         .trim_end_matches('/');
     if base.is_empty() {
-        return Err("该供应商未配置 Base URL，无法获取模型列表".into());
+        return Err(pix_error("providerBaseUrlMissing", "该供应商未配置 Base URL，无法获取模型列表"));
     }
     let api = provider
         .get("api")
@@ -426,14 +426,18 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
             ureq::Error::Status(code, resp) => {
                 let detail = resp.into_string().unwrap_or_default();
                 let detail: String = detail.chars().take(300).collect();
-                format!("获取模型列表失败 (HTTP {code}): {detail}")
+                pix_error_with(
+                    "fetchModelsHttpFailed",
+                    format!("获取模型列表失败 (HTTP {code}): {detail}"),
+                    json!({"status": code.to_string(), "detail": detail}),
+                )
             }
-            other => format!("获取模型列表失败: {other}"),
+            other => pix_error_detail("fetchModelsFailed", format!("获取模型列表失败: {other}"), other),
         })?
         .into_string()
-        .map_err(|e| format!("读取模型列表响应失败: {e}"))?;
+        .map_err(|e| pix_error_detail("modelsResponseReadFailed", format!("读取模型列表响应失败: {e}"), e))?;
     let v: Value =
-        serde_json::from_str(&body).map_err(|e| format!("解析模型列表响应失败: {e}"))?;
+        serde_json::from_str(&body).map_err(|e| pix_error_detail("modelsResponseParseFailed", format!("解析模型列表响应失败: {e}"), e))?;
 
     let mut out: Vec<FetchedModel> = Vec::new();
     if let Some(data) = v.get("data").and_then(Value::as_array) {

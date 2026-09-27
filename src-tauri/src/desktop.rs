@@ -1,6 +1,13 @@
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Window, WindowEvent};
+
+/// 托盘菜单标签句柄；webview 内的语言包对原生菜单不可见，
+/// 由前端在启动与切换语言时经 `set_tray_labels` 上报。
+pub struct TrayLabels {
+    show: MenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
 
 fn restore(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -14,6 +21,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItemBuilder::with_id("show", "显示 PiX").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出 PiX").build(app)?;
     let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+    app.manage(TrayLabels { show: show.clone(), quit: quit.clone() });
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("PiX")
         .menu(&menu)
@@ -51,4 +59,16 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
         api.prevent_close();
         let _ = window.hide();
     }
+}
+
+#[tauri::command]
+pub fn set_tray_labels(app: AppHandle, show_label: String, quit_label: String) -> Result<(), String> {
+    let labels = app.state::<TrayLabels>();
+    let (show, quit) = (labels.show.clone(), labels.quit.clone());
+    // 菜单文本只能在主线程更新。
+    app.run_on_main_thread(move || {
+        let _ = show.set_text(show_label);
+        let _ = quit.set_text(quit_label);
+    })
+    .map_err(|e| e.to_string())
 }

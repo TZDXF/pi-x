@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Pencil, Trash2, Pause, Play, CirclePlay, Clock } from '@lucide/vue'
+import { Plus, Pencil, Trash2, Pause, Play, CirclePlay, FileText, Clock } from '@lucide/vue'
 import { TimeFieldInput, TimeFieldRoot, type TimeValue } from 'reka-ui'
 import { Time } from '@internationalized/date'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,6 +15,7 @@ import { useSessionStore } from '@/stores/conversations'
 import { getModelsConfig } from '@/api/piClient'
 import { listScheduledTasks, saveScheduledTask, deleteScheduledTask, runScheduledTask, onScheduledTasksChanged, type ScheduledTask, type ScheduledTaskInput } from '@/api/schedules'
 import { scheduleExpression, parseScheduleExpression, scheduleFrequencies, scheduleWeekdays, type ScheduleFrequency } from '@/lib/schedules'
+import { tBackendError } from '@/i18n'
 import { supportedThinkingLevels } from '@/lib/thinkingLevels'
 import type { ThinkingLevel } from '@/api/protocol'
 
@@ -81,13 +82,13 @@ async function initialize() {
       mapping[`${current.provider}/${current.id}`] = session.availableThinking
     }
     modelLevels.value = mapping
-    timer = setInterval(() => { if (!busy.value) void refresh().catch(e => { error.value = String(e) }) }, 5000)
-  } catch (e) { if (own === generation) error.value = String(e) }
+    timer = setInterval(() => { if (!busy.value) void refresh().catch(e => { error.value = tBackendError(e) }) }, 5000)
+  } catch (e) { if (own === generation) error.value = tBackendError(e) }
   finally { if (own === generation) loading.value = false }
 }
 void initialize()
 void onScheduledTasksChanged(() => {
-  if (!disposed && !busy.value) void refresh().catch(e => { error.value = String(e) })
+  if (!disposed && !busy.value) void refresh().catch(e => { error.value = tBackendError(e) })
 }).then(unlisten => { if (disposed) unlisten(); else unlistenChanges = unlisten }).catch(() => {})
 onBeforeUnmount(() => { disposed = true; generation++; clearInterval(timer); unlistenChanges?.() })
 function edit(task?: ScheduledTask) {
@@ -109,7 +110,7 @@ async function action(work: () => Promise<unknown>) {
   busy.value = true
   error.value = ''
   try { await work(); await refresh() }
-  catch (e) { error.value = String(e) }
+  catch (e) { error.value = tBackendError(e) }
   finally { busy.value = false }
 }
 async function save() {
@@ -122,6 +123,18 @@ async function save() {
   })
 }
 function formatDate(value: number) { return new Date(value).toLocaleString() }
+function describeExpression(expression: string): string {
+  const parsed = parseScheduleExpression(expression)
+  const time = parsed.time
+  switch (parsed.frequency) {
+    case 'hourly': return t('schedules.hourly')
+    case 'daily': return `${t('schedules.daily')} ${time}`
+    case 'weekdays': return `${t('schedules.weekdays')} ${time}`
+    case 'weekly': return `${t(`schedules.days.${parsed.weekday}`)} ${time}`
+    case 'monthly': return `${t('schedules.monthly')} ${parsed.day}`
+    case 'custom': return expression
+  }
+}
 function openResult(task: ScheduledTask) {
   if (!task.sessionFile) return
   emit('resumeSession', task.sessionFile, task.project)
@@ -180,18 +193,18 @@ function openResult(task: ScheduledTask) {
         <p v-if="loading" class="text-sm text-muted-foreground">{{ t('schedules.loading') }}</p>
         <p v-else-if="!tasks.length" class="py-8 text-center text-sm text-muted-foreground">{{ t('schedules.empty') }}</p>
         <div v-for="task in tasks" :key="task.id!" class="rounded-lg border p-3 space-y-2">
-          <div class="flex justify-between gap-3"><h3 class="font-medium break-words">{{ task.title }}</h3><span class="shrink-0 text-xs text-muted-foreground">{{ t(`schedules.${task.enabled ? task.status : 'paused'}`) }}</span></div>
-          <p class="text-xs text-muted-foreground break-all">{{ workspace.projectName(task.project) }} · {{ task.provider }}/{{ task.model }} · {{ task.expression }}</p>
-          <p v-if="task.enabled" class="text-xs">{{ t('schedules.next') }}: {{ formatDate(task.nextRun) }}</p>
-          <p v-if="task.lastRun" class="text-xs text-muted-foreground">{{ t('schedules.last') }}: {{ formatDate(task.lastRun) }}</p>
-          <p v-if="task.error" class="text-xs text-destructive break-words">{{ task.error }}</p>
-          <div class="flex gap-1 justify-end">
-            <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.run')" @click="action(() => runScheduledTask(task.id!))"><CirclePlay :size="15" /></Button>
-            <Button v-if="task.sessionFile" variant="ghost" size="sm" @click="openResult(task)">{{ t(task.status === 'running' ? 'schedules.progress' : 'schedules.result') }}</Button>
-            <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.edit')" @click="edit(task)"><Pencil :size="15" /></Button>
-            <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t(task.enabled ? 'schedules.pause' : 'schedules.resume')" @click="action(() => saveScheduledTask({ ...task, enabled: !task.enabled }))"><Pause v-if="task.enabled" :size="15" /><Play v-else :size="15" /></Button>
-            <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.delete')" @click="deleting = task.id"><Trash2 :size="15" /></Button>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="font-medium break-words min-w-0">{{ task.title }}</h3>
+            <div class="flex gap-1 shrink-0">
+              <Button variant="ghost" size="sm" :title="t('schedules.run')" :aria-label="t('schedules.run')" :disabled="busy || task.status === 'running'" @click="action(() => runScheduledTask(task.id!))"><CirclePlay :size="15" /></Button>
+              <Button v-if="task.sessionFile" variant="ghost" size="sm" :title="t(task.status === 'running' ? 'schedules.progress' : 'schedules.result')" :aria-label="t(task.status === 'running' ? 'schedules.progress' : 'schedules.result')" @click="openResult(task)"><FileText :size="15" /></Button>
+              <Button variant="ghost" size="sm" :title="t('schedules.edit')" :aria-label="t('schedules.edit')" :disabled="busy || task.status === 'running'" @click="edit(task)"><Pencil :size="15" /></Button>
+              <Button variant="ghost" size="sm" :title="t(task.enabled ? 'schedules.pause' : 'schedules.resume')" :aria-label="t(task.enabled ? 'schedules.pause' : 'schedules.resume')" :disabled="busy || task.status === 'running'" @click="action(() => saveScheduledTask({ ...task, enabled: !task.enabled }))"><Pause v-if="task.enabled" :size="15" /><Play v-else :size="15" /></Button>
+              <Button variant="ghost" size="sm" :title="t('schedules.delete')" :aria-label="t('schedules.delete')" :disabled="busy || task.status === 'running'" @click="deleting = task.id"><Trash2 :size="15" /></Button>
+            </div>
           </div>
+          <p class="text-xs text-muted-foreground break-all">{{ workspace.projectName(task.project) }} · {{ task.provider }}/{{ task.model }} · {{ describeExpression(task.expression) }}<template v-if="task.enabled"> · {{ t('schedules.next') }} {{ formatDate(task.nextRun) }}</template><template v-else> · {{ t('schedules.paused') }}</template></p>
+          <p v-if="task.error" class="text-xs text-destructive break-words">{{ tBackendError(task.error) }}</p>
           <div v-if="deleting === task.id" class="flex items-center justify-end gap-2 text-sm"><span>{{ t('schedules.deleteConfirm') }}</span><Button variant="outline" size="sm" :disabled="busy" @click="deleting = null">{{ t('schedules.cancel') }}</Button><Button variant="destructive" size="sm" :disabled="busy" @click="action(async () => { await deleteScheduledTask(task.id!); deleting = null })">{{ t('schedules.delete') }}</Button></div>
         </div>
       </template>

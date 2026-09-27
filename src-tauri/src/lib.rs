@@ -1,4 +1,5 @@
 mod data_dir;
+mod errors;
 mod logs;
 mod schedules;
 mod desktop;
@@ -127,6 +128,7 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_kill,
+            desktop::set_tray_labels,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

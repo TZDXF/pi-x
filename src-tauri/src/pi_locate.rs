@@ -8,6 +8,8 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+use crate::errors::pix_error;
+
 /// How to start the pi process.
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -272,7 +274,7 @@ pub fn sdk_launcher(custom: Option<&str>) -> Result<(String, PathBuf), String> {
             _ => {
                 let real = dunce::canonicalize(&path).map_err(|e| e.to_string())?;
                 if real.extension().and_then(|v| v.to_str()) != Some("js") {
-                    return Err("所选 Pi 未提供 Node.js SDK，请选择 npm 版 Pi。".into());
+                    return Err(pix_error("piSdkMissing", "所选 Pi 未提供 Node.js SDK，请选择 npm 版 Pi。"));
                 }
                 ("node".into(), real)
             }
@@ -284,5 +286,5 @@ pub fn sdk_launcher(custom: Option<&str>) -> Result<(String, PathBuf), String> {
         }
         break; // Never use a different Pi installation than the selected launcher.
     }
-    Err("当前 Pi 安装未提供可用 SDK。请使用带 dist/core 的 npm 版 Pi；PiX 不会另建数据或绕过信任检查。".into())
+    Err(pix_error("piSdkUnavailable", "当前 Pi 安装未提供可用 SDK。请使用带 dist/core 的 npm 版 Pi；PiX 不会另建数据或绕过信任检查。"))
 }

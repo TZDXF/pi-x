@@ -1,7 +1,7 @@
 import { ALL_THINKING_LEVELS, supportedThinkingLevels, clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
 import { computed, ref, shallowRef } from "vue"
-import { i18n } from "@/i18n"
+import { i18n, tBackendError } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { generateSessionTitle, getModelsConfig, getPiSettings, pixLog, rpcRequest as requestForRuntime, sessionHistory, sessionLastError, sessionMtime, type SessionLastError } from "@/api/piClient"
@@ -605,7 +605,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         await compact(compactMatch[1]?.trim() || undefined)
       }
       catch (e) {
-        entries.value.push({ kind: "assistant", id: nextId(), blocks: [{ type: "text", text: `**Error:** ${String(e)}` }], live: true })
+        entries.value.push({ kind: "assistant", id: nextId(), blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }], live: true })
       }
       // compaction_end also drains the queue; cover RPC failures that emit none.
       if (!stopping && !queuePaused) dispatchQueuedPrompt()
@@ -640,7 +640,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     // resolves after the full run finishes; events drive the UI meanwhile
     rpcRequest(command)
       .then(async (res) => {
-        if (!res.success) throw new Error(res.error ?? "Prompt rejected")
+        if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
       })
       .catch((e) => {
         if (version !== conversationVersion) return
@@ -650,7 +650,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         entries.value.push({
           kind: "assistant",
           id: nextId(),
-          blocks: [{ type: "text", text: `**Error:** ${String(e)}` }],
+          blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }],
           live: true,
         })
       })

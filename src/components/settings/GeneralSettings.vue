@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
+import { setTrayLabels } from "@/api/piClient"
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
 import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib/runningBehavior"
 
@@ -27,6 +28,7 @@ const selectedLocale = ref<Locale>(currentLocale())
 function applyLocale(v: Locale) {
   selectedLocale.value = v
   setLocale(v)
+  void setTrayLabels(t("tray.show"), t("tray.quit")).catch(() => {})
 }
 </script>
 

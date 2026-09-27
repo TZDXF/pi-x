@@ -29,6 +29,7 @@ function harness(group = null) {
     createConversation: project => { const id = 'rt' + (++seq); const s = sessionFor(id); s.cwd = project; activeRuntimeId.value = id; return s },
     findConversation: () => undefined,
     getConfig: async () => ({ lastProject: 'project' }),
+    setTrayLabels: async () => {}, tBackendError: x => x,
     onPiEvent: async () => () => {}, onPiExit: async () => () => {}, onPiStderr: async () => () => {}, onReconnected: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }), saveConfig: async () => {},
     spawnPi: async (...args) => { spawnArgs.push(args); calls.push('spawn') }, killPi: async () => {}, pixLog() {},

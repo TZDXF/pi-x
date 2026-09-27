@@ -2,12 +2,14 @@ use serde::Serialize;
 use std::path::Path;
 use tokio::process::Command;
 
+use crate::errors::{pix_error, pix_error_detail};
+
 async fn git(project: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(project).args(args);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    let output = command.output().await.map_err(|e| format!("无法运行 Git: {e}"))?;
+    let output = command.output().await.map_err(|e| pix_error_detail("gitRunFailed", format!("无法运行 Git: {e}"), e))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -27,12 +29,12 @@ pub async fn workspace_git_info(project: String) -> Result<GitInfo, String> {
 pub async fn workspace_git_create(project: String, branch: String, worktree: bool) -> Result<String, String> {
     let branch = branch.trim();
     if branch.is_empty() || branch.starts_with('-') || branch.starts_with('@') {
-        return Err("请输入有效的分支名".into());
+        return Err(pix_error("branchNameInvalid", "请输入有效的分支名"));
     }
     git(&project, &["check-ref-format", "--branch", branch]).await?;
     let root = git(&project, &["rev-parse", "--show-toplevel"]).await?;
     if worktree {
-        let parent = Path::new(&root).parent().ok_or("无法确定工作树父目录")?;
+        let parent = Path::new(&root).parent().ok_or_else(|| pix_error("worktreeParentUnknown", "无法确定工作树父目录"))?;
         let repo_name = Path::new(&root).file_name().unwrap_or_default().to_string_lossy();
         let slug: String = branch.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' }).take(48).collect();
         let suffix = uuid::Uuid::new_v4().simple().to_string();

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { rpcNotify } from "@/api/piClient"
+import { tBackendError } from "@/i18n"
 import type { ExtensionUiRequest } from "@/api/protocol"
 import { notifyQuestion } from "@/lib/notifications"
 
@@ -88,7 +89,8 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
 
   function pushToast(message: string, kind: Toast["kind"] = "info") {
     const id = ++toastSeq
-    toasts.value.push({ id, message, kind })
+    // 后端编码错误在此统一按当前语言翻译；普通文本原样透传。
+    toasts.value.push({ id, message: tBackendError(message), kind })
     setTimeout(() => {
       toasts.value = toasts.value.filter(t => t.id !== id)
     }, 5000)

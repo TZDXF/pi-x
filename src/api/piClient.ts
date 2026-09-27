@@ -49,6 +49,12 @@ export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">>) =>
   invoke<void>("pi_settings_save", { settings })
 
+/** 原生托盘菜单读不到 webview 的语言包，由前端把当前语言的菜单文案同步给 Rust。 */
+export function setTrayLabels(show: string, quit: string): Promise<void> {
+  if (!isDesktop) return Promise.resolve()
+  return invoke<void>("set_tray_labels", { showLabel: show, quitLabel: quit })
+}
+
 export interface HostedSkill {
   name: string
   description: string

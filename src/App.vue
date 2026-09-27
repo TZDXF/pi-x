@@ -16,6 +16,7 @@ import {
   onSessionsChanged,
   saveConfig,
   sessionMtime,
+  setTrayLabels,
   spawnPi,
   trustSave,
   trustStatus,
@@ -35,6 +36,7 @@ import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
+import { tBackendError } from "@/i18n"
 
 const route = useRoute()
 
@@ -90,6 +92,7 @@ onMounted(async () => {
   } catch {
     config.value = {}
   }
+  void setTrayLabels(t("tray.show"), t("tray.quit")).catch(() => {})
 
   try {
     const handlers = await Promise.all([
@@ -127,7 +130,7 @@ onMounted(async () => {
         owner.partialBlocks = null
         if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
       }),
-      onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(line)),
+      onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(tBackendError(line))),
       onReconnected(() => {
         if (disposed) return
         // Events during the disconnect gap are lost; restore from the backend.

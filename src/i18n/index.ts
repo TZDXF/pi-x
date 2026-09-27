@@ -5,6 +5,7 @@
  * to the OS language when supported, falling back to zh-CN.
  */
 import { createI18n } from "vue-i18n"
+import { formatCodedError } from "@/lib/backendError"
 import zhCN from "./locales/zh-CN"
 import en from "./locales/en"
 
@@ -59,4 +60,9 @@ export function setLocale(locale: Locale) {
 
 export function currentLocale(): Locale {
   return i18n.global.locale.value
+}
+
+/** 翻译后端/传输层的编码错误（PIXERR: 前缀）；普通文本原样返回。 */
+export function tBackendError(raw: unknown): string {
+  return formatCodedError((key, params) => i18n.global.t(key, params ?? {}), raw)
 }

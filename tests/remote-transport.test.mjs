@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { loadTsSource } from './lib/load-ts.mjs'
 
 function harness(desktop = false, fragment = '#token=test-key') {
   const source = readFileSync(new URL('../src/api/transport.ts', import.meta.url), 'utf8')
@@ -26,11 +27,15 @@ function harness(desktop = false, fragment = '#token=test-key') {
     constructor(url) { this.url = url; sockets.push(this); queueMicrotask(() => { this.readyState = 1; this.onopen() }) }
     close() { this.readyState = 3; this.onclose() }
   }
+  // transport.ts imports the coded-error helpers; the import lines are
+  // stripped above, so provide the real implementations to the VM.
+  const backendError = loadTsSource(readFileSync(new URL('../src/lib/backendError.ts', import.meta.url), 'utf8'))
   const context = vm.createContext({
     URLSearchParams, WebSocket: Socket, queueMicrotask, setTimeout: setTimeout_, clearTimeout: clearTimeout_,
     isTauri: () => desktop,
     desktopInvoke: async () => 'desktop',
     desktopListen: async () => () => {},
+    ...backendError,
     sessionStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) },
     location: { hash: fragment, pathname: '/', search: '', protocol: 'http:', host: 'localhost:1421' },
     history: { replaceState: (...args) => requests.push(args) },
@@ -72,7 +77,8 @@ test('event subscribers share one socket and release their handlers', async () =
 test('invalid access keys produce a useful error', async () => {
   const h = harness()
   h.context.fetch = async () => ({ status: 401 })
-  await assert.rejects(h.api.invoke('rpc_running'), /访问凭据已失效/)
+  // The error carries the coded payload so the UI can translate it by locale.
+  await assert.rejects(h.api.invoke('rpc_running'), /PIXERR:.*remoteUnauthorized/)
 })
 
 const flush = () => new Promise(resolve => setImmediate(resolve))

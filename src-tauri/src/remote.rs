@@ -1,4 +1,4 @@
-use crate::{commands, rpc};
+use crate::{commands, errors::{pix_error, pix_error_with}, rpc};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
@@ -138,7 +138,7 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
     let state = app.state::<RemoteState>();
     let _operation = state.operation.lock().await;
     if port == 0 {
-        return Err("端口必须在 1–65535 之间".into());
+        return Err(pix_error("portOutOfRange", "端口必须在 1–65535 之间"));
     }
     let settings = Settings {
         enabled,
@@ -156,7 +156,7 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
         Some(
             tokio::net::TcpListener::bind(("0.0.0.0", port))
                 .await
-                .map_err(|e| format!("无法监听端口 {port}: {e}"))?,
+                .map_err(|e| pix_error_with("portListenFailed", format!("无法监听端口 {port}: {e}"), serde_json::json!({"port": port.to_string(), "detail": e.to_string()})))?,
         )
     } else {
         None
@@ -219,12 +219,12 @@ pub async fn remote_password_set(
     let state = app.state::<RemoteState>();
     let _operation = state.operation.lock().await;
     if state.server.lock().unwrap().is_some() {
-        return Err("请先关闭局域网访问，再修改密码".into());
+        return Err(pix_error("disableLanBeforePasswordChange", "请先关闭局域网访问，再修改密码"));
     }
     let password_hash = match password {
         Some(password) => {
             if password.chars().count() < 8 || password.len() > 128 {
-                return Err("密码至少 8 个字符，且不超过 128 字节".into());
+                return Err(pix_error("passwordLengthInvalid", "密码至少 8 个字符，且不超过 128 字节"));
             }
             Some(
                 tokio::task::spawn_blocking(move || {
@@ -431,14 +431,14 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
         }
         "session_update" => {
-            crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or("缺少 archived")?).await?;
+            crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or_else(|| pix_error("missingArchived", "缺少 archived 参数"))?).await?;
             Ok(Value::Null)
         }
         "session_duplicate" => Ok(Value::String(crate::sessions::session_duplicate(text("file")?).await?)),
         "session_last_error" => Ok(serde_json::to_value(crate::sessions::session_last_error(text("file")?).await?).map_err(|e| e.to_string())?),
         "session_history" => Ok(Value::Array(crate::sessions::session_history(text("file")?).await?)),
         "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
-        "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or("缺少 worktree")?).await?)),
+        "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
         }
@@ -487,7 +487,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         )),
         "detect_editors" => Ok(serde_json::to_value(crate::editor::detect_editors()).unwrap()),
         "editor_icons" => Ok(serde_json::to_value(crate::editor_icon::editor_icons().await?).unwrap()),
-        _ => Err("此操作仅可在桌面端执行".into()),
+        _ => Err(pix_error("desktopOnlyAction", "此操作仅可在桌面端执行")),
     }
 }
 #[derive(Deserialize)]

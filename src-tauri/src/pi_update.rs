@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
 
-use crate::{commands, packages, pi_locate};
+use crate::{commands, errors::{pix_error, pix_error_detail}, packages, pi_locate};
 
 const LATEST_URL: &str = "https://pi.dev/api/latest-version";
 const RELEASE_TAGS_URL: &str = "https://api.github.com/repos/earendil-works/pi/releases/tags";
@@ -80,28 +80,28 @@ pub async fn pi_update_check(app: AppHandle) -> Result<PiUpdateStatus, String> {
     let info = pi_locate::detect(config.pi_path).await;
     let current_version = info
         .version
-        .ok_or("无法读取当前 Pi 版本，请确认 Pi 可正常启动")?;
-    let current = version_key(&current_version).ok_or("无法识别当前 Pi 版本")?;
+        .ok_or_else(|| pix_error("piVersionReadFailed", "无法读取当前 Pi 版本，请确认 Pi 可正常启动"))?;
+    let current = version_key(&current_version).ok_or_else(|| pix_error("piVersionUnparsable", "无法识别当前 Pi 版本"))?;
 
     let latest = tauri::async_runtime::spawn_blocking(|| {
         ureq::get(LATEST_URL)
             .set("User-Agent", "pi-x desktop")
             .timeout(std::time::Duration::from_secs(15))
             .call()
-            .map_err(|e| format!("检查 Pi 更新失败: {e}"))?
+            .map_err(|e| pix_error_detail("updateCheckFailed", format!("检查 Pi 更新失败: {e}"), e))?
             .into_string()
-            .map_err(|e| format!("读取 Pi 更新信息失败: {e}"))
+            .map_err(|e| pix_error_detail("updateInfoReadFailed", format!("读取 Pi 更新信息失败: {e}"), e))
             .and_then(|body| {
                 serde_json::from_str::<LatestResponse>(&body)
-                    .map_err(|e| format!("解析 Pi 更新信息失败: {e}"))
+                    .map_err(|e| pix_error_detail("updateInfoParseFailed", format!("解析 Pi 更新信息失败: {e}"), e))
             })
     })
     .await
     .map_err(|e| e.to_string())??;
     if !latest.ok || latest.package_name != PACKAGE_NAME {
-        return Err("Pi 更新信息来源不匹配".into());
+        return Err(pix_error("updateSourceMismatch", "Pi 更新信息来源不匹配"));
     }
-    let newest = version_key(&latest.version).ok_or("无法识别最新 Pi 版本")?;
+    let newest = version_key(&latest.version).ok_or_else(|| pix_error("latestVersionUnparsable", "无法识别最新 Pi 版本"))?;
     let update_available = newest > current;
     let (release_notes, release_url) = if update_available {
         fetch_release_notes(&latest.version).await.unwrap_or_default()
@@ -128,7 +128,7 @@ impl Drop for UpdateGuard {
 pub async fn pi_update_execute(app: AppHandle) -> Result<(), String> {
     UPDATING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| "Pi 更新正在进行中".to_string())?;
+        .map_err(|_| pix_error("updateInProgress", "Pi 更新正在进行中"))?;
     let _guard = UpdateGuard;
     packages::run_pi(&app, &["update".into(), "--self".into()], None).await?;
     Ok(())

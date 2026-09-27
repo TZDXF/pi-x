@@ -1,5 +1,5 @@
 //! Desktop-owned schedules. Claims are persisted before execution (at most once).
-use crate::{commands, data_dir, pi_locate, rpc, trust};
+use crate::{commands, data_dir, errors::{pix_error, pix_error_detail}, pi_locate, rpc, trust};
 use chrono::{Local, TimeZone};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
@@ -43,18 +43,19 @@ fn notify_schedules_changed(app: &AppHandle) {
 fn next_run(expression: &str, after: i64) -> Result<i64, String> {
     // UI accepts exactly five fields; explicitly prepend seconds for cron-rs.
     if expression.split_whitespace().count() != 5 {
-        return Err("Use five cron fields: minute hour day month weekday (SUN-SAT)".into());
+        return Err(pix_error("cronFieldCount", "请使用五段 cron 表达式：分钟 小时 日 月 星期（SUN-SAT）"));
     }
-    let schedule = Schedule::from_str(&format!("0 {expression} *")).map_err(|e| e.to_string())?;
+    let schedule = Schedule::from_str(&format!("0 {expression} *"))
+        .map_err(|e| pix_error_detail("cronInvalid", format!("无效的 cron 表达式: {e}"), e))?;
     let date = Local
         .timestamp_millis_opt(after)
         .single()
-        .ok_or("Invalid date")?;
+        .ok_or_else(|| pix_error("scheduleInvalidDate", "无效的日期"))?;
     schedule
         .after(&date)
         .next()
         .map(|d| d.timestamp_millis())
-        .ok_or("Schedule has no future occurrence".into())
+        .ok_or_else(|| pix_error("scheduleNoFutureOccurrence", "该表达式没有未来的执行时间"))
 }
 fn validate(input: &TaskInput) -> Result<(), String> {
     if input.title.trim().is_empty()
@@ -64,19 +65,20 @@ fn validate(input: &TaskInput) -> Result<(), String> {
         || input.provider.trim().is_empty()
         || input.model.trim().is_empty()
     {
-        return Err(
-            "Title, prompt and model are required (title ≤ 300 bytes, prompt ≤ 100 KB)".into(),
-        );
+        return Err(pix_error(
+            "taskFieldsRequired",
+            "标题、指令和模型必填（标题 ≤ 300 字节，指令 ≤ 100 KB）",
+        ));
     }
     if !["off", "minimal", "low", "medium", "high", "xhigh", "max"]
         .contains(&input.thinking.as_str())
     {
-        return Err("Invalid thinking level".into());
+        return Err(pix_error("invalidThinkingLevel", "无效的思考等级"));
     }
     if !std::path::Path::new(&input.project).is_absolute()
         || !std::path::Path::new(&input.project).is_dir()
     {
-        return Err("Project directory does not exist".into());
+        return Err(pix_error("projectDirMissing", "项目目录不存在"));
     }
     next_run(&input.expression, Local::now().timestamp_millis())?;
     Ok(())
@@ -113,10 +115,10 @@ pub async fn schedule_save(
         .as_ref()
         .and_then(|id| tasks.iter().position(|t| t.input.id.as_ref() == Some(id)));
     if input.id.is_some() && existing.is_none() {
-        return Err("Task no longer exists".into());
+        return Err(pix_error("taskNotFound", "任务不存在，可能已被删除"));
     }
     if existing.is_some_and(|i| tasks[i].status == "running") {
-        return Err("Task is running".into());
+        return Err(pix_error("taskRunning", "任务正在运行，请稍后再试"));
     }
     let next = next_run(&input.expression, Local::now().timestamp_millis())?;
     input.id = Some(input.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()));
@@ -148,7 +150,7 @@ pub async fn schedule_delete(state: State<'_, ScheduleState>, id: String) -> Res
         .iter()
         .any(|t| t.input.id.as_ref() == Some(&id) && t.status == "running")
     {
-        return Err("Task is running".into());
+        return Err(pix_error("taskRunning", "任务正在运行，请稍后再试"));
     }
     let mut tasks = guard.clone();
     tasks.retain(|t| t.input.id.as_ref() != Some(&id));
@@ -163,10 +165,10 @@ pub async fn schedule_run(app: AppHandle, state: State<'_, ScheduleState>, id: S
         let mut guard = state.0.lock().await;
         let mut tasks = guard.clone();
         let Some(task) = tasks.iter_mut().find(|t| t.input.id.as_deref() == Some(&id)) else {
-            return Err("Task no longer exists".into());
+            return Err(pix_error("taskNotFound", "任务不存在，可能已被删除"));
         };
         if task.status == "running" {
-            return Err("Task is running".into());
+            return Err(pix_error("taskRunning", "任务正在运行，请稍后再试"));
         }
         let claimed = task.clone();
         task.status = "running".into();
@@ -209,12 +211,12 @@ async fn checked_request(state: &rpc::RpcState, id: &str, command: Value) -> Res
         rpc::request(state, command, Some(id)),
     )
     .await
-    .map_err(|_| "Pi request timed out".to_string())??;
+    .map_err(|_| pix_error("piRequestTimedOut", "请求 pi 超时"))??;
     if response["success"] != true {
         return Err(response["error"]
             .as_str()
-            .unwrap_or("Pi request failed")
-            .into());
+            .map(String::from)
+            .unwrap_or_else(|| pix_error("piRequestFailed", "pi 请求失败")));
     }
     Ok(response["data"].clone())
 }
@@ -229,10 +231,10 @@ async fn wait_for_completion(
     loop {
         let event = tokio::select! {
             response = &mut prompt, if !accepted => { response?; accepted = true; continue; }
-            event = events.recv() => event.ok_or("Pi event stream closed")?,
+            event = events.recv() => event.ok_or_else(|| pix_error("piEventStreamClosed", "pi 事件流已关闭"))?,
         };
         if event["type"] == "process_exit" {
-            return Err("Pi exited before completing the task".into());
+            return Err(pix_error("piExitedEarly", "pi 提前退出，任务未完成"));
         }
         if event["type"] == "agent_settled" {
             break;
@@ -246,7 +248,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     // Never change global trust; recheck on each run so revocation takes effect.
     let trust = trust::status(&input.project).await?;
     if trust["needsDecision"] == true {
-        return Err("Project trust requires a decision".into());
+        return Err(pix_error("trustDecisionRequired", "项目信任需要先做出决定"));
     }
     let approved = trust["decision"] == true;
     let pi = pi_locate::detect(commands::app_config_get(app.clone())?.pi_path).await;
@@ -303,17 +305,17 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             .as_array()
             .is_some_and(|a| a.contains(&json!(input.thinking)))
         {
-            return Err("Selected model does not support the thinking level".into());
+            return Err(pix_error("thinkingNotSupported", "所选模型不支持该思考等级"));
         }
         let initial = checked_request(&state, &id, json!({"type":"get_state"})).await?;
         if initial["model"]["provider"] != input.provider
             || initial["model"]["id"] != input.model
             || initial["thinkingLevel"] != input.thinking
         {
-            return Err("Pi did not apply the selected model or thinking level".into());
+            return Err(pix_error("modelApplyFailed", "pi 未应用所选的模型或思考等级"));
         }
         let file = initial["sessionFile"].as_str()
-            .ok_or("Pi did not create a session")?.to_owned();
+            .ok_or_else(|| pix_error("piSessionNotCreated", "pi 未创建会话"))?.to_owned();
         checked_request(&state, &id, json!({"type":"set_session_name", "name":input.title})).await?;
         // Publish the identity before prompting so opening it attaches to this worker.
         {
@@ -321,7 +323,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             let mut guard = schedules.0.lock().await;
             let mut updated = guard.clone();
             let current = updated.iter_mut().find(|t| t.input.id == input.id)
-                .ok_or("Task no longer exists")?;
+                .ok_or_else(|| pix_error("taskNotFound", "任务不存在，可能已被删除"))?;
             current.session_file = Some(file.clone());
             persist(&updated)?;
             *guard = updated;
@@ -344,17 +346,17 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         let last = messages["messages"]
             .as_array()
             .and_then(|a| a.iter().rev().find(|m| m["role"] == "assistant"))
-            .ok_or("Pi returned no assistant response")?;
+            .ok_or_else(|| pix_error("piNoAssistantResponse", "pi 未返回助手回复"))?;
         if matches!(last["stopReason"].as_str(), Some("error" | "aborted")) {
             return Err(last["errorMessage"]
                 .as_str()
-                .unwrap_or("Model run failed")
-                .into());
+                .map(String::from)
+                .unwrap_or_else(|| pix_error("modelRunFailed", "模型运行失败")));
         }
         Ok(file)
     })
     .await
-    .map_err(|_| "Task timed out after one hour".to_string())
+    .map_err(|_| pix_error("taskTimedOut", "任务超时（1 小时）"))
     .and_then(|v| v);
     app.unlisten(listener);
     app.unlisten(exit_listener);
@@ -411,7 +413,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     for task in &mut tasks {
         if task.status == "running" {
             task.status = "failed".into();
-            task.error = Some("Interrupted by application shutdown".into());
+            task.error = Some(pix_error("interruptedByShutdown", "因应用关闭而中断"));
         }
         match next_run(&task.input.expression, now) {
             Ok(next) => task.next_run = next,

@@ -5,6 +5,7 @@
 //! pi, so we don't reconstruct it — instead we read each file's first line
 //! (the session header JSON) and filter by its `cwd` field.
 
+use crate::errors::{pix_error, pix_error_detail};
 use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::Serialize;
@@ -105,7 +106,7 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
     let path = canonicalize(file).map_err(|e| e.to_string())?;
     let root = canonicalize(agent_dir().join("sessions")).map_err(|e| e.to_string())?;
     if !path.starts_with(root) || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-        return Err("无效的会话路径".into());
+        return Err(pix_error("sessionPathInvalid", "无效的会话路径"));
     }
     Ok(path)
 }
@@ -404,7 +405,7 @@ pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, Str
 }
 
 fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("无法读取会话文件: {e}"))?;
+    let text = std::fs::read_to_string(path).map_err(|e| pix_error_detail("sessionFileReadFailed", format!("无法读取会话文件: {e}"), e))?;
     // First pass: index every entry's parent so the current branch can be
     // reconstructed by walking parentIds from the last entry.
     let mut parents: HashMap<String, Option<String>> = HashMap::new();
@@ -480,7 +481,7 @@ pub async fn session_mtime(file: String) -> Result<u64, String> {
 pub async fn session_update(app: AppHandle, file: String, title: Option<String>, archived: bool) -> Result<u64, String> {
     let path = validate_session_path(&file)?;
     if std::fs::symlink_metadata(path.with_extension("pix.json")).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err("无效的会话元数据路径".into());
+        return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
     }
     if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
         set_session_name(&app, &path, title.trim().chars().take(120).collect(), false).await?;

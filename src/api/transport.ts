@@ -1,5 +1,6 @@
 import { invoke as desktopInvoke, isTauri } from "@tauri-apps/api/core"
 import { listen as desktopListen } from "@tauri-apps/api/event"
+import { encodeCodedError } from "@/lib/backendError"
 export const isDesktop = isTauri()
 let token = sessionStorage.getItem("pi-remote-token") ?? ""
 const fragment = new URLSearchParams(location.hash.slice(1))
@@ -48,7 +49,7 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
   })
   if (res.status === 401) {
     clearRemoteToken()
-    throw new Error("访问凭据已失效，请重新登录。")
+    throw new Error(encodeCodedError("remoteUnauthorized", "访问凭据已失效，请重新登录。"))
   }
   const result = await res.json()
   if (!res.ok) throw new Error(result.error ?? `HTTP ${res.status}`)
@@ -98,7 +99,7 @@ function connect(): Promise<void> {
     )
     socket = ws
     const timeout = setTimeout(() => {
-      reject(new Error("远程连接超时，请检查桌面端服务与防火墙。"))
+      reject(new Error(encodeCodedError("remoteConnectTimeout", "远程连接超时，请检查桌面端服务与防火墙。")))
       closingIntentionally = true
       ws.close()
     }, 10000)
@@ -112,7 +113,7 @@ function connect(): Promise<void> {
       clearTimeout(timeout)
       if (socket !== ws) return
       connecting = undefined
-      reject(new Error("无法连接远程服务，请检查访问链接与桌面端开关。"))
+      reject(new Error(encodeCodedError("remoteConnectFailed", "无法连接远程服务，请检查访问链接与桌面端开关。")))
     }
     ws.onmessage = (e) => {
       const event = JSON.parse(e.data)
@@ -131,8 +132,8 @@ function connect(): Promise<void> {
       }
       // Unexpected drop: surface the disconnect, then reconnect in the
       // background. Callers awaiting this initial connect still see the error.
-      reject(new Error("远程连接已断开"))
-      dispatch("pi://stderr", { line: "远程连接已断开，正在自动重连…" })
+      reject(new Error(encodeCodedError("remoteDisconnected", "远程连接已断开")))
+      dispatch("pi://stderr", { line: encodeCodedError("remoteReconnecting", "远程连接已断开，正在自动重连…") })
       dispatch("pi://exit", {})
       scheduleReconnect()
     }

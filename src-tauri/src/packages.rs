@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::process::Stdio;
 use tauri::AppHandle;
 
-use crate::{commands, pi_locate, trust};
+use crate::{commands, errors::{pix_error, pix_error_detail}, pi_locate, trust};
 
 const CATALOG_URL: &str = "https://pi.dev/packages";
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
@@ -180,9 +180,9 @@ pub async fn package_catalog(
             page.unwrap_or(1),
         )
         .call()
-        .map_err(|e| format!("获取插件市场失败: {e}"))?
+        .map_err(|e| pix_error_detail("marketFetchFailed", format!("获取插件市场失败: {e}"), e))?
         .into_string()
-        .map_err(|e| format!("读取插件市场响应失败: {e}"))
+        .map_err(|e| pix_error_detail("marketResponseReadFailed", format!("读取插件市场响应失败: {e}"), e))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -263,7 +263,7 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
     let cfg = commands::app_config_get(app.clone())?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
-        return Err("未找到 pi，请先在设置中配置 pi 路径".into());
+        return Err(pix_error("piNotFound", "未找到 pi，请先在设置中配置 pi 路径"));
     }
 
     let mut cmd = match info.launcher {
@@ -274,7 +274,7 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
         }
         Some(Launcher::Binary { path }) => Command::new(path),
         None => {
-            let path = info.path.clone().ok_or("无法确定 pi 启动方式")?;
+            let path = info.path.clone().ok_or_else(|| pix_error("piLaunchUnknown", "无法确定 pi 启动方式"))?;
             let mut c = Command::new("cmd");
             c.arg("/C").arg(path);
             c
@@ -292,8 +292,8 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
 
     let output = tokio::time::timeout(COMMAND_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| "操作超时（5 分钟）".to_string())?
-        .map_err(|e| format!("启动 pi 失败: {e}"))?;
+        .map_err(|_| pix_error("operationTimeout", "操作超时（5 分钟）"))?
+        .map_err(|e| pix_error_detail("startPiFailed", format!("启动 pi 失败: {e}"), e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -302,7 +302,7 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
         Ok(text)
     } else {
         Err(if text.is_empty() {
-            format!("pi 退出码: {}", output.status)
+            pix_error_detail("piExitCode", format!("pi 退出码: {}", output.status), output.status)
         } else {
             text
         })
@@ -312,10 +312,10 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
 // A missing project must never make `pi install -l` use the app process's cwd.
 fn local_project_dir(project: Option<&str>) -> Result<&str, String> {
     let dir = project.map(str::trim).filter(|s| !s.is_empty())
-        .ok_or("请选择要安装的项目文件夹")?;
+        .ok_or_else(|| pix_error("projectDirRequired", "请选择要安装的项目文件夹"))?;
     let path = std::path::Path::new(dir);
     if !path.is_absolute() || !path.is_dir() {
-        return Err(format!("项目文件夹不存在或不是完整路径: {dir}"));
+        return Err(pix_error_detail("projectDirInvalid", format!("项目文件夹不存在或不是完整路径: {dir}"), dir));
     }
     Ok(dir)
 }
@@ -669,13 +669,13 @@ pub fn package_resources(
 ) -> Result<Vec<PackageResource>, String> {
     let settings_file = settings_path_for(&scope, project.as_deref());
     let raw = std::fs::read_to_string(&settings_file)
-        .map_err(|e| format!("读取设置失败: {e}"))?;
-    let doc: Value = serde_json::from_str(&raw).map_err(|e| format!("解析设置失败: {e}"))?;
-    let idx = find_package_entry(&doc, &source).ok_or("设置中未找到该插件")?;
+        .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
+    let doc: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
+    let idx = find_package_entry(&doc, &source).ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
     let entry = &doc["packages"][idx];
 
     let root = package_root_dir(&source, &scope, project.as_deref())
-        .ok_or("未找到插件安装目录（尚未安装或来源不支持）")?;
+        .ok_or_else(|| pix_error("pluginInstallDirNotFound", "未找到插件安装目录（尚未安装或来源不支持）"))?;
 
     let mut out = Vec::new();
     for rt in RESOURCE_TYPES {
@@ -705,14 +705,14 @@ pub fn package_set_resource(
     enabled: bool,
 ) -> Result<(), String> {
     if !RESOURCE_TYPES.contains(&resource_type.as_str()) {
-        return Err(format!("未知资源类型: {resource_type}"));
+        return Err(pix_error_detail("unknownResourceType", format!("未知资源类型: {resource_type}"), resource_type));
     }
     let settings_file = settings_path_for(&scope, project.as_deref());
     let raw = std::fs::read_to_string(&settings_file).unwrap_or_else(|_| "{}".into());
-    let mut doc: Value = serde_json::from_str(&raw).map_err(|e| format!("解析设置失败: {e}"))?;
+    let mut doc: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
 
-    let idx = find_package_entry(&doc, &source).ok_or("设置中未找到该插件")?;
-    let packages = doc.get_mut("packages").and_then(|v| v.as_array_mut()).ok_or("packages 配置无效")?;
+    let idx = find_package_entry(&doc, &source).ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
+    let packages = doc.get_mut("packages").and_then(|v| v.as_array_mut()).ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
 
     // ensure object form
     if packages[idx].is_string() {
@@ -738,7 +738,7 @@ pub fn package_set_resource(
         .collect();
     updated.push(format!("{}{}", if enabled { '+' } else { '-' }, path));
 
-    let obj = entry.as_object_mut().ok_or("packages 配置无效")?;
+    let obj = entry.as_object_mut().ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
     obj.insert(resource_type, serde_json::Value::Array(
         updated.into_iter().map(serde_json::Value::String).collect(),
     ));
@@ -757,9 +757,9 @@ pub fn package_set_resource(
 
     std::fs::write(
         &settings_file,
-        serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化设置失败: {e}"))?,
+        serde_json::to_string_pretty(&doc).map_err(|e| pix_error_detail("settingsSerializeFailed", format!("序列化设置失败: {e}"), e))?,
     )
-    .map_err(|e| format!("写入设置失败: {e}"))
+    .map_err(|e| pix_error_detail("settingsWriteFailed", format!("写入设置失败: {e}"), e))
 }
 
 #[cfg(test)]

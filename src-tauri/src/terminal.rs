@@ -8,6 +8,8 @@ use base64::Engine;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde_json::json;
 use std::collections::HashMap;
+
+use crate::errors::{pix_error, pix_error_detail};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -54,7 +56,7 @@ pub fn term_create(
 
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| format!("打开终端失败: {e}"))?;
+        .map_err(|e| pix_error_detail("terminalOpenFailed", format!("打开终端失败: {e}"), e))?;
 
     let shell = default_shell();
     let mut cmd = CommandBuilder::new(&shell);
@@ -68,7 +70,7 @@ pub fn term_create(
         cmd.env("TERM", "xterm-256color");
     }
 
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("启动 shell 失败: {e}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| pix_error_detail("shellSpawnFailed", format!("启动 shell 失败: {e}"), e))?;
     let killer = child.clone_killer();
     let writer = pair.master.take_writer().map_err(|e| format!("{e}"))?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("{e}"))?;
@@ -114,7 +116,7 @@ pub fn term_create(
 #[tauri::command]
 pub fn term_write(state: State<'_, TerminalState>, id: u32, data: String) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
-    let session = sessions.get_mut(&id).ok_or("终端已关闭")?;
+    let session = sessions.get_mut(&id).ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
     session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
     session.writer.flush().map_err(|e| e.to_string())
 }
@@ -122,7 +124,7 @@ pub fn term_write(state: State<'_, TerminalState>, id: u32, data: String) -> Res
 #[tauri::command]
 pub fn term_resize(state: State<'_, TerminalState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
-    let session = sessions.get(&id).ok_or("终端已关闭")?;
+    let session = sessions.get(&id).ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
     session
         .master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
