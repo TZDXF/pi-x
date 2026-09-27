@@ -6,78 +6,15 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { generateSessionTitle, getModelsConfig, getPiSettings, pixLog, rpcRequest as requestForRuntime, sessionHistory, sessionLastError, sessionMtime, type SessionLastError } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
-import { notifyTurnComplete } from "@/lib/notifications"
 import { sessionChanges } from "@/lib/sessionChanges"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
-import type {
-  AssistantMessageEvent,
-  CommandInfo,
-  Model,
-  SessionState,
-  SessionStats,
-  ThinkingLevel,
-  Usage,
-} from "@/api/protocol"
+import type { CommandInfo, Model, SessionState, SessionStats, ThinkingLevel, Usage } from "@/api/protocol"
+import { blocksFromMessage, createEventHandler, errorBlockText } from "./session/events"
+import { createPromptQueue } from "./session/promptQueue"
+import type { Block, Entry, QueuedPrompt, RetryInfo, SessionFlow, ToolRun, UserEntry } from "./session/types"
 
-// ---- render model ----
-
-export interface ToolRun {
-  id: string
-  name: string
-  argsText: string
-  outputText: string
-  state: "input-streaming" | "input-available" | "output-available" | "output-error"
-  /** Execution start (tool_execution_start); drives the elapsed-time display. */
-  startedAt?: number
-  completedAt?: number
-}
-
-export interface TextBlock { type: "text", text: string }
-export interface ThinkingBlock { type: "thinking", text: string, streaming: boolean }
-export interface ToolCallBlock { type: "toolCall", callId: string, name: string, argsText: string }
-export type Block = TextBlock | ThinkingBlock | ToolCallBlock
-
-export interface QueuedPrompt {
-  id: number
-  text: string
-  images?: { data: string, mimeType: string }[]
-  expandedText?: string
-  sendAt?: number
-}
-
-export interface UserEntry { kind: "user", id: number, text: string, modelChange?: { from: string, to: string }, images?: { url: string }[], live?: true, timestamp?: number }
-export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true, startedAt?: number, completedAt?: number, timestamp?: number }
-/** Marks where a compaction collapsed earlier history; summary stays expandable. */
-export interface CompactionEntry { kind: "compaction", id: number, summary: string, tokensBefore?: number, tokensAfter?: number, timestamp?: number, live?: true }
-export type Entry = UserEntry | AssistantEntry | CompactionEntry
-
-export interface RetryInfo {
-  attempt: number
-  maxAttempts: number
-  errorMessage: string
-}
-
-/** Keep the status code but unwrap JSON error payloads emitted by providers. */
-function formatRetryError(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : ""
-  if (!raw) return ""
-  const match = raw.match(/^(\d{3})\s*:\s*(\{[\s\S]*\})$/)
-  const status = match?.[1]
-  const json = match?.[2] ?? raw
-  try {
-    const parsed = JSON.parse(json)
-    const inner = typeof parsed?.error?.message === "string" ? parsed.error.message : parsed?.message
-    if (typeof inner === "string" && inner.trim())
-      return status ? `${status} · ${inner.trim()}` : inner.trim()
-  } catch { /* keep the original provider error */ }
-  return raw
-}
-
-/** Shared phrasing between the live settle entry and history rendering. */
-function errorBlockText(message: string): string {
-  return `**${i18n.global.t("chat.errorLabel")}:** ${formatRetryError(message)}`
-}
+export type { AssistantEntry, Block, CompactionEntry, Entry, QueuedPrompt, RetryInfo, TextBlock, ThinkingBlock, ToolCallBlock, ToolRun, UserEntry } from "./session/types"
 
 // ---- thinking levels (mirror pi-ai/models.js for offline use) ----
 
@@ -117,17 +54,11 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   /** In-progress assistant message being assembled from streaming deltas. */
   const partialBlocks = ref<Block[] | null>(null)
   const isStreaming = ref(false)
-  let turnFailed = false
-  let turnAborted = false
-  /** errorMessage of the last failed assistant message; surfaced at settle. */
-  let lastErrorMessage: string | null = null
   const isCompacting = ref(false)
   const retryInfo = ref<RetryInfo | null>(null)
   const promptQueue = ref<QueuedPrompt[]>([])
   const isResending = ref(false)
   let resendVersion = 0
-  let stopping = false
-  let queuePaused = false
   const steering = ref<string[]>([])
   const followUp = ref<string[]>([])
   const state = ref<SessionState | null>(null)
@@ -219,375 +150,34 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   })
   const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
-  // A dispatched prompt reserves the next run before its agent_start arrives.
-  let awaitingAgentStart = false
-  let agentStartedAt: number | undefined
   /** Reserved entry id for the in-flight assistant turn. Assigned at the
    *  first assistant message_start and reused when the entry is committed, so
    *  the UI can key the streaming turn stably across completion. */
   const streamingTurnId = ref<number | null>(null)
 
-  // ---- event ingestion ----
-  function handleEvent(ev: Record<string, any>) {
-    switch (ev.type) {
-      case "scheduled_session_created":
-        // This prompt is submitted by PiX's scheduler rather than the composer.
-        entries.value.push({ kind: "user", id: nextId(), text: ev.prompt, timestamp: Date.now() })
-        isStreaming.value = true
-        awaitingAgentStart = true
-        setSessionRunStatus(sessionFile.value, "running")
-        break
-
-      case "scheduled_session_failed":
-        // Preflight can reject a prompt without ever emitting agent_start/settled.
-        if (awaitingAgentStart) {
-          awaitingAgentStart = false
-          turnFailed = true
-          lastErrorMessage = ev.error
-          handleEvent({ type: "agent_settled" })
-        }
-        break
-
-      case "agent_start":
-        awaitingAgentStart = false
-        agentStartedAt = Date.now()
-        streamingTurnId.value = null
-        isStreaming.value = true
-        turnFailed = false
-        turnAborted = false
-        lastErrorMessage = null
-        setSessionRunStatus(sessionFile.value, "running")
-        break
-
-      case "agent_end":
-        // agent_end only ends one low-level run; auto-retry, overflow
-        // compaction and queued continuations may still follow (pi flags
-        // willRetry on the event). pi always emits agent_settled once it will
-        // not continue on its own — finalize there, never here. Treating
-        // agent_end as final also flips isStreaming off mid-run, which lets
-        // the session-file watcher rebuild (kill) the still-working process.
-        break
-
-      case "agent_settled": {
-        // A dispatched prompt reserves the next run; this settled belongs to
-        // the previous one and must not drain another queued prompt.
-        if (awaitingAgentStart && !stopping) break
-        // A duplicate settled (pi emits one per prompt, pi-x used to
-        // synthesize more) must not notify or drain the queue a second time.
-        if (!isStreaming.value && !stopping) {
-          pixLog("settled: ignored (not streaming)", runtimeId)
-          break
-        }
-        retryInfo.value = null
-        awaitingAgentStart = false
-        isStreaming.value = false
-        const finalStatus = turnAborted || stopping ? null : turnFailed ? "error" : "completed"
-        pixLog(`settled: finalize status=${finalStatus ?? "none"} notify=${!turnAborted && !stopping} failed=${turnFailed} aborted=${turnAborted}`, runtimeId)
-        setSessionRunStatus(sessionFile.value, finalStatus)
-        // Error messages carry an empty content array, so a finally-failed run
-        // would otherwise leave no trace in the conversation. Transient errors
-        // that a retry recovered from never reach this point.
-        if (finalStatus === "error" && lastErrorMessage) {
-          entries.value.push({
-            kind: "assistant",
-            id: nextId(),
-            blocks: [{ type: "text", text: errorBlockText(lastErrorMessage) }],
-            live: true,
-          })
-        }
-        if (!turnAborted && !stopping) {
-          const workspace = useWorkspaceStore()
-          const file = sessionFile.value
-          const row = file ? workspace.histories[cwd.value]?.find(s => s.file === file) : undefined
-          const project = cwd.value ? workspace.projectName(cwd.value) : ""
-          const name = row?.title || row?.preview || ""
-          notifyTurnComplete(name ? `${project} · ${name}` : project, turnFailed)
-        }
-        void refreshStats()
-        void refreshState()
-        // Our own worker just flushed the file; sync so watcher events for
-        // this write are not mistaken for external edits.
-        void syncSessionFile()
-        if (!stopping && !queuePaused) dispatchQueuedPrompt()
-        break
-      }
-
-      case "message_start": {
-        const msg = ev.message
-        if (msg?.role === "assistant") {
-          streamingTurnId.value ??= nextId()
-          partialBlocks.value = []
-        }
-        break
-      }
-
-      case "message_update": {
-        const usage = ev.usage
-        if (usage && usage.totalTokens)
-          lastUsage.value = usage
-        const delta = ev.assistantMessageEvent as AssistantMessageEvent | undefined
-        if (!delta || !partialBlocks.value)
-          break
-        applyDelta(partialBlocks.value, delta)
-        break
-      }
-
-      case "message_end": {
-        const msg = ev.message
-        if (msg?.role === "assistant") {
-          // A successful response means the retried request recovered, even if
-          // the runtime's matching auto_retry_end event is delayed.
-          if (msg.stopReason !== "error" && msg.stopReason !== "aborted")
-            retryInfo.value = null
-          if (msg.stopReason === "error") { turnFailed = true; lastErrorMessage = msg.errorMessage ?? null }
-          if (msg.stopReason === "aborted") turnAborted = true
-          // authoritative replace
-          const blocks = blocksFromMessage(msg)
-          entries.value.push({ kind: "assistant", id: streamingTurnId.value ?? nextId(), blocks, live: true, startedAt: agentStartedAt, completedAt: Date.now() })
-          if (msg.usage)
-            lastUsage.value = msg.usage
-        }
-        // user / toolResult messages are rendered from local state + tool runs
-        partialBlocks.value = null
-        streamingTurnId.value = null
-        break
-      }
-
-      case "tool_execution_start": {
-        runs.value[ev.toolCallId] = {
-          id: ev.toolCallId,
-          name: ev.toolName,
-          argsText: safeJson(ev.args),
-          outputText: "",
-          state: "input-available",
-          startedAt: Date.now(),
-        }
-        break
-      }
-
-      case "tool_execution_update": {
-        const run = runs.value[ev.toolCallId]
-        if (run && ev.partialResult) {
-          // partialResult is the accumulated output so far (per rpc.md)
-          run.outputText = contentText(ev.partialResult.content)
-        }
-        break
-      }
-
-      case "tool_execution_end": {
-        const run = runs.value[ev.toolCallId]
-        if (run) {
-          run.outputText = ev.result ? contentText(ev.result.content) : run.outputText
-          run.state = ev.isError ? "output-error" : "output-available"
-          run.completedAt = Date.now()
-        }
-        break
-      }
-
-      case "queue_update":
-        steering.value = ev.steering ?? []
-        followUp.value = ev.followUp ?? []
-        break
-
-      case "compaction_start":
-        isCompacting.value = true
-        break
-
-      case "compaction_end": {
-        isCompacting.value = false
-        // Keep a visible marker at the position where history was collapsed.
-        if (ev.result?.summary)
-          entries.value.push({ kind: "compaction", id: nextId(), summary: String(ev.result.summary),
-            tokensBefore: Number(ev.result.tokensBefore) || undefined,
-            tokensAfter: Number(ev.result.estimatedTokensAfter) || undefined,
-            timestamp: Date.now(), live: true })
-        void refreshStats()
-        // Pi flushed the compaction entry to the session file; sync our mtime
-        // so the watcher does not mistake it for an external edit and rebuild.
-        void syncSessionFile()
-        if (!stopping && !queuePaused) dispatchQueuedPrompt()
-        break
-      }
-
-      case "auto_retry_start":
-        isStreaming.value = true
-        setSessionRunStatus(sessionFile.value, "running")
-        retryInfo.value = {
-          attempt: Number(ev.attempt) || 1,
-          maxAttempts: Number(ev.maxAttempts) || Number(ev.attempt) || 1,
-          errorMessage: formatRetryError(ev.errorMessage),
-        }
-        break
-
-      case "auto_retry_end": {
-        if (ev.success) retryInfo.value = null
-        else if (retryInfo.value) {
-          retryInfo.value = {
-            ...retryInfo.value,
-            errorMessage: formatRetryError(ev.finalError ?? retryInfo.value.errorMessage),
-          }
-        }
-        // A recovered provider error must not leave the turn marked failed.
-        turnFailed = !ev.success
-        if (!ev.success)
-          void refreshState()
-        // Do NOT synthesize agent_settled here: pi emits auto_retry_end at
-        // the first healthy assistant message, which is usually mid-run, and
-        // always follows with the real agent_settled when the run is done.
-        break
-      }
-
-      case "extension_error":
-        console.warn("[pi] extension error:", ev.extensionPath, ev.error)
-        break
-    }
+  // Run-flow flags shared with the event handler and the queue scheduler
+  // (session/events.ts, session/promptQueue.ts).
+  const flow: SessionFlow = {
+    turnFailed: false,
+    turnAborted: false,
+    lastErrorMessage: null,
+    awaitingAgentStart: false,
+    agentStartedAt: undefined,
+    stopping: false,
+    queuePaused: false,
   }
 
-  function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
-    const i = delta.contentIndex
-    switch (delta.type) {
-      case "text_start":
-        blocks[i] = { type: "text", text: "" }
-        break
-      case "text_delta": {
-        const b = ensure(blocks, i, "text") as TextBlock
-        b.text += delta.delta
-        break
-      }
-      case "text_end":
-        if (delta.content !== undefined)
-          blocks[i] = { type: "text", text: delta.content }
-        break
-      case "thinking_start":
-        blocks[i] = { type: "thinking", text: "", streaming: true }
-        break
-      case "thinking_delta": {
-        const b = ensure(blocks, i, "thinking") as ThinkingBlock
-        b.text += delta.delta
-        break
-      }
-      case "thinking_end": {
-        const b = ensure(blocks, i, "thinking") as ThinkingBlock
-        if (delta.thinking !== undefined)
-          b.text = delta.thinking
-        b.streaming = false
-        break
-      }
-      case "toolcall_start":
-        blocks[i] = { type: "toolCall", callId: delta.id, name: delta.toolName, argsText: "" }
-        break
-      case "toolcall_delta": {
-        const b = ensure(blocks, i, "toolCall") as ToolCallBlock
-        b.argsText += delta.delta
-        break
-      }
-      case "toolcall_end": {
-        const call = delta.toolCall
-        blocks[i] = {
-          type: "toolCall",
-          callId: call.id,
-          name: call.name,
-          argsText: typeof call.arguments === "string"
-            ? call.arguments
-            : JSON.stringify(call.arguments ?? {}, null, 2),
-        }
-        break
-      }
-    }
-  }
+  const { schedulePrompt, removeQueuedPrompt, moveQueuedPrompt, executeQueuedPrompt, dispatchQueuedPrompt, clearQueueTimer }
+    = createPromptQueue({ promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send })
 
-  function ensure(blocks: Block[], i: number, type: Block["type"]): Block {
-    if (!blocks[i] || blocks[i].type !== type) {
-      blocks[i] = type === "text"
-        ? { type: "text", text: "" }
-        : type === "thinking"
-          ? { type: "thinking", text: "", streaming: true }
-          : { type: "toolCall", callId: "unknown", name: "unknown", argsText: "" }
-    }
-    return blocks[i]
-  }
-
-  function blocksFromMessage(msg: any): Block[] {
-    const out: Block[] = []
-    for (const c of msg.content ?? []) {
-      if (c.type === "text" && c.text)
-        out.push({ type: "text", text: c.text })
-      else if (c.type === "thinking" && c.thinking)
-        out.push({ type: "thinking", text: c.thinking, streaming: false })
-      else if (c.type === "toolCall")
-        out.push({
-          type: "toolCall",
-          callId: c.id,
-          name: c.name,
-          argsText: typeof c.arguments === "string"
-            ? c.arguments
-            : JSON.stringify(c.arguments ?? {}, null, 2),
-        })
-    }
-    return out
-  }
-
-  function safeJson(v: unknown): string {
-    try {
-      return JSON.stringify(v ?? {}, null, 2)
-    }
-    catch {
-      return String(v)
-    }
-  }
+  const handleEvent = createEventHandler({
+    runtimeId, entries, runs, partialBlocks, isStreaming, isCompacting, retryInfo,
+    steering, followUp, lastUsage, streamingTurnId, sessionFile, cwd, flow, nextId,
+    refreshStats, refreshState, syncSessionFile, dispatchQueuedPrompt,
+  })
 
   // ---- actions ----
   let conversationVersion = 0
-
-  let queueTimer: ReturnType<typeof setTimeout> | undefined
-  function armQueueTimer() {
-    if (queueTimer !== undefined) clearTimeout(queueTimer)
-    queueTimer = undefined
-    const times = promptQueue.value.flatMap(item => item.sendAt && (!queuePaused || item.sendAt > Date.now()) ? [item.sendAt] : [])
-    if (!times.length) return
-    queueTimer = setTimeout(() => {
-      queueTimer = undefined
-      if (!queuePaused) dispatchQueuedPrompt()
-      armQueueTimer()
-    }, Math.min(Math.max(100, Math.min(...times) - Date.now()), 2_147_483_647))
-  }
-
-  function schedulePrompt(text: string, delayMs: number, images?: QueuedPrompt["images"], expandedText?: string) {
-    if (!Number.isFinite(delayMs) || delayMs <= 0 || delayMs > 365 * 24 * 60 * 60 * 1000)
-      throw new Error(i18n.global.t("chat.invalidSendDelay"))
-    if (!text.trim() && !images?.length) return
-    promptQueue.value.push({ id: nextId(), text: text.trim(), images, expandedText, sendAt: Date.now() + delayMs })
-    armQueueTimer()
-  }
-
-  function removeQueuedPrompt(id: number) {
-    const index = promptQueue.value.findIndex(item => item.id === id)
-    if (index < 0) return
-    const item = promptQueue.value.splice(index, 1)[0]
-    armQueueTimer()
-    return item
-  }
-
-  function moveQueuedPrompt(id: number, targetId: number) {
-    const from = promptQueue.value.findIndex(item => item.id === id)
-    const to = promptQueue.value.findIndex(item => item.id === targetId)
-    if (from < 0 || to < 0 || from === to) return
-    promptQueue.value.splice(to, 0, promptQueue.value.splice(from, 1)[0])
-  }
-
-  function executeQueuedPrompt(id: number) {
-    if (stopping || isResending.value || isCompacting.value) return
-    const item = removeQueuedPrompt(id)
-    if (item) void send(item.text, item.images, item.expandedText, "steer")
-  }
-
-  function dispatchQueuedPrompt() {
-    if (isStreaming.value || stopping || isResending.value || isCompacting.value) return
-    queuePaused = false
-    const index = promptQueue.value.findIndex(item => !item.sendAt || item.sendAt <= Date.now())
-    const next = index < 0 ? undefined : removeQueuedPrompt(promptQueue.value[index].id)
-    if (next) void send(next.text, next.images, next.expandedText)
-  }
 
   async function send(text: string, images?: { data: string, mimeType: string }[], expandedText?: string, behavior: "queue" | "steer" = "steer", replacement?: UserEntry) {
     const trimmed = text.trim()
@@ -597,7 +187,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     // steered into an active run, so queue it behind one instead.
     const compactMatch = /^\/compact(?:\s+([\s\S]*))?$/.exec(trimmed)
     if (compactMatch && !images?.length && !commands.value.some(command => command.name === "compact")) {
-      if (isStreaming.value || stopping || isResending.value || isCompacting.value) {
+      if (isStreaming.value || flow.stopping || isResending.value || isCompacting.value) {
         promptQueue.value.push({ id: nextId(), text: trimmed })
         return
       }
@@ -608,17 +198,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         entries.value.push({ kind: "assistant", id: nextId(), blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }], live: true })
       }
       // compaction_end also drains the queue; cover RPC failures that emit none.
-      if (!stopping && !queuePaused) dispatchQueuedPrompt()
+      if (!flow.stopping && !flow.queuePaused) dispatchQueuedPrompt()
       return
     }
     if (isStreaming.value && behavior === "queue") {
       promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
       return
     }
-    queuePaused = false
+    flow.queuePaused = false
     const wasStreaming = isStreaming.value
     isStreaming.value = true
-    if (!wasStreaming) { awaitingAgentStart = true; turnFailed = false; turnAborted = false }
+    if (!wasStreaming) { flow.awaitingAgentStart = true; flow.turnFailed = false; flow.turnAborted = false }
     setSessionRunStatus(sessionFile.value, "running")
     const version = conversationVersion
     const firstMessage = !entries.value.some(entry => entry.kind === "user") && !(state.value?.messageCount)
@@ -644,9 +234,9 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       })
       .catch((e) => {
         if (version !== conversationVersion) return
-        turnFailed = true
+        flow.turnFailed = true
         setSessionRunStatus(sessionFile.value, "error")
-        if (!wasStreaming) { awaitingAgentStart = false; isStreaming.value = false }
+        if (!wasStreaming) { flow.awaitingAgentStart = false; isStreaming.value = false }
         entries.value.push({
           kind: "assistant",
           id: nextId(),
@@ -686,8 +276,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
         throw new Error(i18n.global.t("chat.editSessionChanged"))
     }
     isResending.value = true
-    stopping = true
-    queuePaused = true
+    flow.stopping = true
+    flow.queuePaused = true
     try {
       if (isStreaming.value || isCompacting.value || pendingCount.value > 0) {
         // Stop Pi's pending continuations from racing with the replacement question.
@@ -734,7 +324,7 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
       await send(text, images, expandedText, "steer", original)
     } finally {
       if (operation === resendVersion) {
-        stopping = false
+        flow.stopping = false
         isResending.value = false
       }
     }
@@ -742,8 +332,8 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   /** Esc: take back queued messages, then abort. Returns text to restore. */
   async function abortAndRestore(): Promise<string> {
-    stopping = true
-    queuePaused = true
+    flow.stopping = true
+    flow.queuePaused = true
     const restored: string[] = []
     try {
       const res = await rpcRequest<{ steering?: string[], followUp?: string[] }>({ type: "clear_queue" })
@@ -761,10 +351,10 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     try {
       await refreshState()
     } finally {
-      turnAborted = true
+      flow.turnAborted = true
       isStreaming.value = false
       setSessionRunStatus(sessionFile.value, null)
-      stopping = false
+      flow.stopping = false
     }
     return restored.join("\n")
   }
@@ -1118,18 +708,17 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
 
   function clear() {
     pendingModelChange = null
-    agentStartedAt = undefined
-    turnFailed = false
-    turnAborted = false
-    lastErrorMessage = null
-    awaitingAgentStart = false
+    flow.agentStartedAt = undefined
+    flow.turnFailed = false
+    flow.turnAborted = false
+    flow.lastErrorMessage = null
+    flow.awaitingAgentStart = false
     promptQueue.value = []
-    if (queueTimer !== undefined) clearTimeout(queueTimer)
-    queueTimer = undefined
-    stopping = false
+    clearQueueTimer()
+    flow.stopping = false
     ++resendVersion
     isResending.value = false
-    queuePaused = false
+    flow.queuePaused = false
     isStreaming.value = false
     isCompacting.value = false
     retryInfo.value = null
@@ -1253,3 +842,6 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
     clear,
   }
 })
+
+/** Store instance type for composables and helpers that operate on a session. */
+export type SessionStore = ReturnType<ReturnType<typeof createSessionStore>>

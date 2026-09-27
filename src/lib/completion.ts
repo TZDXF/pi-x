@@ -33,7 +33,9 @@ export function insertSessionCompletion(text: string, token: CompletionToken, fi
 }
 
 /** Only expand references to sessions currently known to the workspace. */
-export function withSessionReferences(text: string, sessions: { file: string; title?: string | null; preview?: string | null }[]): string {
+export interface KnownSession { file: string; title?: string | null; preview?: string | null }
+
+export function withSessionReferences(text: string, sessions: KnownSession[]): string {
   const known = new Map(sessions.map(s => [s.file.replace(/\\/g, '/'), s]))
   const matches = new Map<string, string>()
   for (const match of text.matchAll(/(?:^|\s)@session\(("(?:\\.|[^"\\])*")\)/g)) {

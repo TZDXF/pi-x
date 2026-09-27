@@ -1,9 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import vm from 'node:vm'
-import ts from 'typescript'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsModule, loadTsSource } from './lib/load-ts.mjs'
 
 function harness(storage = new Map(), options = {}) {
   const calls = []
@@ -33,12 +31,10 @@ function harness(storage = new Map(), options = {}) {
       },
     },
   }
-  const context = vm.createContext({ exports: {}, require: id => modules[id], console,
-    localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
-  })
-  const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return { store: context.exports.createSessionStore('default')(), calls, state, storage }
+  const { createSessionStore } = loadTsModule(
+    new URL('../src/stores/session.ts', import.meta.url), id => modules[id],
+    { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) } })
+  return { store: createSessionStore('default')(), calls, state, storage }
 }
 
 test('Pi defaults are displayed offline but never overwrite a restored session', async () => {

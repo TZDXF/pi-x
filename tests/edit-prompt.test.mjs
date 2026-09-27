@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadTsSource, contentModule } from './lib/load-ts.mjs'
+import { loadTsModule, contentModule } from './lib/load-ts.mjs'
 
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -24,10 +24,12 @@ function harness(overrides = {}) {
     '@/lib/content': contentModule(),
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/i18n': { i18n: { global: { t: key => key } } },
+    '@/lib/notifications': { notifyTurnComplete() {} },
+    '@/stores/workspace': { useWorkspaceStore: () => ({ histories: {}, projectName: () => 'project', preview() {}, generatedTitle() {}, refresh: async () => {} }) },
   }
-  const { createSessionStore } = loadTsSource(source('../src/stores/session.ts'), {
-    require: name => modules[name], localStorage: { getItem: () => null },
-  })
+  const { createSessionStore } = loadTsModule(
+    new URL('../src/stores/session.ts', import.meta.url), name => modules[name],
+    { localStorage: { getItem: () => null } })
   const store = createSessionStore('editing')()
   store.state.value = state
   store.sessionFile.value = state.sessionFile
@@ -127,8 +129,7 @@ test('late rejection of the interrupted prompt cannot fail the replacement run',
 })
 
 test('edit UI allows a running answer and preserves the draft when stopping fails', () => {
-  const chat = source('../src/components/ChatView.vue')
-  const edit = chat.slice(chat.indexOf('// Resend the edited question'), chat.indexOf('// ---- settings / export / copy ----'))
+  const edit = source('../src/composables/usePromptEdit.ts')
   assert.doesNotMatch(edit, /session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
   assert.match(edit, /await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
   const app = source('../src/App.vue')
@@ -138,10 +139,11 @@ test('edit UI allows a running answer and preserves the draft when stopping fail
 
 test('only the latest question offers inline editing, and stale edits cannot be resent', () => {
   const chat = source('../src/components/ChatView.vue')
-  assert.match(chat, /const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
+  const edit = source('../src/composables/usePromptEdit.ts')
+  assert.match(edit, /const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
   assert.match(chat, /v-if="entry\.id === lastUserPromptId && editedPrompt\?\.id !== entry\.id"[^>]*@click="startEditPrompt\(entry\)"/)
-  assert.match(chat, /if \(editBlocked\.value \|\| entry\.id !== lastUserPromptId\.value\) return/)
-  assert.match(chat, /if \(!entry \|\| entry\.id !== lastUserPromptId\.value \|\| editBlocked\.value/)
+  assert.match(edit, /if \(editBlocked\.value \|\| entry\.id !== lastUserPromptId\.value\) return/)
+  assert.match(edit, /if \(!entry \|\| entry\.id !== lastUserPromptId\.value \|\| editBlocked\.value/)
   assert.match(chat, /v-if="editedPrompt\?\.id === entry\.id"[\s\S]*<Textarea[\s\S]*v-model="editedText"/)
   assert.doesNotMatch(chat, /<Dialog :open="editedPrompt !== null"/)
 })

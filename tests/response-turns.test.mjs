@@ -64,7 +64,8 @@ test('chat uses an initially closed process disclosure and original index for br
 test('streaming and completed answers share one render path so markdown never remounts', () => {
   const chat = readFileSync(new URL('../src/components/ChatView.vue', import.meta.url), 'utf8')
   const blocks = readFileSync(new URL('../src/components/AssistantBlocks.vue', import.meta.url), 'utf8')
-  const session = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
+  // The streaming-turn id is reserved in the store's event-ingestion submodule.
+  const session = readFileSync(new URL('../src/stores/session/events.ts', import.meta.url), 'utf8')
   // In-flight deltas fold into the last turn instead of a separate Message.
   assert.doesNotMatch(chat, /<Message v-if="session.partialBlocks"/)
   assert.match(chat, /blocks: \[\.\.\.last\.blocks, \.\.\.partial\]/)

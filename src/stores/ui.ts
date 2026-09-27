@@ -118,3 +118,6 @@ export const createUiStore = (runtimeId = "default") => defineStore(`ui:${runtim
     clear,
   }
 })
+
+/** Store instance type for composables and helpers that operate on UI state. */
+export type UiStore = ReturnType<ReturnType<typeof createUiStore>>

@@ -1,12 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import vm from 'node:vm'
-import ts from 'typescript'
-import { contentModule, loadTsSource } from './lib/load-ts.mjs'
+import { contentModule, loadTsModule, loadTsSource } from './lib/load-ts.mjs'
 
 function harness({ messages = [], lastError = null } = {}) {
-  const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
@@ -29,9 +26,10 @@ function harness({ messages = [], lastError = null } = {}) {
     '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
     '@/lib/contextBreakdown': loadTsSource(readFileSync(new URL('../src/lib/contextBreakdown.ts', import.meta.url), 'utf8')),
   }
-  const context = vm.createContext({ exports: {}, console, setTimeout, localStorage: { getItem: () => null }, require: id => modules[id] })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  const store = context.exports.createSessionStore('test')()
+  const { createSessionStore } = loadTsModule(
+    new URL('../src/stores/session.ts', import.meta.url), id => modules[id],
+    { setTimeout, localStorage: { getItem: () => null } })
+  const store = createSessionStore('test')()
   store.sessionFile.value = 'test.jsonl'
   return store
 }

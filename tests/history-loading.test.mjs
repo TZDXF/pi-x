@@ -1,9 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import vm from 'node:vm'
-import ts from 'typescript'
-import { contentModule, loadTsSource } from './lib/load-ts.mjs'
+import { contentModule, loadTsModule, loadTsSource } from './lib/load-ts.mjs'
 
 function harness() {
   const requests = []
@@ -18,10 +16,9 @@ function harness() {
     '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
     '@/lib/contextBreakdown': loadTsSource(readFileSync(new URL('../src/lib/contextBreakdown.ts', import.meta.url), 'utf8')),
   }
-  const context = vm.createContext({ exports: {}, setTimeout, require: id => modules[id] })
-  const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  return { store: context.exports.createSessionStore('default')(), requests }
+  const { createSessionStore } = loadTsModule(
+    new URL('../src/stores/session.ts', import.meta.url), id => modules[id], { setTimeout })
+  return { store: createSessionStore('default')(), requests }
 }
 const messages = count => Array.from({ length: count }, (_, i) => ({ role: 'user', content: `message ${i}` }))
 

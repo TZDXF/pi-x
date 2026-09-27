@@ -1,16 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import vm from 'node:vm'
-import ts from 'typescript'
-import { contentModule } from './lib/load-ts.mjs'
+import { contentModule, loadTsModule } from './lib/load-ts.mjs'
 
 function loadStore(name, modules) {
-  const source = readFileSync(new URL(`../src/stores/${name}.ts`, import.meta.url), 'utf8')
-  const context = vm.createContext({ exports: {}, setTimeout, clearTimeout, console: { warn() {}, error() {} },
-    require: id => modules[id], localStorage: { getItem: () => null } })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  const exports = context.exports
+  const exports = loadTsModule(new URL(`../src/stores/${name}.ts`, import.meta.url), id => modules[id],
+    { setTimeout, clearTimeout, console: { warn() {}, error() {} }, localStorage: { getItem: () => null } })
   // session.ts: factory (runtimeId => store); workspace.ts: plain store fn.
   const factory = exports.createSessionStore ?? exports.createUiStore
   const store = factory ? factory('default')() : Object.values(exports)[0]()

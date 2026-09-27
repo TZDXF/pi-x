@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { loadTsModule } from './lib/load-ts.mjs'
 
 function harness() {
   const statuses = new Map()
   const notifications = []
-  const source = readFileSync(new URL('../src/stores/session.ts', import.meta.url), 'utf8')
   const modules = {
     pinia: { defineStore: (_, setup) => setup },
     vue: { ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }) },
@@ -19,10 +19,11 @@ function harness() {
       else statuses.delete(file)
     } },
   }
-  const context = vm.createContext({ exports: {}, console, localStorage: { getItem: () => null }, require: id => modules[id] })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
+  const { createSessionStore } = loadTsModule(
+    new URL('../src/stores/session.ts', import.meta.url), id => modules[id],
+    { localStorage: { getItem: () => null } })
   function session(id, file) {
-    const store = context.exports.createSessionStore(id)()
+    const store = createSessionStore(id)()
     store.sessionFile.value = file
     return store
   }
