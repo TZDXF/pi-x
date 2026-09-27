@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning"
+import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
@@ -174,11 +174,11 @@ const { t } = useI18n()
         class="text-sm"
       />
 
-      <!-- thinking -->
-      <Reasoning v-else-if="block.type === 'thinking'" :is-streaming="block.streaming" :default-open="block.streaming">
-        <ReasoningTrigger />
-        <ReasoningContent :content="block.text" :animate="props.animate" />
-      </Reasoning>
+      <!-- thinking: collapsed by default; the trigger streams the latest reasoning line -->
+      <Thinking v-else-if="block.type === 'thinking'" :is-streaming="block.streaming">
+        <ThinkingTrigger :streaming-text="block.text" />
+        <ThinkingContent :content="block.text" />
+      </Thinking>
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">

@@ -651,6 +651,10 @@ export default {
     output: "Output",
     openInReview: "View this file in the review page",
     copyTerminal: "Copy terminal content",
+    thinking: "Thinking",
+    thinkingSeconds: "Thinking · {seconds}s",
+    thoughtFew: "Thought for a few seconds",
+    thoughtSeconds: "Thought for {seconds}s",
   },
 
   status: {

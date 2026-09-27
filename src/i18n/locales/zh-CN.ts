@@ -651,6 +651,10 @@ export default {
     output: "输出",
     openInReview: "在审查页中查看此文件的变更",
     copyTerminal: "复制终端内容",
+    thinking: "思考中",
+    thinkingSeconds: "思考中 · {seconds} 秒",
+    thoughtFew: "思考了片刻",
+    thoughtSeconds: "思考了 {seconds} 秒",
   },
 
   status: {
