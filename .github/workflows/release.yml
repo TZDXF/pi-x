@@ -84,7 +84,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
+          tagName: ${{ github.ref_name }}
           releaseName: PiX ${{ github.ref_name }}
+          releaseDraft: false
           updaterJsonPreferNsis: true
           args: --features remote-access --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
