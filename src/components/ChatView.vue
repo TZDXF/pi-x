@@ -883,8 +883,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
           :disabled="editBusy || workspace.gitBusy || (connecting && !selectingProject && !completion?.initiating)"
           class="min-h-14"
         />
-        <div data-align="block-end" class="composer-controls flex flex-wrap items-center justify-between w-full pt-0 pr-[5px] pb-[5px] pl-[5px] gap-1.5">
-          <div class="composer-options flex items-center gap-1 min-w-0 flex-wrap flex-1">
+        <div data-align="block-end" class="composer-controls flex items-center justify-between w-full pt-0 pr-[5px] pb-[5px] pl-[5px] gap-1.5">
+          <div class="composer-options flex items-center gap-1 min-w-0 flex-1">
             <Button
               type="button"
               variant="ghost"
@@ -897,14 +897,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
               <Paperclip class="size-4.5" />
             </Button>
 
-            <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" :show-provider="false" open-above />
+            <ConversationModelSelect trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35 overflow-hidden [&>[data-slot=select-value]]:min-w-0 [&>[data-slot=select-value]]:overflow-hidden" v-model="modelKey" :models="session.models" :disabled="!connected && session.models.length === 0" :show-provider="false" open-above />
 
             <Select
               :model-value="session.thinkingLevel"
               :disabled="!connected && session.models.length === 0"
               @update:model-value="onThinkingChange"
             >
-              <SelectTrigger class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35">
+              <SelectTrigger class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35 overflow-hidden [&>[data-slot=select-value]]:min-w-0 [&>[data-slot=select-value]]:overflow-hidden">
                 <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
               </SelectTrigger>
               <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">
@@ -920,7 +920,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
             </Select>
 
           </div>
-          <div class="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
+          <div class="ml-auto flex max-w-full items-center justify-end gap-1">
             <div v-if="delayedSend" class="flex h-8 items-center rounded-md border border-border bg-background px-1 text-sm font-mono tabular-nums text-foreground focus-within:ring-1 focus-within:ring-ring" role="group" :aria-label="t('chat.sendDelay')">
               <NumberFieldRoot v-model="sendDelayMinutes" :min="0" :max="525600" disable-wheel-change :format-options="{ minimumIntegerDigits: 2, useGrouping: false }" @wheel="onSendDelayWheel($event, 'minutes')">
                 <NumberFieldInput class="min-w-0 bg-transparent text-right outline-none" :style="{ width: `${Math.max(2, String(sendDelayMinutes ?? 0).length) + 0.5}ch` }" :aria-label="t('chat.sendDelayMinutes')" />
