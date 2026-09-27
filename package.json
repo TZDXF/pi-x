@@ -3,10 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@12.4.1",
   "scripts": {
     "dev": "vite",
-    "dev:desktop": "tauri dev",
-    "dev:desktop:remote": "npm run build && tauri dev --features remote-access",
+    "dev:desktop": "tauri dev --config tauri.dev.conf.json",
+    "dev:desktop:remote": "npm run build && tauri dev --features remote-access --config tauri.dev.conf.json",
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint src tests",
