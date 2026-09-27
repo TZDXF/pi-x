@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri 2（Rust），通过 `pi --mode rpc` 的 JSONL 标准输入/输出通信。
-- `src/components/`：界面组件；`stores/`：会话与 UI 状态；`composables/`：可复用组合逻辑。
+- `src/components/`：界面组件，其中 `ui/` 与 `ai-elements/` 为 vendored 上游组件（shadcn-vue / ai-elements），以 fork 模式自行维护；`stores/`：会话与 UI 状态；`composables/`：可复用组合逻辑。
 - `src/api/`：RPC 类型与桌面/远程传输；`src/lib/`：业务工具；`src/i18n/`：翻译。
 - `src/assets/`、`public/`：前端资源；`src-tauri/src/`：进程管理、信任、终端及 Git 等后端能力。
 - `tests/`：Node 单元测试与浏览器回归脚本；`tests/lib/`：测试辅助代码。Rust 单元测试位于后端源码中。
@@ -20,7 +20,7 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 ## 代码风格与命名
 遵循邻近代码：Vue/TypeScript 通常使用两空格缩进、省略分号；Rust 使用四空格缩进。组件采用 PascalCase（如 `ChatView.vue`），变量与函数使用 camelCase，Rust 模块与函数使用 snake_case。前端内部导入可使用 `@/` 别名。
 
-TypeScript 启用严格检查；使用 `pnpm run lint` 验证 ESLint 规则，不进行无关的大规模格式化。`src/components/ui/` 与 `ai-elements/` 为上游组件，避免直接修改。遵守 `.gitattributes`：文本默认 LF，Windows 脚本使用 CRLF。用户可见文案必须通过 i18n，并同步 `zh-CN` 与 `en`。
+TypeScript 启用严格检查；使用 `pnpm run lint` 验证 ESLint 规则，不进行无关的大规模格式化。`src/components/ui/` 与 `src/components/ai-elements/` 是 vendored 进仓库的组件库，本项目以 fork 模式直接修改维护（历史提交亦如此），可按需改动；改动保持小步、贴近原有写法，便于日后与上游同步时对照。ESLint 忽略这两个目录，其代码风格需手动与邻近代码保持一致。遵守 `.gitattributes`：文本默认 LF，Windows 脚本使用 CRLF。用户可见文案必须通过 i18n，并同步 `zh-CN` 与 `en`。
 
 ## 测试要求
 Node 测试使用 `node:test` 与 `node:assert/strict`，文件命名为 `tests/<feature>.test.mjs`；修复缺陷时补充回归用例。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。

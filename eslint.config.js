@@ -10,7 +10,7 @@ export default tseslint.config(
       "node_modules/**",
       "src-tauri/**",
       ".playwright-cli/**",
-      // Vendored component libraries (shadcn-vue / ai-elements) — maintained upstream.
+      // Vendored component libraries (shadcn-vue / ai-elements) — fork-maintained in this repo, lint skipped.
       "src/components/ui/**",
       "src/components/ai-elements/**",
     ],

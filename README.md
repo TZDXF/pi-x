@@ -68,7 +68,7 @@ pi-x/
 │   │   ├── session.ts          # 会话状态：流式组装、工具运行状态机、队列
 │   │   └── ui.ts               # 扩展对话框队列、toast、stderr 诊断
 │   ├── components/
-│   │   ├── ai-elements/        # ai-elements-vue 生成的组件（勿手改）
+│   │   ├── ai-elements/        # ai-elements-vue 组件（fork 模式自维护，含本地改动）
 │   │   ├── ChatView.vue        # 主聊天界面
 │   │   ├── AssistantBlocks.vue # assistant 消息块渲染（文本/思考/工具）
 │   │   ├── PromptInputBridge.vue # PromptInput context 桥接（编程式访问输入框）
