@@ -120,7 +120,13 @@ fn parse_target(root: &str, raw_path: &str) -> Option<Target> {
     }
     let scheme = parts.next()?.to_ascii_lowercase();
     let host = parts.next()?.to_string();
-    if host.is_empty() || (scheme != "http" && scheme != "https") {
+    // The host is spliced back into injected markup and rewritten URLs; keep
+    // it to hostname characters so it cannot break out of attribute context.
+    let host_safe = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '%'));
+    if !host_safe || (scheme != "http" && scheme != "https") {
         return None;
     }
     Some(Target {
@@ -129,6 +135,14 @@ fn parse_target(root: &str, raw_path: &str) -> Option<Target> {
         scheme,
         host,
     })
+}
+
+/// The proxied base for the document itself: `{prefix}/{scheme}/{host}`.
+/// Root-relative URLs in the page (`/_astro/x.css`) are rewritten against it,
+/// because `/…` URLs always resolve against the origin and would otherwise
+/// escape the proxy prefix.
+fn document_base(target: &Target) -> String {
+    format!("{}/{}/{}", target.prefix, target.scheme, target.host)
 }
 
 async fn handle(req: Request) -> Response {
@@ -344,19 +358,33 @@ async fn forward_http(req: Request, target: &Target) -> Response {
             builder = builder.header(header::LOCATION, location);
         }
     }
-    let is_html = response
+    let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_ascii_lowercase().contains("text/html"))
-        .unwrap_or(false);
-    if is_html {
+        .map(|v| v.to_ascii_lowercase())
+        .unwrap_or_default();
+    if content_type.contains("text/html") {
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
         };
         return builder
-            .body(Body::from(inject_bridge(&bytes, &target.prefix)))
+            .body(Body::from(rewrite_document(&bytes, target)))
+            .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+    }
+    if content_type.contains("text/css") {
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+        };
+        let base = document_base(target);
+        let rewritten = match std::str::from_utf8(&bytes) {
+            Ok(text) => rewrite_css_urls(text, &base).into_bytes(),
+            Err(_) => bytes.to_vec(),
+        };
+        return builder
+            .body(Body::from(rewritten))
             .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
     }
     builder
@@ -384,15 +412,32 @@ fn rewrite_referer(parts: &axum::http::request::Parts, target: &Target) -> Optio
     ))
 }
 
-/// Injects the bridge script into the first closing body/html tag; pages
-/// without either still get it appended so the panel keeps working.
-fn inject_bridge(html: &[u8], prefix: &str) -> Vec<u8> {
-    let script = format!(r#"<script src="{prefix}/bridge.js"></script>"#);
+/// Rewrites the document for the proxy and injects the bridge. Root-relative
+/// URLs (`/_astro/x.css`) resolve against the proxy origin and would 404, so
+/// HTML attributes and CSS `url()` references are prefixed, and the document
+/// base is published for the bridge to patch runtime requests (fetch/XHR/…).
+fn rewrite_document(html: &[u8], target: &Target) -> Vec<u8> {
+    let base = document_base(target);
+    let script = format!(
+        r#"<script>window.__pixPreviewBase="{base}";</script><script src="{}/bridge.js"></script>"#,
+        target.prefix
+    );
+    // Non-UTF-8 documents (legacy charsets) are served unrewritten but still
+    // get the bridge appended.
+    let Ok(text) = std::str::from_utf8(html) else {
+        return append_before_close(html, script.as_bytes());
+    };
+    let rewritten = rewrite_html_attributes(text, &base);
+    let rewritten = rewrite_css_urls(&rewritten, &base);
+    append_before_close(rewritten.as_bytes(), script.as_bytes())
+}
+
+fn append_before_close(html: &[u8], script: &[u8]) -> Vec<u8> {
     for marker in [b"</body>".as_slice(), b"</html>".as_slice()] {
         if let Some(pos) = find_case_insensitive(html, marker) {
             let mut out = Vec::with_capacity(html.len() + script.len());
             out.extend_from_slice(&html[..pos]);
-            out.extend_from_slice(script.as_bytes());
+            out.extend_from_slice(script);
             out.extend_from_slice(&html[pos..]);
             return out;
         }
@@ -400,8 +445,72 @@ fn inject_bridge(html: &[u8], prefix: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(html.len() + script.len() + 1);
     out.extend_from_slice(html);
     out.extend_from_slice(b"\n");
-    out.extend_from_slice(script.as_bytes());
+    out.extend_from_slice(script);
     out
+}
+
+/// URL-carrying HTML attributes that must stay inside the proxy prefix.
+fn attribute_regex() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // The regex crate has no backreferences, so the closing quote may be
+        // either kind; real-world attributes are well-formed anyway.
+        regex::Regex::new(r#"(?i)(\s(?:src|href|action|poster|data-src|data-srcset|srcset|imagesrcset)\s*=\s*)(["'])([^"']*)(["'])"#)
+            .expect("attribute regex")
+    })
+}
+
+fn css_url_regex() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r#"url\(\s*(["']?)(/[^)"']*)(["']?)\s*\)"#).expect("css url regex"))
+}
+
+/// Prefixes root-relative URLs; protocol-relative (`//cdn`), absolute
+/// (`https://…`), fragment and already-prefixed URLs pass through untouched.
+fn rewrite_single_url(url: &str, base: &str) -> String {
+    if url.len() > 1 && url.starts_with('/') && !url.starts_with("//") && !url.starts_with(base) {
+        format!("{base}{url}")
+    } else {
+        url.to_string()
+    }
+}
+
+fn rewrite_html_attributes(text: &str, base: &str) -> String {
+    attribute_regex()
+        .replace_all(text, |caps: &regex::Captures| {
+            let lead = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let open = caps.get(2).map(|m| m.as_str()).unwrap_or("\"");
+            let value = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            let close = caps.get(4).map(|m| m.as_str()).unwrap_or("\"");
+            // srcset/imagesrcset carry "url descriptor" candidates per comma.
+            let rewritten = value
+                .split(',')
+                .map(|candidate| {
+                    let trimmed = candidate.trim_start();
+                    let leading = &candidate[..candidate.len() - trimmed.len()];
+                    let mut tokens = trimmed.splitn(2, char::is_whitespace);
+                    let url = tokens.next().unwrap_or("");
+                    match tokens.next() {
+                        Some(rest) => format!("{leading}{} {rest}", rewrite_single_url(url, base)),
+                        None => format!("{leading}{}", rewrite_single_url(url, base)),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{lead}{open}{rewritten}{close}")
+        })
+        .into_owned()
+}
+
+fn rewrite_css_urls(text: &str, base: &str) -> String {
+    css_url_regex()
+        .replace_all(text, |caps: &regex::Captures| {
+            let open = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let url = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let close = caps.get(3).map(|m| m.as_str()).unwrap_or(open);
+            format!("url({open}{}{close})", rewrite_single_url(url, base))
+        })
+        .into_owned()
 }
 
 fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -593,18 +702,63 @@ mod tests {
     }
 
     #[test]
-    fn injects_the_bridge_before_the_closing_body_tag() {
-        let injected = inject_bridge(b"<html><body><p>hi</p></body></html>", "/p/secret");
-        assert_eq!(
-            String::from_utf8(injected).unwrap(),
-            r#"<html><body><p>hi</p><script src="/p/secret/bridge.js"></script></body></html>"#
-        );
+    fn rewrites_the_document_and_injects_the_bridge() {
+        let target = target_for(&proxied("/https/example.com"));
+        let base = document_base(&target);
+        let html = r#"<html><body><link rel="stylesheet" href="/_astro/a.css"><img src="/logo.png" srcset="/a.png 1x, /b.png 2x"></body></html>"#;
+        let out = String::from_utf8(rewrite_document(html.as_bytes(), &target)).unwrap();
+        assert!(out.contains(&format!(r#"href="{base}/_astro/a.css""#)));
+        assert!(out.contains(&format!(r#"src="{base}/logo.png""#)));
+        assert!(out.contains(&format!(r#"srcset="{base}/a.png 1x, {base}/b.png 2x""#)));
+        assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
+        assert!(out.contains(&format!(r#"<script src="{}/bridge.js"></script>"#, target.prefix)));
         // Case-insensitive fallback.
-        let injected = inject_bridge(b"<html><BODY></BODY></HTML>", "/p/secret");
-        assert!(String::from_utf8(injected).unwrap().contains(r#"<script src="/p/secret/bridge.js"></script>"#));
+        let out = String::from_utf8(rewrite_document(b"<html><BODY></BODY></HTML>", &target)).unwrap();
+        assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
+        assert!(out.contains(r#"<script src="/p/"#));
         // Pages without closing tags still receive the bridge.
-        let injected = inject_bridge(b"<html><body><p>truncated", "/p/secret");
-        assert!(String::from_utf8(injected).unwrap().ends_with(r#"<script src="/p/secret/bridge.js"></script>"#));
+        let out = String::from_utf8(rewrite_document(b"<html><body><p>truncated", &target)).unwrap();
+        assert!(out.contains(r#"<script src="/p/"#));
+    }
+
+    #[test]
+    fn leaves_escaping_urls_and_already_prefixed_ones_alone() {
+        let target = target_for(&proxied("/https/example.com"));
+        let base = document_base(&target);
+        let html = format!(
+            r##"<a href="//cdn.example.org/x">cdn</a><a href="https://other.org/y">abs</a><a href="#anchor">frag</a><a href="mailto:a@b.c">mail</a><img src="{base}/prefixed.png">"##
+        );
+        let out = String::from_utf8(rewrite_document(html.as_bytes(), &target)).unwrap();
+        assert!(out.contains(r##"href="//cdn.example.org/x""##));
+        assert!(out.contains(r##"href="https://other.org/y""##));
+        assert!(out.contains(r##"href="#anchor""##));
+        assert!(out.contains(r##"href="mailto:a@b.c""##));
+        // Already prefixed: exactly one occurrence in the img, none added by the rewrite.
+        assert_eq!(out.matches(&format!(r##"src="{base}/prefixed.png""##)).count(), 1);
+    }
+
+    #[test]
+    fn rewrites_root_relative_css_urls() {
+        let target = target_for(&proxied("/https/example.com"));
+        let base = document_base(&target);
+        let css = r#"body { background: url(/img/bg.png) } .a { background-image: url('/i/a.png'); mask: url("//cdn/m.png") }"#;
+        let out = rewrite_css_urls(css, &base);
+        assert!(out.contains(&format!("url({base}/img/bg.png)")));
+        assert!(out.contains(&format!("url('{base}/i/a.png')")));
+        // Protocol-relative stays untouched.
+        assert!(out.contains(r#"url("//cdn/m.png")"#));
+    }
+
+    #[test]
+    fn rejects_hosts_with_markup_characters() {
+        init();
+        // Percent-encoded quotes stay encoded through the whole pipeline and
+        // cannot break out of injected markup, so they are allowed.
+        assert!(parse_target(DESKTOP_ROOT, &proxied("/http/a%22b/")).is_some());
+        assert!(parse_target(DESKTOP_ROOT, &proxied("/http/a\"b/")).is_none());
+        assert!(parse_target(DESKTOP_ROOT, &proxied("/http/a<b/")).is_none());
+        assert!(parse_target(DESKTOP_ROOT, &proxied("/http/127.0.0.1:5173/")).is_some());
+        assert!(parse_target(DESKTOP_ROOT, &proxied("/http/[::1]:8080/")).is_some());
     }
 
     #[test]
@@ -657,10 +811,17 @@ mod tests {
 
         let target = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let target_port = target.local_addr().unwrap().port();
-        let app = Router::new().route(
-            "/",
-            get(|| async { axum::response::Html("<html><body><h1>dev</h1></body></html>") }),
-        );
+        let app = Router::new()
+            .route(
+                "/",
+                get(|| async {
+                    axum::response::Html(r#"<html><body><link rel="stylesheet" href="/style.css"><h1>dev</h1></body></html>"#)
+                }),
+            )
+            .route(
+                "/style.css",
+                get(|| async { ([(header::CONTENT_TYPE, "text/css")], "body { background: url(/bg.png) }") }),
+            );
         tokio::spawn(async move { axum::serve(target, app).await.unwrap() });
 
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -676,7 +837,14 @@ mod tests {
         assert_eq!(page.status(), 200);
         let body = page.text().await.unwrap();
         assert!(body.contains("<h1>dev</h1>"));
+        let base = format!("/p/{}/http/127.0.0.1:{target_port}", secret());
+        assert!(body.contains(&format!(r#"href="{base}/style.css""#)));
+        assert!(body.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
         assert!(body.contains(&format!("<script src=\"/p/{}/bridge.js\"></script>", secret())));
+
+        let css = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/style.css")).await.unwrap();
+        assert_eq!(css.status(), 200);
+        assert!(css.text().await.unwrap().contains(&format!("url({base}/bg.png)")));
 
         let bridge = reqwest::get(format!("http://127.0.0.1:{proxy_port}/p/{}/bridge.js", secret()))
             .await

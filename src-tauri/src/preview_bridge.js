@@ -15,6 +15,19 @@
   var SOURCE = "pix-preview"
   var INCOMING = "pix-preview-page"
 
+  // Injected by the proxy: the proxied base for this document
+  // ("{prefix}/{scheme}/{host}"). Root-relative URLs must be re-based or they
+  // escape the proxy prefix and 404 against the proxy origin.
+  var BASE = window.__pixPreviewBase || ""
+
+  function prefixUrl(url) {
+    if (!BASE || typeof url !== "string") return url
+    if (url.charAt(0) === "/" && url.charAt(1) !== "/" && url.indexOf(BASE + "/") !== 0 && url !== BASE) {
+      return BASE + url
+    }
+    return url
+  }
+
   function send(message) {
     try {
       message.source = SOURCE
@@ -29,6 +42,12 @@
 
   // ---- navigation reporting -------------------------------------------------
 
+  function fixStateUrl(url) {
+    if (url == null) return url
+    if (typeof url === "string") return prefixUrl(url)
+    return String(url)
+  }
+
   function reportNavigation() {
     send({ type: "navigated", url: location.href, title: safeText(document.title, 200) })
   }
@@ -36,12 +55,16 @@
   var nativePushState = history.pushState
   var nativeReplaceState = history.replaceState
   history.pushState = function () {
-    var result = nativePushState.apply(this, arguments)
+    var args = Array.prototype.slice.call(arguments)
+    if (args.length >= 3) args[2] = fixStateUrl(args[2])
+    var result = nativePushState.apply(this, args)
     setTimeout(reportNavigation, 0)
     return result
   }
   history.replaceState = function () {
-    var result = nativeReplaceState.apply(this, arguments)
+    var args = Array.prototype.slice.call(arguments)
+    if (args.length >= 3) args[2] = fixStateUrl(args[2])
+    var result = nativeReplaceState.apply(this, args)
     setTimeout(reportNavigation, 0)
     return result
   }
@@ -80,6 +103,66 @@
     var reason = event.reason
     forwardConsole("error", ["Unhandled rejection: " + safeText(reason && reason.message ? reason.message : reason, 400)])
   })
+
+  // ---- runtime request patching ----------------------------------------------
+  // Static HTML/CSS are rewritten server-side; requests issued from
+  // JavaScript need the same re-basing at runtime.
+
+  if (BASE) {
+    var nativeFetch = window.fetch
+    if (nativeFetch) {
+      window.fetch = function (input, init) {
+        try {
+          if (typeof input === "string") input = prefixUrl(input)
+        } catch (_) { /* fall through with the original input */ }
+        return nativeFetch.call(this, input, init)
+      }
+    }
+
+    var nativeOpen = XMLHttpRequest.prototype.open
+    XMLHttpRequest.prototype.open = function () {
+      var args = Array.prototype.slice.call(arguments)
+      if (args.length >= 2) args[1] = prefixUrl(args[1])
+      return nativeOpen.apply(this, args)
+    }
+
+    var NativeEventSource = window.EventSource
+    if (NativeEventSource) {
+      window.EventSource = function (url, config) {
+        return new NativeEventSource(prefixUrl(url), config)
+      }
+      window.EventSource.prototype = NativeEventSource.prototype
+      Object.assign(window.EventSource, { CONNECTING: 0, OPEN: 1, CLOSED: 2 })
+    }
+
+    var NativeWebSocket = window.WebSocket
+    if (NativeWebSocket) {
+      window.WebSocket = function (url, protocols) {
+        var patched = url
+        try {
+          if (typeof url === "string") {
+            if (url.charAt(0) === "/" && url.charAt(1) !== "/") {
+              var scheme = location.protocol === "https:" ? "wss:" : "ws:"
+              patched = scheme + "//" + location.host + prefixUrl(url)
+            } else if (/^wss?:\/\//i.test(url)) {
+              // Absolute socket URLs aimed at the proxy host need the base
+              // inserted; other hosts go out directly.
+              var parsed = new URL(url)
+              if (parsed.host === location.host) {
+                var path = parsed.pathname + parsed.search
+                if (path.charAt(0) === "/" && path.indexOf(BASE + "/") !== 0) {
+                  patched = parsed.protocol + "//" + parsed.host + BASE + path
+                }
+              }
+            }
+          }
+        } catch (_) { /* keep the original url */ }
+        return protocols === undefined ? new NativeWebSocket(patched) : new NativeWebSocket(patched, protocols)
+      }
+      window.WebSocket.prototype = NativeWebSocket.prototype
+      Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 })
+    }
+  }
 
   // ---- document-coordinate helpers -------------------------------------------
 
@@ -294,7 +377,6 @@
 
   function clearMarkers() {
     if (markerLayer) markerLayer.textContent = ""
-    trackedMarkers = []
   }
 
   // ---- control messages ---------------------------------------------------------
