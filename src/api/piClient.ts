@@ -54,7 +54,9 @@ export interface PiSettings {
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
-  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & { retry?: { maxRetries: number } },
+  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & {
+    retry?: { maxRetries: number }
+  },
 ) => invoke<void>("pi_settings_save", { settings })
 
 /** 原生托盘菜单读不到 webview 的语言包，由前端把当前语言的菜单文案同步给 Rust。 */
