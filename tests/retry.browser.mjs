@@ -46,12 +46,7 @@ await page.addInitScript(() => {
     invoke: async (command, args) => {
       window.calls.push({ command, args })
       if (command === "pi_settings_get") {
-        return {
-          defaultProvider: "test",
-          defaultModel: "test-model",
-          skills: [],
-          retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 },
-        }
+        return { defaultProvider: "test", defaultModel: "test-model", skills: [], retry: { maxRetries: 3 } }
       }
       if (command === "pi_settings_save") return null
       return {}
@@ -83,16 +78,8 @@ try {
     "settings nav lists the retry page",
   )
 
-  const enabled = page.getByRole("switch", { name: "自动重试" })
   const attempts = page.getByRole("spinbutton", { name: "重试次数" })
-  const firstDelay = page.getByRole("spinbutton", { name: "首次重试等待（毫秒）" })
-  const maxDelay = page.getByRole("spinbutton", { name: "单次等待上限（毫秒）" })
-  assert.deepEqual(await enabled.isChecked(), true)
-  assert.deepEqual(await Promise.all([attempts, firstDelay, maxDelay].map(input => input.inputValue())), [
-    "3",
-    "2000",
-    "60000",
-  ])
+  assert.equal(await attempts.inputValue(), "3")
 
   // Type like a user so the input's change event (the commit trigger) fires.
   async function editNumber(input, text) {
@@ -105,27 +92,21 @@ try {
 
   await editNumber(attempts, "5")
   await waitForSaves(1)
-  assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }], "only the edited key is written")
-  await enabled.click()
-  await waitForSaves(2)
-  assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }, { retry: { enabled: false } }])
+  assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }], "only the retry count is written")
 
   await editNumber(attempts, "99")
   await page.waitForTimeout(300)
-  assert.equal(await saved().then(list => list.length), 2, "an out-of-range count is not saved")
+  assert.equal(await saved().then(list => list.length), 1, "an out-of-range count is not saved")
   assert.equal(await attempts.inputValue(), "5", "the input falls back to the saved value")
   assert.ok((await toasts()).includes("请输入 0–20 之间的整数。"), "invalid input is reported in the current language")
-  await editNumber(firstDelay, "")
-  await page.waitForTimeout(300)
-  assert.equal(await saved().then(list => list.length), 2, "an empty input is not saved as 0")
 
-  await editNumber(firstDelay, "3000")
-  await waitForSaves(3)
-  assert.deepEqual(
-    await saved(),
-    [{ retry: { maxRetries: 5 } }, { retry: { enabled: false } }, { retry: { baseDelayMs: 3000 } }],
-    "a second field edit still writes only its own key",
-  )
+  await editNumber(attempts, "")
+  await page.waitForTimeout(300)
+  assert.equal(await saved().then(list => list.length), 1, "an empty input is not saved as 0")
+
+  await editNumber(attempts, "0")
+  await waitForSaves(2)
+  assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }, { retry: { maxRetries: 0 } }])
   if (process.env.PI_RETRY_SCREENSHOT) await page.screenshot({ path: process.env.PI_RETRY_SCREENSHOT })
   assert.deepEqual(errors, [])
   console.log("retry settings page: ok")

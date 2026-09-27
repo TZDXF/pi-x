@@ -4,9 +4,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 
-const POLICY = { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 }
-
-function harness(retry = { ...POLICY }) {
+function harness(retry = { maxRetries: 3 }) {
   const source = readFileSync(new URL("../src/components/settings/RetrySettings.vue", import.meta.url), "utf8")
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, "")
@@ -32,19 +30,16 @@ function harness(retry = { ...POLICY }) {
     },
   })
   vm.runInContext(
-    ts.transpile(
-      source + "\nglobalThis.api = { retry, draft, loading, error, saving, load, save, commitBudget, BUDGET_FIELDS };",
-      { target: ts.ScriptTarget.ES2022 },
-    ),
+    ts.transpile(source + "\nglobalThis.api = { attempts, draft, loading, error, saving, load, commit };", {
+      target: ts.ScriptTarget.ES2022,
+    }),
     context,
   )
-  const api = context.api
   return {
-    api,
+    api: context.api,
     mount: () => mount(),
     patches,
     toasts,
-    field: key => api.BUDGET_FIELDS.find(f => f.key === key),
     failRead: value => {
       failRead = value
     },
@@ -54,68 +49,54 @@ function harness(retry = { ...POLICY }) {
   }
 }
 
-test("load mirrors the resolved policy into the inputs", async () => {
-  const h = harness()
+test("load mirrors the retry count Pi resolves into the input", async () => {
+  const h = harness({ maxRetries: 5 })
   await h.mount()
   assert.equal(h.api.loading.value, false)
-  assert.deepEqual({ ...h.api.retry.value }, POLICY)
-  assert.deepEqual({ ...h.api.draft.value }, { maxRetries: "3", baseDelayMs: "2000", maxAgentDelayMs: "60000" })
+  assert.equal(h.api.attempts.value, 5)
+  assert.equal(h.api.draft.value, "5")
 })
 
-test("editing a budget field saves the touched key only and rejects out-of-range input", async () => {
+test("editing the count saves it and rejects input outside the allowed range", async () => {
   const h = harness()
   await h.mount()
 
-  h.api.draft.value.maxRetries = "5"
-  await h.api.commitBudget(h.field("maxRetries"))
+  h.api.draft.value = "5"
+  await h.api.commit()
   assert.deepEqual(h.patches, [{ maxRetries: 5 }])
-  assert.equal(h.api.retry.value.maxRetries, 5)
-  assert.equal(h.api.retry.value.baseDelayMs, 2000, "other budget keys stay untouched")
+  assert.equal(h.api.attempts.value, 5)
   assert.equal(h.toasts.at(-1)[1], "info")
 
-  h.api.draft.value.maxRetries = "5"
-  await h.api.commitBudget(h.field("maxRetries"))
+  h.api.draft.value = "5"
+  await h.api.commit()
   assert.equal(h.patches.length, 1, "an unchanged value does not write again")
 
-  for (const value of ["-1", "2.5", "21", "abc", ""]) {
-    h.api.draft.value.maxRetries = value
-    await h.api.commitBudget(h.field("maxRetries"))
-    assert.equal(h.patches.length, 1, `${value} is not saved`)
-    assert.equal(h.api.draft.value.maxRetries, "5", `${value} falls back to the saved value`)
+  for (const value of ["-1", "2.5", "21", "abc", "", " "]) {
+    h.api.draft.value = value
+    await h.api.commit()
+    assert.equal(h.patches.length, 1, `${JSON.stringify(value)} is not saved`)
+    assert.equal(h.api.draft.value, "5", `${JSON.stringify(value)} falls back to the saved value`)
     assert.equal(h.toasts.at(-1)[1], "error")
   }
-  assert.equal(h.api.retry.value.maxRetries, 5)
+  assert.equal(h.api.attempts.value, 5)
 })
 
 test("a failed save reverts the value and the draft", async () => {
-  const h = harness()
+  const h = harness({ maxRetries: 5 })
   await h.mount()
   h.failWrite(true)
-  h.api.draft.value.baseDelayMs = "500"
-  await h.api.commitBudget(h.field("baseDelayMs"))
-  assert.equal(h.api.retry.value.baseDelayMs, 2000)
-  assert.equal(h.api.draft.value.baseDelayMs, "2000")
+  h.api.draft.value = "0"
+  await h.api.commit()
+  assert.equal(h.api.attempts.value, 5)
+  assert.equal(h.api.draft.value, "5")
   assert.deepEqual(h.patches, [])
   assert.equal(h.toasts.at(-1)[1], "error")
 })
 
-test("the switch persists retry.enabled and reverts on failure", async () => {
-  const h = harness()
-  await h.mount()
-  await h.api.save({ enabled: false })
-  assert.deepEqual(h.patches, [{ enabled: false }])
-  assert.equal(h.api.retry.value.enabled, false)
-
-  h.failWrite(true)
-  await h.api.save({ enabled: true })
-  assert.equal(h.api.retry.value.enabled, false, "failed toggle is reverted")
-  assert.equal(h.toasts.at(-1)[1], "error")
-})
-
-test("an older Pi without the retry block is reported instead of rendering inputs", async () => {
+test("an older Pi without the retry block is reported instead of rendering the input", async () => {
   const h = harness(null)
   await h.mount()
-  assert.equal(h.api.retry.value, null)
+  assert.equal(h.api.attempts.value, null)
   assert.equal(h.api.error.value, "")
 })
 
@@ -127,7 +108,7 @@ test("load failures support retry", async () => {
   h.failRead(false)
   await h.api.load()
   assert.equal(h.api.error.value, "")
-  assert.deepEqual({ ...h.api.retry.value }, POLICY)
+  assert.equal(h.api.attempts.value, 3)
 })
 
 test("settings registers a dedicated desktop-only retry page", () => {
