@@ -144,7 +144,7 @@ onBeforeUnmount(() => {
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize"
       @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeWithKeyboard"
     />
-    <div class="flex items-center gap-1 border-b px-2 py-1.5" role="tablist" :aria-label="t('sidebarTabs.title')">
+    <div class="flex items-center gap-1 shrink-0 border-b px-2 py-1.5 min-h-12" role="tablist" :aria-label="t('sidebarTabs.title')">
       <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         <button
           v-for="tab in tabs"
