@@ -136,7 +136,10 @@ function openExternal() {
 }
 
 function postToPage(message: BridgeOutbound) {
-  iframeRef.value?.contentWindow?.postMessage(message, "*")
+  // Payloads carry objects read out of deep refs (selections, annotations),
+  // which are reactive proxies; structured clone rejects proxies, so flatten
+  // to plain JSON first — the bridge contract is JSON data anyway.
+  iframeRef.value?.contentWindow?.postMessage(JSON.parse(JSON.stringify(message)), "*")
 }
 
 function onIframeLoad() {

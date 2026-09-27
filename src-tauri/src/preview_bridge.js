@@ -245,7 +245,16 @@
     inspecting = enabled
     ensureInspectLayer()
     document.documentElement.classList.toggle("pix-preview-inspect", enabled)
-    if (!enabled) {
+    // Capture phase so inspect clicks are consumed here and never reach the
+    // page's own handlers.
+    if (enabled) {
+      document.addEventListener("mousemove", onInspectMove, true)
+      document.addEventListener("mousedown", onInspectDown, true)
+      document.addEventListener("mouseup", onInspectUp, true)
+    } else {
+      document.removeEventListener("mousemove", onInspectMove, true)
+      document.removeEventListener("mousedown", onInspectDown, true)
+      document.removeEventListener("mouseup", onInspectUp, true)
       hideHover()
       areaBox.style.display = "none"
       dragStart = null
