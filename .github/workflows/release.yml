@@ -82,9 +82,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           releaseName: PiX ${{ github.ref_name }}
-          args: --features remote-access
+          updaterJsonPreferNsis: true
+          args: --features remote-access --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
   notes:
     name: 生成发布说明

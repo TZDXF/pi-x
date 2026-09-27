@@ -158,6 +158,16 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 > 预览版使用日期版本号，Windows 端仅提供 NSIS 安装包（MSI 要求主版本号 ≤ 255，无法使用日期形式的大版本号）。
 
+### 应用内更新
+
+「设置 → 关于」中可检查并安装应用更新（`app_update.rs` + `tauri-plugin-updater`，更新包经 minisign 签名验证）：
+
+- **更新通道**：默认 `正式版`（跟踪语义化版本 Release），可切换 `预览版`（跟踪每日 `preview-v*` Prerelease）。通道偏好保存在 `~/.pix/config.json`。
+- **版本判定**：正式版之间按语义化版本比较；预览版之间按日期比较。从预览版切回正式通道时不回退旧正式版——仅当最新正式版的发布日期晚于当前预览版（版本号即构建日期）才提示更新，否则等待下一次正式版发布。
+- **签名密钥**：公钥已写入 `src-tauri/tauri.conf.json`；私钥默认在 `~/.tauri/pi-x.key`（本地生成命令：`pnpm tauri signer generate -w ~/.tauri/pi-x.key`）。**需在仓库 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`**（私钥文件全文），否则发布 workflow 生成签名更新包时失败。
+- CI 通过 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 仅在发布构建中生成 updater 产物（`.sig` 签名与 `latest.json`，Windows 优先 NSIS），本地打包不受签名密钥影响。
+- **安装行为**：Windows 上下载完成后安装器自动接管并重启应用（进度在设置页可见）；macOS / Linux 安装完成后点击「重启应用」生效。
+
 ## Roadmap
 
 ### M2（已完成）
@@ -175,7 +185,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - [x] **会话导出**：`export_html` + 桌面端选择目录并打开／远程端下载
 - [x] **消息复制**：ai-elements `MessageActions` 一键复制回复
 - [x] **技能托管**：完整技能存放在 `~/.pix/skills`，设置中可视化导入 / 启用禁用 / 删除（`skills.rs`，启用列表同步到 pi settings）
-- [ ] **自动更新**：tauri-plugin-updater（需签名密钥与发布渠道）
+- [x] **应用内更新**：检查更新 + 更新通道（正式版/预览版，预览退出后不回退旧正式版），tauri-plugin-updater 签名安装
 - [ ] **多会话并行**：多窗口 + 每窗口独立 pi 进程（需将 RpcState 改为 per-window 实例）
 - [ ] **扩展管理界面**：列出/启用禁用扩展包
 

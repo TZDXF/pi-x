@@ -5,6 +5,7 @@ mod schedules;
 mod desktop;
 mod editor;
 mod editor_icon;
+mod app_update;
 mod commands;
 mod fs_search;
 mod packages;
@@ -34,6 +35,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(RpcState::default())
         .manage(schedules::ScheduleState::default())
         .manage(terminal::TerminalState::default())
@@ -76,6 +78,9 @@ pub fn run() {
             commands::pi_detect,
             pi_update::pi_update_check,
             pi_update::pi_update_execute,
+            app_update::app_update_check,
+            app_update::app_update_install,
+            app_update::app_update_restart,
             commands::pi_settings_get,
             commands::pi_settings_save,
             commands::app_config_get,

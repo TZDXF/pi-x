@@ -14,12 +14,24 @@ pub struct ModelRef {
     pub model_id: String,
 }
 
+/// PiX 应用自身的更新通道：正式版（语义化版本）或预览版（每日日期版本号）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Preview,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
+    /// 应用自身更新通道，见 `app_update` 模块。
+    #[serde(rename = "updateChannel", default, skip_serializing_if = "Option::is_none")]
+    pub update_channel: Option<UpdateChannel>,
     /// Default model for auxiliary features such as title generation.
     /// Independent of pi's own default model in `settings.json`.
     #[serde(rename = "defaultModel", default, skip_serializing_if = "Option::is_none")]
