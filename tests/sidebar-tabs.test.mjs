@@ -21,6 +21,19 @@ test('right sidebar hosts review, files and terminal as addable tabs', () => {
   assert.doesNotMatch(chat, /<TerminalPanel/)
 })
 
+test('terminal top tab opens a shell directly instead of lingering on the empty state', () => {
+  const sidebar = read('../src/components/RightSidebar.vue')
+  const terminal = read('../src/components/terminal/TerminalPanel.vue')
+  // 经 + 菜单添加终端 tab 时面板挂载即 visible=true，watch 需 immediate 才能自动开 shell。
+  assert.match(terminal, /if \(!visible\) return/)
+  assert.match(terminal, /\{ immediate: true \}/)
+  // 顶部 tab 点击统一走 clickTab；已激活且无 shell 的终端 tab 再点一次直接新建。
+  assert.match(sidebar, /@click="clickTab\(tab\)"/)
+  assert.match(sidebar, /function clickTab\(tab: SidebarTabItem\)/)
+  assert.match(sidebar, /if \(wasActive && tab\.type === "terminal"\)/)
+  assert.match(sidebar, /:ref="el => setTerminalPanel\(tab\.id, el\)"/)
+})
+
 test('browser tab works on desktop and remote with chat insert support', () => {
   const sidebar = read('../src/components/RightSidebar.vue')
   const chat = read('../src/components/ChatView.vue')

@@ -2,7 +2,7 @@
 import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Clock, Copy, Folder, FolderPlus, Link, MessagesSquare, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown } from "@lucide/vue"
+import { Clock, Copy, Folder, FolderPlus, Link, PanelLeft, Plus, Search, Settings, Archive, Pencil, MoreHorizontal, Pin, PinOff, FolderOpen, X, FileDown, ChevronRight } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient"
 import type { QueuedPrompt } from "@/stores/session"
@@ -34,7 +34,8 @@ const query = ref("")
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
-const showArchived = ref(false)
+const tasksCollapsed = ref(false)
+const projectsCollapsed = ref(false)
 const renaming = ref<SessionMeta | null>(null)
 const title = ref("")
 const saving = ref(false)
@@ -44,12 +45,13 @@ const name = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
   const sessions = workspace.orderedSessions(path)
-  return sessions.filter(s => !!s.archived === showArchived.value && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
+  return sessions.filter(s => !s.archived && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
 }
 function pendingRows(path: string) {
-  if (showArchived.value) return []
   return pendingConversations(allConversations(), workspace.projectFolders(path), workspace.orderedSessions(path).map(row => row.file), query.value)
 }
+const taskPath = computed(() => workspace.projectless)
+const visibleProjects = computed(() => projectsCollapsed.value ? [] : workspace.orderedProjects().filter(p => !workspace.isProjectless(p)))
 const queueNow = ref(Date.now())
 let countdownTimer: ReturnType<typeof setInterval> | undefined
 watch(() => allConversations().some(conversation => conversation.promptQueue.some(item => item.sendAt !== undefined)), hasScheduled => {
@@ -150,7 +152,7 @@ function onProjectDrop(e: DragEvent, path: string) {
   const before = projectDrop.value?.before ?? true
   clearDrag()
   if (!from || from === path) return
-  const next = workspace.orderedProjects().filter(p => p !== from)
+  const next = workspace.orderedProjects().filter(p => p !== from && !workspace.isProjectless(p))
   next.splice(next.indexOf(path) + (before ? 0 : 1), 0, from)
   workspace.reorderProjects(next)
 }
@@ -194,17 +196,48 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
     <Button size="content" variant="sidebar-action" class="sidebar-action" :disabled="!ready || navigationDisabled" @click="emit('newSession', project)"><Plus :size="17" class="size-auto shrink-0" />{{ t('sidebar.newSession') }}</Button>
     <Button v-if="isDesktop" size="content" variant="sidebar-action" class="sidebar-action" :aria-current="route.name === 'schedules' ? 'page' : undefined" @click="emit('schedules')"><Clock :size="17" class="size-auto shrink-0" />{{ t('schedules.title') }}</Button>
     <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"><Search :size="15" class="size-auto shrink-0" /><Input v-model="query" :placeholder="t('sidebar.search')" :aria-label="t('sidebar.search')" class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent" /></label>
-    <div class="sidebar-section-label flex items-center justify-between text-muted-foreground text-[11px] py-[5px] px-2.5 font-mono tracking-[0.06em] shrink-0"><span>{{ showArchived ? t('workspace.archived') : t('sidebar.projects') }}</span>
-      <div class="flex"><Button variant="quiet" size="toolbar" :aria-pressed="showArchived" :title="t('workspace.archived')" :aria-label="t('workspace.archived')" @click="showArchived = !showArchived"><Archive :size="15" class="size-auto shrink-0" /></Button>
-      <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('projectless.name')" :aria-label="t('projectless.name')" @click="emit('projectless')"><MessagesSquare :size="15" class="size-auto shrink-0" /></Button>
-      <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" class="size-auto shrink-0" /></Button></div>
-    </div>
     <ScrollArea class="project-groups flex-1 min-h-0 min-w-0" @dragend="clearDrag">
-      <section v-for="path in workspace.orderedProjects()" :key="path" class="project-group mb-1 min-w-0 max-w-full">
+      <section class="task-group mb-1.5 min-w-0 max-w-full">
+        <div class="sidebar-section-label flex items-center justify-between gap-1 text-muted-foreground text-[11px] py-[5px] pl-2.5 pr-2 font-mono tracking-[0.06em] shrink-0">
+          <Button variant="quiet" size="content" class="section-toggle min-w-0 flex-1 justify-start gap-1 rounded-md px-1.5 py-[5px] font-normal text-[11px] tracking-[0.06em]" :aria-expanded="!tasksCollapsed" @click="tasksCollapsed = !tasksCollapsed"><ChevronRight :size="15" class="size-auto shrink-0 transition-transform" :class="{ 'rotate-90': !tasksCollapsed }" /><span class="truncate">{{ t('sidebar.tasks') }}</span></Button>
+          <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('projectless.name')" :aria-label="t('projectless.name')" @click="emit('projectless')"><Plus :size="15" class="size-auto shrink-0" /></Button>
+        </div>
+        <div v-if="!tasksCollapsed && taskPath" class="session-list min-h-0 p-0 overflow-visible">
+          <div v-if="workspace.isProjectless(project) && ready && !session.sessionFile && !session.promptQueue.length && (session.started || session.entries.length) && !query" class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-for="pending in pendingRows(taskPath)" :key="pending.runtimeId" class="session-row relative flex min-h-8 min-w-0 items-center gap-1 rounded-md pl-7 pr-2 text-xs" :class="{ active: pending.runtimeId === activeRuntimeId }">
+            <span class="session-queue-status absolute left-[7px] top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" role="status" :title="queueTitle(pending.promptQueue)" :aria-label="queueTitle(pending.promptQueue)"><Clock class="size-3" /></span>
+            <Button size="content" variant="session-link" class="session-link" :disabled="navigationDisabled" :aria-current="pending.runtimeId === activeRuntimeId ? 'page' : undefined" :title="pending.promptQueue[0]?.text || t('chat.newSession')" @click="emit('selectConversation', pending.runtimeId)">{{ pending.promptQueue[0]?.text || t('chat.newSession') }}</Button>
+          </div>
+          <div v-for="s in rows(taskPath)" :key="s.file" class="session-row group/session flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :class="{ active: s.file === session.sessionFile, 'drag-source': dragSession?.file === s.file && dragSession.path === taskPath, 'drop-before': sessionDrop?.path === taskPath && sessionDrop.file === s.file && sessionDrop.before, 'drop-after': sessionDrop?.path === taskPath && sessionDrop.file === s.file && !sessionDrop.before, 'pl-11': !!(sessionRunStatus(s.file) && findConversation(s.file)?.promptQueue.length), 'pl-7': !(sessionRunStatus(s.file) && findConversation(s.file)?.promptQueue.length) }"
+            :draggable="!disabled" @dragstart="onSessionDragStart($event, taskPath, s.file)" @dragend="clearDrag" @dragover="onSessionDragOver($event, taskPath, s.file)" @drop="onSessionDrop($event, taskPath, s.file)" @dragleave="onRowDragLeave">
+            <span v-if="sessionRunStatus(s.file)" class="session-status absolute left-[7px] top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" :class="`session-status-${sessionRunStatus(s.file)}`" role="status" :aria-label="t(`sidebar.status.${sessionRunStatus(s.file)}`)" :title="t(`sidebar.status.${sessionRunStatus(s.file)}`)">
+              <span v-if="sessionRunStatus(s.file) === 'running'" class="session-running" aria-hidden="true" />
+              <span v-else class="session-status-dot w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
+            </span>
+            <span v-if="findConversation(s.file)?.promptQueue.length" class="session-queue-status absolute top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" :class="sessionRunStatus(s.file) ? 'left-[23px]' : 'left-[7px]'" role="status" :title="queueTitle(findConversation(s.file)?.promptQueue)" :aria-label="queueTitle(findConversation(s.file)?.promptQueue)"><Clock class="size-3" /></span>
+            <Button size="content" variant="session-link" class="session-link" :aria-current="s.file === session.sessionFile ? 'page' : undefined" :disabled="navigationDisabled" :title="label(s)" @click="openSession(s)" @dblclick.stop="renameOnDoubleClick(s)">{{ label(s) }}</Button>
+            <div class="session-actions hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] flex items-center shrink-0 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto">
+              <Button variant="quiet" size="row-action" :disabled="disabled" :title="s.archived ? t('workspace.restore') : t('workspace.archive')" :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')" @click="archive(s)"><Archive :size="14" class="size-auto shrink-0" /></Button>
+              <DropdownMenu><DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" :disabled="disabled" :aria-label="t('workspace.sessionActions')"><MoreHorizontal :size="14" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end"><DropdownMenuItem @select="rename(s)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('workspace.rename') }}</DropdownMenuItem><DropdownMenuItem @select="duplicateSession(s)"><Copy :size="14" class="size-auto shrink-0" />{{ t('workspace.duplicate') }}</DropdownMenuItem><DropdownMenuItem @select="copySessionLink(s)"><Link :size="14" class="size-auto shrink-0" />{{ t('workspace.copyLink') }}</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem @select="emit('sessionAction', s.file, 'export')"><FileDown :size="14" class="size-auto shrink-0" />{{ t('chat.export') }}</DropdownMenuItem></DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+          <Button v-if="errors[taskPath]" variant="ghost" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto" @click="refresh(taskPath)">{{ errors[taskPath] }} · {{ t('sidebar.refresh') }}</Button>
+          <p v-else-if="loading[taskPath] && !workspace.histories[taskPath]" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.loading') }}</p>
+          <p v-else-if="!rows(taskPath).length && query" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.noMatch') }}</p>
+        </div>
+      </section>
+      <section class="project-section mb-1 min-w-0 max-w-full">
+        <div class="sidebar-section-label flex items-center justify-between gap-1 text-muted-foreground text-[11px] py-[5px] pl-2.5 pr-2 font-mono tracking-[0.06em] shrink-0">
+          <Button variant="quiet" size="content" class="section-toggle min-w-0 flex-1 justify-start gap-1 rounded-md px-1.5 py-[5px] font-normal text-[11px] tracking-[0.06em]" :aria-expanded="!projectsCollapsed" @click="projectsCollapsed = !projectsCollapsed"><ChevronRight :size="15" class="size-auto shrink-0 transition-transform" :class="{ 'rotate-90': !projectsCollapsed }" /><span class="truncate">{{ t('sidebar.projects') }}</span></Button>
+          <Button variant="quiet" size="toolbar" :disabled="navigationDisabled" :title="t('sidebar.openProject')" :aria-label="t('sidebar.openProject')" @click="emit('switchProject')"><FolderPlus :size="15" class="size-auto shrink-0" /></Button>
+        </div>
+      <section v-for="path in visibleProjects" :key="path" class="project-group mb-1 min-w-0 max-w-full">
         <div class="project-heading relative flex items-center min-h-8 rounded-md pr-1 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)]" :class="{ selected: path === workspace.projectRoot(project), 'drag-source': dragProject === path, 'drop-before': projectDrop?.path === path && projectDrop.before, 'drop-after': projectDrop?.path === path && !projectDrop.before }"
           :draggable="!disabled" @dragstart="onProjectDragStart($event, path)" @dragover="onProjectDragOver($event, path)" @drop="onProjectDrop($event, path)" @dragleave="onRowDragLeave">
           <Button size="content" variant="project-row" class="project-row" :title="path" :aria-expanded="!collapsed[path]" @click="collapsed[path] = !collapsed[path]">
-            <MessagesSquare v-if="workspace.isProjectless(path)" :size="15" class="size-auto shrink-0" /><FolderOpen v-else-if="!collapsed[path]" :size="15" class="size-auto shrink-0" /><Folder v-else :size="15" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span>
+            <FolderOpen v-if="!collapsed[path]" :size="15" class="size-auto shrink-0" /><Folder v-else :size="15" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span>
           </Button>
           <Button variant="quiet" size="row-action" class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="navigationDisabled || (!ready && path === project)" :title="t('sidebar.newSession')" :aria-label="`${t('sidebar.newSession')} · ${name(path)}`" @click="emit('newSession', path)"><Plus :size="16" class="size-auto shrink-0" /></Button>
           <Pin v-if="workspace.pinnedProjects.includes(path)" :size="12" class="size-auto shrink-0 project-pin shrink-0 text-muted-foreground" :aria-label="t('workspace.pinned')" />
@@ -212,7 +245,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
             <DropdownMenuTrigger as-child><Button variant="quiet" size="row-action" class="project-more hover-action w-6 h-6.5 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto" :disabled="disabled" :title="t('workspace.projectActions')" :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"><MoreHorizontal :size="16" class="size-auto shrink-0" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="bottom">
               <DropdownMenuItem @select="workspace.togglePin(path)"><PinOff v-if="workspace.pinnedProjects.includes(path)" :size="14" class="size-auto shrink-0" /><Pin v-else :size="14" class="size-auto shrink-0" />{{ workspace.pinnedProjects.includes(path) ? t('workspace.unpin') : t('workspace.pin') }}</DropdownMenuItem>
-              <DropdownMenuItem v-if="!workspace.isProjectless(path)" @select="emit('editProject', path)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
+              <DropdownMenuItem @select="emit('editProject', path)"><Pencil :size="14" class="size-auto shrink-0" />{{ t('projectDialog.editTitle') }}</DropdownMenuItem>
               <DropdownMenuItem :disabled="!isDesktop" :title="!isDesktop ? t('workspace.desktopOnly') : undefined" @select="openProjectFolder(path)"><FolderOpen :size="14" class="size-auto shrink-0" />{{ t('workspace.openExplorer') }}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem class="text-destructive" :title="t('workspace.removeProjectHint')" @select="emit('removeProject', path)"><X :size="14" />{{ t('workspace.removeProject') }}</DropdownMenuItem>
@@ -220,7 +253,7 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           </DropdownMenu>
         </div>
         <div v-if="!collapsed[path]" class="session-list min-h-0 p-0 overflow-visible">
-          <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && !session.promptQueue.length && (session.started || session.entries.length) && !showArchived && !query" class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
+          <div v-if="path === workspace.projectRoot(project) && ready && !session.sessionFile && !session.promptQueue.length && (session.started || session.entries.length) && !query" class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9" aria-current="page"><span class="truncate">{{ t('chat.newSession') }}</span></div>
           <div v-for="pending in pendingRows(path)" :key="pending.runtimeId" class="session-row relative flex min-h-8 min-w-0 items-center gap-1 rounded-md pl-7 pr-2 text-xs" :class="{ active: pending.runtimeId === activeRuntimeId }">
             <span class="session-queue-status absolute left-[7px] top-1/2 -translate-y-1/2 inline-flex w-3.5 items-center justify-center text-muted-foreground" role="status" :title="queueTitle(pending.promptQueue)" :aria-label="queueTitle(pending.promptQueue)"><Clock class="size-3" /></span>
             <Button size="content" variant="session-link" class="session-link" :disabled="navigationDisabled" :aria-current="pending.runtimeId === activeRuntimeId ? 'page' : undefined" :title="pending.promptQueue[0]?.text || t('chat.newSession')" @click="emit('selectConversation', pending.runtimeId)">{{ pending.promptQueue[0]?.text || t('chat.newSession') }}</Button>
@@ -242,8 +275,9 @@ for (const path of workspace.projects) for (const folder of workspace.projectFol
           </div>
           <Button v-if="errors[path]" variant="ghost" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto" @click="refresh(path)">{{ errors[path] }} · {{ t('sidebar.refresh') }}</Button>
           <p v-else-if="loading[path] && !workspace.histories[path]" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.loading') }}</p>
-          <p v-else-if="!rows(path).length && (showArchived || query)" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.noMatch') }}</p>
+          <p v-else-if="!rows(path).length && query" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">{{ t('sidebar.noMatch') }}</p>
         </div>
+      </section>
       </section>
     </ScrollArea>
     <div class="sidebar-footer mt-auto pt-[7px] border-t border-border shrink-0"><Button size="content" variant="sidebar-action" class="sidebar-action" @click="emit('settings')"><Settings :size="17" class="size-auto shrink-0" />{{ t('sidebar.settings') }}</Button></div>

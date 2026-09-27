@@ -12,7 +12,7 @@ export const buttonVariants = cva(
         'project-row': 'flex items-center gap-1.5 w-auto py-1 px-1.5 text-[13px] font-medium min-w-0 min-h-8 text-left h-auto justify-start flex-1 shrink-1 [@media(pointer:coarse)]:min-h-9 bg-transparent text-inherit hover:bg-transparent',
         'session-link': '[@media(hover:none)]:pr-[52px] flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-left py-1 px-0 text-xs leading-5 font-normal h-auto block shrink-1 rounded-none [@media(pointer:coarse)]:min-h-9 bg-transparent text-inherit hover:bg-transparent',
         'context-chip': 'flex items-center gap-[7px] p-1.5 rounded-md max-w-[40%] text-xs whitespace-nowrap h-auto max-[700px]:gap-1 hover:enabled:bg-accent',
-        'context-menu-item': 'flex items-center w-full gap-2 text-left py-[9px] px-2 rounded-md text-[13px] h-auto justify-start hover:bg-accent',
+        'context-menu-item': 'flex items-center w-full gap-2 text-left py-[5px] px-2 rounded-md text-[13px] h-auto justify-start hover:bg-accent',
         default: 'bg-primary text-primary-foreground [a]:hover:bg-primary/80',
         outline: 'border-border bg-background hover:bg-muted hover:text-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 aria-expanded:bg-muted aria-expanded:text-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',

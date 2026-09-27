@@ -202,6 +202,8 @@ watch(
       instances.get(activeId.value ?? -1)?.term.focus()
     })
   },
+  // A tab added while already active mounts with visible=true; without immediate no transition fires and the empty state lingers.
+  { immediate: true },
 )
 
 watch(

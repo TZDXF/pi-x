@@ -58,6 +58,25 @@ function closeTab(id: number) {
   emit("close-tab", id)
 }
 
+interface TerminalPanelExposed {
+  openTerminal: () => Promise<void>
+  hasTerminals: () => boolean
+}
+const terminalPanels = new Map<number, TerminalPanelExposed>()
+function setTerminalPanel(id: number, el: unknown) {
+  if (el) terminalPanels.set(id, el as TerminalPanelExposed)
+  else terminalPanels.delete(id)
+}
+function clickTab(tab: SidebarTabItem) {
+  const wasActive = tab.id === props.activeId
+  emit("update:activeId", tab.id)
+  // 已激活的终端 tab 再点一次时，若面板里没有 shell 则直接新建，避免停留在空状态。
+  if (wasActive && tab.type === "terminal") {
+    const panel = terminalPanels.get(tab.id)
+    if (panel && !panel.hasTerminals()) void panel.openTerminal()
+  }
+}
+
 const sidebar = ref<HTMLElement | null>(null)
 const containerWidth = ref(1200)
 const overlay = ref(false)
@@ -154,7 +173,7 @@ onBeforeUnmount(() => {
           :aria-selected="tab.id === activeId"
           class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs"
           :class="tab.id === activeId ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/50'"
-          @click="$emit('update:activeId', tab.id)"
+          @click="clickTab(tab)"
         >
           <component :is="iconFor(tab.type)" class="size-3.5 shrink-0" />
           <span class="truncate">{{ titleFor(tab) }}</span>
@@ -199,7 +218,7 @@ onBeforeUnmount(() => {
     <template v-for="tab in tabs" :key="tab.id">
       <ReviewPanel v-if="tab.type === 'review'" v-show="tab.id === activeId" :changes="changes" :project="project" :focus="tab.id === activeId ? focus : null" :checkpoints="checkpoints" />
       <ProjectFiles v-else-if="tab.type === 'files'" v-show="tab.id === activeId" :project="project" />
-      <TerminalPanel v-else-if="tab.type === 'terminal' && isDesktop" v-show="tab.id === activeId" :project="project" :visible="open && tab.id === activeId" embedded />
+      <TerminalPanel v-else-if="tab.type === 'terminal' && isDesktop" v-show="tab.id === activeId" :ref="el => setTerminalPanel(tab.id, el)" :project="project" :visible="open && tab.id === activeId" embedded />
       <BrowserPanel v-else-if="tab.type === 'browser'" v-show="tab.id === activeId" :visible="open && tab.id === activeId" @send-to-chat="$emit('send-to-chat', $event)" /></template>
     <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
       <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('review')">

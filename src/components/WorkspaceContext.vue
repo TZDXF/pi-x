@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, GitBranch, Laptop, Layers, ChevronDown, Plus, LoaderCircle } from "@lucide/vue"
+import { Folder, GitBranch, Laptop, Layers, MessagesSquare, ChevronDown, Plus, LoaderCircle } from "@lucide/vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,6 +25,15 @@ const branch = ref("")
 const error = ref("")
 const blocked = computed(() => props.disabled || workspace.gitBusy)
 const name = (path: string) => workspace.projectName(path)
+// 项目下拉：搜索框 + 两组选项（上方为普通项目，底部固定为无项目会话与添加项目）。
+const projectQuery = ref("")
+watch(projectOpen, open => { if (open) projectQuery.value = "" })
+const filteredProjects = computed(() => {
+  const paths = workspace.orderedProjects().filter(p => !workspace.isProjectless(p))
+  const query = projectQuery.value.trim().toLowerCase()
+  if (!query) return paths
+  return paths.filter(p => name(p).toLowerCase().includes(query) || p.toLowerCase().includes(query))
+})
 let request = 0
 async function refresh() {
   const id = ++request
@@ -62,9 +72,16 @@ watch(() => props.project, refresh, { immediate: true })
 <template>
   <div class="workspace-context flex gap-[5px] items-center mt-0 mr-3.5 mb-[-10px] ml-3.5 pt-[5px] pr-2 pb-[15px] pl-2 bg-muted rounded-[16px_16px_0_0] max-[700px]:[margin-inline:2px] max-[700px]:gap-0">
     <Popover v-model:open="projectOpen"><PopoverTrigger as-child><Button variant="context-chip" size="content" class="context-chip" :disabled="blocked" :title="project"><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(project) }}</span><ChevronDown :size="12" class="size-auto shrink-0" /></Button></PopoverTrigger>
-      <PopoverContent align="start" class="w-72 p-2"><p class="px-2 py-1 text-xs text-muted-foreground">{{ t('workspace.selectProject') }}</p>
-        <Button v-for="path in workspace.orderedProjects()" :key="path" variant="context-menu-item" size="content" class="context-menu-item" :aria-current="path === workspace.projectRoot(project) ? 'true' : undefined" :title="path" @click="select(path)"><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span><span v-if="path === workspace.projectRoot(project)" class="ml-auto">✓</span></Button>
-        <Button variant="context-menu-item" size="content" class="context-menu-item" @click="projectOpen = false; emit('openProject')"><Plus :size="14" class="size-auto shrink-0" />{{ t('sidebar.openProject') }}</Button>
+      <PopoverContent align="start" class="w-72 p-2">
+        <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
+        <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
+          <Button v-for="path in filteredProjects" :key="path" variant="context-menu-item" size="content" class="context-menu-item" :aria-current="path === workspace.projectRoot(project) ? 'true' : undefined" :title="path" @click="select(path)"><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span><span v-if="path === workspace.projectRoot(project)" class="ml-auto">✓</span></Button>
+        </ScrollArea>
+        <p v-else-if="projectQuery.trim()" class="px-2 py-2 text-xs text-muted-foreground">{{ t('workspace.noMatchingProject') }}</p>
+        <div class="border-t border-border pt-1.5">
+          <Button v-if="workspace.projectless" variant="context-menu-item" size="content" class="context-menu-item" :aria-current="workspace.isProjectless(project) ? 'true' : undefined" :title="workspace.projectless" @click="select(workspace.projectless)"><MessagesSquare :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(workspace.projectless) }}</span><span v-if="workspace.isProjectless(project)" class="ml-auto">✓</span></Button>
+          <Button variant="context-menu-item" size="content" class="context-menu-item" @click="projectOpen = false; emit('openProject')"><Plus :size="14" class="size-auto shrink-0" />{{ t('sidebar.openProject') }}</Button>
+        </div>
       </PopoverContent>
     </Popover>
     <Popover v-model:open="modeOpen"><PopoverTrigger as-child><Button variant="context-chip" size="content" class="context-chip" :disabled="blocked || !info" :title="gitError || undefined"><Layers v-if="info?.worktree" :size="14" class="size-auto shrink-0" /><Laptop v-else :size="14" class="size-auto shrink-0" />{{ info?.worktree ? 'Worktree' : t('workspace.local') }}<ChevronDown :size="12" class="size-auto shrink-0" /></Button></PopoverTrigger>
