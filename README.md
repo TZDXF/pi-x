@@ -144,6 +144,20 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 事件流：`message_start` → `message_update`（delta 组装）→ `message_end`（权威替换）；`tool_execution_start/update/end` 驱动工具卡片。
 
+## 打包发布
+
+发布通过 GitHub Actions 完成，分正式版与预览版两条渠道，产物覆盖 Windows / macOS / Linux。
+
+- **正式版**（`.github/workflows/release.yml`）：在 main 分支上创建语义化版本 tag 并推送即可触发（workflow 会校验 tag 必须位于 main）：
+  ```bash
+  git tag v0.0.1 origin/main
+  git push origin v0.0.1
+  ```
+  版本号取自 tag（如 `0.0.1`），自动同步到 `package.json` 与 `src-tauri/tauri.conf.json`，发布为正式 Release 并自动生成 Release Notes。
+- **预览版**（`.github/workflows/preview.yml`）：每天北京时间 00:00（UTC 16:00）检测 dev 分支，相对上一个预览 tag 有新提交时自动构建；版本号为当天日期（如 `2026.9.27`，tag 为 `preview-v2026.9.27`），发布为 Prerelease。当天预览 tag 已存在或无新提交时自动跳过；也可在 Actions 页面手动触发，勾选 `force` 可跳过更新检测。
+
+> 预览版使用日期版本号，Windows 端仅提供 NSIS 安装包（MSI 要求主版本号 ≤ 255，无法使用日期形式的大版本号）。
+
 ## Roadmap
 
 ### M2（已完成）

@@ -1,0 +1,140 @@
+name: Preview Release
+
+# 预览版：每天北京时间 00:00（UTC 16:00）检测 dev 分支，
+# 相对上一个预览版有新提交时自动构建并发布 prerelease，版本号为当天日期（如 2026.9.27）。
+# 也可在 Actions 页面手动触发（可勾选 force 跳过更新检测）。
+
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 忽略更新检测，强制构建今日预览版
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: preview-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: 检测更新并创建预览 tag
+    runs-on: ubuntu-latest
+    outputs:
+      should-build: ${{ steps.detect.outputs.should-build }}
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      changes: ${{ steps.detect.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: 检测 dev 更新
+        id: detect
+        shell: bash
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          VERSION=$(TZ=Asia/Shanghai date +'%Y.%-m.%-d')
+          TAG="preview-v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+            echo "今日预览 tag $TAG 已存在，跳过构建"
+            echo "should-build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LAST_TAG=$(git tag -l 'preview-v*' --sort=-v:refname | head -n1)
+          if [ "$FORCE" != "true" ] && [ -n "$LAST_TAG" ] && [ "$(git rev-list -n1 "$LAST_TAG")" = "$(git rev-parse HEAD)" ]; then
+            echo "dev 分支自 $LAST_TAG 以来没有新提交，跳过构建"
+            echo "should-build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo 'changes<<EOF'
+            if [ -n "$LAST_TAG" ]; then
+              git log --no-decorate --pretty='- %s (%h)' "${LAST_TAG}..HEAD"
+            else
+              git log --no-decorate --pretty='- %s (%h)' -20
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "should-build=true" >> "$GITHUB_OUTPUT"
+
+      - name: 创建并推送预览 tag
+        if: steps.detect.outputs.should-build == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.detect.outputs.tag }}" -m "Preview ${{ steps.detect.outputs.version }}"
+          git push origin "${{ steps.detect.outputs.tag }}"
+
+  build:
+    name: 构建预览版 (${{ matrix.platform }})
+    needs: check
+    if: needs.check.outputs.should-build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MSI 版本号要求 major <= 255，日期版本号只能用 NSIS 打包
+          - platform: windows-latest
+            args: --features remote-access --bundles nsis
+          - platform: macos-latest
+            args: --features remote-access
+          - platform: ubuntu-latest
+            args: --features remote-access
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 Linux 依赖
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 同步版本号
+        run: node scripts/set-version.mjs "${{ needs.check.outputs.version }}"
+
+      - name: 构建并发布预览版
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.check.outputs.tag }}
+          releaseName: PiX Preview ${{ needs.check.outputs.version }}
+          releaseBody: ${{ needs.check.outputs.changes }}
+          prerelease: true
+          args: ${{ matrix.args }}
