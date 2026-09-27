@@ -74,7 +74,7 @@ export default {
     "failed": "打开文件失败：{error}"
 },
   sidebarTabs: { title: "右侧面板", review: "代码审查", files: "项目文件", terminal: "终端" },
-  projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", desktopOnly: "仅桌面端可在编辑器中打开文件" },
+  projectFiles: { refresh: "刷新项目文件", empty: "此目录为空", preview: "文件预览", closePreview: "关闭预览", binary: "二进制文件，无法预览", truncated: "文件过大，仅显示前 512 KB 内容", rendered: "渲染视图", source: "查看源码", wrap: "自动换行", imageBroken: "图片加载失败" },
   changes: {
     showFlat: "平铺显示", showTree: "树形显示",
     unified: "逐行", split: "并排", wordDiff: "行内差异", before: "修改前", after: "修改后",
@@ -760,5 +760,8 @@ export default {
     remoteConnectFailed: "无法连接远程服务，请检查访问链接与桌面端开关。",
     remoteDisconnected: "远程连接已断开",
     remoteReconnecting: "远程连接已断开，正在自动重连…",
+    previewPathInvalid: "无效的文件路径: {detail}",
+    previewReadFailed: "读取文件失败: {detail}",
+    previewImageTooLarge: "图片过大，无法预览（上限 {limit} MB）",
   },
 }

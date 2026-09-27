@@ -74,7 +74,7 @@ export default {
     "failed": "Failed to open file: {error}"
 },
   sidebarTabs: { title: "Right panel", review: "Review", files: "Project files", terminal: "Terminal" },
-  projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", desktopOnly: "Open files in an editor from the desktop app" },
+  projectFiles: { refresh: "Refresh project files", empty: "This directory is empty", preview: "File preview", closePreview: "Close preview", binary: "Binary file — not previewable", truncated: "File too large — showing the first 512 KB", rendered: "Rendered view", source: "View source", wrap: "Wrap lines", imageBroken: "Failed to load image" },
   changes: {
     showFlat: "Flat list", showTree: "File tree",
     unified: "Unified", split: "Split", wordDiff: "Inline diff", before: "Before", after: "After",
@@ -761,5 +761,8 @@ export default {
     remoteConnectFailed: "Cannot connect to the remote service. Check the access link and the desktop switch.",
     remoteDisconnected: "Remote connection lost.",
     remoteReconnecting: "Remote connection lost. Reconnecting…",
+    previewPathInvalid: "Invalid file path: {detail}",
+    previewReadFailed: "Failed to read file: {detail}",
+    previewImageTooLarge: "Image too large to preview (limit {limit} MB)",
   },
 }

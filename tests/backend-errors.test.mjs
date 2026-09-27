@@ -87,9 +87,18 @@ test('every Rust and transport error code is present in both catalogs, with no o
 
   const codes = new Set()
   const rustDir = new URL('../src-tauri/src/', import.meta.url)
-  for (const file of readdirSync(rustDir)) {
-    if (!file.endsWith('.rs')) continue
-    const source = readFileSync(new URL(file, rustDir), 'utf8')
+  // 递归扫描：modules 拆分成子目录（如 packages/）后调用点仍在仓库内。
+  const rustFiles = []
+  const walk = dir => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const url = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir)
+      if (entry.isDirectory()) walk(url)
+      else if (entry.name.endsWith('.rs')) rustFiles.push(url)
+    }
+  }
+  walk(rustDir)
+  for (const file of rustFiles) {
+    const source = readFileSync(file, 'utf8')
     for (const match of source.matchAll(/pix_error(?:_detail|_with)?\(\s*"([A-Za-z0-9_]+)"/g)) {
       codes.add(match[1])
     }

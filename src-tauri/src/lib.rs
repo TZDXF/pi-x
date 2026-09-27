@@ -8,6 +8,7 @@ mod editor_icon;
 mod app_update;
 mod commands;
 mod fs_search;
+mod file_preview;
 mod packages;
 mod pi_locate;
 mod pi_update;
@@ -109,6 +110,7 @@ pub fn run() {
             workspace_git::workspace_git_create,
             commands::search_files,
             commands::list_project_directory,
+            commands::read_file_preview,
             commands::session_export_file,
             commands::open_path,
             editor::open_in_editor,

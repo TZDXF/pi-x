@@ -445,6 +445,9 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "list_project_directory" => Ok(serde_json::to_value(
             commands::list_project_directory(text("project")?, text("path")?).await?,
         ).map_err(|e| e.to_string())?),
+        "read_file_preview" => Ok(serde_json::to_value(
+            commands::read_file_preview(text("project")?, text("path")?).await?,
+        ).map_err(|e| e.to_string())?),
         "search_files" => Ok(serde_json::to_value(
             commands::search_files(text("project")?, text("query")?).await?,
         )

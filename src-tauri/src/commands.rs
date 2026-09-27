@@ -4,7 +4,7 @@ use std::path::Path;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{errors::{pix_error, pix_error_detail, pix_error_with}, fs_search, pi_locate, rpc, sessions, trust};
+use crate::{errors::{pix_error, pix_error_detail, pix_error_with}, file_preview, fs_search, pi_locate, rpc, sessions, trust};
 
 /// A provider/model pair selected in the app configuration.
 #[derive(Clone, Serialize, Deserialize)]
@@ -263,6 +263,12 @@ pub async fn search_files(project: String, query: String) -> Result<Vec<fs_searc
 #[tauri::command]
 pub async fn list_project_directory(project: String, path: String) -> Result<Vec<fs_search::ProjectEntry>, String> {
     fs_search::list_directory(project, path).await
+}
+
+/// Read a project file for the in-app preview (text / image / binary).
+#[tauri::command]
+pub async fn read_file_preview(project: String, path: String) -> Result<file_preview::FilePreview, String> {
+    file_preview::read_file_preview(project, path).await
 }
 
 /// Export a stored Pi session without activating or switching any runtime.
