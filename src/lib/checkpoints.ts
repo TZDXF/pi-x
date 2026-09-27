@@ -29,6 +29,11 @@ export function createCheckpoint(project: string, checkpointId: string): Promise
   return invoke<CheckpointMeta>("session_checkpoint_create", { project, checkpointId })
 }
 
+/** 删除 checkpoint 的 Git 引用（对齐 ZCode 的 deleteCheckpoint API） */
+export function deleteCheckpoint(project: string, checkpointId: string): Promise<void> {
+  return invoke<void>("session_checkpoint_delete", { project, checkpointId })
+}
+
 export function diffCheckpoints(project: string, from: string, to: string): Promise<CheckpointFileDiff[]> {
   return invoke<CheckpointFileDiff[]>("session_checkpoint_diff", { project, from, to })
 }

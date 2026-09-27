@@ -18,7 +18,9 @@ use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
 use crate::sessions::validate_session_path;
 
-const CHECKPOINT_REF_PREFIX: &str = "refs/pix/checkpoints";
+// 使用 refs/pix-internal/ 前缀，避免用户在 `git log --all` 或 Git 工具中注意到
+// checkpoint 提交。这些 ref 是内部实现细节，不属于用户可见的 Git 历史。
+const CHECKPOINT_REF_PREFIX: &str = "refs/pix-internal/checkpoints";
 
 #[derive(Serialize, Debug)]
 pub struct CheckpointMeta {
@@ -186,6 +188,25 @@ pub async fn session_checkpoint_create(project: String, checkpoint_id: String) -
             fnv1a(&format!("{}:{}", project, checkpoint_id)),
         );
         create_checkpoint(&layout, &ref_name, &checkpoint_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 删除一个 checkpoint 的 Git 引用（对齐 ZCode 的 deleteCheckpoint API）
+#[tauri::command]
+pub async fn session_checkpoint_delete(project: String, checkpoint_id: String) -> Result<(), String> {
+    spawn_blocking(move || {
+        let layout = resolve_repo(&project)?;
+        let ref_name = format!(
+            "{}/{:016x}/{}",
+            CHECKPOINT_REF_PREFIX,
+            fnv1a(&layout.workspace_in_repo),
+            fnv1a(&format!("{}:{}", project, checkpoint_id)),
+        );
+        // 删除 Git ref（允许不存在时静默成功）
+        git_in(&layout.repo_root, &["update-ref", "-d", &ref_name], None)?;
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?

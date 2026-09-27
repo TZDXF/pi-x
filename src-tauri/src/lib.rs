@@ -114,6 +114,7 @@ pub fn run() {
             workspace_git::workspace_git_create,
             session_revert::session_revert_changes,
             session_checkpoint::session_checkpoint_create,
+            session_checkpoint::session_checkpoint_delete,
             session_checkpoint::session_checkpoint_diff,
             session_checkpoint::session_checkpoint_restore,
             session_checkpoint::session_checkpoint_manifest_get,
