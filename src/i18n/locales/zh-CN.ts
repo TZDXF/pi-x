@@ -111,7 +111,8 @@ export default {
     resize: "拖拽调整审查栏宽度（也可使用左右方向键）",
     title: "会话代码变动", review: "审查", close: "关闭代码审查",
     description: "仅统计成功的文件修改工具，按操作累计增删行（非 Git 净变动）。",
-    empty: "当前会话暂无成功的文件修改。", unknown: "原内容未知 · 仅展示写入内容，未计入统计",
+    empty: "当前会话暂无成功的文件修改。", unknown: "原内容未知 · 按全部新增统计，仅展示写入内容",
+    realDiff: "Git 快照差异 · 真实文件行号",
   },
   turnChanges: {
     filesCount: "{count} 个文件",
@@ -822,6 +823,8 @@ export default {
     previewPathInvalid: "无效的文件路径: {detail}",
     previewReadFailed: "读取文件失败: {detail}",
     previewImageTooLarge: "图片过大，无法预览（上限 {limit} MB）",
+    checkpointContentTooLarge: "快照文件过大，无法展示差异: {detail}",
+    projectlessDirUnusable: "无法使用无项目会话目录: {detail}",
     revertPathInvalid: "无效的文件路径: {detail}",
     revertReadFailed: "读取文件失败: {detail}",
     revertWriteFailed: "写入文件失败: {detail}",

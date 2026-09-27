@@ -111,7 +111,8 @@ export default {
     resize: "Drag to resize code review (or use left/right arrow keys)",
     title: "Session changes", review: "Review", close: "Close code review",
     description: "Successful file tools only. Counts accumulate per operation, not a Git net diff.",
-    empty: "No successful file changes in this session.", unknown: "Original content unknown · write preview only, excluded from totals",
+    empty: "No successful file changes in this session.", unknown: "Original content unknown · counted as additions, write preview only",
+    realDiff: "Git snapshot diff · real file line numbers",
   },
   turnChanges: {
     filesCount: "{count} files",
@@ -823,6 +824,8 @@ export default {
     previewPathInvalid: "Invalid file path: {detail}",
     previewReadFailed: "Failed to read file: {detail}",
     previewImageTooLarge: "Image too large to preview (limit {limit} MB)",
+    checkpointContentTooLarge: "Snapshot file too large to diff: {detail}",
+    projectlessDirUnusable: "Cannot use the no-project workspace directory: {detail}",
     revertPathInvalid: "Invalid file path: {detail}",
     revertReadFailed: "Failed to read file: {detail}",
     revertWriteFailed: "Failed to write file: {detail}",
