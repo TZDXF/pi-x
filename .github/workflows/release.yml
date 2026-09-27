@@ -96,6 +96,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 自动生成 Release Notes
-        run: gh release edit "${{ github.ref_name }}" --generate-notes
+        # gh release edit 不支持 --generate-notes（runner 版本限制），改用 REST API
+        run: |
+          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq .id)
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F generate_release_notes=true --jq .html_url
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
