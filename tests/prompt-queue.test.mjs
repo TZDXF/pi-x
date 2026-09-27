@@ -263,3 +263,29 @@ test('compaction_end appends a visible marker with token stats; aborted runs add
   h.store.handleEvent({ type: 'compaction_end', result: null, aborted: true })
   assert.equal(h.store.entries.value.filter(e => e.kind === 'compaction').length, 1)
 })
+
+
+test('scheduled conversations render the submitted prompt and live output without sending it again', () => {
+  const h = sessionHarness()
+  h.store.handleEvent({ type: 'scheduled_session_created', prompt: 'Inspect the project' })
+  assert.equal(h.store.entries.value[0].text, 'Inspect the project')
+  assert.equal(h.store.isStreaming.value, true)
+  assert.equal(h.calls.filter(c => c.type === 'prompt').length, 0)
+  h.store.handleEvent({ type: 'agent_start' })
+  h.store.handleEvent({ type: 'message_start', message: { role: 'assistant' } })
+  h.store.handleEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } })
+  h.store.handleEvent({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Working' } })
+  assert.equal(h.store.partialBlocks.value[0].text, 'Working')
+  h.store.handleEvent({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Done' }] } })
+  h.store.handleEvent({ type: 'agent_settled' })
+  assert.equal(h.store.isStreaming.value, false)
+  assert.equal(h.store.entries.value[1].blocks[0].text, 'Done')
+})
+
+test('scheduled preflight rejection releases the conversation for user continuation', () => {
+  const h = sessionHarness()
+  h.store.handleEvent({ type: 'scheduled_session_created', prompt: 'Inspect' })
+  h.store.handleEvent({ type: 'scheduled_session_failed', error: 'Model unavailable' })
+  assert.equal(h.store.isStreaming.value, false)
+  assert.match(h.store.entries.value[1].blocks[0].text, /Model unavailable/)
+})

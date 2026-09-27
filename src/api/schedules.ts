@@ -1,4 +1,4 @@
-import { invoke } from './transport'
+import { invoke, listen } from './transport'
 import type { ThinkingLevel } from './protocol'
 
 export interface ScheduledTaskInput {
@@ -22,3 +22,8 @@ export interface ScheduledTask extends ScheduledTaskInput {
 export const listScheduledTasks = () => invoke<ScheduledTask[]>('schedule_list')
 export const saveScheduledTask = (input: ScheduledTaskInput) => invoke<ScheduledTask>('schedule_save', { input })
 export const deleteScheduledTask = (id: string) => invoke<void>('schedule_delete', { id })
+export const runScheduledTask = (id: string) => invoke<void>('schedule_run', { id })
+
+/** Schedule rows change outside this component when a run starts or publishes its session. */
+export const onScheduledTasksChanged = (handler: () => void) =>
+  listen('pi://schedules-changed', () => handler())

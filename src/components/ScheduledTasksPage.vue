@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Pencil, Trash2, Pause, Play, Clock } from '@lucide/vue'
+import { Plus, Pencil, Trash2, Pause, Play, CirclePlay, Clock } from '@lucide/vue'
 import { TimeFieldInput, TimeFieldRoot, type TimeValue } from 'reka-ui'
 import { Time } from '@internationalized/date'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -13,7 +13,7 @@ import ConversationModelSelect from '@/components/ConversationModelSelect.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSessionStore } from '@/stores/conversations'
 import { getModelsConfig } from '@/api/piClient'
-import { listScheduledTasks, saveScheduledTask, deleteScheduledTask, type ScheduledTask, type ScheduledTaskInput } from '@/api/schedules'
+import { listScheduledTasks, saveScheduledTask, deleteScheduledTask, runScheduledTask, onScheduledTasksChanged, type ScheduledTask, type ScheduledTaskInput } from '@/api/schedules'
 import { scheduleExpression, parseScheduleExpression, scheduleFrequencies, scheduleWeekdays, type ScheduleFrequency } from '@/lib/schedules'
 import { supportedThinkingLevels } from '@/lib/thinkingLevels'
 import type { ThinkingLevel } from '@/api/protocol'
@@ -52,6 +52,8 @@ const models = computed(() => {
 const levels = computed(() => modelLevels.value[modelKey.value] ?? supportedThinkingLevels(session.models.find(m => `${m.provider}/${m.id}` === modelKey.value) ?? {}))
 watch(levels, values => { if (!values.includes(draft.value.thinking)) draft.value.thinking = values.includes('medium') ? 'medium' : values[0] ?? 'off' })
 let timer: ReturnType<typeof setInterval> | undefined
+let unlistenChanges: (() => void) | undefined
+let disposed = false
 let generation = 0
 async function refresh() {
   const own = generation
@@ -84,7 +86,10 @@ async function initialize() {
   finally { if (own === generation) loading.value = false }
 }
 void initialize()
-onBeforeUnmount(() => { generation++; clearInterval(timer) })
+void onScheduledTasksChanged(() => {
+  if (!disposed && !busy.value) void refresh().catch(e => { error.value = String(e) })
+}).then(unlisten => { if (disposed) unlisten(); else unlistenChanges = unlisten }).catch(() => {})
+onBeforeUnmount(() => { disposed = true; generation++; clearInterval(timer); unlistenChanges?.() })
 function edit(task?: ScheduledTask) {
   error.value = ''
   draft.value = task ? { ...task } : emptyDraft()
@@ -181,7 +186,8 @@ function openResult(task: ScheduledTask) {
           <p v-if="task.lastRun" class="text-xs text-muted-foreground">{{ t('schedules.last') }}: {{ formatDate(task.lastRun) }}</p>
           <p v-if="task.error" class="text-xs text-destructive break-words">{{ task.error }}</p>
           <div class="flex gap-1 justify-end">
-            <Button v-if="task.sessionFile" variant="ghost" size="sm" @click="openResult(task)">{{ t('schedules.result') }}</Button>
+            <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.run')" @click="action(() => runScheduledTask(task.id!))"><CirclePlay :size="15" /></Button>
+            <Button v-if="task.sessionFile" variant="ghost" size="sm" @click="openResult(task)">{{ t(task.status === 'running' ? 'schedules.progress' : 'schedules.result') }}</Button>
             <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.edit')" @click="edit(task)"><Pencil :size="15" /></Button>
             <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t(task.enabled ? 'schedules.pause' : 'schedules.resume')" @click="action(() => saveScheduledTask({ ...task, enabled: !task.enabled }))"><Pause v-if="task.enabled" :size="15" /><Play v-else :size="15" /></Button>
             <Button variant="ghost" size="sm" :disabled="busy || task.status === 'running'" :aria-label="t('schedules.delete')" @click="deleting = task.id"><Trash2 :size="15" /></Button>

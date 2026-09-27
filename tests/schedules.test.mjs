@@ -47,3 +47,21 @@ test('scheduled tasks use a workspace route and a page with the instructions las
   assert.match(page, /<SelectItem v-for="path in projects"[^>]*>{{ workspace.projectName\(path\) }}<\/SelectItem>/)
   assert.ok(page.indexOf("t('schedules.prompt') }}<Textarea") > page.indexOf('id="schedule-thinking"'))
 })
+
+
+test('scheduled runs get unique Pix-owned runtimes and publish before prompting', () => {
+  const source = readFileSync(new URL('../src-tauri/src/schedules.rs', import.meta.url), 'utf8')
+  assert.match(source, /let id = format!\("schedule-\{}", uuid::Uuid::new_v4\(\)\);/)
+  assert.ok(source.indexOf('"type": "scheduled_session_created"') < source.indexOf('json!({"type":"prompt", "message":input.prompt})'))
+  assert.match(source, /current\.session_file = Some\(file\.clone\(\)\);[\s\S]*persist\(&updated\)\?;/)
+  assert.match(source, /notify_schedules_changed\(app\);[\s\S]*published = true/)
+})
+
+test('scheduled workers remain visible to Pix while retaining their backend event channel', () => {
+  const source = readFileSync(new URL('../src-tauri/src/rpc.rs', import.meta.url), 'utf8')
+  const emit = source.slice(source.indexOf('fn emit_process_event'), source.indexOf('const CREATE_NO_WINDOW'))
+  assert.match(emit, /pi:\/\/schedule-/)
+  assert.match(emit, /crate::remote::emit\(app, event, payload\)/)
+  const list = source.slice(source.indexOf('pub async fn list'), source.indexOf('pub(crate) async fn set_session_name'))
+  assert.doesNotMatch(list, /starts_with\("schedule-"\)/)
+})

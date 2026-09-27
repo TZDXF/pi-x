@@ -15,7 +15,7 @@ import { useWorkspaceStore } from '/src/stores/workspace.ts'
 import '/src/style.css'
 const app = createApp({setup() { const route = useRoute(); return () => h('div', { class: 'flex h-screen' }, [
   h(WorkspaceSidebar, { project: 'C:/demo', ready: true, busy: false, onSchedules: () => navigate('/schedules') }),
-  route.value.name === 'schedules' ? h('main', { class: 'flex flex-1 min-h-0' }, [h(ScheduledTasksPage, { project: 'C:/demo' })]) : h('main', 'Workspace'),
+  route.value.name === 'schedules' ? h('main', { class: 'flex flex-1 min-h-0' }, [h(ScheduledTasksPage, { project: 'C:/demo', onResumeSession: (file, project) => { window.openedSession = { file, project } } })]) : h('main', 'Workspace'),
 ]) }})
 app.use(createPinia()).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':messages}}))
 useWorkspaceStore().projects = ['C:/demo']
@@ -45,6 +45,7 @@ await page.addInitScript(() => {
       window.tasks = [saved]
       return saved
     }
+    if (command === 'schedule_run') { Object.assign(window.tasks[0], { status: 'running', sessionFile: 'scheduled.jsonl' }); return }
     if (command === 'schedule_delete') { window.tasks = []; return }
     if (command === 'models_config_get') return { providers: { test: { models: [{ id: 'test-model', name: 'Test model', reasoning: true }] } } }
     if (command === 'pi_settings_get') return { defaultProvider: 'test', defaultModel: 'test-model', skills: [] }
@@ -104,6 +105,12 @@ try {
   assert.equal(saved.expression, '*/15 9-17 * * MON-FRI')
   await page.getByRole('button', { name: '恢复', exact: true }).click()
   await page.getByRole('button', { name: '暂停', exact: true }).waitFor()
+  await page.getByRole('button', { name: '立即执行', exact: true }).click()
+  await page.getByRole('button', { name: '查看执行过程', exact: true }).click()
+  assert.deepEqual(await page.evaluate(() => window.openedSession), { file: 'scheduled.jsonl', project: 'C:/demo' })
+  assert.equal(await page.getByRole('button', { name: '立即执行', exact: true }).isDisabled(), true)
+  await page.evaluate(() => { window.tasks[0].status = 'success' })
+  await page.getByRole('button', { name: '查看最近结果', exact: true }).waitFor()
   await page.getByRole('button', { name: '删除', exact: true }).click()
   await page.getByText('确定删除此定时任务？').waitFor()
   await page.getByRole('button', { name: '删除', exact: true }).last().click()

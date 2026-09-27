@@ -1,6 +1,7 @@
 /** 简体中文语言包 */
 export default {
   schedules: {
+    "progress": "查看执行过程",
     "title": "定时任务",
     "description": "按本机时区运行，需要 PiX 保持运行。重启不补跑错过的任务，同一任务不重叠执行。",
     "taskTitle": "标题",
@@ -36,6 +37,7 @@ export default {
     "paused": "已暂停",
     "next": "下次执行",
     "last": "上次执行",
+    "run": "立即执行",
     "result": "查看最近结果",
     "edit": "编辑",
     "pause": "暂停",

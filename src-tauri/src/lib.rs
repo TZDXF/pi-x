@@ -68,6 +68,7 @@ pub fn run() {
             schedules::schedule_list,
             schedules::schedule_save,
             schedules::schedule_delete,
+            schedules::schedule_run,
             remote::remote_status,
             remote::remote_set,
             remote::remote_password_set,

@@ -100,6 +100,14 @@ onMounted(async () => {
           return
         }
         const owner = sessionFor(id)
+        if (ev.type === "scheduled_session_created") {
+          owner.cwd = ev.project
+          owner.sessionFile = ev.sessionFile
+          owner.state = ev.state
+          owner.started = true
+          // Metadata requests do not replace live entries accumulated below.
+          void owner.init(ev.project).catch(console.warn)
+        }
         owner.handleEvent(ev)
         if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
       }),
@@ -412,6 +420,7 @@ async function resumeSession(file: string, targetProject?: string) {
   phase.value = "chat"
   connecting.value = true
   let owner = findConversation(file)
+  let attaching = false
   try {
     const dir = targetProject || owner?.cwd || project.value
     const changingProject = dir !== project.value
@@ -429,6 +438,24 @@ async function resumeSession(file: string, targetProject?: string) {
         pendingResume.value = file
         phase.value = "trust"
         return
+      }
+    }
+    // The scheduler and other PiX windows may have created the worker since
+    // this UI last synchronized. Attach by persisted identity, never spawn twice.
+    if (!owner?.started) {
+      const running = await listRunningSessions()
+      const runtime = running.find(item => item.state.sessionFile?.replace(/\\/g, "/") === file.replace(/\\/g, "/"))
+      if (runtime) {
+        owner = sessionFor(runtime.runtimeId)
+        attaching = true
+        if (!owner.started) {
+          owner.sessionFile = file
+          await owner.init(runtime.project)
+          await owner.loadHistory()
+          owner.isStreaming = runtime.state.isStreaming
+          owner.started = true
+          if (owner.isStreaming) owner.markRunning()
+        }
       }
     }
     if (owner.started) {
@@ -450,7 +477,7 @@ async function resumeSession(file: string, targetProject?: string) {
     await Promise.all([owner.init(dir), owner.loadHistory()])
     owner.started = true
   } catch (e) {
-    if (owner) {
+    if (owner && !attaching) {
       await killPi(owner.runtimeId).catch(() => {})
       owner.started = false
     }

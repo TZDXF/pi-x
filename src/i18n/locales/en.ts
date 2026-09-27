@@ -1,6 +1,7 @@
 /** English locale */
 export default {
   schedules: {
+    "progress": "View progress",
     "title": "Scheduled tasks",
     "description": "Runs in this computer’s timezone while PiX is running. Missed runs are skipped on restart; runs of the same task never overlap.",
     "taskTitle": "Title",
@@ -36,6 +37,7 @@ export default {
     "paused": "Paused",
     "next": "Next run",
     "last": "Last run",
+    "run": "Run now",
     "result": "View latest result",
     "edit": "Edit",
     "pause": "Pause",

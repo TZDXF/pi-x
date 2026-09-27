@@ -19,15 +19,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-// Scheduled workers are owned by the backend, not interactive UI stores.
+// Scheduled workers also have a backend completion listener; all workers are visible to PiX.
 fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
     if runtime_id.starts_with("schedule-") {
         use tauri::Emitter;
         let name = event.replace("pi://", "pi://schedule-");
-        let _ = app.emit(&name, payload);
-    } else {
-        crate::remote::emit(app, event, payload);
+        let _ = app.emit(&name, payload.clone());
     }
+    crate::remote::emit(app, event, payload);
 }
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -579,7 +578,6 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     let mut result = Vec::new();
     for process in processes {
-        if process.runtime_id.starts_with("schedule-") { continue; }
         if !process_running(&process).await { continue; }
         let mut probe = json!({"type": "get_state"});
         if let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await {

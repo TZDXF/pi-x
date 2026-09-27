@@ -36,6 +36,10 @@ pub struct Task {
 #[derive(Default)]
 pub struct ScheduleState(Mutex<Vec<Task>>);
 
+fn notify_schedules_changed(app: &AppHandle) {
+    crate::remote::emit(app, "pi://schedules-changed", json!({}));
+}
+
 fn next_run(expression: &str, after: i64) -> Result<i64, String> {
     // UI accepts exactly five fields; explicitly prepend seconds for cron-rs.
     if expression.split_whitespace().count() != 5 {
@@ -152,6 +156,52 @@ pub async fn schedule_delete(state: State<'_, ScheduleState>, id: String) -> Res
     *guard = tasks;
     Ok(())
 }
+#[tauri::command]
+pub async fn schedule_run(app: AppHandle, state: State<'_, ScheduleState>, id: String) -> Result<(), String> {
+    // Claim before execution, same as the scheduler loop; manual runs keep next_run untouched.
+    let task = {
+        let mut guard = state.0.lock().await;
+        let mut tasks = guard.clone();
+        let Some(task) = tasks.iter_mut().find(|t| t.input.id.as_deref() == Some(&id)) else {
+            return Err("Task no longer exists".into());
+        };
+        if task.status == "running" {
+            return Err("Task is running".into());
+        }
+        let claimed = task.clone();
+        task.status = "running".into();
+        task.session_file = None;
+        task.error = None;
+        task.last_run = Some(Local::now().timestamp_millis());
+        persist(&tasks)?;
+        *guard = tasks;
+        claimed
+    };
+    notify_schedules_changed(&app);
+    tauri::async_runtime::spawn(async move {
+        let result = execute(&app, &task).await;
+        let state = app.state::<ScheduleState>();
+        let mut guard = state.0.lock().await;
+        if let Some(current) = guard.iter_mut().find(|t| t.input.id == task.input.id) {
+            match result {
+                Ok(file) => {
+                    current.status = "success".into();
+                    current.session_file = Some(file);
+                }
+                Err(e) => {
+                    current.status = "failed".into();
+                    current.error = Some(e);
+                }
+            }
+            if let Err(e) = persist(&guard) {
+                eprintln!("Schedule result persistence failed: {e}");
+            }
+            drop(guard);
+            notify_schedules_changed(&app);
+        }
+    });
+    Ok(())
+}
 
 async fn checked_request(state: &rpc::RpcState, id: &str, command: Value) -> Result<Value, String> {
     let response = tokio::time::timeout(
@@ -184,14 +234,6 @@ async fn wait_for_completion(
         if event["type"] == "process_exit" {
             return Err("Pi exited before completing the task".into());
         }
-        if event["type"] == "extension_ui_request"
-            && matches!(
-                event["method"].as_str(),
-                Some("select" | "confirm" | "input" | "editor")
-            )
-        {
-            return Err("Task requires interactive input; open a conversation to continue".into());
-        }
         if event["type"] == "agent_settled" {
             break;
         }
@@ -209,7 +251,9 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     let approved = trust["decision"] == true;
     let pi = pi_locate::detect(commands::app_config_get(app.clone())?.pi_path).await;
     let state = app.state::<rpc::RpcState>();
-    let id = format!("schedule-{}", input.id.as_deref().ok_or("Missing task ID")?);
+    let id = format!("schedule-{}", uuid::Uuid::new_v4());
+    let mut published = false;
+    let mut settled = false;
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
     let exit_sender = sender.clone();
     let exit_id = id.clone();
@@ -268,12 +312,34 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         {
             return Err("Pi did not apply the selected model or thinking level".into());
         }
+        let file = initial["sessionFile"].as_str()
+            .ok_or("Pi did not create a session")?.to_owned();
+        checked_request(&state, &id, json!({"type":"set_session_name", "name":input.title})).await?;
+        // Publish the identity before prompting so opening it attaches to this worker.
+        {
+            let schedules = app.state::<ScheduleState>();
+            let mut guard = schedules.0.lock().await;
+            let mut updated = guard.clone();
+            let current = updated.iter_mut().find(|t| t.input.id == input.id)
+                .ok_or("Task no longer exists")?;
+            current.session_file = Some(file.clone());
+            persist(&updated)?;
+            *guard = updated;
+        }
+        notify_schedules_changed(app);
+        published = true;
+        crate::remote::emit(app, "pi://event", json!({
+            "type": "scheduled_session_created", "runtimeId": id,
+            "project": input.project, "sessionFile": file, "state": initial,
+            "prompt": input.prompt,
+        }));
         let prompt = checked_request(
             &state,
             &id,
             json!({"type":"prompt", "message":input.prompt}),
         );
         wait_for_completion(prompt, &mut events).await?;
+        settled = true;
         let messages = checked_request(&state, &id, json!({"type":"get_messages"})).await?;
         let last = messages["messages"]
             .as_array()
@@ -285,17 +351,6 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
                 .unwrap_or("Model run failed")
                 .into());
         }
-        let info = checked_request(&state, &id, json!({"type":"get_state"})).await?;
-        let file = info["sessionFile"]
-            .as_str()
-            .ok_or("Pi did not create a session")?
-            .to_owned();
-        checked_request(
-            &state,
-            &id,
-            json!({"type":"set_session_name", "name":input.title}),
-        )
-        .await?;
         Ok(file)
     })
     .await
@@ -303,7 +358,19 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     .and_then(|v| v);
     app.unlisten(listener);
     app.unlisten(exit_listener);
-    let _ = rpc::kill(&state, Some(&id)).await;
+    if !published {
+        let _ = rpc::kill(&state, Some(&id)).await;
+    } else if let Err(error) = &outcome {
+        // Never abort a follow-up the user sent after the scheduled turn settled.
+        if !settled {
+            if checked_request(&state, &id, json!({"type":"abort"})).await.is_err() {
+                let _ = rpc::kill(&state, Some(&id)).await;
+            }
+            crate::remote::emit(app, "pi://event", json!({
+                "type": "scheduled_session_failed", "runtimeId": id, "error": error,
+            }));
+        }
+    }
     outcome
 }
 
@@ -325,6 +392,7 @@ fn claim_due(tasks: &mut [Task], now: i64) -> (Vec<Task>, bool) {
             }
         }
         task.status = "running".into();
+        task.session_file = None;
         task.error = None;
         task.last_run = Some(now);
         claimed.push(task.clone());
@@ -373,6 +441,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
             *guard = updated;
             drop(guard);
+            notify_schedules_changed(&app);
             for task in claimed {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -399,6 +468,8 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         if let Err(e) = persist(&guard) {
                             eprintln!("Schedule result persistence failed: {e}");
                         }
+                        drop(guard);
+                        notify_schedules_changed(&app);
                     }
                 });
             }
@@ -446,6 +517,7 @@ mod tests {
     fn claims_once_and_never_overlaps_or_runs_paused_tasks() {
         let now = Local::now().timestamp_millis();
         let mut tasks = vec![fixture(), fixture()];
+        tasks[0].session_file = Some("previous-run.jsonl".into());
         tasks[1].input.enabled = false;
         let (claimed, changed) = claim_due(&mut tasks, now);
         assert!(changed);
@@ -453,6 +525,7 @@ mod tests {
         assert_eq!(tasks[0].last_run, Some(now));
         assert!(tasks[0].next_run > now);
         assert_eq!(tasks[0].status, "running");
+        assert!(tasks[0].session_file.is_none());
         let (claimed, changed) = claim_due(&mut tasks, now + 3_600_000);
         assert!(!changed);
         assert!(claimed.is_empty());
@@ -484,17 +557,24 @@ mod tests {
         assert!(wait.await.is_ok());
     }
     #[tokio::test]
-    async fn input_and_exit_fail_even_before_preflight_ack() {
-        for event in [
-            json!({"type":"extension_ui_request", "method":"confirm"}),
-            json!({"type":"process_exit"}),
-        ] {
+    async fn exit_fails_even_before_preflight_ack() {
+        for event in [json!({"type":"process_exit"})] {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             tx.send(event).unwrap();
             assert!(wait_for_completion(std::future::pending(), &mut rx)
                 .await
                 .is_err());
         }
+    }
+    #[tokio::test]
+    async fn interactive_requests_wait_for_the_pix_user() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let wait = wait_for_completion(async { Ok(Value::Null) }, &mut rx);
+        tokio::pin!(wait);
+        tx.send(json!({"type":"extension_ui_request", "method":"confirm"})).unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut wait).await.is_err());
+        tx.send(json!({"type":"agent_settled"})).unwrap();
+        assert!(wait.await.is_ok());
     }
     #[tokio::test]
     async fn rejected_prompts_and_closed_streams_fail() {

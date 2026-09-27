@@ -230,6 +230,24 @@ export const createSessionStore = (runtimeId = "default") => defineStore(`sessio
   // ---- event ingestion ----
   function handleEvent(ev: Record<string, any>) {
     switch (ev.type) {
+      case "scheduled_session_created":
+        // This prompt is submitted by PiX's scheduler rather than the composer.
+        entries.value.push({ kind: "user", id: nextId(), text: ev.prompt, timestamp: Date.now() })
+        isStreaming.value = true
+        awaitingAgentStart = true
+        setSessionRunStatus(sessionFile.value, "running")
+        break
+
+      case "scheduled_session_failed":
+        // Preflight can reject a prompt without ever emitting agent_start/settled.
+        if (awaitingAgentStart) {
+          awaitingAgentStart = false
+          turnFailed = true
+          lastErrorMessage = ev.error
+          handleEvent({ type: "agent_settled" })
+        }
+        break
+
       case "agent_start":
         awaitingAgentStart = false
         agentStartedAt = Date.now()

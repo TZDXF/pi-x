@@ -185,3 +185,45 @@ test('selecting a queued new conversation reattaches its runtime without clearin
   assert.equal(pending.promptQueue.length, 1)
   assert.deepEqual(calls, [])
 })
+
+
+test('opening a running scheduled session attaches to its existing worker without spawning', async () => {
+  const { context, calls } = harness()
+  await context.mount()
+  const owner = context.sessionFor('schedule-unique-run')
+  owner.cwd = 'project'
+  owner.markRunning = () => calls.push('running')
+  context.listRunningSessions = async () => [{ runtimeId: owner.runtimeId, project: 'project', state: { sessionFile: 'scheduled.jsonl', isStreaming: true } }]
+  await context.actions.resumeSession('scheduled.jsonl', 'project')
+  assert.equal(context.activeRuntimeId.value, owner.runtimeId)
+  assert.equal(owner.started, true)
+  assert.equal(owner.isStreaming, true)
+  assert.equal(owner.sessionFile, 'scheduled.jsonl')
+  assert.equal(calls.includes('spawn'), false)
+  assert.equal(context.actions.phase.value, 'chat')
+})
+
+test('opening an observed scheduled session preserves its live output', async () => {
+  const { context, calls } = harness()
+  await context.mount()
+  const owner = context.sessionFor('schedule-observed')
+  Object.assign(owner, { cwd: 'project', started: true, isStreaming: true, sessionFile: 'scheduled.jsonl', partialBlocks: [{ type: 'text', text: 'Working' }] })
+  context.findConversation = () => owner
+  await context.actions.resumeSession('scheduled.jsonl', 'project')
+  assert.equal(context.activeRuntimeId.value, owner.runtimeId)
+  assert.equal(owner.partialBlocks[0].text, 'Working')
+  assert.deepEqual(calls, [])
+})
+
+
+test('failed attachment never kills a backend-owned scheduled worker', async () => {
+  const { context } = harness()
+  await context.mount()
+  const owner = context.sessionFor('schedule-failed-attach')
+  owner.init = async () => { throw new Error('Metadata temporarily unavailable') }
+  const killed = []
+  context.killPi = async id => killed.push(id)
+  context.listRunningSessions = async () => [{ runtimeId: owner.runtimeId, project: 'project', state: { sessionFile: 'scheduled.jsonl', isStreaming: true } }]
+  await context.actions.resumeSession('scheduled.jsonl', 'project')
+  assert.deepEqual(killed, [])
+})
