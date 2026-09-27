@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadTsModule, loadTsSource } from './lib/load-ts.mjs'
+import { loadTsModule, loadTsSource, pathsModule } from './lib/load-ts.mjs'
 
-const sessionChanges = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'))
+const sessionChanges = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'), { require: () => pathsModule() })
 const { turnFileChanges } = loadTsModule(
   new URL('../src/lib/turnChanges.ts', import.meta.url),
   id => (id === '@/lib/sessionChanges' ? sessionChanges : undefined),

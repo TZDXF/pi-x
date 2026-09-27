@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
+import { normalizeSlashes } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
 
 const route = useRoute()
@@ -462,7 +463,7 @@ async function resumeSession(file: string, targetProject?: string) {
     // this UI last synchronized. Attach by persisted identity, never spawn twice.
     if (!owner?.started) {
       const running = await listRunningSessions()
-      const runtime = running.find(item => item.state.sessionFile?.replace(/\\/g, "/") === file.replace(/\\/g, "/"))
+      const runtime = running.find(item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file))
       if (runtime) {
         owner = sessionFor(runtime.runtimeId)
         attaching = true

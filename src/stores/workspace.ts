@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
-import { samePath } from "@/lib/paths"
+import { baseName, samePath } from "@/lib/paths"
 import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
@@ -159,7 +159,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function projectName(path: string) {
     if (isProjectless(path)) return i18n.global.t("projectless.name")
-    return projectGroups.value[projectRoot(path)]?.name || path.split(/[\\/]/).filter(Boolean).pop() || path
+    return projectGroups.value[projectRoot(path)]?.name || baseName(path) || path
   }
   function projectFolders(path: string) {
     return projectGroups.value[projectRoot(path)]?.folders || [path]

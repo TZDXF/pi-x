@@ -28,6 +28,7 @@ function storeHarness({ dir = DEFAULT_DIR, defaultDir = DEFAULT_DIR, failures = 
     listSessions: async () => [],
     updateSession: async () => 0,
     samePath,
+    baseName: paths.baseName,
     i18n: { global: { t: key => (key === 'projectless.name' ? LABEL : key) } },
     resolveProjectlessDir: async () => {
       calls.push(1)

@@ -18,6 +18,19 @@ export function joinDisplayPath(base: string, ...segments: string[]): string {
   return [root, ...rest].filter((s) => s.length > 0).join(sep)
 }
 
+/** Separators normalized to forward slashes, so Windows paths compare and render consistently. */
+export function normalizeSlashes(path: string): string {
+  return path.replace(/\\/g, "/")
+}
+
+/**
+ * Final path segment (file or folder name) with separators normalized. Empty or
+ * all-separator input returns the input itself, so callers can chain fallbacks.
+ */
+export function baseName(path: string): string {
+  return normalizeSlashes(path).split("/").filter(Boolean).pop() ?? path
+}
+
 /**
  * Path shown in the UI: relative to `root` when the file lives inside the
  * project directory, the original path otherwise. Separator styles are
@@ -26,8 +39,8 @@ export function joinDisplayPath(base: string, ...segments: string[]): string {
  * distinct.
  */
 export function relativeDisplayPath(path: string, root: string): string {
-  const target = path.replace(/\\/g, "/")
-  const base = root.replace(/\\/g, "/").replace(/\/+$/, "")
+  const target = normalizeSlashes(path)
+  const base = normalizeSlashes(root).replace(/\/+$/, "")
   if (!base) return target
   const windows = /^[a-z]:\//i.test(base) || /^[a-z]:\//i.test(target)
   const fold = (value: string) => (windows ? value.toLowerCase() : value)
@@ -52,7 +65,7 @@ export function isAbsolutePath(path: string): boolean {
  * directories that differ by case stay distinct.
  */
 export function samePath(a: string, b: string): boolean {
-  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "")
+  const normalize = (value: string) => normalizeSlashes(value).replace(/\/+$/, "")
   const left = normalize(a)
   const right = normalize(b)
   if (!left || !right) return false

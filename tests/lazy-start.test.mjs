@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { pathsModule } from './lib/load-ts.mjs'
 function harness(group = null) {
   const calls = [], spawnArgs = []
   const workspace = { projectRoot: path => path, projectName: path => path, projectGroups: group ? { project: group } : {},
@@ -38,6 +39,7 @@ function harness(group = null) {
     listRunningSessions: async () => [], detectPi: async () => ({ found: true }),
     onSessionsChanged: async () => () => {}, sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {}, useRoute: () => ({}), navigate: () => {},
+    normalizeSlashes: pathsModule().normalizeSlashes,
   })
   vm.runInContext(ts.transpile(source + '\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, selectQueuedConversation, connecting, selectingProject, phase };', { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { context, calls, spawnArgs, workspace }

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { pathsModule } from './lib/load-ts.mjs'
+const paths = pathsModule()
 function harness(initialStorage = new Map()) {
   const source = readFileSync(new URL('../src/stores/workspace.ts', import.meta.url), 'utf8')
     .replace(/^import .*$/gm, '').replace(/export /g, '') + '\nglobalThis.store = useWorkspaceStore();'
@@ -12,6 +14,7 @@ function harness(initialStorage = new Map()) {
     listSessions: path => new Promise(resolve => requests.push({ path, resolve })),
     updateSession: async (...args) => writes.push(args),
     localStorage: { getItem: key => storage.get(key), setItem: (k, v) => storage.set(k, v) },
+    samePath: paths.samePath, baseName: paths.baseName,
   })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
   return { store: context.store, requests, writes, storage, context }

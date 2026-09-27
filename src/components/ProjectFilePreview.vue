@@ -9,6 +9,7 @@ import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
 import { isMarkdownExt } from "@/lib/fileKind"
+import { baseName } from "@/lib/paths"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
@@ -39,7 +40,7 @@ const zoomed = ref(false)
 const imageBroken = ref(false)
 
 const isMarkdown = computed(() => isMarkdownExt(props.path))
-const isSvg = computed(() => props.path.replace(/\\/g, "/").split("/").pop()?.toLowerCase().endsWith(".svg") ?? false)
+const isSvg = computed(() => baseName(props.path).toLowerCase().endsWith(".svg"))
 const text = computed(() => (preview.value?.kind === "text" ? preview.value.text ?? "" : ""))
 const codeLines = computed(() => text.value.split("\n"))
 /** svg 以文本读回后可直接按 data URL 渲染（截断的 svg 不完整，只看源码） */

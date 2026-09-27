@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useWorkspaceStore, type ProjectGroup } from "@/stores/workspace"
+import { baseName } from "@/lib/paths"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
@@ -18,7 +19,7 @@ const folders = ref<string[]>([])
 const primary = ref("")
 const error = ref("")
 const adding = ref(false)
-const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path
+const folderName = baseName
 const valid = computed(() => !!title.value.trim() && folders.value.length > 0 && folders.value.includes(primary.value))
 
 watch(() => [props.open, props.editPath] as const, ([open]) => {

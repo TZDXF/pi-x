@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { contentModule, loadTsModule, loadTsSource } from './lib/load-ts.mjs'
+import { contentModule, loadTsModule, loadTsSource, pathsModule } from './lib/load-ts.mjs'
 
 function harness({ messages = [], lastError = null } = {}) {
   const modules = {
@@ -24,7 +24,7 @@ function harness({ messages = [], lastError = null } = {}) {
     '@/lib/notifications': { notifyTurnComplete() {} },
     '@/stores/sessionRunStatus': { setSessionRunStatus() {} },
     '@/lib/content': contentModule(),
-    '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8')),
+    '@/lib/sessionChanges': loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'), { require: () => pathsModule() }),
     '@/lib/contextBreakdown': loadTsSource(readFileSync(new URL('../src/lib/contextBreakdown.ts', import.meta.url), 'utf8')),
   }
   const { createSessionStore } = loadTsModule(

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { loadTsModule } from './lib/load-ts.mjs'
+import { loadTsModule, pathsModule } from './lib/load-ts.mjs'
 
 function harness() {
   const statuses = new Map()
@@ -87,7 +87,7 @@ test('aborted turns clear status; unexpected process exit marks running turn as 
 
 test('viewing a session acknowledges terminal badges without clearing running or other sessions', () => {
   const source = readFileSync(new URL('../src/stores/sessionRunStatus.ts', import.meta.url), 'utf8')
-  const context = vm.createContext({ exports: {}, require: () => ({ reactive: value => value }) })
+  const context = vm.createContext({ exports: {}, require: name => (name === 'vue' ? { reactive: value => value } : pathsModule()) })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
   const { setSessionRunStatus: set, sessionRunStatus: get, acknowledgeSessionRunStatus: acknowledge } = context.exports
   for (const terminal of ['completed', 'error']) {

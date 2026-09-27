@@ -1,10 +1,11 @@
 import { reactive } from "vue"
+import { normalizeSlashes } from "@/lib/paths"
 
 /** Status of the most recent turn, keyed by session file rather than selected runtime.
  * Keep terminal statuses after a dormant conversation store is evicted. */
 export type SessionRunStatus = "running" | "completed" | "error"
 const statuses = reactive(new Map<string, SessionRunStatus>())
-const key = (file: string) => file.replace(/\\/g, "/")
+const key = normalizeSlashes
 
 export function sessionRunStatus(file: string): SessionRunStatus | undefined {
   return statuses.get(key(file))

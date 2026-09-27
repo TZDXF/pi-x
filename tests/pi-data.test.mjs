@@ -92,6 +92,31 @@ test('Pi exports a saved session file directly without opening a runtime', { ski
   assert.ok(readFileSync(outputPath, 'utf8').startsWith('<!DOCTYPE html>'))
 })
 
+test('retry settings merge into the global file and reject invalid patches', { skip: !dist }, t => {
+  const { agent, call } = fixture(t)
+  const path = join(agent, 'settings.json')
+  writeFileSync(path, '{}')
+  assert.deepEqual(call({ op: 'settings_get' }).retry,
+    { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 }, 'defaults come from Pi')
+
+  writeFileSync(path, JSON.stringify({ theme: 'dark', retry: { enabled: false, maxRetries: 9, provider: { maxRetries: 2 } } }))
+  call({ op: 'settings_save', settings: { retry: { enabled: true, maxRetries: 5, baseDelayMs: 500 } } })
+  let saved = JSON.parse(readFileSync(path, 'utf8'))
+  assert.equal(saved.retry.maxRetries, 5)
+  assert.equal(saved.retry.baseDelayMs, 500)
+  assert.equal(saved.retry.enabled, true)
+  assert.deepEqual(saved.retry.provider, { maxRetries: 2 }, 'untouched retry keys survive the patch')
+  assert.equal(saved.theme, 'dark')
+  assert.deepEqual(call({ op: 'settings_get' }).retry, { enabled: true, maxRetries: 5, baseDelayMs: 500, maxAgentDelayMs: 60000 })
+
+  for (const retry of [{ maxRetries: -1 }, { baseDelayMs: 1.5 }, { enabled: 'yes' }, { provider: { maxRetries: 1 } }, 3]) {
+    call({ op: 'settings_save', settings: { retry } }, false)
+  }
+  saved = JSON.parse(readFileSync(path, 'utf8'))
+  assert.equal(saved.retry.maxRetries, 5, 'invalid patches never reach the file')
+  assert.equal(saved.retry.baseDelayMs, 500)
+})
+
 test('malformed Pi settings and invalid patches fail without replacing the file', { skip: !dist }, t => {
   const { agent, call } = fixture(t)
   const file = join(agent, 'settings.json')

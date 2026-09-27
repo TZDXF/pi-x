@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 import { loadTsModule, loadTsSource } from './lib/load-ts.mjs'
 
 const source = readFileSync(new URL('../src/components/TurnChangesCard.vue', import.meta.url), 'utf8')
-const sessionChanges = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'))
-const turnChanges = loadTsModule(new URL('../src/lib/turnChanges.ts', import.meta.url), id => (id === '@/lib/sessionChanges' ? sessionChanges : undefined))
 const paths = loadTsSource(readFileSync(new URL('../src/lib/paths.ts', import.meta.url), 'utf8'))
+const sessionChanges = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'), { require: () => paths })
+const turnChanges = loadTsModule(new URL('../src/lib/turnChanges.ts', import.meta.url), id => (id === '@/lib/sessionChanges' ? sessionChanges : undefined))
 const backendError = loadTsSource(readFileSync(new URL('../src/lib/backendError.ts', import.meta.url), 'utf8'))
 
 const checkpointRecord = (state = 'active') => ({

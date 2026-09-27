@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
+import { normalizeSlashes } from "@/lib/paths"
 import SessionDiff from "@/components/SessionDiff.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 import { buildFileTree, flatFileRows, flattenVisibleTree } from "@/lib/reviewFileTree"
@@ -46,13 +47,13 @@ async function openActiveFile() {
 const treeMode = ref(false)
 const collapsed = ref(new Set<string>())
 const fileRows = computed(() => treeMode.value
-  ? flattenVisibleTree(buildFileTree(files.value.map(file => ({ ...file, path: file.path.replace(/\\/g, "/") }))), collapsed.value)
+  ? flattenVisibleTree(buildFileTree(files.value.map(file => ({ ...file, path: normalizeSlashes(file.path) }))), collapsed.value)
   : flatFileRows(files.value))
 // Locate a file requested from a chat tool card: select it, reveal its
 // tree ancestors, and scroll its row into view.
 watch(() => props.focus, path => {
   if (!path) return
-  const normalized = path.replace(/\\/g, "/")
+  const normalized = normalizeSlashes(path)
   const file = files.value.find(file => file.path === normalized)
   if (!file) return
   selectedPath.value = file.path

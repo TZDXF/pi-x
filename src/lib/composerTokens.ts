@@ -1,3 +1,5 @@
+import { baseName, normalizeSlashes } from './paths'
+
 export interface ComposerPart { kind: 'text' | 'file' | 'session' | 'command'; raw: string; label: string }
 
 /** Shared chip look so the composer and rendered messages stay visually identical. */
@@ -5,10 +7,6 @@ export const composerChipClass = 'inline-flex max-w-52 items-center align-baseli
 
 export function composerChipText(part: ComposerPart): string {
   return `${part.kind === 'command' ? '⌘ ' : '▣ '}${part.label}`
-}
-
-export function normalizedPath(path: string): string {
-  return path.replace(/\\/g, '/')
 }
 
 /** Keep transport text intact; only replace complete references in the editor display. */
@@ -30,8 +28,8 @@ export function composerParts(text: string, sessionLabels: Record<string, string
       const value = session ? raw.slice(9, -1) : raw.slice(1)
       try { label = value.startsWith('"') ? JSON.parse(value) as string : value } catch { continue }
       if (!label || label.split(/[\\/]/).includes('..')) continue
-      const path = normalizedPath(label)
-      label = (session ? sessionLabels[path] : undefined) || path.split('/').pop() || label
+      const path = normalizeSlashes(label)
+      label = (session ? sessionLabels[path] : undefined) || baseName(path) || label
       kind = session ? 'session' : 'file'
     }
     if (start > cursor) parts.push({ kind: 'text', raw: text.slice(cursor, start), label: text.slice(cursor, start) })

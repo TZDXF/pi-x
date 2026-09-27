@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 const source = readFileSync(new URL('../src/lib/paths.ts', import.meta.url), 'utf8')
 const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { isWindowsPath, joinDisplayPath, relativeDisplayPath } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, baseName } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
 
 test('windows paths use backslashes when joined', () => {
   assert.equal(joinDisplayPath('C:\\code\\pi-x', '.pi', 'settings.json'), 'C:\\code\\pi-x\\.pi\\settings.json')
@@ -41,4 +41,21 @@ test('relativeDisplayPath keeps absolute paths for files outside the project', (
 test('relativeDisplayPath folds case only for windows drive paths', () => {
   assert.equal(relativeDisplayPath('c:/CODE/pi-x/src/a.ts', 'C:/code/pi-x'), 'src/a.ts')
   assert.equal(relativeDisplayPath('/Home/U/Proj/src/a.ts', '/home/u/proj'), '/Home/U/Proj/src/a.ts')
+})
+
+test('normalizeSlashes converts windows separators and keeps posix paths intact', () => {
+  assert.equal(normalizeSlashes('C:\\code\\pi-x\\src\\App.vue'), 'C:/code/pi-x/src/App.vue')
+  assert.equal(normalizeSlashes('\\\\server\\share\\a.jsonl'), '//server/share/a.jsonl')
+  assert.equal(normalizeSlashes('/home/u/proj'), '/home/u/proj')
+  assert.equal(normalizeSlashes(''), '')
+})
+
+test('baseName returns the final segment for both separator styles', () => {
+  assert.equal(baseName('C:\\code\\pi-x\\src\\App.vue'), 'App.vue')
+  assert.equal(baseName('/home/u/proj/src/App.vue'), 'App.vue')
+  assert.equal(baseName('App.vue'), 'App.vue')
+  assert.equal(baseName('src/App.vue/'), 'App.vue')
+  assert.equal(baseName('C:'), 'C:')
+  assert.equal(baseName(''), '')
+  assert.equal(baseName('/'), '/')
 })

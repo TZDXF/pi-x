@@ -66,6 +66,14 @@ const toasts = () =>
     const { useUiStore } = await import("/src/stores/conversations.ts")
     return useUiStore().toasts.map(toast => toast.message)
   })
+// Saving runs the installed Pi SDK, so the panel stays disabled until it returns.
+const waitForSaves = async count => {
+  await page.waitForFunction(n => window.calls.filter(c => c.command === "pi_settings_save").length >= n, count)
+  await page.waitForFunction(() => {
+    const fieldset = document.querySelector("fieldset")
+    return !!fieldset && !fieldset.disabled
+  })
+}
 try {
   await page.goto("http://localhost:1448/__retry_test#/settings/retry")
   await page.getByRole("heading", { name: "自动重试", level: 1 }).waitFor()
@@ -96,9 +104,10 @@ try {
   }
 
   await editNumber(attempts, "5")
-  await page.waitForFunction(() => window.calls.some(c => c.command === "pi_settings_save"))
+  await waitForSaves(1)
   assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }], "only the edited key is written")
   await enabled.click()
+  await waitForSaves(2)
   assert.deepEqual(await saved(), [{ retry: { maxRetries: 5 } }, { retry: { enabled: false } }])
 
   await editNumber(attempts, "99")
@@ -111,7 +120,7 @@ try {
   assert.equal(await saved().then(list => list.length), 2, "an empty input is not saved as 0")
 
   await editNumber(firstDelay, "3000")
-  await page.waitForFunction(() => window.calls.filter(c => c.command === "pi_settings_save").length === 3)
+  await waitForSaves(3)
   assert.deepEqual(
     await saved(),
     [{ retry: { maxRetries: 5 } }, { retry: { enabled: false } }, { retry: { baseDelayMs: 3000 } }],

@@ -1,7 +1,7 @@
 // Adapted from RepoMeow src/lib/diff-highlight.ts; isolated for lazy loading.
 import { codeToTokens, type BundledLanguage } from "shiki";
 import type { DiffLine } from "@/lib/reviewDiff";
-const baseName = (path: string) => path.replace(/\\/g, "/").split("/").pop() ?? path;
+import { baseName } from "./paths";
 
 /**
  * diff 代码着色:把 diff 行按「旧版本 = ctx+del / 新版本 = ctx+add」重组为两段完整源码,

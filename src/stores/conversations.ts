@@ -1,5 +1,6 @@
 import { reactive } from "vue"
 import { createUuid } from "../lib/uuid"
+import { normalizeSlashes } from "../lib/paths"
 import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
 import { createUiStore } from "./ui"
@@ -59,7 +60,7 @@ export function pruneDormantConversations() {
     pinia?._s?.delete(`ui:${id}`)
   }
 }
-const normalized = (file: string) => file.replace(/\\/g, "/")
+const normalized = normalizeSlashes
 export function findConversation(file: string) {
   return [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(file))
 }

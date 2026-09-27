@@ -1,16 +1,17 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import ts from 'typescript'
+import { loadTsModule, pathsModule } from './lib/load-ts.mjs'
 
-const source = readFileSync(new URL('../src/lib/composerTokens.ts', import.meta.url), 'utf8')
-const js = ts.transpile(source, { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 })
-const { composerParts, normalizedPath } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+const { composerParts } = loadTsModule(new URL('../src/lib/composerTokens.ts', import.meta.url))
+const { normalizeSlashes } = pathsModule()
+// VM 内创建的对象原型与测试环境不同，deepStrictEqual 会因原型差异而失败。
+const plain = value => JSON.parse(JSON.stringify(value))
 
 test('composer chips hide paths and slash prefixes without changing raw text', () => {
   const text = '/review @"C:/project/src/my file.ts" @session("C:/sessions/old.jsonl") with @src/App.vue '
   const parts = composerParts(text)
-  assert.deepEqual(parts.filter(p => p.kind !== 'text').map(p => [p.kind, p.label]), [
+  assert.deepEqual(plain(parts.filter(p => p.kind !== 'text').map(p => [p.kind, p.label])), [
     ['command', 'review'], ['file', 'my file.ts'], ['session', 'old.jsonl'], ['file', 'App.vue'],
   ])
   assert.equal(parts.map(p => p.raw).join(''), text)
@@ -26,7 +27,7 @@ test('unfinished completion tokens remain editable plain text', () => {
 
 test('known session references display their current title', () => {
   const raw = '@session("C:/sessions/old.jsonl")'
-  const labels = { [normalizedPath('C:\\sessions\\old.jsonl')]: '修复登录问题' }
+  const labels = { [normalizeSlashes('C:\\sessions\\old.jsonl')]: '修复登录问题' }
   const [part] = composerParts(`请看 ${raw} 的上下文`, labels)
   assert.equal(part.kind, 'text')
   const session = composerParts(`请看 ${raw} 的上下文`, labels).find(p => p.kind === 'session')

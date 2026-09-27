@@ -6,9 +6,6 @@ const load = name => import(pathToFileURL(join(process.argv[1], name)).href);
 const { getAgentDir } = await load("config.js");
 const request = JSON.parse(readFileSync(0, "utf8"));
 const { op } = request;
-// Declared before the dispatch chain below, which runs before the helpers at the
-// end of this file are reached.
-const RETRY_BUDGET_KEYS = ["maxRetries", "baseDelayMs", "maxAgentDelayMs"];
 let result = null;
 if (op.startsWith("trust_")) {
   const { ProjectTrustStore, getProjectTrustOptions, getProjectTrustParentPath,
@@ -79,37 +76,28 @@ function checkErrors(settings) {
   if (errors.length) throw new Error(errors.map(e => e.error?.message ?? String(e)).join("; "));
 }
 
-/** Resolved retry policy, or null when the installed Pi predates the `retry` block. */
+/** Retry attempt count, or null when the installed Pi predates the `retry` block. */
 function readRetrySettings(settings) {
-  if (typeof settings.getRetrySettings !== "function" || typeof settings.getRetryEnabled !== "function") return null;
-  const { maxRetries, baseDelayMs, maxAgentDelayMs } = settings.getRetrySettings();
-  return { enabled: settings.getRetryEnabled(), maxRetries, baseDelayMs, maxAgentDelayMs };
+  if (typeof settings.getRetrySettings !== "function") return null;
+  return { maxRetries: settings.getRetrySettings().maxRetries };
 }
 
 /**
- * Pi only exposes a setter for `retry.enabled`; the budget keys have none. Write
- * them the way Pi's own setters do — mutate the global settings object, mark the
- * touched key as modified, then save — so a patch rewrites just those keys.
+ * Pi exposes no setter for the retry attempt count, so write it the way Pi's own
+ * setters do — mutate the global settings object, mark the key as modified, then
+ * save — which rewrites only that key inside the existing `retry` block.
  */
 function applyRetrySettings(settings, patch) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid retry settings");
   for (const key of Object.keys(patch)) {
-    if (key !== "enabled" && !RETRY_BUDGET_KEYS.includes(key)) throw new Error(`Unsupported retry setting: ${key}`);
+    if (key !== "maxRetries") throw new Error(`Unsupported retry setting: ${key}`);
   }
-  if ("enabled" in patch && typeof patch.enabled !== "boolean") throw new Error("Invalid retry enabled");
-  for (const key of RETRY_BUDGET_KEYS) {
-    if (key in patch && (!Number.isSafeInteger(patch[key]) || patch[key] < 0)) throw new Error(`Invalid retry ${key}`);
-  }
-  if (typeof settings.setRetryEnabled !== "function" || !settings.globalSettings || typeof settings.markModified !== "function") {
+  if (!Number.isSafeInteger(patch.maxRetries) || patch.maxRetries < 0) throw new Error("Invalid retry maxRetries");
+  if (!settings.globalSettings || typeof settings.markModified !== "function" || typeof settings.save !== "function") {
     throw new Error("Installed Pi does not support retry settings");
   }
-  if ("enabled" in patch) settings.setRetryEnabled(patch.enabled);
-  const budget = RETRY_BUDGET_KEYS.filter(key => key in patch);
-  if (!budget.length) return;
   if (!settings.globalSettings.retry) settings.globalSettings.retry = {};
-  for (const key of budget) {
-    settings.globalSettings.retry[key] = patch[key];
-    settings.markModified("retry", key);
-  }
+  settings.globalSettings.retry.maxRetries = patch.maxRetries;
+  settings.markModified("retry", "maxRetries");
   settings.save();
 }

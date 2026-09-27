@@ -38,3 +38,8 @@ export function loadTsModule(entryUrl, resolve = () => undefined, extraContext =
 export function contentModule() {
   return loadTsSource(readFileSync(new URL('../../src/lib/content.ts', import.meta.url), 'utf8'))
 }
+
+/** Load the shared path helpers (src/lib/paths.ts) for harness require maps. */
+export function pathsModule() {
+  return loadTsSource(readFileSync(new URL('../../src/lib/paths.ts', import.meta.url), 'utf8'))
+}

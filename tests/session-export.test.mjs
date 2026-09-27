@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
+import { pathsModule } from './lib/load-ts.mjs'
 
 const source = readFileSync(new URL('../src/api/piClient.ts', import.meta.url), 'utf8')
 const exportSource = source.slice(source.indexOf('async function chooseExportPath'), source.indexOf('// ---- RPC bridge ----'))
@@ -19,6 +20,7 @@ function harness({ desktop = true, directory = 'C:\\exports', rpcSuccess = true 
   }
   const context = vm.createContext({
     activeRuntimeId: { value: 'default' }, isDesktop: desktop, document, Blob,
+    baseName: pathsModule().baseName,
     URL: { createObjectURL: () => 'blob:export', revokeObjectURL: url => calls.push(['revoke', url]) },
     setTimeout: callback => callback(),
     chooseDirectory: async options => {

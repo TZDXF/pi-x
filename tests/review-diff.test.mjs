@@ -2,11 +2,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { codeToTokens } from 'shiki'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
 const load = (name, context) => loadTsSource(readFileSync(new URL(`../src/lib/${name}.ts`, import.meta.url), 'utf8'), context)
+const paths = pathsModule()
 const { parseDiff, intralineRanges, toSideBySideRows, foldContextLines } = load('reviewDiff')
-const { changedLines } = load('sessionChanges')
-const { tokensToLineHtml, highlightDiffLines, diffLangOf } = load('reviewHighlight', { require: () => ({ codeToTokens }) })
+const { changedLines } = load('sessionChanges', { require: () => paths })
+const { tokensToLineHtml, highlightDiffLines, diffLangOf } = load('reviewHighlight', { require: name => (name === 'shiki' ? { codeToTokens } : paths) })
 const plain = value => JSON.parse(JSON.stringify(value))
 test('reference diff parser retains independent before and after line numbers', () => {
   const lines = parseDiff('@@ -10,2 +10,3 @@\n-const x = 1\n+const x = 20\n+extra\n tail')

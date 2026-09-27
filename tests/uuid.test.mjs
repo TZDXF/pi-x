@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { webcrypto } from 'node:crypto'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
 
 const source = readFileSync(new URL('../src/lib/uuid.ts', import.meta.url), 'utf8')
 
@@ -42,6 +42,7 @@ test('creating conversations works without randomUUID on LAN HTTP', () => {
       vue: { reactive: value => value },
       pinia: { getActivePinia: () => undefined },
       '../lib/uuid': { createUuid },
+      '../lib/paths': pathsModule(),
       './session': { createSessionStore: id => () => ({ runtimeId: id }) },
       './ui': { createUiStore: () => () => ({}) },
       './runtime': { activeRuntimeId },

@@ -16,6 +16,8 @@ import { useWorkspaceStore } from '/src/stores/workspace.ts'
 import '/src/style.css'
 const view = new URLSearchParams(location.search).get('view')
 const pinia = createPinia()
+// 断言对照现用文案，避免测试写死具体措辞。
+window.__messages = messages
 const projectless = () => { window.projectlessOpened = true }
 const app = createApp({ setup() {
   if (view === 'sidebar') return () => h('div', { class: 'flex h-screen' }, [
@@ -32,7 +34,7 @@ if (view === 'sidebar') {
 }
 app.mount('#app')
 </script></body></html>`
-const server = await createServer({ server: { port: 1448, strictPort: true }, plugins: [{
+const server = await createServer({ server: { port: 1448, strictPort: true, hmr: false }, plugins: [{
   name: 'projectless-test', configureServer(server) {
     server.middlewares.use('/__projectless_test', async (req, res, next) => {
       try { res.setHeader('Content-Type', 'text/html'); res.end(await server.transformIndexHtml('/__projectless_test', html)) } catch (e) { next(e) }
@@ -63,32 +65,53 @@ await page.addInitScript((defaultDir) => {
     return {}
   } }
 }, DEFAULT_DIR)
+/** 打开一个视图并等应用渲染完成；开发服务器可能因源文件改动刷新页面，重试即可。 */
+async function openView(url) {
+  let lastError
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto(url)
+    try {
+      await page.waitForFunction(() => (document.querySelector('#app')?.childElementCount ?? 0) > 0, null, { timeout: 15000 })
+      return
+    } catch (error) { lastError = error }
+  }
+  throw lastError
+}
 try {
+  await openView('http://localhost:1448/__projectless_test?view=welcome')
+  // 文案取自当前语言包，避免测试写死具体措辞。
+  const text = await page.evaluate(() => ({
+    name: window.__messages.projectless.name,
+    label: window.__messages.projectless.settingsLabel,
+    reset: window.__messages.projectless.reset,
+    invalidPath: window.__messages.projectless.invalidPath,
+    openFolder: window.__messages.welcome.openFolder,
+  }))
+
   // 欢迎页：无项目会话入口可点击，且不触发目录选择器。
-  await page.goto('http://localhost:1448/__projectless_test?view=welcome')
-  const entry = page.getByRole('button', { name: '无项目会话', exact: true })
+  const entry = page.getByRole('button', { name: text.name, exact: true })
   await entry.waitFor()
-  assert.equal(await page.getByRole('button', { name: '添加项目', exact: true }).count(), 1)
+  assert.equal(await page.getByRole('button', { name: text.openFolder, exact: true }).count(), 1)
   await entry.click()
   assert.equal(await page.evaluate(() => window.projectlessOpened), true)
   assert.equal(await page.evaluate(() => window.calls.some(call => call.command.startsWith('plugin:dialog'))), false)
 
   // 侧栏：无项目会话显示专用名称，普通项目仍显示目录名。
-  await page.goto('http://localhost:1448/__projectless_test?view=sidebar')
-  await page.getByText('无项目会话', { exact: true }).first().waitFor()
+  await openView('http://localhost:1448/__projectless_test?view=sidebar')
+  await page.getByText(text.name, { exact: true }).first().waitFor()
   assert.equal(await page.getByText('workspace', { exact: true }).count(), 0)
   assert.equal(await page.getByText('demo', { exact: true }).count(), 1)
-  await page.locator('button[aria-label="无项目会话"]').click()
+  await page.locator(`button[aria-label="${text.name}"]`).click()
   assert.equal(await page.evaluate(() => window.projectlessOpened), true)
 
   // 设置项：展示默认目录、拒绝非法路径、保存绝对路径、与默认值一致时不写入配置。
-  await page.goto('http://localhost:1448/__projectless_test?view=settings#/settings/general')
-  const input = page.getByLabel('无项目会话目录')
+  await openView('http://localhost:1448/__projectless_test?view=settings#/settings/general')
+  const input = page.getByLabel(text.label)
   await input.waitFor()
   assert.equal(await input.getAttribute('placeholder'), DEFAULT_DIR)
   await input.fill('work')
   await input.press('Enter')
-  assert.equal(await page.getByRole('alert').textContent(), '请输入完整路径，例如 C:\\work 或 ~/work')
+  assert.equal(await page.getByRole('alert').textContent(), text.invalidPath)
   assert.equal(await page.evaluate(() => window.calls.some(call => call.command === 'app_config_save')), false)
   await input.fill('D:/pix/scratch')
   await input.press('Enter')
@@ -96,7 +119,7 @@ try {
   await input.fill(DEFAULT_DIR)
   await input.press('Enter')
   await page.waitForFunction(() => window.config.projectlessDir === undefined)
-  assert.ok(await page.getByRole('button', { name: '恢复默认' }).isDisabled())
+  assert.ok(await page.getByRole('button', { name: text.reset }).isDisabled())
   assert.deepEqual(errors, [])
   console.log('projectless browser regression: ok')
 } finally {

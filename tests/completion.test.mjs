@@ -1,10 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import ts from 'typescript'
-const source = readFileSync(new URL('../src/lib/completion.ts', import.meta.url), 'utf8')
-const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { desktopCommands, completionToken, insertCompletion, insertSessionCompletion, sessionReference, fileReference, withFileReferences, withSessionReferences, mergeWorkspaceFiles } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`)
+import { loadTsModule } from './lib/load-ts.mjs'
+const { desktopCommands, completionToken, insertCompletion, insertSessionCompletion, sessionReference, fileReference, withFileReferences, withSessionReferences, mergeWorkspaceFiles } = loadTsModule(new URL('../src/lib/completion.ts', import.meta.url))
 
 test('built-in slash commands exclude export while keeping new and compact', () => {
   assert.deepEqual([...desktopCommands], ['new', 'compact'])
@@ -64,7 +62,7 @@ test('multi-root completions interleave folders and use absolute secondary paths
   const primary = [{ name: 'a.ts', path: 'src/a.ts', dir: 'src' }, { name: 'b.ts', path: 'src/b.ts', dir: 'src' }]
   const secondary = [{ name: 'App.vue', path: 'src/App.vue', dir: 'src' }]
   const hits = mergeWorkspaceFiles('C:/api', ['C:/api', 'C:\\code\\ui'], [primary, secondary])
-  assert.deepEqual(hits.map(hit => hit.path), ['src/a.ts', 'C:/code/ui/src/App.vue', 'src/b.ts'])
+  assert.deepEqual([...hits.map(hit => hit.path)], ['src/a.ts', 'C:/code/ui/src/App.vue', 'src/b.ts'])
   assert.equal(hits[1].dir, 'ui/src')
 })
 test('AI Elements command list forwards slot and editor intercepts keys before submit', () => {

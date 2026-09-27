@@ -5,6 +5,7 @@ import { ChevronRight, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { invoke } from "@/api/transport"
+import { baseName } from "@/lib/paths"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
@@ -80,7 +81,7 @@ const rows = computed(() => {
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
-      <span class="truncate text-xs text-muted-foreground" :title="project">{{ project.split(/[\\/]/).filter(Boolean).pop() }}</span>
+      <span class="truncate text-xs text-muted-foreground" :title="project">{{ baseName(project) }}</span>
       <Button variant="ghost" size="icon-xs" :title="t('projectFiles.refresh')" :aria-label="t('projectFiles.refresh')" @click="reset"><RefreshCw /></Button>
     </div>
     <div class="grid min-h-0 flex-1 overflow-hidden" :class="selected ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'">

@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadTsSource } from './lib/load-ts.mjs'
-const { sessionChanges, changedLines } = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'))
+import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
+const { sessionChanges, changedLines } = loadTsSource(readFileSync(new URL('../src/lib/sessionChanges.ts', import.meta.url), 'utf8'), { require: () => pathsModule() })
 const call = (id, name, args) => ({ type: 'toolCall', id, name, arguments: args })
 const history = (block, isError = false) => [{ role: 'assistant', content: [block] }, { role: 'toolResult', toolCallId: block.id, isError }]
 const collect = h => sessionChanges(h, [], [], {})

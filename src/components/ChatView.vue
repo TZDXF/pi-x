@@ -77,6 +77,7 @@ import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import ComposerText from "@/components/ComposerText.vue"
 import { withFileReferences, withSessionReferences, desktopCommands } from "@/lib/completion"
+import { baseName } from "@/lib/paths"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { buildPromptWithCodeComments } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
@@ -201,7 +202,7 @@ const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 const codeComments = useCodeCommentsStore()
 const pendingComments = computed(() => codeComments.project === props.project ? codeComments.comments : [])
 function commentFile(path: string) {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
+  return baseName(path)
 }
 
 // ---- attachments (images) ----

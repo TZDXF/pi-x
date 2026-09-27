@@ -1,4 +1,5 @@
 import type { Block, Entry, ToolRun } from "@/stores/session"
+import { normalizeSlashes } from "@/lib/paths"
 
 export interface ChangeLine { kind: "add" | "remove" | "context"; text: string; oldLine?: number | null; newLine?: number | null }
 export interface FileChange {
@@ -92,7 +93,7 @@ export function changeForCall(id: string, name: string, args: any): FileChange[]
     if (typeof after !== "string" || (edit && typeof before !== "string")) continue
     const unknownBefore = write && typeof before !== "string" && tool !== "create_file"
     const diff = changedLines(typeof before === "string" ? before : "", after)
-    changes.push({ id: `${id}:${index}`, path: path.replace(/\\/g, "/"), tool: name, lines: diff,
+    changes.push({ id: `${id}:${index}`, path: normalizeSlashes(path), tool: name, lines: diff,
       // 未知原内容按"全部为新增"统计（与 ZCode 的 before ?? "" 口径一致）；
       // unknownBefore 仅保留用于判断内容回放是否可撤销。
       added: diff.filter(line => line.kind === "add").length,

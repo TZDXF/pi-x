@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
 
-const { pendingConversations } = loadTsSource(readFileSync(new URL('../src/lib/pendingConversations.ts', import.meta.url), 'utf8'))
+const { pendingConversations } = loadTsSource(readFileSync(new URL('../src/lib/pendingConversations.ts', import.meta.url), 'utf8'), { require: () => pathsModule() })
 const draft = (sessionFile, text = 'Send later', cwd = 'project') => ({ cwd, sessionFile, promptQueue: [{ text }] })
 
 test('new queued conversations appear before a history file or row exists', () => {

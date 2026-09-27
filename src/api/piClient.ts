@@ -1,6 +1,7 @@
 import { activeRuntimeId } from "@/stores/runtime"
 import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
 import { join } from "@tauri-apps/api/path"
+import { baseName } from "@/lib/paths"
 import { RECONNECTED_EVENT, invoke, isDesktop, listen } from "./transport"
 import type { ExtensionUiResponse, RpcResponse } from "./protocol"
 
@@ -38,14 +39,8 @@ export interface AppConfig {
   titleModel?: ModelRef
   /** Title generation follows the default model instead of titleModel. */
   titleFollowMain?: boolean
-}
-
-/** 自动重试策略，来自 pi 全局 settings.json 的 `retry` 段。 */
-export interface RetrySettings {
-  enabled: boolean
-  maxRetries: number
-  baseDelayMs: number
-  maxAgentDelayMs: number
+  /** 无项目会话的工作目录；缺省为 `~/.pix/workspace`。 */
+  projectlessDir?: string
 }
 
 export interface PiSettings {
@@ -54,12 +49,12 @@ export interface PiSettings {
   defaultThinkingLevel?: import("./protocol").ThinkingLevel
   modelThinkingLevels?: Record<string, import("./protocol").ThinkingLevel>
   skills: string[]
-  /** 旧版 pi 不返回该段，此时为 null。 */
-  retry?: RetrySettings | null
+  /** pi 全局 settings.json 的 `retry` 段；旧版 pi 不返回该段，此时为 null。 */
+  retry?: { maxRetries: number } | null
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
-  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & { retry?: Partial<RetrySettings> },
+  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & { retry?: { maxRetries: number } },
 ) => invoke<void>("pi_settings_save", { settings })
 
 /** 原生托盘菜单读不到 webview 的语言包，由前端把当前语言的菜单文案同步给 Rust。 */
@@ -133,6 +128,25 @@ export const restartApp = () => invoke<void>("app_update_restart")
 export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
+
+export interface ProjectlessDirInfo {
+  /** 实际使用的工作目录（已规范化）。 */
+  dir: string
+  /** 默认目录 `~/.pix/workspace`，用于设置页展示与「恢复默认」。 */
+  defaultDir: string
+  /** 当前是否使用默认目录（未配置或配置即默认值）。 */
+  isDefault: boolean
+}
+
+/** 解析无项目会话目录并由后端按需创建；未配置时返回 `~/.pix/workspace`。 */
+export const resolveProjectlessDir = () => invoke<ProjectlessDirInfo>("projectless_dir_resolve")
+
+/** 桌面端目录选择器；浏览器/远程返回 null（无法访问主机文件系统）。 */
+export async function chooseDirectoryPath(title: string): Promise<string | null> {
+  if (!isDesktop) return null
+  const picked = await chooseDirectory({ directory: true, title })
+  return typeof picked === "string" ? picked : null
+}
 
 export interface GlobalPromptFile { fileName: string; content: string; exists: boolean }
 
@@ -217,7 +231,7 @@ export const openPath = (path: string) => invoke<void>("open_path", { path })
 async function chooseExportPath(sessionFile?: string | null, directoryTitle?: string): Promise<string | null> {
   const directory = await chooseDirectory({ directory: true, title: directoryTitle })
   if (typeof directory !== "string") return null
-  const base = sessionFile?.split(/[/\\]/).pop()?.replace(/\.jsonl$/i, "") || `session-${Date.now()}`
+  const base = baseName(sessionFile ?? "").replace(/\.jsonl$/i, "") || `session-${Date.now()}`
   const filename = `pi-session-${base.replace(/[^a-zA-Z0-9._-]/g, "_")}.html`
   return join(directory, filename)
 }
@@ -227,7 +241,7 @@ function downloadExport(path: string, html: string): void {
   try {
     const link = document.createElement("a")
     link.href = url
-    link.download = path.split(/[/\\]/).pop() || "session.html"
+    link.download = baseName(path) || "session.html"
     document.body.append(link)
     link.click()
     link.remove()
@@ -307,6 +321,13 @@ export interface RemoteStatus { enabled: boolean; port: number; urls: string[]; 
 export const remoteStatus = () => invoke<RemoteStatus>("remote_status")
 export const remoteSet = (enabled: boolean, port: number) => invoke<RemoteStatus>("remote_set", { enabled, port })
 export const remotePasswordSet = (password: string | null) => invoke<RemoteStatus>("remote_password_set", { password })
+
+// ---- built-in browser preview proxy ----
+export interface PreviewProxyInfo {
+  /** Loopback URL (desktop) or remote-relative path prefix for proxied pages. */
+  base: string
+}
+export const previewProxyInfo = () => invoke<PreviewProxyInfo>("preview_proxy_info")
 
 // ---- pi models.json (custom provider / model management) ----
 

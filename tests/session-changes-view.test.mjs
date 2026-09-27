@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
 const source = readFileSync(new URL('../src/components/ReviewPanel.vue', import.meta.url), 'utf8')
 function harness(changes) {
   const props = { changes, checkpoints: [] }
@@ -11,7 +11,7 @@ function harness(changes) {
     require: id => id === 'vue' ? {
       ref: value => ({ value }), shallowRef: value => ({ value }), computed: get => ({ get value() { return get() } }),
       onMounted() {}, onBeforeUnmount() {}, watch() {},
-    } : id === '@/lib/reviewFileTree' ? loadTsSource(readFileSync(new URL('../src/lib/reviewFileTree.ts', import.meta.url), 'utf8')) : id === 'vue-i18n' ? { useI18n: () => ({ t: key => key }) } : {},
+    } : id === '@/lib/reviewFileTree' ? loadTsSource(readFileSync(new URL('../src/lib/reviewFileTree.ts', import.meta.url), 'utf8')) : id === 'vue-i18n' ? { useI18n: () => ({ t: key => key }) } : id === '@/lib/paths' ? pathsModule() : {},
   })
   return { props, ...module }
 }

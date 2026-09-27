@@ -6,6 +6,7 @@ import { ask } from "@tauri-apps/plugin-dialog"
 import { deleteHostedSkill, listDiscoveredSkills, listHostedSkills, openHostedSkillsDirectory, setHostedSkillsEnabled } from "@/api/piClient"
 import type { DiscoveredSkill, HostedSkill } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
+import { normalizeSlashes } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 
@@ -58,7 +59,7 @@ async function remove(skill: HostedSkill) {
 }
 
 function displaySkillPath(path: string): string {
-  return path.replace(/\\/g, "/")
+  return normalizeSlashes(path)
 }
 
 function sourceLabel(skill: DiscoveredSkill): string {

@@ -1,3 +1,5 @@
+import { baseName, normalizeSlashes } from './paths'
+
 /** TUI commands with equivalent, supported desktop RPC actions. */
 export const desktopCommands = ['new', 'compact'] as const
 
@@ -15,12 +17,12 @@ export function completionToken(text: string, caret: number, end = caret): Compl
 }
 
 export function fileReference(path: string): string {
-  return `@${JSON.stringify(path.replace(/\\/g, '/'))}`
+  return `@${JSON.stringify(normalizeSlashes(path))}`
 }
 
 /** A session reference is distinct from a workspace file reference. */
 export function sessionReference(file: string): string {
-  return `@session(${JSON.stringify(file.replace(/\\/g, '/'))})`
+  return `@session(${JSON.stringify(normalizeSlashes(file))})`
 }
 
 export function insertSessionCompletion(text: string, token: CompletionToken, file: string) {
@@ -36,7 +38,7 @@ export function insertSessionCompletion(text: string, token: CompletionToken, fi
 export interface KnownSession { file: string; title?: string | null; preview?: string | null }
 
 export function withSessionReferences(text: string, sessions: KnownSession[]): string {
-  const known = new Map(sessions.map(s => [s.file.replace(/\\/g, '/'), s]))
+  const known = new Map(sessions.map(s => [normalizeSlashes(s.file), s]))
   const matches = new Map<string, string>()
   for (const match of text.matchAll(/(?:^|\s)@session\(("(?:\\.|[^"\\])*")\)/g)) {
     let file: string
@@ -65,12 +67,12 @@ export function insertCompletion(text: string, token: CompletionToken, value: st
 export function withFileReferences(text: string, additionalRoots: string[] = []): string {
   const relative = new Set<string>()
   const absolute = new Set<string>()
-  const roots = additionalRoots.map(root => root.replace(/\\/g, '/').replace(/\/+$/, ''))
+  const roots = additionalRoots.map(root => normalizeSlashes(root).replace(/\/+$/, ''))
   const pattern = /(?:^|\s)@("(?:\\.|[^"\\])*"|[^\s"@]+)/g
   for (const match of text.matchAll(pattern)) {
     let path: string
     try { path = match[1]!.startsWith('"') ? JSON.parse(match[1]!) : match[1]! } catch { continue }
-    path = path.replace(/\\/g, '/')
+    path = normalizeSlashes(path)
     if (path === 'session(') continue
     if (!path || path.split('/').includes('..')) continue
     if (path.startsWith('/') || /^[a-z]:/i.test(path)) {
@@ -98,10 +100,10 @@ export function mergeWorkspaceFiles<T extends { path: string; name: string; dir:
       const hit = results[index]?.[offset]
       if (!hit) continue
       const root = roots[index]!
-      const path = root === current ? hit.path : `${root.replace(/[\\/]+$/, '').replace(/\\/g, '/')}/${hit.path}`
+      const path = root === current ? hit.path : `${normalizeSlashes(root).replace(/[\\/]+$/, '')}/${hit.path}`
       if (seen.has(path)) continue
       seen.add(path)
-      merged.push({ ...hit, path, dir: root === current ? hit.dir : `${root.split(/[\\/]/).pop()}/${hit.dir}` })
+      merged.push({ ...hit, path, dir: root === current ? hit.dir : `${baseName(root)}/${hit.dir}` })
       if (merged.length === limit) break
     }
   }

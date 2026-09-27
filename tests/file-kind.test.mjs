@@ -1,9 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { loadTsSource } from './lib/load-ts.mjs'
+import { loadTsModule } from './lib/load-ts.mjs'
 
-const fileKind = loadTsSource(readFileSync(new URL('../src/lib/fileKind.ts', import.meta.url), 'utf8'))
+const fileKind = loadTsModule(new URL('../src/lib/fileKind.ts', import.meta.url))
 const { extOf, isImageExt, isMarkdownExt, IMAGE_EXTS, MD_EXTS } = fileKind
 
 test('extOf extracts the lowercased extension from posix and windows paths', () => {
