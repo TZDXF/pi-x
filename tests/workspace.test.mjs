@@ -12,18 +12,22 @@ function harness(initialStorage = new Map()) {
       .replace(/export /g, "") + "\nglobalThis.store = useWorkspaceStore();"
   const requests = [],
     writes = [],
+    invokes = [],
     storage = initialStorage
   const context = vm.createContext({
     defineStore: (_, setup) => setup,
     ref: value => ({ value }),
     listSessions: path => new Promise(resolve => requests.push({ path, resolve })),
     updateSession: async (...args) => writes.push(args),
+    invoke: async (command, args) => {
+      invokes.push([command, args])
+    },
     localStorage: { getItem: key => storage.get(key), setItem: (k, v) => storage.set(k, v) },
     samePath: paths.samePath,
     baseName: paths.baseName,
   })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
-  return { store: context.store, requests, writes, storage, context }
+  return { store: context.store, requests, writes, invokes, storage, context }
 }
 test("projects are persisted without duplicates", () => {
   const h = harness()
@@ -217,6 +221,16 @@ test("drag order spans every folder in a grouped project and survives refresh", 
     ["b", "a", "c"],
   )
 })
+test("removing a session deletes its checkpoint manifest", async () => {
+  const h = harness()
+  h.store.histories.value.project = [{ file: "session.jsonl" }]
+  h.store.removeSession("session.jsonl")
+  await Promise.resolve()
+  assert.deepEqual(JSON.parse(JSON.stringify(h.invokes)), [
+    ["session_checkpoint_manifest_delete", { file: "session.jsonl" }],
+  ])
+})
+
 test("removing a project also clears its session order", () => {
   const h = harness()
   h.store.remember("one")

@@ -47,7 +47,7 @@ export function toProxyUrl(base: string, url: string): string {
   const prefix = base.endsWith("/") ? base.slice(0, -1) : base
   const port = target.port ? `:${target.port}` : ""
   const secret = extractSecret(prefix)
-  const token = secret ? fnv1a(secret + target.hostname) : ""
+  const token = secret ? fnv1a(secret + target.host) : ""
   // Replace the secret segment in the base with the per-host token.
   const tokenBase = secret ? prefix.replace(/\/[^/]+$/, `/${token}`) : prefix
   return `${tokenBase}/${target.protocol.slice(0, -1)}/${target.hostname}${port}${target.pathname}${target.search}`

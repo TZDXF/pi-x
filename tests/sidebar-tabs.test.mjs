@@ -70,7 +70,7 @@ test("sidebar tab state lives in ChatView with per-type add, close and review fo
 
 test("project directory is available locally and remotely with containment checks", () => {
   const files = read("../src-tauri/src/fs_search.rs")
-  assert.match(files, /relative\.components\(\)\.any/)
+  assert.match(files, /relative\s*\.\s*components\(\)\s*\.\s*any/)
   assert.match(files, /!directory\.starts_with\(&root\)/)
   assert.match(files, /kind\.is_symlink\(\)/)
   assert.match(read("../src-tauri/src/lib.rs"), /commands::list_project_directory/)

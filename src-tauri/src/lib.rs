@@ -119,6 +119,7 @@ pub fn run() {
             session_checkpoint::session_checkpoint_restore,
             session_checkpoint::session_checkpoint_manifest_get,
             session_checkpoint::session_checkpoint_manifest_set,
+            session_checkpoint::session_checkpoint_manifest_delete,
             session_checkpoint::session_checkpoint_content,
             commands::search_files,
             commands::list_project_directory,

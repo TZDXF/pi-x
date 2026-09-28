@@ -172,19 +172,19 @@ fn document_base(target: &Target) -> String {
 
 async fn handle(req: Request) -> Response {
     let root = if req.uri().path().starts_with(REMOTE_ROOT) { REMOTE_ROOT } else { DESKTOP_ROOT };
-    // The bridge script sits directly under the secret; parse it before the
-    // scheme/host/path grammar (which would reject "bridge.js" as a scheme).
-    if let Some(rest) = req.uri().path().strip_prefix(root).and_then(|r| r.strip_prefix('/')) {
-        if let Some((secret, "bridge.js")) = rest.split_once('/') {
-            if *req.method() == axum::http::Method::GET && constant_time_eq(secret, &proxy().secret) {
-                return bridge_js();
-            }
-            return StatusCode::NOT_FOUND.into_response();
-        }
-    }
     let Some(target) = parse_target(root, req.uri().path()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // Serve the bridge through the same per-host capability as the document.
+    // Publishing the shared secret here would let a previewed page forge
+    // tokens for every other target host.
+    if target.path == "__pix-preview-bridge.js" {
+        return if *req.method() == axum::http::Method::GET {
+            bridge_js()
+        } else {
+            StatusCode::METHOD_NOT_ALLOWED.into_response()
+        };
+    }
     if is_websocket_upgrade(&req) {
         let (mut parts, _) = req.into_parts();
         return match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
@@ -320,9 +320,10 @@ fn rewrite_location(location: &str, target: &Target, query: Option<&str>) -> Opt
         Some(port) => format!("{}:{port}", next.host_str()?),
         None => next.host_str()?.to_string(),
     };
+    let root = target.prefix.rsplit_once('/').map(|(root, _)| root).unwrap_or_default();
+    let token = host_token(&proxy().secret, &host);
     Some(format!(
-        "{}/{}/{}{}{}",
-        target.prefix,
+        "{root}/{token}/{}/{}{}{}",
         next.scheme(),
         host,
         next.path(),
@@ -477,16 +478,10 @@ fn rewrite_referer(parts: &axum::http::request::Parts, target: &Target) -> Optio
 /// base is published for the bridge to patch runtime requests (fetch/XHR/…).
 fn rewrite_document(html: &[u8], target: &Target) -> Vec<u8> {
     let base = document_base(target);
-    // bridge.js is validated against the shared secret, not the per-host token.
-    let bridge_prefix = format!(
-        "{}/{}",
-        if base.starts_with(REMOTE_ROOT) { REMOTE_ROOT } else { DESKTOP_ROOT },
-        proxy().secret
-    );
-    let script = format!(
-        r#"<script>window.__pixPreviewBase="{base}";</script><script src="{}/bridge.js"></script>"#,
-        bridge_prefix
-    );
+    // The bridge is addressed through the document's per-host prefix so the
+    // page never learns the shared secret used to derive host capabilities.
+    // The reserved filename avoids shadowing a common target "/bridge.js".
+    let script = format!(r#"<script>window.__pixPreviewBase="{base}";</script><script src="{base}/__pix-preview-bridge.js"></script>"#);
     // Non-UTF-8 documents (legacy charsets) are served unrewritten but still
     // get the bridge appended.
     let Ok(text) = std::str::from_utf8(html) else {
@@ -732,16 +727,17 @@ mod tests {
         );
         assert_eq!(
             rewrite_location("https://other.example.org/a/b", &target, None).unwrap(),
-            format!("/p/{token}/https/other.example.org/a/b")
+            format!("/p/{}/https/other.example.org/a/b", host_token(&secret(), "other.example.org"))
         );
         assert_eq!(
             rewrite_location("section", &target, None).unwrap(),
             format!("/p/{token}/http/localhost:3000/section")
         );
-        // Default ports are already omitted by the url crate.
+        // Default ports are already omitted by the url crate, and redirects
+        // get a fresh token bound to the redirect target host.
         assert_eq!(
             rewrite_location("https://example.com/", &target, None).unwrap(),
-            format!("/p/{}/https/example.com/", secret())
+            format!("/p/{}/https/example.com/", host_token(&secret(), "example.com"))
         );
     }
 
@@ -781,7 +777,7 @@ mod tests {
         assert!(out.contains(&format!(r#"src="{base}/logo.png""#)));
         assert!(out.contains(&format!(r#"srcset="{base}/a.png 1x, {base}/b.png 2x""#)));
         assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
-        assert!(out.contains(&format!(r#"<script src="{}/bridge.js"></script>"#, target.prefix)));
+        assert!(out.contains(&format!(r#"<script src="{base}/__pix-preview-bridge.js"></script>"#)));
         // Case-insensitive fallback.
         let out = String::from_utf8(rewrite_document(b"<html><BODY></BODY></HTML>", &target)).unwrap();
         assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
@@ -911,13 +907,13 @@ mod tests {
         let base = format!("/p/{token}/http/{target_host}");
         assert!(body.contains(&format!(r#"href="{base}/style.css""#)));
         assert!(body.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
-        assert!(body.contains(&format!("<script src=\"/p/{}/bridge.js\"></script>", secret())));
+        assert!(body.contains(&format!("<script src=\"{base}/__pix-preview-bridge.js\"></script>")));
 
         let css = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/style.css")).await.unwrap();
         assert_eq!(css.status(), 200);
         assert!(css.text().await.unwrap().contains(&format!("url({base}/bg.png)")));
 
-        let bridge = reqwest::get(format!("http://127.0.0.1:{proxy_port}/p/{}/bridge.js", secret()))
+        let bridge = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/__pix-preview-bridge.js"))
             .await
             .unwrap();
         assert_eq!(bridge.status(), 200);
@@ -930,7 +926,7 @@ mod tests {
         .unwrap();
         assert_eq!(stranger.status(), 404);
         let stranger_bridge =
-            reqwest::get(format!("http://127.0.0.1:{proxy_port}/p/not-the-secret/bridge.js")).await.unwrap();
+            reqwest::get(format!("http://127.0.0.1:{proxy_port}/p/not-the-secret/http/{target_host}/__pix-preview-bridge.js")).await.unwrap();
         assert_eq!(stranger_bridge.status(), 404);
     }
 }

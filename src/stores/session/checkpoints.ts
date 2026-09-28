@@ -118,6 +118,9 @@ export function createTurnCheckpoints(ctx: {
           { turnIndex, checkpointId, startOid: from, endOid, state: "active", files },
         ]
         persist()
+        // The API keeps hidden Git refs bounded; this is intentionally async and
+        // non-blocking for the completed turn.
+        void cleanupOldCheckpoints()
       })
       .catch(() => {
         /* 快照/差异失败：本轮仅失去回滚能力 */
@@ -137,14 +140,12 @@ export function createTurnCheckpoints(ctx: {
    */
   async function cleanupOldCheckpoints(keepCount: number = 10): Promise<void> {
     const project = ctx.cwd.value
-    if (!project || records.value.length <= keepCount) return
+    const file = ctx.sessionFile.value
+    if (!project || !file || records.value.length <= keepCount) return
 
-    // 按时间排序，保留最近的 keepCount 个
-    const sorted = [...records.value].sort((a, b) => {
-      const aTime = a.userTimestamp ?? 0
-      const bTime = b.userTimestamp ?? 0
-      return bTime - aTime
-    })
+    // turnIndex is the stable order used by rollback and rendering. Unlike the
+    // display timestamp it is available immediately for newly settled turns.
+    const sorted = [...records.value].sort((a, b) => b.turnIndex - a.turnIndex)
     const toDelete = sorted.slice(keepCount)
 
     // 并行删除旧的 checkpoint refs
@@ -153,10 +154,13 @@ export function createTurnCheckpoints(ctx: {
         record.checkpointId ? deleteCheckpoint(project, record.checkpointId) : Promise.resolve(),
       ),
     )
+    if (ctx.sessionFile.value !== file) return
 
     // 从 records 中移除
     const deleteSet = new Set(toDelete.map(r => r.turnIndex))
-    records.value = records.value.filter(r => !deleteSet.has(r.turnIndex))
+    const next = records.value.filter(r => !deleteSet.has(r.turnIndex))
+    if (next.length === records.value.length) return
+    records.value = next
     persist()
   }
 

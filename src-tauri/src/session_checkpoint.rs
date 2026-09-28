@@ -94,21 +94,6 @@ fn git_raw_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
-/// 与 git_in 相同，但不 trim 输出：cat-file blob 的内容必须逐字节保留。
-fn git_raw(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(repo_root).args(args);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    let output = command
-        .output()
-        .map_err(|e| pix_error_detail("gitRunFailed", "无法运行 Git: {detail}", e))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
 /// FNV-1a 64：给 workspace 命名空间与 manifest 文件名生成稳定短哈希，无需额外依赖。
 fn fnv1a(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;

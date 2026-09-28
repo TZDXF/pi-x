@@ -55,11 +55,6 @@ fn revert_file(root: &Path, file: &RevertFile) -> RevertFileResult {
     }
 }
 
-/// 支持绝对路径与项目内相对路径；canonicalize 后必须仍落在项目根内。
-fn resolve_within(root: &Path, raw: &str) -> Result<PathBuf, String> {
-    resolve_path(root, raw, false)
-}
-
 /// 路径解析：Delete 操作的目标文件可能已不存在（幂等回滚），跳过 canonicalize。
 fn resolve_path(root: &Path, raw: &str, skip_canonicalize: bool) -> Result<PathBuf, String> {
     let candidate = Path::new(raw);
@@ -265,13 +260,13 @@ mod tests {
     #[test]
     fn rejects_paths_outside_project() {
         let root = temp_dir();
-        assert!(resolve_within(&root.0, "../outside.txt").is_err());
+        assert!(resolve_path(&root.0, "../outside.txt", false).is_err());
         let outside = std::env::temp_dir().join("pix-revert-test-outside.txt");
         std::fs::write(&outside, "x").unwrap();
-        let resolved = resolve_within(&root.0, &outside.to_string_lossy());
+        let resolved = resolve_path(&root.0, &outside.to_string_lossy(), false);
         let _ = std::fs::remove_file(&outside);
         assert!(resolved.is_err());
-        assert!(resolve_within(&root.0, "missing.txt").is_err());
+        assert!(resolve_path(&root.0, "missing.txt", false).is_err());
     }
 
     #[test]

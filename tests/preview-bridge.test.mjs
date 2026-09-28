@@ -67,6 +67,7 @@ function makeEnvironment() {
     __pixPreviewBase: "/p/s/http/localhost:5173",
     scrollX: 5,
     scrollY: 7,
+    URL,
     setTimeout,
     console: { log() {}, info() {}, warn() {}, error() {}, debug() {} },
     fetch: () => {},

@@ -463,8 +463,11 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             let paths = a["paths"].as_array().map(|list| {
                 list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
             });
+            let tool_files = a["toolTouchedFiles"].as_array().map(|list| {
+                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+            });
             Ok(serde_json::to_value(
-                crate::session_checkpoint::session_checkpoint_restore(text("project")?, text("from")?, text("to")?, paths).await?,
+                crate::session_checkpoint::session_checkpoint_restore(text("project")?, text("from")?, text("to")?, paths, tool_files).await?,
             ).map_err(|e| e.to_string())?)
         }
         "session_checkpoint_manifest_get" => Ok(serde_json::to_value(
@@ -472,6 +475,14 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         ).map_err(|e| e.to_string())?),
         "session_checkpoint_manifest_set" => {
             crate::session_checkpoint::session_checkpoint_manifest_set(text("file")?, a["manifest"].clone()).await?;
+            Ok(Value::Null)
+        }
+        "session_checkpoint_manifest_delete" => {
+            crate::session_checkpoint::session_checkpoint_manifest_delete(text("file")?).await?;
+            Ok(Value::Null)
+        }
+        "session_checkpoint_delete" => {
+            crate::session_checkpoint::session_checkpoint_delete(text("project")?, text("checkpointId")?).await?;
             Ok(Value::Null)
         }
         "session_checkpoint_content" => Ok(serde_json::to_value(

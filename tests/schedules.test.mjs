@@ -61,7 +61,10 @@ test("scheduled tasks use a workspace route and a page with the instructions las
   assert.match(sidebar, /@click="emit\('schedules'\)"/)
   assert.doesNotMatch(sidebar, /ScheduledTasksDialog/)
   assert.match(page, /<TimeFieldRoot[^>]*v-model="timeValue"/)
-  assert.match(page, /<SelectItem v-for="path in projects"[^>]*>\s*{{\s*workspace\.projectName\(path\)\s*}}<\/SelectItem>/)
+  assert.match(
+    page,
+    /<SelectItem v-for="path in projects"[^>]*>\s*{{\s*workspace\.projectName\(path\)\s*}}<\/SelectItem>/,
+  )
   assert.ok(page.indexOf("schedules.prompt") > page.indexOf('id="schedule-thinking"'))
 })
 

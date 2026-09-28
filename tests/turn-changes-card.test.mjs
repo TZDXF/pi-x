@@ -165,7 +165,7 @@ test("template wires expand toggle, review opening and per-file actions", () => 
   assert.ok(source.includes(':aria-expanded="expanded"'))
   assert.ok(source.includes(`emit('openReview', row.file.path)`))
   assert.ok(source.includes("confirmOpen = true"))
-  assert.ok(source.includes("revert(revertibleFiles, true)"))
+  assert.ok(source.includes('@click="confirmRevertAll"'))
   assert.ok(source.includes("revert([row.file], false)"))
   assert.ok(source.includes(':disabled="busy || !row.file.revertible"'))
 })

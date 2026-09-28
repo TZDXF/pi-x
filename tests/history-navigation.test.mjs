@@ -117,7 +117,7 @@ test("streaming navigation switches without aborting the running generation", as
 
 test("streaming composer shows send for text or attachments and stop only when empty", () => {
   const chat = source("../src/components/ChatView.vue")
-  const declaration = chat.match(/^const showStopButton = .*$/m)?.[0]
+  const declaration = chat.slice(chat.indexOf("const showStopButton"), chat.indexOf("const sendDelayMinutes")).trimEnd()
   assert.ok(declaration)
   const session = { isStreaming: true }
   const delayedSend = { value: false }
@@ -152,9 +152,14 @@ test("streaming composer shows send for text or attachments and stop only when e
   delayedSend.value = false
   session.isStreaming = false
   assert.equal(context.shouldStop(), false)
-  assert.match(
-    chat,
-    /:aria-label="\s*showStopButton \? t\('chat\.stop'\) : delayedSend \? t\('chat\.delayedSend'\) : t\('chat\.sendMessage'\)"/,
+  const submitRegion = chat.slice(chat.indexOf("<PromptInputSubmit"), chat.indexOf("</PromptInputSubmit>"))
+  const ariaLabel = submitRegion
+    .match(/:aria-label="([\s\S]*?)"/)?.[1]
+    .replace(/\s+/g, " ")
+    .trim()
+  assert.equal(
+    ariaLabel,
+    "showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : t('chat.sendMessage')",
   )
 })
 
@@ -169,9 +174,9 @@ test("streaming input reaches command dispatch; the submit button doubles as sto
   assert.doesNotMatch(submit, /await abort\(\)/)
   assert.match(
     submit,
-    /else if \(commandName === 'compact'\) await session\.send\(text, undefined, undefined, runningBehavior\.value\)/,
+    /else if \(commandName === "compact"\) await session\.send\(text, undefined, undefined, runningBehavior\.value\)/,
   )
-  assert.match(submit, /if \(commandName === 'new'\) emit\('newSession'\)/)
+  assert.match(submit, /if \(commandName === "new"\) emit\("newSession"\)/)
   const sidebar = source("../src/components/WorkspaceSidebar.vue")
   assert.doesNotMatch(sidebar, /const navigationDisabled = .*session.isStreaming/)
 })

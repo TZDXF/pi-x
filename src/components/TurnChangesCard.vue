@@ -45,6 +45,11 @@ const rows = computed(() =>
   }),
 )
 
+function confirmRevertAll() {
+  confirmOpen.value = false
+  void revert(revertibleFiles.value, true)
+}
+
 async function revert(list: TurnFileChange[], full: boolean) {
   if (busy.value || !list.length) return
   busy.value = true
@@ -215,13 +220,9 @@ async function revert(list: TurnFileChange[], full: boolean) {
           <Button type="button" variant="outline" size="sm" :disabled="busy" @click="confirmOpen = false">{{
             t("common.cancel")
           }}</Button>
-          <Button
-            type="button"
-            size="sm"
-            :disabled="busy"
-            @click="confirmOpen = false; revert(revertibleFiles, true)"
-            >{{ busy ? t("turnChanges.busy") : t("turnChanges.confirmAction") }}</Button
-          >
+          <Button type="button" size="sm" :disabled="busy" @click="confirmRevertAll">{{
+            busy ? t("turnChanges.busy") : t("turnChanges.confirmAction")
+          }}</Button>
         </div>
       </DialogContent>
     </Dialog>

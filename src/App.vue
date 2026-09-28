@@ -62,6 +62,11 @@ const sidebarOpen = ref(true)
 const projectDialogOpen = ref(false)
 const editingProjectPath = ref<string | null>(null)
 
+function closeProjectDialog() {
+  projectDialogOpen.value = false
+  editingProjectPath.value = null
+}
+
 const phase = ref<Phase>("detecting")
 const config = ref<AppConfig>({})
 const project = ref("")
@@ -705,7 +710,7 @@ onUnmounted(() => {
     <CreateProjectDialog
       :open="projectDialogOpen"
       :edit-path="editingProjectPath"
-      @close="projectDialogOpen = false; editingProjectPath = null"
+      @close="closeProjectDialog"
       @save="saveProject"
     />
     <!-- global toasts -->

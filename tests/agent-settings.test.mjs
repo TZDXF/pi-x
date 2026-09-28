@@ -7,7 +7,8 @@ import ts from "typescript"
 function harness(initial = {}, component = "SkillSettings") {
   const source = readFileSync(new URL(`../src/components/settings/${component}.vue`, import.meta.url), "utf8")
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
-    .replace(/^import .*$/gm, "")
+    .replace(/^import[\s\S]*?from\s+["'][^"']+["']\n/gm, "")
+    .replace(/^import\s+["'][^"']+["']\n/gm, "")
   let config = initial,
     mount,
     failRead = false,

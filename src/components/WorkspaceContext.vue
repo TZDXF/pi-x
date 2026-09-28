@@ -17,6 +17,11 @@ const info = ref<WorkspaceGitInfo | null>(null)
 const loading = ref(false)
 const gitError = ref("")
 const projectOpen = ref(false)
+
+function openProject() {
+  projectOpen.value = false
+  emit("openProject")
+}
 const modeOpen = ref(false)
 const branchOpen = ref(false)
 const createOpen = ref(false)
@@ -125,11 +130,7 @@ watch(() => props.project, refresh, { immediate: true })
             }}</span
             ><span v-if="workspace.isProjectless(project)" class="ml-auto">✓</span></Button
           >
-          <Button
-            variant="context-menu-item"
-            size="content"
-            class="context-menu-item"
-            @click="projectOpen = false; emit('openProject')"
+          <Button variant="context-menu-item" size="content" class="context-menu-item" @click="openProject"
             ><Plus :size="14" class="size-auto shrink-0" />{{ t("sidebar.openProject") }}</Button
           >
         </div>
