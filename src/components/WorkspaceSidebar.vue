@@ -13,6 +13,7 @@ import {
   Search,
   Settings,
   Archive,
+  AlertTriangle,
   Pencil,
   MoreHorizontal,
   Pin,
@@ -22,6 +23,7 @@ import {
   FileDown,
 } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
+import { parseCodedError } from "@/lib/backendError"
 import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient"
 import type { QueuedPrompt } from "@/stores/session"
 import { sendCountdown } from "@/lib/sendCountdown"
@@ -142,8 +144,9 @@ async function refresh(path: string) {
   errors.value[path] = ""
   try {
     await workspace.refresh(path)
-  } catch {
-    errors.value[path] = t("sidebar.loadFailed")
+  } catch (error) {
+    const code = parseCodedError(String(error).replace(/^Error: /, ""))?.code
+    errors.value[path] = code === "projectDirMissing" ? "missing" : "failed"
   } finally {
     loading.value[path] = false
   }
@@ -398,6 +401,13 @@ for (const path of workspace.projects)
                     :size="15"
                     class="size-auto shrink-0"
                   /><span class="truncate">{{ name(path) }}</span>
+                  <AlertTriangle
+                    v-if="errors[path] === 'missing'"
+                    :size="14"
+                    class="size-auto shrink-0 text-amber-600 dark:text-amber-400"
+                    :aria-label="t('sidebar.projectDirMissing')"
+                    :title="t('sidebar.projectDirMissing')"
+                  />
                 </Button>
                 <Button
                   variant="quiet"
@@ -484,7 +494,14 @@ for (const path of workspace.projects)
               ></ContextMenuContent
             >
           </ContextMenu>
-          <div v-if="!collapsed[path]" class="session-list min-h-0 p-0 overflow-visible">
+          <p
+            v-if="!collapsed[path] && errors[path] === 'missing'"
+            role="alert"
+            class="flex items-center gap-2 px-3 py-2 text-xs text-amber-600 dark:text-amber-400"
+          >
+            <AlertTriangle :size="14" class="shrink-0" />{{ t("sidebar.projectDirMissing") }}
+          </p>
+          <div v-if="!collapsed[path] && errors[path] !== 'missing'" class="session-list min-h-0 p-0 overflow-visible">
             <div
               v-if="
                 path === workspace.projectRoot(project) &&
@@ -599,11 +616,11 @@ for (const path of workspace.projects)
               >
             </ContextMenu>
             <Button
-              v-if="errors[path]"
+              v-if="errors[path] === 'failed'"
               variant="ghost"
               class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto"
               @click="refresh(path)"
-              >{{ errors[path] }} · {{ t("sidebar.refresh") }}</Button
+              >{{ t("sidebar.loadFailed") }} · {{ t("sidebar.refresh") }}</Button
             >
             <p
               v-else-if="loading[path] && !workspace.histories[path]"

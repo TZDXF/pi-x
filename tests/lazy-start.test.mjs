@@ -97,6 +97,7 @@ function harness(group = null) {
     useRoute: () => ({}),
     navigate: () => {},
     normalizeSlashes: pathsModule().normalizeSlashes,
+    normalizeProjectPath: pathsModule().normalizeProjectPath,
     window: { addEventListener() {}, removeEventListener() {} },
     dispatchShortcut: () => false,
     registerShortcutHandler: () => () => {},

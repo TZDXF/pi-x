@@ -46,7 +46,7 @@ import ChatView from "@/components/ChatView.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
-import { normalizeSlashes } from "@/lib/paths"
+import { normalizeProjectPath, normalizeSlashes } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
@@ -334,6 +334,7 @@ async function reloadExternalConversation(file: string) {
 }
 
 async function selectProject(dir: string) {
+  dir = normalizeProjectPath(dir)
   if (workspace.gitBusy || connecting.value) return
   connecting.value = true
   selectingProject.value = true
@@ -481,7 +482,7 @@ async function resumeSession(file: string, targetProject?: string) {
   let owner = findConversation(file)
   let attaching = false
   try {
-    const dir = targetProject || owner?.cwd || project.value
+    const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
     const changingProject = dir !== project.value
     if (!owner) owner = createConversation(dir)
     // Select the saved identity before any asynchronous work, never a draft.
@@ -564,6 +565,7 @@ async function openSessionAction(file: string, action: "export") {
 }
 
 async function newProjectSession(path: string) {
+  path = normalizeProjectPath(path)
   if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {

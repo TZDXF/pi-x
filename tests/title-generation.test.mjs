@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { contentModule, loadTsModule } from "./lib/load-ts.mjs"
+import { contentModule, loadTsModule, pathsModule } from "./lib/load-ts.mjs"
 
 function loadStore(name, modules) {
   const exports = loadTsModule(new URL(`../src/stores/${name}.ts`, import.meta.url), id => modules[id], {
@@ -131,6 +131,7 @@ test("workspace preserves previews before pi persists and does not overwrite man
   let disk = []
   const store = loadStore("workspace", {
     ...framework,
+    "@/lib/paths": pathsModule(),
     "@/api/piClient": {
       sessionHistory: async () => [],
       pixLog() {},

@@ -113,6 +113,12 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
 
 /// List the most recent sessions whose `cwd` matches `project`.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
+    if let Err(error) = std::fs::metadata(&project) {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Err(pix_error("projectDirMissing", "Project directory does not exist"));
+        }
+        return Err(format!("invalid project path: {project}: {error}"));
+    }
     let project_norm = normalize(Path::new(&project))
         .ok_or_else(|| format!("invalid project path: {project}"))?;
 
@@ -566,6 +572,16 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+    #[tokio::test]
+    async fn missing_project_has_specific_error_code() {
+        let path = std::env::temp_dir().join(format!("pix-missing-project-{}", uuid::Uuid::new_v4()));
+        let error = match list(path.to_string_lossy().into_owned()).await {
+            Ok(_) => panic!("missing directory unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(error.contains("\"code\":\"projectDirMissing\""));
+    }
+
     #[test]
     fn last_session_error_finds_latest_failure() {
         let file = std::env::temp_dir().join(format!("pix-last-error-{}.jsonl", uuid::Uuid::new_v4()));

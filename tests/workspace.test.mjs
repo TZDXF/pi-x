@@ -24,6 +24,7 @@ function harness(initialStorage = new Map()) {
     },
     localStorage: { getItem: key => storage.get(key), setItem: (k, v) => storage.set(k, v) },
     samePath: paths.samePath,
+    normalizeProjectPath: paths.normalizeProjectPath,
     baseName: paths.baseName,
   })
   vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
@@ -35,6 +36,28 @@ test("projects are persisted without duplicates", () => {
   h.store.remember("C:/one")
   h.store.remember("C:/two")
   assert.deepEqual(JSON.parse(h.storage.get("pix.recentProjects")), ["C:/two", "C:/one"])
+})
+test("legacy Windows path variants merge with pins, groups and order", () => {
+  const storage = new Map([
+    ["pix.recentProjects", JSON.stringify(["C:\\code\\pi-x", "C:/code/pi-x", "C:\\code\\other"])],
+    ["pix.pinnedProjects", JSON.stringify(["C:/code/pi-x"])],
+    ["pix.projectGroups", JSON.stringify({ "C:/code/pi-x": { name: "PiX", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] } })],
+    ["pix.sessionOrder", JSON.stringify({ "C:\\code\\pi-x": ["chat.jsonl"] })],
+  ])
+  const h = harness(storage)
+  assert.deepEqual(Array.from(h.store.projects.value), ["C:/code/pi-x", "C:/code/other"])
+  assert.deepEqual(JSON.parse(storage.get("pix.pinnedProjects")), ["C:/code/pi-x"])
+  assert.equal(h.store.projectName("C:\\code\\pi-x"), "PiX")
+  assert.deepEqual(JSON.parse(storage.get("pix.sessionOrder"))["C:/code/pi-x"], ["chat.jsonl"])
+  h.store.remember("C:\\CODE\\pi-x\\")
+  assert.equal(h.store.projects.value.length, 2)
+})
+test("new project folders are stored with forward slashes and reject equivalent paths", () => {
+  const h = harness()
+  h.store.createProject({ name: "PiX", primary: "C:\\code\\pi-x", folders: ["C:\\code\\pi-x"] })
+  assert.deepEqual(Array.from(h.store.orderedProjects()), ["C:/code/pi-x"])
+  assert.deepEqual(JSON.parse(h.storage.get("pix.projectGroups"))["C:/code/pi-x"].folders, ["C:/code/pi-x"])
+  assert.throws(() => h.store.createProject({ name: "Duplicate", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] }))
 })
 test("named projects keep all folders and selected primary without duplicating navigation entries", () => {
   const h = harness()

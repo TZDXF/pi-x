@@ -1,7 +1,7 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
-import { baseName, samePath } from "@/lib/paths"
+import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
 import { invoke } from "@/api/transport"
 
@@ -37,14 +37,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const versions: Record<string, number> = {}
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.recentProjects") || "[]")
-    if (Array.isArray(stored)) projects.value = stored.filter((p): p is string => typeof p === "string")
+    if (Array.isArray(stored)) {
+      for (const item of stored) {
+        if (typeof item !== "string") continue
+        const path = normalizeProjectPath(item)
+        if (path && !projects.value.some(existing => samePath(existing, path))) projects.value.push(path)
+      }
+    }
   } catch {
     /* Optional storage. */
   }
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
     if (Array.isArray(stored))
-      pinnedProjects.value = stored.filter((p): p is string => typeof p === "string" && projects.value.includes(p))
+      pinnedProjects.value = projects.value.filter(path => stored.some(p => typeof p === "string" && samePath(p, path)))
   } catch {
     /* Optional storage. */
   }
@@ -52,7 +58,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.sessionOrder") || "{}")
     if (stored && typeof stored === "object" && !Array.isArray(stored)) {
       for (const [path, files] of Object.entries(stored)) {
-        if (Array.isArray(files)) sessionOrder.value[path] = files.filter((f): f is string => typeof f === "string")
+        if (Array.isArray(files)) {
+          const key = projects.value.find(project => samePath(project, path)) || normalizeProjectPath(path)
+          sessionOrder.value[key] = [
+            ...new Set([...(sessionOrder.value[key] || []), ...files.filter((f): f is string => typeof f === "string")]),
+          ]
+        }
       }
     }
   } catch {
@@ -62,15 +73,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.projectGroups") || "{}")
     if (stored && typeof stored === "object" && !Array.isArray(stored)) {
       for (const [primary, value] of Object.entries(stored)) {
-        if (!projects.value.includes(primary) || !value || typeof value !== "object") continue
+        const key = projects.value.find(path => samePath(path, primary))
+        if (!key || projectGroups.value[key] || !value || typeof value !== "object") continue
         const group = value as Partial<ProjectGroup>
         if (
           typeof group.name === "string" &&
           Array.isArray(group.folders) &&
           group.folders.every(p => typeof p === "string") &&
-          group.folders.includes(primary)
+          group.folders.some(folder => samePath(folder, primary))
         ) {
-          projectGroups.value[primary] = { name: group.name, folders: group.folders, primary }
+          const folders: string[] = []
+          for (const folder of group.folders) {
+            const normalized = normalizeProjectPath(folder)
+            if (!folders.some(existing => samePath(existing, normalized))) folders.push(normalized)
+          }
+          projectGroups.value[key] = { name: group.name, folders, primary: key }
         }
       }
     }
@@ -93,6 +110,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       /* Optional storage. */
     }
   }
+  // Normalize existing localStorage records once, including group keys and pinned/order metadata.
+  persistProjects()
+  persistSessionOrder()
   function orderedProjects() {
     return [...projects.value].sort(
       (a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)),
@@ -100,8 +120,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   /** Persist a manual project ordering. Pinned projects still stay on top. */
   function reorderProjects(ordered: string[]) {
-    const seen = new Set(ordered)
-    projects.value = [...ordered, ...projects.value.filter(p => !seen.has(p))]
+    const normalized = ordered.map(normalizeProjectPath)
+    projects.value = [...normalized, ...projects.value.filter(p => !normalized.some(path => samePath(path, p)))]
     persistProjects()
   }
   function applySessionOrder(path: string) {
@@ -119,6 +139,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   /** A project can span several folders; its sidebar order belongs to the project. */
   function orderedSessions(path: string) {
+    path = normalizeProjectPath(path)
     const folders = projectFolders(path)
     if (folders.length === 1) return histories.value[folders[0]] || []
     return sortSessions(
@@ -128,22 +149,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   /** Persist a manual ordering for the given sessions of a project. */
   function reorderSessions(path: string, orderedFiles: string[]) {
+    path = normalizeProjectPath(path)
     const rest = (sessionOrder.value[path] || []).filter(f => !orderedFiles.includes(f))
     sessionOrder.value[path] = [...orderedFiles, ...rest]
     applySessionOrder(path)
     persistSessionOrder()
   }
   function createProject(group: ProjectGroup) {
-    const { primary, folders, name } = group
+    const { name } = group
+    const primary = normalizeProjectPath(group.primary)
+    const folders = group.folders.map(normalizeProjectPath)
     if (
       !primary ||
       !name.trim() ||
       !folders.includes(primary) ||
-      new Set(folders).size !== folders.length ||
+      folders.some((folder, index) => folders.slice(0, index).some(existing => samePath(existing, folder))) ||
       folders.some(
         path =>
-          projects.value.includes(path) ||
-          Object.values(projectGroups.value).some(existing => existing.folders.includes(path)),
+          projects.value.some(existing => samePath(existing, path)) ||
+          Object.values(projectGroups.value).some(existing => existing.folders.some(folder => samePath(folder, path))),
       )
     ) {
       throw new Error("Project folders must be unique and not belong to another project")
@@ -153,7 +177,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
   }
   function projectRoot(path: string) {
-    return Object.values(projectGroups.value).find(group => group.folders.includes(path))?.primary || path
+    path = normalizeProjectPath(path)
+    return (
+      Object.values(projectGroups.value).find(group => group.folders.some(folder => samePath(folder, path)))?.primary ||
+      projects.value.find(existing => samePath(existing, path)) ||
+      path
+    )
   }
   // ---- 无项目会话：未打开项目时使用的固定工作目录 ----
   /** 解析（并由后端按需创建）无项目会话目录；并发调用共享同一次请求。 */
@@ -183,18 +212,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return !!projectless.value && samePath(path, projectless.value)
   }
   function updateProject(oldPrimary: string, group: ProjectGroup) {
+    oldPrimary = projectRoot(oldPrimary)
     if (!projects.value.includes(oldPrimary)) throw new Error("Project not found")
-    const { primary, folders, name } = group
+    const { name } = group
+    const primary = normalizeProjectPath(group.primary)
+    const folders = group.folders.map(normalizeProjectPath)
     if (
       !primary ||
       !name.trim() ||
       !folders.includes(primary) ||
-      new Set(folders).size !== folders.length ||
+      folders.some((folder, index) => folders.slice(0, index).some(existing => samePath(existing, folder))) ||
       folders.some(
         folder =>
-          projects.value.some(path => path !== oldPrimary && path === folder) ||
+          projects.value.some(path => path !== oldPrimary && samePath(path, folder)) ||
           Object.entries(projectGroups.value).some(
-            ([path, existing]) => path !== oldPrimary && existing.folders.includes(folder),
+            ([path, existing]) => path !== oldPrimary && existing.folders.some(path => samePath(path, folder)),
           ),
       )
     ) {
@@ -207,13 +239,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
   }
   function projectName(path: string) {
+    path = normalizeProjectPath(path)
     if (isProjectless(path)) return i18n.global.t("projectless.name")
     return projectGroups.value[projectRoot(path)]?.name || baseName(path) || path
   }
   function projectFolders(path: string) {
+    path = normalizeProjectPath(path)
     return projectGroups.value[projectRoot(path)]?.folders || [path]
   }
   function togglePin(path: string) {
+    path = projectRoot(path)
     if (!projects.value.includes(path)) return
     pinnedProjects.value = pinnedProjects.value.includes(path)
       ? pinnedProjects.value.filter(p => p !== path)
@@ -221,37 +256,41 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
   }
   function removeProject(path: string) {
+    path = projectRoot(path)
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
     delete projectGroups.value[path]
     delete sessionOrder.value[path]
     versions[path] = (versions[path] || 0) + 1
     delete histories.value[path]
-    for (const [file, row] of pending) if (row.cwd === path) pending.delete(file)
+    for (const [file, row] of pending) if (samePath(row.cwd, path)) pending.delete(file)
     persistProjects()
     persistSessionOrder()
   }
   function remember(path: string) {
+    path = normalizeProjectPath(path)
     if (!path) return
     if (!projects.value.includes(path) && projectRoot(path) === path) projects.value = [path, ...projects.value]
     persistProjects()
   }
   async function refresh(path: string) {
+    path = normalizeProjectPath(path)
     const version = (versions[path] = (versions[path] || 0) + 1)
     const rows = await listSessions(path)
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
-      const previews = [...pending.values()].filter(row => row.cwd === path)
+      const previews = [...pending.values()].filter(row => samePath(row.cwd, path))
       histories.value[path] = [...rows, ...previews].sort((a, b) => b.mtimeMs - a.mtimeMs)
       applySessionOrder(path)
     }
   }
   // pi does not flush a new session to disk until its first assistant response.
   function preview(row: SessionMeta) {
-    const rows = histories.value[row.cwd] ?? []
+    const path = normalizeProjectPath(row.cwd)
+    const rows = histories.value[path] ?? []
     if (rows.some(s => s.file === row.file)) return
     pending.set(row.file, row)
-    histories.value[row.cwd] = [row, ...rows]
+    histories.value[path] = [row, ...rows]
   }
   function generatedTitle(file: string, title: string) {
     for (const rows of Object.values(histories.value)) {

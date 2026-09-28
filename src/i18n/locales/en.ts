@@ -422,6 +422,7 @@ export default {
     currentSession: "Current session",
     untitled: "Untitled session",
     loadFailed: "Failed to load sessions, please retry",
+    projectDirMissing: "Project directory no longer exists. Check or remove this project.",
     noMatch: "No matching sessions",
     emptyHint: "Start a new session. History is saved under this project.",
     recentProjects: "Recent projects",

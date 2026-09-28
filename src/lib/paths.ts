@@ -28,6 +28,14 @@ export function normalizeSlashes(path: string): string {
   return path.replace(/\\/g, "/")
 }
 
+/** Stable project key across folder pickers, config and stored session cwd values. */
+export function normalizeProjectPath(path: string): string {
+  const normalized = normalizeSlashes(path)
+  if (/^[a-zA-Z]:\/+$/.test(normalized)) return `${normalized[0]}:/`
+  if (/^\/+$/.test(normalized)) return normalized.startsWith("//") ? "//" : "/"
+  return normalized.replace(/\/+$/, "")
+}
+
 /**
  * Final path segment (file or folder name) with separators normalized. Empty or
  * all-separator input returns the input itself, so callers can chain fallbacks.

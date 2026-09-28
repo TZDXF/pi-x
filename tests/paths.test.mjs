@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import ts from "typescript"
 const source = readFileSync(new URL("../src/lib/paths.ts", import.meta.url), "utf8")
 const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, baseName } = await import(
+const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, normalizeProjectPath, baseName } = await import(
   `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
 )
 
@@ -50,6 +50,13 @@ test("normalizeSlashes converts windows separators and keeps posix paths intact"
   assert.equal(normalizeSlashes("\\\\server\\share\\a.jsonl"), "//server/share/a.jsonl")
   assert.equal(normalizeSlashes("/home/u/proj"), "/home/u/proj")
   assert.equal(normalizeSlashes(""), "")
+})
+
+test("project paths use stable slash separators without losing filesystem roots", () => {
+  assert.equal(normalizeProjectPath("C:\\code\\pi-x\\"), "C:/code/pi-x")
+  assert.equal(normalizeProjectPath("C:\\"), "C:/")
+  assert.equal(normalizeProjectPath("\\\\server\\share\\"), "//server/share")
+  assert.equal(normalizeProjectPath("/"), "/")
 })
 
 test("baseName returns the final segment for both separator styles", () => {

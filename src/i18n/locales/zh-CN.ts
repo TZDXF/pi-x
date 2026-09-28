@@ -410,6 +410,7 @@ export default {
     currentSession: "当前会话",
     untitled: "未命名会话",
     loadFailed: "无法加载会话，请重试",
+    projectDirMissing: "项目目录不存在，请检查或移除该项目",
     noMatch: "没有匹配的会话",
     emptyHint: "从一个新会话开始。历史记录会保存在此项目下。",
     recentProjects: "最近项目",

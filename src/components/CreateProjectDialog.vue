@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useWorkspaceStore, type ProjectGroup } from "@/stores/workspace"
-import { baseName } from "@/lib/paths"
+import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
@@ -43,16 +43,16 @@ async function addFolder() {
       ? await openFolderDialog({ directory: true, title: t("welcome.openFolderTitle") })
       : window.prompt(t("settings.remoteProject"))
     if (typeof result !== "string" || !result.trim()) return
-    const path = result.trim()
-    if (!props.open || folders.value.includes(path)) return
+    const path = normalizeProjectPath(result.trim())
+    if (!props.open || folders.value.some(folder => samePath(folder, path))) return
     if (folders.value.length >= 32) {
       error.value = t("projectDialog.tooManyFolders")
       return
     }
     if (
-      workspace.projects.some(existing => existing !== props.editPath && existing === path) ||
+      workspace.projects.some(existing => existing !== props.editPath && samePath(existing, path)) ||
       Object.entries(workspace.projectGroups).some(
-        ([root, group]) => root !== props.editPath && group.folders.includes(path),
+        ([root, group]) => root !== props.editPath && group.folders.some(folder => samePath(folder, path)),
       )
     ) {
       error.value = t("projectDialog.alreadyAdded")
