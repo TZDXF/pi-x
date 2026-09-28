@@ -35,3 +35,18 @@ test("drawer heights are no longer fixed tailwind sizes", () => {
     assert.doesNotMatch(root[1], /\bh-(?:40|48)\b/)
   }
 })
+
+test("proxy initialization does not touch TDZ state", () => {
+  const panel = read("../src/components/browser/BrowserPanel.vue")
+  const initIndex = panel.indexOf("let initPromise")
+  const watchIndex = panel.indexOf("watch(")
+  assert.ok(initIndex >= 0, "initPromise must be declared")
+  assert.ok(watchIndex >= 0, "visible watcher must exist")
+  assert.ok(initIndex < watchIndex, "immediate watcher must not call initProxy before initPromise exists")
+})
+
+test("panel posts bridge commands to the proxy origin", () => {
+  const panel = read("../src/components/browser/BrowserPanel.vue")
+  assert.match(panel, /const targetOrigin = proxyBase\.value \? new URL\(proxyBase\.value\)\.origin : "\*"/)
+  assert.doesNotMatch(panel, /targetOrigin = proxyBase\.value \?\? "\*"/)
+})

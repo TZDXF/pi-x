@@ -98,6 +98,8 @@ function isSameOrigin(url: string): boolean {
 }
 
 let initialized = false
+let initPromise: Promise<void> | null = null
+
 watch(
   () => props.visible,
   visible => {
@@ -108,8 +110,6 @@ watch(
   },
   { immediate: true },
 )
-
-let initPromise: Promise<void> | null = null
 
 async function initProxy() {
   if (!initPromise) {
@@ -164,7 +164,7 @@ function postToPage(message: BridgeOutbound) {
   // Payloads carry objects read out of deep refs (selections, annotations),
   // which are reactive proxies; structured clone rejects proxies, so flatten
   // to plain JSON first — the bridge contract is JSON data anyway.
-  const targetOrigin = proxyBase.value ?? "*"
+  const targetOrigin = proxyBase.value ? new URL(proxyBase.value).origin : "*"
   iframeRef.value?.contentWindow?.postMessage(JSON.parse(JSON.stringify(message)), targetOrigin)
 }
 
