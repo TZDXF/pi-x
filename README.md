@@ -1,252 +1,118 @@
 # PiX
 
-**pi coding agent 的桌面客户端** —— 基于 [Tauri 2](https://v2.tauri.app/) + Vue 3 + TypeScript 构建，通过 pi 官方支持的 RPC 模式驱动 [pi coding agent](https://github.com/badlogic/pi-mono)（`@earendil-works/pi-coding-agent`），在原生窗口中提供完整的 AI 结对编程体验。
+**pi coding agent 的桌面客户端**。PiX 使用 [Tauri 2](https://v2.tauri.app/) + Vue 3 + TypeScript 构建原生桌面体验，并通过 pi 官方 RPC 模式驱动 [pi coding agent](https://github.com/badlogic/pi-mono)；扩展、技能、提示词、MCP、凭据与终端 Pi 保持一致。
 
+## 功能亮点
+
+### 智能对话
+
+- **完整 Pi 会话体验**：通过 `pi --mode rpc` 的 JSONL stdio 与 Pi 通信，文本、思考过程、工具调用与输出全部流式渲染。
+- **工具运行可视化**：工具卡片展示运行中、输出、完成、失败等状态；命令类工具可展开为终端风格输出并复制。
+- **模型与思考强度**：对话中直接切换供应商、模型和思考等级；选择会作为界面偏好保留。
+- **消息队列与转向**：生成中可选择把新提问加入队列，或立即调整当前方向；队列可排序、编辑、立即执行或删除。
+- **延迟发送**：支持为提问设置延迟时间，到期待会话空闲后发送；期间可继续编辑、暂停或恢复队列。
+- **富输入**：粘贴 / 拖拽 / 选择图片发送；输入 `@` 搜索会话、项目文件并插入引用；输入 `/` 使用内置命令、扩展命令、提示词模板和技能命令。
+- **上下文统计与压缩**：状态栏显示模型、上下文用量和队列状态，支持压缩上下文与新建会话。
+- **会话分支**：从任意历史用户提示词重新开始，必要时免重启切换 Pi 会话。
+- **扩展 UI**：Pi 扩展请求的 select、confirm、input、editor 对话框会在 PiX 中原生呈现，并回传给扩展。
+
+### 会话与项目管理
+
+- **项目工作区**：维护最近项目列表，快速搜索、切换项目；首次打开时复用 Pi 的项目信任确认。
+- **无项目任务**：不需要先选择文件夹即可开始对话；默认工作目录为 `~/.pix/workspace`，可在设置中修改。
+- **Git 工作区辅助**：查看当前分支，创建分支或 Git worktree，并直接切换到新工作区。
+- **会话管理**：按项目浏览、搜索、切换和复制会话，可归档会话；独立归档页支持恢复或永久删除。
+- **自动标题**：桌面端可在首次发送消息后异步生成会话标题，可选择专用供应商 / 模型；手动标题不会被覆盖。
+- **会话导出**：导出 HTML；桌面端可选择目录并打开，远程端可直接下载。
+- **系统通知**：轮次完成、等待输入时可发送系统通知，支持提示音设置。
+
+### 代码工作台
+
+右侧工作台以多标签组织审查、文件、终端和浏览器预览。
+
+- **代码审查**：查看会话内成功文件修改的累计增删、文件列表与真实行号；支持逐行 / 并排差异、行内差异、树形或平铺导航。
+- **变更回滚**：展示每轮修改的文件；在存在可恢复依据时可回滚单个文件或整轮修改，Git 项目使用内部隐藏快照辅助恢复。
+- **文件浏览与预览**：浏览项目文件，预览文本、Markdown、图片等类型；可选中代码行添加批注，并随下一条消息发送给 AI。
+- **内置终端**：在桌面端打开多个终端标签，保留输出并支持复制；可从快捷键快速新建。
+- **浏览器预览**：通过桌面端代理预览网页，支持画笔和元素检查标注、控制台查看、导出标注，并把结构化反馈插入聊天。
+- **文件打开方式**：可为审查面板配置系统默认应用或自定义 IDE 打开文件。
+
+### 配置、扩展与自动化
+
+- **可视化 Pi 配置**：管理供应商与模型、Pi 路径与检测结果、agent 配置、包安装和托管技能；配置写入 Pi 的既有配置体系。
+- **技能托管**：将完整技能保存在 `~/.pix/skills`，支持导入、启用、禁用和删除；启用列表同步到 Pi 设置。
+- **快捷键**：内置全局、聊天、输入框和工作台快捷键，可自定义绑定、检测冲突并恢复默认。
+- **通用偏好**：亮色 / 暗色 / 跟随系统主题、中英文界面、生成中的发送策略、Pi 临时错误自动重试次数等。
+- **定时任务**：创建、编辑、暂停或删除周期任务，支持每小时、每天、工作日、每周、每月和自定义 Cron；可指定项目、模型、思考强度、工具权限和项目信任策略。PiX 运行时在本机调度，不提供系统级唤醒。
+- **应用与 Pi 更新**：应用内检查并安装 PiX 正式版或预览版更新，也可触发 Pi 更新。
+- **桌面集成**：自定义标题栏、关闭最小化到托盘、后台继续运行、托盘菜单退出。
+
+### 局域网访问
+
+在桌面端 **设置 → 局域网访问** 开启后，同一局域网设备可扫码或输入访问密码使用 PiX 网页界面。
+
+- 网页复用桌面端 Pi 进程，支持项目、会话、聊天、实时事件和归档会话管理。
+- 可设置监听端口和至少 8 个字符的访问密码；未设置密码时访问链接本身包含访问凭据。
+- HTTP 未加密：仅在可信局域网使用，不要公开链接、二维码或映射端口到公网。
+- 重新开启服务会使旧入口失效；关闭监听不会中断已提交给 Pi 的任务。
+
+## 架构概览
+
+```text
+┌─────────────────────────────────────────────┐
+│                 PiX 桌面窗口                │
+│                                             │
+│   Vue 3 前端：聊天、工作台、设置、远程页面  │
+│              │ Tauri command / event        │
+│   Rust 壳：RPC、会话、Git、终端、远程服务   │
+└──────────────┬──────────────────────────────┘
+               │ stdin / stdout JSONL
+               ▼
+          pi --mode rpc 子进程
 ```
-┌─────────────────────────────────────────────────┐
-│                PiX (Tauri 窗口)                 │
-│                                                 │
-│  Vue 3 前端 (ai-elements-vue 聊天 UI)            │
-│      │ Tauri commands / events                  │
-│  Rust 壳 (rpc.rs / trust.rs / pi_locate.rs)     │
-└──────┬──────────────────────────────────────────┘
-       │ stdin/stdout (JSONL, LF 字节帧)
-       ▼
-  pi --mode rpc 子进程
-  （扩展 / 技能 / 提示词 / MCP 与 TUI 完全一致）
-```
 
-## 核心特性
-
-- **流式对话**：文本、思考（Reasoning）、工具调用卡片全部流式渲染，打字机式实时生长
-- **工具运行可视化**：每条工具调用的状态机（运行中 / 输出 / 完成 / 出错），可展开查看输出
-- **模型与思考等级切换**：工具栏下拉选择任意 provider/model，实时切换思考等级（仅影响后续轮次）
-- **消息队列**：AI 响应中继续输入 —— steering（转向）与 follow-up（追问）排队显示，Esc 中断后自动恢复输入
-- **@file 引用**：输入 `@` 弹出项目文件补全（基名匹配优先，自动跳过 node_modules/.git/dist 等），支持光标处补全、中文/空格路径；选中插入 `@"relative/path"`，发送时明确提供路径供 agent 按需读取（不自动附加全文，不跨项目搜索符号链接）
-- **图片输入**：粘贴 / 拖拽 / 添加按钮发送图片（base64），气泡内预览
-- **Fork 分叉**：从任意历史用户提示词重新开始对话（`fork` RPC）
-- **扩展 UI 完整支持**：pi 扩展弹出的 select / confirm / input / editor 对话框以原生桌面对话框呈现，回答通过 `extension_ui_response` 回传
-- **项目信任管理**：调用已安装 Pi 的信任管理器，与终端共用 `trust.json`；首次打开项目弹出信任确认，父目录继承规则由 Pi 决定
-- **无项目会话**：不用选择文件夹即可开始对话，会话在 PiX 的工作目录中运行（默认 `~/.pix/workspace`，可在设置 → 通用中改为任意目录，留空即恢复默认）；入口在欢迎页和侧边栏，会话记录与其他项目一样按该目录归档
-- **pi 自动检测**：扫描 PATH 与常见安装位置定位 pi；支持在应用内配置自定义 pi 路径；Windows 下解析 npm `.cmd` shim 并直接以 `node + cli.js` 启动（绕开 cmd shim 在管道下的兼容性问题）
-- **会话统计**：状态栏实时显示上下文 token 用量、成本、模型信息
-- **会话导出**：桌面端选择目录导出 HTML 并在浏览器打开；侧边栏可直接导出任意会话而不切换，远程端下载到本地
-- **应用内设置**：自定义 pi 可执行路径 + 实时检测结果（Windows 下自动解析 npm shim）；供应商与模型管理（可视化编辑 pi 的 models.json，打开模型选择器即生效）
-- **技能托管**：完整技能（含 SKILL.md、脚本、参考文档）保存在 `~/.pix/skills`，可视化导入 / 启用 / 禁用 / 删除；启用列表写入 pi 的 settings.json，对所有项目生效
-- **消息复制**：AI 回复一键复制为 Markdown 文本
-
-## 定时任务
-
-桌面端侧边栏「新会话」下方的「定时任务」可创建、编辑、暂停或删除任务。每个任务配置标题、指令、项目、工具权限（只读/读写/完全访问）、项目文件信任策略、模型与思考强度，支持每小时、每天、工作日、每周、每月及自定义 Cron。
-
-- 使用本机时区，由 Rust 后端每 15 秒检查；PiX 必须保持运行（可以隐藏到托盘）。重启不补跑错过的任务；同一任务不重叠运行，单次最长一小时。
-- 工作日指周一至周五，不排除法定节假日。每月选 29–31 日时，没有该日的月份会跳过。
-- 自定义 Cron 使用五字段「分 时 日 月 星期」，如 `0 9 * * MON-FRI`；星期推荐用英文缩写，数字按 cron-rs 规则为 1=周日至 7=周六。日与星期同时指定时需同时匹配。
-- 工具权限复用会话的 `--tools` 白名单；项目文件信任另行校验，两者都不是操作系统沙箱。任务不更改全局信任。选择「仅在项目已受信任时运行」后，信任撤销会阻止后续执行。需要交互输入的任务会失败，不自动批准。
-- 每次运行启动独立 Pi 会话，不打断当前对话。成功结果可从任务列表或项目历史打开；状态及错误在任务列表显示。
-- 配置保存在 `~/.pix/schedules.json`，不存储模型密钥。当前仅桌面端管理，不提供系统级唤醒或退出后执行。
-
-## 技术栈
-
-| 层         | 技术                                                                                                                                         |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 桌面壳     | Tauri 2.0（Rust）                                                                                                                            |
-| 前端       | Vue 3 + TypeScript + Vite                                                                                                                    |
-| UI         | Tailwind CSS v4 + shadcn-vue（reka-ui）                                                                                                      |
-| 聊天组件   | [ai-elements-vue](https://github.com/radix-vue/ai-elements)（Conversation / Message / Reasoning / Tool / PromptInput / Queue / Loader 全套） |
-| 状态管理   | Pinia                                                                                                                                        |
-| 与 pi 通信 | `pi --mode rpc` 子进程，JSONL over stdio                                                                                                     |
-
-## 目录结构
-
-```
-pi-x/
-├── src/                        # Vue 前端
-│   ├── api/
-│   │   ├── protocol.ts         # pi RPC 协议类型定义
-│   │   └── piClient.ts         # Tauri command/event 封装
-│   ├── stores/
-│   │   ├── session.ts          # 会话状态：流式组装、工具运行状态机、队列
-│   │   └── ui.ts               # 扩展对话框队列、toast、stderr 诊断
-│   ├── components/
-│   │   ├── ai-elements/        # ai-elements-vue 组件（fork 模式自维护，含本地改动）
-│   │   ├── ChatView.vue        # 主聊天界面
-│   │   ├── AssistantBlocks.vue # assistant 消息块渲染（文本/思考/工具）
-│   │   ├── PromptInputBridge.vue # PromptInput context 桥接（编程式访问输入框）
-│   │   ├── ExtensionDialog.vue # 扩展 UI 对话框
-│   │   ├── TrustDialog.vue     # 项目信任确认
-│   │   ├── WelcomeView.vue     # 项目选择/引导页
-│   │   └── StatusBar.vue       # 底部状态栏
-│   └── App.vue                 # 阶段状态机：detecting → pick → trust → chat → down
-├── src-tauri/                  # Rust 壳
-│   └── src/
-│       ├── rpc.rs              # pi 子进程生命周期 + stdio 桥 + 请求/响应关联
-│       ├── pi_locate.rs        # pi 定位 + npm shim 解析（node+cli.js 直启）
-│       ├── trust.rs            # 调用 Pi SDK 的信任管理器
-│       ├── commands.rs         # Tauri commands + 应用配置
-│       └── lib.rs / main.rs    # 入口，退出时清理子进程
-└── package.json
-```
+- `src/components/`：聊天、会话、工作台、浏览器、设置和 vendored UI 组件。
+- `src/api/`、`src/stores/`、`src/composables/`：RPC 传输、协议类型、会话与界面状态。
+- `src-tauri/src/`：Pi 进程与 RPC、信任、会话、快照、Git、终端、定时任务、技能、远程访问和更新。
+- `tests/`：Node 单元测试与浏览器回归脚本；Rust 测试位于后端源码中。
 
 ## 开发
 
 ### 前置要求
 
-- Node.js ≥ 22、Rust ≥ 1.90（含 cargo）
+- Node.js ≥ 22、Rust ≥ 1.90、pnpm。
 - 已安装 pi coding agent：
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
-- 模型凭据：沿用 pi 现有配置（`~/.pi/agent/auth.json` 或环境变量）。**OAuth 订阅登录（Claude Pro/Max 等）暂不支持**，请使用 API key 方式。
+- 模型凭据沿用 Pi 配置，例如 `~/.pi/agent/auth.json` 或环境变量。当前 PiX 不代管订阅 OAuth 登录。
 
 ### 常用命令
 
-| 命令                         | 说明                                                           |
-| ---------------------------- | -------------------------------------------------------------- |
-| `npm run dev:desktop`        | 桌面开发（不含远程访问）                                       |
-| `npm run dev:desktop:remote` | 桌面开发并包含远程访问功能                                     |
-| `npm run dev`                | 仅前端（浏览器预览，无 pi 进程）                               |
-| `npm run build`              | 前端构建（vite build）                                         |
-| `npm run typecheck`          | 前端类型检查（vue-tsc）                                        |
-| `npm run lint`               | oxlint（整个仓库，vendored ui/ai-elements 已排除）             |
-| `npm run lint:fix`           | oxlint 自动修复                                                |
-| `npm run fmt` / `fmt:check`  | oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）                  |
-| `npm run check`              | lint + typecheck + 前端构建 + cargo check                      |
-| `npm run test`               | Rust 单元测试（cargo test）                                    |
-| `npm run test:web`           | 前端/协议单元测试（node --test tests）                         |
-| `npm run package`            | 打包安装程序（NSIS/MSI 到 `src-tauri/target/release/bundle/`） |
-| `npm run package:debug`      | Debug 打包                                                     |
+| 命令 | 说明 |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | 安装依赖 |
+| `pnpm run dev:desktop` | 桌面开发，前端热更新 |
+| `pnpm run dev` | 仅浏览器预览，不启动 Pi 进程 |
+| `pnpm run dev:desktop:remote` | 构建前端并启用远程访问开发模式 |
+| `pnpm run check` | oxlint、类型检查、前端构建与 Rust check |
+| `pnpm run test:web` | Node 单元测试 |
+| `pnpm test` | Rust 单元测试 |
+| `pnpm run package` | 构建包含远程访问的桌面安装包 |
 
-普通桌面开发（`npm run dev:desktop`）不编译远程访问功能，无需生成 `dist`，保留 Vite 热更新。
+Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
 
-使用 `npm run dev:desktop:remote` 可先构建前端，再启用 `remote-access` feature。启动后可在设置中开启远程访问，已保存的开启状态会自动恢复。远程页面使用编译时的前端快照，不走 HMR。
+## 数据与平台
 
-所有 `package*` 脚本仍包含远程访问功能（包括 Debug 打包）。直接运行 Cargo 默认不包含远程访问；若添加 `--features remote-access`，请先在项目根目录执行 `npm run build`。
+- Pi 数据由 Pi 管理，默认在 `~/.pi/agent`，尊重 `PI_CODING_AGENT_DIR`；模型、凭据、信任、会话和扩展与终端 Pi 共用。
+- `.pix` 保存 PiX 自有设置、无项目任务目录和托管技能；会话标题使用 Pi 原生 `session_info`，不复制会话数据到私有格式。
+- PiX 主要在 Windows 上开发与验证；macOS 和 Linux 理论可用，尚未系统测试。
+- 推送和 PR 由 GitHub Actions 执行 lint、类型检查、前端构建、Node 测试与 Rust 检查；Release workflow 支持 Windows / macOS / Linux 产物和签名更新。
 
-### 调试提示
+## 发布
 
-- pi 的 stderr 会转发为前端 `pi://stderr` 事件；pi 异常退出时「已退出」界面会显示最后 12 行 stderr，便于定位启动失败原因
-- Rust 侧修改后需重启 `dev:desktop`；前端修改走 HMR（事件监听已做卸载清理，可安全热更）
-
-## RPC 协议映射
-
-前端使用到的 pi RPC 命令（详见 pi 的 `docs/rpc.md`）：
-
-| 命令                                                   | 用途                             |
-| ------------------------------------------------------ | -------------------------------- |
-| `prompt`                                               | 发送消息（流式，steering 模式）  |
-| `abort` / `clear_queue`                                | 中断当前轮次 / 取回排队消息      |
-| `get_state` / `get_session_stats`                      | 模型、思考等级、token 用量       |
-| `get_available_models` / `set_model`                   | 模型列表与切换                   |
-| `get_available_thinking_levels` / `set_thinking_level` | 思考等级                         |
-| `get_commands`                                         | 自定义斜杠命令（命令面板数据源） |
-| `new_session` / `compact`                              | 新会话 / 压缩上下文              |
-| `extension_ui_response`                                | 应答扩展 UI 请求                 |
-
-事件流：`message_start` → `message_update`（delta 组装）→ `message_end`（权威替换）；`tool_execution_start/update/end` 驱动工具卡片。
-
-## 打包发布
-
-发布通过 GitHub Actions 完成，分正式版与预览版两条渠道，产物覆盖 Windows / macOS / Linux。
-
-- **正式版**（`.github/workflows/release.yml`）：在 main 分支上创建语义化版本 tag 并推送即可触发（workflow 会校验 tag 必须位于 main）：
-  ```bash
-  git tag v0.0.1 origin/main
-  git push origin v0.0.1
-  ```
-  版本号取自 tag（如 `0.0.1`），自动同步到 `package.json` 与 `src-tauri/tauri.conf.json`，发布为正式 Release 并自动生成 Release Notes。
-- **预览版**（`.github/workflows/preview.yml`）：每天北京时间 00:00（UTC 16:00）检测 dev 分支，相对上一个预览 tag 有新提交时自动构建；版本号为当天日期（如 `2026.9.27`，tag 为 `preview-v2026.9.27`），发布为 Prerelease。当天预览 tag 已存在或无新提交时自动跳过；也可在 Actions 页面手动触发，勾选 `force` 可跳过更新检测。
-
-> 预览版使用日期版本号，Windows 端仅提供 NSIS 安装包（MSI 要求主版本号 ≤ 255，无法使用日期形式的大版本号）。
-
-### 应用内更新
-
-「设置 → 关于」中可检查并安装应用更新（`app_update.rs` + `tauri-plugin-updater`，更新包经 minisign 签名验证）：
-
-- **更新通道**：默认 `正式版`（跟踪语义化版本 Release），可切换 `预览版`（跟踪每日 `preview-v*` Prerelease）。通道偏好保存在 `~/.pix/config.json`。
-- **版本判定**：正式版之间按语义化版本比较；预览版之间按日期比较。从预览版切回正式通道时不回退旧正式版——仅当最新正式版的发布日期晚于当前预览版（版本号即构建日期）才提示更新，否则等待下一次正式版发布。
-- **签名密钥**：公钥已写入 `src-tauri/tauri.conf.json`；私钥默认在 `~/.tauri/pi-x.key`（本地生成命令：`pnpm tauri signer generate -w ~/.tauri/pi-x.key`）。**需在仓库 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`**（私钥文件全文），否则发布 workflow 生成签名更新包时失败。若生成私钥时设置了口令（`tauri signer generate` 交互式提示），还需在 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，否则 CI 在 updater 签名阶段会失败。
-- CI 通过 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 仅在发布构建中生成 updater 产物（`.sig` 签名与 `latest.json`，Windows 优先 NSIS），本地打包不受签名密钥影响。
-- **安装行为**：Windows 上下载完成后安装器自动接管并重启应用（进度在设置页可见）；macOS / Linux 安装完成后点击「重启应用」生效。
-
-## Roadmap
-
-### M2（已完成）
-
-- [x] **会话列表**：Rust 扫描 `~/.pi/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
-- [x] **斜杠命令面板**：基于 `get_commands` + ai-elements `PromptInputCommand` 的 `/` 命令补全
-- [x] **会话内导航**：`get_tree` 分支树可视化（活跃路径高亮、user 节点一键 fork）
-
-### M3（已完成）
-
-- [x] **图片输入**：粘贴 / 拖拽 / 添加按钮 → `prompt.images`（base64），输入框与气泡内预览
-- [x] **@file 引用补全**：Rust 端项目文件搜索（跳过依赖/构建目录）+ 输入 `@` 弹出补全面板
-- [x] **消息操作**：工具栏 Fork（`get_fork_messages` + `fork` 从历史提示词重新分叉）；会话切换改用 `switch_session` 免重启
-
-### M4（进行中）
-
-- [x] **应用设置**：pi 路径配置 + 检测（SettingsDialog）
-- [x] **会话导出**：`export_html` + 桌面端选择目录并打开／远程端下载
-- [x] **消息复制**：ai-elements `MessageActions` 一键复制回复
-- [x] **技能托管**：完整技能存放在 `~/.pix/skills`，设置中可视化导入 / 启用禁用 / 删除（`skills.rs`，启用列表同步到 pi settings）
-- [x] **应用内更新**：检查更新 + 更新通道（正式版/预览版，预览退出后不回退旧正式版），tauri-plugin-updater 签名安装
-- [ ] **多会话并行**：多窗口 + 每窗口独立 pi 进程（需将 RpcState 改为 per-window 实例）
-- [ ] **扩展管理界面**：列出/启用禁用扩展包
-
-### 暂缓
-
-- **主题映射**：pi 主题（`~/.pi/agent/themes`）映射到应用配色
-- **OAuth 订阅登录**（Claude Pro/Max、ChatGPT、Copilot 等）：需要宿主应用注册与凭据安全存储方案，先依赖 pi 现有 auth.json / API key 配置
-
-## 平台支持
-
-- **Windows**（主要目标，已验证）：npm shim 解析、CREATE_NO_WINDOW、进程树清理
-- macOS / Linux：理论可用（pi 以 shebang 脚本直接启动），未系统测试
-
-## 局域网网页访问
-
-在桌面端 **设置 → 局域网访问** 中开启（默认关闭，默认端口 `1421`），复制显示的完整访问链接到同一局域网内设备的浏览器。可在开启前修改端口。开关与端口会保存，重启应用后恢复；每次重新开启或重启应用都会生成新密钥，需重新复制链接。
-
-- 保持桌面应用运行，并仅在 Windows 防火墙的专用网络中放行该端口；不自动修改防火墙。
-- 网页复用本机 Pi 进程，支持会话、聊天及实时事件；首次连接已有进程时不会重启它。桌面和网页共享同一个会话，避免同时切换项目或发送消息。
-- 网页选择项目时填写**主机上的绝对目录路径**，不是访问设备上的路径。运行时路径设置、局域网开关以及系统打开文件仅在桌面端使用。
-- 关闭开关会停止监听并断开网页事件连接，不会终止已经提交给 Pi 的任务。
-- **完整链接包含访问密钥，相当于授予主机上 Pi 的控制权限。HTTP 未加密，只用于可信局域网；不要公开链接或将端口映射到公网。**
-- 网页文件随桌面程序内嵌打包。开发此功能时先运行 `npm run build` 更新网页资源，再启动/重建桌面端；只有 Vite 开发服务不能提供远程 Pi API。
-
-### 自动会话标题
-
-在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 PiX 重复填写密钥。
-
-新会话发送第一条消息后，侧栏立即显示消息预览，独立的 pi 进程异步生成标题并持久保存。不切换当前对话模型、不使用工具、不加载扩展或项目上下文。生成失败或超时保留预览，每个会话最多尝试一次；手动标题不会被覆盖。默认关闭，启用后会产生额外模型用量，配置变更对新会话生效。
-
-### 窗口托盘与数据目录
-
-- 点击关闭按钮直接最小化到系统托盘，后台任务继续运行。
-- 托盘单击或菜单「显示 PiX」恢复窗口，菜单「退出 PiX」结束应用及正在运行的 agent。
-- Pi 数据由 Pi 管理，默认使用 `~/.pi/agent`，尊重用户设置的 `PI_CODING_AGENT_DIR`。模型、凭据、提示词、技能、包配置、信任决定和会话与终端共用；PiX 不再创建独立 agent 目录。
-- 模型和思考等级作为界面选择偏好保存在浏览器本地，新项目和新对话沿用上次选择；恢复历史会话时以 Pi 会话记录为准。
-- `.pix` 仅保存 PiX 自有设置（窗口/界面、最近项目、自动标题功能、远程访问、无项目会话目录等）、无项目会话的默认工作目录（`~/.pix/workspace`），以及托管的完整技能（`~/.pix/skills`，启用状态记录在 Pi 的 settings.json；删除托管技能会同时从启用列表移除）。会话名称保存为 Pi 原生 `session_info`；`*.pix.json` 仅保存归档和标题生成尝试标记。
-- 不读取或迁移旧 `.pix/agent`、旧默认模型、旧技能列表和旧标题字段；不会自动删除旧文件。
-- 信任、默认模型、技能路径和离线会话改名通过已安装 Pi 的 SDK 操作，要求提供 `dist/core` 的 npm 版 Pi 及 Node.js；不会自动安装第二份 Pi。
-- 项目内 `.pi` 配置仍在原位置，浏览器的界面偏好仍属于该浏览器。
-
-### 输入框补全
-
-- 消息开头输入 `/`：首次主动使用时启动 pi，展示 RPC 返回的扩展、提示词模板和技能命令；内置 `/new`、`/compact [要求]` 映射为对应 RPC 操作；其余终端专属或未知命令会提示不支持，不作为普通消息误发。
-- 输入 `@`：搜索当前项目文件；支持在句中移动光标后补全，搜索失败可重试。
-- `↑` / `↓` 切换候选，`Enter` / `Tab` 选择，`Esc` 关闭；`Shift+Enter` 换行。输入法确认不会选中候选或发送。
-- 引用文件只提供项目相对路径，agent 按需读取。扩展命令保留原始参数，其文件引用解释由扩展负责；提示词模板如何使用参数由模板本身决定。
-- 补全 UI 使用 AI Elements 的 PromptInputCommand 系列、PromptInputButton 和 Loader。
-
-补全测试：`npm run test:web`（即 `node --test "tests/*.test.mjs"`，运行全部单元测试）。浏览器回归：安装 Playwright 后运行 `node tests/completion.browser.mjs`（默认使用本机 Edge，可通过 `PI_BROWSER_CHANNEL` 切换；`PI_PLAYWRIGHT_MODULE` 可指定已有 Playwright 的 index.mjs 路径）。浏览器测试使用模拟 RPC，不调用模型。
-
-推送/PR 由 GitHub Actions（`.github/workflows/ci.yml`）自动执行 lint、typecheck、构建、Node 测试与 Rust check/test。
-
-#### 错误消息约定
-
-- **UI 层用户可见消息**：一律走 vue-i18n（`zh-CN` / `en`），包括 store 抛出的可预期错误。
-- **Rust 侧诊断消息**：面向开发者/日志，保持原文；前端在展示时可用 toast 包装。
-- **包管理器**：统一使用 pnpm（`pnpm-lock.yaml` 是唯一锁文件）；scripts 中的 `npm run` 仅为脚本执行器，与安装工具无关。
+- 在 `main` 分支创建并推送语义化版本 tag（例如 `v0.1.0`）触发正式 Release；版本号会同步到应用配置。
+- 每日北京时间 00:00 检查 `dev` 分支，有新提交时构建 `preview-v*` Prerelease；也可在 Actions 中手动触发并选择跳过更新检测。
+- 更新签名公钥位于 `src-tauri/tauri.conf.json`；CI 需要配置 `TAURI_SIGNING_PRIVATE_KEY`，如私钥有口令还需配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
