@@ -40,6 +40,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "settings.notifications",
     title: "settings.notifications",
     desc: "settings.notificationsDesc",
+    desktopOnly: true,
     component: defineAsyncComponent(() => import("./NotificationSettings.vue")),
   },
   {
@@ -47,6 +48,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "settings.remote",
     title: "settings.remote",
     desc: "settings.remoteDesc",
+    desktopOnly: true,
     component: defineAsyncComponent(() => import("./RemoteSettings.vue")),
   },
   {
