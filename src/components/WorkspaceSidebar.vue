@@ -55,6 +55,7 @@ const emit = defineEmits<{
   newSession: [project: string]
   sessionAction: [file: string, action: "export"]
   schedules: []
+  archives: []
   settings: []
   collapse: []
 }>()
@@ -324,6 +325,14 @@ for (const path of workspace.projects)
       :aria-current="route.name === 'schedules' ? 'page' : undefined"
       @click="emit('schedules')"
       ><Clock :size="17" class="size-auto shrink-0" />{{ t("schedules.title") }}</Button
+    >
+    <Button
+      size="content"
+      variant="sidebar-action"
+      class="sidebar-action"
+      :aria-current="route.name === 'archives' ? 'page' : undefined"
+      @click="emit('archives')"
+      ><Archive :size="17" class="size-auto shrink-0" />{{ t("sessionArchive.title") }}</Button
     >
     <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"
       ><Search :size="15" class="size-auto shrink-0" /><Input

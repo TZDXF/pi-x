@@ -43,13 +43,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./RemoteSettings.vue")),
   },
   {
-    id: "archive",
-    nav: "sessionArchive.title",
-    title: "sessionArchive.title",
-    desc: "sessionArchive.description",
-    component: defineAsyncComponent(() => import("./ArchiveSettings.vue")),
-  },
-  {
     id: "packages",
     nav: "packages.title",
     title: "packages.title",

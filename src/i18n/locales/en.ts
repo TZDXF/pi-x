@@ -612,6 +612,8 @@ export default {
   settings: {
     back: "Back",
     dataDirectory: "Application data directory",
+    searchPlaceholder: "Search settings menus…",
+    searchEmpty: "No matching settings menus",
 
     theme: "Appearance",
     runningBehaviorDesc:

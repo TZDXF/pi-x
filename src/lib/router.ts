@@ -6,6 +6,7 @@ import { computed, ref } from "vue"
  * Routes:
  *   #/                    -> workspace (home)
  *   #/schedules           -> scheduled tasks in the workspace main pane
+ *   #/archives            -> archived sessions in the workspace main pane
  *   #/settings            -> settings page, defaults to the "general" tab
  *   #/settings/:tab       -> settings page with a specific tab (deep-linkable)
  *
@@ -16,8 +17,8 @@ import { computed, ref } from "vue"
 export interface Route {
   /** Normalized path, e.g. "/settings/models". */
   path: string
-  /** Route name: "home" | "schedules" | "settings". */
-  name: "home" | "schedules" | "settings"
+  /** Route name: "home" | "schedules" | "archives" | "settings". */
+  name: "home" | "schedules" | "archives" | "settings"
   /** Path parameters, e.g. { tab: "models" }. */
   params: { tab?: string }
 }
@@ -26,7 +27,6 @@ export const SETTINGS_TABS = [
   "remote",
   "general",
   "notifications",
-  "archive",
   "models",
   "agent-config",
   "skills",
@@ -46,6 +46,7 @@ function parse(): Route {
     return { path, name: "settings", params: { tab: segments[1] ?? "general" } }
   }
   if (segments[0] === "schedules") return { path: "/schedules", name: "schedules", params: {} }
+  if (segments[0] === "archives") return { path: "/archives", name: "archives", params: {} }
   return { path: "/", name: "home", params: {} }
 }
 

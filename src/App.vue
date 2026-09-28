@@ -38,6 +38,7 @@ import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
+import ArchivedSessionsPage from "@/components/ArchivedSessionsPage.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { PanelLeft } from "@lucide/vue"
@@ -637,6 +638,7 @@ onUnmounted(() => {
       @edit-project="editProject"
       @settings="navigate('/settings/general')"
       @schedules="navigate('/schedules')"
+      @archives="navigate('/archives')"
       @collapse="sidebarOpen = false"
     />
     <main
@@ -658,8 +660,9 @@ onUnmounted(() => {
         >
           <PanelLeft :size="18" />
         </Button>
+        <ArchivedSessionsPage v-if="route.name === 'archives'" />
         <ScheduledTasksPage
-          v-if="route.name === 'schedules'"
+          v-else-if="route.name === 'schedules'"
           :project="project"
           @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
         />

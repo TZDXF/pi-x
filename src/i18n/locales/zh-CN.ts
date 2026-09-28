@@ -597,6 +597,8 @@ export default {
   settings: {
     back: "返回",
     dataDirectory: "应用数据目录",
+    searchPlaceholder: "搜索设置菜单…",
+    searchEmpty: "未找到匹配的设置菜单",
 
     theme: "外观主题",
     runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
