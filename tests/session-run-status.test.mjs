@@ -266,7 +266,7 @@ test("sidebar shows session statuses on the left with animated running and seman
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
   const light = readFileSync(new URL("../src/styles/theme/light.css", import.meta.url), "utf8")
   const dark = readFileSync(new URL("../src/styles/theme/dark.css", import.meta.url), "utf8")
-  const row = sidebar.match(/<div\s+v-for="s in rows\(path\)"[\s\S]*?<div\s+class="session-actions/)?.[0]
+  const row = sidebar.match(/<ContextMenu\s+v-for="s in rows\(path\)"[\s\S]*?<\/ContextMenuTrigger>/)?.[0]
   assert.ok(row, "session row is present")
   assert.ok(row.indexOf('class="session-status') < row.indexOf('variant="session-link"'), "status precedes the title")
   assert.match(row, /class="session-status absolute left-\[7px\] top-1\/2/)
@@ -278,10 +278,44 @@ test("sidebar shows session statuses on the left with animated running and seman
   for (const theme of [light, dark]) assert.match(theme, /--success: #[0-9a-f]{6}/)
 })
 
+test("session rows expose their actions through a right-click context menu", () => {
+  const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
+  assert.doesNotMatch(sidebar, /class="session-actions/)
+  for (const section of ["rows\\(path\\)", "rows\\(taskPath\\)"]) {
+    const row = sidebar.match(new RegExp(`<ContextMenu\\s+v-for="s in ${section}"[\\s\\S]*?<\\/ContextMenu>`))?.[0]
+    assert.ok(row, `context menu wraps ${section} rows`)
+    assert.match(row, /<ContextMenuTrigger as-child :disabled="disabled">/)
+    for (const action of ["rename(s)", "duplicateSession(s)", "copySessionLink(s)", "sessionAction', s.file, 'export'"])
+      assert.ok(row.includes(action), `menu keeps ${action}`)
+    // 归档是行内快捷按钮，hover 时显示，不进右键菜单。
+    assert.match(row, /class="session-archive hover-action /)
+    assert.ok(row.includes('@click="archive(s)"'), "row keeps the hover archive button")
+    assert.doesNotMatch(row, /<ContextMenuItem @select="archive\(s\)"/)
+  }
+})
+
+test("project heading exposes its actions through a right-click context menu", () => {
+  const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
+  const heading = sidebar.match(
+    /<ContextMenu>\s*<ContextMenuTrigger as-child :disabled="disabled">\s*<div\s+class="project-heading[\s\S]*?<\/ContextMenu>/,
+  )?.[0]
+  assert.ok(heading, "project heading is wrapped in a context menu")
+  // ⋯ 下拉菜单保留，右键菜单提供同样的操作。
+  assert.match(heading, /class="project-more hover-action/)
+  assert.match(heading, /<ContextMenuContent/)
+  for (const action of [
+    "workspace.togglePin(path)",
+    "emit('editProject', path)",
+    "openProjectFolder(path)",
+    "emit('removeProject', path)",
+  ])
+    assert.equal(heading.split(action).length - 1, 2, `${action} appears in both menus`)
+})
+
 test("queued prompts show a left-hand clock without a count and hover for the live countdown", () => {
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
   const pending = sidebar.match(/<div\s+v-for="pending in pendingRows\(path\)"[\s\S]*?<\/div>/)?.[0]
-  const saved = sidebar.match(/<div\s+v-for="s in rows\(path\)"[\s\S]*?<div\s+class="session-actions/)?.[0]
+  const saved = sidebar.match(/<ContextMenu\s+v-for="s in rows\(path\)"[\s\S]*?<\/ContextMenuTrigger>/)?.[0]
   assert.ok(pending && saved)
   assert.match(pending, /session-queue-status absolute left-\[7px\]/)
   assert.match(saved, /session-queue-status absolute top-1\/2/)
