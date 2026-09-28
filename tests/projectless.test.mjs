@@ -126,7 +126,7 @@ test("入口、设置项与后端命令均已接线", () => {
   assert.match(read("../src/App.vue"), /@projectless="requestWorkspaceNavigation\(openProjectless\)"/)
   assert.match(read("../src/components/WelcomeView.vue"), /emit\('openProjectless'\)/)
   assert.match(read("../src/components/WorkspaceSidebar.vue"), /emit\('projectless'\)/)
-  assert.match(read("../src/components/settings/GeneralSettings.vue"), /<ProjectlessSettings \/>/)
+  assert.match(read("../src/components/settings/WorkspaceSettings.vue"), /<ProjectlessSettings \/>/)
   assert.match(read("../src/components/settings/ProjectlessSettings.vue"), /projectlessDir: next \?\? undefined/)
   assert.match(read("../src/components/ChatView.vue"), /workspace\.projectName\(project\)/)
 })

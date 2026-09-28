@@ -599,6 +599,19 @@ export default {
     dataDirectory: "应用数据目录",
     searchPlaceholder: "搜索设置菜单…",
     searchEmpty: "未找到匹配的设置菜单",
+    resizeNav: "调整设置菜单宽度",
+    workspace: "工作区与文件",
+    workspaceTitle: "工作区与文件",
+    workspaceDesc: "管理审查文件打开方式与无项目会话目录。",
+
+    groups: {
+      general: "通用",
+      workspace: "工作区与文件",
+      modelConversation: "模型与对话",
+      extensions: "扩展与提示词",
+      notificationsRemote: "通知与远程",
+      system: "系统与更新",
+    },
 
     theme: "外观主题",
     runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
