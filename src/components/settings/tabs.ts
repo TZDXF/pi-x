@@ -90,6 +90,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./SkillSettings.vue")),
   },
   {
+    id: "archives",
+    nav: "sessionArchive.nav",
+    title: "sessionArchive.title",
+    desc: "sessionArchive.description",
+    component: defineAsyncComponent(() => import("@/components/ArchivedSessionsPage.vue")),
+  },
+  {
     id: "about",
     nav: "settings.about",
     title: "settings.aboutTitle",
@@ -121,7 +128,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
     labelKey: "settings.groups.notificationsRemote",
     tabIds: ["notifications", "remote"],
   },
-  { id: "system", labelKey: "settings.groups.system", tabIds: ["about"] },
+  { id: "system", labelKey: "settings.groups.system", tabIds: ["archives", "about"] },
 ]
 
 export function settingsGroupForTab(tabId: SettingsTab): SettingsGroupDef {

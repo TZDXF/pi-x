@@ -272,6 +272,7 @@ export default {
     hint: "仅超载、限流、5xx 等临时错误会重试；额度不足、上下文超限等不会重试。",
   },
   sessionArchive: {
+    nav: "归档",
     title: "归档会话",
     description: "恢复或永久删除归档会话。",
     refresh: "刷新",

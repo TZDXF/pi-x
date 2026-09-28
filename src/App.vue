@@ -38,7 +38,6 @@ import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
-import ArchivedSessionsPage from "@/components/ArchivedSessionsPage.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { PanelLeft } from "@lucide/vue"
@@ -619,7 +618,7 @@ const offShortcutHandlers = [
   }),
   registerShortcutHandler("app.settings", () => navigate("/settings/general")),
   registerShortcutHandler("app.schedules", () => navigate("/schedules")),
-  registerShortcutHandler("app.archives", () => navigate("/archives")),
+  registerShortcutHandler("app.archives", () => navigate("/settings/archives")),
   registerShortcutHandler("app.prevSession", () => switchSessionByOffset(-1)),
   registerShortcutHandler("app.nextSession", () => switchSessionByOffset(1)),
 ]
@@ -684,7 +683,6 @@ onUnmounted(() => {
       @edit-project="editProject"
       @settings="navigate('/settings/general')"
       @schedules="navigate('/schedules')"
-      @archives="navigate('/archives')"
       @collapse="sidebarOpen = false"
     />
     <main
@@ -706,9 +704,8 @@ onUnmounted(() => {
         >
           <PanelLeft :size="18" />
         </Button>
-        <ArchivedSessionsPage v-if="route.name === 'archives'" />
         <ScheduledTasksPage
-          v-else-if="route.name === 'schedules'"
+          v-if="route.name === 'schedules'"
           :project="project"
           @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
         />

@@ -57,7 +57,7 @@ test("scheduled tasks use a workspace route and a page with the instructions las
   const page = readFileSync(new URL("../src/components/ScheduledTasksPage.vue", import.meta.url), "utf8")
   const router = readFileSync(new URL("../src/lib/router.ts", import.meta.url), "utf8")
   assert.match(router, /name: "schedules"/)
-  assert.match(app, /<ScheduledTasksPage[^>]*v-else-if="route.name === 'schedules'"/)
+  assert.match(app, /<ScheduledTasksPage[^>]*v-if="route.name === 'schedules'"/)
   assert.match(sidebar, /@click="emit\('schedules'\)"/)
   assert.doesNotMatch(sidebar, /ScheduledTasksDialog/)
   assert.match(page, /<TimeFieldRoot[^>]*v-model="timeValue"/)

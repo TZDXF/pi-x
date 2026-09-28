@@ -281,6 +281,7 @@ export default {
     hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
   },
   sessionArchive: {
+    nav: "Archives",
     title: "Archived sessions",
     description: "Restore or permanently delete archived sessions.",
     refresh: "Refresh",

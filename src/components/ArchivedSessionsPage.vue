@@ -1,11 +1,10 @@
 <script setup lang="ts">
-/** Archived sessions page: grouped by project, with search, restore and delete actions. */
+/** Archived sessions panel (settings → archives): grouped by project, with search, restore and delete actions. */
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Dialog,
   DialogContent,
@@ -117,138 +116,130 @@ onMounted(load)
 </script>
 
 <template>
-  <ScrollArea class="flex-1 min-h-0 h-full" viewport-class="h-full">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8 max-[640px]:px-4">
-      <header class="space-y-1">
-        <h1 class="flex items-center gap-2 text-lg font-semibold">
-          <Archive :size="18" />{{ t("sessionArchive.title") }}
-        </h1>
-        <p class="text-xs text-muted-foreground">{{ t("sessionArchive.description") }}</p>
-      </header>
-      <div class="flex items-center gap-3">
-        <label
-          class="flex h-8 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-muted-foreground focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30"
-        >
-          <Search :size="14" class="shrink-0" />
-          <input
-            v-model="query"
-            type="search"
-            :placeholder="t('sessionArchive.search')"
-            :aria-label="t('sessionArchive.search')"
-            class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
-          />
-          <button
-            v-if="query"
-            type="button"
-            class="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground"
-            :aria-label="t('common.clear')"
-            @click="query = ''"
-          >
-            <X :size="13" />
-          </button>
-        </label>
-        <Button variant="outline" size="sm" class="h-8 shrink-0 gap-2 px-3 text-xs" :disabled="loading" @click="load">
-          <RotateCw :size="14" :class="{ 'animate-spin': loading }" />
-          {{ t("sessionArchive.refresh") }}
-        </Button>
-      </div>
-
-      <p class="text-xs text-muted-foreground">
-        {{ t("sessionArchive.count", { count: sessions.length }) }}
-      </p>
-
-      <p v-if="error" class="text-sm text-destructive">
-        {{ t("sessionArchive.loadFailed") }}
-        <button class="underline underline-offset-2" @click="load">
-          {{ t("sessionArchive.reload") }}
-        </button>
-        <span class="block break-all font-mono text-xs opacity-70">{{ error }}</span>
-      </p>
-      <p v-else-if="loading && !sessions.length" class="text-sm text-muted-foreground">
-        {{ t("sessionArchive.loading") }}
-      </p>
-      <p v-else-if="!sessions.length" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <Archive :size="16" />
-        {{ t("sessionArchive.empty") }}
-      </p>
-      <p v-else-if="!groups.length" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <Search :size="16" />
-        {{ t("sessionArchive.noMatch") }}
-      </p>
-
-      <div class="space-y-4">
-        <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
-          <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
-            <Folder :size="15" class="shrink-0 text-muted-foreground" />
-            <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
-            <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-              {{ group.rows.length }}
-            </span>
-          </header>
-          <ul class="divide-y divide-border/60">
-            <li
-              v-for="s in group.rows"
-              :key="s.file"
-              class="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/40"
-            >
-              <div class="min-w-0 flex-1">
-                <p class="truncate text-sm" :title="label(s)">{{ label(s) }}</p>
-                <p class="text-xs text-muted-foreground">{{ when(s) }}</p>
-              </div>
-              <div class="flex shrink-0 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  class="text-muted-foreground hover:text-foreground"
-                  :disabled="!!busy"
-                  :title="t('sessionArchive.restore')"
-                  :aria-label="t('sessionArchive.restore')"
-                  @click="restore(s)"
-                >
-                  <RefreshCw v-if="busy === s.file" :size="14" class="animate-spin" />
-                  <ArchiveRestore v-else :size="15" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  class="text-muted-foreground hover:text-destructive"
-                  :disabled="!!busy"
-                  :title="t('sessionArchive.delete')"
-                  :aria-label="t('sessionArchive.delete')"
-                  @click="askRemove(s)"
-                >
-                  <Trash2 :size="15" />
-                </Button>
-              </div>
-            </li>
-          </ul>
-        </section>
-      </div>
-      <Dialog
-        :open="!!pendingDelete"
-        @update:open="
-          (v: boolean) => {
-            if (!v && !busy) pendingDelete = null
-          }
-        "
+  <div class="space-y-5">
+    <div class="flex items-center gap-3">
+      <label
+        class="flex h-8 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-muted-foreground focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30"
       >
-        <DialogContent class="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{{ t("sessionArchive.delete") }}</DialogTitle>
-            <DialogDescription>
-              {{ pendingDelete ? t("sessionArchive.deleteConfirm", { name: label(pendingDelete) }) : "" }}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" :disabled="!!busy" @click="pendingDelete = null">
-              {{ t("common.cancel") }}
-            </Button>
-            <Button variant="destructive" :disabled="!!busy" @click="pendingDelete && remove(pendingDelete)">
-              {{ t("sessionArchive.delete") }}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        <Search :size="14" class="shrink-0" />
+        <input
+          v-model="query"
+          type="search"
+          :placeholder="t('sessionArchive.search')"
+          :aria-label="t('sessionArchive.search')"
+          class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+        />
+        <button
+          v-if="query"
+          type="button"
+          class="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground"
+          :aria-label="t('common.clear')"
+          @click="query = ''"
+        >
+          <X :size="13" />
+        </button>
+      </label>
+      <Button variant="outline" size="sm" class="h-8 shrink-0 gap-2 px-3 text-xs" :disabled="loading" @click="load">
+        <RotateCw :size="14" :class="{ 'animate-spin': loading }" />
+        {{ t("sessionArchive.refresh") }}
+      </Button>
     </div>
-  </ScrollArea>
+
+    <p class="text-xs text-muted-foreground">
+      {{ t("sessionArchive.count", { count: sessions.length }) }}
+    </p>
+
+    <p v-if="error" class="text-sm text-destructive">
+      {{ t("sessionArchive.loadFailed") }}
+      <button class="underline underline-offset-2" @click="load">
+        {{ t("sessionArchive.reload") }}
+      </button>
+      <span class="block break-all font-mono text-xs opacity-70">{{ error }}</span>
+    </p>
+    <p v-else-if="loading && !sessions.length" class="text-sm text-muted-foreground">
+      {{ t("sessionArchive.loading") }}
+    </p>
+    <p v-else-if="!sessions.length" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+      <Archive :size="16" />
+      {{ t("sessionArchive.empty") }}
+    </p>
+    <p v-else-if="!groups.length" class="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+      <Search :size="16" />
+      {{ t("sessionArchive.noMatch") }}
+    </p>
+
+    <div class="space-y-4">
+      <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
+        <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
+          <Folder :size="15" class="shrink-0 text-muted-foreground" />
+          <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
+          <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+            {{ group.rows.length }}
+          </span>
+        </header>
+        <ul class="divide-y divide-border/60">
+          <li
+            v-for="s in group.rows"
+            :key="s.file"
+            class="group flex items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/40"
+          >
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm" :title="label(s)">{{ label(s) }}</p>
+              <p class="text-xs text-muted-foreground">{{ when(s) }}</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="text-muted-foreground hover:text-foreground"
+                :disabled="!!busy"
+                :title="t('sessionArchive.restore')"
+                :aria-label="t('sessionArchive.restore')"
+                @click="restore(s)"
+              >
+                <RefreshCw v-if="busy === s.file" :size="14" class="animate-spin" />
+                <ArchiveRestore v-else :size="15" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="text-muted-foreground hover:text-destructive"
+                :disabled="!!busy"
+                :title="t('sessionArchive.delete')"
+                :aria-label="t('sessionArchive.delete')"
+                @click="askRemove(s)"
+              >
+                <Trash2 :size="15" />
+              </Button>
+            </div>
+          </li>
+        </ul>
+      </section>
+    </div>
+    <Dialog
+      :open="!!pendingDelete"
+      @update:open="
+        (v: boolean) => {
+          if (!v && !busy) pendingDelete = null
+        }
+      "
+    >
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t("sessionArchive.delete") }}</DialogTitle>
+          <DialogDescription>
+            {{ pendingDelete ? t("sessionArchive.deleteConfirm", { name: label(pendingDelete) }) : "" }}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" :disabled="!!busy" @click="pendingDelete = null">
+            {{ t("common.cancel") }}
+          </Button>
+          <Button variant="destructive" :disabled="!!busy" @click="pendingDelete && remove(pendingDelete)">
+            {{ t("sessionArchive.delete") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </div>
 </template>

@@ -4,22 +4,32 @@ import { readFileSync } from "node:fs"
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
 
-test("archived sessions use a workspace route outside settings", () => {
+test("archived sessions live in a settings tab and the sidebar entry is gone", () => {
   const router = read("../src/lib/router.ts")
   const tabs = read("../src/components/settings/tabs.ts")
   const app = read("../src/App.vue")
   const sidebar = read("../src/components/WorkspaceSidebar.vue")
+
+  assert.match(router, /"archives",/)
+  // 旧链接仍可达，但会落到设置里的归档标签。
+  assert.match(router, /segments\[0\] === "archives"[\s\S]*?tab: "archives"/)
+  assert.doesNotMatch(router, /name: "archives"/)
+  assert.match(tabs, /id: "archives"[\s\S]*?import\("@\/components\/ArchivedSessionsPage\.vue"\)/)
+  assert.match(tabs, /"system",[\s\S]*?tabIds: \["archives", "about"\]/)
+  assert.match(app, /registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
+  assert.doesNotMatch(sidebar, /emit\('archives'\)/)
+  assert.doesNotMatch(sidebar, /archives: \[\]/)
+})
+
+test("the archived session panel keeps search, restore and delete", () => {
   const page = read("../src/components/ArchivedSessionsPage.vue")
 
-  assert.match(router, /name: "archives"/)
-  assert.match(router, /path: "\/archives"/)
-  assert.doesNotMatch(router, /"archive",/)
-  assert.doesNotMatch(tabs, /id: "archive",/)
-  assert.match(app, /<ArchivedSessionsPage[^>]*v-if="route.name === 'archives'"/)
-  assert.match(sidebar, /@click="emit\('archives'\)"/)
   assert.match(page, /<Search :size="14"/)
   assert.match(page, /restore\(s\)/)
   assert.match(page, /async function remove\(s: SessionMeta\)/)
+  // 面板由设置页提供滚动容器与标题，这里不再自带 ScrollArea 与页头。
+  assert.doesNotMatch(page, /ScrollArea/)
+  assert.doesNotMatch(page, /<h1/)
 })
 
 test("archived session list, restore and delete work through remote dispatch", () => {

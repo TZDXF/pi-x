@@ -185,6 +185,8 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "skills", labelKey: "skillsConfig.hosted" },
   { tab: "skills", labelKey: "skillsConfig.discovered" },
   { tab: "general", labelKey: "retrySettings.maxRetries" },
+  { tab: "archives", labelKey: "sessionArchive.restore" },
+  { tab: "archives", labelKey: "sessionArchive.delete" },
   { tab: "about", labelKey: "appUpdate.title" },
   { tab: "about", labelKey: "piUpdate.title" },
   { tab: "about", labelKey: "settings.dataDirectory" },
@@ -243,6 +245,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   "model-config": ["titleGeneration"],
   "agent-config": ["agentConfig"],
   skills: ["skillsConfig"],
+  archives: ["sessionArchive"],
   about: ["settings.aboutBody", "appUpdate", "piUpdate", "settings.dataDirectory"],
 }
 
