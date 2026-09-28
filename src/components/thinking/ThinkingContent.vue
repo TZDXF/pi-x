@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
     <div v-if="shouldRender" class="pt-1">
       <div
         ref="scrollRef"
-        class="max-h-60 overflow-auto py-1 text-muted-foreground"
+        class="thinking-scroll max-h-60 overflow-auto py-1 text-muted-foreground"
         :style="scrollMaskStyle"
         @scroll="onScroll"
       >
@@ -126,3 +126,27 @@ onBeforeUnmount(() => {
     </div>
   </CollapsibleContent>
 </template>
+<style scoped>
+/* 与 ScrollArea 组件保持一致的滚动条外观(w-2.5 / rounded-full / bg-border) */
+.thinking-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.thinking-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.thinking-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thinking-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+.thinking-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--input);
+  background-clip: content-box;
+}
+</style>
