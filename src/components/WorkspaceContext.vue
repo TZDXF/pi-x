@@ -160,17 +160,15 @@ watch(() => props.project, refresh, { immediate: true })
           ><Laptop :size="14" class="size-auto shrink-0" /><span>{{ t("workspace.local") }}</span
           ><span v-if="!selection?.worktree" class="ml-auto">✓</span></Button
         >
-        <div class="border-t border-border pt-1.5">
-          <Button
-            variant="context-menu-item"
-            size="content"
-            class="context-menu-item"
-            :aria-current="selection?.worktree ? 'true' : undefined"
-            @click="selectMode(true)"
-            ><Plus :size="14" class="size-auto shrink-0" />{{ t("workspace.createWorktree")
-            }}<span v-if="selection?.worktree" class="ml-auto">✓</span></Button
-          >
-        </div></PopoverContent
+        <Button
+          variant="context-menu-item"
+          size="content"
+          class="context-menu-item"
+          :aria-current="selection?.worktree ? 'true' : undefined"
+          @click="selectMode(true)"
+          ><GitBranch :size="14" class="size-auto shrink-0" />{{ t("workspace.createWorktree")
+          }}<span v-if="selection?.worktree" class="ml-auto">✓</span></Button
+        ></PopoverContent
       >
     </Popover>
     <Popover v-model:open="branchOpen"
