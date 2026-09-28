@@ -47,7 +47,7 @@ function titleFor(tab: SidebarTabItem): string {
   const sameType = props.tabs.filter(item => item.type === tab.type)
   if (sameType.length > 1) return `${base} ${sameType.findIndex(item => item.id === tab.id) + 1}`
   if (tab.type === "review" && (props.totals.added || props.totals.removed || props.totals.unknown))
-    return `${base} +${props.totals.added} −${props.totals.removed}${props.totals.unknown ? " *" : ""}`
+    return `${base} +${props.totals.added} -${props.totals.removed}${props.totals.unknown ? " *" : ""}`
   return base
 }
 function addTab(type: SidebarTabType) {
@@ -85,7 +85,9 @@ const storageKey = "pix.review-sidebar-width"
 try {
   const saved = Number(localStorage.getItem(storageKey))
   if (Number.isFinite(saved) && saved > 0) preferredWidth.value = saved
-} catch { /* Storage may be unavailable in restricted browsers. */ }
+} catch {
+  /* Storage may be unavailable in restricted browsers. */
+}
 const bounds = computed(() => reviewWidthBounds(containerWidth.value, overlay.value))
 const width = computed(() => clampReviewWidth(preferredWidth.value, containerWidth.value, overlay.value))
 const dragging = ref(false)
@@ -98,7 +100,11 @@ function measure() {
   overlay.value = window.matchMedia("(max-width: 900px)").matches
 }
 function saveWidth() {
-  try { localStorage.setItem(storageKey, String(preferredWidth.value)) } catch { /* Optional preference. */ }
+  try {
+    localStorage.setItem(storageKey, String(preferredWidth.value))
+  } catch {
+    /* Optional preference. */
+  }
 }
 function startResize(event: PointerEvent) {
   if (event.button !== 0 || pointer) return
@@ -116,7 +122,11 @@ function startResize(event: PointerEvent) {
 }
 function resize(event: PointerEvent) {
   if (!pointer || pointer.id !== event.pointerId) return
-  preferredWidth.value = clampReviewWidth(pointer.width + pointer.x - event.clientX, containerWidth.value, overlay.value)
+  preferredWidth.value = clampReviewWidth(
+    pointer.width + pointer.x - event.clientX,
+    containerWidth.value,
+    overlay.value,
+  )
 }
 function stopResize() {
   if (!pointer) return
@@ -133,8 +143,12 @@ function resizeWithKeyboard(event: KeyboardEvent) {
   event.preventDefault()
   measure()
   const step = event.shiftKey ? 64 : 16
-  const next = event.key === "Home" ? bounds.value.min : event.key === "End" ? bounds.value.max
-    : width.value + (event.key === "ArrowLeft" ? step : -step)
+  const next =
+    event.key === "Home"
+      ? bounds.value.min
+      : event.key === "End"
+        ? bounds.value.max
+        : width.value + (event.key === "ArrowLeft" ? step : -step)
   preferredWidth.value = clampReviewWidth(next, containerWidth.value, overlay.value)
   saveWidth()
 }
@@ -154,16 +168,36 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside ref="sidebar" class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]" :style="{ width: `${width}px` }" :aria-label="t('sidebarTabs.title')" @keydown.esc="$emit('close')">
+  <aside
+    ref="sidebar"
+    class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]"
+    :style="{ width: `${width}px` }"
+    :aria-label="t('sidebarTabs.title')"
+    @keydown.esc="$emit('close')"
+  >
     <div
-      class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]" :class="{ 'is-dragging': dragging }"
-      role="separator" tabindex="0" aria-orientation="vertical"
-      :aria-label="t('changes.resize')" :title="t('changes.resize')"
-      :aria-valuenow="Math.round(width)" :aria-valuemin="Math.round(bounds.min)" :aria-valuemax="Math.round(bounds.max)"
-      @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize"
-      @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeWithKeyboard"
+      class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]"
+      :class="{ 'is-dragging': dragging }"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      :aria-label="t('changes.resize')"
+      :title="t('changes.resize')"
+      :aria-valuenow="Math.round(width)"
+      :aria-valuemin="Math.round(bounds.min)"
+      :aria-valuemax="Math.round(bounds.max)"
+      @pointerdown="startResize"
+      @pointermove="resize"
+      @pointerup="stopResize"
+      @pointercancel="stopResize"
+      @lostpointercapture="stopResize"
+      @keydown="resizeWithKeyboard"
     />
-    <div class="flex items-center gap-1 shrink-0 border-b px-2 py-1.5 min-h-12" role="tablist" :aria-label="t('sidebarTabs.title')">
+    <div
+      class="flex items-center gap-1 shrink-0 border-b px-2 py-1.5 min-h-12"
+      role="tablist"
+      :aria-label="t('sidebarTabs.title')"
+    >
       <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         <button
           v-for="tab in tabs"
@@ -172,7 +206,11 @@ onBeforeUnmount(() => {
           role="tab"
           :aria-selected="tab.id === activeId"
           class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs"
-          :class="tab.id === activeId ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-accent/50'"
+          :class="
+            tab.id === activeId
+              ? 'bg-accent text-accent-foreground font-medium'
+              : 'text-muted-foreground hover:bg-accent/50'
+          "
           @click="clickTab(tab)"
         >
           <component :is="iconFor(tab.type)" class="size-3.5 shrink-0" />
@@ -198,40 +236,90 @@ onBeforeUnmount(() => {
             </Button>
           </PopoverTrigger>
           <PopoverContent align="end" class="w-44 p-1.5">
-            <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('review')">
-              <FileCode class="size-4 shrink-0" />{{ t('sidebarTabs.newReview') }}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('review')"
+            >
+              <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
             </Button>
             <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('files')">
-              <FolderTree class="size-4 shrink-0" />{{ t('sidebarTabs.newFiles') }}
+              <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
             </Button>
-            <Button v-if="isDesktop" type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('terminal')">
-              <SquareTerminal class="size-4 shrink-0" />{{ t('sidebarTabs.newTerminal') }}
+            <Button
+              v-if="isDesktop"
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('terminal')"
+            >
+              <SquareTerminal class="size-4 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
             </Button>
-            <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('browser')">
-              <Globe class="size-4 shrink-0" />{{ t('sidebarTabs.newBrowser') }}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('browser')"
+            >
+              <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
             </Button>
           </PopoverContent>
         </Popover>
       </div>
-      <Button variant="ghost" size="icon-sm" class="shrink-0" :aria-label="t('sidebarTabs.toggle')" @click="$emit('close')"><PanelRight /></Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        class="shrink-0"
+        :aria-label="t('sidebarTabs.toggle')"
+        @click="$emit('close')"
+        ><PanelRight
+      /></Button>
     </div>
     <template v-for="tab in tabs" :key="tab.id">
-      <ReviewPanel v-if="tab.type === 'review'" v-show="tab.id === activeId" :changes="changes" :project="project" :focus="tab.id === activeId ? focus : null" :checkpoints="checkpoints" />
+      <ReviewPanel
+        v-if="tab.type === 'review'"
+        v-show="tab.id === activeId"
+        :changes="changes"
+        :project="project"
+        :focus="tab.id === activeId ? focus : null"
+        :checkpoints="checkpoints" />
       <ProjectFiles v-else-if="tab.type === 'files'" v-show="tab.id === activeId" :project="project" />
-      <TerminalPanel v-else-if="tab.type === 'terminal' && isDesktop" v-show="tab.id === activeId" :ref="el => setTerminalPanel(tab.id, el)" :project="project" :visible="open && tab.id === activeId" embedded />
-      <BrowserPanel v-else-if="tab.type === 'browser'" v-show="tab.id === activeId" :visible="open && tab.id === activeId" @send-to-chat="$emit('send-to-chat', $event)" /></template>
+      <TerminalPanel
+        v-else-if="tab.type === 'terminal' && isDesktop"
+        v-show="tab.id === activeId"
+        :ref="el => setTerminalPanel(tab.id, el)"
+        :project="project"
+        :visible="open && tab.id === activeId"
+        embedded />
+      <BrowserPanel
+        v-else-if="tab.type === 'browser'"
+        v-show="tab.id === activeId"
+        :visible="open && tab.id === activeId"
+        @send-to-chat="$emit('send-to-chat', $event)"
+    /></template>
     <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
       <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('review')">
-        <FileCode class="size-6 shrink-0" />{{ t('sidebarTabs.newReview') }}
+        <FileCode class="size-6 shrink-0" />{{ t("sidebarTabs.newReview") }}
       </Button>
       <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('files')">
-        <FolderTree class="size-6 shrink-0" />{{ t('sidebarTabs.newFiles') }}
+        <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
       </Button>
-      <Button v-if="isDesktop" type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('terminal')">
-        <SquareTerminal class="size-6 shrink-0" />{{ t('sidebarTabs.newTerminal') }}
+      <Button
+        v-if="isDesktop"
+        type="button"
+        variant="outline"
+        size="lg"
+        class="h-auto flex-col gap-2 py-4"
+        @click="addTab('terminal')"
+      >
+        <SquareTerminal class="size-6 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
       </Button>
       <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('browser')">
-        <Globe class="size-6 shrink-0" />{{ t('sidebarTabs.newBrowser') }}
+        <Globe class="size-6 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
       </Button>
     </div>
   </aside>
@@ -256,6 +344,3 @@ onBeforeUnmount(() => {
   background: var(--primary);
 }
 </style>
-
-
-

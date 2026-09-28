@@ -1,20 +1,28 @@
-import { test } from 'node:test'
-import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { codeToTokens } from 'shiki'
-import { loadTsSource, pathsModule } from './lib/load-ts.mjs'
-const load = (name, context) => loadTsSource(readFileSync(new URL(`../src/lib/${name}.ts`, import.meta.url), 'utf8'), context)
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { codeToTokens } from "shiki"
+import { loadTsSource, pathsModule } from "./lib/load-ts.mjs"
+const load = (name, context) =>
+  loadTsSource(readFileSync(new URL(`../src/lib/${name}.ts`, import.meta.url), "utf8"), context)
 const paths = pathsModule()
-const { parseDiff, intralineRanges, toSideBySideRows, foldContextLines } = load('reviewDiff')
-const { changedLines } = load('sessionChanges', { require: () => paths })
-const { tokensToLineHtml, highlightDiffLines, diffLangOf } = load('reviewHighlight', { require: name => (name === 'shiki' ? { codeToTokens } : paths) })
-const plain = value => JSON.parse(JSON.stringify(value))
-test('reference diff parser retains independent before and after line numbers', () => {
-  const lines = parseDiff('@@ -10,2 +10,3 @@\n-const x = 1\n+const x = 20\n+extra\n tail')
-  assert.deepEqual(plain(lines.slice(1).map(l => [l.oldLine, l.newLine])), [[10, null], [null, 10], [null, 11], [11, 12]])
+const { parseDiff, intralineRanges, toSideBySideRows, foldContextLines } = load("reviewDiff")
+const { changedLines } = load("sessionChanges", { require: () => paths })
+const { tokensToLineHtml, highlightDiffLines, diffLangOf } = load("reviewHighlight", {
+  require: name => (name === "shiki" ? { codeToTokens } : paths),
 })
-test('intraline emphasis isolates changed text and split mode pairs unequal blocks', () => {
-  const lines = parseDiff('@@ -1 +1,2 @@\n-const x = 1;\n+const x = 20;\n+extra').slice(1)
+const plain = value => JSON.parse(JSON.stringify(value))
+test("reference diff parser retains independent before and after line numbers", () => {
+  const lines = parseDiff("@@ -10,2 +10,3 @@\n-const x = 1\n+const x = 20\n+extra\n tail")
+  assert.deepEqual(plain(lines.slice(1).map(l => [l.oldLine, l.newLine])), [
+    [10, null],
+    [null, 10],
+    [null, 11],
+    [11, 12],
+  ])
+})
+test("intraline emphasis isolates changed text and split mode pairs unequal blocks", () => {
+  const lines = parseDiff("@@ -1 +1,2 @@\n-const x = 1;\n+const x = 20;\n+extra").slice(1)
   const ranges = intralineRanges(lines)
   assert.deepEqual(plain(ranges.get(lines[0])), [10, 11])
   assert.deepEqual(plain(ranges.get(lines[1])), [10, 12])
@@ -25,50 +33,59 @@ test('intraline emphasis isolates changed text and split mode pairs unequal bloc
   assert.equal(rows[1].left, null)
   assert.equal(rows[1].right, lines[2])
 })
-test('unchanged context folds and expands without losing source line numbers', () => {
-  const lines = Array.from({ length: 30 }, (_, i) => ({ kind: 'ctx', text: ` line${i}`, oldLine: i + 1, newLine: i + 1 }))
+test("unchanged context folds and expands without losing source line numbers", () => {
+  const lines = Array.from({ length: 30 }, (_, i) => ({
+    kind: "ctx",
+    text: ` line${i}`,
+    oldLine: i + 1,
+    newLine: i + 1,
+  }))
   const folded = foldContextLines(lines, new Set())
   assert.equal(folded.length, 7)
   assert.equal(folded[3].count, 24)
   assert.equal(folded[4].newLine, 28)
   const expanded = foldContextLines(lines, new Set([folded[3].key]))
   assert.equal(expanded.length, 30)
-  assert.equal(toSideBySideRows(folded)[3].kind, 'fold')
+  assert.equal(toSideBySideRows(folded)[3].kind, "fold")
 })
-test('tool snippets retain full context and relative line numbering', () => {
-  const prefix = Array.from({ length: 20 }, (_, i) => `same ${i}`).join('\n')
+test("tool snippets retain full context and relative line numbering", () => {
+  const prefix = Array.from({ length: 20 }, (_, i) => `same ${i}`).join("\n")
   const lines = changedLines(`${prefix}\nold\ntail`, `${prefix}\nnew\nextra\ntail`)
   assert.equal(lines[0].oldLine, 1)
-  assert.equal(lines.find(l => l.kind === 'remove').oldLine, 21)
-  assert.equal(lines.find(l => l.kind === 'add').newLine, 21)
+  assert.equal(lines.find(l => l.kind === "remove").oldLine, 21)
+  assert.equal(lines.find(l => l.kind === "add").newLine, 21)
   assert.equal(lines.at(-1).oldLine, 22)
   assert.equal(lines.at(-1).newLine, 23)
 })
-test('large writes do not exceed the JavaScript argument stack limit', () => {
-  const lines = changedLines('', 'line\n'.repeat(150_000))
+test("large writes do not exceed the JavaScript argument stack limit", () => {
+  const lines = changedLines("", "line\n".repeat(150_000))
   assert.equal(lines.length, 150_000)
   assert.equal(lines.at(-1).newLine, 150_000)
 })
-test('highlighting escapes source HTML and preserves theme colors', () => {
-  const html = tokensToLineHtml([{ content: '<script>&', htmlStyle: { '--shiki-light': '#000', '--shiki-dark': '#fff' } }], [1, 7], 'diff-word-add')
-  assert.ok(html.includes('&lt;'))
-  assert.ok(html.includes('&amp;'))
-  assert.ok(html.includes('--shiki-light:#000'))
-  assert.ok(html.includes('diff-word-add'))
-  assert.ok(!html.includes('<script>'))
-  assert.equal(diffLangOf('C:\\src\\test.ts'), 'typescript')
-  assert.equal(diffLangOf('unknown.xyz123'), 'text')
+test("highlighting escapes source HTML and preserves theme colors", () => {
+  const html = tokensToLineHtml(
+    [{ content: "<script>&", htmlStyle: { "--shiki-light": "#000", "--shiki-dark": "#fff" } }],
+    [1, 7],
+    "diff-word-add",
+  )
+  assert.ok(html.includes("&lt;"))
+  assert.ok(html.includes("&amp;"))
+  assert.ok(html.includes("--shiki-light:#000"))
+  assert.ok(html.includes("diff-word-add"))
+  assert.ok(!html.includes("<script>"))
+  assert.equal(diffLangOf("C:\\src\\test.ts"), "typescript")
+  assert.equal(diffLangOf("unknown.xyz123"), "text")
 })
-test('real syntax highlighting supports deletion-only diffs and inline ranges', async () => {
-  const deleted = parseDiff('@@ -1 +0,0 @@\n-const n = 1;').slice(1)
-  const deletionHtml = await highlightDiffLines(deleted, 'test.ts')
-  assert.ok(deletionHtml.get(deleted[0]).includes('--shiki-light'))
-  const lines = parseDiff('@@ -1 +1 @@\n-const n = 1;\n+const n = 2;').slice(1)
-  const result = await highlightDiffLines(lines, 'test.ts', intralineRanges(lines))
-  assert.ok(result.get(lines[0]).includes('diff-word-del'))
-  assert.ok(result.get(lines[1]).includes('diff-word-add'))
+test("real syntax highlighting supports deletion-only diffs and inline ranges", async () => {
+  const deleted = parseDiff("@@ -1 +0,0 @@\n-const n = 1;").slice(1)
+  const deletionHtml = await highlightDiffLines(deleted, "test.ts")
+  assert.ok(deletionHtml.get(deleted[0]).includes("--shiki-light"))
+  const lines = parseDiff("@@ -1 +1 @@\n-const n = 1;\n+const n = 2;").slice(1)
+  const result = await highlightDiffLines(lines, "test.ts", intralineRanges(lines))
+  assert.ok(result.get(lines[0]).includes("diff-word-del"))
+  assert.ok(result.get(lines[1]).includes("diff-word-add"))
 })
-test('very large diffs skip grammar processing', async () => {
-  const lines = Array.from({ length: 5001 }, () => ({ kind: 'add', text: '+x', oldLine: null, newLine: 1 }))
-  assert.equal(await highlightDiffLines(lines, 'test.ts'), null)
+test("very large diffs skip grammar processing", async () => {
+  const lines = Array.from({ length: 5001 }, () => ({ kind: "add", text: "+x", oldLine: null, newLine: 1 }))
+  assert.equal(await highlightDiffLines(lines, "test.ts"), null)
 })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import SettingRow from '@/components/shared/SettingRow.vue'
-import SettingHeading from '@/components/shared/SettingHeading.vue'
-import SettingDescription from '@/components/shared/SettingDescription.vue'
+import SettingRow from "@/components/shared/SettingRow.vue"
+import SettingHeading from "@/components/shared/SettingHeading.vue"
+import SettingDescription from "@/components/shared/SettingDescription.vue"
 /** 无项目会话的工作目录：默认 `~/.pix/workspace`，可改为任意目录。 */
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -76,7 +76,11 @@ async function load() {
     error.value = tBackendError(e)
   }
   // 默认目录由后端解析并创建；远程模式下此前可能尚未解析过。
-  try { await workspace.ensureProjectless() } catch (e) { error.value = tBackendError(e) }
+  try {
+    await workspace.ensureProjectless()
+  } catch (e) {
+    error.value = tBackendError(e)
+  }
 }
 onMounted(load)
 </script>

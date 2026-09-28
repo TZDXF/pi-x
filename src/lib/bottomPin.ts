@@ -9,7 +9,11 @@
  *
  * Returns whether the scroll position changed.
  */
-export function pinToBottom(viewport: { scrollTop: number, scrollHeight: number, clientHeight: number }, atBottom: boolean, escaped: boolean): boolean {
+export function pinToBottom(
+  viewport: { scrollTop: number; scrollHeight: number; clientHeight: number },
+  atBottom: boolean,
+  escaped: boolean,
+): boolean {
   if (!atBottom || escaped) return false
   const max = viewport.scrollHeight - viewport.clientHeight
   if (max <= 0 || viewport.scrollTop >= max) return false

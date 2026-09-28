@@ -3,8 +3,11 @@
 @theme inline {
   --font-sans: "Geist Variable", "Geist", "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-serif: "Plantin MT Pro", "Plantin MT Std", Plantin, Georgia, "Songti SC", "SimSun", serif;
-  --font-mono: "Commit Mono", "Departure Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-diff: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Microsoft YaHei", monospace;
+  --font-mono:
+    "Commit Mono", "Departure Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-diff:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Microsoft YaHei",
+    monospace;
   --font-heading: var(--font-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);

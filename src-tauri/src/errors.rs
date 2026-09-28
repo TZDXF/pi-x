@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 pub const CODED_ERROR_PREFIX: &str = "PIXERR:";
 
 /// 用户可见错误统一编码后返回：`PIXERR:` + JSON（code/fallback/params）。
-/// 前端按当前语言翻译 `backendErrors.<code>`；fallback 保留中文原文，
-/// 供未知编码或解析失败时原样展示。
+/// 前端按当前语言翻译 `backendErrors.<code>`；fallback 为含 `{param}` 占位符的
+/// 模板，供未知编码或解析失败时由前端插值展示。
 pub fn pix_error(code: &str, fallback: impl Into<String>) -> String {
     pix_error_with(code, fallback, Value::Null)
 }

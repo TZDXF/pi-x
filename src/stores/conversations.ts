@@ -25,7 +25,10 @@ export function sessionFor(id: string): Session {
 }
 export function uiFor(id: string): Ui {
   let store = interfaces.get(id)
-  if (!store) { store = createUiStore(id)(); interfaces.set(id, store) }
+  if (!store) {
+    store = createUiStore(id)()
+    interfaces.set(id, store)
+  }
   return store
 }
 export function activateSession(id: string) {
@@ -67,7 +70,9 @@ export function findConversation(file: string) {
 export function isSessionRunning(file: string) {
   return !!findConversation(file)?.isStreaming
 }
-export function allConversations() { return [...sessions.values()] }
+export function allConversations() {
+  return [...sessions.values()]
+}
 
 // Reads follow the selected conversation, but actions are bound to the store
 // at lookup time. Async work in that store never follows later UI navigation.

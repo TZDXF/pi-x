@@ -11,7 +11,12 @@ export interface PromptQueueContext {
   flow: SessionFlow
   nextId: () => number
   /** Store's send action, used to dispatch a dequeued prompt. */
-  send: (text: string, images?: QueuedPrompt["images"], expandedText?: string, behavior?: "queue" | "steer") => Promise<void>
+  send: (
+    text: string,
+    images?: QueuedPrompt["images"],
+    expandedText?: string,
+    behavior?: "queue" | "steer",
+  ) => Promise<void>
 }
 
 // ---- queue scheduling ----
@@ -22,13 +27,18 @@ export function createPromptQueue(ctx: PromptQueueContext) {
   function armQueueTimer() {
     if (queueTimer !== undefined) clearTimeout(queueTimer)
     queueTimer = undefined
-    const times = promptQueue.value.flatMap(item => item.sendAt && (!flow.queuePaused || item.sendAt > Date.now()) ? [item.sendAt] : [])
+    const times = promptQueue.value.flatMap(item =>
+      item.sendAt && (!flow.queuePaused || item.sendAt > Date.now()) ? [item.sendAt] : [],
+    )
     if (!times.length) return
-    queueTimer = setTimeout(() => {
-      queueTimer = undefined
-      if (!flow.queuePaused) dispatchQueuedPrompt()
-      armQueueTimer()
-    }, Math.min(Math.max(100, Math.min(...times) - Date.now()), 2_147_483_647))
+    queueTimer = setTimeout(
+      () => {
+        queueTimer = undefined
+        if (!flow.queuePaused) dispatchQueuedPrompt()
+        armQueueTimer()
+      },
+      Math.min(Math.max(100, Math.min(...times) - Date.now()), 2_147_483_647),
+    )
   }
 
   function schedulePrompt(text: string, delayMs: number, images?: QueuedPrompt["images"], expandedText?: string) {
@@ -73,5 +83,12 @@ export function createPromptQueue(ctx: PromptQueueContext) {
     queueTimer = undefined
   }
 
-  return { schedulePrompt, removeQueuedPrompt, moveQueuedPrompt, executeQueuedPrompt, dispatchQueuedPrompt, clearQueueTimer }
+  return {
+    schedulePrompt,
+    removeQueuedPrompt,
+    moveQueuedPrompt,
+    executeQueuedPrompt,
+    dispatchQueuedPrompt,
+    clearQueueTimer,
+  }
 }

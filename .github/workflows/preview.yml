@@ -6,11 +6,11 @@ name: Preview Release
 
 on:
   schedule:
-    - cron: '0 16 * * *'
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: 忽略更新检测，强制构建今日预览版
+        description: 忽略更新检测，强制构建今日预览版（当日 tag 已存在时仍跳过）
         type: boolean
         default: false
 
@@ -62,13 +62,13 @@ jobs:
           fi
 
           {
-            echo 'changes<<EOF'
+            echo 'changes<<CHANGES_EOF'
             if [ -n "$LAST_TAG" ]; then
               git log --no-decorate --pretty='- %s (%h)' "${LAST_TAG}..HEAD"
             else
               git log --no-decorate --pretty='- %s (%h)' -20
             fi
-            echo 'EOF'
+            echo 'CHANGES_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "should-build=true" >> "$GITHUB_OUTPUT"
 
@@ -131,6 +131,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ needs.check.outputs.tag }}
           releaseName: PiX Preview ${{ needs.check.outputs.version }}

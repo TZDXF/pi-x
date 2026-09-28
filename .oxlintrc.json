@@ -17,10 +17,7 @@
     // The codebase deliberately uses `any` at protocol boundaries (pi RPC
     // payloads are untyped JSON); tighten incrementally.
     "@typescript-eslint/no-explicit-any": "off",
-    "no-unused-vars": [
-      "error",
-      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
-    ]
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }]
   },
   "overrides": [
     {

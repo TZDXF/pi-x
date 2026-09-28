@@ -35,14 +35,17 @@ test("isHttpUrl only accepts http(s)", () => {
 
 test("toProxyUrl embeds scheme, host and path after the proxy prefix", () => {
   const base = "http://127.0.0.1:1234/p/secret"
+  // Per-host token: fnv1a(secret + hostname) replaces the shared secret.
+  const localhostToken = "473873af1932c856" // fnv1a("secret" + "localhost")
+  const exampleToken = "5c5f619405520e22" // fnv1a("secret" + "example.com")
   assert.equal(
     toProxyUrl(base, "http://localhost:5173/app?x=1"),
-    "http://127.0.0.1:1234/p/secret/http/localhost:5173/app?x=1",
+    `http://127.0.0.1:1234/p/${localhostToken}/http/localhost:5173/app?x=1`,
   )
-  assert.equal(toProxyUrl(base, "https://example.com"), "http://127.0.0.1:1234/p/secret/https/example.com/")
+  assert.equal(toProxyUrl(base, "https://example.com"), `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/`)
   // Default ports are omitted by the URL parser.
-  assert.equal(toProxyUrl(base, "https://example.com:443/a"), "http://127.0.0.1:1234/p/secret/https/example.com/a")
-  assert.equal(toProxyUrl(base + "/", "https://example.com"), "http://127.0.0.1:1234/p/secret/https/example.com/")
+  assert.equal(toProxyUrl(base, "https://example.com:443/a"), `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/a`)
+  assert.equal(toProxyUrl(base + "/", "https://example.com"), `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/`)
 })
 
 test("resolveProxyBase supports remote-relative and absolute bases", () => {

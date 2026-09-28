@@ -113,7 +113,19 @@
     if (nativeFetch) {
       window.fetch = function (input, init) {
         try {
-          if (typeof input === "string") input = prefixUrl(input)
+          if (typeof input === "string") {
+            input = prefixUrl(input)
+          } else if (input instanceof URL) {
+            input = new URL(prefixUrl(input.href))
+          } else if (input instanceof Request) {
+            var url = input.url
+            if (typeof url === "string") {
+              var prefixed = prefixUrl(url)
+              if (prefixed !== url) {
+                input = new Request(prefixed, input)
+              }
+            }
+          }
         } catch (_) { /* fall through with the original input */ }
         return nativeFetch.call(this, input, init)
       }
@@ -380,12 +392,26 @@
       badge.style.left = rect.x - 10 + "px"
       badge.style.top = rect.y - 10 + "px"
     }
+    // Store the update function on the node so we can remove listeners in clearMarkers.
+    node.__pixUpdate = update
     window.addEventListener("scroll", update, { passive: true })
     window.addEventListener("resize", update)
   }
 
   function clearMarkers() {
-    if (markerLayer) markerLayer.textContent = ""
+    if (markerLayer) {
+      // Remove all scroll/resize listeners before clearing the DOM.
+      var nodes = markerLayer.querySelectorAll("[data-annotation-id]")
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i]
+        if (node.__pixUpdate) {
+          window.removeEventListener("scroll", node.__pixUpdate)
+          window.removeEventListener("resize", node.__pixUpdate)
+          node.__pixUpdate = null
+        }
+      }
+      markerLayer.textContent = ""
+    }
   }
 
   // ---- control messages ---------------------------------------------------------
@@ -393,6 +419,11 @@
   window.addEventListener("message", function (event) {
     var data = event.data
     if (!data || data.target !== INCOMING) return
+    // Only accept messages from the proxy origin.
+    try {
+      var baseOrigin = new URL(BASE, window.location.href).origin
+      if (event.origin !== baseOrigin) return
+    } catch (_) { return }
     switch (data.type) {
       case "back":
         history.back()

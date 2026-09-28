@@ -147,14 +147,18 @@ fn pick_stable(releases: &[GhRelease]) -> Option<&GhRelease> {
     })
 }
 
-/// 预览版是否构成对当前版本的更新：同为预览版按日期比较，正式版当前版本总是更旧。
-fn preview_supersedes(preview: &GhRelease, current: &str) -> bool {
+/// 预览版是否构成对当前版本的更新：同为预览版按日期比较；当前为正式版时
+/// 用预览版 `published_at` 与当前正式版的发布日期比较，避免把正式版"降级"为更旧的预览版。
+fn preview_supersedes(preview: &GhRelease, current: &str, current_release: Option<&GhRelease>) -> bool {
     let Some(newer) = parse_date_version(&preview.tag_name[9..]) else {
         return false;
     };
     match parse_date_version(current) {
         Some(current) => newer > current,
-        None => true,
+        None => match (published_date(preview), current_release.and_then(published_date)) {
+            (Some(preview_date), Some(current_date)) => preview_date > current_date,
+            _ => false,
+        },
     }
 }
 
@@ -204,7 +208,15 @@ fn target_of(release: &GhRelease) -> Target {
 fn decide(current: &str, channel: UpdateChannel, releases: &[GhRelease]) -> Decision {
     match channel {
         UpdateChannel::Preview => {
-            if let Some(release) = pick_preview(releases).filter(|r| preview_supersedes(r, current)) {
+            let current_release = if is_preview_version(current) {
+                None
+            } else {
+                releases.iter().find(|r| {
+                    !r.draft && !r.prerelease
+                        && release_version(&r.tag_name).is_some_and(|v| v == current)
+                })
+            };
+            if let Some(release) = pick_preview(releases).filter(|r| preview_supersedes(r, current, current_release)) {
                 return Decision::Update(target_of(release));
             }
             if let Some(release) = pick_stable(releases).filter(|r| stable_supersedes(r, current)) {

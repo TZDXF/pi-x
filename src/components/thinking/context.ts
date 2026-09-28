@@ -10,12 +10,10 @@ export interface ThinkingContextValue {
   duration: Ref<number | undefined>
 }
 
-export const ThinkingKey: InjectionKey<ThinkingContextValue>
-  = Symbol("ThinkingContext")
+export const ThinkingKey: InjectionKey<ThinkingContextValue> = Symbol("ThinkingContext")
 
 export function useThinkingContext() {
   const ctx = inject<ThinkingContextValue>(ThinkingKey)
-  if (!ctx)
-    throw new Error("Thinking components must be used within <Thinking>")
+  if (!ctx) throw new Error("Thinking components must be used within <Thinking>")
   return ctx
 }

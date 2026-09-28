@@ -11,24 +11,61 @@ export interface ToolRun {
   completedAt?: number
 }
 
-export interface TextBlock { type: "text", text: string }
-export interface ThinkingBlock { type: "thinking", text: string, streaming: boolean }
-export interface ToolCallBlock { type: "toolCall", callId: string, name: string, argsText: string }
+export interface TextBlock {
+  type: "text"
+  text: string
+}
+export interface ThinkingBlock {
+  type: "thinking"
+  text: string
+  streaming: boolean
+}
+export interface ToolCallBlock {
+  type: "toolCall"
+  callId: string
+  name: string
+  argsText: string
+}
 export type Block = TextBlock | ThinkingBlock | ToolCallBlock
 
 export interface QueuedPrompt {
   id: number
   text: string
-  images?: { data: string, mimeType: string }[]
+  images?: { data: string; mimeType: string }[]
   expandedText?: string
   sendAt?: number
 }
 
-export interface UserEntry { kind: "user", id: number, text: string, modelChange?: { from: string, to: string }, images?: { url: string }[], live?: true, timestamp?: number }
-export interface AssistantEntry { kind: "assistant", id: number, blocks: Block[], live?: true, startedAt?: number, completedAt?: number, timestamp?: number }
+export interface UserEntry {
+  kind: "user"
+  id: number
+  text: string
+  modelChange?: { from: string; to: string }
+  images?: { url: string }[]
+  live?: true
+  timestamp?: number
+  turnIndex?: number
+}
+export interface AssistantEntry {
+  kind: "assistant"
+  id: number
+  blocks: Block[]
+  live?: true
+  startedAt?: number
+  completedAt?: number
+  timestamp?: number
+}
 /** Marks where a compaction collapsed earlier history; summary stays expandable. */
-export interface CompactionEntry { kind: "compaction", id: number, summary: string, tokensBefore?: number, tokensAfter?: number, timestamp?: number, live?: true }
-export type Entry = UserEntry | AssistantEntry | CompactionEntry
+export interface CompactionEntry {
+  kind: "compaction"
+  id: number
+  summary: string
+  tokensBefore?: number
+  tokensAfter?: number
+  timestamp?: number
+  live?: true
+}
+export type Entry = (UserEntry | AssistantEntry | CompactionEntry) & { turnIndex?: number }
 
 export interface RetryInfo {
   attempt: number

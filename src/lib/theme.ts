@@ -9,7 +9,9 @@ function initialTheme(): ThemePreference {
   try {
     const value = localStorage.getItem(STORAGE_KEY)
     if (isTheme(value)) return value
-  } catch { /* Storage is optional. */ }
+  } catch {
+    /* Storage is optional. */
+  }
   return "dark"
 }
 
@@ -18,15 +20,21 @@ export const theme = readonly(preference)
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
 
 function applyTheme() {
-  document.documentElement.classList.toggle("dark",
-    preference.value === "system" ? systemTheme.matches : preference.value === "dark")
+  document.documentElement.classList.toggle(
+    "dark",
+    preference.value === "system" ? systemTheme.matches : preference.value === "dark",
+  )
 }
 
 export function setTheme(value: ThemePreference) {
   if (!isTheme(value)) return
   preference.value = value
   applyTheme()
-  try { localStorage.setItem(STORAGE_KEY, value) } catch { /* Storage is optional. */ }
+  try {
+    localStorage.setItem(STORAGE_KEY, value)
+  } catch {
+    /* Storage is optional. */
+  }
 }
 
 function syncTheme(event: StorageEvent) {

@@ -89,10 +89,10 @@ fn list_global_prompts(dir: &Path) -> Result<Vec<GlobalPromptFile>, String> {
 
 fn write_config(path: &std::path::Path, config: &AppConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent).map_err(|e| pix_error_detail("configDirCreateFailed", "无法创建配置目录: {detail}", e))?;
     }
-    let body = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(path, body).map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(config).map_err(|e| pix_error_detail("configSerializeFailed", "配置序列化失败: {detail}", e))?;
+    std::fs::write(path, body).map_err(|e| pix_error_detail("configWriteFailed", "无法写入配置文件: {detail}", e))
 }
 
 #[tauri::command]
@@ -101,8 +101,8 @@ pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let raw = std::fs::read_to_string(path).map_err(|e| pix_error_detail("configReadFailed", "无法读取配置文件: {detail}", e))?;
+    serde_json::from_str(&raw).map_err(|e| pix_error_detail("configParseFailed", "配置文件解析失败: {detail}", e))
 }
 
 #[tauri::command]
@@ -125,7 +125,11 @@ pub fn projectless_dir_resolve(app: AppHandle) -> Result<ProjectlessDirInfo, Str
     let configured = app_config_get(app)?.projectless_dir;
     let dir = crate::data_dir::resolve_projectless_dir(configured.as_deref());
     std::fs::create_dir_all(&dir).map_err(|e| {
-        pix_error_detail("projectlessDirUnusable", format!("无法使用无项目会话目录 {}: {e}", dir.display()), e)
+        pix_error_with(
+            "projectlessDirUnusable",
+            "无法使用无项目会话目录 {dir}: {detail}",
+            json!({ "dir": dir.display().to_string(), "detail": e.to_string() }),
+        )
     })?;
     // 规范化后再返回：会话列表按 cwd 精确匹配，短路径/符号链接会造成两份记录。
     let resolved = dunce::canonicalize(&dir).unwrap_or(dir);
@@ -204,7 +208,7 @@ fn same_directory(left: &Path, right: &Path) -> bool {
 fn workspace_manifest(project: &str, workspace: &WorkspaceContext) -> Result<String, String> {
     if workspace.name.trim().is_empty() || workspace.name.chars().count() > 120
         || workspace.roots.is_empty() || workspace.roots.len() > 32 {
-        return Err("Invalid workspace directory list".into());
+        return Err(pix_error("workspaceInvalid", "工作区目录列表无效"));
     }
     let cwd = dunce::canonicalize(project).map_err(|e| e.to_string())?;
     let primary = dunce::canonicalize(&workspace.primary).map_err(|e| e.to_string())?;
@@ -271,10 +275,10 @@ pub async fn rpc_spawn(
     let extra_args = workspace_args(&project, workspace).await?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
-        return Err(
-            "pi not found. Install it with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
-                .to_string(),
-        );
+        return Err(pix_error(
+            "piNotFound",
+            "未找到 pi。请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+        ));
     }
     rpc::spawn(app, &state, &info, &project, session_file, extra_args, runtime_id).await
 }
@@ -313,7 +317,7 @@ pub async fn session_export_file(file: String, output_path: Option<String>) -> R
             Some(path) => {
                 let path = std::path::PathBuf::from(path);
                 if !path.is_absolute() || !path.parent().is_some_and(|parent| parent.is_dir()) {
-                    return Err("Invalid export directory".into());
+                    return Err(pix_error("exportDirInvalid", "无效的导出目录"));
                 }
                 path
             }
@@ -322,9 +326,9 @@ pub async fn session_export_file(file: String, output_path: Option<String>) -> R
         let result = crate::pi_data::call(json!({
             "op": "session_export_html", "file": source, "outputPath": target
         }))?;
-        let exported = result.as_str().ok_or("Pi did not return an export path")?;
+        let exported = result.as_str().ok_or_else(|| pix_error("exportPathMissing", "Pi 未返回导出路径"))?;
         dunce::canonicalize(exported).map(|p| p.to_string_lossy().to_string())
-            .map_err(|e| format!("Cannot locate exported HTML: {e}"))
+            .map_err(|e| pix_error_detail("exportPathUnreachable", "无法定位导出的 HTML: {detail}", e))
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -395,10 +399,10 @@ pub fn models_config_get() -> Result<Value, String> {
 pub fn models_config_save(config: Value) -> Result<(), String> {
     let path = models_config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(parent).map_err(|e| pix_error_detail("modelsDirCreateFailed", "无法创建 models 目录: {detail}", e))?;
     }
-    let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(&config).map_err(|e| pix_error_detail("modelsSerializeFailed", "models.json 序列化失败: {detail}", e))?;
+    std::fs::write(&path, format!("{body}\n")).map_err(|e| pix_error_detail("modelsWriteFailed", "无法写入 models.json: {detail}", e))
 }
 /// One model discovered from a provider's `/models` endpoint.
 #[derive(Serialize)]
@@ -521,12 +525,12 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
 #[tauri::command]
 pub async fn pi_settings_get() -> Result<Value, String> {
     tokio::task::spawn_blocking(|| crate::pi_data::call(serde_json::json!({"op": "settings_get"})))
-        .await.map_err(|e| e.to_string())?
+        .await.map_err(|e| pix_error_detail("settingsReadFailed", "读取 Pi 设置失败: {detail}", e))?
 }
 #[tauri::command]
 pub async fn pi_settings_save(settings: Value) -> Result<(), String> {
     tokio::task::spawn_blocking(move || crate::pi_data::call(serde_json::json!({"op": "settings_save", "settings": settings})))
-        .await.map_err(|e| e.to_string())??;
+        .await.map_err(|e| pix_error_detail("settingsWriteFailed", "保存 Pi 设置失败: {detail}", e))??;
     Ok(())
 }
 

@@ -1,9 +1,8 @@
 {
   "name": "pix",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.4.1",
   "scripts": {
     "dev": "vite",
     "dev:desktop": "tauri dev --config tauri.dev.conf.json",
@@ -76,5 +75,6 @@
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
     "vue-tsc": "^3.3.5"
-  }
+  },
+  "packageManager": "pnpm@12.4.1"
 }

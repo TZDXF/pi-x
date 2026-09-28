@@ -5,13 +5,7 @@ import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
 import { useI18n } from "vue-i18n"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { AcceptableValue } from "reka-ui"
 import {
@@ -38,10 +32,7 @@ const { t } = useI18n()
       :model-value="turnCompleteNotification"
       @update:model-value="(v: AcceptableValue) => setTurnCompleteNotification(v as TurnCompleteNotification)"
     >
-      <SelectTrigger
-        class="h-8 w-36 text-xs"
-        aria-labelledby="turn-complete-label"
-      >
+      <SelectTrigger class="h-8 w-36 text-xs" aria-labelledby="turn-complete-label">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -71,10 +62,7 @@ const { t } = useI18n()
       :model-value="notificationSound"
       @update:model-value="(v: AcceptableValue) => setNotificationSound(v as NotificationSound)"
     >
-      <SelectTrigger
-        class="h-8 w-36 text-xs"
-        aria-labelledby="notify-sound-label"
-      >
+      <SelectTrigger class="h-8 w-36 text-xs" aria-labelledby="notify-sound-label">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

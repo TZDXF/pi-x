@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
-import { usePromptInput } from '@/components/ai-elements/prompt-input/context'
-import { useSessionLabels } from '@/composables/useSessionLabels'
-import { composerChipClass, composerChipText, composerParts, editorSelection, editorText, setEditorCaret } from '@/lib/composerTokens'
+import { nextTick, onMounted, ref, watch } from "vue"
+import { usePromptInput } from "@/components/ai-elements/prompt-input/context"
+import { useSessionLabels } from "@/composables/useSessionLabels"
+import {
+  composerChipClass,
+  composerChipText,
+  composerParts,
+  editorSelection,
+  editorText,
+  setEditorCaret,
+} from "@/lib/composerTokens"
 
 defineProps<{ placeholder: string; disabled?: boolean }>()
 const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput()
@@ -15,17 +22,17 @@ function render(value: string, caret?: number) {
   if (!root) return
   root.replaceChildren()
   for (const part of composerParts(value, sessionLabels.value)) {
-    if (part.kind === 'text') {
+    if (part.kind === "text") {
       root.append(document.createTextNode(part.raw))
       continue
     }
-    const chip = document.createElement('span')
+    const chip = document.createElement("span")
     chip.dataset.raw = part.raw
-    chip.contentEditable = 'false'
-    chip.setAttribute('aria-label', part.label)
+    chip.contentEditable = "false"
+    chip.setAttribute("aria-label", part.label)
     chip.className = composerChipClass
-    const label = document.createElement('span')
-    label.className = 'truncate'
+    const label = document.createElement("span")
+    label.className = "truncate"
     label.textContent = composerChipText(part)
     chip.append(label)
     root.append(chip)
@@ -34,7 +41,7 @@ function render(value: string, caret?: number) {
 }
 
 onMounted(() => render(textInput.value))
-watch(textInput, (value) => {
+watch(textInput, value => {
   if (composing.value || !editor.value || editorText(editor.value) === value) return
   render(value, document.activeElement === editor.value ? value.length : undefined)
 })
@@ -58,51 +65,61 @@ function replaceSelection(value: string) {
   const next = textInput.value.slice(0, start) + value + textInput.value.slice(end)
   setTextInput(next)
   render(next, start + value.length)
-  root.dispatchEvent(new Event('input', { bubbles: true }))
+  root.dispatchEvent(new Event("input", { bubbles: true }))
 }
 
 function onKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented || composing.value || event.isComposing || event.keyCode === 229) return
-  if ((event.key === 'Backspace' || event.key === 'Delete') && editor.value) {
+  if ((event.key === "Backspace" || event.key === "Delete") && editor.value) {
     const { start, end } = editorSelection(editor.value)
     if (start !== end) {
       event.preventDefault()
-      replaceSelection('')
+      replaceSelection("")
       return
     }
     if (start === end) {
       let cursor = 0
       for (const part of composerParts(textInput.value, sessionLabels.value)) {
         const next = cursor + part.raw.length
-        if (part.kind !== 'text' && (event.key === 'Backspace' ? next === start : cursor === start)) {
+        if (part.kind !== "text" && (event.key === "Backspace" ? next === start : cursor === start)) {
           event.preventDefault()
           const updated = textInput.value.slice(0, cursor) + textInput.value.slice(next)
           setTextInput(updated)
           render(updated, cursor)
-          editor.value.dispatchEvent(new Event('input', { bubbles: true }))
+          editor.value.dispatchEvent(new Event("input", { bubbles: true }))
           return
         }
         cursor = next
       }
     }
   }
-  if (event.key === 'Enter') {
+  if (event.key === "Enter") {
     event.preventDefault()
-    if (event.shiftKey) { replaceSelection('\n'); return }
-    const form = editor.value?.closest('form')
+    if (event.shiftKey) {
+      replaceSelection("\n")
+      return
+    }
+    const form = editor.value?.closest("form")
     if (!(form?.querySelector('button[type="submit"]') as HTMLButtonElement | null)?.disabled) form?.requestSubmit()
   }
-  if (event.key === 'Backspace' && !textInput.value && files.value.length) {
+  if (event.key === "Backspace" && !textInput.value && files.value.length) {
     event.preventDefault()
     removeFile(files.value[files.value.length - 1]!.id)
   }
 }
 
 function onPaste(event: ClipboardEvent) {
-  const attachments = Array.from(event.clipboardData?.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => !!file)
-  if (attachments.length) { event.preventDefault(); addFiles(attachments); return }
+  const attachments = Array.from(event.clipboardData?.items || [])
+    .filter(item => item.kind === "file")
+    .map(item => item.getAsFile())
+    .filter((file): file is File => !!file)
+  if (attachments.length) {
+    event.preventDefault()
+    addFiles(attachments)
+    return
+  }
   event.preventDefault()
-  replaceSelection(event.clipboardData?.getData('text/plain') || '')
+  replaceSelection(event.clipboardData?.getData("text/plain") || "")
 }
 
 function onCopy(event: ClipboardEvent) {
@@ -110,8 +127,8 @@ function onCopy(event: ClipboardEvent) {
   const { start, end } = editorSelection(editor.value)
   if (start === end) return
   event.preventDefault()
-  event.clipboardData?.setData('text/plain', textInput.value.slice(start, end))
-  if (event.type === 'cut') replaceSelection('')
+  event.clipboardData?.setData("text/plain", textInput.value.slice(start, end))
+  if (event.type === "cut") replaceSelection("")
 }
 
 function onCompositionEnd() {

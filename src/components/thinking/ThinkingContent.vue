@@ -48,32 +48,27 @@ function updateScrollMaskState() {
 
 function scrollToBottom() {
   const node = scrollRef.value
-  if (!node)
-    return
+  if (!node) return
   node.scrollTop = node.scrollHeight
   updateScrollMaskState()
 }
 
 function onScroll() {
   const node = scrollRef.value
-  if (!node)
-    return
+  if (!node) return
   // 用户滚离底部即暂停跟随;滚回底部附近自动恢复。
-  autoFollowBottom.value
-    = node.scrollHeight - node.clientHeight - node.scrollTop <= BOTTOM_LOCK_DISTANCE_PX
+  autoFollowBottom.value = node.scrollHeight - node.clientHeight - node.scrollTop <= BOTTOM_LOCK_DISTANCE_PX
   updateScrollMaskState()
 }
 
 function followOrMask() {
-  if (autoFollowBottom.value)
-    scrollToBottom()
-  else
-    updateScrollMaskState()
+  if (autoFollowBottom.value) scrollToBottom()
+  else updateScrollMaskState()
 }
 
 let resizeObserver: ResizeObserver | null = null
 
-watch(shouldRender, async (render) => {
+watch(shouldRender, async render => {
   resizeObserver?.disconnect()
   resizeObserver = null
   if (!render) {
@@ -83,22 +78,21 @@ watch(shouldRender, async (render) => {
   }
   await nextTick()
   followOrMask()
-  if (typeof ResizeObserver === "undefined")
-    return
+  if (typeof ResizeObserver === "undefined") return
   // 流式追加时 scrollHeight 变化;同时监听容器与内容尺寸。
   resizeObserver = new ResizeObserver(() => followOrMask())
-  if (scrollRef.value)
-    resizeObserver.observe(scrollRef.value)
-  if (contentRef.value)
-    resizeObserver.observe(contentRef.value)
+  if (scrollRef.value) resizeObserver.observe(scrollRef.value)
+  if (contentRef.value) resizeObserver.observe(contentRef.value)
 })
 
-watch(() => props.content, async () => {
-  if (!shouldRender.value)
-    return
-  await nextTick()
-  followOrMask()
-})
+watch(
+  () => props.content,
+  async () => {
+    if (!shouldRender.value) return
+    await nextTick()
+    followOrMask()
+  },
+)
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
@@ -108,13 +102,15 @@ onBeforeUnmount(() => {
 
 <template>
   <CollapsibleContent
-    :class="cn(
-      'text-sm outline-none',
-      'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2',
-      'data-[state=open]:slide-in-from-top-2',
-      'data-[state=closed]:animate-out data-[state=open]:animate-in',
-      props.class,
-    )"
+    :class="
+      cn(
+        'text-sm outline-none',
+        'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2',
+        'data-[state=open]:slide-in-from-top-2',
+        'data-[state=closed]:animate-out data-[state=open]:animate-in',
+        props.class,
+      )
+    "
   >
     <div v-if="shouldRender" class="pt-1">
       <div

@@ -1,7 +1,7 @@
 // Adapted from RepoMeow src/lib/diff-highlight.ts; isolated for lazy loading.
-import { codeToTokens, type BundledLanguage } from "shiki";
-import type { DiffLine } from "@/lib/reviewDiff";
-import { baseName } from "./paths";
+import { codeToTokens, type BundledLanguage } from "shiki"
+import type { DiffLine } from "@/lib/reviewDiff"
+import { baseName } from "./paths"
 
 /**
  * diff 代码着色:把 diff 行按「旧版本 = ctx+del / 新版本 = ctx+add」重组为两段完整源码,
@@ -11,7 +11,7 @@ import { baseName } from "./paths";
  */
 
 /** 超过该字符数跳过着色,保留可分页的纯文本预览。 */
-const MAX_CHARS = 200_000;
+const MAX_CHARS = 200_000
 
 /** 扩展名 → shiki 语言 id(只收 canonical 名,未收录的落 text 不着色) */
 const EXT_TO_LANG: Record<string, string> = {
@@ -78,26 +78,26 @@ const EXT_TO_LANG: Record<string, string> = {
   prisma: "prisma",
   diff: "diff",
   mk: "makefile",
-};
+}
 
 /** 由文件路径推断 shiki 语言;无扩展名的 Dockerfile / Makefile 按文件名识别 */
 export function diffLangOf(filePath: string): string {
-  const name = baseName(filePath);
-  const lower = name.toLowerCase();
-  if (lower === "dockerfile" || lower.startsWith("dockerfile.")) return "dockerfile";
-  if (lower === "makefile") return "makefile";
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0) return "text";
-  return EXT_TO_LANG[name.slice(dot + 1).toLowerCase()] ?? "text";
+  const name = baseName(filePath)
+  const lower = name.toLowerCase()
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.")) return "dockerfile"
+  if (lower === "makefile") return "makefile"
+  const dot = name.lastIndexOf(".")
+  if (dot <= 0) return "text"
+  return EXT_TO_LANG[name.slice(dot + 1).toLowerCase()] ?? "text"
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
 interface LineToken {
-  content: string;
-  htmlStyle?: Record<string, string>;
+  content: string
+  htmlStyle?: Record<string, string>
 }
 
 /**
@@ -116,16 +116,16 @@ function segmentHtml(
   const colorOf = (s: string) =>
     !light && !dark
       ? escapeHtml(s)
-      : `<span style="--shiki-light:${light ?? "inherit"};--shiki-dark:${dark ?? "inherit"}">${escapeHtml(s)}</span>`;
-  if (!emphasis) return colorOf(content);
-  const cs = Math.max(emphasis[0] - base, 0);
-  const ce = Math.min(emphasis[1] - base, content.length);
-  if (cs >= ce) return colorOf(content);
-  let html = "";
-  if (cs > 0) html += colorOf(content.slice(0, cs));
-  html += `<span class="${emphasisCls}">${colorOf(content.slice(cs, ce))}</span>`;
-  if (ce < content.length) html += colorOf(content.slice(ce));
-  return html;
+      : `<span style="--shiki-light:${light ?? "inherit"};--shiki-dark:${dark ?? "inherit"}">${escapeHtml(s)}</span>`
+  if (!emphasis) return colorOf(content)
+  const cs = Math.max(emphasis[0] - base, 0)
+  const ce = Math.min(emphasis[1] - base, content.length)
+  if (cs >= ce) return colorOf(content)
+  let html = ""
+  if (cs > 0) html += colorOf(content.slice(0, cs))
+  html += `<span class="${emphasisCls}">${colorOf(content.slice(cs, ce))}</span>`
+  if (ce < content.length) html += colorOf(content.slice(ce))
+  return html
 }
 
 /**
@@ -138,11 +138,11 @@ export function tokensToLineHtml(
   emphasis?: [number, number],
   emphasisCls = "",
 ): string {
-  if (!tokens) return "";
-  let html = "";
-  let base = 0;
+  if (!tokens) return ""
+  let html = ""
+  let base = 0
   for (const token of tokens) {
-    if (!token.content) continue;
+    if (!token.content) continue
     html += segmentHtml(
       token.content,
       token.htmlStyle?.["--shiki-light"],
@@ -150,27 +150,23 @@ export function tokensToLineHtml(
       emphasis,
       emphasisCls,
       base,
-    );
-    base += token.content.length;
+    )
+    base += token.content.length
   }
-  return html;
+  return html
 }
 
 /** 未着色(纯文本回退)行的行内差异 HTML:转义后按区间三段拼接 */
-export function emphasisTextHtml(
-  text: string,
-  emphasis: [number, number],
-  emphasisCls: string,
-): string {
-  return segmentHtml(text, undefined, undefined, emphasis, emphasisCls, 0);
+export function emphasisTextHtml(text: string, emphasis: [number, number], emphasisCls: string): string {
+  return segmentHtml(text, undefined, undefined, emphasis, emphasisCls, 0)
 }
 
 /** 行内差异底色 class(del / add 两侧配色不同) */
 export function wordClsOf(line: DiffLine): string {
-  return line.kind === "del" ? "diff-word-del" : "diff-word-add";
+  return line.kind === "del" ? "diff-word-del" : "diff-word-add"
 }
 
-const THEMES = { light: "github-light", dark: "github-dark" } as const;
+const THEMES = { light: "github-light", dark: "github-dark" } as const
 
 /**
  * 逐行着色整份 diff:返回 DiffLine → 行内 HTML(不含行首 +/-/空格 标记)。
@@ -182,31 +178,31 @@ export async function highlightDiffLines(
   filePath: string,
   emphasis?: Map<DiffLine, [number, number]>,
 ): Promise<Map<DiffLine, string> | null> {
-  const oldSrc: string[] = [];
-  const oldRefs: DiffLine[] = [];
-  const newSrc: string[] = [];
-  const newRefs: DiffLine[] = [];
-  let total = 0;
+  const oldSrc: string[] = []
+  const oldRefs: DiffLine[] = []
+  const newSrc: string[] = []
+  const newRefs: DiffLine[] = []
+  let total = 0
   for (const line of lines) {
-    if (line.kind !== "ctx" && line.kind !== "del" && line.kind !== "add") continue;
+    if (line.kind !== "ctx" && line.kind !== "del" && line.kind !== "add") continue
     // 去掉行首 diff 标记才是源码;ctx 行同时属于新旧两侧
-    const src = line.text.slice(1);
-    total += src.length;
+    const src = line.text.slice(1)
+    total += src.length
     if (line.kind !== "add") {
-      oldSrc.push(src);
-      oldRefs.push(line);
+      oldSrc.push(src)
+      oldRefs.push(line)
     }
     if (line.kind !== "del") {
-      newSrc.push(src);
-      newRefs.push(line);
+      newSrc.push(src)
+      newRefs.push(line)
     }
   }
-  if ((!newRefs.length && !oldRefs.length) || lines.length > 5000 || total > MAX_CHARS) return null;
+  if ((!newRefs.length && !oldRefs.length) || lines.length > 5000 || total > MAX_CHARS) return null
 
-  const lang = diffLangOf(filePath) as BundledLanguage;
-  const out = new Map<DiffLine, string>();
+  const lang = diffLangOf(filePath) as BundledLanguage
+  const out = new Map<DiffLine, string>()
   const htmlOf = (ref: DiffLine, tokens: LineToken[] | undefined) =>
-    tokensToLineHtml(tokens, emphasis?.get(ref), wordClsOf(ref));
+    tokensToLineHtml(tokens, emphasis?.get(ref), wordClsOf(ref))
   try {
     // 先旧后新:ctx 行两侧文本相同,新侧结果覆盖旧侧,视觉效果一致
     if (oldRefs.length) {
@@ -214,19 +210,19 @@ export async function highlightDiffLines(
         lang,
         themes: THEMES,
         defaultColor: false,
-      });
-      oldRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])));
+      })
+      oldRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
     }
     if (newRefs.length) {
       const { tokens } = await codeToTokens(newSrc.join("\n"), {
         lang,
         themes: THEMES,
         defaultColor: false,
-      });
-      newRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])));
+      })
+      newRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
     }
   } catch {
-    return null;
+    return null
   }
-  return out;
+  return out
 }

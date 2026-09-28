@@ -53,9 +53,9 @@ export function usePackages(project: () => string | undefined) {
   /** busy key: `${action}:${source}` or "all" (null = idle) */
   const busy = ref<string | null>(null)
 
-  const recentProjects = computed(() => [...new Set([
-    ...workspace.orderedProjects(), project(), viewedProject.value,
-  ].filter((p): p is string => !!p))])
+  const recentProjects = computed(() => [
+    ...new Set([...workspace.orderedProjects(), project(), viewedProject.value].filter((p): p is string => !!p)),
+  ])
 
   /** Initial load, called when the packages route mounts. */
   async function activate() {
@@ -107,16 +107,22 @@ export function usePackages(project: () => string | undefined) {
     return fetchCatalog(true)
   }
 
-  watch([query, sortBy, typeFilter], () => {
-    // Invalidate immediately, including responses arriving during the debounce.
-    ++catalogRequest
-    clearSearchTimer()
-    catalog.value = []
-    catalogHasMore.value = false
-    catalogError.value = ""
-    catalogLoading.value = true
-    searchTimer = setTimeout(() => { void loadCatalog() }, 250)
-  }, { flush: "sync" })
+  watch(
+    [query, sortBy, typeFilter],
+    () => {
+      // Invalidate immediately, including responses arriving during the debounce.
+      ++catalogRequest
+      clearSearchTimer()
+      catalog.value = []
+      catalogHasMore.value = false
+      catalogError.value = ""
+      catalogLoading.value = true
+      searchTimer = setTimeout(() => {
+        void loadCatalog()
+      }, 250)
+    },
+    { flush: "sync" },
+  )
 
   onScopeDispose(() => {
     clearSearchTimer()
@@ -252,8 +258,8 @@ export function usePackages(project: () => string | undefined) {
       .join(" · ")
   }
 
-  const globalInstalled = computed(() => installed.value.filter((p) => p.scope === "global"))
-  const projectInstalled = computed(() => installed.value.filter((p) => p.scope === "project"))
+  const globalInstalled = computed(() => installed.value.filter(p => p.scope === "global"))
+  const projectInstalled = computed(() => installed.value.filter(p => p.scope === "project"))
 
   return {
     catalog,

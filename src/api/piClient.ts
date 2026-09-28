@@ -49,8 +49,8 @@ export interface PiSettings {
   defaultThinkingLevel?: import("./protocol").ThinkingLevel
   modelThinkingLevels?: Record<string, import("./protocol").ThinkingLevel>
   skills: string[]
-  /** pi 全局 settings.json 的 `retry` 段；旧版 pi 不返回该段，此时为 null。 */
-  retry?: { maxRetries: number } | null
+  /** pi 全局 settings.json 的 `retry` 段。 */
+  retry: { maxRetries: number }
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
@@ -75,8 +75,7 @@ export interface HostedSkill {
 export const listHostedSkills = () => invoke<HostedSkill[]>("skills_hosted_list")
 export const openHostedSkillsDirectory = () => invoke<void>("skills_hosted_open_dir")
 export const deleteHostedSkill = (path: string) => invoke<void>("skills_hosted_delete", { path })
-export const setHostedSkillsEnabled = (paths: string[]) =>
-  invoke<void>("skills_hosted_set_enabled", { paths })
+export const setHostedSkillsEnabled = (paths: string[]) => invoke<void>("skills_hosted_set_enabled", { paths })
 
 /** A skill Pi discovers outside the hosted skills, including package skills (read-only). */
 export interface DiscoveredSkill {
@@ -87,11 +86,9 @@ export interface DiscoveredSkill {
   sourceKind: "globalPi" | "globalAgents" | "packageGlobal" | "settingsGlobal"
   sourceName: string | null
 }
-export const listDiscoveredSkills = () =>
-  invoke<DiscoveredSkill[]>("skills_discovered_list")
+export const listDiscoveredSkills = () => invoke<DiscoveredSkill[]>("skills_discovered_list")
 
-export const detectPi = (customPath?: string) =>
-  invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
+export const detectPi = (customPath?: string) => invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
 export interface PiUpdateStatus {
   currentVersion: string
@@ -121,10 +118,8 @@ export interface AppUpdateStatus {
 /** Rust 端下载/安装进度事件，stage: download | install | installed */
 export const APP_UPDATE_PROGRESS_EVENT = "pix://app-update"
 
-export const checkAppUpdate = (channel: UpdateChannel) =>
-  invoke<AppUpdateStatus>("app_update_check", { channel })
-export const installAppUpdate = (channel: UpdateChannel) =>
-  invoke<void>("app_update_install", { channel })
+export const checkAppUpdate = (channel: UpdateChannel) => invoke<AppUpdateStatus>("app_update_check", { channel })
+export const installAppUpdate = (channel: UpdateChannel) => invoke<void>("app_update_install", { channel })
 export const restartApp = () => invoke<void>("app_update_restart")
 
 export const getConfig = () => invoke<AppConfig>("app_config_get")
@@ -150,7 +145,11 @@ export async function chooseDirectoryPath(title: string): Promise<string | null>
   return typeof picked === "string" ? picked : null
 }
 
-export interface GlobalPromptFile { fileName: string; content: string; exists: boolean }
+export interface GlobalPromptFile {
+  fileName: string
+  content: string
+  exists: boolean
+}
 
 export const listGlobalPrompts = () => invoke<GlobalPromptFile[]>("global_prompt_list")
 
@@ -162,10 +161,18 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
 
-export interface WorkspaceContext { name: string; primary: string; roots: string[] }
+export interface WorkspaceContext {
+  name: string
+  primary: string
+  roots: string[]
+}
 
-export const spawnPi = (project: string, sessionFile?: string, runtimeId = activeRuntimeId.value, workspace?: WorkspaceContext) =>
-  invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId, workspace: workspace ?? null })
+export const spawnPi = (
+  project: string,
+  sessionFile?: string,
+  runtimeId = activeRuntimeId.value,
+  workspace?: WorkspaceContext,
+) => invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId, workspace: workspace ?? null })
 
 export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_kill", { runtimeId })
 
@@ -173,7 +180,11 @@ export const piRunning = (runtimeId = activeRuntimeId.value) => invoke<boolean>(
 
 /** Fire-and-forget diagnostic log line, persisted by the backend to ~/.pix/logs. */
 export const pixLog = (message: string, runtimeId: string | null = null) => {
-  try { void invoke("pix_log", { message, runtimeId }).catch(() => {}) } catch { /* tests / offline */ }
+  try {
+    void invoke("pix_log", { message, runtimeId }).catch(() => {})
+  } catch {
+    /* tests / offline */
+  }
 }
 
 export interface SessionMeta {
@@ -187,8 +198,7 @@ export interface SessionMeta {
   preview?: string | null
 }
 
-export const listSessions = (project: string) =>
-  invoke<SessionMeta[]>("session_list", { project })
+export const listSessions = (project: string) => invoke<SessionMeta[]>("session_list", { project })
 
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
@@ -225,8 +235,7 @@ export interface FileHit {
   dir: string
 }
 
-export const searchFiles = (project: string, query: string) =>
-  invoke<FileHit[]>("search_files", { project, query })
+export const searchFiles = (project: string, query: string) => invoke<FileHit[]>("search_files", { project, query })
 
 export const openPath = (path: string) => invoke<void>("open_path", { path })
 
@@ -291,12 +300,18 @@ export async function exportSessionFileHtml(file: string, directoryTitle?: strin
 // ---- RPC bridge ----
 
 /** Correlated request: resolves with the `response` record that carries our id. */
-export function rpcRequest<T = unknown>(command: Record<string, unknown>, runtimeId = activeRuntimeId.value): Promise<RpcResponse<T>> {
+export function rpcRequest<T = unknown>(
+  command: Record<string, unknown>,
+  runtimeId = activeRuntimeId.value,
+): Promise<RpcResponse<T>> {
   return invoke<RpcResponse<T>>("rpc_request", { command, runtimeId })
 }
 
 /** Fire-and-forget write (extension_ui_response has no response record). */
-export function rpcNotify(command: ExtensionUiResponse | Record<string, unknown>, runtimeId = activeRuntimeId.value): Promise<void> {
+export function rpcNotify(
+  command: ExtensionUiResponse | Record<string, unknown>,
+  runtimeId = activeRuntimeId.value,
+): Promise<void> {
   return invoke<void>("rpc_notify", { command, runtimeId })
 }
 
@@ -319,7 +334,12 @@ export function onReconnected(handler: () => void): Promise<() => void> {
   return listen(RECONNECTED_EVENT, () => handler())
 }
 
-export interface RemoteStatus { enabled: boolean; port: number; urls: string[]; passwordEnabled: boolean }
+export interface RemoteStatus {
+  enabled: boolean
+  port: number
+  urls: string[]
+  passwordEnabled: boolean
+}
 export const remoteStatus = () => invoke<RemoteStatus>("remote_status")
 export const remoteSet = (enabled: boolean, port: number) => invoke<RemoteStatus>("remote_set", { enabled, port })
 export const remotePasswordSet = (password: string | null) => invoke<RemoteStatus>("remote_password_set", { password })
@@ -366,15 +386,16 @@ export interface ModelsConfig {
 
 export const getModelsConfig = () => invoke<ModelsConfig>("models_config_get")
 
-export const saveModelsConfig = (config: ModelsConfig) =>
-  invoke<void>("models_config_save", { config })
+export const saveModelsConfig = (config: ModelsConfig) => invoke<void>("models_config_save", { config })
 
 /** Model discovered from a provider's `/models` listing endpoint. */
-export interface FetchedModel { id: string; name?: string }
+export interface FetchedModel {
+  id: string
+  name?: string
+}
 
 /** Ask a provider for its advertised model list (OpenAI/Anthropic/Google styles). */
-export const fetchProviderModels = (provider: ProviderEntry) =>
-  invoke<FetchedModel[]>("models_fetch", { provider })
+export const fetchProviderModels = (provider: ProviderEntry) => invoke<FetchedModel[]>("models_fetch", { provider })
 
 /** Returns the resulting session-file mtime so callers can sync change detection. */
 export const updateSession = (file: string, title: string | null, archived: boolean) =>
@@ -385,7 +406,11 @@ export const listArchivedSessions = () => invoke<SessionMeta[]>("session_list_ar
 
 /** Permanently delete a session file (and its PiX metadata sidecar). */
 export const deleteSession = (file: string) => invoke<void>("session_delete", { file })
-export interface WorkspaceGitInfo { branch: string; branches: string[]; worktree: boolean }
+export interface WorkspaceGitInfo {
+  branch: string
+  branches: string[]
+  worktree: boolean
+}
 export const workspaceGitInfo = (project: string) => invoke<WorkspaceGitInfo>("workspace_git_info", { project })
 export const createWorkspaceGit = (project: string, branch: string, worktree: boolean) =>
   invoke<string>("workspace_git_create", { project, branch, worktree })
@@ -442,8 +467,7 @@ export const packageRemove = (source: string, scope: "global" | "project" = "glo
   invoke<string>("package_remove", { source, scope, project: project ?? null })
 
 /** Update one package, or all packages when source is omitted. */
-export const packageUpdate = (source?: string) =>
-  invoke<string>("package_update", { source: source ?? null })
+export const packageUpdate = (source?: string) => invoke<string>("package_update", { source: source ?? null })
 
 /** One loadable resource (extension / skill / prompt / theme file) of an installed package. */
 export interface PackageResource {
@@ -485,5 +509,9 @@ export function packageNameOf(source: string): string {
   return s
 }
 
-export interface RunningSession { runtimeId: string; project: string; state: import("./protocol").SessionState }
+export interface RunningSession {
+  runtimeId: string
+  project: string
+  state: import("./protocol").SessionState
+}
 export const listRunningSessions = () => invoke<RunningSession[]>("rpc_sessions")

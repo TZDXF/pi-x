@@ -10,7 +10,9 @@ import { useWorkspaceStore } from "@/stores/workspace"
 type WorkspaceStore = ReturnType<typeof useWorkspaceStore>
 
 /** Handle of the inline edit textarea rendered inside the user message. */
-export interface PromptEditTextarea { $el: HTMLTextAreaElement }
+export interface PromptEditTextarea {
+  $el: HTMLTextAreaElement
+}
 
 /**
  * Inline editing of the last question: replaces it at its original position
@@ -42,8 +44,15 @@ export function usePromptEdit(deps: {
     }
     return null
   })
-  const editBlocked = computed(() => editBusy.value || connecting() || !connected() ||
-    workspace.gitBusy || session.isResending || session.historyLoading)
+  const editBlocked = computed(
+    () =>
+      editBusy.value ||
+      connecting() ||
+      !connected() ||
+      workspace.gitBusy ||
+      session.isResending ||
+      session.historyLoading,
+  )
 
   async function startEditPrompt(entry: UserEntry) {
     if (editBlocked.value || entry.id !== lastUserPromptId.value) return
@@ -57,7 +66,12 @@ export function usePromptEdit(deps: {
     if (!editBusy.value) editedPrompt.value = null
   }
 
-  watch(() => session.sessionFile, () => { editedPrompt.value = null })
+  watch(
+    () => session.sessionFile,
+    () => {
+      editedPrompt.value = null
+    },
+  )
   watch(lastUserPromptId, id => {
     if (editedPrompt.value?.id !== id) cancelEditedPrompt()
   })
@@ -74,8 +88,14 @@ export function usePromptEdit(deps: {
     }
     editBusy.value = true
     try {
-      await session.resendPrompt(text, images.length ? images as { data: string; mimeType: string }[] : undefined,
-        withFileReferences(withSessionReferences(text, knownSessions()), workspace.projectFolders(project()).filter(path => path !== project())))
+      await session.resendPrompt(
+        text,
+        images.length ? (images as { data: string; mimeType: string }[]) : undefined,
+        withFileReferences(
+          withSessionReferences(text, knownSessions()),
+          workspace.projectFolders(project()).filter(path => path !== project()),
+        ),
+      )
       editedPrompt.value = null
     } catch (error) {
       ui.pushToast(String(error), "error")
@@ -84,5 +104,14 @@ export function usePromptEdit(deps: {
     }
   }
 
-  return { editedPrompt, editedText, editBusy, lastUserPromptId, editBlocked, startEditPrompt, cancelEditedPrompt, resendEditedPrompt }
+  return {
+    editedPrompt,
+    editedText,
+    editBusy,
+    lastUserPromptId,
+    editBlocked,
+    startEditPrompt,
+    cancelEditedPrompt,
+    resendEditedPrompt,
+  }
 }

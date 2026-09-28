@@ -1,7 +1,7 @@
-import type { Block, CompactionEntry, Entry, UserEntry } from '@/stores/session'
+import type { Block, CompactionEntry, Entry, UserEntry } from "@/stores/session"
 
 export interface AssistantTurn {
-  kind: 'assistant'
+  kind: "assistant"
   id: number
   lastIndex: number
   blocks: Block[]
@@ -19,22 +19,32 @@ export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry 
   let questionTime: number | undefined
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
-    if (entry.kind === 'user') {
+    if (entry.kind === "user") {
       result.push(entry)
       questionTime = entry.timestamp
       continue
     }
-    if (entry.kind === 'compaction') {
+    if (entry.kind === "compaction") {
       // Compaction markers break turn grouping and cross it no duration flows.
       result.push(entry)
       questionTime = undefined
       continue
     }
     const previous = result[result.length - 1]
-    const turn: AssistantTurn = previous?.kind === 'assistant' ? previous : {
-      kind: 'assistant', id: entry.id, lastIndex: index,
-      blocks: [], process: [], summary: [], complete: true, durationMs: null, toolCallCount: 0,
-    }
+    const turn: AssistantTurn =
+      previous?.kind === "assistant"
+        ? previous
+        : {
+            kind: "assistant",
+            id: entry.id,
+            lastIndex: index,
+            blocks: [],
+            process: [],
+            summary: [],
+            complete: true,
+            durationMs: null,
+            toolCallCount: 0,
+          }
     if (turn !== previous) result.push(turn)
     turn.lastIndex = index
     // Live messages have an observed completion time; history retains the
@@ -42,22 +52,30 @@ export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry 
     const start = questionTime ?? entry.startedAt
     const end = entry.completedAt ?? entry.timestamp
     turn.timestamp = end ?? turn.timestamp
-    turn.durationMs = typeof start === 'number' && Number.isFinite(start) &&
-      typeof end === 'number' && Number.isFinite(end) && end >= start ? end - start : null
+    turn.durationMs =
+      typeof start === "number" &&
+      Number.isFinite(start) &&
+      typeof end === "number" &&
+      Number.isFinite(end) &&
+      end >= start
+        ? end - start
+        : null
     // Only trailing text from the final assistant entry is a final answer.
     // Commentary before a tool call must never be mistaken for a summary.
     let summaryStart = entry.blocks.length
-    while (summaryStart > 0 && entry.blocks[summaryStart - 1]!.type === 'text') summaryStart--
+    while (summaryStart > 0 && entry.blocks[summaryStart - 1]!.type === "text") summaryStart--
     turn.summary = entry.blocks.slice(summaryStart)
     turn.blocks.push(...entry.blocks)
   }
   for (const entry of result) {
-    if (entry.kind === 'assistant') {
+    if (entry.kind === "assistant") {
       entry.process = entry.blocks.slice(0, entry.blocks.length - entry.summary.length)
-      entry.toolCallCount = new Set(entry.blocks.flatMap(block => block.type === 'toolCall' ? [block.callId] : [])).size
+      entry.toolCallCount = new Set(
+        entry.blocks.flatMap(block => (block.type === "toolCall" ? [block.callId] : [])),
+      ).size
     }
   }
   const last = result[result.length - 1]
-  if (last?.kind === 'assistant') last.complete = !streaming
+  if (last?.kind === "assistant") last.complete = !streaming
   return result
 }

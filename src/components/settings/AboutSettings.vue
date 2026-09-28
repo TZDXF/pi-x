@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import SettingRow from '@/components/shared/SettingRow.vue'
-import SettingHeading from '@/components/shared/SettingHeading.vue'
-import SettingDescription from '@/components/shared/SettingDescription.vue'
+import SettingRow from "@/components/shared/SettingRow.vue"
+import SettingHeading from "@/components/shared/SettingHeading.vue"
+import SettingDescription from "@/components/shared/SettingDescription.vue"
 /** About page: desktop-only app self-update (stable/preview channels) and Pi self-update controls. */
 import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -29,13 +29,7 @@ import {
 import { formatCodedError } from "@/lib/backendError"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
 
 const { t } = useI18n()
@@ -76,12 +70,13 @@ async function checkApp() {
 
 async function changeChannel(v: AcceptableValue) {
   if (appInstalling.value || v === appChannel.value) return
-  appChannel.value = v as UpdateChannel
   appStatus.value = null
   appError.value = ""
   try {
+    const channel = v as UpdateChannel
     // 通道偏好持久化后再按新通道检查，保证下次启动的判定一致
-    await saveConfig({ ...(await getConfig()), updateChannel: appChannel.value })
+    await saveConfig({ ...(await getConfig()), updateChannel: channel })
+    appChannel.value = channel
   } catch (e) {
     appError.value = formatCodedError(t, e)
   }
@@ -178,7 +173,11 @@ async function update() {
     // The running RPC process keeps its current code; a new session loads the update.
     status.value = null
     updated.value = true
-    try { currentVersion.value = (await detectPi()).version } catch { /* Check again manually if probing fails. */ }
+    try {
+      currentVersion.value = (await detectPi()).version
+    } catch {
+      /* Check again manually if probing fails. */
+    }
   } catch (e) {
     error.value = formatCodedError(t, e)
   } finally {
@@ -206,8 +205,16 @@ function openRelease() {
 onMounted(() => {
   if (!isDesktop) return
   void (async () => {
-    try { appVersion.value = await getVersion() } catch { /* 手动检查后可见 */ }
-    try { appChannel.value = (await getConfig()).updateChannel ?? "stable" } catch { /* 默认正式版 */ }
+    try {
+      appVersion.value = await getVersion()
+    } catch {
+      /* 手动检查后可见 */
+    }
+    try {
+      appChannel.value = (await getConfig()).updateChannel ?? "stable"
+    } catch {
+      /* 默认正式版 */
+    }
     unlistenProgress = await listen<AppUpdateProgress>(APP_UPDATE_PROGRESS_EVENT, onProgress)
   })()
 })
@@ -232,7 +239,8 @@ onUnmounted(() => {
       <SettingDescription v-if="appVersion" aria-live="polite">
         {{ t("appUpdate.current") }} <span class="font-mono text-foreground">{{ appVersion }}</span>
         <template v-if="appStatus?.updateAvailable && appStatus.version">
-          <span aria-hidden="true"> → </span><span class="sr-only">{{ t("appUpdate.latest") }}</span><span class="font-mono text-foreground">{{ appStatus.version }}</span>
+          <span aria-hidden="true"> → </span><span class="sr-only">{{ t("appUpdate.latest") }}</span
+          ><span class="font-mono text-foreground">{{ appStatus.version }}</span>
         </template>
         <span v-else-if="appStatus && !appStatus.waitingStable"> · {{ t("appUpdate.upToDate") }}</span>
       </SettingDescription>
@@ -240,7 +248,9 @@ onUnmounted(() => {
         {{ t("appUpdate.waitingStable", { current: appStatus.currentVersion, version: appStatus.version }) }}
       </SettingDescription>
       <SettingDescription v-if="appInstalled" role="status">{{ t("appUpdate.installed") }}</SettingDescription>
-      <SettingDescription v-if="appError" role="alert" class="break-words !text-destructive">{{ appError }}</SettingDescription>
+      <SettingDescription v-if="appError" role="alert" class="break-words !text-destructive">{{
+        appError
+      }}</SettingDescription>
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <Select :model-value="appChannel" :disabled="appInstalling" @update:model-value="changeChannel">
@@ -252,12 +262,32 @@ onUnmounted(() => {
           <SelectItem value="preview">{{ t("appUpdate.channelPreview") }}</SelectItem>
         </SelectContent>
       </Select>
-      <Button variant="outline" size="sm" :disabled="appChecking || appInstalling" :aria-label="appChecking ? t('appUpdate.checking') : undefined" @click="checkApp">
-        <span v-if="appChecking" class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+      <Button
+        variant="outline"
+        size="sm"
+        :disabled="appChecking || appInstalling"
+        :aria-label="appChecking ? t('appUpdate.checking') : undefined"
+        @click="checkApp"
+      >
+        <span
+          v-if="appChecking"
+          class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden="true"
+        />
         {{ t("appUpdate.check") }}
       </Button>
-      <Button v-if="appStatus?.updateAvailable && !appInstalled" size="sm" :disabled="appChecking || appInstalling" :aria-label="appInstalling ? t('appUpdate.installing') : undefined" @click="updateApp">
-        <span v-if="appInstalling" class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+      <Button
+        v-if="appStatus?.updateAvailable && !appInstalled"
+        size="sm"
+        :disabled="appChecking || appInstalling"
+        :aria-label="appInstalling ? t('appUpdate.installing') : undefined"
+        @click="updateApp"
+      >
+        <span
+          v-if="appInstalling"
+          class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden="true"
+        />
         {{ t("appUpdate.install") }}
       </Button>
       <Button v-if="appInstalled" size="sm" @click="restart">{{ t("appUpdate.restart") }}</Button>
@@ -292,20 +322,43 @@ onUnmounted(() => {
       <SettingDescription v-if="currentVersion" aria-live="polite">
         {{ t("piUpdate.current") }} <span class="font-mono text-foreground">{{ currentVersion }}</span>
         <template v-if="status?.updateAvailable">
-          <span aria-hidden="true"> → </span><span class="sr-only">{{ t("piUpdate.latest") }}</span><span class="font-mono text-foreground">{{ status.latestVersion }}</span>
+          <span aria-hidden="true"> → </span><span class="sr-only">{{ t("piUpdate.latest") }}</span
+          ><span class="font-mono text-foreground">{{ status.latestVersion }}</span>
         </template>
         <span v-else-if="status"> · {{ t("piUpdate.upToDate") }}</span>
       </SettingDescription>
       <SettingDescription v-if="updated" role="status">{{ t("piUpdate.completed") }}</SettingDescription>
-      <SettingDescription v-if="error" role="alert" class="break-words !text-destructive">{{ error }}</SettingDescription>
+      <SettingDescription v-if="error" role="alert" class="break-words !text-destructive">{{
+        error
+      }}</SettingDescription>
     </div>
     <div class="flex shrink-0 flex-wrap gap-2">
-      <Button variant="outline" size="sm" :disabled="checking || updating" :aria-label="checking ? t('piUpdate.checking') : undefined" @click="check">
-        <span v-if="checking" class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+      <Button
+        variant="outline"
+        size="sm"
+        :disabled="checking || updating"
+        :aria-label="checking ? t('piUpdate.checking') : undefined"
+        @click="check"
+      >
+        <span
+          v-if="checking"
+          class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden="true"
+        />
         {{ t("piUpdate.check") }}
       </Button>
-      <Button v-if="status?.updateAvailable" size="sm" :disabled="checking || updating" :aria-label="updating ? t('piUpdate.updating') : undefined" @click="update">
-        <span v-if="updating" class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+      <Button
+        v-if="status?.updateAvailable"
+        size="sm"
+        :disabled="checking || updating"
+        :aria-label="updating ? t('piUpdate.updating') : undefined"
+        @click="update"
+      >
+        <span
+          v-if="updating"
+          class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden="true"
+        />
         {{ t("piUpdate.update") }}
       </Button>
     </div>

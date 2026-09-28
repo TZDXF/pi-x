@@ -48,14 +48,14 @@
 
 ## 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 桌面壳 | Tauri 2.0（Rust） |
-| 前端 | Vue 3 + TypeScript + Vite |
-| UI | Tailwind CSS v4 + shadcn-vue（reka-ui） |
-| 聊天组件 | [ai-elements-vue](https://github.com/radix-vue/ai-elements)（Conversation / Message / Reasoning / Tool / PromptInput / Queue / Loader 全套） |
-| 状态管理 | Pinia |
-| 与 pi 通信 | `pi --mode rpc` 子进程，JSONL over stdio |
+| 层         | 技术                                                                                                                                         |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 桌面壳     | Tauri 2.0（Rust）                                                                                                                            |
+| 前端       | Vue 3 + TypeScript + Vite                                                                                                                    |
+| UI         | Tailwind CSS v4 + shadcn-vue（reka-ui）                                                                                                      |
+| 聊天组件   | [ai-elements-vue](https://github.com/radix-vue/ai-elements)（Conversation / Message / Reasoning / Tool / PromptInput / Queue / Loader 全套） |
+| 状态管理   | Pinia                                                                                                                                        |
+| 与 pi 通信 | `pi --mode rpc` 子进程，JSONL over stdio                                                                                                     |
 
 ## 目录结构
 
@@ -103,21 +103,21 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 ### 常用命令
 
-| 命令 | 说明 |
-|---|---|
-| `npm run dev:desktop` | 桌面开发（不含远程访问） |
-| `npm run dev:desktop:remote` | 桌面开发并包含远程访问功能 |
-| `npm run dev` | 仅前端（浏览器预览，无 pi 进程） |
-| `npm run build` | 前端构建（vite build） |
-| `npm run typecheck` | 前端类型检查（vue-tsc） |
-| `npm run lint` | oxlint（整个仓库，vendored ui/ai-elements 已排除） |
-| `npm run lint:fix` | oxlint 自动修复 |
-| `npm run fmt` / `fmt:check` | oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`） |
-| `npm run check` | lint + typecheck + 前端构建 + cargo check |
-| `npm run test` | Rust 单元测试（cargo test） |
-| `npm run test:web` | 前端/协议单元测试（node --test tests） |
-| `npm run package` | 打包安装程序（NSIS/MSI 到 `src-tauri/target/release/bundle/`） |
-| `npm run package:debug` | Debug 打包 |
+| 命令                         | 说明                                                           |
+| ---------------------------- | -------------------------------------------------------------- |
+| `npm run dev:desktop`        | 桌面开发（不含远程访问）                                       |
+| `npm run dev:desktop:remote` | 桌面开发并包含远程访问功能                                     |
+| `npm run dev`                | 仅前端（浏览器预览，无 pi 进程）                               |
+| `npm run build`              | 前端构建（vite build）                                         |
+| `npm run typecheck`          | 前端类型检查（vue-tsc）                                        |
+| `npm run lint`               | oxlint（整个仓库，vendored ui/ai-elements 已排除）             |
+| `npm run lint:fix`           | oxlint 自动修复                                                |
+| `npm run fmt` / `fmt:check`  | oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）                  |
+| `npm run check`              | lint + typecheck + 前端构建 + cargo check                      |
+| `npm run test`               | Rust 单元测试（cargo test）                                    |
+| `npm run test:web`           | 前端/协议单元测试（node --test tests）                         |
+| `npm run package`            | 打包安装程序（NSIS/MSI 到 `src-tauri/target/release/bundle/`） |
+| `npm run package:debug`      | Debug 打包                                                     |
 
 普通桌面开发（`npm run dev:desktop`）不编译远程访问功能，无需生成 `dist`，保留 Vite 热更新。
 
@@ -134,16 +134,16 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 前端使用到的 pi RPC 命令（详见 pi 的 `docs/rpc.md`）：
 
-| 命令 | 用途 |
-|---|---|
-| `prompt` | 发送消息（流式，steering 模式） |
-| `abort` / `clear_queue` | 中断当前轮次 / 取回排队消息 |
-| `get_state` / `get_session_stats` | 模型、思考等级、token 用量 |
-| `get_available_models` / `set_model` | 模型列表与切换 |
-| `get_available_thinking_levels` / `set_thinking_level` | 思考等级 |
-| `get_commands` | 自定义斜杠命令（命令面板数据源） |
-| `new_session` / `compact` | 新会话 / 压缩上下文 |
-| `extension_ui_response` | 应答扩展 UI 请求 |
+| 命令                                                   | 用途                             |
+| ------------------------------------------------------ | -------------------------------- |
+| `prompt`                                               | 发送消息（流式，steering 模式）  |
+| `abort` / `clear_queue`                                | 中断当前轮次 / 取回排队消息      |
+| `get_state` / `get_session_stats`                      | 模型、思考等级、token 用量       |
+| `get_available_models` / `set_model`                   | 模型列表与切换                   |
+| `get_available_thinking_levels` / `set_thinking_level` | 思考等级                         |
+| `get_commands`                                         | 自定义斜杠命令（命令面板数据源） |
+| `new_session` / `compact`                              | 新会话 / 压缩上下文              |
+| `extension_ui_response`                                | 应答扩展 UI 请求                 |
 
 事件流：`message_start` → `message_update`（delta 组装）→ `message_end`（权威替换）；`tool_execution_start/update/end` 驱动工具卡片。
 
@@ -167,23 +167,26 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 - **更新通道**：默认 `正式版`（跟踪语义化版本 Release），可切换 `预览版`（跟踪每日 `preview-v*` Prerelease）。通道偏好保存在 `~/.pix/config.json`。
 - **版本判定**：正式版之间按语义化版本比较；预览版之间按日期比较。从预览版切回正式通道时不回退旧正式版——仅当最新正式版的发布日期晚于当前预览版（版本号即构建日期）才提示更新，否则等待下一次正式版发布。
-- **签名密钥**：公钥已写入 `src-tauri/tauri.conf.json`；私钥默认在 `~/.tauri/pi-x.key`（本地生成命令：`pnpm tauri signer generate -w ~/.tauri/pi-x.key`）。**需在仓库 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`**（私钥文件全文），否则发布 workflow 生成签名更新包时失败。
+- **签名密钥**：公钥已写入 `src-tauri/tauri.conf.json`；私钥默认在 `~/.tauri/pi-x.key`（本地生成命令：`pnpm tauri signer generate -w ~/.tauri/pi-x.key`）。**需在仓库 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY`**（私钥文件全文），否则发布 workflow 生成签名更新包时失败。若生成私钥时设置了口令（`tauri signer generate` 交互式提示），还需在 Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，否则 CI 在 updater 签名阶段会失败。
 - CI 通过 `--config '{"bundle":{"createUpdaterArtifacts":true}}'` 仅在发布构建中生成 updater 产物（`.sig` 签名与 `latest.json`，Windows 优先 NSIS），本地打包不受签名密钥影响。
 - **安装行为**：Windows 上下载完成后安装器自动接管并重启应用（进度在设置页可见）；macOS / Linux 安装完成后点击「重启应用」生效。
 
 ## Roadmap
 
 ### M2（已完成）
+
 - [x] **会话列表**：Rust 扫描 `~/.pi/agent/sessions/` JSONL 头部，展示历史会话并恢复（`switch_session` 免重启 / `--session` 重启兑底）
 - [x] **斜杠命令面板**：基于 `get_commands` + ai-elements `PromptInputCommand` 的 `/` 命令补全
 - [x] **会话内导航**：`get_tree` 分支树可视化（活跃路径高亮、user 节点一键 fork）
 
 ### M3（已完成）
+
 - [x] **图片输入**：粘贴 / 拖拽 / 添加按钮 → `prompt.images`（base64），输入框与气泡内预览
 - [x] **@file 引用补全**：Rust 端项目文件搜索（跳过依赖/构建目录）+ 输入 `@` 弹出补全面板
 - [x] **消息操作**：工具栏 Fork（`get_fork_messages` + `fork` 从历史提示词重新分叉）；会话切换改用 `switch_session` 免重启
 
 ### M4（进行中）
+
 - [x] **应用设置**：pi 路径配置 + 检测（SettingsDialog）
 - [x] **会话导出**：`export_html` + 桌面端选择目录并打开／远程端下载
 - [x] **消息复制**：ai-elements `MessageActions` 一键复制回复
@@ -193,6 +196,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 - [ ] **扩展管理界面**：列出/启用禁用扩展包
 
 ### 暂缓
+
 - **主题映射**：pi 主题（`~/.pi/agent/themes`）映射到应用配色
 - **OAuth 订阅登录**（Claude Pro/Max、ChatGPT、Copilot 等）：需要宿主应用注册与凭据安全存储方案，先依赖 pi 现有 auth.json / API key 配置
 
@@ -217,7 +221,6 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 在桌面端「设置 → 模型配置」启用自动标题，通过与对话框相同的下拉列表一次选择「供应商 / 模型」；认证复用 pi 的配置，无需在 PiX 重复填写密钥。
 
 新会话发送第一条消息后，侧栏立即显示消息预览，独立的 pi 进程异步生成标题并持久保存。不切换当前对话模型、不使用工具、不加载扩展或项目上下文。生成失败或超时保留预览，每个会话最多尝试一次；手动标题不会被覆盖。默认关闭，启用后会产生额外模型用量，配置变更对新会话生效。
-
 
 ### 窗口托盘与数据目录
 

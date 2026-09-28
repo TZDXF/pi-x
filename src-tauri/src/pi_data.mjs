@@ -76,9 +76,7 @@ function checkErrors(settings) {
   if (errors.length) throw new Error(errors.map(e => e.error?.message ?? String(e)).join("; "));
 }
 
-/** Retry attempt count, or null when the installed Pi predates the `retry` block. */
 function readRetrySettings(settings) {
-  if (typeof settings.getRetrySettings !== "function") return null;
   return { maxRetries: settings.getRetrySettings().maxRetries };
 }
 

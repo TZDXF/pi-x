@@ -6,7 +6,9 @@ import { useUiStore } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 
-interface PromptDraft extends GlobalPromptFile { savedContent: string }
+interface PromptDraft extends GlobalPromptFile {
+  savedContent: string
+}
 
 const { t } = useI18n()
 const ui = useUiStore()
@@ -14,7 +16,9 @@ const files = ref<PromptDraft[]>([])
 const selectedName = ref("SYSTEM.md")
 const selectedFile = computed(() => files.value.find(file => file.fileName === selectedName.value))
 const loading = ref(true)
-const showDefaultHint = computed(() => selectedFile.value?.fileName === 'SYSTEM.md' && !selectedFile.value?.content.trim())
+const showDefaultHint = computed(
+  () => selectedFile.value?.fileName === "SYSTEM.md" && !selectedFile.value?.content.trim(),
+)
 const saving = ref(false)
 const error = ref("")
 
@@ -23,8 +27,11 @@ async function load() {
   error.value = ""
   try {
     files.value = (await listGlobalPrompts()).map(file => ({ ...file, savedContent: file.content }))
-  } catch (e) { error.value = String(e) }
-  finally { loading.value = false }
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loading.value = false
+  }
 }
 
 function updatePrompt(value: string | number) {
@@ -40,8 +47,11 @@ async function save() {
     file.exists = !!file.content.trim()
     file.savedContent = file.content
     ui.pushToast(t("agentConfig.saved"), "info")
-  } catch (e) { ui.pushToast(String(e), "error") }
-  finally { saving.value = false }
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    saving.value = false
+  }
 }
 onMounted(load)
 </script>
@@ -65,16 +75,24 @@ onMounted(load)
           @click="selectedName = file.fileName"
         >
           <span class="min-w-0 truncate font-mono text-xs">{{ file.fileName }}</span>
-          <span v-if="file.content !== file.savedContent" class="size-2 shrink-0 rounded-full bg-primary" :aria-label="t('agentConfig.unsaved')" />
+          <span
+            v-if="file.content !== file.savedContent"
+            class="size-2 shrink-0 rounded-full bg-primary"
+            :aria-label="t('agentConfig.unsaved')"
+          />
         </button>
       </nav>
       <section v-if="selectedFile" class="min-w-0 flex-1 space-y-3">
         <div class="flex flex-wrap items-center gap-2">
           <label for="global-agent-prompt" class="font-mono text-sm font-medium">{{ selectedFile.fileName }}</label>
-          <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ t(selectedFile.exists ? 'agentConfig.exists' : 'agentConfig.missing') }}</span>
+          <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{
+            t(selectedFile.exists ? "agentConfig.exists" : "agentConfig.missing")
+          }}</span>
         </div>
         <p class="text-xs text-muted-foreground">{{ t(`agentConfig.hints.${selectedFile.fileName}`) }}</p>
-        <p v-if="showDefaultHint" class="text-xs text-blue-600 dark:text-blue-400">{{ t('agentConfig.defaultPromptHint') }}</p>
+        <p v-if="showDefaultHint" class="text-xs text-blue-600 dark:text-blue-400">
+          {{ t("agentConfig.defaultPromptHint") }}
+        </p>
 
         <Textarea
           id="global-agent-prompt"
@@ -83,13 +101,14 @@ onMounted(load)
           @update:model-value="updatePrompt"
         />
         <div class="flex items-center gap-3">
-          <Button :disabled="saving || selectedFile.content === selectedFile.savedContent" @click="save">{{ t(saving ? "agentConfig.saving" : "agentConfig.save") }}</Button>
-          <span v-if="selectedFile.content !== selectedFile.savedContent" class="text-xs text-muted-foreground">{{ t("agentConfig.unsaved") }}</span>
+          <Button :disabled="saving || selectedFile.content === selectedFile.savedContent" @click="save">{{
+            t(saving ? "agentConfig.saving" : "agentConfig.save")
+          }}</Button>
+          <span v-if="selectedFile.content !== selectedFile.savedContent" class="text-xs text-muted-foreground">{{
+            t("agentConfig.unsaved")
+          }}</span>
         </div>
       </section>
     </div>
   </fieldset>
 </template>
-
-
-

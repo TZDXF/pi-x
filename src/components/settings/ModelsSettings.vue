@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import DragHandle from '@/components/shared/DragHandle.vue'
-import SectionHeading from '@/components/shared/SectionHeading.vue'
+import DragHandle from "@/components/shared/DragHandle.vue"
+import SectionHeading from "@/components/shared/SectionHeading.vue"
 /** Providers & models page: provider list on the left, provider config and its models on the right. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -61,7 +61,7 @@ async function finishDrag() {
 /** Keep the selection valid when providers change (load/removed externally). */
 watch(
   providers,
-  (list) => {
+  list => {
     if (creating.value) return
     const ids = list.map(([id]) => id)
     if (!selected.value || !ids.includes(selected.value)) selected.value = ids[0] ?? null
@@ -93,8 +93,12 @@ function onDeleted() {
 <template>
   <p class="text-muted-foreground mb-4 text-xs">{{ t("settings.modelsFileHint") }}</p>
 
-  <div class="provider-layout grid [grid-template-columns:196px_minmax(0,_1fr)] gap-5 items-start max-[900px]:[grid-template-columns:minmax(0,_1fr)]">
-    <aside class="provider-list flex flex-col gap-[3px] border-r border-border pr-3 max-[900px]:[border-right:none] max-[900px]:border-b border-border max-[900px]:pr-0 max-[900px]:pb-3">
+  <div
+    class="provider-layout grid [grid-template-columns:196px_minmax(0,_1fr)] gap-5 items-start max-[900px]:[grid-template-columns:minmax(0,_1fr)]"
+  >
+    <aside
+      class="provider-list flex flex-col gap-[3px] border-r border-border pr-3 max-[900px]:[border-right:none] max-[900px]:border-b border-border max-[900px]:pr-0 max-[900px]:pb-3"
+    >
       <VueDraggable
         v-model="providers"
         class="provider-sortable flex flex-col gap-[3px]"
@@ -104,10 +108,25 @@ function onDeleted() {
         @start="startDrag"
         @end="finishDrag"
       >
-        <div v-for="[id, p] in providers" :key="id" class="provider-item flex items-center min-w-0 rounded-[7px] py-[3px] px-1 hover:bg-border" :class="{ active: !creating && selected === id }">
-          <DragHandle :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"><GripVertical :size="14" /></DragHandle>
-          <button type="button" class="provider-item-content flex flex-1 flex-col min-w-0 gap-[1px] py-[3px] px-[5px] text-left" @click="selectProvider(id)">
-            <span class="provider-item-name text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap" :title="p.name || id">{{ p.name || id }}</span>
+        <div
+          v-for="[id, p] in providers"
+          :key="id"
+          class="provider-item flex items-center min-w-0 rounded-[7px] py-[3px] px-1 hover:bg-border"
+          :class="{ active: !creating && selected === id }"
+        >
+          <DragHandle :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"
+            ><GripVertical :size="14"
+          /></DragHandle>
+          <button
+            type="button"
+            class="provider-item-content flex flex-1 flex-col min-w-0 gap-[1px] py-[3px] px-[5px] text-left"
+            @click="selectProvider(id)"
+          >
+            <span
+              class="provider-item-name text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap"
+              :title="p.name || id"
+              >{{ p.name || id }}</span
+            >
             <span class="provider-item-meta flex justify-between gap-2 text-[10px] text-muted-foreground" :title="id">
               <span v-if="p.name && p.name !== id" class="font-mono">{{ id }}</span>
               <span>{{ t("settings.providerModelCount", { count: p.models?.length ?? 0 }) }}</span>
@@ -115,13 +134,7 @@ function onDeleted() {
           </button>
         </div>
       </VueDraggable>
-      <Button
-        variant="outline"
-        size="sm"
-        class="mt-2"
-        :class="{ active: creating }"
-        @click="startAdd"
-      >
+      <Button variant="outline" size="sm" class="mt-2" :class="{ active: creating }" @click="startAdd">
         + {{ t("settings.providerAdd") }}
       </Button>
     </aside>
@@ -131,11 +144,7 @@ function onDeleted() {
         <SectionHeading>
           {{ creating ? t("settings.providerAdd") : t("settings.providerEdit") }}
         </SectionHeading>
-        <ProviderSettings
-          :provider-id="creating ? null : selected"
-          @saved="onSaved"
-          @deleted="onDeleted"
-        />
+        <ProviderSettings :provider-id="creating ? null : selected" @saved="onSaved" @deleted="onDeleted" />
         <template v-if="!creating && selected">
           <Separator class="my-6" />
           <SectionHeading>{{ t("settings.models") }}</SectionHeading>

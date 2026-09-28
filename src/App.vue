@@ -22,7 +22,15 @@ import {
   trustStatus,
 } from "@/api/piClient"
 import type { AppConfig, RunningSession, TrustStatus, WorkspaceContext } from "@/api/piClient"
-import { useSessionStore, sessionFor, uiFor, activeRuntimeId, activateSession, createConversation, findConversation } from "@/stores/conversations"
+import {
+  useSessionStore,
+  sessionFor,
+  uiFor,
+  activeRuntimeId,
+  activateSession,
+  createConversation,
+  findConversation,
+} from "@/stores/conversations"
 import { useWorkspaceStore, registerSessionMtimeSync, type ProjectGroup } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
@@ -60,22 +68,33 @@ const project = ref("")
 const trustInfo = ref<TrustStatus | null>(null)
 const lastError = ref<string | null>(null)
 
-const started = computed({ get: () => session.started, set: value => { session.started = value } })
+const started = computed({
+  get: () => session.started,
+  set: value => {
+    session.started = value
+  },
+})
 const connecting = ref(false)
 const selectingProject = ref(false)
 // A terminal badge represents an unread result, not a permanent session state.
-watch(() => {
-  if (phase.value !== "chat" || route.value.name !== "home" || connecting.value || navigating.value) return null
-  const file = session.sessionFile
-  const status = file ? sessionRunStatus(file) : undefined
-  return status === "completed" || status === "error" ? file : null
-}, file => acknowledgeSessionRunStatus(file), { immediate: true })
+watch(
+  () => {
+    if (phase.value !== "chat" || route.value.name !== "home" || connecting.value || navigating.value) return null
+    const file = session.sessionFile
+    const status = file ? sessionRunStatus(file) : undefined
+    return status === "completed" || status === "error" ? file : null
+  },
+  file => acknowledgeSessionRunStatus(file),
+  { immediate: true },
+)
 const runtimeWorkspaces = new Map<string, string>()
 function contextFor(dir: string): WorkspaceContext | undefined {
   const group = workspace.projectGroups[workspace.projectRoot(dir)]
   return group ? { name: group.name, primary: group.primary, roots: [...group.folders] } : undefined
 }
-function contextSignature(dir: string) { return JSON.stringify(contextFor(dir) ?? null) }
+function contextSignature(dir: string) {
+  return JSON.stringify(contextFor(dir) ?? null)
+}
 async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
   const context = contextFor(dir)
   await spawnPi(dir, file, runtimeId, context)
@@ -99,7 +118,7 @@ onMounted(async () => {
 
   try {
     const handlers = await Promise.all([
-      onPiEvent((ev) => {
+      onPiEvent(ev => {
         const id = ev.runtimeId ?? "default"
         if (ev.type === "extension_ui_request") {
           uiFor(id).handleRequest(ev as any)
@@ -115,10 +134,11 @@ onMounted(async () => {
           void owner.init(ev.project).catch(console.warn)
         }
         owner.handleEvent(ev)
-        if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd) void workspace.refresh(owner.cwd).catch(console.warn)
+        if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd)
+          void workspace.refresh(owner.cwd).catch(console.warn)
       }),
-      onSessionsChanged((files) => handleExternalSessionChanges(files)),
-      onPiExit((runtimeId) => {
+      onSessionsChanged(files => handleExternalSessionChanges(files)),
+      onPiExit(runtimeId => {
         pixLog(`pi exit: runtimeId=${runtimeId ?? "<transport>"}`, runtimeId ?? null)
         // An unscoped exit is a transport disconnect; it is not an agent exit.
         if (!runtimeId) {
@@ -139,19 +159,21 @@ onMounted(async () => {
         // Events during the disconnect gap are lost; restore from the backend.
         if (phase.value === "down") {
           void reattachRunningSessions()
-            .then((restored) => {
+            .then(restored => {
               if (restored) return
               phase.value = "pick"
               refreshVisibleHistories()
             })
-            .catch((e) => { lastError.value = String(e) })
+            .catch(e => {
+              lastError.value = String(e)
+            })
           return
         }
         refreshVisibleHistories()
       }),
     ])
     if (disposed) {
-      handlers.forEach((off) => off())
+      handlers.forEach(off => off())
       return
     }
     unlisteners = handlers
@@ -200,12 +222,17 @@ async function drainNavigation() {
       pendingResume.value = null
       try {
         await action()
+      } catch (error) {
+        ui.pushToast(String(error), "error")
       }
-      catch (error) { ui.pushToast(String(error), "error") }
     }
-  } finally { navigationRunning.value = false }
+  } finally {
+    navigationRunning.value = false
+  }
 }
-watch([connecting, navigating], () => { void drainNavigation() })
+watch([connecting, navigating], () => {
+  void drainNavigation()
+})
 
 /** Reattach to runtimes already alive on the backend (UI reload, remote
  *  reconnect) without spawning duplicates. Returns the restored runtime. */
@@ -291,7 +318,10 @@ async function reloadExternalConversation(file: string) {
   const disk = await sessionMtime(file).catch(() => null)
   // Equal mtime means the write was our own (already synced at agent_end).
   if (disk == null || disk === owner.syncedSessionMtime || owner.isStreaming || owner.isResending) return
-  pixLog(`watcher: external change detected, rebuilding file=${file} streaming=${owner.isStreaming} synced=${owner.syncedSessionMtime} disk=${disk}`, owner.runtimeId)
+  pixLog(
+    `watcher: external change detected, rebuilding file=${file} streaming=${owner.isStreaming} synced=${owner.syncedSessionMtime} disk=${disk}`,
+    owner.runtimeId,
+  )
   await rebuildConversation(owner)
 }
 
@@ -320,8 +350,7 @@ async function selectProject(dir: string) {
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
     phase.value = "down"
-  }
-  finally {
+  } finally {
     selectingProject.value = false
     connecting.value = false
   }
@@ -345,7 +374,8 @@ async function start(): Promise<boolean> {
   // Completion can request a runtime while the draft remains editable.
   if (selectingProject.value || phase.value !== "chat") return false
   const owner = sessionFor(activeRuntimeId.value)
-  if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value)) return true
+  if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value))
+    return true
   if (owner.started && owner.isStreaming) {
     return true
   }
@@ -414,7 +444,9 @@ async function saveProject(group: ProjectGroup) {
       projectDialogOpen.value = false
       await selectProject(group.primary)
     }
-  } catch (e) { ui.pushToast(String(e), "error") }
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
 }
 
 async function selectQueuedConversation(runtimeId: string) {
@@ -463,10 +495,14 @@ async function resumeSession(file: string, targetProject?: string) {
     // this UI last synchronized. Attach by persisted identity, never spawn twice.
     if (!owner?.started) {
       const running = await listRunningSessions()
-      const runtime = running.find(item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file))
+      const runtime = running.find(
+        item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file),
+      )
       if (runtime) {
+        const placeholder = owner
         owner = sessionFor(runtime.runtimeId)
         attaching = true
+        if (placeholder && placeholder !== owner) placeholder.sessionFile = null
         if (!owner.started) {
           owner.sessionFile = file
           await owner.init(runtime.project)
@@ -503,8 +539,9 @@ async function resumeSession(file: string, targetProject?: string) {
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
     phase.value = "down"
+  } finally {
+    connecting.value = false
   }
-  finally { connecting.value = false }
 }
 
 /** Export a sidebar session directly from its saved file. Never change the
@@ -512,8 +549,7 @@ async function resumeSession(file: string, targetProject?: string) {
 async function openSessionAction(file: string, action: "export") {
   if (action !== "export") return
   try {
-    if (await exportSessionFileHtml(file, t("chat.exportDirectory")))
-      ui.pushToast(t("chat.toastExported"), "info")
+    if (await exportSessionFileHtml(file, t("chat.exportDirectory"))) ui.pushToast(t("chat.toastExported"), "info")
   } catch (error) {
     ui.pushToast(String(error), "error")
   }
@@ -532,8 +568,11 @@ async function newProjectSession(path: string) {
       if (!pristine || active.cwd !== path) createConversation(path)
       void session.loadOfflineModels()
     }
-  } catch (e) { ui.pushToast(String(e), "error") }
-  finally { navigating.value = false }
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    navigating.value = false
+  }
 }
 
 // Removing a project only removes its navigation entry, never files or logs.
@@ -553,13 +592,16 @@ async function removeProject(path: string) {
       phase.value = "pick"
     }
     workspace.removeProject(path)
-  } catch (e) { ui.pushToast(String(e), "error") }
-  finally { navigating.value = false }
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  } finally {
+    navigating.value = false
+  }
 }
 
 onUnmounted(() => {
   disposed = true
-  unlisteners.forEach((off) => off())
+  unlisteners.forEach(off => off())
   unlisteners = []
 })
 </script>
@@ -586,68 +628,86 @@ onUnmounted(() => {
       @schedules="navigate('/schedules')"
       @collapse="sidebarOpen = false"
     />
-    <main class="workspace-main flex-1 min-w-0 flex flex-col relative overflow-hidden" :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }">
+    <main
+      class="workspace-main flex-1 min-w-0 flex flex-col relative overflow-hidden"
+      :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }"
+    >
       <template v-if="route.name === 'settings'">
         <SettingsPage :project="project" />
       </template>
       <template v-else>
-      <Button
-        v-if="!sidebarOpen"
-        variant="quiet"
-        size="toolbar"
-        class="sidebar-restore absolute top-[17px] left-2.5 z-[10] bg-sidebar"
-        :title="t('app.expandSidebar')"
-        :aria-label="t('app.expandSidebar')"
-        @click="sidebarOpen = true"
-      >
-        <PanelLeft :size="18" />
-      </Button>
-      <ScheduledTasksPage v-if="route.name === 'schedules'" :project="project" @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))" />
-      <WelcomeView
-        v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
-        :phase
-        :config
-        @configured="phase = 'pick'"
-        @open-project="switchProject"
-        @open-projectless="openProjectless"
-      />
+        <Button
+          v-if="!sidebarOpen"
+          variant="quiet"
+          size="toolbar"
+          class="sidebar-restore absolute top-[17px] left-2.5 z-[10] bg-sidebar"
+          :title="t('app.expandSidebar')"
+          :aria-label="t('app.expandSidebar')"
+          @click="sidebarOpen = true"
+        >
+          <PanelLeft :size="18" />
+        </Button>
+        <ScheduledTasksPage
+          v-if="route.name === 'schedules'"
+          :project="project"
+          @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
+        />
+        <WelcomeView
+          v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
+          :phase
+          :config
+          @configured="phase = 'pick'"
+          @open-project="switchProject"
+          @open-projectless="openProjectless"
+        />
 
-      <div
-        v-else-if="phase === 'trust' && trustInfo"
-        class="flex flex-1 items-center justify-center"
-      >
-        <TrustDialog :info="trustInfo" @done="onTrustDecision" />
-      </div>
+        <div v-else-if="phase === 'trust' && trustInfo" class="flex flex-1 items-center justify-center">
+          <TrustDialog :info="trustInfo" @done="onTrustDecision" />
+        </div>
 
-      <template v-else-if="phase === 'chat'">
-        <ChatView :key="activeRuntimeId" :project="project" :ensure-started="start" :connecting="connecting" :selecting-project="selectingProject" :connected="started" @select-project="path => requestNavigation(() => selectProject(path))" @open-project="requestNavigation(switchProject)" @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))" />
-      </template>
+        <template v-else-if="phase === 'chat'">
+          <ChatView
+            :key="activeRuntimeId"
+            :project="project"
+            :ensure-started="start"
+            :connecting="connecting"
+            :selecting-project="selectingProject"
+            :connected="started"
+            @select-project="path => requestNavigation(() => selectProject(path))"
+            @open-project="requestNavigation(switchProject)"
+            @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))"
+          />
+        </template>
 
-      <div
-        v-else-if="phase === 'down'"
-        class="flex flex-1 flex-col items-center justify-center gap-4 p-8"
-      >
-        <p class="text-lg font-medium">{{ t("app.exited") }}</p>
-        <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
-          {{ lastError }}
-        </p>
-        <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
-          <p class="text-muted-foreground mb-1 text-xs font-medium">
-            {{ t("app.stderr") }}
+        <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+          <p class="text-lg font-medium">{{ t("app.exited") }}</p>
+          <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
+            {{ lastError }}
           </p>
-          <ScrollArea viewport-class="max-h-48"><pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
-            ui.stderrLines.slice(-12).join("\n")
-          }}</pre></ScrollArea>
+          <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
+            <p class="text-muted-foreground mb-1 text-xs font-medium">
+              {{ t("app.stderr") }}
+            </p>
+            <ScrollArea viewport-class="max-h-48">
+              <pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
+                ui.stderrLines.slice(-12).join("\n")
+              }}</pre>
+            </ScrollArea>
+          </div>
+          <div class="flex gap-2">
+            <Button variant="outline" @click="switchProject">
+              {{ t("app.chooseProject") }}
+            </Button>
+          </div>
         </div>
-        <div class="flex gap-2">
-          <Button variant="outline" @click="switchProject">
-            {{ t("app.chooseProject") }}
-          </Button>
-        </div>
-      </div>
       </template>
     </main>
-    <CreateProjectDialog :open="projectDialogOpen" :edit-path="editingProjectPath" @close="projectDialogOpen = false; editingProjectPath = null" @save="saveProject" />
+    <CreateProjectDialog
+      :open="projectDialogOpen"
+      :edit-path="editingProjectPath"
+      @close="projectDialogOpen = false; editingProjectPath = null"
+      @save="saveProject"
+    />
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div
@@ -656,10 +716,8 @@ onUnmounted(() => {
         class="pointer-events-auto max-w-sm rounded-md border px-4 py-3 text-sm shadow-lg"
         :class="{
           'bg-background text-foreground': t.kind === 'info',
-          'border-amber-500/50 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100':
-            t.kind === 'warning',
-          'border-red-500/50 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100':
-            t.kind === 'error',
+          'border-amber-500/50 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100': t.kind === 'warning',
+          'border-red-500/50 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100': t.kind === 'error',
         }"
       >
         {{ t.message }}

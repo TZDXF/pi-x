@@ -6,11 +6,7 @@
 /** Plain text of a content field: a string, or the concatenation of its
  *  text blocks. Non-text blocks (thinking / toolCall / image) contribute nothing. */
 export function contentText(content: unknown): string {
-  if (typeof content === "string")
-    return content
-  if (Array.isArray(content))
-    return content
-      .map((c: any) => (c && c.type === "text" ? c.text : ""))
-      .join("")
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) return content.map((c: any) => (c && c.type === "text" ? c.text : "")).join("")
   return ""
 }

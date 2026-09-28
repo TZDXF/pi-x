@@ -95,15 +95,34 @@ async function copyLink(url: string) {
 
       <div class="space-y-3 rounded-xl border border-border p-4">
         <div class="flex items-center justify-between gap-3">
-          <label v-if="!remote.enabled" class="text-sm font-medium" for="remote-password">{{ t("settings.remotePassword") }}</label>
+          <label v-if="!remote.enabled" class="text-sm font-medium" for="remote-password">{{
+            t("settings.remotePassword")
+          }}</label>
           <span v-else class="text-sm font-medium">{{ t("settings.remotePassword") }}</span>
-          <span v-if="remote.passwordEnabled" class="text-xs text-muted-foreground">{{ t("settings.remotePasswordConfigured") }}</span>
+          <span v-if="remote.passwordEnabled" class="text-xs text-muted-foreground">{{
+            t("settings.remotePasswordConfigured")
+          }}</span>
         </div>
         <form v-if="!remote.enabled" class="flex flex-wrap gap-2" @submit.prevent="savePassword(password)">
-          <Input id="remote-password" v-model="password" type="password" autocomplete="new-password"
-            :placeholder="t('settings.remotePasswordPlaceholder')" class="min-w-40 flex-1" />
-          <Button type="submit" variant="outline" :disabled="remoteBusy || password.length < 8">{{ t("settings.remotePasswordSave") }}</Button>
-          <Button v-if="remote.passwordEnabled" type="button" variant="ghost" :disabled="remoteBusy" @click="savePassword(null)">{{ t("settings.remotePasswordClear") }}</Button>
+          <Input
+            id="remote-password"
+            v-model="password"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="t('settings.remotePasswordPlaceholder')"
+            class="min-w-40 flex-1"
+          />
+          <Button type="submit" variant="outline" :disabled="remoteBusy || password.length < 8">{{
+            t("settings.remotePasswordSave")
+          }}</Button>
+          <Button
+            v-if="remote.passwordEnabled"
+            type="button"
+            variant="ghost"
+            :disabled="remoteBusy"
+            @click="savePassword(null)"
+            >{{ t("settings.remotePasswordClear") }}</Button
+          >
         </form>
         <p v-else class="text-xs text-muted-foreground">{{ t("settings.remotePasswordChangeHint") }}</p>
       </div>
@@ -119,7 +138,11 @@ async function copyLink(url: string) {
             <span class="self-start text-xs font-medium text-muted-foreground">
               {{ t("settings.remoteAddress", { number: index + 1 }) }}
             </span>
-            <div class="rounded-lg bg-white p-3" role="img" :aria-label="t('settings.remoteQrLabel', { number: index + 1 })">
+            <div
+              class="rounded-lg bg-white p-3"
+              role="img"
+              :aria-label="t('settings.remoteQrLabel', { number: index + 1 })"
+            >
               <QrcodeSvg :value="url" :size="180" level="M" />
             </div>
             <Button variant="outline" size="sm" class="w-full" @click="copyLink(url)">
@@ -130,7 +153,9 @@ async function copyLink(url: string) {
         </div>
         <p v-else class="text-sm text-muted-foreground">{{ t("settings.remoteNoAddress") }}</p>
       </div>
-      <p class="text-xs leading-relaxed text-amber-700 dark:text-amber-400">{{ t(remote.passwordEnabled ? "settings.remotePasswordWarning" : "settings.remoteWarning") }}</p>
+      <p class="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+        {{ t(remote.passwordEnabled ? "settings.remotePasswordWarning" : "settings.remoteWarning") }}
+      </p>
     </div>
   </template>
   <p v-else class="text-sm">{{ t("settings.remoteDesktopOnly") }}</p>

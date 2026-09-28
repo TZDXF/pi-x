@@ -1,10 +1,6 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
-import {
-  getModelsConfig,
-  saveModelsConfig,
-  type ModelsConfig,
-} from "@/api/piClient"
+import { getModelsConfig, saveModelsConfig, type ModelsConfig } from "@/api/piClient"
 
 /**
  * Shared state for pi's `~/.pi/agent/models.json`, backing the provider and

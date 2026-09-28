@@ -15,7 +15,9 @@ const passwordEnabled = ref(false)
 const password = ref("")
 const error = ref("")
 
-function unauthorized() { authenticated.value = false }
+function unauthorized() {
+  authenticated.value = false
+}
 onMounted(async () => {
   if (bypassAuth) return
   window.addEventListener(REMOTE_UNAUTHORIZED_EVENT, unauthorized)
@@ -61,7 +63,14 @@ async function login() {
       </div>
       <form v-if="passwordEnabled" class="space-y-3" @submit.prevent="login">
         <label class="block text-sm font-medium" for="remote-login-password">{{ t("settings.remotePassword") }}</label>
-        <Input id="remote-login-password" v-model="password" type="password" autocomplete="current-password" autofocus required />
+        <Input
+          id="remote-login-password"
+          v-model="password"
+          type="password"
+          autocomplete="current-password"
+          autofocus
+          required
+        />
         <Button type="submit" class="w-full" :disabled="loading || !password">{{ t("settings.remoteLogin") }}</Button>
       </form>
       <p v-else-if="!loading && !error" class="text-sm text-muted-foreground">{{ t("settings.remoteLoginQrOnly") }}</p>

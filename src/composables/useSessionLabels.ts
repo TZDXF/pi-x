@@ -1,6 +1,6 @@
-import { computed } from 'vue'
-import { useWorkspaceStore } from '@/stores/workspace'
-import { normalizeSlashes } from '@/lib/paths'
+import { computed } from "vue"
+import { useWorkspaceStore } from "@/stores/workspace"
+import { normalizeSlashes } from "@/lib/paths"
 
 /** Session reference labels shared by the composer chips and rendered messages. */
 export function useSessionLabels() {

@@ -22,7 +22,7 @@ export interface Model {
   input: string[]
   contextWindow: number
   maxTokens: number
-  cost: { input: number, output: number, cacheRead: number, cacheWrite: number }
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number }
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
@@ -33,7 +33,7 @@ export interface Usage {
   cacheRead: number
   cacheWrite: number
   totalTokens: number
-  cost: { input: number, output: number, cacheRead: number, cacheWrite: number, total: number }
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
 }
 
 export interface SessionState {
@@ -57,9 +57,9 @@ export interface SessionStats {
   assistantMessages: number
   toolCalls: number
   totalMessages: number
-  tokens: { input: number, output: number, cacheRead: number, cacheWrite: number, total: number }
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
   cost: number
-  contextUsage: { tokens: number, contextWindow: number, percent: number } | null
+  contextUsage: { tokens: number; contextWindow: number; percent: number } | null
 }
 
 export interface CommandInfo {
@@ -70,10 +70,25 @@ export interface CommandInfo {
   path?: string
 }
 
-export interface TextContent { type: "text", text: string }
-export interface ImageContent { type: "image", data: string, mimeType: string }
-export interface ThinkingContent { type: "thinking", thinking: string }
-export interface ToolCallContent { type: "toolCall", id: string, name: string, arguments: Record<string, unknown> | string }
+export interface TextContent {
+  type: "text"
+  text: string
+}
+export interface ImageContent {
+  type: "image"
+  data: string
+  mimeType: string
+}
+export interface ThinkingContent {
+  type: "thinking"
+  thinking: string
+}
+export interface ToolCallContent {
+  type: "toolCall"
+  id: string
+  name: string
+  arguments: Record<string, unknown> | string
+}
 export type AssistantContent = TextContent | ThinkingContent | ToolCallContent
 
 export interface UserMessage {
@@ -95,28 +110,37 @@ export interface AssistantMessage {
   timestamp?: number
 }
 
-export type AgentMessage = UserMessage | AssistantMessage
-  | { role: "toolResult", [k: string]: unknown }
-  | { role: "bashExecution", [k: string]: unknown }
+export type AgentMessage =
+  | UserMessage
+  | AssistantMessage
+  | { role: "toolResult"; [k: string]: unknown }
+  | { role: "bashExecution"; [k: string]: unknown }
 
 // ---- streaming delta events (assistantMessageEvent) ----
 
 export type AssistantMessageEvent =
-  | { type: "text_start", contentIndex: number }
-  | { type: "text_delta", contentIndex: number, delta: string }
-  | { type: "text_end", contentIndex: number, content?: string }
-  | { type: "thinking_start", contentIndex: number }
-  | { type: "thinking_delta", contentIndex: number, delta: string }
-  | { type: "thinking_end", contentIndex: number, thinking?: string }
-  | { type: "toolcall_start", contentIndex: number, id: string, toolName: string }
-  | { type: "toolcall_delta", contentIndex: number, delta: string }
-  | { type: "toolcall_end", contentIndex: number, toolCall: ToolCallContent }
+  | { type: "text_start"; contentIndex: number }
+  | { type: "text_delta"; contentIndex: number; delta: string }
+  | { type: "text_end"; contentIndex: number; content?: string }
+  | { type: "thinking_start"; contentIndex: number }
+  | { type: "thinking_delta"; contentIndex: number; delta: string }
+  | { type: "thinking_end"; contentIndex: number; thinking?: string }
+  | { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
+  | { type: "toolcall_delta"; contentIndex: number; delta: string }
+  | { type: "toolcall_end"; contentIndex: number; toolCall: ToolCallContent }
 
 // ---- extension UI sub-protocol ----
 
 export type ExtensionUiMethod =
-  | "select" | "confirm" | "input" | "editor"
-  | "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text"
+  | "select"
+  | "confirm"
+  | "input"
+  | "editor"
+  | "notify"
+  | "setStatus"
+  | "setWidget"
+  | "setTitle"
+  | "set_editor_text"
 
 export interface ExtensionUiRequest {
   type: "extension_ui_request"

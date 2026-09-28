@@ -7,11 +7,7 @@ import { Check, ChevronDown, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import type { FetchedModel, ProviderEntry } from "@/api/piClient"
 import { useModelFetch } from "./useModelFetch"
 
@@ -27,7 +23,7 @@ const open = ref(false)
 const { fetched, fetching, fetchError, query, filtered, load } = useModelFetch(() => props.provider)
 
 /** Opening the picker resets the search box and loads the list once. */
-watch(open, (v) => {
+watch(open, v => {
   if (!v) return
   query.value = ""
   void load()
@@ -55,11 +51,7 @@ function pick(m: FetchedModel) {
     </PopoverTrigger>
     <PopoverContent align="end" class="w-80 p-2">
       <div class="mb-2 flex items-center gap-1">
-        <Input
-          v-model="query"
-          :placeholder="t('settings.modelFetchSearch')"
-          class="h-7 text-xs"
-        />
+        <Input v-model="query" :placeholder="t('settings.modelFetchSearch')" class="h-7 text-xs" />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -94,7 +86,9 @@ function pick(m: FetchedModel) {
           <Check v-if="existingIds.has(m.id)" :size="14" class="shrink-0" />
           <span class="min-w-0">
             <span class="block truncate font-mono text-xs">{{ m.id }}</span>
-            <span v-if="m.name && m.name !== m.id" class="text-muted-foreground block truncate text-[11px]">{{ m.name }}</span>
+            <span v-if="m.name && m.name !== m.id" class="text-muted-foreground block truncate text-[11px]">{{
+              m.name
+            }}</span>
           </span>
         </button>
       </ScrollArea>

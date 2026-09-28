@@ -5,13 +5,7 @@ import { useI18n } from "vue-i18n"
 import { Spinner } from "@/components/ui/spinner"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  Dialog,
-  DialogContent,
-} from "@/components/ui/dialog"
+import { DialogHeader, DialogTitle, DialogDescription, Dialog, DialogContent } from "@/components/ui/dialog"
 import {
   packageResources,
   packageSetResource,
@@ -40,7 +34,7 @@ const RESOURCE_GROUPS: PackageResource["resourceType"][] = ["extensions", "skill
 
 watch(
   () => props.pkg,
-  async (p) => {
+  async p => {
     if (!p) return
     resources.value = []
     loading.value = true
@@ -56,7 +50,7 @@ watch(
 )
 
 function resourcesOf(type: PackageResource["resourceType"]): PackageResource[] {
-  return resources.value.filter((r) => r.resourceType === type)
+  return resources.value.filter(r => r.resourceType === type)
 }
 
 async function toggleResource(r: PackageResource) {
@@ -64,14 +58,7 @@ async function toggleResource(r: PackageResource) {
   const key = `${r.resourceType}:${r.path}`
   resourceBusy.value = key
   try {
-    await packageSetResource(
-      props.pkg.source,
-      props.pkg.scope,
-      r.resourceType,
-      r.path,
-      !r.enabled,
-      props.project,
-    )
+    await packageSetResource(props.pkg.source, props.pkg.scope, r.resourceType, r.path, !r.enabled, props.project)
     r.enabled = !r.enabled
   } catch (e) {
     ui.pushToast(String(e), "error")
@@ -88,7 +75,14 @@ const resourceTypeName = (type: string) => {
 </script>
 
 <template>
-  <Dialog :open="!!pkg" @update:open="(v: boolean) => { if (!v) emit('close') }">
+  <Dialog
+    :open="!!pkg"
+    @update:open="
+      (v: boolean) => {
+        if (!v) emit('close')
+      }
+    "
+  >
     <DialogContent v-if="pkg" class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>{{ t("packages.resourcesTitle", { name: packageNameOf(pkg.source) }) }}</DialogTitle>
@@ -119,7 +113,8 @@ const resourceTypeName = (type: string) => {
                   class="flex-1 truncate font-mono text-xs"
                   :class="r.enabled ? '' : 'text-muted-foreground line-through'"
                   :title="r.path"
-                >{{ r.path }}</span>
+                  >{{ r.path }}</span
+                >
                 <Spinner v-if="resourceBusy === `${r.resourceType}:${r.path}`" class="size-3" />
               </div>
             </div>

@@ -6,13 +6,7 @@ import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { FetchedModel, ProviderEntry } from "@/api/piClient"
 import { PROVIDER_API_TYPES } from "@/stores/modelsConfig"
 import ModelAdvancedSettings from "@/components/settings/ModelAdvancedSettings.vue"
@@ -60,12 +54,7 @@ function pickFetched(m: FetchedModel) {
       <div>
         <label class="mb-1 block text-xs" for="model-id">{{ t("settings.modelId") }}</label>
         <div class="flex items-center gap-1">
-          <Input
-            id="model-id"
-            v-model="form.id"
-            class="font-mono text-xs"
-            :disabled="props.isEdit"
-          />
+          <Input id="model-id" v-model="form.id" class="font-mono text-xs" :disabled="props.isEdit" />
           <ModelFetchPopover
             v-if="!props.isEdit"
             :provider="props.provider"
@@ -93,15 +82,11 @@ function pickFetched(m: FetchedModel) {
         </Select>
       </div>
       <div>
-        <label class="mb-1 block text-xs" for="model-ctx">{{
-          t("settings.modelContextWindow")
-        }}</label>
+        <label class="mb-1 block text-xs" for="model-ctx">{{ t("settings.modelContextWindow") }}</label>
         <Input id="model-ctx" v-model="form.contextWindow" placeholder="128000" class="text-xs" />
       </div>
       <div>
-        <label class="mb-1 block text-xs" for="model-max">{{
-          t("settings.modelMaxTokens")
-        }}</label>
+        <label class="mb-1 block text-xs" for="model-max">{{ t("settings.modelMaxTokens") }}</label>
         <Input id="model-max" v-model="form.maxTokens" placeholder="16384" class="text-xs" />
       </div>
     </div>

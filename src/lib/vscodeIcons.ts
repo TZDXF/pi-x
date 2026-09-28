@@ -13,5 +13,5 @@ export function loadVscodeIcons(): void {
   started = true
   import("@iconify-json/vscode-icons")
     .then(({ icons }) => addCollection(icons as IconifyJSON))
-    .catch((error) => console.warn("Failed to load vscode-icons collection:", error))
+    .catch(error => console.warn("Failed to load vscode-icons collection:", error))
 }

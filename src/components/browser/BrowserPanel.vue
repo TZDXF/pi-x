@@ -82,6 +82,21 @@ const iframeRef = ref<HTMLIFrameElement | null>(null)
 // reload loops through URL-normalization differences.
 const activeSrc = ref("")
 
+const sandboxAttr = computed(() => {
+  if (proxyBase.value && isSameOrigin(proxyBase.value)) {
+    return "allow-scripts allow-forms allow-popups allow-modals"
+  }
+  return "allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+})
+
+function isSameOrigin(url: string): boolean {
+  try {
+    return new URL(url).origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
 let initialized = false
 watch(
   () => props.visible,
@@ -94,7 +109,16 @@ watch(
   { immediate: true },
 )
 
+let initPromise: Promise<void> | null = null
+
 async function initProxy() {
+  if (!initPromise) {
+    initPromise = doInitProxy()
+  }
+  return initPromise
+}
+
+async function doInitProxy() {
   try {
     const info = await previewProxyInfo()
     proxyBase.value = resolveProxyBase(info.base)
@@ -103,7 +127,8 @@ async function initProxy() {
   }
 }
 
-function navigate() {
+async function navigate() {
+  await initProxy()
   const url = normalizeInputUrl(inputUrl.value)
   if (!url) return
   if (url === currentUrl.value) {
@@ -118,7 +143,7 @@ function navigate() {
 function reload() {
   if (!currentUrl.value) return
   loading.value = true
-  iframeKey.value++
+  postToPage(bridgeCommand("reload"))
 }
 
 function goBack() {
@@ -139,7 +164,8 @@ function postToPage(message: BridgeOutbound) {
   // Payloads carry objects read out of deep refs (selections, annotations),
   // which are reactive proxies; structured clone rejects proxies, so flatten
   // to plain JSON first — the bridge contract is JSON data anyway.
-  iframeRef.value?.contentWindow?.postMessage(JSON.parse(JSON.stringify(message)), "*")
+  const targetOrigin = proxyBase.value ?? "*"
+  iframeRef.value?.contentWindow?.postMessage(JSON.parse(JSON.stringify(message)), targetOrigin)
 }
 
 function onIframeLoad() {
@@ -210,7 +236,7 @@ function setMode(next: Mode) {
   } else {
     postToPage(bridgeInspect(false))
   }
-  if (next !== "draw") updateCanvasStyle()
+  updateCanvasStyle()
   if (next !== "inspect" && showAnnotations.value === false) showAnnotations.value = annotations.value.length > 0
 }
 
@@ -437,8 +463,8 @@ function getCanvasPoint(e: MouseEvent): Point {
   const canvasEl = canvasRef.value!
   const rect = canvasEl.getBoundingClientRect()
   return {
-    x: (e.clientX - rect.left) * (canvasEl.width / rect.width),
-    y: (e.clientY - rect.top) * (canvasEl.height / rect.height),
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top,
   }
 }
 
@@ -793,8 +819,8 @@ onBeforeUnmount(() => {
           ref="iframeRef"
           :src="activeSrc"
           class="absolute inset-0 h-full w-full border-none bg-white"
-          title="PiX browser preview"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          :title="t('browser.previewTitle')"
+          :sandbox="sandboxAttr"
           referrerpolicy="no-referrer"
           @load="onIframeLoad"
         />

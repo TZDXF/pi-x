@@ -1,4 +1,4 @@
-import { i18n } from "@/i18n"
+import { i18n, tBackendError } from "@/i18n"
 import { pixLog } from "@/api/piClient"
 import { contentText } from "@/lib/content"
 import { notifyTurnComplete } from "@/lib/notifications"
@@ -18,9 +18,10 @@ export function formatRetryError(value: unknown): string {
   try {
     const parsed = JSON.parse(json)
     const inner = typeof parsed?.error?.message === "string" ? parsed.error.message : parsed?.message
-    if (typeof inner === "string" && inner.trim())
-      return status ? `${status} · ${inner.trim()}` : inner.trim()
-  } catch { /* keep the original provider error */ }
+    if (typeof inner === "string" && inner.trim()) return status ? `${status} · ${inner.trim()}` : inner.trim()
+  } catch {
+    /* keep the original provider error */
+  }
   return raw
 }
 
@@ -36,13 +37,12 @@ export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
       blocks[i] = { type: "text", text: "" }
       break
     case "text_delta": {
-          const b = ensure(blocks, i, "text") as TextBlock
+      const b = ensure(blocks, i, "text") as TextBlock
       b.text += delta.delta
       break
     }
     case "text_end":
-      if (delta.content !== undefined)
-        blocks[i] = { type: "text", text: delta.content }
+      if (delta.content !== undefined) blocks[i] = { type: "text", text: delta.content }
       break
     case "thinking_start":
       blocks[i] = { type: "thinking", text: "", streaming: true }
@@ -54,8 +54,7 @@ export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
     }
     case "thinking_end": {
       const b = ensure(blocks, i, "thinking") as ThinkingBlock
-      if (delta.thinking !== undefined)
-        b.text = delta.thinking
+      if (delta.thinking !== undefined) b.text = delta.thinking
       b.streaming = false
       break
     }
@@ -73,9 +72,7 @@ export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
         type: "toolCall",
         callId: call.id,
         name: call.name,
-        argsText: typeof call.arguments === "string"
-          ? call.arguments
-          : JSON.stringify(call.arguments ?? {}, null, 2),
+        argsText: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments ?? {}, null, 2),
       }
       break
     }
@@ -84,11 +81,12 @@ export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
 
 function ensure(blocks: Block[], i: number, type: Block["type"]): Block {
   if (!blocks[i] || blocks[i].type !== type) {
-    blocks[i] = type === "text"
-      ? { type: "text", text: "" }
-      : type === "thinking"
-        ? { type: "thinking", text: "", streaming: true }
-        : { type: "toolCall", callId: "unknown", name: "unknown", argsText: "" }
+    blocks[i] =
+      type === "text"
+        ? { type: "text", text: "" }
+        : type === "thinking"
+          ? { type: "thinking", text: "", streaming: true }
+          : { type: "toolCall", callId: "unknown", name: "unknown", argsText: "" }
   }
   return blocks[i]
 }
@@ -96,18 +94,14 @@ function ensure(blocks: Block[], i: number, type: Block["type"]): Block {
 export function blocksFromMessage(msg: any): Block[] {
   const out: Block[] = []
   for (const c of msg.content ?? []) {
-    if (c.type === "text" && c.text)
-      out.push({ type: "text", text: c.text })
-    else if (c.type === "thinking" && c.thinking)
-      out.push({ type: "thinking", text: c.thinking, streaming: false })
+    if (c.type === "text" && c.text) out.push({ type: "text", text: c.text })
+    else if (c.type === "thinking" && c.thinking) out.push({ type: "thinking", text: c.thinking, streaming: false })
     else if (c.type === "toolCall")
       out.push({
         type: "toolCall",
         callId: c.id,
         name: c.name,
-        argsText: typeof c.arguments === "string"
-          ? c.arguments
-          : JSON.stringify(c.arguments ?? {}, null, 2),
+        argsText: typeof c.arguments === "string" ? c.arguments : JSON.stringify(c.arguments ?? {}, null, 2),
       })
   }
   return out
@@ -116,8 +110,7 @@ export function blocksFromMessage(msg: any): Block[] {
 function safeJson(v: unknown): string {
   try {
     return JSON.stringify(v ?? {}, null, 2)
-  }
-  catch {
+  } catch {
     return String(v)
   }
 }
@@ -151,10 +144,27 @@ export interface EventContext {
 // ---- event ingestion ----
 export function createEventHandler(ctx: EventContext) {
   const {
-    runtimeId, entries, runs, partialBlocks, isStreaming, isCompacting, retryInfo,
-    steering, followUp, lastUsage, streamingTurnId, sessionFile, cwd, flow,
-    nextId, refreshStats, refreshState, syncSessionFile, dispatchQueuedPrompt,
-    checkpointStart, checkpointSettle,
+    runtimeId,
+    entries,
+    runs,
+    partialBlocks,
+    isStreaming,
+    isCompacting,
+    retryInfo,
+    steering,
+    followUp,
+    lastUsage,
+    streamingTurnId,
+    sessionFile,
+    cwd,
+    flow,
+    nextId,
+    refreshStats,
+    refreshState,
+    syncSessionFile,
+    dispatchQueuedPrompt,
+    checkpointStart,
+    checkpointSettle,
   } = ctx
 
   function handleEvent(ev: Record<string, any>) {
@@ -172,7 +182,7 @@ export function createEventHandler(ctx: EventContext) {
         if (flow.awaitingAgentStart) {
           flow.awaitingAgentStart = false
           flow.turnFailed = true
-          flow.lastErrorMessage = ev.error
+          flow.lastErrorMessage = tBackendError(ev.error)
           handleEvent({ type: "agent_settled" })
         }
         break
@@ -212,7 +222,10 @@ export function createEventHandler(ctx: EventContext) {
         flow.awaitingAgentStart = false
         isStreaming.value = false
         const finalStatus = flow.turnAborted || flow.stopping ? null : flow.turnFailed ? "error" : "completed"
-        pixLog(`settled: finalize status=${finalStatus ?? "none"} notify=${!flow.turnAborted && !flow.stopping} failed=${flow.turnFailed} aborted=${flow.turnAborted}`, runtimeId)
+        pixLog(
+          `settled: finalize status=${finalStatus ?? "none"} notify=${!flow.turnAborted && !flow.stopping} failed=${flow.turnFailed} aborted=${flow.turnAborted}`,
+          runtimeId,
+        )
         setSessionRunStatus(sessionFile.value, finalStatus)
         // Error messages carry an empty content array, so a finally-failed run
         // would otherwise leave no trace in the conversation. Transient errors
@@ -255,11 +268,9 @@ export function createEventHandler(ctx: EventContext) {
 
       case "message_update": {
         const usage = ev.usage
-        if (usage && usage.totalTokens)
-          lastUsage.value = usage
+        if (usage && usage.totalTokens) lastUsage.value = usage
         const delta = ev.assistantMessageEvent as AssistantMessageEvent | undefined
-        if (!delta || !partialBlocks.value)
-          break
+        if (!delta || !partialBlocks.value) break
         applyDelta(partialBlocks.value, delta)
         break
       }
@@ -269,15 +280,23 @@ export function createEventHandler(ctx: EventContext) {
         if (msg?.role === "assistant") {
           // A successful response means the retried request recovered, even if
           // the runtime's matching auto_retry_end event is delayed.
-          if (msg.stopReason !== "error" && msg.stopReason !== "aborted")
-            retryInfo.value = null
-          if (msg.stopReason === "error") { flow.turnFailed = true; flow.lastErrorMessage = msg.errorMessage ?? null }
+          if (msg.stopReason !== "error" && msg.stopReason !== "aborted") retryInfo.value = null
+          if (msg.stopReason === "error") {
+            flow.turnFailed = true
+            flow.lastErrorMessage = msg.errorMessage ?? null
+          }
           if (msg.stopReason === "aborted") flow.turnAborted = true
           // authoritative replace
           const blocks = blocksFromMessage(msg)
-          entries.value.push({ kind: "assistant", id: streamingTurnId.value ?? nextId(), blocks, live: true, startedAt: flow.agentStartedAt, completedAt: Date.now() })
-          if (msg.usage)
-            lastUsage.value = msg.usage
+          entries.value.push({
+            kind: "assistant",
+            id: streamingTurnId.value ?? nextId(),
+            blocks,
+            live: true,
+            startedAt: flow.agentStartedAt,
+            completedAt: Date.now(),
+          })
+          if (msg.usage) lastUsage.value = msg.usage
         }
         // user / toolResult messages are rendered from local state + tool runs
         partialBlocks.value = null
@@ -329,10 +348,15 @@ export function createEventHandler(ctx: EventContext) {
         isCompacting.value = false
         // Keep a visible marker at the position where history was collapsed.
         if (ev.result?.summary)
-          entries.value.push({ kind: "compaction", id: nextId(), summary: String(ev.result.summary),
+          entries.value.push({
+            kind: "compaction",
+            id: nextId(),
+            summary: String(ev.result.summary),
             tokensBefore: Number(ev.result.tokensBefore) || undefined,
             tokensAfter: Number(ev.result.estimatedTokensAfter) || undefined,
-            timestamp: Date.now(), live: true })
+            timestamp: Date.now(),
+            live: true,
+          })
         void refreshStats()
         // Pi flushed the compaction entry to the session file; sync our mtime
         // so the watcher does not mistake it for an external edit and rebuild.
@@ -361,8 +385,7 @@ export function createEventHandler(ctx: EventContext) {
         }
         // A recovered provider error must not leave the turn marked failed.
         flow.turnFailed = !ev.success
-        if (!ev.success)
-          void refreshState()
+        if (!ev.success) void refreshState()
         // Do NOT synthesize agent_settled here: pi emits auto_retry_end at
         // the first healthy assistant message, which is usually mid-run, and
         // always follows with the real agent_settled when the run is done.

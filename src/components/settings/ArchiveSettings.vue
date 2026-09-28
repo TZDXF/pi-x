@@ -5,7 +5,14 @@ import { useI18n } from "vue-i18n"
 import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 
@@ -30,7 +37,11 @@ function matches(s: SessionMeta, q: string) {
   return haystack.includes(q)
 }
 
-interface ArchiveGroup { cwd: string; name: string; rows: SessionMeta[] }
+interface ArchiveGroup {
+  cwd: string
+  name: string
+  rows: SessionMeta[]
+}
 const groups = computed<ArchiveGroup[]>(() => {
   const q = query.value.trim().toLowerCase()
   const byProject = new Map<string, SessionMeta[]>()
@@ -116,7 +127,7 @@ onMounted(load)
         :placeholder="t('sessionArchive.search')"
         :aria-label="t('sessionArchive.search')"
         class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
-      >
+      />
       <button
         v-if="query"
         type="button"
@@ -157,7 +168,7 @@ onMounted(load)
   </p>
 
   <div class="space-y-4">
-      <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
+    <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
       <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
         <Folder :size="15" class="shrink-0 text-muted-foreground" />
         <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
@@ -204,7 +215,14 @@ onMounted(load)
       </ul>
     </section>
   </div>
-  <Dialog :open="!!pendingDelete" @update:open="(v: boolean) => { if (!v && !busy) pendingDelete = null }">
+  <Dialog
+    :open="!!pendingDelete"
+    @update:open="
+      (v: boolean) => {
+        if (!v && !busy) pendingDelete = null
+      }
+    "
+  >
     <DialogContent class="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{{ t("sessionArchive.delete") }}</DialogTitle>

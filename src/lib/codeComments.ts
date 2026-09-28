@@ -4,7 +4,10 @@
  * 批注随下一条消息发给 agent，本文件保持无依赖以便单元测试直接加载。
  */
 
-export interface CodeCommentRange { start: number, end: number }
+export interface CodeCommentRange {
+  start: number
+  end: number
+}
 
 export interface CodeCommentDraft {
   path: string

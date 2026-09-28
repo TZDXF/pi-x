@@ -18,9 +18,7 @@ export function useModelFetch(provider: () => ProviderEntry | undefined) {
     if (!list) return []
     const q = query.value.trim().toLowerCase()
     if (!q) return list
-    return list.filter(
-      (m) => m.id.toLowerCase().includes(q) || (m.name ?? "").toLowerCase().includes(q),
-    )
+    return list.filter(m => m.id.toLowerCase().includes(q) || (m.name ?? "").toLowerCase().includes(q))
   })
 
   /** Load the provider-advertised model list (once unless forced). */

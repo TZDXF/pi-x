@@ -79,6 +79,21 @@ fn git_in(repo_root: &Path, args: &[&str], env: Option<&HashMap<&str, String>>) 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// 与 git_in 相同，但返回原始字节：cat-file blob 的内容必须逐字节保留。
+fn git_raw_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo_root).args(args);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = command
+        .output()
+        .map_err(|e| pix_error_detail("gitRunFailed", "无法运行 Git: {detail}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
 /// 与 git_in 相同，但不 trim 输出：cat-file blob 的内容必须逐字节保留。
 fn git_raw(repo_root: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new("git");
@@ -224,20 +239,21 @@ pub async fn session_checkpoint_content(
     spawn_blocking(move || {
         let layout = resolve_repo(&project)?;
         let spec = format!("{oid}:{}", to_repo_relative(&layout, &path));
-        // 先探测大小；路径在快照中不存在时返回 null，过大时拒绝读取。
-        match git_in(&layout.repo_root, &["cat-file", "-s", &spec], None) {
-            Ok(size) => {
-                if size.trim().parse::<u64>().unwrap_or(u64::MAX) > MAX_CONTENT_BYTES {
-                    return Err(pix_error_detail("checkpointContentTooLarge", "快照文件过大，无法展示差异: {detail}", path));
-                }
-            }
-            Err(stderr) if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in") => return Ok(None),
-            Err(stderr) => return Err(stderr),
+        // 用 cat-file -e 检查存在性，避免 stderr 文本本地化误判
+        if git_in(&layout.repo_root, &["cat-file", "-e", &spec], None).is_err() {
+            return Ok(None);
         }
-        match git_raw(&layout.repo_root, &["cat-file", "blob", &spec]) {
-            Ok(content) => Ok(Some(content)),
-            Err(stderr) if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in") => Ok(None),
-            Err(stderr) => Err(stderr),
+        let size = git_in(&layout.repo_root, &["cat-file", "-s", &spec], None)?;
+        if size.trim().parse::<u64>().unwrap_or(u64::MAX) > MAX_CONTENT_BYTES {
+            return Err(pix_error_detail("checkpointContentTooLarge", "快照文件过大，无法展示差异: {detail}", path));
+        }
+        match git_raw_bytes(&layout.repo_root, &["cat-file", "blob", &spec]) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(content) => Ok(Some(content)),
+                // 非 UTF-8 内容（二进制文件）返回 null
+                Err(_) => Ok(None),
+            },
+            Err(_) => Ok(None),
         }
     })
     .await
@@ -276,10 +292,11 @@ pub async fn session_checkpoint_restore(
     from: String,
     to: String,
     paths: Option<Vec<String>>,
+    tool_touched_files: Option<Vec<String>>,
 ) -> Result<CheckpointRestoreResult, String> {
     spawn_blocking(move || {
         let layout = resolve_repo(&project)?;
-        restore_between(&layout, &from, &to, paths.as_deref())
+        restore_between(&layout, &from, &to, paths.as_deref(), tool_touched_files.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -287,18 +304,27 @@ pub async fn session_checkpoint_restore(
 
 /// 把工作区从 `from` 声明的基线恢复到 `to` 的状态。
 /// `from`/`to` 为 commit oid；`paths` 为项目相对路径子集（缺省恢复全部差异路径）。
+/// `tool_touched_files` 限定只恢复该列表内的文件，避免覆盖用户手改。
 fn restore_between(
     layout: &RepoLayout,
     from: &str,
     to: &str,
     paths: Option<&[String]>,
+    tool_touched_files: Option<&[String]>,
 ) -> Result<CheckpointRestoreResult, String> {
-    let affected: Vec<String> = match paths {
+    let mut affected: Vec<String> = match paths {
         Some(list) if !list.is_empty() => {
             list.iter().map(|path| to_repo_relative(layout, path)).collect()
         }
         _ => diff_paths_between(layout, from, to)?,
     };
+    // 只恢复 tool_touched_files 中的文件，避免覆盖用户手改
+    if let Some(tool_files) = tool_touched_files {
+        if !tool_files.is_empty() {
+            let tool_set: std::collections::HashSet<String> = tool_files.iter().map(|p| to_repo_relative(layout, p)).collect();
+            affected.retain(|p| tool_set.contains(p));
+        }
+    }
     if affected.is_empty() {
         return Ok(CheckpointRestoreResult { restored: vec![], conflicts: vec![] });
     }
@@ -342,14 +368,27 @@ fn restore_between(
         }
     }
     if !restore_paths.is_empty() {
-        // 只恢复 worktree，不动用户暂存区。
+        // 只恢复 worktree，不动用户暂存区。分批处理避免超出 Windows 命令行 32K 上限。
         let source = format!("--source={to}");
-        let mut args: Vec<&str> = vec!["restore", &source, "--worktree", "--"];
-        args.extend(restore_paths.iter().map(String::as_str));
-        git_in(&layout.repo_root, &args, None)?;
+        const BATCH_SIZE: usize = 100;
+        for chunk in restore_paths.chunks(BATCH_SIZE) {
+            let mut args: Vec<&str> = vec!["restore", &source, "--worktree", "--"];
+            args.extend(chunk.iter().map(String::as_str));
+            git_in(&layout.repo_root, &args, None)?;
+        }
     }
     for path in &delete_paths {
-        let _ = std::fs::remove_file(layout.repo_root.join(path));
+        let target = layout.repo_root.join(path);
+        if let Err(e) = std::fs::remove_file(&target) {
+            // 不存在的文件视为已删除（幂等）
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(pix_error_detail(
+                    "checkpointDeleteFailed",
+                    "无法删除文件 {path}: {detail}",
+                    target.display(),
+                ));
+            }
+        }
     }
 
     // 恢复后再校验一次，确保磁盘确实到达目标基线。
@@ -382,43 +421,47 @@ fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str) -> Result<Vec<S
 }
 
 /// 当前磁盘在 `baseline` 的受影响路径上是否仍与基线一致（blob hash 级比较）。
+/// 分批处理避免超出 Windows 命令行 32K 上限。
 fn collect_conflicts(layout: &RepoLayout, baseline: &str, repo_paths: &[String]) -> Vec<(String, String)> {
-    let mut args: Vec<&str> = vec!["ls-tree", "-r", "-z", baseline, "--"];
-    args.extend(repo_paths.iter().map(String::as_str));
-    let tree = match git_in(&layout.repo_root, &args, None) {
-        Ok(output) => parse_ls_tree(&output),
-        Err(_) => {
-            return repo_paths
-                .iter()
-                .map(|path| (path.clone(), "tree-read-failed".into()))
-                .collect()
-        }
-    };
+    const BATCH_SIZE: usize = 100;
     let mut conflicts = Vec::new();
-    for repo_path in repo_paths {
-        let absolute = layout.repo_root.join(repo_path);
-        let Some(expected) = tree.get(repo_path) else {
-            // 基线里不存在该路径：磁盘上也不应存在；存在即用户新增，视为冲突。
-            if !absolute.exists() {
+    for chunk in repo_paths.chunks(BATCH_SIZE) {
+        let mut args: Vec<&str> = vec!["ls-tree", "-r", "-z", baseline, "--"];
+        args.extend(chunk.iter().map(String::as_str));
+        let tree = match git_in(&layout.repo_root, &args, None) {
+            Ok(output) => parse_ls_tree(&output),
+            Err(_) => {
+                for path in chunk {
+                    conflicts.push((path.clone(), "tree-read-failed".into()));
+                }
                 continue;
             }
-            conflicts.push((repo_path.clone(), "unexpected-file-in-worktree".into()));
-            continue;
         };
-        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
-            conflicts.push((repo_path.clone(), "missing-in-worktree".into()));
-            continue;
-        };
-        if metadata.is_dir() {
-            conflicts.push((repo_path.clone(), "type-mismatch".into()));
-            continue;
-        }
-        // 带过滤的 hash-object：与 add/restore 走同一套行尾转换语义，
-        // 避免 autocrlf 工作区里 CRLF 文件被误判为内容漂移。
-        let hash = git_in(&layout.repo_root, &["hash-object", "--", repo_path], None)
-            .unwrap_or_default();
-        if hash.trim() != expected {
-            conflicts.push((repo_path.clone(), "content-mismatch".into()));
+        for repo_path in chunk {
+            let absolute = layout.repo_root.join(repo_path);
+            let Some(expected) = tree.get(repo_path) else {
+                // 基线里不存在该路径：磁盘上也不应存在；存在即用户新增，视为冲突。
+                if !absolute.exists() {
+                    continue;
+                }
+                conflicts.push((repo_path.clone(), "unexpected-file-in-worktree".into()));
+                continue;
+            };
+            let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+                conflicts.push((repo_path.clone(), "missing-in-worktree".into()));
+                continue;
+            };
+            if metadata.is_dir() {
+                conflicts.push((repo_path.clone(), "type-mismatch".into()));
+                continue;
+            }
+            // 带过滤的 hash-object：与 add/restore 走同一套行尾转换语义，
+            // 避免 autocrlf 工作区里 CRLF 文件被误判为内容漂移。
+            let hash = git_in(&layout.repo_root, &["hash-object", "--", repo_path], None)
+                .unwrap_or_default();
+            if hash.trim() != expected {
+                conflicts.push((repo_path.clone(), "content-mismatch".into()));
+            }
         }
     }
     conflicts
@@ -522,10 +565,21 @@ fn to_workspace_relative(layout: &RepoLayout, repo_relative: &str) -> String {
 }
 
 fn to_repo_relative(layout: &RepoLayout, workspace_relative: &str) -> String {
-    if layout.workspace_in_repo == "." {
-        return workspace_relative.replace('\\', "/");
+    let normalized = workspace_relative.replace('\\', "/");
+    // pi 工具可能传入绝对路径（如 C:/code/pi-x/src/...），转为仓库相对路径
+    if Path::new(&normalized).is_absolute() {
+        if let Ok(stripped) = Path::new(&normalized).strip_prefix(&layout.repo_root) {
+            let relative = stripped.to_string_lossy().replace('\\', "/");
+            if !relative.is_empty() {
+                return relative;
+            }
+        }
+        return normalized;
     }
-    format!("{}/{}", layout.workspace_in_repo, workspace_relative.replace('\\', "/"))
+    if layout.workspace_in_repo == "." {
+        return normalized;
+    }
+    format!("{}/{}", layout.workspace_in_repo, normalized)
 }
 
 fn merge_diff(
@@ -585,6 +639,23 @@ pub async fn session_checkpoint_manifest_set(file: String, manifest: serde_json:
         std::fs::create_dir_all(store.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&store, serde_json::to_string(&manifest).map_err(|e| e.to_string())?)
             .map_err(|e| pix_error_detail("checkpointManifestWriteFailed", "写入快照清单失败: {detail}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 删除会话对应的快照清单文件（会话删除时调用）。
+#[tauri::command]
+pub async fn session_checkpoint_manifest_delete(file: String) -> Result<(), String> {
+    spawn_blocking(move || {
+        let path = validate_session_path(&file)?;
+        let store = manifest_path(&path);
+        if store.exists() {
+            std::fs::remove_file(&store).map_err(|e| {
+                pix_error_detail("checkpointManifestDeleteFailed", "删除快照清单失败: {detail}", e)
+            })?;
+        }
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -664,7 +735,7 @@ mod tests {
         assert_eq!((tracked.added, tracked.removed), (1, 0));
 
         // 回滚：from=当前(end) → to=轮前(start)
-        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), None).await.unwrap();
+        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), None, None).await.unwrap();
         assert!(result.conflicts.is_empty(), "unexpected conflicts: {:?}", result.conflicts);
         assert_eq!(std::fs::read_to_string(repo.0.join("tracked.txt")).unwrap(), "a\nb\n");
         assert!(!repo.0.join("new.txt").exists());
@@ -680,14 +751,14 @@ mod tests {
         let end = session_checkpoint_create(project.clone(), "end".into()).await.unwrap();
 
         // 单文件回滚只影响指定路径。
-        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), Some(vec!["other.txt".into()])).await.unwrap();
+        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), Some(vec!["other.txt".into()]), None).await.unwrap();
         assert!(result.conflicts.is_empty());
         assert!(!repo.0.join("other.txt").exists());
         assert_eq!(std::fs::read_to_string(repo.0.join("tracked.txt")).unwrap(), "changed\n");
 
         // 用户在回滚前又改了 tracked.txt、且 other.txt 已被前一步删除 → 两个路径都报冲突，拒绝执行。
         std::fs::write(repo.0.join("tracked.txt"), "user edit\n").unwrap();
-        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), None).await.unwrap();
+        let result = session_checkpoint_restore(project.clone(), end.commit_oid.clone(), start.commit_oid.clone(), None, None).await.unwrap();
         assert!(result.restored.is_empty());
         assert_eq!(result.conflicts.len(), 2);
         let tracked = result.conflicts.iter().find(|conflict| conflict.path == "tracked.txt").unwrap();

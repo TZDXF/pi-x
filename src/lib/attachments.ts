@@ -6,9 +6,5 @@ export function dataUrlToImage(d: string): { data: string; mimeType: string } | 
 
 /** Whether an attachment URL renders as an image (inline data or a remote image file). */
 export function isImageUrl(url?: string): boolean {
-  return (
-    !!url &&
-    (url.startsWith("data:image/") ||
-      /^https?:\/\/.*\.(png|jpe?g|gif|webp)/i.test(url))
-  )
+  return !!url && (url.startsWith("data:image/") || /^https?:\/\/.*\.(png|jpe?g|gif|webp)/i.test(url))
 }

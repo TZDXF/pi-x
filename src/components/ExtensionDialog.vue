@@ -23,28 +23,29 @@ const editing = ref("")
 const active = computed(() => ui.activeDialog)
 
 // prefill on dialog change
-watch(active, (req) => {
-  if (!req)
-    return
+watch(active, req => {
+  if (!req) return
   input.value = req.placeholder ?? ""
   editing.value = req.prefill ?? ""
 })
 
 function submitValue(value: string | undefined) {
-  if (active.value)
-    ui.respond(active.value, { value })
+  if (active.value) ui.respond(active.value, { value })
 }
 
 function confirm(confirmed: boolean) {
-  if (active.value)
-    ui.respond(active.value, { confirmed })
+  if (active.value) ui.respond(active.value, { confirmed })
 }
 </script>
 
 <template>
   <Dialog
     :open="!!active"
-    @update:open="(v: boolean) => { if (!v && active) ui.respond(active, { cancelled: true }) }"
+    @update:open="
+      (v: boolean) => {
+        if (!v && active) ui.respond(active, { cancelled: true })
+      }
+    "
   >
     <DialogContent v-if="active" class="sm:max-w-md">
       <DialogHeader>
@@ -53,17 +54,19 @@ function confirm(confirmed: boolean) {
       </DialogHeader>
 
       <!-- select -->
-      <ScrollArea v-if="active.method === 'select'" viewport-class="max-h-[50dvh]"><div class="flex flex-col gap-1">
-        <Button
-          v-for="(opt, i) in active.options ?? []"
-          :key="i"
-          variant="outline"
-          class="h-auto justify-start whitespace-normal break-words px-3 py-2 text-left"
-          @click="submitValue(opt)"
-        >
-          {{ opt }}
-        </Button>
-      </div></ScrollArea>
+      <ScrollArea v-if="active.method === 'select'" viewport-class="max-h-[50dvh]"
+        ><div class="flex flex-col gap-1">
+          <Button
+            v-for="(opt, i) in active.options ?? []"
+            :key="i"
+            variant="outline"
+            class="h-auto justify-start whitespace-normal break-words px-3 py-2 text-left"
+            @click="submitValue(opt)"
+          >
+            {{ opt }}
+          </Button>
+        </div></ScrollArea
+      >
 
       <!-- confirm -->
       <DialogFooter v-else-if="active.method === 'confirm'" class="gap-2">
@@ -95,11 +98,7 @@ function confirm(confirmed: boolean) {
 
       <!-- editor -->
       <div v-else-if="active.method === 'editor'" class="space-y-3">
-        <Textarea
-          v-model="editing"
-          rows="10"
-          class="font-mono text-xs"
-        />
+        <Textarea v-model="editing" rows="10" class="font-mono text-xs" />
         <DialogFooter class="gap-2">
           <Button variant="outline" @click="ui.respond(active, { cancelled: true })">
             {{ t("ext.cancel") }}

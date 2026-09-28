@@ -34,10 +34,10 @@ function makeElement(name = "div") {
 function makeEnvironment() {
   const listeners = {}
   const posted = []
-  const track = (prefix) => (type, fn) => {
+  const track = prefix => (type, fn) => {
     ;(listeners[`${prefix}:${type}`] ??= []).push(fn)
   }
-  const untrack = (prefix) => (type, fn) => {
+  const untrack = prefix => (type, fn) => {
     const list = listeners[`${prefix}:${type}`]
     if (!list) return
     const index = list.indexOf(fn)
@@ -49,14 +49,18 @@ function makeEnvironment() {
     body: makeElement("body"),
     title: "Stub page",
     readyState: "complete",
-    createElement: (name) => makeElement(name),
+    createElement: name => makeElement(name),
     addEventListener: track("document"),
     removeEventListener: untrack("document"),
     querySelector: () => null,
   }
   const win = {
     window: null,
-    parent: { postMessage(message) { posted.push(message) } },
+    parent: {
+      postMessage(message) {
+        posted.push(message)
+      },
+    },
     document,
     location: { href: "http://127.0.0.1:9/p/s/http/localhost:5173/", protocol: "http:", host: "127.0.0.1:9" },
     history: { pushState() {}, replaceState() {}, back() {}, forward() {} },
@@ -97,7 +101,7 @@ test("bridge reports ready and navigated to the panel", () => {
   vm.createContext(env.win)
   vm.runInContext(bridgeSource, env.win)
   assert.deepEqual(
-    env.posted.map((message) => message.type),
+    env.posted.map(message => message.type),
     ["navigated", "ready"],
   )
   assert.equal(env.posted[0].source, "pix-preview")
@@ -119,7 +123,7 @@ test("enabling inspect registers pointer handlers and clicks report pins", () =>
   dispatch(env, "mousedown", { ...noopEvent, button: 0, target, pageX: 12, pageY: 14 })
   dispatch(env, "mouseup", { ...noopEvent, target, pageX: 13, pageY: 15 })
 
-  const selected = env.posted.find((message) => message.type === "selected")
+  const selected = env.posted.find(message => message.type === "selected")
   assert.ok(selected, "click must report a selection")
   // JSON round-trip: the bridge runs in a VM realm whose object prototypes
   // differ from the host's, which deepStrictEqual would reject.
@@ -141,7 +145,7 @@ test("dragging beyond the threshold reports an area selection", () => {
   dispatch(env, "mousemove", { target, pageX: 60, pageY: 80 })
   dispatch(env, "mouseup", { ...noopEvent, target, pageX: 60, pageY: 80 })
 
-  const selected = env.posted.find((message) => message.type === "selected")
+  const selected = env.posted.find(message => message.type === "selected")
   assert.ok(selected, "drag must report a selection")
   const selection = JSON.parse(JSON.stringify(selected))
   assert.equal(selection.pin, undefined)

@@ -2,4 +2,4 @@ allowBuilds:
   vue-demi: true
 
 overrides:
-  'ignore@^7.0.0': 7.0.9
+  "ignore@^7.0.0": 7.0.9

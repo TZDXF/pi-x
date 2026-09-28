@@ -12,14 +12,17 @@ import { changeForCall } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
-const props = withDefaults(defineProps<{
-  blocks: Block[]
-  runs: Record<string, ToolRun>
-  animate?: boolean
-  /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
-   *  keeps the same keys it had while the full block list was streaming. */
-  keyOffset?: number
-}>(), { keyOffset: 0, animate: true })
+const props = withDefaults(
+  defineProps<{
+    blocks: Block[]
+    runs: Record<string, ToolRun>
+    animate?: boolean
+    /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
+     *  keeps the same keys it had while the full block list was streaming. */
+    keyOffset?: number
+  }>(),
+  { keyOffset: 0, animate: true },
+)
 
 const emit = defineEmits<{ openReview: [path: string] }>()
 
@@ -29,7 +32,18 @@ function runFor(block: ToolCallBlock): ToolRun | undefined {
 
 // ---- tool specialization ----
 
-const BASH_TOOLS = new Set(["bash", "shell", "sh", "zsh", "powershell", "pwsh", "cmd", "terminal", "run_command", "execute_command"])
+const BASH_TOOLS = new Set([
+  "bash",
+  "shell",
+  "sh",
+  "zsh",
+  "powershell",
+  "pwsh",
+  "cmd",
+  "terminal",
+  "run_command",
+  "execute_command",
+])
 function isBash(block: ToolCallBlock): boolean {
   return BASH_TOOLS.has(toolBase(block))
 }
@@ -37,7 +51,11 @@ function isBash(block: ToolCallBlock): boolean {
 function parsedArgs(block: ToolCallBlock): any | null {
   const text = block.argsText || runFor(block)?.argsText
   if (!text) return null
-  try { return JSON.parse(text) } catch { return null }
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
 }
 
 /** Command text, tolerating still-streaming (unterminated) JSON arguments. */
@@ -90,11 +108,23 @@ function isRunning(block: ToolCallBlock): boolean {
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
 const anyRunning = computed(() => props.blocks.some(b => b.type === "toolCall" && isRunning(b)))
-watch(anyRunning, running => {
-  if (running && clock === undefined) clock = setInterval(() => { now.value = Date.now() }, 1000)
-  if (!running && clock !== undefined) { clearInterval(clock); clock = undefined }
-}, { immediate: true })
-onUnmounted(() => { if (clock !== undefined) clearInterval(clock) })
+watch(
+  anyRunning,
+  running => {
+    if (running && clock === undefined)
+      clock = setInterval(() => {
+        now.value = Date.now()
+      }, 1000)
+    if (!running && clock !== undefined) {
+      clearInterval(clock)
+      clock = undefined
+    }
+  },
+  { immediate: true },
+)
+onUnmounted(() => {
+  if (clock !== undefined) clearInterval(clock)
+})
 
 function formatElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
@@ -124,11 +154,16 @@ function elapsedClass(block: ToolCallBlock): string {
   return "text-muted-foreground"
 }
 
-interface FileCard { path: string, added: number, removed: number, written: number }
+interface FileCard {
+  path: string
+  added: number
+  removed: number
+  written: number
+}
 
 // Diff results are cached per callId+argsText: streaming re-renders must not
 // re-run the line diff for arguments that have not changed.
-const cardCache = new Map<string, { argsText: string, card: FileCard | null }>()
+const cardCache = new Map<string, { argsText: string; card: FileCard | null }>()
 function cardFor(block: ToolCallBlock): FileCard | null {
   const argsText = block.argsText || runFor(block)?.argsText || ""
   const hit = cardCache.get(block.callId)
@@ -193,7 +228,9 @@ const { t } = useI18n()
           v-if="elapsedText(block)"
           class="flex items-center justify-end gap-1 px-3 pb-1.5 -mt-1 text-xs tabular-nums"
           :class="elapsedClass(block)"
-        >{{ elapsedText(block) }}</div>
+        >
+          {{ elapsedText(block) }}
+        </div>
         <ToolContent>
           <div class="p-3">
             <Terminal
@@ -225,10 +262,20 @@ const { t } = useI18n()
           @click="emit('openReview', cardFor(block)!.path)"
         >
           <FileTypeIcon :name="cardFor(block)!.path" class="size-4" />
-          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{ cardFor(block)!.path }}</span>
-          <span v-if="cardFor(block)!.added || cardFor(block)!.written" class="shrink-0 text-xs text-green-600 dark:text-green-400">+{{ cardFor(block)!.added || cardFor(block)!.written }}</span>
-          <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400">-{{ cardFor(block)!.removed }}</span>
-          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{ elapsedText(block) }}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="cardFor(block)!.path">{{
+            cardFor(block)!.path
+          }}</span>
+          <span
+            v-if="cardFor(block)!.added || cardFor(block)!.written"
+            class="shrink-0 text-xs text-green-600 dark:text-green-400"
+            >+{{ cardFor(block)!.added || cardFor(block)!.written }}</span
+          >
+          <span v-if="cardFor(block)!.removed" class="shrink-0 text-xs text-red-600 dark:text-red-400"
+            >-{{ cardFor(block)!.removed }}</span
+          >
+          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{
+            elapsedText(block)
+          }}</span>
           <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
           <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
         </button>
@@ -238,9 +285,11 @@ const { t } = useI18n()
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
           class="gap-2 px-3 py-2 [&>div]:min-w-0"
-          :class="isRead(block)
-            ? '[&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal'
-            : '[&>div]:flex-wrap [&>div>span]:break-all'"
+          :class="
+            isRead(block)
+              ? '[&>div>span]:min-w-0 [&>div>span]:truncate [&>div>span]:font-mono [&>div>span]:text-xs [&>div>span]:font-normal'
+              : '[&>div]:flex-wrap [&>div>span]:break-all'
+          "
           :type="`tool-${block.name}`"
           :icon="isRead(block) ? readIcon(block) : undefined"
           :title="isRead(block) ? pathOf(block) || undefined : undefined"
@@ -250,16 +299,24 @@ const { t } = useI18n()
           v-if="elapsedText(block)"
           class="flex items-center justify-end gap-1 px-3 pb-1.5 -mt-1 text-xs tabular-nums"
           :class="elapsedClass(block)"
-        >{{ elapsedText(block) }}</div>
+        >
+          {{ elapsedText(block) }}
+        </div>
         <ToolContent>
           <div class="space-y-2 p-3 text-xs">
             <div v-if="block.argsText">
               <div class="text-muted-foreground mb-1 font-medium">{{ t("blocks.input") }}</div>
-              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-40"><pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{ block.argsText }}</pre></ScrollArea>
+              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-40">
+                <pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{ block.argsText }}</pre>
+              </ScrollArea>
             </div>
             <div v-if="runFor(block)?.outputText">
               <div class="text-muted-foreground mb-1 font-medium">{{ t("blocks.output") }}</div>
-              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-60"><pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{ runFor(block)!.outputText }}</pre></ScrollArea>
+              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-60">
+                <pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{
+                  runFor(block)!.outputText
+                }}</pre>
+              </ScrollArea>
             </div>
           </div>
         </ToolContent>

@@ -1,21 +1,15 @@
 <script setup lang="ts">
-import SectionHeading from '@/components/shared/SectionHeading.vue'
-import SettingRow from '@/components/shared/SettingRow.vue'
-import SettingHeading from '@/components/shared/SettingHeading.vue'
-import SettingDescription from '@/components/shared/SettingDescription.vue'
+import SectionHeading from "@/components/shared/SectionHeading.vue"
+import SettingRow from "@/components/shared/SettingRow.vue"
+import SettingHeading from "@/components/shared/SettingHeading.vue"
+import SettingDescription from "@/components/shared/SettingDescription.vue"
 /** Installed tab: custom source install plus global/project package lists. */
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { Separator } from "@/components/ui/separator"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { packageNameOf, type InstalledPackage } from "@/api/piClient"
 import { joinDisplayPath } from "@/lib/paths"
 import { Trash2, ArrowUpCircle, Plus, SlidersHorizontal } from "@lucide/vue"
@@ -25,14 +19,7 @@ const props = defineProps<{ ctx: PackagesContext }>()
 const emit = defineEmits<{ manage: [pkg: InstalledPackage] }>()
 const { t } = useI18n()
 
-const {
-  customSource,
-  customScope,
-  globalInstalled,
-  projectInstalled,
-  viewedProject,
-  busy,
-} = props.ctx
+const { customSource, customScope, globalInstalled, projectInstalled, viewedProject, busy } = props.ctx
 const { installCustom, update, remove, filterSummary } = props.ctx
 </script>
 
@@ -65,13 +52,7 @@ const { installCustom, update, remove, filterSummary } = props.ctx
 
   <div class="mb-2 flex items-center justify-between">
     <SectionHeading class="!mb-0">{{ t("packages.scopeGlobal") }}</SectionHeading>
-    <Button
-      v-if="globalInstalled.length"
-      variant="outline"
-      size="sm"
-      :disabled="busy !== null"
-      @click="update()"
-    >
+    <Button v-if="globalInstalled.length" variant="outline" size="sm" :disabled="busy !== null" @click="update()">
       <Spinner v-if="busy === 'all'" class="size-3" />
       <ArrowUpCircle v-else :size="14" />
       {{ t("packages.updateAll") }}
@@ -87,30 +68,16 @@ const { installCustom, update, remove, filterSummary } = props.ctx
       <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
     </div>
     <div class="flex shrink-0 gap-2">
-      <Button
-        variant="outline"
-        size="sm"
-        @click="emit('manage', p)"
-      >
+      <Button variant="outline" size="sm" @click="emit('manage', p)">
         <SlidersHorizontal :size="14" />
         {{ t("packages.manage") }}
       </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="busy !== null"
-        @click="update(p.source)"
-      >
+      <Button variant="outline" size="sm" :disabled="busy !== null" @click="update(p.source)">
         <Spinner v-if="busy === `update:${p.source}`" class="size-3" />
         <ArrowUpCircle v-else :size="14" />
         {{ t("packages.update") }}
       </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="busy !== null"
-        @click="remove(p)"
-      >
+      <Button variant="outline" size="sm" :disabled="busy !== null" @click="remove(p)">
         <Spinner v-if="busy === `remove:${p.source}`" class="size-3" />
         <Trash2 v-else :size="14" />
         {{ t("packages.remove") }}
@@ -121,7 +88,9 @@ const { installCustom, update, remove, filterSummary } = props.ctx
   <template v-if="viewedProject">
     <Separator class="my-4" />
     <SectionHeading>{{ t("packages.scopeProject") }}</SectionHeading>
-    <p class="text-muted-foreground mb-2 font-mono text-xs">{{ joinDisplayPath(viewedProject, ".pi", "settings.json") }}</p>
+    <p class="text-muted-foreground mb-2 font-mono text-xs">
+      {{ joinDisplayPath(viewedProject, ".pi", "settings.json") }}
+    </p>
     <p v-if="!projectInstalled.length" class="text-muted-foreground py-3 text-sm">
       {{ t("packages.noneProject") }}
     </p>
@@ -132,20 +101,11 @@ const { installCustom, update, remove, filterSummary } = props.ctx
         <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
       </div>
       <div class="flex shrink-0 gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          @click="emit('manage', p)"
-        >
+        <Button variant="outline" size="sm" @click="emit('manage', p)">
           <SlidersHorizontal :size="14" />
           {{ t("packages.manage") }}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="busy !== null"
-          @click="remove(p)"
-        >
+        <Button variant="outline" size="sm" :disabled="busy !== null" @click="remove(p)">
           <Spinner v-if="busy === `remove:${p.source}`" class="size-3" />
           <Trash2 v-else :size="14" />
           {{ t("packages.remove") }}

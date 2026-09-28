@@ -276,7 +276,6 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
 pub(crate) struct PackageSkillPath {
     pub path: std::path::PathBuf,
     pub source: String,
-    pub scope: String,
 }
 
 pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath> {
@@ -290,7 +289,7 @@ pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath
         for rel in collect_resources(&root, "skills") {
             if resource_enabled(&rel, patterns.as_deref()) {
                 paths.push(PackageSkillPath {
-                    path: root.join(rel), source: package.source.clone(), scope: package.scope.clone(),
+                    path: root.join(rel), source: package.source.clone(),
                 });
             }
         }

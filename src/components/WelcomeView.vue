@@ -44,10 +44,7 @@ async function saveAndDetect() {
         <p class="text-muted-foreground text-sm">{{ t("welcome.subtitle") }}</p>
       </div>
 
-      <p
-        v-if="phase === 'detecting'"
-        class="text-center text-sm text-muted-foreground animate-pulse"
-      >
+      <p v-if="phase === 'detecting'" class="text-center text-sm text-muted-foreground animate-pulse">
         {{ t("welcome.connecting") }}
       </p>
 
@@ -63,20 +60,13 @@ async function saveAndDetect() {
             }}
           </p>
         </div>
-        <div
-          class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs"
-        >
+        <div class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs">
           <span class="min-w-0 flex-1 whitespace-pre-wrap break-words"
-            >npm install -g --ignore-scripts
-            @earendil-works/pi-coding-agent</span
+            >npm install -g --ignore-scripts @earendil-works/pi-coding-agent</span
           >
         </div>
         <div class="flex gap-2">
-          <Input
-            v-model="customPath"
-            :placeholder="t('welcome.pathPlaceholder')"
-            class="h-9 flex-1"
-          />
+          <Input v-model="customPath" :placeholder="t('welcome.pathPlaceholder')" class="h-9 flex-1" />
           <Button :disabled="busy" class="px-4" @click="saveAndDetect">
             {{ busy ? t("welcome.checking") : t("welcome.usePath") }}
           </Button>
@@ -89,22 +79,13 @@ async function saveAndDetect() {
           <span class="size-2 rounded-full bg-green-500" />
           <span class="text-sm">
             Pi {{ t("welcome.ready") }}
-            <span v-if="info?.version" class="text-muted-foreground"
-              >({{ info.version }})</span
-            >
+            <span v-if="info?.version" class="text-muted-foreground">({{ info.version }})</span>
           </span>
         </div>
-        <Button
-          class="h-11 w-full"
-          @click="emit('openProject')"
-        >
+        <Button class="h-11 w-full" @click="emit('openProject')">
           {{ t("welcome.openFolder") }}
         </Button>
-        <Button
-          variant="outline"
-          class="h-11 w-full"
-          @click="emit('openProjectless')"
-        >
+        <Button variant="outline" class="h-11 w-full" @click="emit('openProjectless')">
           <MessagesSquare :size="16" class="size-auto shrink-0" />
           {{ t("projectless.name") }}
         </Button>

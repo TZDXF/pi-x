@@ -222,10 +222,10 @@ void listen<{ id: number; code: number }>("term://exit", e => {
   if (!tab || tab.exited) return
   tab.exited = true
   tab.exitCode = e.payload.code
-  instances.get(tab.id)?.term.writeln(
-    `\r\n\x1b[2m${t("terminal.exited", { code: e.payload.code })}\x1b[0m`,
-  )
-}).then(fn => { unlistenExit = fn })
+  instances.get(tab.id)?.term.writeln(`\r\n\x1b[2m${t("terminal.exited", { code: e.payload.code })}\x1b[0m`)
+}).then(fn => {
+  unlistenExit = fn
+})
 
 onBeforeUnmount(() => {
   for (const [, inst] of instances) inst.dispose()
@@ -240,7 +240,11 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
 </script>
 
 <template>
-  <div class="terminal-dock border-border flex min-h-0 flex-col" :class="embedded ? 'flex-1' : 'border-t'" :style="embedded ? undefined : { height: `${panelHeight}px` }">
+  <div
+    class="terminal-dock border-border flex min-h-0 flex-col"
+    :class="embedded ? 'flex-1' : 'border-t'"
+    :style="embedded ? undefined : { height: `${panelHeight}px` }"
+  >
     <!-- drag handle -->
     <div
       v-if="!embedded"
@@ -252,9 +256,9 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
     <!-- empty state -->
     <div v-if="!tabs.length" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-zinc-950 p-4">
       <SquareTerminal class="size-8 text-zinc-600" />
-      <p class="text-xs text-zinc-500">{{ t('terminal.empty') }}</p>
+      <p class="text-xs text-zinc-500">{{ t("terminal.empty") }}</p>
       <Button type="button" variant="ghost" size="sm" class="text-zinc-300" @click="openTerminal">
-        <Plus class="size-3.5" />{{ t('terminal.new') }}
+        <Plus class="size-3.5" />{{ t("terminal.new") }}
       </Button>
     </div>
 

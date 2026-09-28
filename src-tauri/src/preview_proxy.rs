@@ -29,11 +29,31 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
+/// FNV-1a 64-bit hash for per-host token derivation.
+fn fnv1a(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in s.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Derives a per-host token from the shared secret and the target host.
+/// The proxy validates `token == fnv1a(secret + host)` so a page previewed on
+/// one host cannot use the same token to reach arbitrary loopback services.
+fn host_token(secret: &str, host: &str) -> String {
+    format!("{:x}", fnv1a(&format!("{}{}", secret, host)))
+}
+
 const BRIDGE_JS: &str = include_str!("preview_bridge.js");
 /// Route root on the dedicated loopback server.
 const DESKTOP_ROOT: &str = "/p";
 /// Route root mounted by the remote access server.
 const REMOTE_ROOT: &str = "/api/preview";
+/// Maximum size for HTML/CSS responses that are buffered for rewriting.
+/// Larger responses are passed through without rewriting.
+const REWRITE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 struct ProxyState {
     secret: String,
@@ -109,15 +129,15 @@ struct Target {
     path: String,
 }
 
-/// Parses `{root}/{secret}/{scheme}/{host}[/{path}]` out of the raw request
-/// path. Returns the prefix (everything up to the secret) used to build
+/// Parses `{root}/{token}/{scheme}/{host}[/{path}]` out of the raw request
+/// path. The token is `fnv1a(secret + host)` — a per-host capability that
+/// prevents a previewed page from using the same token to reach arbitrary
+/// loopback services. Returns the prefix (root + token) used to build
 /// absolute proxy URLs back into the page (bridge script, rewritten redirects).
 fn parse_target(root: &str, raw_path: &str) -> Option<Target> {
     let rest = raw_path.strip_prefix(root)?.strip_prefix('/')?;
     let mut parts = rest.splitn(4, '/');
-    if !constant_time_eq(parts.next()?, &proxy().secret) {
-        return None;
-    }
+    let token = parts.next()?.to_string();
     let scheme = parts.next()?.to_ascii_lowercase();
     let host = parts.next()?.to_string();
     // The host is spliced back into injected markup and rewritten URLs; keep
@@ -129,11 +149,16 @@ fn parse_target(root: &str, raw_path: &str) -> Option<Target> {
     if !host_safe || (scheme != "http" && scheme != "https") {
         return None;
     }
+    // Validate the per-host token: it must equal fnv1a(secret + host).
+    let expected = host_token(&proxy().secret, &host);
+    if !constant_time_eq(&token, &expected) {
+        return None;
+    }
     Some(Target {
-        prefix: format!("{root}/{}", proxy().secret),
-        path: parts.next().unwrap_or("").to_string(),
+        prefix: format!("{root}/{token}"),
         scheme,
         host,
+        path: parts.next().unwrap_or("").to_string(),
     })
 }
 
@@ -333,7 +358,8 @@ async fn forward_http(req: Request, target: &Target) -> Response {
         .body(reqwest::Body::wrap_stream(body.into_data_stream()));
     let response = match request.send().await {
         Ok(response) => response,
-        Err(_) => {
+        Err(e) => {
+            eprintln!("preview proxy: failed to reach target: {}", e);
             return (
                 StatusCode::BAD_GATEWAY,
                 "PiX preview proxy: failed to reach the target host",
@@ -365,19 +391,52 @@ async fn forward_http(req: Request, target: &Target) -> Response {
         .map(|v| v.to_ascii_lowercase())
         .unwrap_or_default();
     if content_type.contains("text/html") {
+        // Check Content-Length before buffering to avoid unbounded memory usage.
+        let content_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        if content_length.unwrap_or(0) > REWRITE_MAX_BYTES {
+            // Too large to rewrite; pass through without rewriting.
+            return builder
+                .body(Body::from_stream(response.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        }
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
         };
+        // Double-check actual size after reading.
+        if bytes.len() as u64 > REWRITE_MAX_BYTES {
+            return builder
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        }
         return builder
             .body(Body::from(rewrite_document(&bytes, target)))
             .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
     }
     if content_type.contains("text/css") {
+        let content_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        if content_length.unwrap_or(0) > REWRITE_MAX_BYTES {
+            return builder
+                .body(Body::from_stream(response.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        }
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
         };
+        if bytes.len() as u64 > REWRITE_MAX_BYTES {
+            return builder
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        }
         let base = document_base(target);
         let rewritten = match std::str::from_utf8(&bytes) {
             Ok(text) => rewrite_css_urls(text, &base).into_bytes(),
@@ -418,9 +477,15 @@ fn rewrite_referer(parts: &axum::http::request::Parts, target: &Target) -> Optio
 /// base is published for the bridge to patch runtime requests (fetch/XHR/…).
 fn rewrite_document(html: &[u8], target: &Target) -> Vec<u8> {
     let base = document_base(target);
+    // bridge.js is validated against the shared secret, not the per-host token.
+    let bridge_prefix = format!(
+        "{}/{}",
+        if base.starts_with(REMOTE_ROOT) { REMOTE_ROOT } else { DESKTOP_ROOT },
+        proxy().secret
+    );
     let script = format!(
         r#"<script>window.__pixPreviewBase="{base}";</script><script src="{}/bridge.js"></script>"#,
-        target.prefix
+        bridge_prefix
     );
     // Non-UTF-8 documents (legacy charsets) are served unrewritten but still
     // get the bridge appended.
@@ -468,7 +533,7 @@ fn css_url_regex() -> &'static regex::Regex {
 /// Prefixes root-relative URLs; protocol-relative (`//cdn`), absolute
 /// (`https://…`), fragment and already-prefixed URLs pass through untouched.
 fn rewrite_single_url(url: &str, base: &str) -> String {
-    if url.len() > 1 && url.starts_with('/') && !url.starts_with("//") && !url.starts_with(base) {
+    if url.starts_with('/') && !url.starts_with("//") && !url.starts_with(base) {
         format!("{base}{url}")
     } else {
         url.to_string()
@@ -616,8 +681,12 @@ mod tests {
 
     fn proxied(path: &str) -> String {
         init();
-        format!("{DESKTOP_ROOT}/{}", secret())
-            + path
+        // path is like "/http/127.0.0.1:5173/app/page.html"
+        // Extract host and compute per-host token.
+        let parts: Vec<&str> = path.trim_start_matches('/').splitn(3, '/').collect();
+        let host = parts.get(1).copied().unwrap_or("");
+        let token = host_token(&secret(), host);
+        format!("{DESKTOP_ROOT}/{token}{path}")
     }
 
     #[test]
@@ -626,7 +695,8 @@ mod tests {
         assert_eq!(target.scheme, "http");
         assert_eq!(target.host, "127.0.0.1:5173");
         assert_eq!(target.path, "app/page.html");
-        assert_eq!(target.prefix, format!("{DESKTOP_ROOT}/{}", secret()));
+        let token = host_token(&secret(), "127.0.0.1:5173");
+        assert_eq!(target.prefix, format!("{DESKTOP_ROOT}/{token}"));
     }
 
     #[test]
@@ -655,23 +725,23 @@ mod tests {
     #[test]
     fn rewrites_redirect_locations_back_into_the_proxy() {
         let target = target_for(&proxied("/http/localhost:3000/app"));
-        let secret = secret().to_string();
+        let token = host_token(&secret(), "localhost:3000");
         assert_eq!(
             rewrite_location("/login?next=/app", &target, None).unwrap(),
-            format!("/p/{secret}/http/localhost:3000/login?next=/app")
+            format!("/p/{token}/http/localhost:3000/login?next=/app")
         );
         assert_eq!(
             rewrite_location("https://other.example.org/a/b", &target, None).unwrap(),
-            format!("/p/{secret}/https/other.example.org/a/b")
+            format!("/p/{token}/https/other.example.org/a/b")
         );
         assert_eq!(
             rewrite_location("section", &target, None).unwrap(),
-            format!("/p/{secret}/http/localhost:3000/section")
+            format!("/p/{token}/http/localhost:3000/section")
         );
         // Default ports are already omitted by the url crate.
         assert_eq!(
             rewrite_location("https://example.com/", &target, None).unwrap(),
-            format!("/p/{secret}/https/example.com/")
+            format!("/p/{}/https/example.com/", secret())
         );
     }
 
@@ -764,13 +834,13 @@ mod tests {
     #[test]
     fn maps_proxy_referer_back_to_the_target_origin() {
         let target = target_for(&proxied("/http/localhost:5173/app"));
-        let secret = secret().to_string();
+        let token = host_token(&secret(), "localhost:5173");
         let request = HttpRequest::builder()
             .method("GET")
-            .uri(format!("http://127.0.0.1:9/p/{secret}/http/localhost:5173/app"))
+            .uri(format!("http://127.0.0.1:9/p/{token}/http/localhost:5173/app"))
             .header(
                 header::REFERER,
-                format!("http://127.0.0.1:9/p/{secret}/http/localhost:5173/app/page"),
+                format!("http://127.0.0.1:9/p/{token}/http/localhost:5173/app/page"),
             )
             .body(Body::empty())
             .unwrap();
@@ -828,16 +898,17 @@ mod tests {
         let proxy_port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, router()).await.unwrap() });
 
+        let target_host = format!("127.0.0.1:{target_port}");
+        let token = host_token(&secret(), &target_host);
         let page = reqwest::get(format!(
-            "http://127.0.0.1:{proxy_port}/p/{}/http/127.0.0.1:{target_port}/",
-            secret()
+            "http://127.0.0.1:{proxy_port}/p/{token}/http/{target_host}/",
         ))
         .await
         .unwrap();
         assert_eq!(page.status(), 200);
         let body = page.text().await.unwrap();
         assert!(body.contains("<h1>dev</h1>"));
-        let base = format!("/p/{}/http/127.0.0.1:{target_port}", secret());
+        let base = format!("/p/{token}/http/{target_host}");
         assert!(body.contains(&format!(r#"href="{base}/style.css""#)));
         assert!(body.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
         assert!(body.contains(&format!("<script src=\"/p/{}/bridge.js\"></script>", secret())));
@@ -853,7 +924,7 @@ mod tests {
         assert!(bridge.text().await.unwrap().contains("pix-preview"));
 
         let stranger = reqwest::get(format!(
-            "http://127.0.0.1:{proxy_port}/p/not-the-secret/http/127.0.0.1:{target_port}/"
+            "http://127.0.0.1:{proxy_port}/p/not-the-secret/http/{target_host}/"
         ))
         .await
         .unwrap();

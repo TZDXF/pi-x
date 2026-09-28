@@ -2,8 +2,12 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 
-const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8")
+const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
 
+// NOTE: 当前测试为源码正则断言，不验证运行时行为。
+// BrowserPanel.vue 是 Vue 组件，行为测试需要挂载实例（@vue/test-utils），
+// 项目未引入该依赖，故暂以源码断言作为回归防护。
+// 局限：重命名函数/调整类名会导致断言失败，但不保证运行时逻辑正确。
 test("browser drawers resize by dragging their top handles", () => {
   const panel = read("../src/components/browser/BrowserPanel.vue")
   // 两个抽屉都由 drawerHeights 驱动高度,顶部把手按抽屉名启动拖拽。
@@ -22,7 +26,11 @@ test("browser drawers resize by dragging their top handles", () => {
 test("drawer heights are no longer fixed tailwind sizes", () => {
   const panel = read("../src/components/browser/BrowserPanel.vue")
   for (const drawer of ["annotations", "console"]) {
-    const root = panel.match(new RegExp(`v-if="show${drawer[0].toUpperCase()}${drawer.slice(1)}"[\\s\\S]*?class="([^"]*)"\\n[\\s\\S]*?:style="\\{ height:`))
+    const root = panel.match(
+      new RegExp(
+        `v-if="show${drawer[0].toUpperCase()}${drawer.slice(1)}"[\\s\\S]*?class="([^"]*)"\\n[\\s\\S]*?:style="\\{ height:`,
+      ),
+    )
     assert.ok(root, `${drawer} drawer must bind its height via :style`)
     assert.doesNotMatch(root[1], /\bh-(?:40|48)\b/)
   }

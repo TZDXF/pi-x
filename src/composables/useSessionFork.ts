@@ -8,8 +8,11 @@ import type { UiStore } from "@/stores/ui"
  * Fork dialog: restart the conversation from a previous prompt of the
  * current session.
  */
-export function useSessionFork(session: SessionStore, ui: UiStore,
-  rpcRequest: <T = unknown>(command: Record<string, unknown>) => Promise<RpcResponse<T>>) {
+export function useSessionFork(
+  session: SessionStore,
+  ui: UiStore,
+  rpcRequest: <T = unknown>(command: Record<string, unknown>) => Promise<RpcResponse<T>>,
+) {
   const { t } = useI18n()
   const forkOpen = ref(false)
   const forkMessages = ref<{ entryId: string; text: string }[]>([])
@@ -19,7 +22,7 @@ export function useSessionFork(session: SessionStore, ui: UiStore,
       const res = await rpcRequest<{
         messages: { entryId: string; text: string }[]
       }>({ type: "get_fork_messages" })
-      if (!res.success) throw new Error(res.error ?? "fork list failed")
+      if (!res.success) throw new Error(res.error ?? t("chat.forkFailedList"))
       forkMessages.value = (res.data?.messages ?? []).slice().reverse()
       forkOpen.value = true
     } catch (e) {
@@ -38,7 +41,11 @@ export function useSessionFork(session: SessionStore, ui: UiStore,
     let questionIndex = -1
     for (let i = entryIndex + 1; i < list.length; i++) {
       const e = list[i]
-      if (e.kind === "user") { questionText = e.text; questionIndex = i; break }
+      if (e.kind === "user") {
+        questionText = e.text
+        questionIndex = i
+        break
+      }
     }
     if (questionText === null) {
       ui.pushToast(t("chat.toastForkNoLater"), "info")
@@ -48,7 +55,7 @@ export function useSessionFork(session: SessionStore, ui: UiStore,
       const res = await rpcRequest<{
         messages: { entryId: string; text: string }[]
       }>({ type: "get_fork_messages" })
-      if (!res.success) throw new Error(res.error ?? "fork list failed")
+      if (!res.success) throw new Error(res.error ?? t("chat.forkFailedList"))
       const chronological = res.data?.messages ?? []
       // Resolve duplicates by occurrence rank: the n-th identical question on
       // this branch maps to the n-th identical entry in the fork list.
@@ -73,7 +80,7 @@ export function useSessionFork(session: SessionStore, ui: UiStore,
         type: "fork",
         entryId,
       })
-      if (!res.success) throw new Error(res.error ?? "fork failed")
+      if (!res.success) throw new Error(res.error ?? t("chat.forkFailed"))
       if (res.data?.cancelled) {
         ui.pushToast(t("chat.toastForkCancelled"), "info")
         return

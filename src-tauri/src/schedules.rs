@@ -4,7 +4,10 @@ use chrono::{Local, TimeZone};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{str::FromStr, time::Duration};
+use std::{
+  str::FromStr,
+  time::{Duration, Instant},
+};
 use tauri::{AppHandle, Listener, Manager, State};
 use tokio::sync::Mutex;
 
@@ -35,6 +38,9 @@ pub struct Task {
 }
 #[derive(Default)]
 pub struct ScheduleState(Mutex<Vec<Task>>);
+
+/// Schedule runtime 完成后的回收宽限期：若期间未被前端 attach（无任何请求），则 kill。
+const SCHEDULE_RUNTIME_TTL: Duration = Duration::from_secs(600);
 
 fn notify_schedules_changed(app: &AppHandle) {
     crate::remote::emit(app, "pi://schedules-changed", json!({}));
@@ -193,6 +199,14 @@ pub async fn schedule_run(app: AppHandle, state: State<'_, ScheduleState>, id: S
                 Err(e) => {
                     current.status = "failed".into();
                     current.error = Some(e);
+                }
+            }
+            // 手动运行可能跨越了计划时刻；若 next_run 已错过，推进到下一个未来槽，
+            // 避免运行结束后下个 tick 立即补跑。
+            let now = Local::now().timestamp_millis();
+            if current.next_run <= now {
+                if let Ok(next) = next_run(&current.input.expression, now) {
+                    current.next_run = next;
                 }
             }
             if let Err(e) = persist(&guard) {
@@ -373,6 +387,22 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             }));
         }
     }
+    if published && settled && outcome.is_ok() {
+        // 成功路径留下存活的 schedule runtime 供前端 attach；若宽限期内未被
+        // 前端 attach（无任何请求），回收进程与 RpcState 条目，防止无界增长。
+        let cleanup_app = app.clone();
+        let cleanup_id = id.clone();
+        let completed_at = Instant::now();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(SCHEDULE_RUNTIME_TTL).await;
+            let state = cleanup_app.state::<rpc::RpcState>();
+            if !rpc::running(&state, Some(&cleanup_id)).await { return; }
+            let last = state.last_activity.lock().await.get(&cleanup_id).copied();
+            if last.is_none_or(|t| t <= completed_at) {
+                let _ = rpc::kill(&state, Some(&cleanup_id)).await;
+            }
+        });
+    }
     outcome
 }
 
@@ -404,8 +434,16 @@ fn claim_due(tasks: &mut [Task], now: i64) -> (Vec<Task>, bool) {
 
 pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let path = data_dir::root().join("schedules.json");
-    let mut tasks: Vec<Task> = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
+    let mut tasks: Vec<Task> = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                eprintln!("Failed to parse schedules.json, starting with empty list: {e}");
+                let backup = path.with_extension("corrupt");
+                let _ = std::fs::rename(&path, &backup);
+                Vec::new()
+            }
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };

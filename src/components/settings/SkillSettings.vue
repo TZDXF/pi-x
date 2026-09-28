@@ -3,7 +3,13 @@ import { onMounted, ref } from "vue"
 import { Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { ask } from "@tauri-apps/plugin-dialog"
-import { deleteHostedSkill, listDiscoveredSkills, listHostedSkills, openHostedSkillsDirectory, setHostedSkillsEnabled } from "@/api/piClient"
+import {
+  deleteHostedSkill,
+  listDiscoveredSkills,
+  listHostedSkills,
+  openHostedSkillsDirectory,
+  setHostedSkillsEnabled,
+} from "@/api/piClient"
 import type { DiscoveredSkill, HostedSkill } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import { normalizeSlashes } from "@/lib/paths"
@@ -21,20 +27,23 @@ async function load() {
   loading.value = true
   error.value = ""
   try {
-    const [hosted, found] = await Promise.all([
-      listHostedSkills(),
-      listDiscoveredSkills(),
-    ])
+    const [hosted, found] = await Promise.all([listHostedSkills(), listDiscoveredSkills()])
     skills.value = hosted
     // Hide skills already managed under ~/.pix/skills.
     discovered.value = found.filter(s => !s.hosted)
-  } catch (e) { error.value = String(e) }
-  finally { loading.value = false }
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loading.value = false
+  }
 }
 
 async function openDirectory() {
-  try { await openHostedSkillsDirectory() }
-  catch (e) { ui.pushToast(String(e), "error") }
+  try {
+    await openHostedSkillsDirectory()
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
 }
 
 async function toggle(skill: HostedSkill, checked: boolean) {
@@ -50,12 +59,18 @@ async function toggle(skill: HostedSkill, checked: boolean) {
 }
 
 async function remove(skill: HostedSkill) {
-  const confirmed = await ask(t("skillsConfig.deleteConfirm", { name: skill.name }), { title: t("skillsConfig.title"), okLabel: t("skillsConfig.delete"), cancelLabel: t("common.cancel") })
+  const confirmed = await ask(t("skillsConfig.deleteConfirm", { name: skill.name }), {
+    title: t("skillsConfig.title"),
+    okLabel: t("skillsConfig.delete"),
+    cancelLabel: t("common.cancel"),
+  })
   if (!confirmed) return
   try {
     await deleteHostedSkill(skill.path)
     await load()
-  } catch (e) { ui.pushToast(String(e), "error") }
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
 }
 
 function displaySkillPath(path: string): string {
@@ -93,13 +108,34 @@ onMounted(load)
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex flex-wrap items-center gap-2">
               <p class="text-sm font-medium">{{ skill.name }}</p>
-              <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ t("skillsConfig.sourceHosted") }}</span>
+              <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{
+                t("skillsConfig.sourceHosted")
+              }}</span>
             </div>
-            <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">{{ displaySkillPath(skill.path) }}</p>
-            <p v-if="skill.description" class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
+            <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">
+              {{ displaySkillPath(skill.path) }}
+            </p>
+            <p
+              v-if="skill.description"
+              class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground"
+            >
+              {{ skill.description }}
+            </p>
           </div>
-          <Switch :model-value="skill.enabled" :aria-label="`${t('skillsConfig.enable')} · ${skill.name}`" @update:model-value="v => toggle(skill, Boolean(v))" />
-          <Button variant="ghost" size="icon-sm" class="text-destructive hover:text-destructive" :aria-label="`${t('skillsConfig.delete')} · ${skill.name}`" :title="t('skillsConfig.delete')" @click="remove(skill)"><Trash2 :size="15" /></Button>
+          <Switch
+            :model-value="skill.enabled"
+            :aria-label="`${t('skillsConfig.enable')} · ${skill.name}`"
+            @update:model-value="v => toggle(skill, Boolean(v))"
+          />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="text-destructive hover:text-destructive"
+            :aria-label="`${t('skillsConfig.delete')} · ${skill.name}`"
+            :title="t('skillsConfig.delete')"
+            @click="remove(skill)"
+            ><Trash2 :size="15"
+          /></Button>
         </div>
       </div>
     </section>
@@ -112,8 +148,15 @@ onMounted(load)
             <p class="text-sm font-medium">{{ skill.name }}</p>
             <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ sourceLabel(skill) }}</span>
           </div>
-          <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">{{ displaySkillPath(skill.path) }}</p>
-          <p v-if="skill.description" class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ skill.description }}</p>
+          <p class="break-all font-mono text-xs text-muted-foreground" :title="displaySkillPath(skill.path)">
+            {{ displaySkillPath(skill.path) }}
+          </p>
+          <p
+            v-if="skill.description"
+            class="line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-muted-foreground"
+          >
+            {{ skill.description }}
+          </p>
         </div>
       </div>
     </section>

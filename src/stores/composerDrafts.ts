@@ -18,16 +18,26 @@ try {
     for (const item of stored) {
       if (!item || typeof item !== "object") continue
       const { project, file, text } = item as Partial<ComposerDraft>
-      if (typeof project !== "string" || !(file === null || typeof file === "string") ||
-          typeof text !== "string" || !text) continue
+      if (
+        typeof project !== "string" ||
+        !(file === null || typeof file === "string") ||
+        typeof text !== "string" ||
+        !text
+      )
+        continue
       drafts.set(file ? fileKey(file) : projectKey(project), { project, file, text })
     }
   }
-} catch { /* Local storage is optional. */ }
+} catch {
+  /* Local storage is optional. */
+}
 
 function persist() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...drafts.values()])) }
-  catch { /* Keep the in-memory draft if storage is unavailable or full. */ }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...drafts.values()]))
+  } catch {
+    /* Keep the in-memory draft if storage is unavailable or full. */
+  }
 }
 
 export function composerDraftText(project: string, file: string | null): string {

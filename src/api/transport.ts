@@ -115,7 +115,7 @@ function connect(): Promise<void> {
       connecting = undefined
       reject(new Error(encodeCodedError("remoteConnectFailed", "无法连接远程服务，请检查访问链接与桌面端开关。")))
     }
-    ws.onmessage = (e) => {
+    ws.onmessage = e => {
       const event = JSON.parse(e.data)
       dispatch(event.event, event.payload)
     }
@@ -141,10 +141,7 @@ function connect(): Promise<void> {
   return connecting
 }
 
-export async function listen<T = unknown>(
-  event: string,
-  handler: (e: { payload: T }) => void,
-): Promise<() => void> {
+export async function listen<T = unknown>(event: string, handler: (e: { payload: T }) => void): Promise<() => void> {
   if (isDesktop) return desktopListen<T>(event, handler)
   const set = handlers.get(event) ?? new Set()
   handlers.set(event, set)
@@ -157,7 +154,7 @@ export async function listen<T = unknown>(
   }
   return () => {
     set.delete(handler)
-    if ([...handlers.values()].every((s) => s.size === 0)) {
+    if ([...handlers.values()].every(s => s.size === 0)) {
       closingIntentionally = true
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)

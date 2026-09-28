@@ -7,13 +7,17 @@ import type PromptInputBridge from "@/components/PromptInputBridge.vue"
  * Drag a session row from the sidebar onto the chat view: dropping it appends
  * an @session(...) reference to the composer text.
  */
-export function useSessionDrop(session: SessionStore, bridge: Ref<InstanceType<typeof PromptInputBridge> | null>, knownSessions: ComputedRef<KnownSession[]>) {
+export function useSessionDrop(
+  session: SessionStore,
+  bridge: Ref<InstanceType<typeof PromptInputBridge> | null>,
+  knownSessions: ComputedRef<KnownSession[]>,
+) {
   const sessionDragOver = ref(false)
 
   function onSessionDragOver(event: DragEvent) {
-    if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
+    if (!event.dataTransfer?.types.includes("application/x-pix-session")) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = 'copy'
+    event.dataTransfer.dropEffect = "copy"
     sessionDragOver.value = true
   }
   function onSessionDragLeave(event: DragEvent) {
@@ -22,15 +26,15 @@ export function useSessionDrop(session: SessionStore, bridge: Ref<InstanceType<t
   }
   function onSessionDrop(event: DragEvent) {
     sessionDragOver.value = false
-    if (!event.dataTransfer?.types.includes('application/x-pix-session')) return
+    if (!event.dataTransfer?.types.includes("application/x-pix-session")) return
     event.preventDefault()
     event.stopPropagation()
-    const file = event.dataTransfer.getData('application/x-pix-session')
+    const file = event.dataTransfer.getData("application/x-pix-session")
     if (!file || file === session.sessionFile || !knownSessions.value.some(row => row.file === file)) return
     const reference = sessionReference(file)
-    const previous = bridge.value?.textInput ?? ''
-    bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? ' ' : '') + reference + ' ')
-    nextTick(() => document.querySelector<HTMLElement>('.composer-dock .composer-rich-editor')?.focus())
+    const previous = bridge.value?.textInput ?? ""
+    bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? " " : "") + reference + " ")
+    nextTick(() => document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")?.focus())
   }
 
   return { sessionDragOver, onSessionDragOver, onSessionDragLeave, onSessionDrop }

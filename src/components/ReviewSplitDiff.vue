@@ -1,45 +1,45 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { useI18n } from "vue-i18n";
-import { useSplitDiffLayout } from "@/composables/useSplitDiffLayout";
-import type { DiffLine, DiffSideRow } from "@/lib/reviewDiff";
-import { emphasisTextHtml, wordClsOf } from "@/lib/reviewHighlight";
-type GitCommitFileDiff = { truncated: boolean };
+import { computed, ref, watchEffect } from "vue"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { useI18n } from "vue-i18n"
+import { useSplitDiffLayout } from "@/composables/useSplitDiffLayout"
+import type { DiffLine, DiffSideRow } from "@/lib/reviewDiff"
+import { emphasisTextHtml, wordClsOf } from "@/lib/reviewHighlight"
+type GitCommitFileDiff = { truncated: boolean }
 
 const props = defineProps<{
-  rows: DiffSideRow[];
-  landedDiff: GitCommitFileDiff | null;
-  lineHtml: Map<DiffLine, string>;
-  wordRanges: Map<DiffLine, [number, number]>;
+  rows: DiffSideRow[]
+  landedDiff: GitCommitFileDiff | null
+  lineHtml: Map<DiffLine, string>
+  wordRanges: Map<DiffLine, [number, number]>
   /** 短暂高亮的新文件行号(语义变更定位;仅右侧窗格,1.6s 后由父组件清除) */
-  revealLine?: number | null;
-}>();
+  revealLine?: number | null
+}>()
 
 const emit = defineEmits<{
-  expandFold: [key: string];
-}>();
+  expandFold: [key: string]
+}>()
 
-const splitRatio = defineModel<number>("splitRatio", { required: true });
-const currentRowPos = defineModel<number>("currentRowPos", { required: true });
-const { t } = useI18n();
+const splitRatio = defineModel<number>("splitRatio", { required: true })
+const currentRowPos = defineModel<number>("currentRowPos", { required: true })
+const { t } = useI18n()
 
-const sideRows = computed(() => props.rows);
-const splitActive = computed(() => true);
-const landedDiff = computed(() => props.landedDiff);
+const sideRows = computed(() => props.rows)
+const splitActive = computed(() => true)
+const landedDiff = computed(() => props.landedDiff)
 
-const splitWrapEl = ref<HTMLElement | null>(null);
-const leftScrollArea = ref<InstanceType<typeof ScrollArea> | null>(null);
-const rightScrollArea = ref<InstanceType<typeof ScrollArea> | null>(null);
-const leftPaneEl = ref<HTMLElement | null>(null);
-const rightPaneEl = ref<HTMLElement | null>(null);
-const leftGutterEl = ref<HTMLElement | null>(null);
-const rightGutterEl = ref<HTMLElement | null>(null);
-const dividerEl = ref<HTMLElement | null>(null);
+const splitWrapEl = ref<HTMLElement | null>(null)
+const leftScrollArea = ref<InstanceType<typeof ScrollArea> | null>(null)
+const rightScrollArea = ref<InstanceType<typeof ScrollArea> | null>(null)
+const leftPaneEl = ref<HTMLElement | null>(null)
+const rightPaneEl = ref<HTMLElement | null>(null)
+const leftGutterEl = ref<HTMLElement | null>(null)
+const rightGutterEl = ref<HTMLElement | null>(null)
+const dividerEl = ref<HTMLElement | null>(null)
 watchEffect(() => {
-  leftPaneEl.value = leftScrollArea.value?.viewport ?? null;
-  rightPaneEl.value = rightScrollArea.value?.viewport ?? null;
-});
+  leftPaneEl.value = leftScrollArea.value?.viewport ?? null
+  rightPaneEl.value = rightScrollArea.value?.viewport ?? null
+})
 
 const {
   leftRows,
@@ -66,42 +66,42 @@ const {
     rightGutterEl,
     dividerEl,
   },
-});
+})
 
 function sideText(line: DiffLine | null) {
-  return line ? line.text.slice(1) : "";
+  return line ? line.text.slice(1) : ""
 }
 
 function hlOf(line: DiffLine | null | undefined) {
   if (!line) {
-    return "";
+    return ""
   }
-  const html = props.lineHtml.get(line);
+  const html = props.lineHtml.get(line)
   if (html) {
-    return html;
+    return html
   }
-  const range = props.wordRanges.get(line);
-  return range ? emphasisTextHtml(line.text.slice(1), range, wordClsOf(line)) : "";
+  const range = props.wordRanges.get(line)
+  return range ? emphasisTextHtml(line.text.slice(1), range, wordClsOf(line)) : ""
 }
 
 function scrollToRow(rowPosition: number) {
-  const left = scrollTopAt("left", rowPosition);
-  const right = scrollTopAt("right", rowPosition);
+  const left = scrollTopAt("left", rowPosition)
+  const right = scrollTopAt("right", rowPosition)
   if (leftPaneEl.value) {
-    leftPaneEl.value.scrollTop = left;
+    leftPaneEl.value.scrollTop = left
   }
   if (leftGutterEl.value) {
-    leftGutterEl.value.scrollTop = left;
+    leftGutterEl.value.scrollTop = left
   }
   if (rightPaneEl.value) {
-    rightPaneEl.value.scrollTop = right;
+    rightPaneEl.value.scrollTop = right
   }
   if (rightGutterEl.value) {
-    rightGutterEl.value.scrollTop = right;
+    rightGutterEl.value.scrollTop = right
   }
 }
 
-defineExpose({ scrollToRow });
+defineExpose({ scrollToRow })
 </script>
 
 <template>
@@ -110,7 +110,8 @@ defineExpose({ scrollToRow });
     <!-- direction:rtl 只用于把旧版本窗格的纵向滚动条移到左边，内层恢复 ltr -->
     <ScrollArea
       ref="leftScrollArea"
-      orientation="both" dir="rtl"
+      orientation="both"
+      dir="rtl"
       viewport-class="pb-2.5 [direction:rtl]"
       class="min-w-0"
       :style="{ flex: `${splitRatio} 1 0%` }"
@@ -118,16 +119,10 @@ defineExpose({ scrollToRow });
     >
       <div class="diff-code relative min-w-max py-1 text-xs leading-5 [direction:ltr]">
         <template v-for="(row, i) in leftRows" :key="i">
-          <div
-            v-if="row.kind === 'hunk'"
-            class="bg-muted/60 px-3 whitespace-pre text-muted-foreground select-none"
-          >
+          <div v-if="row.kind === 'hunk'" class="bg-muted/60 px-3 whitespace-pre text-muted-foreground select-none">
             {{ row.text }}
           </div>
-          <div
-            v-else-if="row.kind === 'meta'"
-            class="px-3 whitespace-pre text-muted-foreground select-none"
-          >
+          <div v-else-if="row.kind === 'meta'" class="px-3 whitespace-pre text-muted-foreground select-none">
             {{ row.text }}
           </div>
           <button
@@ -158,10 +153,7 @@ defineExpose({ scrollToRow });
       class="shrink-0 overflow-auto border-l border-border/60 font-mono text-xs leading-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       @scroll="syncPaneScroll('leftGutter')"
     >
-      <div
-        class="relative py-1"
-        :style="{ paddingBottom: `calc(0.25rem + ${hbarPad.leftGutter}px)` }"
-      >
+      <div class="relative py-1" :style="{ paddingBottom: `calc(0.25rem + ${hbarPad.leftGutter}px)` }">
         <template v-for="(row, i) in leftRows" :key="i">
           <div v-if="row.kind === 'hunk'" class="h-5 bg-muted/60 select-none" />
           <div v-else-if="row.kind === 'meta'" class="h-5 select-none" />
@@ -209,10 +201,7 @@ defineExpose({ scrollToRow });
       class="shrink-0 overflow-auto border-r border-border/60 font-mono text-xs leading-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       @scroll="syncPaneScroll('rightGutter')"
     >
-      <div
-        class="relative py-1"
-        :style="{ paddingBottom: `calc(0.25rem + ${hbarPad.rightGutter}px)` }"
-      >
+      <div class="relative py-1" :style="{ paddingBottom: `calc(0.25rem + ${hbarPad.rightGutter}px)` }">
         <template v-for="(row, i) in rightRows" :key="i">
           <div v-if="row.kind === 'hunk'" class="h-5 bg-muted/60 select-none" />
           <div v-else-if="row.kind === 'meta'" class="h-5 select-none" />
@@ -244,7 +233,8 @@ defineExpose({ scrollToRow });
 
     <ScrollArea
       ref="rightScrollArea"
-      orientation="both" dir="ltr"
+      orientation="both"
+      dir="ltr"
       viewport-class="pb-2.5"
       class="min-w-0"
       :style="{ flex: `${1 - splitRatio} 1 0%` }"
@@ -252,16 +242,10 @@ defineExpose({ scrollToRow });
     >
       <div class="diff-code relative min-w-max py-1 text-xs leading-5">
         <template v-for="(row, i) in rightRows" :key="i">
-          <div
-            v-if="row.kind === 'hunk'"
-            class="bg-muted/60 px-3 whitespace-pre text-muted-foreground select-none"
-          >
+          <div v-if="row.kind === 'hunk'" class="bg-muted/60 px-3 whitespace-pre text-muted-foreground select-none">
             {{ row.text }}
           </div>
-          <div
-            v-else-if="row.kind === 'meta'"
-            class="px-3 whitespace-pre text-muted-foreground select-none"
-          >
+          <div v-else-if="row.kind === 'meta'" class="px-3 whitespace-pre text-muted-foreground select-none">
             {{ row.text }}
           </div>
           <button
@@ -299,8 +283,8 @@ defineExpose({ scrollToRow });
 <style scoped>
 .diff-code {
   font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    "Microsoft YaHei", monospace;
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", "Microsoft YaHei",
+    monospace;
 }
 
 .diff-fold-wave {

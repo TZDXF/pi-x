@@ -4,13 +4,7 @@ import { computed, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { ProviderEntry } from "@/api/piClient"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/conversations"
@@ -24,9 +18,7 @@ const session = useSessionStore()
 const ui = useUiStore()
 const { t } = useI18n()
 
-const provider = computed(() =>
-  props.providerId ? store.config.providers[props.providerId] : undefined,
-)
+const provider = computed(() => (props.providerId ? store.config.providers[props.providerId] : undefined))
 
 interface ProviderForm {
   name: string
@@ -129,16 +121,12 @@ async function remove() {
         />
       </div>
       <div>
-        <label class="mb-1 block text-xs" for="provider-name">{{
-          t("settings.providerName")
-        }}</label>
+        <label class="mb-1 block text-xs" for="provider-name">{{ t("settings.providerName") }}</label>
         <Input id="provider-name" v-model="form.name" class="text-xs" />
       </div>
     </div>
     <div>
-      <label class="mb-1 block text-xs" for="provider-base-url">{{
-        t("settings.providerBaseUrl")
-      }}</label>
+      <label class="mb-1 block text-xs" for="provider-base-url">{{ t("settings.providerBaseUrl") }}</label>
       <Input
         id="provider-base-url"
         v-model="form.baseUrl"
@@ -159,23 +147,13 @@ async function remove() {
         </Select>
       </div>
       <div>
-        <label class="mb-1 block text-xs" for="provider-key">{{
-          t("settings.providerApiKey")
-        }}</label>
-        <Input
-          id="provider-key"
-          v-model="form.apiKey"
-          class="font-mono text-xs"
-          type="password"
-          autocomplete="off"
-        />
+        <label class="mb-1 block text-xs" for="provider-key">{{ t("settings.providerApiKey") }}</label>
+        <Input id="provider-key" v-model="form.apiKey" class="font-mono text-xs" type="password" autocomplete="off" />
       </div>
     </div>
     <div class="flex justify-end gap-2 pt-1">
       <template v-if="confirmingDelete">
-        <span class="text-destructive mr-auto self-center text-xs">{{
-          t("settings.providerDeleteConfirm")
-        }}</span>
+        <span class="text-destructive mr-auto self-center text-xs">{{ t("settings.providerDeleteConfirm") }}</span>
         <Button variant="destructive" size="sm" :disabled="busy" @click="remove">
           {{ t("settings.confirmDelete") }}
         </Button>

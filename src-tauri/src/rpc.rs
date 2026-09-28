@@ -14,6 +14,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::AppHandle;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -427,12 +428,16 @@ pub async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), Stri
 #[derive(Default)]
 pub struct RpcState {
     processes: Mutex<HashMap<String, Arc<ProcessState>>>,
+    /// 每个 runtime 的最后用户请求时间，供 schedule runtime 延迟回收判定是否已被前端 attach。
+    pub last_activity: Mutex<HashMap<String, Instant>>,
 }
 
 impl RpcState {
     async fn process(&self, runtime_id: Option<&str>) -> Result<Arc<ProcessState>, String> {
-        self.processes.lock().await.get(runtime_id.unwrap_or("default")).cloned()
-            .ok_or_else(|| "pi is not running".into())
+        let process = self.processes.lock().await.get(runtime_id.unwrap_or("default")).cloned()
+            .ok_or_else(|| "pi is not running".to_string())?;
+        self.last_activity.lock().await.insert(process.runtime_id.clone(), Instant::now());
+        Ok(process)
     }
 }
 
@@ -459,7 +464,8 @@ pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
     }
     let process = Arc::new(ProcessState { runtime_id: id.clone(), project: project.into(), ..Default::default() });
     process_spawn(app, &process, pi, project, session_file, extra_args).await?;
-    pool.insert(id, process);
+    pool.insert(id.clone(), process);
+    state.last_activity.lock().await.insert(id, Instant::now());
     Ok(())
 }
 
@@ -566,11 +572,15 @@ pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
 }
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
     let process = state.processes.lock().await.remove(runtime_id.unwrap_or("default"));
-    if let Some(process) = process { process_kill(&process, "rpc_kill").await?; }
+    if let Some(process) = process {
+        process_kill(&process, "rpc_kill").await?;
+        state.last_activity.lock().await.remove(&process.runtime_id);
+    }
     Ok(())
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
+    state.last_activity.lock().await.clear();
     for process in processes.values() { process_kill(process, "kill_all (app exit)").await?; }
     Ok(())
 }

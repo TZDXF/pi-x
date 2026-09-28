@@ -1,6 +1,9 @@
 import { invoke } from "@/api/transport"
 
-export interface CheckpointMeta { refName: string; commitOid: string }
+export interface CheckpointMeta {
+  refName: string
+  commitOid: string
+}
 export type CheckpointDiffKind = "added" | "deleted" | "modified" | "renamed"
 export interface CheckpointFileDiff {
   path: string
@@ -9,8 +12,14 @@ export interface CheckpointFileDiff {
   removed: number
   originalPath: string | null
 }
-export interface CheckpointConflict { path: string; reason: string }
-export interface CheckpointRestoreResult { restored: string[]; conflicts: CheckpointConflict[] }
+export interface CheckpointConflict {
+  path: string
+  reason: string
+}
+export interface CheckpointRestoreResult {
+  restored: string[]
+  conflicts: CheckpointConflict[]
+}
 
 /** 单轮回滚记录；快照本体存于项目 Git 仓库的隐藏 ref，清单存桌面端数据目录。 */
 export interface TurnCheckpointRecord {
@@ -22,8 +31,13 @@ export interface TurnCheckpointRecord {
   state: "active" | "reverted"
   /** 本轮的文件差异（结算时计算并持久化，避免重开会话重新 diff）。 */
   files: CheckpointFileDiff[]
+  /** 创建结束快照时使用的 checkpointId，用于精确删除 Git ref。 */
+  checkpointId?: string
 }
-export interface CheckpointManifest { version: 1; turns: TurnCheckpointRecord[] }
+export interface CheckpointManifest {
+  version: 1
+  turns: TurnCheckpointRecord[]
+}
 
 export function createCheckpoint(project: string, checkpointId: string): Promise<CheckpointMeta> {
   return invoke<CheckpointMeta>("session_checkpoint_create", { project, checkpointId })
@@ -38,9 +52,15 @@ export function diffCheckpoints(project: string, from: string, to: string): Prom
   return invoke<CheckpointFileDiff[]>("session_checkpoint_diff", { project, from, to })
 }
 
-/** 回滚到 baseline 快照；paths 缺省回滚全部差异路径。 */
-export function restoreCheckpoints(project: string, from: string, to: string, paths?: string[]): Promise<CheckpointRestoreResult> {
-  return invoke<CheckpointRestoreResult>("session_checkpoint_restore", { project, from, to, paths })
+/** 回滚到 baseline 快照；paths 缺省回滚全部差异路径；tool_touched_files 限定只恢复该列表内的文件。 */
+export function restoreCheckpoints(
+  project: string,
+  from: string,
+  to: string,
+  paths?: string[],
+  toolTouchedFiles?: string[],
+): Promise<CheckpointRestoreResult> {
+  return invoke<CheckpointRestoreResult>("session_checkpoint_restore", { project, from, to, paths, toolTouchedFiles })
 }
 
 export async function loadCheckpointManifest(file: string): Promise<CheckpointManifest | null> {

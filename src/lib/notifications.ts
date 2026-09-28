@@ -21,14 +21,15 @@ const SOUND_KEY = "pix.notify.sound"
 
 const isTurnMode = (value: unknown): value is TurnCompleteNotification =>
   value === "never" || value === "unfocused" || value === "always"
-const isSound = (value: unknown): value is NotificationSound =>
-  value === "default" || value === "none"
+const isSound = (value: unknown): value is NotificationSound => value === "default" || value === "none"
 
 function readTurnMode(): TurnCompleteNotification {
   try {
     const value = localStorage.getItem(TURN_KEY)
     if (isTurnMode(value)) return value
-  } catch { /* Storage is optional. */ }
+  } catch {
+    /* Storage is optional. */
+  }
   return "unfocused"
 }
 function readBool(key: string, fallback: boolean): boolean {
@@ -36,14 +37,18 @@ function readBool(key: string, fallback: boolean): boolean {
     const value = localStorage.getItem(key)
     if (value === "1") return true
     if (value === "0") return false
-  } catch { /* Storage is optional. */ }
+  } catch {
+    /* Storage is optional. */
+  }
   return fallback
 }
 function readSound(): NotificationSound {
   try {
     const value = localStorage.getItem(SOUND_KEY)
     if (isSound(value)) return value
-  } catch { /* Storage is optional. */ }
+  } catch {
+    /* Storage is optional. */
+  }
   return "default"
 }
 
@@ -56,7 +61,11 @@ export const questionNotification = readonly(questionEnabled)
 export const notificationSound = readonly(soundSetting)
 
 function write(key: string, value: string) {
-  try { localStorage.setItem(key, value) } catch { /* Storage is optional. */ }
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* Storage is optional. */
+  }
 }
 
 export function setTurnCompleteNotification(value: TurnCompleteNotification) {
@@ -114,8 +123,8 @@ async function ensurePermission(): Promise<boolean> {
 /** Short two-tone chime played through WebAudio; no audio asset needed. */
 export function playNotificationSound() {
   try {
-    const AudioContextClass = window.AudioContext
-      ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    const AudioContextClass =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!AudioContextClass) return
     const ctx = new AudioContextClass()
     const notes = [880, 1174.66]
@@ -133,11 +142,13 @@ export function playNotificationSound() {
       osc.stop(start + 0.45)
     })
     window.setTimeout(() => void ctx.close(), 900)
-  } catch { /* Audio is optional. */ }
+  } catch {
+    /* Audio is optional. */
+  }
 }
 
 async function deliver(title: string, body: string) {
-  if (!await ensurePermission()) return
+  if (!(await ensurePermission())) return
   if (soundSetting.value === "default") playNotificationSound()
   try {
     if (isDesktop) {
@@ -146,7 +157,9 @@ async function deliver(title: string, body: string) {
     } else {
       new Notification(title, { body })
     }
-  } catch { /* Notification delivery is best-effort. */ }
+  } catch {
+    /* Notification delivery is best-effort. */
+  }
 }
 
 const t = (key: string) => i18n.global.t(key)

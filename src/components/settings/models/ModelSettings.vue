@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import DragHandle from '@/components/shared/DragHandle.vue'
-import SettingBadge from '@/components/shared/SettingBadge.vue'
+import DragHandle from "@/components/shared/DragHandle.vue"
+import SettingBadge from "@/components/shared/SettingBadge.vue"
 /** Model list for one provider: edits its `models` array in pi's models.json.
  *  The add/edit panel lives in ModelEditForm.vue. */
 import { computed, ref, watch } from "vue"
@@ -12,12 +12,7 @@ import type { ModelEntry } from "@/api/piClient"
 import { useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore, useUiStore } from "@/stores/conversations"
 import ModelEditForm from "./ModelEditForm.vue"
-import {
-  emptyModelForm,
-  modelEntryFromForm,
-  modelFormFromEntry,
-  type ModelForm,
-} from "./modelForm"
+import { emptyModelForm, modelEntryFromForm, modelFormFromEntry, type ModelForm } from "./modelForm"
 
 const props = defineProps<{ /** Provider key whose models are managed here. */ providerId: string }>()
 
@@ -29,7 +24,9 @@ const { t } = useI18n()
 const provider = computed(() => store.config.providers[props.providerId])
 const models = computed<ModelEntry[]>({
   get: () => provider.value?.models ?? [],
-  set: list => { if (provider.value) provider.value.models = list },
+  set: list => {
+    if (provider.value) provider.value.models = list
+  },
 })
 
 const editing = ref<ModelForm | null>(null)
@@ -80,9 +77,7 @@ async function saveForm() {
     ui.pushToast(t("settings.modelIdRequired"), "error")
     return
   }
-  const dup = models.value.some(
-    (m, i) => m.id === id && i !== editingIndex.value,
-  )
+  const dup = models.value.some((m, i) => m.id === id && i !== editingIndex.value)
   if (dup) {
     ui.pushToast(t("settings.modelIdExists"), "error")
     return
@@ -171,48 +166,84 @@ async function finishDrag() {
       @start="startDrag"
       @end="finishDrag"
     >
-    <div v-for="(m, i) in models" :key="m.id" class="model-item group min-w-0 border-b border-border hover:bg-muted focus-within:bg-muted">
-      <div class="model-item-summary flex items-center gap-[7px] min-w-0 py-1.5 px-1">
-        <DragHandle
-
-          :title="t('settings.dragToReorder')"
-          :aria-label="t('settings.dragToReorder')"
-        ><GripVertical :size="14" /></DragHandle>
-        <div class="min-w-0 flex-1">
-          <div class="flex min-w-0 items-center gap-2">
-            <span class="truncate font-mono text-xs font-medium" :title="m.id">{{ m.name || m.id }}</span>
-            <SettingBadge v-if="m.reasoning" class="shrink-0">{{ t("settings.modelReasoning") }}</SettingBadge>
-            <SettingBadge v-if="(m.input ?? ['text']).includes('image')" class="shrink-0">{{ t("settings.modelImage") }}</SettingBadge>
+      <div
+        v-for="(m, i) in models"
+        :key="m.id"
+        class="model-item group min-w-0 border-b border-border hover:bg-muted focus-within:bg-muted"
+      >
+        <div class="model-item-summary flex items-center gap-[7px] min-w-0 py-1.5 px-1">
+          <DragHandle :title="t('settings.dragToReorder')" :aria-label="t('settings.dragToReorder')"
+            ><GripVertical :size="14"
+          /></DragHandle>
+          <div class="min-w-0 flex-1">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="truncate font-mono text-xs font-medium" :title="m.id">{{ m.name || m.id }}</span>
+              <SettingBadge v-if="m.reasoning" class="shrink-0">{{ t("settings.modelReasoning") }}</SettingBadge>
+              <SettingBadge v-if="(m.input ?? ['text']).includes('image')" class="shrink-0">{{
+                t("settings.modelImage")
+              }}</SettingBadge>
+            </div>
+            <p
+              class="text-muted-foreground truncate text-[11px]"
+              :title="
+                t('settings.modelSize', {
+                  ctx: (m.contextWindow ?? 128000).toLocaleString(),
+                  max: (m.maxTokens ?? 16384).toLocaleString(),
+                })
+              "
+            >
+              <template v-if="m.name && m.name !== m.id">{{ m.id }} · </template>
+              {{
+                t("settings.modelSize", {
+                  ctx: formatSize(m.contextWindow, 128000),
+                  max: formatSize(m.maxTokens, 16384),
+                })
+              }}
+            </p>
           </div>
-          <p
-            class="text-muted-foreground truncate text-[11px]"
-            :title="t('settings.modelSize', { ctx: (m.contextWindow ?? 128000).toLocaleString(), max: (m.maxTokens ?? 16384).toLocaleString() })"
+          <div v-if="confirmingDelete === i" class="flex shrink-0 items-center gap-1">
+            <span class="text-destructive text-xs">{{ t("settings.modelDeleteConfirm") }}</span>
+            <Button variant="destructive" size="sm" :disabled="busy" @click="remove(i)">{{
+              t("settings.confirmDelete")
+            }}</Button>
+            <Button variant="ghost" size="sm" @click="confirmingDelete = null">{{ t("common.cancel") }}</Button>
+          </div>
+          <div
+            v-else
+            class="model-item-actions flex shrink-0 items-center gap-0.5 opacity-[0] [@media(hover:none)]:opacity-[1]"
           >
-            <template v-if="m.name && m.name !== m.id">{{ m.id }} · </template>
-            {{ t("settings.modelSize", { ctx: formatSize(m.contextWindow, 128000), max: formatSize(m.maxTokens, 16384) }) }}
-          </p>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              :aria-label="t('settings.edit')"
+              :title="t('settings.edit')"
+              :disabled="busy"
+              @click="startEdit(i, m)"
+              ><Pencil :size="14"
+            /></Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="text-destructive"
+              :aria-label="t('settings.delete')"
+              :title="t('settings.delete')"
+              :disabled="busy"
+              @click="confirmingDelete = i"
+              ><Trash2 :size="14"
+            /></Button>
+          </div>
         </div>
-        <div v-if="confirmingDelete === i" class="flex shrink-0 items-center gap-1">
-          <span class="text-destructive text-xs">{{ t("settings.modelDeleteConfirm") }}</span>
-          <Button variant="destructive" size="sm" :disabled="busy" @click="remove(i)">{{ t("settings.confirmDelete") }}</Button>
-          <Button variant="ghost" size="sm" @click="confirmingDelete = null">{{ t("common.cancel") }}</Button>
-        </div>
-        <div v-else class="model-item-actions flex shrink-0 items-center gap-0.5 opacity-[0] [@media(hover:none)]:opacity-[1]">
-          <Button variant="ghost" size="icon-xs" :aria-label="t('settings.edit')" :title="t('settings.edit')" :disabled="busy" @click="startEdit(i, m)"><Pencil :size="14" /></Button>
-          <Button variant="ghost" size="icon-xs" class="text-destructive" :aria-label="t('settings.delete')" :title="t('settings.delete')" :disabled="busy" @click="confirmingDelete = i"><Trash2 :size="14" /></Button>
-        </div>
+        <ModelEditForm
+          v-if="editing && editingIndex === i"
+          v-model="editing"
+          is-edit
+          :provider
+          :existing-ids="existingIds"
+          :busy
+          @save="saveForm"
+          @cancel="editing = null"
+        />
       </div>
-      <ModelEditForm
-        v-if="editing && editingIndex === i"
-        v-model="editing"
-        is-edit
-        :provider
-        :existing-ids="existingIds"
-        :busy
-        @save="saveForm"
-        @cancel="editing = null"
-      />
-    </div>
     </VueDraggable>
 
     <ModelEditForm
@@ -226,13 +257,7 @@ async function finishDrag() {
       @cancel="editing = null"
     />
 
-    <Button
-      v-if="!editing"
-      variant="outline"
-      size="sm"
-      class="mt-3"
-      @click="startAdd"
-    >
+    <Button v-if="!editing" variant="outline" size="sm" class="mt-3" @click="startAdd">
       + {{ t("settings.modelAdd") }}
     </Button>
   </template>

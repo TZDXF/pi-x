@@ -10,7 +10,8 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
+use std::io::Read;
 
 /// 文本预览上限 512KB,超出按 UTF-8 边界截断(与 RepoMeow 的口径一致)。
 pub const TEXT_PREVIEW_MAX_BYTES: usize = 512 * 1024;
@@ -100,20 +101,43 @@ fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
             path,
         ));
     }
-    let bytes = std::fs::read(&file).map_err(|e| {
+    // Check file size before reading to avoid loading oversized files into memory.
+    let metadata = std::fs::metadata(&file).map_err(|e| {
         crate::errors::pix_error_detail("previewReadFailed", "读取文件失败: {detail}", e)
     })?;
+    let file_size = metadata.len();
+    let ext = ext_of(path);
+    let is_image_ext = IMAGE_EXTS.contains(&ext.as_str());
+    // Reject oversized images before reading.
+    if is_image_ext && file_size > IMAGE_PREVIEW_MAX_BYTES {
+        return Err(crate::errors::pix_error_with(
+            "previewImageTooLarge",
+            "图片过大，无法预览（上限 {limit} MB）",
+            json!({ "limit": IMAGE_PREVIEW_MAX_BYTES / 1024 / 1024 }),
+        ));
+    }
+    // Read the file: for text, stream with take() to avoid loading huge files;
+    // for images, read the full content after size check.
+    let mut file_handle = std::fs::File::open(&file).map_err(|e| {
+        crate::errors::pix_error_detail("previewReadFailed", "读取文件失败: {detail}", e)
+    })?;
+    let mut bytes = Vec::with_capacity(file_size.min(TEXT_PREVIEW_MAX_BYTES as u64 + 1) as usize);
+    if is_image_ext {
+        file_handle.read_to_end(&mut bytes).map_err(|e| {
+            crate::errors::pix_error_detail("previewReadFailed", "读取文件失败: {detail}", e)
+        })?;
+    } else {
+        // Read at most TEXT_PREVIEW_MAX_BYTES + 1 bytes for text/binary sniffing.
+        file_handle
+            .take((TEXT_PREVIEW_MAX_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| {
+                crate::errors::pix_error_detail("previewReadFailed", "读取文件失败: {detail}", e)
+            })?;
+    }
     let is_binary = bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0);
     if is_binary {
-        let ext = ext_of(path);
-        if IMAGE_EXTS.contains(&ext.as_str()) {
-            if bytes.len() as u64 > IMAGE_PREVIEW_MAX_BYTES {
-                return Err(crate::errors::pix_error_with(
-                    "previewImageTooLarge",
-                    "图片过大，无法预览（上限 {limit} MB）",
-                    json!({ "limit": IMAGE_PREVIEW_MAX_BYTES / 1024 / 1024 }),
-                ));
-            }
+        if is_image_ext {
             return Ok(FilePreview {
                 kind: "image".into(),
                 text: None,
@@ -148,6 +172,7 @@ fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn preview(project: &std::path::Path, path: &str) -> Result<FilePreview, String> {
         read_preview(&project.to_string_lossy(), path)

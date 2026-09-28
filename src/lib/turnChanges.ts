@@ -2,9 +2,7 @@ import type { Block, ToolRun } from "@/stores/session"
 import { changeForCall, EDIT_TOOLS, WRITE_TOOLS } from "@/lib/sessionChanges"
 
 /** 单文件的撤销操作，按工具调用时间顺序排列，后端按逆序回放。 */
-export type RevertOp =
-  | { kind: "replace"; before: string; after: string }
-  | { kind: "delete"; content: string }
+export type RevertOp = { kind: "replace"; before: string; after: string } | { kind: "delete"; content: string }
 
 export interface TurnFileChange {
   path: string
@@ -24,13 +22,22 @@ export function turnFileChanges(blocks: Block[], runs: Record<string, ToolRun>):
     // 与会话级统计同一口径：只计入成功完成的调用。
     if (runs[block.callId]?.state !== "output-available") continue
     let args: any
-    try { args = JSON.parse(block.argsText) } catch { /* 参数仍在流式生成 */ continue }
+    try {
+      args = JSON.parse(block.argsText)
+    } catch {
+      /* 参数仍在流式生成 */ continue
+    }
     const changes = changeForCall(block.callId, block.name, args)
     if (!changes.length) continue
     const ops = revertOpsForCall(block.name, args)
     const path = changes[0]!.path
     const file = files.get(path) ?? {
-      path, added: 0, removed: 0, unknown: false, ops: [] as RevertOp[], revertible: true,
+      path,
+      added: 0,
+      removed: 0,
+      unknown: false,
+      ops: [] as RevertOp[],
+      revertible: true,
     }
     files.set(path, file)
     file.added += changes.reduce((sum, change) => sum + change.added, 0)
@@ -54,7 +61,7 @@ function revertOpsForCall(name: string, args: any): RevertOp[] | null {
   for (const item of edits) {
     if (!item || typeof item !== "object") return null
     const before = item.oldText ?? item.old_string ?? item.old_str
-    const after = edit ? item.newText ?? item.new_string ?? item.new_str : item.content ?? item.contents
+    const after = edit ? (item.newText ?? item.new_string ?? item.new_str) : (item.content ?? item.contents)
     if (typeof after !== "string") return null
     if (edit || typeof before === "string") {
       if (typeof before !== "string") return null

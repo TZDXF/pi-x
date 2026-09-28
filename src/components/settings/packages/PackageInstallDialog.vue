@@ -8,13 +8,7 @@ import { isDesktop } from "@/api/transport"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   DialogHeader,
   DialogTitle,
@@ -40,7 +34,12 @@ const { t } = useI18n()
 const installTarget = ref("")
 
 // Never silently reuse the main UI's project: reset on each new request.
-watch(() => props.source, () => { installTarget.value = "" })
+watch(
+  () => props.source,
+  () => {
+    installTarget.value = ""
+  },
+)
 
 async function browseInstallTarget() {
   try {
@@ -55,7 +54,14 @@ async function browseInstallTarget() {
 </script>
 
 <template>
-  <Dialog :open="!!source" @update:open="(v: boolean) => { if (!v && !busy) emit('cancel') }">
+  <Dialog
+    :open="!!source"
+    @update:open="
+      (v: boolean) => {
+        if (!v && !busy) emit('cancel')
+      }
+    "
+  >
     <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>{{ t("packages.chooseProject") }}</DialogTitle>
@@ -68,8 +74,14 @@ async function browseInstallTarget() {
         </SelectContent>
       </Select>
       <div class="flex gap-2">
-        <Input v-model="installTarget" :placeholder="t('packages.projectPathPrompt')" class="min-w-0 flex-1 font-mono text-xs" />
-        <Button v-if="isDesktop" variant="outline" @click="browseInstallTarget">{{ t("packages.browseProject") }}</Button>
+        <Input
+          v-model="installTarget"
+          :placeholder="t('packages.projectPathPrompt')"
+          class="min-w-0 flex-1 font-mono text-xs"
+        />
+        <Button v-if="isDesktop" variant="outline" @click="browseInstallTarget">{{
+          t("packages.browseProject")
+        }}</Button>
       </div>
       <DialogFooter>
         <Button variant="outline" :disabled="busy" @click="emit('cancel')">{{ t("packages.cancel") }}</Button>

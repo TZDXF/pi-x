@@ -7,7 +7,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   prepare:
-    name: 校验 tag
+    name: 校验 tag 并创建 release
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -40,13 +40,30 @@ jobs:
             exit 1
           fi
 
+      - name: 创建草稿 release
+        # 串行创建 release，避免 tauri-action 三平台矩阵并发调用 GitHub API 产生 422 already_exists。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --draft \
+            --title "PiX ${{ github.ref_name }}" \
+            --notes "Release notes will be generated after all platforms finish building."
+
   build:
     name: 构建 (${{ matrix.platform }})
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          # MSI 版本号要求 major <= 255，语义化版本超限；统一用 NSIS 打包规避。
+          - platform: windows-latest
+            args: --features remote-access --bundles nsis
+          - platform: macos-latest
+            args: --features remote-access
+          - platform: ubuntu-latest
+            args: --features remote-access
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -81,22 +98,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: PiX ${{ github.ref_name }}
           releaseDraft: false
           updaterJsonPreferNsis: true
-          args: --features remote-access --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
   notes:
     name: 生成发布说明
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: 自动生成 Release Notes
-        # gh release edit 不支持 --generate-notes（runner 版本限制），改用 REST API
+      - name: 生成发布说明并转为正式 release
+        # gh release edit 不支持 --generate-notes（runner 版本限制），改用 REST API；
+        # 同时将 prepare 阶段创建的草稿发布为正式版。
         run: |
           RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq .id)
           gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F generate_release_notes=true --jq .html_url
+          gh release edit "${{ github.ref_name }}" --draft=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

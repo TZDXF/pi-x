@@ -13,9 +13,14 @@ export function joinDisplayPath(base: string, ...segments: string[]): string {
   const sep = isWindowsPath(base) ? "\\" : "/"
   const root = base.replace(/[\\/]+$/, "")
   const rest = segments
-    .map((s) => s.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "").replace(/\//g, sep))
-    .filter((s) => s.length > 0)
-  return [root, ...rest].filter((s) => s.length > 0).join(sep)
+    .map(s =>
+      s
+        .replace(/^[\\/]+/, "")
+        .replace(/[\\/]+$/, "")
+        .replace(/\//g, sep),
+    )
+    .filter(s => s.length > 0)
+  return [root, ...rest].filter(s => s.length > 0).join(sep)
 }
 
 /** Separators normalized to forward slashes, so Windows paths compare and render consistently. */
@@ -42,7 +47,8 @@ export function relativeDisplayPath(path: string, root: string): string {
   const target = normalizeSlashes(path)
   const base = normalizeSlashes(root).replace(/\/+$/, "")
   if (!base) return target
-  const windows = /^[a-z]:\//i.test(base) || /^[a-z]:\//i.test(target)
+  const windows =
+    /^[a-z]:\//i.test(base) || /^[a-z]:\//i.test(target) || base.startsWith("//") || target.startsWith("//")
   const fold = (value: string) => (windows ? value.toLowerCase() : value)
   if (!fold(target).startsWith(`${fold(base)}/`)) return target
   return target.slice(base.length + 1)
@@ -54,8 +60,14 @@ export function relativeDisplayPath(path: string, root: string): string {
  * the app never knows which directory they would resolve against.
  */
 export function isAbsolutePath(path: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\") || path.startsWith("/")
-    || path === "~" || path.startsWith("~/") || path.startsWith("~\\")
+  return (
+    /^[a-zA-Z]:[\\/]/.test(path) ||
+    path.startsWith("\\\\") ||
+    path.startsWith("/") ||
+    path === "~" ||
+    path.startsWith("~/") ||
+    path.startsWith("~\\")
+  )
 }
 
 /**

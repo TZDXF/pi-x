@@ -16,16 +16,22 @@ export const EDITOR_OPTIONS = [
   { id: "clion", label: "CLion" },
   { id: "rustrover", label: "RustRover" },
 ] as const
-export type EditorKind = typeof EDITOR_OPTIONS[number]["id"] | "system" | "custom"
-interface OpenWithPreference { kind: EditorKind; executable: string }
+export type EditorKind = (typeof EDITOR_OPTIONS)[number]["id"] | "system" | "custom"
+interface OpenWithPreference {
+  kind: EditorKind
+  executable: string
+}
 const STORAGE_KEY = "pix.openWith"
 export const isEditorKind = (value: unknown): value is EditorKind =>
   value === "system" || value === "custom" || EDITOR_OPTIONS.some(option => option.id === value)
 function readPreference(): OpenWithPreference {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null")
-    if (saved && isEditorKind(saved.kind)) return { kind: saved.kind, executable: typeof saved.executable === "string" ? saved.executable : "" }
-  } catch { /* Storage is optional. */ }
+    if (saved && isEditorKind(saved.kind))
+      return { kind: saved.kind, executable: typeof saved.executable === "string" ? saved.executable : "" }
+  } catch {
+    /* Storage is optional. */
+  }
   return { kind: "vscode", executable: "" }
 }
 const preference = ref(readPreference())

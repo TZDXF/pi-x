@@ -35,11 +35,7 @@ function decide(trusted: boolean, trustParent = false) {
     </div>
 
     <div class="flex flex-col gap-2">
-      <Button
-        :disabled="busy"
-        class="py-2.5"
-        @click="decide(true)"
-      >
+      <Button :disabled="busy" class="py-2.5" @click="decide(true)">
         {{ t("trust.trustFolder") }}
       </Button>
       <Button
@@ -52,12 +48,7 @@ function decide(trusted: boolean, trustParent = false) {
         {{ t("trust.trustParent") }}
         <span class="text-muted-foreground font-mono text-xs">({{ props.info.parentPath }})</span>
       </Button>
-      <Button
-        :disabled="busy"
-        variant="outline"
-        class="py-2.5"
-        @click="decide(false)"
-      >
+      <Button :disabled="busy" variant="outline" class="py-2.5" @click="decide(false)">
         {{ t("trust.dontTrust") }}
         <span class="text-muted-foreground text-xs">{{ t("trust.dontTrustNote") }}</span>
       </Button>

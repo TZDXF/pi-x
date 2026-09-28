@@ -35,10 +35,8 @@ function textAndImageChars(content: unknown): number {
   if (!Array.isArray(content)) return 0
   let chars = 0
   for (const block of content) {
-    if (block?.type === "text" && typeof block.text === "string")
-      chars += block.text.length
-    else if (block?.type === "image")
-      chars += ESTIMATED_IMAGE_CHARS
+    if (block?.type === "text" && typeof block.text === "string") chars += block.text.length
+    else if (block?.type === "image") chars += ESTIMATED_IMAGE_CHARS
   }
   return chars
 }
@@ -47,10 +45,8 @@ function assistantChars(content: unknown): number {
   if (!Array.isArray(content)) return 0
   let chars = 0
   for (const block of content) {
-    if (block?.type === "text" && typeof block.text === "string")
-      chars += block.text.length
-    else if (block?.type === "thinking" && typeof block.thinking === "string")
-      chars += block.thinking.length
+    if (block?.type === "text" && typeof block.text === "string") chars += block.text.length
+    else if (block?.type === "thinking" && typeof block.thinking === "string") chars += block.thinking.length
     else if (block?.type === "toolCall")
       chars += String(block.name ?? "").length + JSON.stringify(block.arguments ?? {}).length
   }
@@ -99,8 +95,7 @@ export function annotateCompactionEstimates(messages: any[]): void {
     const keptStart = typeof msg.firstKeptEntryId === "string" ? indexByEntryId.get(msg.firstKeptEntryId) : undefined
     if (keptStart !== undefined && keptStart < i) {
       for (let j = keptStart; j < i; j++) chars += messageChars(messages[j])
-    }
-    else {
+    } else {
       for (let j = i + 1; j < messages.length; j++) {
         const next = messages[j]
         if (next?.role === "compactionSummary") break
@@ -127,32 +122,26 @@ export function estimateContextBreakdown(messages: any[]): ContextBreakdownEstim
       historyChars += messageChars(message)
       continue
     }
-    if (typeof message.content === "string" && message.content)
-      promptChars = message.content.length
+    if (typeof message.content === "string" && message.content) promptChars = message.content.length
     if (message.sections && typeof message.sections === "object") {
       for (const [name, value] of Object.entries(message.sections)) {
-        if (value == null)
-          sections.delete(name)
-        else if (typeof value === "string")
-          sections.set(name, value)
+        if (value == null) sections.delete(name)
+        else if (typeof value === "string") sections.set(name, value)
       }
     }
     if (Array.isArray(message.toolsAdded)) {
-      for (const tool of message.toolsAdded)
-        if (tool?.name) tools.set(tool.name, tool)
+      for (const tool of message.toolsAdded) if (tool?.name) tools.set(tool.name, tool)
     }
     if (Array.isArray(message.toolsRemoved)) {
-      for (const tool of message.toolsRemoved)
-        tools.delete(typeof tool === "string" ? tool : tool?.name)
+      for (const tool of message.toolsRemoved) tools.delete(typeof tool === "string" ? tool : tool?.name)
     }
   }
 
   for (const [name, value] of sections) {
-    if (name !== TOOLS_SECTION)
-      promptChars += value.length
+    if (name !== TOOLS_SECTION) promptChars += value.length
   }
-  const toolChars = (sections.get(TOOLS_SECTION)?.length ?? 0)
-    + (tools.size ? JSON.stringify([...tools.values()]).length : 0)
+  const toolChars =
+    (sections.get(TOOLS_SECTION)?.length ?? 0) + (tools.size ? JSON.stringify([...tools.values()]).length : 0)
 
   const systemPrompt = toTokens(promptChars)
   const toolDefinitions = toTokens(toolChars)
@@ -165,9 +154,11 @@ export function estimateContextBreakdown(messages: any[]): ContextBreakdownEstim
  * get_session_stats) is available, category tokens are scaled so they sum to
  * it; otherwise the raw estimates are shown.
  */
-export function contextBreakdownParts(estimate: ContextBreakdownEstimate, actualTotal?: number | null): ContextBreakdownPart[] {
-  if (estimate.total <= 0)
-    return []
+export function contextBreakdownParts(
+  estimate: ContextBreakdownEstimate,
+  actualTotal?: number | null,
+): ContextBreakdownPart[] {
+  if (estimate.total <= 0) return []
   const scale = actualTotal && actualTotal > 0 ? actualTotal / estimate.total : 1
   const keys: ContextBreakdownKey[] = ["systemPrompt", "toolDefinitions", "messageHistory"]
   return keys.map(key => ({

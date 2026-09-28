@@ -3,6 +3,7 @@ import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, samePath } from "@/lib/paths"
 import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
+import { invoke } from "@/api/transport"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
  *  the resulting mtime; lets the session watcher tell its own writes from
@@ -15,7 +16,11 @@ function notifySessionMtimeSync(file: string, mtimeMs: number) {
   sessionMtimeSync?.(file, mtimeMs)
 }
 
-export interface ProjectGroup { name: string; folders: string[]; primary: string }
+export interface ProjectGroup {
+  name: string
+  folders: string[]
+  primary: string
+}
 
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
@@ -33,11 +38,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.recentProjects") || "[]")
     if (Array.isArray(stored)) projects.value = stored.filter((p): p is string => typeof p === "string")
-  } catch { /* Optional storage. */ }
+  } catch {
+    /* Optional storage. */
+  }
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
-    if (Array.isArray(stored)) pinnedProjects.value = stored.filter((p): p is string => typeof p === "string" && projects.value.includes(p))
-  } catch { /* Optional storage. */ }
+    if (Array.isArray(stored))
+      pinnedProjects.value = stored.filter((p): p is string => typeof p === "string" && projects.value.includes(p))
+  } catch {
+    /* Optional storage. */
+  }
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.sessionOrder") || "{}")
     if (stored && typeof stored === "object" && !Array.isArray(stored)) {
@@ -45,34 +55,48 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         if (Array.isArray(files)) sessionOrder.value[path] = files.filter((f): f is string => typeof f === "string")
       }
     }
-  } catch { /* Optional storage. */ }
+  } catch {
+    /* Optional storage. */
+  }
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("pix.projectGroups") || "{}")
     if (stored && typeof stored === "object" && !Array.isArray(stored)) {
       for (const [primary, value] of Object.entries(stored)) {
         if (!projects.value.includes(primary) || !value || typeof value !== "object") continue
         const group = value as Partial<ProjectGroup>
-        if (typeof group.name === "string" && Array.isArray(group.folders)
-          && group.folders.every(p => typeof p === "string") && group.folders.includes(primary)) {
+        if (
+          typeof group.name === "string" &&
+          Array.isArray(group.folders) &&
+          group.folders.every(p => typeof p === "string") &&
+          group.folders.includes(primary)
+        ) {
           projectGroups.value[primary] = { name: group.name, folders: group.folders, primary }
         }
       }
     }
-  } catch { /* Optional storage. */ }
+  } catch {
+    /* Optional storage. */
+  }
   function persistProjects() {
     try {
       localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
       localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
       localStorage.setItem("pix.projectGroups", JSON.stringify(projectGroups.value))
-    } catch { /* Optional storage. */ }
+    } catch {
+      /* Optional storage. */
+    }
   }
   function persistSessionOrder() {
     try {
       localStorage.setItem("pix.sessionOrder", JSON.stringify(sessionOrder.value))
-    } catch { /* Optional storage. */ }
+    } catch {
+      /* Optional storage. */
+    }
   }
   function orderedProjects() {
-    return [...projects.value].sort((a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)))
+    return [...projects.value].sort(
+      (a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)),
+    )
   }
   /** Persist a manual project ordering. Pinned projects still stay on top. */
   function reorderProjects(ordered: string[]) {
@@ -97,7 +121,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function orderedSessions(path: string) {
     const folders = projectFolders(path)
     if (folders.length === 1) return histories.value[folders[0]] || []
-    return sortSessions(folders.flatMap(folder => histories.value[folder] || []), sessionOrder.value[projectRoot(path)] || [])
+    return sortSessions(
+      folders.flatMap(folder => histories.value[folder] || []),
+      sessionOrder.value[projectRoot(path)] || [],
+    )
   }
   /** Persist a manual ordering for the given sessions of a project. */
   function reorderSessions(path: string, orderedFiles: string[]) {
@@ -108,8 +135,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function createProject(group: ProjectGroup) {
     const { primary, folders, name } = group
-    if (!primary || !name.trim() || !folders.includes(primary) || new Set(folders).size !== folders.length
-      || folders.some(path => projects.value.includes(path) || Object.values(projectGroups.value).some(existing => existing.folders.includes(path)))) {
+    if (
+      !primary ||
+      !name.trim() ||
+      !folders.includes(primary) ||
+      new Set(folders).size !== folders.length ||
+      folders.some(
+        path =>
+          projects.value.includes(path) ||
+          Object.values(projectGroups.value).some(existing => existing.folders.includes(path)),
+      )
+    ) {
       throw new Error("Project folders must be unique and not belong to another project")
     }
     projects.value = [primary, ...projects.value]
@@ -125,12 +161,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (projectless.value) return Promise.resolve(projectless.value)
     if (!projectlessRequest) {
       projectlessRequest = resolveProjectlessDir()
-        .then((info) => {
+        .then(info => {
           projectlessDefault.value = info.defaultDir
           projectless.value = info.dir
           return info.dir
         })
-        .catch((error) => { projectlessRequest = null; throw error })
+        .catch(error => {
+          projectlessRequest = null
+          throw error
+        })
     }
     return projectlessRequest
   }
@@ -146,13 +185,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function updateProject(oldPrimary: string, group: ProjectGroup) {
     if (!projects.value.includes(oldPrimary)) throw new Error("Project not found")
     const { primary, folders, name } = group
-    if (!primary || !name.trim() || !folders.includes(primary) || new Set(folders).size !== folders.length
-      || folders.some(folder => projects.value.some(path => path !== oldPrimary && path === folder)
-        || Object.entries(projectGroups.value).some(([path, existing]) => path !== oldPrimary && existing.folders.includes(folder)))) {
+    if (
+      !primary ||
+      !name.trim() ||
+      !folders.includes(primary) ||
+      new Set(folders).size !== folders.length ||
+      folders.some(
+        folder =>
+          projects.value.some(path => path !== oldPrimary && path === folder) ||
+          Object.entries(projectGroups.value).some(
+            ([path, existing]) => path !== oldPrimary && existing.folders.includes(folder),
+          ),
+      )
+    ) {
       throw new Error("Project folders must be unique and not belong to another project")
     }
-    projects.value = projects.value.map(path => path === oldPrimary ? primary : path)
-    pinnedProjects.value = pinnedProjects.value.map(path => path === oldPrimary ? primary : path)
+    projects.value = projects.value.map(path => (path === oldPrimary ? primary : path))
+    pinnedProjects.value = pinnedProjects.value.map(path => (path === oldPrimary ? primary : path))
     delete projectGroups.value[oldPrimary]
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
     persistProjects()
@@ -167,7 +216,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function togglePin(path: string) {
     if (!projects.value.includes(path)) return
     pinnedProjects.value = pinnedProjects.value.includes(path)
-      ? pinnedProjects.value.filter(p => p !== path) : [...pinnedProjects.value, path]
+      ? pinnedProjects.value.filter(p => p !== path)
+      : [...pinnedProjects.value, path]
     persistProjects()
   }
   function removeProject(path: string) {
@@ -187,7 +237,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
   }
   async function refresh(path: string) {
-    const version = versions[path] = (versions[path] || 0) + 1
+    const version = (versions[path] = (versions[path] || 0) + 1)
     const rows = await listSessions(path)
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
@@ -234,6 +284,38 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         histories.value[path] = next
       }
     }
+    // Delete the checkpoint manifest file for the removed session.
+    invoke("session_checkpoint_manifest_delete", { file }).catch(() => {
+      // Silently ignore errors — the manifest may not exist.
+    })
   }
-  return { gitBusy, projects, pinnedProjects, projectGroups, createProject, updateProject, projectRoot, projectName, projectFolders, projectless, projectlessDefault, ensureProjectless, refreshProjectless, isProjectless, orderedProjects, reorderProjects, orderedSessions, togglePin, removeProject, histories, reorderSessions, remember, refresh, update, removeSession, preview, generatedTitle }
+  return {
+    gitBusy,
+    projects,
+    pinnedProjects,
+    projectGroups,
+    createProject,
+    updateProject,
+    projectRoot,
+    projectName,
+    projectFolders,
+    projectless,
+    projectlessDefault,
+    ensureProjectless,
+    refreshProjectless,
+    isProjectless,
+    orderedProjects,
+    reorderProjects,
+    orderedSessions,
+    togglePin,
+    removeProject,
+    histories,
+    reorderSessions,
+    remember,
+    refresh,
+    update,
+    removeSession,
+    preview,
+    generatedTitle,
+  }
 })

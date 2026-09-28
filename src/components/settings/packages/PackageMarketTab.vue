@@ -6,29 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Download, ExternalLink } from "@lucide/vue"
 import type { PackagesContext } from "./usePackages"
 
 const props = defineProps<{ ctx: PackagesContext }>()
 const { t } = useI18n()
 
-const {
-  query,
-  sortBy,
-  typeFilter,
-  catalogHasMore,
-  catalog,
-  catalogLoading,
-  catalogError,
-  busy,
-} = props.ctx
+const { query, sortBy, typeFilter, catalogHasMore, catalog, catalogLoading, catalogError, busy } = props.ctx
 const {
   loadCatalog,
   loadMoreCatalog,
@@ -82,11 +67,7 @@ const {
   </p>
 
   <div v-else class="grid gap-3">
-    <div
-      v-for="p in catalog"
-      :key="p.name"
-      class="rounded-md border p-3"
-    >
+    <div v-for="p in catalog" :key="p.name" class="rounded-md border p-3">
       <div class="flex flex-wrap items-center gap-2">
         <h4 class="text-sm font-medium">{{ p.name }}</h4>
         <Badge v-for="tp in p.types" :key="tp" variant="secondary">{{ typeLabel(tp) }}</Badge>
@@ -111,21 +92,14 @@ const {
           <Download v-else :size="14" />
           {{ scopesOf(p.name).has("global") ? t("packages.installedBadge") : t("packages.install") }}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="busy !== null"
-          @click="chooseProjectForInstall(p.source)"
-        >
+        <Button variant="outline" size="sm" :disabled="busy !== null" @click="chooseProjectForInstall(p.source)">
           {{ t("packages.installProject") }}
         </Button>
         <Button variant="ghost" size="sm" @click="openUrl(p.detailUrl)">
           <ExternalLink :size="14" />
           {{ t("packages.details") }}
         </Button>
-        <code class="text-muted-foreground ml-auto hidden font-mono text-xs sm:block">
-          pi install {{ p.source }}
-        </code>
+        <code class="text-muted-foreground ml-auto hidden font-mono text-xs sm:block"> pi install {{ p.source }} </code>
       </div>
     </div>
   </div>

@@ -47,7 +47,8 @@ pub async fn session_revert_changes(
 }
 
 fn revert_file(root: &Path, file: &RevertFile) -> RevertFileResult {
-    let result = resolve_within(root, &file.path).and_then(|path| apply_ops(&path, &file.ops));
+    let is_delete = matches!(file.ops.first(), Some(RevertOp::Delete { .. }));
+    let result = resolve_path(root, &file.path, is_delete).and_then(|path| apply_ops(&path, &file.ops));
     match result {
         Ok(()) => RevertFileResult { path: file.path.clone(), ok: true, error: None },
         Err(error) => RevertFileResult { path: file.path.clone(), ok: false, error: Some(error) },
@@ -56,10 +57,19 @@ fn revert_file(root: &Path, file: &RevertFile) -> RevertFileResult {
 
 /// 支持绝对路径与项目内相对路径；canonicalize 后必须仍落在项目根内。
 fn resolve_within(root: &Path, raw: &str) -> Result<PathBuf, String> {
+    resolve_path(root, raw, false)
+}
+
+/// 路径解析：Delete 操作的目标文件可能已不存在（幂等回滚），跳过 canonicalize。
+fn resolve_path(root: &Path, raw: &str, skip_canonicalize: bool) -> Result<PathBuf, String> {
     let candidate = Path::new(raw);
     let path = if candidate.is_absolute() { candidate.to_path_buf() } else { root.join(candidate) };
-    let path = dunce::canonicalize(&path)
-        .map_err(|_| pix_error_detail("revertPathInvalid", "无效的文件路径: {detail}", raw))?;
+    let path = if skip_canonicalize {
+        dunce::canonicalize(&path).unwrap_or(path)
+    } else {
+        dunce::canonicalize(&path)
+            .map_err(|_| pix_error_detail("revertPathInvalid", "无效的文件路径: {detail}", raw))?
+    };
     if !path.starts_with(root) {
         return Err(pix_error_detail("revertPathInvalid", "无效的文件路径: {detail}", raw));
     }
@@ -108,6 +118,10 @@ fn apply_ops(path: &Path, ops: &[RevertOp]) -> Result<(), String> {
 /// 避免模型给出的 LF 参数在 Windows CRLF 文件上无法定位。
 fn revert_replace(content: &str, before: &str, after: &str) -> Result<String, String> {
     if let Some(index) = content.find(after) {
+        // after 必须恰好出现一次，否则改错位置
+        if content[index + after.len()..].contains(after) {
+            return Err(pix_error("revertContentChanged", "文件内容已变化，无法自动撤销"));
+        }
         let mut updated = String::with_capacity(content.len() + before.len() - after.len());
         updated.push_str(&content[..index]);
         updated.push_str(before);
