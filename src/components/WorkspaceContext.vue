@@ -68,6 +68,11 @@ function select(path: string) {
   projectOpen.value = false
   if (path !== props.project) emit("selectProject", path)
 }
+// 工作树下拉：切换到当前项目拥有的某个工作树。
+function selectWorktree(path: string) {
+  modeOpen.value = false
+  select(path)
+}
 async function create() {
   if (blocked.value || !branch.value.trim()) return
   workspace.gitBusy = true
@@ -151,10 +156,27 @@ watch(() => props.project, refresh, { immediate: true })
           }}<ChevronDown :size="12" class="size-auto shrink-0" /></Button
       ></PopoverTrigger>
       <PopoverContent align="start" class="w-64 p-2"
-        ><p class="px-2 py-2 text-xs text-muted-foreground">{{ t("workspace.worktreeHint") }}</p>
-        <Button variant="context-menu-item" size="content" class="context-menu-item" @click="openCreate(true)"
-          ><Plus :size="14" class="size-auto shrink-0" />{{ t("workspace.createWorktree") }}</Button
-        ></PopoverContent
+        ><ScrollArea v-if="info?.worktrees.length" viewport-class="max-h-64">
+          <Button
+            v-for="tree in info.worktrees"
+            :key="tree.path"
+            variant="context-menu-item"
+            size="content"
+            class="context-menu-item"
+            :aria-current="tree.current ? 'true' : undefined"
+            :title="tree.path"
+            @click="selectWorktree(tree.path)"
+            ><Layers :size="14" class="size-auto shrink-0" /><span class="truncate">{{
+              tree.branch || t("workspace.detachedHead")
+            }}</span
+            ><span v-if="tree.current" class="ml-auto">✓</span></Button
+          >
+        </ScrollArea>
+        <div class="border-t border-border pt-1.5">
+          <Button variant="context-menu-item" size="content" class="context-menu-item" @click="openCreate(true)"
+            ><Plus :size="14" class="size-auto shrink-0" />{{ t("workspace.createWorktree") }}</Button
+          >
+        </div></PopoverContent
       >
     </Popover>
     <Popover v-model:open="branchOpen"

@@ -15,15 +15,47 @@ async fn git(project: &str, args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
+#[derive(Debug, Serialize)]
+pub struct GitWorktree { path: String, branch: String, current: bool }
 #[derive(Serialize)]
-pub struct GitInfo { branch: String, branches: Vec<String>, worktree: bool }
+pub struct GitInfo { branch: String, branches: Vec<String>, worktree: bool, worktrees: Vec<GitWorktree> }
+
+/// `git worktree list --porcelain` always lists the current working tree first,
+/// which is how the entries get flagged instead of comparing platform-dependent paths.
+fn parse_worktrees(list: &str) -> Vec<GitWorktree> {
+    let mut out: Vec<GitWorktree> = Vec::new();
+    let mut path = String::new();
+    let mut branch = String::new();
+    let flush = |out: &mut Vec<GitWorktree>, path: &mut String, branch: &mut String| {
+        if !path.is_empty() {
+            out.push(GitWorktree { path: std::mem::take(path), branch: std::mem::take(branch), current: out.is_empty() });
+        }
+    };
+    for line in list.lines() {
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            flush(&mut out, &mut path, &mut branch);
+            path = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            branch = rest.strip_prefix("refs/heads/").unwrap_or(rest).to_string();
+        }
+    }
+    flush(&mut out, &mut path, &mut branch);
+    out
+}
+
 #[tauri::command]
 pub async fn workspace_git_info(project: String) -> Result<GitInfo, String> {
     let branch = git(&project, &["branch", "--show-current"]).await?;
     let branches = git(&project, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).await?;
     let dir = git(&project, &["rev-parse", "--absolute-git-dir"]).await?;
     let common = git(&project, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await?;
-    Ok(GitInfo { branch: if branch.is_empty() { "HEAD (detached)".into() } else { branch }, branches: branches.lines().map(String::from).collect(), worktree: dir != common })
+    let list = git(&project, &["worktree", "list", "--porcelain"]).await?;
+    Ok(GitInfo {
+        branch: if branch.is_empty() { "HEAD (detached)".into() } else { branch },
+        branches: branches.lines().map(String::from).collect(),
+        worktree: dir != common,
+        worktrees: parse_worktrees(&list),
+    })
 }
 #[tauri::command]
 pub async fn workspace_git_create(project: String, branch: String, worktree: bool) -> Result<String, String> {
@@ -83,6 +115,13 @@ mod tests {
         assert_eq!(info.branch, "feature/isolated");
         assert!(info.worktree);
         assert!(!Path::new(&tree).join("untracked.txt").exists());
+        let listed = workspace_git_info(project.clone()).await.unwrap().worktrees;
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert_eq!(listed[0].branch, "feature/local");
+        assert!(listed[0].current);
+        assert_eq!(listed[1].path, tree.replace('\\', "/"));
+        assert_eq!(listed[1].branch, "feature/isolated");
+        assert!(!listed[1].current);
         assert_eq!(workspace_git_info(project.clone()).await.unwrap().branch, "feature/local");
         assert!(Path::new(&project).join("untracked.txt").exists());
         assert!(workspace_git_create(project, "feature/local".into(), false).await.is_err());

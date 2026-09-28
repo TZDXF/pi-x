@@ -328,6 +328,7 @@ export default {
     currentBranch: "Current branch",
     branchName: "New branch name",
     noGit: "Git unavailable",
+    detachedHead: "Detached HEAD",
     creating: "Creating…",
     create: "Create and switch",
     worktreeHint:

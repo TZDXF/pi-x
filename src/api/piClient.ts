@@ -406,10 +406,16 @@ export const listArchivedSessions = () => invoke<SessionMeta[]>("session_list_ar
 
 /** Permanently delete a session file (and its PiX metadata sidecar). */
 export const deleteSession = (file: string) => invoke<void>("session_delete", { file })
+export interface GitWorktree {
+  path: string
+  branch: string
+  current: boolean
+}
 export interface WorkspaceGitInfo {
   branch: string
   branches: string[]
   worktree: boolean
+  worktrees: GitWorktree[]
 }
 export const workspaceGitInfo = (project: string) => invoke<WorkspaceGitInfo>("workspace_git_info", { project })
 export const createWorkspaceGit = (project: string, branch: string, worktree: boolean) =>

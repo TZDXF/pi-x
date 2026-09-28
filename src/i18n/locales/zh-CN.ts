@@ -319,6 +319,7 @@ export default {
     currentBranch: "当前分支",
     branchName: "新分支名称",
     noGit: "Git 不可用",
+    detachedHead: "游离 HEAD",
     creating: "正在创建…",
     create: "创建并切换",
     worktreeHint: "从当前 HEAD 创建独立工作树和新分支，成功后切换至该目录。未提交的修改不会复制。",
