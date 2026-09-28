@@ -29,3 +29,16 @@ test("archived session list, restore and delete work through remote dispatch", (
   assert.match(remote, /"session_update" =>/)
   assert.match(remote, /"session_delete" =>/)
 })
+
+test("archiving hides the row immediately without disabling the rest of the sidebar", () => {
+  const sidebar = read("../src/components/WorkspaceSidebar.vue")
+
+  // 点击归档立即隐藏该行（乐观更新），失败时清掉标记撤回。
+  assert.match(sidebar, /async function archive\(s: SessionMeta\)/)
+  assert.match(sidebar, /archiving\.value\[s\.file\] = true/)
+  assert.match(sidebar, /finally \{\s*delete archiving\.value\[s\.file\]/)
+  assert.match(sidebar, /!archiving\.value\[s\.file\] &&/)
+  // 归档不再占用共享的 saving 标志，因此不会连带禁用整个列表。
+  const archive = sidebar.slice(sidebar.indexOf("async function archive("))
+  assert.doesNotMatch(archive.slice(0, archive.indexOf("\n}")), /saving\.value/)
+})

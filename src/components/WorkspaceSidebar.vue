@@ -73,13 +73,20 @@ const projectsCollapsed = ref(false)
 const renaming = ref<SessionMeta | null>(null)
 const title = ref("")
 const saving = ref(false)
+/** 归档中的会话：先从列表中隐藏，请求失败时自动撤回 */
+const archiving = ref<Record<string, boolean>>({})
 const navigationDisabled = computed(() => props.navigationBusy || workspace.gitBusy || saving.value)
 const disabled = computed(() => props.busy || workspace.gitBusy || saving.value)
 const name = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 function rows(path: string) {
   const sessions = workspace.orderedSessions(path)
-  return sessions.filter(s => !s.archived && `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()))
+  return sessions.filter(
+    s =>
+      !s.archived &&
+      !archiving.value[s.file] &&
+      `${label(s)} ${s.id}`.toLowerCase().includes(query.value.toLowerCase()),
+  )
 }
 function pendingRows(path: string) {
   return pendingConversations(
@@ -187,14 +194,15 @@ async function saveTitle() {
   }
 }
 async function archive(s: SessionMeta) {
-  if (disabled.value) return
-  saving.value = true
+  if (disabled.value || archiving.value[s.file]) return
+  // 先隐藏行，后端写入完成前列表保持可用；失败时清掉标记自动回滚
+  archiving.value[s.file] = true
   try {
     await workspace.update(s, s.title || null, !s.archived)
   } catch (e) {
     ui.pushToast(String(e), "error")
   } finally {
-    saving.value = false
+    delete archiving.value[s.file]
   }
 }
 
