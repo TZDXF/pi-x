@@ -7,7 +7,7 @@ import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
 import { ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
-import { computed, h, onUnmounted, ref, watch } from "vue"
+import { computed, onUnmounted, ref, watch } from "vue"
 import { changeForCall } from "@/lib/sessionChanges"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
@@ -190,10 +190,6 @@ function toolBase(block: ToolCallBlock): string {
   return block.name.toLowerCase().split(/[.:/]/).pop()!
 }
 
-/** read 工具头部按文件路径显示 vscode-icons 类型图标 */
-function readIcon(block: ToolCallBlock) {
-  return h(FileTypeIcon, { name: pathOf(block) })
-}
 
 const { t } = useI18n()
 </script>
@@ -291,7 +287,6 @@ const { t } = useI18n()
               : '[&>div]:flex-wrap [&>div>span]:break-all'
           "
           :type="`tool-${block.name}`"
-          :icon="isRead(block) ? readIcon(block) : undefined"
           :title="isRead(block) ? pathOf(block) || undefined : undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
