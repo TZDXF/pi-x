@@ -340,6 +340,10 @@ export default {
     restart: "重新启动",
     chooseProject: "选择其他项目",
     toastSessionCancelled: "扩展取消了会话切换",
+    windowMinimize: "最小化",
+    windowMaximize: "最大化",
+    windowRestore: "还原",
+    windowClose: "关闭",
   },
 
   tray: {

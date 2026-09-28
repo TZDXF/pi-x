@@ -2,6 +2,7 @@
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { isDesktop } from "@/api/transport"
 import {
   detectPi,
   exportSessionFileHtml,
@@ -42,6 +43,7 @@ import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
+import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 import { normalizeSlashes } from "@/lib/paths"
@@ -612,7 +614,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground">
+  <div
+    class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground"
+    :style="isDesktop ? { paddingTop: '2.25rem' } : undefined"
+  >
+    <WindowTitleBar v-if="isDesktop" />
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
     <WorkspaceSidebar
       v-show="sidebarOpen && route.name !== 'settings'"

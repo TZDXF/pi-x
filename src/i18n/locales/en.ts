@@ -350,6 +350,10 @@ export default {
     restart: "Restart",
     chooseProject: "Choose another project",
     toastSessionCancelled: "Session switch cancelled by an extension",
+    windowMinimize: "Minimize",
+    windowMaximize: "Maximize",
+    windowRestore: "Restore",
+    windowClose: "Close",
   },
 
   tray: {
