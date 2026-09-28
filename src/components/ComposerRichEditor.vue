@@ -17,13 +17,20 @@ const sessionLabels = useSessionLabels()
 const editor = ref<HTMLElement | null>(null)
 const composing = ref(false)
 
+function appendText(root: HTMLElement, raw: string) {
+  raw.split("\n").forEach((line, index) => {
+    if (index > 0) root.append(document.createElement("br"))
+    if (line) root.append(document.createTextNode(line))
+  })
+}
+
 function render(value: string, caret?: number) {
   const root = editor.value
   if (!root) return
   root.replaceChildren()
   for (const part of composerParts(value, sessionLabels.value)) {
     if (part.kind === "text") {
-      root.append(document.createTextNode(part.raw))
+      appendText(root, part.raw)
       continue
     }
     const chip = document.createElement("span")
@@ -37,12 +44,25 @@ function render(value: string, caret?: number) {
     chip.append(label)
     root.append(chip)
   }
+  if (value) {
+    // The sentinel keeps a visible caret line after a trailing newline without adding model text.
+    const caretBreak = document.createElement("br")
+    caretBreak.dataset.editorCaret = ""
+    root.append(caretBreak)
+  }
   if (caret !== undefined) setEditorCaret(root, caret)
+}
+
+function editorRequiresRender(root: HTMLElement, value: string): boolean {
+  if (editorText(root) !== value) return true
+  const expected = composerParts(value, sessionLabels.value).filter(part => part.kind !== "text")
+  const actual = Array.from(root.querySelectorAll<HTMLElement>("[data-raw]"))
+  return expected.length !== actual.length || expected.some((part, index) => part.raw !== actual[index]?.dataset.raw)
 }
 
 onMounted(() => render(textInput.value))
 watch(textInput, value => {
-  if (composing.value || !editor.value || editorText(editor.value) === value) return
+  if (composing.value || !editor.value || !editorRequiresRender(editor.value, value)) return
   render(value, document.activeElement === editor.value ? value.length : undefined)
 })
 watch(sessionLabels, () => {
@@ -55,48 +75,64 @@ function onInput() {
   const value = editorText(editor.value)
   const caret = editorSelection(editor.value).start
   setTextInput(value)
-  render(value, caret)
+  // Native edits keep their undo history; only normalize when chips or DOM structure changed.
+  if (editorRequiresRender(editor.value, value)) render(value, caret)
 }
 
-function replaceSelection(value: string) {
+function insertAtSelection(value: string, lineBreak = false): boolean {
+  if (lineBreak) return document.execCommand("insertLineBreak")
+  if (!value) return true
+  return document.execCommand("insertText", false, value)
+}
+
+function deleteAtomicChip(key: string, caret: number): boolean {
   const root = editor.value
-  if (!root) return
-  const { start, end } = editorSelection(root)
-  const next = textInput.value.slice(0, start) + value + textInput.value.slice(end)
-  setTextInput(next)
-  render(next, start + value.length)
+  if (!root) return false
+  const parts = composerParts(textInput.value, sessionLabels.value)
+  let cursor = 0
+  let chipIndex = -1
+  let targetIndex = -1
+  let targetCursor = 0
+  let targetEnd = 0
+  for (const part of parts) {
+    const next = cursor + part.raw.length
+    if (part.kind !== "text") {
+      chipIndex++
+      if ((key === "Backspace" && next === caret) || (key === "Delete" && cursor === caret)) {
+        targetIndex = chipIndex
+        targetCursor = cursor
+        targetEnd = next
+      }
+    }
+    cursor = next
+  }
+  if (targetIndex < 0) return false
+  const chip = Array.from(root.querySelectorAll<HTMLElement>("[data-raw]"))[targetIndex]
+  if (!chip) return false
+  const range = document.createRange()
+  range.selectNode(chip)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  if (document.execCommand("delete")) return true
+  const updated = textInput.value.slice(0, targetCursor) + textInput.value.slice(targetEnd)
+  setTextInput(updated)
+  render(updated, targetCursor)
   root.dispatchEvent(new Event("input", { bubbles: true }))
+  return true
 }
 
 function onKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented || composing.value || event.isComposing || event.keyCode === 229) return
   if ((event.key === "Backspace" || event.key === "Delete") && editor.value) {
     const { start, end } = editorSelection(editor.value)
-    if (start !== end) {
-      event.preventDefault()
-      replaceSelection("")
-      return
-    }
-    if (start === end) {
-      let cursor = 0
-      for (const part of composerParts(textInput.value, sessionLabels.value)) {
-        const next = cursor + part.raw.length
-        if (part.kind !== "text" && (event.key === "Backspace" ? next === start : cursor === start)) {
-          event.preventDefault()
-          const updated = textInput.value.slice(0, cursor) + textInput.value.slice(next)
-          setTextInput(updated)
-          render(updated, cursor)
-          editor.value.dispatchEvent(new Event("input", { bubbles: true }))
-          return
-        }
-        cursor = next
-      }
-    }
+    if (start === end && deleteAtomicChip(event.key, start)) return
+    // Leave ordinary text deletion to the browser so native undo remains intact.
   }
   if (event.key === "Enter") {
     event.preventDefault()
     if (event.shiftKey) {
-      replaceSelection("\n")
+      insertAtSelection("\n", true)
       return
     }
     const form = editor.value?.closest("form")
@@ -119,7 +155,7 @@ function onPaste(event: ClipboardEvent) {
     return
   }
   event.preventDefault()
-  replaceSelection(event.clipboardData?.getData("text/plain") || "")
+  insertAtSelection(event.clipboardData?.getData("text/plain") || "")
 }
 
 function onCopy(event: ClipboardEvent) {
@@ -128,7 +164,7 @@ function onCopy(event: ClipboardEvent) {
   if (start === end) return
   event.preventDefault()
   event.clipboardData?.setData("text/plain", textInput.value.slice(start, end))
-  if (event.type === "cut") replaceSelection("")
+  if (event.type === "cut") document.execCommand("delete")
 }
 
 function onCompositionEnd() {

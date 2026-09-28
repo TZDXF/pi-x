@@ -50,8 +50,13 @@ export function composerParts(text: string, sessionLabels: Record<string, string
 }
 
 /** DOM length differs from displayed text length for atomic reference chips. */
+function isEditorCaretBreak(node: Node): boolean {
+  return node instanceof HTMLElement && node.nodeName === "BR" && node.dataset.editorCaret !== undefined
+}
+
 export function editorText(root: HTMLElement): string {
   function read(node: Node): string {
+    if (isEditorCaretBreak(node)) return ""
     if (node instanceof HTMLElement && node.dataset.raw) return node.dataset.raw
     if (node.nodeName === "BR") return "\n"
     if (node.nodeType === Node.TEXT_NODE) return node.textContent || ""
@@ -77,6 +82,7 @@ export function editorSelection(root: HTMLElement): { start: number; end: number
         count += current.dataset.raw.length
         return false
       }
+      if (isEditorCaretBreak(current)) return true
       if (current.nodeName === "BR") {
         count++
         return false
@@ -100,6 +106,7 @@ export function setEditorCaret(root: HTMLElement, offset: number): void {
   const range = document.createRange()
   let remaining = offset
   function seek(node: Node): boolean {
+    if (isEditorCaretBreak(node)) return false
     if (node instanceof HTMLElement && node.dataset.raw) return false
     if (node.nodeType === Node.TEXT_NODE) {
       const length = node.textContent?.length || 0
@@ -112,6 +119,10 @@ export function setEditorCaret(root: HTMLElement, offset: number): void {
     }
     if (node.nodeName === "BR") {
       remaining--
+      if (remaining === 0) {
+        range.setStartAfter(node)
+        return true
+      }
       return false
     }
     for (const child of node.childNodes) {

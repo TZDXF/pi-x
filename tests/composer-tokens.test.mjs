@@ -53,6 +53,14 @@ test("known session references display their current title", () => {
   assert.equal(composerParts(`请看 ${raw} `, {}).find(p => p.kind === "session").label, "old.jsonl")
 })
 
+test("rich editor preserves browser newline and undo behavior for plain text", () => {
+  const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
+  assert.match(editor, /insertLineBreak/)
+  assert.match(editor, /editorRequiresRender\(editor\.value, value\)/)
+  assert.doesNotMatch(editor, /replaceSelection/)
+  assert.match(editor, /Leave ordinary text deletion to the browser/)
+})
+
 test("rich editor wires workspace session titles into chip rendering", () => {
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
   const composable = readFileSync(new URL("../src/composables/useSessionLabels.ts", import.meta.url), "utf8")
