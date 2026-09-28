@@ -31,6 +31,7 @@ export const SETTINGS_TABS = [
   "models",
   "model-config",
   "retry",
+  "shortcuts",
   "packages",
   "agent-config",
   "skills",

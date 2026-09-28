@@ -49,6 +49,7 @@ import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 import { normalizeSlashes } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
+import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
 const route = useRoute()
 
@@ -583,6 +584,51 @@ async function newProjectSession(path: string) {
   }
 }
 
+// ---- global keyboard shortcuts: dispatcher + app-level actions ----
+
+function onGlobalKeydown(event: KeyboardEvent) {
+  if (phase.value !== "chat") return
+  if (ui.activeDialog) return // extension dialogs handle their own keys
+  dispatchShortcut(event)
+}
+
+function focusComposerFromShortcut() {
+  const el = document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")
+  if (el) {
+    el.focus()
+    return
+  }
+  if (route.value.name !== "home") navigate("/")
+}
+
+function switchSessionByOffset(offset: number) {
+  if (route.value.name !== "home" || connecting.value || navigating.value) return
+  const rows = workspace.orderedSessions(project.value)
+  if (rows.length < 2) return
+  const index = rows.findIndex(row => row.file === session.sessionFile)
+  // No saved session yet (pristine draft): next = newest, prev = oldest.
+  const target = index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
+  if (target) requestWorkspaceNavigation(() => resumeSession(target.file, target.cwd))
+}
+
+const offShortcutHandlers = [
+  registerShortcutHandler("app.newSession", () => requestWorkspaceNavigation(() => newProjectSession(project.value))),
+  registerShortcutHandler("app.focusComposer", focusComposerFromShortcut),
+  registerShortcutHandler("app.toggleSidebar", () => {
+    if (route.value.name === "home") sidebarOpen.value = !sidebarOpen.value
+  }),
+  registerShortcutHandler("app.settings", () => navigate("/settings/general")),
+  registerShortcutHandler("app.schedules", () => navigate("/schedules")),
+  registerShortcutHandler("app.archives", () => navigate("/archives")),
+  registerShortcutHandler("app.prevSession", () => switchSessionByOffset(-1)),
+  registerShortcutHandler("app.nextSession", () => switchSessionByOffset(1)),
+]
+
+onMounted(() => window.addEventListener("keydown", onGlobalKeydown))
+onUnmounted(() => {
+  offShortcutHandlers.forEach(off => off())
+  window.removeEventListener("keydown", onGlobalKeydown)
+})
 // Removing a project only removes its navigation entry, never files or logs.
 async function removeProject(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return

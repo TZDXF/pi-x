@@ -47,7 +47,12 @@ function harness(group = null) {
       },
     }),
     onMounted: fn => {
-      context.mount = fn
+      // App registers multiple mount hooks; chain them in registration order.
+      const previous = context.mount
+      context.mount = async () => {
+        if (previous) await previous()
+        await fn()
+      }
     },
     onUnmounted: () => {},
     useI18n: () => ({ t: x => x, locale: { value: "en" } }),
@@ -92,6 +97,9 @@ function harness(group = null) {
     useRoute: () => ({}),
     navigate: () => {},
     normalizeSlashes: pathsModule().normalizeSlashes,
+    window: { addEventListener() {}, removeEventListener() {} },
+    dispatchShortcut: () => false,
+    registerShortcutHandler: () => () => {},
   })
   vm.runInContext(
     ts.transpile(

@@ -29,6 +29,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./GeneralSettings.vue")),
   },
   {
+    id: "shortcuts",
+    nav: "settings.shortcutsNav",
+    title: "settings.shortcutsTitle",
+    desc: "settings.shortcutsDesc",
+    component: defineAsyncComponent(() => import("./ShortcutsSettings.vue")),
+  },
+  {
     id: "workspace",
     nav: "settings.workspace",
     title: "settings.workspaceTitle",
@@ -123,7 +130,7 @@ export interface SettingsGroupDef {
 
 /** The visible information architecture; route ids remain stable for deep links. */
 export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
-  { id: "general", labelKey: "settings.groups.general", tabIds: ["general"] },
+  { id: "general", labelKey: "settings.groups.general", tabIds: ["general", "shortcuts"] },
   { id: "workspace", labelKey: "settings.groups.workspace", tabIds: ["workspace"] },
   {
     id: "modelConversation",

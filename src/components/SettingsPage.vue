@@ -165,7 +165,7 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "general", labelKey: "settings.theme" },
   { tab: "general", labelKey: "chat.runningBehavior" },
   { tab: "general", labelKey: "settings.language" },
-  { tab: "general", labelKey: "settings.shortcutsTitle" },
+  { tab: "shortcuts", labelKey: "settings.shortcutsTitle" },
   { tab: "workspace", labelKey: "openWith.default" },
   { tab: "workspace", labelKey: "projectless.settingsLabel" },
   { tab: "notifications", labelKey: "settings.turnComplete" },
@@ -194,7 +194,16 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
 /** Low-weight fallback text so synonyms and field labels locate the owning menu. */
 const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
-  general: ["settings.theme", "settings.runningBehaviorDesc", "settings.language", "settings.shortcutsTitle"],
+  general: ["settings.theme", "settings.runningBehaviorDesc", "settings.language"],
+  shortcuts: [
+    "shortcuts.actions.newSession",
+    "shortcuts.actions.focusComposer",
+    "shortcuts.actions.toggleSidebar",
+    "shortcuts.actions.stop",
+    "shortcuts.actions.forkLast",
+    "shortcuts.actions.attachFile",
+    "shortcuts.actions.terminal",
+  ],
   workspace: ["openWith", "projectless", "sessionArchive.description"],
   notifications: [
     "settings.turnCompleteDesc",

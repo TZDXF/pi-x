@@ -6,7 +6,7 @@ import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownP
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { NumberFieldInput, NumberFieldRoot } from "reka-ui"
 import {
@@ -59,6 +59,8 @@ import { useSessionFork } from "@/composables/useSessionFork"
 import { usePromptEdit, type PromptEditTextarea } from "@/composables/usePromptEdit"
 import { useSessionDrop } from "@/composables/useSessionDrop"
 import { runningBehavior } from "@/lib/runningBehavior"
+import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
+import { isDesktop } from "@/api/transport"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -590,19 +592,79 @@ async function abort() {
   if (restored) bridge.value?.setTextInput(restored)
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key !== "Escape" || e.isComposing) return
-  if (ui.activeDialog) return // dialog handles its own cancel
-  // Let our own dialogs (fork / image preview) handle Escape first.
-  if (forkOpen.value || previewImage.value || editedPrompt.value) return
-  if (session.isStreaming) {
-    e.preventDefault()
-    void abort()
+// ---- keyboard shortcuts: executors for lib/shortcuts.ts actions ----
+
+function lastAssistantTurn(): AssistantTurn | undefined {
+  const turns = renderedEntries.value
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const entry = turns[index]
+    if (entry.kind === "assistant") return entry
   }
+  return undefined
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown))
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown))
+function historyViewport(): HTMLElement | null {
+  const root = conversation.value as unknown as { $el?: HTMLElement } | null
+  return root?.$el?.querySelector<HTMLElement>('[role="log"]') ?? null
+}
+
+function scrollHistory(direction: -1 | 1) {
+  const viewport = historyViewport()
+  if (!viewport) return
+  conversation.value?.stopScroll()
+  viewport.scrollTo({ top: direction < 0 ? 0 : viewport.scrollHeight })
+}
+
+function cycleSidebarTab(offset: number) {
+  if (!sidebarTabs.value.length) return
+  const index = sidebarTabs.value.findIndex(tab => tab.id === activeTabId.value)
+  const next = sidebarTabs.value[(index + offset + sidebarTabs.value.length) % sidebarTabs.value.length]
+  if (next) activeTabId.value = next.id
+}
+
+const offShortcutHandlers = [
+  registerShortcutHandler("chat.stop", () => {
+    if (session.isStreaming) void abort()
+  }),
+  registerShortcutHandler("chat.forkLast", () => {
+    const entry = lastAssistantTurn()
+    if (entry) void forkFromAnswer(entry.lastIndex)
+  }),
+  registerShortcutHandler("chat.copyLastAnswer", () => {
+    const entry = lastAssistantTurn()
+    if (entry) void copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))
+  }),
+  registerShortcutHandler("chat.scrollTop", () => scrollHistory(-1)),
+  registerShortcutHandler("chat.scrollBottom", () => scrollHistory(1)),
+  registerShortcutHandler("editor.attachFile", () => bridge.value?.openFileDialog?.()),
+  registerShortcutHandler("editor.toggleDelayedSend", () => {
+    delayedSend.value = !delayedSend.value
+  }),
+  registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
+  registerShortcutHandler("sidebar.files", () => addSidebarTab("files")),
+  registerShortcutHandler("sidebar.terminal", () => {
+    if (isDesktop) addSidebarTab("terminal")
+  }),
+  registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
+  registerShortcutHandler("sidebar.closeTab", () => {
+    if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)
+  }),
+  registerShortcutHandler("sidebar.nextTab", () => cycleSidebarTab(1)),
+  registerShortcutHandler("sidebar.prevTab", () => cycleSidebarTab(-1)),
+]
+
+// Our own dialogs (fork / image preview / prompt edit) swallow shortcuts so
+// their inputs keep every key; extension dialogs are gated via ui.activeDialog.
+watch(
+  () => Boolean(forkOpen.value || previewImage.value || editedPrompt.value),
+  active => setShortcutsSuppressed("chat-dialogs", active),
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  offShortcutHandlers.forEach(off => off())
+  setShortcutsSuppressed("chat-dialogs", false)
+})
 </script>
 
 <template>

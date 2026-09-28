@@ -11,7 +11,9 @@ import type { AcceptableValue } from "reka-ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
 import { setTrayLabels } from "@/api/piClient"
 import { theme, setTheme, type ThemePreference } from "@/lib/theme"
+import { navigate } from "@/lib/router"
 import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib/runningBehavior"
+import { Button } from "@/components/ui/button"
 
 const { t } = useI18n()
 
@@ -83,5 +85,8 @@ function applyLocale(v: Locale) {
         <KeyHint>/</KeyHint>
       </SettingDescription>
     </div>
+    <Button variant="outline" size="sm" @click="navigate('/settings/shortcuts')">
+      {{ t("settings.shortcutsOpen") }}
+    </Button>
   </SettingRow>
 </template>
