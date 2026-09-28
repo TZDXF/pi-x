@@ -367,8 +367,11 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "app_config_save" => {
             let mut cfg = commands::app_config_get(app.clone())?;
             cfg.last_project = a["config"]["lastProject"].as_str().map(str::to_owned);
-            // 远程端只能改工作区偏好，其余应用配置（如 piPath）保持主机现状。
+            // 远程端只能改工作区偏好和内置插件开关，其余应用配置（如 piPath）保持主机现状。
             cfg.projectless_dir = a["config"]["projectlessDir"].as_str().map(str::to_owned);
+            if let Some(enabled) = a["config"]["builtinFileChanges"].as_bool() {
+                cfg.builtin_file_changes = Some(enabled);
+            }
             commands::app_config_save(app.clone(), cfg)?;
             Ok(Value::Null)
         }
@@ -457,6 +460,27 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             let files: Vec<crate::session_revert::RevertFile> = serde_json::from_value(a["files"].clone())
                 .map_err(|e| pix_error_with("missingFiles", format!("缺少 files 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
             Ok(serde_json::to_value(crate::session_revert::session_revert_changes(text("project")?, files).await?).map_err(|e| e.to_string())?)
+        }
+        "session_file_rewind_preview" => {
+            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> = serde_json::from_value(a["artifacts"].clone())
+                .map_err(|e| pix_error_with("missingArtifacts", format!("缺少 artifacts 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
+            Ok(serde_json::to_value(crate::session_file_rewind::session_file_rewind_preview(text("project")?, artifacts).await?).map_err(|e| e.to_string())?)
+        }
+        "session_file_rewind_apply" => {
+            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> = serde_json::from_value(a["artifacts"].clone())
+                .map_err(|e| pix_error_with("missingArtifacts", format!("缺少 artifacts 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
+            Ok(serde_json::to_value(crate::session_file_rewind::session_file_rewind_apply(text("project")?, artifacts).await?).map_err(|e| e.to_string())?)
+        }
+        "session_file_rewind_state_get" => Ok(serde_json::to_value(
+            crate::session_file_rewind::session_file_rewind_state_get(text("file")?).await?,
+        ).map_err(|e| e.to_string())?),
+        "session_file_rewind_state_mark" => {
+            let ids = a["toolCallIds"].as_array().map(|list| {
+                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+            }).unwrap_or_default();
+            Ok(serde_json::to_value(
+                crate::session_file_rewind::session_file_rewind_state_mark(text("file")?, ids).await?,
+            ).map_err(|e| e.to_string())?)
         }
         "session_checkpoint_create" => Ok(serde_json::to_value(
             crate::session_checkpoint::session_checkpoint_create(text("project")?, text("checkpointId")?).await?,

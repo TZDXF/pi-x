@@ -139,6 +139,8 @@ export interface EventContext {
   /** 轮次 Git 快照：agent_start 建开始快照，settled 建结束快照并计算差异。 */
   checkpointStart: () => void
   checkpointSettle: () => void
+  /** Extension custom entry (e.g. exact file before/after artifact). */
+  customEntryAppended: (entry: any) => void
 }
 
 // ---- event ingestion ----
@@ -165,6 +167,7 @@ export function createEventHandler(ctx: EventContext) {
     dispatchQueuedPrompt,
     checkpointStart,
     checkpointSettle,
+    customEntryAppended,
   } = ctx
 
   function handleEvent(ev: Record<string, any>) {
@@ -338,6 +341,10 @@ export function createEventHandler(ctx: EventContext) {
       case "queue_update":
         steering.value = ev.steering ?? []
         followUp.value = ev.followUp ?? []
+        break
+
+      case "entry_appended":
+        customEntryAppended(ev.entry)
         break
 
       case "compaction_start":

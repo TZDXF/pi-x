@@ -45,6 +45,9 @@ pub struct AppConfig {
     /// 无项目会话的工作目录；缺省为 `~/.pix/workspace`。
     #[serde(rename = "projectlessDir", default, skip_serializing_if = "Option::is_none")]
     pub projectless_dir: Option<String>,
+    /// PiX 内置的 pi extension 开关；缺省为启用。
+    #[serde(rename = "builtinFileChanges", default, skip_serializing_if = "Option::is_none")]
+    pub builtin_file_changes: Option<bool>,
 }
 
 fn is_false(v: &bool) -> bool {

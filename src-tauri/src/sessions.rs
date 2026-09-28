@@ -9,6 +9,7 @@ use crate::errors::{pix_error, pix_error_detail};
 use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use std::collections::HashMap;
 use std::io::Read;
@@ -469,6 +470,20 @@ fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
                 }
                 messages.push(msg);
             }
+            Some("custom") if entry.get("customType").and_then(|v| v.as_str()) == Some("pix-file-change") => {
+                let mut message = serde_json::json!({
+                    "role": "custom",
+                    "customType": "pix-file-change",
+                    "data": entry.get("data").cloned().unwrap_or(Value::Null),
+                    "_entryId": id,
+                });
+                if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str())
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                {
+                    message["timestamp"] = ts.timestamp_millis().into();
+                }
+                messages.push(message);
+            }
             _ => {}
         }
     }
@@ -656,11 +671,12 @@ mod presentation_tests {
             // A forked branch off m1 must not leak into the current branch.
             "{\"type\":\"message\",\"id\":\"fork\",\"parentId\":\"m1\",\"message\":{\"role\":\"user\",\"content\":\"forked\"}}\n",
             "{\"type\":\"message\",\"id\":\"m4\",\"parentId\":\"m3\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+            "{\"type\":\"custom\",\"id\":\"fc1\",\"parentId\":\"m4\",\"timestamp\":\"2026-09-26T11:20:03.000Z\",\"customType\":\"pix-file-change\",\"data\":{\"toolCallId\":\"call-1\",\"files\":[]}}\n",
         );
         std::fs::write(&file, content).unwrap();
         let messages = read_session_history(&file).unwrap();
         let roles: Vec<&str> = messages.iter().filter_map(|m| m["role"].as_str()).collect();
-        assert_eq!(roles, ["user", "assistant", "compactionSummary", "user", "assistant"]);
+        assert_eq!(roles, ["user", "assistant", "compactionSummary", "user", "assistant", "custom"]);
         assert_eq!(messages[0]["content"], "first");
         assert_eq!(messages[2]["summary"], "collapsed");
         assert_eq!(messages[2]["tokensBefore"], 222767);
@@ -668,6 +684,8 @@ mod presentation_tests {
         assert_eq!(messages[2]["firstKeptEntryId"], "m2");
         assert_eq!(messages[0]["_entryId"], "m1");
         assert_eq!(messages[3]["content"], "second");
+        assert_eq!(messages[5]["customType"], "pix-file-change");
+        assert_eq!(messages[5]["data"]["toolCallId"], "call-1");
         std::fs::remove_file(file).unwrap();
     }
 

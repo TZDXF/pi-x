@@ -41,6 +41,8 @@ export interface AppConfig {
   titleFollowMain?: boolean
   /** 无项目会话的工作目录；缺省为 `~/.pix/workspace`。 */
   projectlessDir?: string
+  /** PiX 内置文件变更插件；缺省为启用。 */
+  builtinFileChanges?: boolean
 }
 
 export interface PiSettings {

@@ -442,7 +442,8 @@ impl RpcState {
 }
 
 pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
-    session_file: Option<String>, extra_args: Vec<String>, runtime_id: Option<String>) -> Result<(), String> {
+    session_file: Option<String>, mut extra_args: Vec<String>, runtime_id: Option<String>) -> Result<(), String> {
+    extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
     let id = runtime_id.unwrap_or_else(|| "default".into());
     let mut pool = state.processes.lock().await;
     if let Some(existing) = pool.get(&id) {

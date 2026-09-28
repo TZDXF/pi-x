@@ -4,11 +4,14 @@ import { computed, onScopeDispose, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   packageCatalog,
+  getConfig,
   packageList,
   packageInstall,
   packageRemove,
   packageUpdate,
   packageNameOf,
+  saveConfig,
+  type AppConfig,
   type CatalogPackage,
   type InstalledPackage,
 } from "@/api/piClient"
@@ -33,6 +36,13 @@ export function usePackages(project: () => string | undefined) {
   // ---- installed ----
   const installed = ref<InstalledPackage[]>([])
   const installedLoading = ref(false)
+
+  // ---- built-in plugins ----
+  const appConfig = ref<AppConfig | null>(null)
+  const builtinLoading = ref(false)
+  const builtinBusy = ref<string | null>(null)
+
+  const builtinFileChanges = computed(() => appConfig.value?.builtinFileChanges !== false)
 
   // ---- market filters ----
   const query = ref("")
@@ -59,8 +69,38 @@ export function usePackages(project: () => string | undefined) {
 
   /** Initial load, called when the packages route mounts. */
   async function activate() {
-    void refreshInstalled()
+    void Promise.all([refreshInstalled(), loadBuiltinPlugins()])
     void loadCatalog()
+  }
+
+  async function loadBuiltinPlugins() {
+    builtinLoading.value = true
+    try {
+      appConfig.value = await getConfig()
+    } catch (e) {
+      ui.pushToast(String(e), "error")
+    } finally {
+      builtinLoading.value = false
+    }
+  }
+
+  async function setBuiltinFileChanges(enabled: boolean) {
+    if (builtinBusy.value) return
+    const previous = appConfig.value
+    const next = { ...(appConfig.value ?? {}), builtinFileChanges: enabled }
+    appConfig.value = next
+    builtinBusy.value = "fileChanges"
+    try {
+      await saveConfig(next)
+      ui.pushToast(t(enabled ? "packages.builtinEnabledToast" : "packages.builtinDisabledToast", {
+        name: t("packages.builtin.fileChanges.name"),
+      }), "info")
+    } catch (e) {
+      appConfig.value = previous
+      ui.pushToast(String(e), "error")
+    } finally {
+      builtinBusy.value = null
+    }
   }
 
   function clearSearchTimer() {
@@ -268,6 +308,10 @@ export function usePackages(project: () => string | undefined) {
     catalogHasMore,
     installed,
     installedLoading,
+    appConfig,
+    builtinLoading,
+    builtinBusy,
+    builtinFileChanges,
     query,
     sortBy,
     typeFilter,
@@ -284,6 +328,8 @@ export function usePackages(project: () => string | undefined) {
     loadCatalog,
     loadMoreCatalog,
     refreshInstalled,
+    loadBuiltinPlugins,
+    setBuiltinFileChanges,
     scopesOf,
     fmtDownloads,
     fmtUpdated,

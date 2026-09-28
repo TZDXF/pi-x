@@ -22,15 +22,25 @@ const checkpointRecord = (state = "active") => ({
   files: [],
 })
 
-function harness(files, { project = "C:/code/demo", checkpoint = null } = {}) {
-  const props = { files, project, checkpoint }
+function harness(files, { project = "C:/code/demo", checkpoint = null, artifacts = [], preview, apply } = {}) {
+  const props = { files, project, checkpoint, artifacts }
   const emitted = []
   const revertCalls = []
   const restoreCalls = []
+  const previewCalls = []
+  const applyCalls = []
+  const defaultPreview = {
+    canApply: true,
+    safeFiles: artifacts.flatMap(artifact =>
+      artifact.files.map(file => ({ path: file.path, operationCount: 1, toolNames: [artifact.toolName] })),
+    ),
+    unsafeFiles: [],
+    ignoredFiles: [],
+  }
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
   const module = loadTsSource(
     script +
-      "\nexport { totals, rows, revertibleFiles, revert, expanded, busy, reverted, gitRevertible, turnReverted }",
+      "\nexport { totals, rows, revertibleFiles, hasArtifacts, revert, expanded, busy, reverted, gitRevertible, turnReverted, isTurnReverted, rewindPreview, rewindOpen, openArtifactRewind, confirmArtifactRewind }",
     {
       defineProps: () => props,
       defineEmits: () => (name, payload) => emitted.push([name, payload]),
@@ -69,6 +79,17 @@ function harness(files, { project = "C:/code/demo", checkpoint = null } = {}) {
               }
             },
           }
+        if (id === "@/lib/fileRewind")
+          return {
+            previewFileRewind: async (project, list) => {
+              previewCalls.push({ project, list })
+              return preview ?? defaultPreview
+            },
+            applyFileRewind: async (project, list) => {
+              applyCalls.push({ project, list })
+              return { applied: true, preview: apply ?? preview ?? defaultPreview, response: "" }
+            },
+          }
         if (id === "@/lib/turnChanges") return turnChanges
         if (id === "@/lib/paths") return paths
         if (id === "@/lib/backendError") return backendError
@@ -76,7 +97,7 @@ function harness(files, { project = "C:/code/demo", checkpoint = null } = {}) {
       },
     },
   )
-  return { props, emitted, revertCalls, restoreCalls, ...module }
+  return { props, emitted, revertCalls, restoreCalls, previewCalls, applyCalls, ...module }
 }
 
 const file = (path, { added = 1, removed = 0, unknown = false, revertible = true, ops = [] } = {}) => ({
@@ -157,8 +178,8 @@ test("reverted turns keep the badge and drop the undo affordances", () => {
   assert.equal(h.gitRevertible.value, false)
   assert.equal(h.revertibleFiles.value.length, 1)
   // 模板：已回滚徽标 + 头部按钮隐藏 + 行内显示成功图标。
-  assert.ok(source.includes(`v-if="revertibleFiles.length && !turnReverted"`))
-  assert.ok(source.includes(`v-if="turnReverted || reverted.has(row.file.path)"`))
+  assert.ok(source.includes(`v-if="(revertibleFiles.length || hasArtifacts) && !isTurnReverted"`))
+  assert.ok(source.includes(`v-if="isTurnReverted || reverted.has(row.file.path)"`))
 })
 
 test("template wires expand toggle, review opening and per-file actions", () => {
@@ -168,4 +189,42 @@ test("template wires expand toggle, review opening and per-file actions", () => 
   assert.ok(source.includes('@click="confirmRevertAll"'))
   assert.ok(source.includes("revert([row.file], false)"))
   assert.ok(source.includes(':disabled="busy || !row.file.revertible"'))
+})
+
+const artifact = () => ({
+  version: 1,
+  toolCallId: "call-artifact",
+  toolName: "write",
+  entryId: "entry-artifact",
+  files: [{ path: "a.ts", existedBefore: true, beforeContent: "before\n", afterContent: "after\n" }],
+})
+
+test("artifact preview blocks apply when any file is unsafe", async () => {
+  const unsafe = {
+    canApply: false,
+    safeFiles: [{ path: "a.ts", operationCount: 1, toolNames: ["write"] }],
+    unsafeFiles: [{ path: "a.ts", operationCount: 1, toolNames: ["write"], reason: "external_modified" }],
+    ignoredFiles: [],
+  }
+  const h = harness([file("a.ts")], { artifacts: [artifact()], preview: unsafe })
+  assert.equal(h.hasArtifacts.value, true)
+  await h.openArtifactRewind()
+  assert.equal(h.rewindOpen.value, true)
+  assert.equal(h.rewindPreview.value.canApply, false)
+  assert.equal(h.previewCalls.length, 1)
+  await h.confirmArtifactRewind()
+  assert.equal(h.applyCalls.length, 0)
+  assert.ok(source.includes('t("turnChanges.rewindUnsafe")'))
+  assert.ok(source.includes('t("turnChanges.rewindReasonExternalModified")'))
+})
+
+test("artifact preview applies safe files and persists the reverted state", async () => {
+  const h = harness([file("a.ts")], { artifacts: [artifact()] })
+  await h.openArtifactRewind()
+  assert.equal(h.rewindPreview.value.canApply, true)
+  await h.confirmArtifactRewind()
+  assert.equal(h.applyCalls.length, 1)
+  assert.equal(h.isTurnReverted.value, true)
+  assert.ok(h.emitted.some(([name]) => name === "revertedAll"))
+  assert.ok(source.includes('t("turnChanges.rewindApply")'))
 })

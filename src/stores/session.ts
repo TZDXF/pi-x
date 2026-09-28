@@ -17,6 +17,12 @@ import {
 } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { sessionChanges } from "@/lib/sessionChanges"
+import {
+  fileChangeArtifactFromEntry,
+  mergeArtifactChanges,
+  type FileChangeArtifact,
+} from "@/lib/fileChangeArtifacts"
+import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
 import type { CommandInfo, Model, SessionState, SessionStats, ThinkingLevel, Usage } from "@/api/protocol"
@@ -95,6 +101,8 @@ export const createSessionStore = (runtimeId = "default") =>
     // ---- state ----
     const entries = ref<Entry[]>([])
     const runs = ref<Record<string, ToolRun>>({})
+    const fileChangeArtifacts = ref<FileChangeArtifact[]>([])
+    const revertedFileChangeCalls = ref(new Set<string>())
     /** In-progress assistant message being assembled from streaming deltas. */
     const partialBlocks = ref<Block[] | null>(null)
     const isStreaming = ref(false)
@@ -182,11 +190,46 @@ export const createSessionStore = (runtimeId = "default") =>
 
     function invalidateHistory() {
       historyVersion++
+      fileChangeArtifacts.value = []
+      revertedFileChangeCalls.value = new Set()
       historyMessages.value = []
       pendingHistoryError.value = null
       historyCursor.value = 0
       historyLoading.value = false
       olderHistoryLoading.value = false
+    }
+
+    async function refreshFileRewindState(file: string | null) {
+      if (!file) return
+      try {
+        const ids = await fileRewindState(file)
+        if (sessionFile.value === file) revertedFileChangeCalls.value = new Set(ids)
+      } catch {
+        /* Optional persisted UI state. */
+      }
+    }
+
+    async function markFileRewinds(toolCallIds: string[]) {
+      const file = sessionFile.value
+      if (!file || !toolCallIds.length) return
+      try {
+        const ids = await markFileRewindState(file, toolCallIds)
+        if (sessionFile.value === file) revertedFileChangeCalls.value = new Set(ids)
+      } catch {
+        /* The actual file rewind already succeeded. */
+      }
+    }
+
+    function mergeFileChangeArtifact(entry: any) {
+      const artifact = fileChangeArtifactFromEntry(entry)
+      if (!artifact) return
+      const key = `${artifact.entryId ?? ""}:${artifact.toolCallId}`
+      const index = fileChangeArtifacts.value.findIndex(
+        item => `${item.entryId ?? ""}:${item.toolCallId}` === key,
+      )
+      fileChangeArtifacts.value = index >= 0
+        ? fileChangeArtifacts.value.map((item, i) => (i === index ? artifact : item))
+        : [...fileChangeArtifacts.value, artifact]
     }
 
     // streaming assembly
@@ -272,6 +315,7 @@ export const createSessionStore = (runtimeId = "default") =>
       dispatchQueuedPrompt,
       checkpointStart: turnCheckpoints.onAgentStart,
       checkpointSettle: turnCheckpoints.onAgentSettled,
+      customEntryAppended: mergeFileChangeArtifact,
     })
 
     // ---- actions ----
@@ -608,6 +652,10 @@ export const createSessionStore = (runtimeId = "default") =>
         for (let i = start; i < end; i++) {
           if (version !== historyVersion) return
           const msg = source[i]
+          if (msg.role === "custom") {
+            mergeFileChangeArtifact(msg)
+            continue
+          }
           if (msg.role === "user") {
             const text = contentText(msg.content)
             const images = Array.isArray(msg.content)
@@ -737,6 +785,7 @@ export const createSessionStore = (runtimeId = "default") =>
           if (!res.success) throw new Error(res.error || "Failed to load history")
           msgs = res.data?.messages ?? []
         }
+        void refreshFileRewindState(file)
         // History markers only know tokensBefore; estimate the after size.
         annotateCompactionEstimates(msgs)
         entries.value = []
@@ -937,8 +986,14 @@ export const createSessionStore = (runtimeId = "default") =>
       started,
       entries,
       fileChanges: computed(() =>
-        sessionChanges(historyMessages.value, entries.value, partialBlocks.value, runs.value),
+        mergeArtifactChanges(
+          sessionChanges(historyMessages.value, entries.value, partialBlocks.value, runs.value),
+          fileChangeArtifacts.value,
+        ),
       ),
+      fileChangeArtifacts,
+      revertedFileChangeCalls,
+      markFileRewinds,
       /** 轮次 Git 快照回滚记录（按 turnIndex 关联）。 */
       turnCheckpointRecords: turnCheckpoints.records,
       markTurnReverted: turnCheckpoints.markReverted,

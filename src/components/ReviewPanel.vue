@@ -101,10 +101,9 @@ function selectRow(row: (typeof fileRows.value)[number]) {
   } else if (row.data) selectedPath.value = row.data.changes[0]?.path ?? row.fullPath
 }
 
-// ---- Git 快照真实差异（对齐 ZCode）----
-// pi 的 write/edit 工具参数只带代码片段，write 甚至没有原内容（审查里会显示
-// "原内容未知"）。快照覆盖的文件改用轮次快照前后的真实内容计算 diff：
-// 真实增删与文件行号，split 视图可用；未覆盖的文件回退到工具参数片段视图。
+// ---- 真实差异：artifact 优先，Git checkpoint 兼容旧会话 ----
+// 内置文件变更插件已经为 write/edit 保存精确 before/after；没有 artifact 的
+// 旧轮次再使用 Git 快照，最后才回退到工具参数片段。
 const coveredPaths = computed(() => {
   const set = new Set<string>()
   for (const record of props.checkpoints ?? []) {
@@ -112,7 +111,13 @@ const coveredPaths = computed(() => {
   }
   return set
 })
+// Artifact-backed changes already carry exact before/after content. Never
+// replace them with a broader checkpoint span from another turn.
+const artifactBacked = computed(() =>
+  activeFile.value?.changes.some(change => change.id.startsWith("artifact:")) ?? false,
+)
 const coverage = computed(() => {
+  if (artifactBacked.value) return null
   const path = activeFile.value?.path
   const records = (props.checkpoints ?? []).filter(record => record.files.some(file => file.path === path))
   if (!path || !records.length) return null

@@ -7,12 +7,20 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 import { relativeDisplayPath } from "@/lib/paths"
-import { encodeCodedError } from "@/lib/backendError"
+import { encodeCodedError, formatCodedError } from "@/lib/backendError"
 import { restoreCheckpoints, type TurnCheckpointRecord } from "@/lib/checkpoints"
 import { revertTurnFiles, type RevertFileResult } from "@/lib/revertChanges"
+import { applyFileRewind, previewFileRewind, type FileRewindFile, type FileRewindPreview } from "@/lib/fileRewind"
+import type { FileChangeArtifact } from "@/lib/fileChangeArtifacts"
 import type { TurnFileChange } from "@/lib/turnChanges"
 
-const props = defineProps<{ files: TurnFileChange[]; project: string; checkpoint?: TurnCheckpointRecord | null }>()
+const props = defineProps<{
+  files: TurnFileChange[]
+  project: string
+  checkpoint?: TurnCheckpointRecord | null
+  artifacts?: FileChangeArtifact[]
+  wasReverted?: boolean
+}>()
 const emit = defineEmits<{ openReview: [path: string]; reverted: [results: RevertFileResult[]]; revertedAll: [] }>()
 const { t } = useI18n()
 
@@ -20,6 +28,12 @@ const expanded = ref(false)
 const busy = ref(false)
 const confirmOpen = ref(false)
 const reverted = ref(new Set<string>())
+const rewindOpen = ref(false)
+const rewindLoading = ref(false)
+const rewindApplying = ref(false)
+const rewindError = ref("")
+const rewindPreview = ref<FileRewindPreview | null>(null)
+const revertedByArtifact = ref(false)
 const totals = computed(() =>
   props.files.reduce((sum, file) => ({ added: sum.added + file.added, removed: sum.removed + file.removed }), {
     added: 0,
@@ -27,9 +41,12 @@ const totals = computed(() =>
   }),
 )
 const revertibleFiles = computed(() => props.files.filter(file => file.revertible && !reverted.value.has(file.path)))
+const exactArtifacts = computed(() => props.artifacts ?? [])
+const hasArtifacts = computed(() => exactArtifacts.value.length > 0)
 // Git 快照回滚：该轮处于「未回滚」状态才可用；否则降级为内容回放。
 const gitRevertible = computed(() => !!props.checkpoint && props.checkpoint.state === "active")
 const turnReverted = computed(() => !!props.checkpoint && props.checkpoint.state === "reverted")
+const isTurnReverted = computed(() => turnReverted.value || revertedByArtifact.value || props.wasReverted === true)
 
 // 项目内显示相对路径，项目外显示原路径；目录段弱化、文件名保持高亮。
 const rows = computed(() =>
@@ -48,6 +65,59 @@ const rows = computed(() =>
 function confirmRevertAll() {
   confirmOpen.value = false
   void revert(revertibleFiles.value, true)
+}
+
+async function openArtifactRewind() {
+  if (busy.value || rewindLoading.value || rewindApplying.value) return
+  rewindOpen.value = true
+  rewindLoading.value = true
+  rewindError.value = ""
+  rewindPreview.value = null
+  try {
+    rewindPreview.value = await previewFileRewind(props.project, exactArtifacts.value)
+  } catch (error) {
+    rewindError.value = formatCodedError(t, String(error))
+  } finally {
+    rewindLoading.value = false
+  }
+}
+
+async function confirmArtifactRewind() {
+  if (!rewindPreview.value?.canApply || rewindApplying.value) return
+  rewindApplying.value = true
+  rewindError.value = ""
+  try {
+    const result = await applyFileRewind(props.project, exactArtifacts.value)
+    rewindPreview.value = result.preview
+    if (!result.applied) {
+      rewindError.value = t("turnChanges.rewindFailed")
+      return
+    }
+    revertedByArtifact.value = true
+    for (const file of result.preview.safeFiles) reverted.value.add(file.path)
+    const results = result.preview.safeFiles.map(file => ({ path: file.path, ok: true }))
+    emit("reverted", results)
+    emit("revertedAll")
+    rewindOpen.value = false
+  } catch (error) {
+    rewindError.value = formatCodedError(t, String(error))
+  } finally {
+    rewindApplying.value = false
+  }
+}
+
+function rewindReason(file: FileRewindFile): string {
+  switch (file.reason) {
+    case "external_modified":
+      return t("turnChanges.rewindReasonExternalModified")
+    case "bash_ignored":
+      return t("turnChanges.rewindReasonBashIgnored")
+    case "file_read_failed":
+    case "rewindReadFailed":
+      return t("turnChanges.rewindReasonReadFailed")
+    default:
+      return t("turnChanges.rewindReasonUnsupported")
+  }
 }
 
 async function revert(list: TurnFileChange[], full: boolean) {
@@ -113,23 +183,23 @@ async function revert(list: TurnFileChange[], full: boolean) {
           <span v-if="totals.removed" class="text-red-600 dark:text-red-400">-{{ totals.removed }}</span>
         </span>
         <span
-          v-if="turnReverted"
+          v-if="isTurnReverted"
           class="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
           >{{ t("turnChanges.reverted") }}</span
         >
       </button>
       <Button
-        v-if="revertibleFiles.length && !turnReverted"
+        v-if="(revertibleFiles.length || hasArtifacts) && !isTurnReverted"
         type="button"
         variant="ghost"
         size="xs"
         class="shrink-0 text-muted-foreground"
-        :disabled="busy"
+        :disabled="busy || rewindLoading || rewindApplying"
         :title="t('turnChanges.revertAll')"
         :aria-label="t('turnChanges.revertAll')"
-        @click="confirmOpen = true"
+        @click="hasArtifacts ? openArtifactRewind() : (confirmOpen = true)"
       >
-        <Undo2 data-icon="inline-start" />{{ busy ? t("turnChanges.busy") : t("turnChanges.revert") }}
+        <Undo2 data-icon="inline-start" />{{ busy || rewindApplying ? t("turnChanges.busy") : t("turnChanges.revert") }}
       </Button>
     </div>
     <div v-if="expanded" class="border-t border-border" role="list" :aria-label="t('turnChanges.title')">
@@ -168,7 +238,7 @@ async function revert(list: TurnFileChange[], full: boolean) {
             ><Eye
           /></Button>
           <span
-            v-if="turnReverted || reverted.has(row.file.path)"
+            v-if="isTurnReverted || reverted.has(row.file.path)"
             class="flex size-6 shrink-0 items-center justify-center text-green-600 dark:text-green-400"
             :title="t('turnChanges.reverted')"
             :aria-label="t('turnChanges.reverted')"
@@ -176,7 +246,7 @@ async function revert(list: TurnFileChange[], full: boolean) {
             <Check class="size-3.5" />
           </span>
           <Button
-            v-else
+            v-else-if="!hasArtifacts"
             type="button"
             variant="ghost"
             size="icon-xs"
@@ -223,6 +293,73 @@ async function revert(list: TurnFileChange[], full: boolean) {
           <Button type="button" size="sm" :disabled="busy" @click="confirmRevertAll">{{
             busy ? t("turnChanges.busy") : t("turnChanges.confirmAction")
           }}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog :open="rewindOpen" @update:open="rewindOpen = $event">
+      <DialogContent class="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{{ t("turnChanges.rewindPreviewTitle") }}</DialogTitle>
+        </DialogHeader>
+        <p class="text-muted-foreground text-xs">{{ t("turnChanges.rewindPreviewDesc") }}</p>
+        <div v-if="rewindLoading" class="py-6 text-center text-xs text-muted-foreground">
+          {{ t("turnChanges.rewindLoading") }}
+        </div>
+        <p v-else-if="rewindError" role="alert" class="text-destructive text-xs">{{ rewindError }}</p>
+        <ScrollArea v-else-if="rewindPreview" viewport-class="max-h-72">
+          <div class="flex flex-col gap-3 pr-2">
+            <section v-if="rewindPreview.safeFiles.length">
+              <h4 class="mb-1 text-xs font-medium">
+                {{ t("turnChanges.rewindSafe") }} ({{ rewindPreview.safeFiles.length }})
+              </h4>
+              <div v-for="file in rewindPreview.safeFiles" :key="file.path" class="rounded border px-2 py-1.5 text-xs">
+                <p class="truncate font-mono" :title="file.path">{{ relativeDisplayPath(file.path, project) }}</p>
+                <p class="text-muted-foreground mt-0.5">
+                  {{ t("turnChanges.rewindOperationCount", { count: file.operationCount }) }}
+                </p>
+              </div>
+            </section>
+            <section v-if="rewindPreview.unsafeFiles.length">
+              <h4 class="mb-1 text-xs font-medium text-destructive">
+                {{ t("turnChanges.rewindUnsafe") }} ({{ rewindPreview.unsafeFiles.length }})
+              </h4>
+              <div
+                v-for="file in rewindPreview.unsafeFiles"
+                :key="file.path"
+                class="rounded border border-destructive/40 px-2 py-1.5 text-xs"
+              >
+                <p class="truncate font-mono" :title="file.path">{{ relativeDisplayPath(file.path, project) }}</p>
+                <p class="text-muted-foreground mt-0.5">{{ rewindReason(file) }}</p>
+              </div>
+            </section>
+            <section v-if="rewindPreview.ignoredFiles.length">
+              <h4 class="mb-1 text-xs font-medium text-muted-foreground">
+                {{ t("turnChanges.rewindIgnored") }} ({{ rewindPreview.ignoredFiles.length }})
+              </h4>
+              <div
+                v-for="file in rewindPreview.ignoredFiles"
+                :key="file.path"
+                class="rounded border px-2 py-1.5 text-xs"
+              >
+                <p class="truncate font-mono" :title="file.path">{{ relativeDisplayPath(file.path, project) }}</p>
+                <p class="text-muted-foreground mt-0.5">{{ rewindReason(file) }}</p>
+              </div>
+            </section>
+          </div>
+        </ScrollArea>
+        <div class="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" :disabled="rewindApplying" @click="rewindOpen = false">{{
+            t("common.cancel")
+          }}</Button>
+          <Button
+            type="button"
+            size="sm"
+            :disabled="rewindApplying || !rewindPreview?.canApply"
+            @click="confirmArtifactRewind"
+          >
+            {{ rewindApplying ? t("turnChanges.busy") : t("turnChanges.rewindApply") }}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

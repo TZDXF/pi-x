@@ -41,6 +41,7 @@ import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
 import TurnChangesCard from "@/components/TurnChangesCard.vue"
 import { turnFileChanges, type TurnFileChange } from "@/lib/turnChanges"
+import { turnFileChangesFromArtifacts } from "@/lib/fileChangeArtifacts"
 import type { TurnCheckpointRecord } from "@/lib/checkpoints"
 import { formatCodedError } from "@/lib/backendError"
 import type { RevertFileResult } from "@/lib/revertChanges"
@@ -309,6 +310,10 @@ function hasSummary(entry: AssistantTurn): boolean {
 // from being recomputed while the turn's calls and their run states stand still.
 const turnChangesCache = new Map<number, { signature: string; files: TurnFileChange[] }>()
 function changesForTurn(entry: AssistantTurn): TurnFileChange[] {
+  // Built-in file-change tracking records exact before/after content around
+  // write/edit calls. Prefer it over reconstructed snippets or turn snapshots.
+  const exact = turnFileChangesFromArtifacts(entry.blocks, session.runs, session.fileChangeArtifacts)
+  if (exact.length) return exact
   // 有 Git 快照记录的轮次以快照差异为准（覆盖 bash 等工具的文件修改）。
   const checkpoint = checkpointForTurn(entry)
   if (checkpoint)
@@ -332,6 +337,11 @@ function changesForTurn(entry: AssistantTurn): TurnFileChange[] {
   const files = turnFileChanges(entry.blocks, session.runs)
   turnChangesCache.set(entry.id, { signature, files })
   return files
+}
+
+function artifactsForTurn(entry: AssistantTurn) {
+  const ids = new Set(entry.blocks.flatMap(block => (block.type === "toolCall" ? [block.callId] : [])))
+  return session.fileChangeArtifacts.filter(artifact => ids.has(artifact.toolCallId))
 }
 watch(
   () => session.sessionFile,
@@ -360,8 +370,15 @@ function onTurnReverted(results: RevertFileResult[]) {
 }
 
 function onTurnRevertedAll(entry: AssistantTurn) {
+  const artifacts = artifactsForTurn(entry)
+  if (artifacts.length) void session.markFileRewinds(artifacts.map(artifact => artifact.toolCallId))
   const checkpoint = checkpointForTurn(entry)
   if (checkpoint) session.markTurnReverted(checkpoint.turnIndex)
+}
+
+function turnArtifactsReverted(entry: AssistantTurn): boolean {
+  const artifacts = artifactsForTurn(entry)
+  return artifacts.length > 0 && artifacts.every(artifact => session.revertedFileChangeCalls.has(artifact.toolCallId))
 }
 
 // Process blocks render lazily on first expand: they are hidden anyway, and
@@ -865,6 +882,8 @@ onBeforeUnmount(() => {
                       <TurnChangesCard
                         v-if="entry.complete && changesForTurn(entry).length"
                         :files="changesForTurn(entry)"
+                        :artifacts="artifactsForTurn(entry)"
+                        :was-reverted="turnArtifactsReverted(entry)"
                         :project="session.cwd || project"
                         :checkpoint="checkpointForTurn(entry)"
                         @open-review="openReviewAt"

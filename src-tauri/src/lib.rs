@@ -6,6 +6,7 @@ mod desktop;
 mod editor;
 mod editor_icon;
 mod app_update;
+mod builtin_extensions;
 mod commands;
 mod fs_search;
 mod file_preview;
@@ -20,6 +21,7 @@ mod remote;
 mod remote;
 mod rpc;
 mod session_checkpoint;
+mod session_file_rewind;
 mod session_revert;
 mod session_watch;
 mod sessions;
@@ -122,6 +124,10 @@ pub fn run() {
             workspace_git::workspace_git_create,
             workspace_git::workspace_git_prepare,
             session_revert::session_revert_changes,
+            session_file_rewind::session_file_rewind_preview,
+            session_file_rewind::session_file_rewind_apply,
+            session_file_rewind::session_file_rewind_state_get,
+            session_file_rewind::session_file_rewind_state_mark,
             session_checkpoint::session_checkpoint_create,
             session_checkpoint::session_checkpoint_delete,
             session_checkpoint::session_checkpoint_diff,

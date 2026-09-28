@@ -43,3 +43,17 @@ export function contentModule() {
 export function pathsModule() {
   return loadTsSource(readFileSync(new URL("../../src/lib/paths.ts", import.meta.url), "utf8"))
 }
+
+/** Load the file-change artifact parser/aggregator used by session tests. */
+export function fileChangeArtifactsModule() {
+  const paths = pathsModule()
+  const sessionChanges = loadTsSource(
+    readFileSync(new URL("../../src/lib/sessionChanges.ts", import.meta.url), "utf8"),
+    { require: () => paths },
+  )
+  return loadTsModule(new URL("../../src/lib/fileChangeArtifacts.ts", import.meta.url), id => {
+    if (id === "@/lib/sessionChanges") return sessionChanges
+    if (id === "@/lib/paths") return paths
+    return undefined
+  })
+}

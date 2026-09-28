@@ -42,6 +42,7 @@ futures-util = "0.3"
 url = "2"
 portable-pty = "0.8"
 base64 = "0.22"
+sha2 = "0.10"
 notify = "8"
 # 编辑器图标提取(image 负责缩放与 PNG 编码;pelite/ico 解析 Windows exe 资源;
 # plist/icns 解析 macOS .app 图标)——均为纯 Rust,参考 RepoMeow 的实现

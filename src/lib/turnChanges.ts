@@ -2,7 +2,10 @@ import type { Block, ToolRun } from "@/stores/session"
 import { changeForCall, EDIT_TOOLS, WRITE_TOOLS } from "@/lib/sessionChanges"
 
 /** 单文件的撤销操作，按工具调用时间顺序排列，后端按逆序回放。 */
-export type RevertOp = { kind: "replace"; before: string; after: string } | { kind: "delete"; content: string }
+export type RevertOp =
+  | { kind: "replace"; before: string; after: string }
+  | { kind: "restore"; before: string; after: string }
+  | { kind: "delete"; content: string }
 
 export interface TurnFileChange {
   path: string

@@ -10,6 +10,8 @@ use crate::errors::{pix_error, pix_error_detail};
 pub enum RevertOp {
     /// 编辑类工具：把替换后的文本还原为替换前文本。
     Replace { before: String, after: String },
+    /// 整文件写入：当前内容必须等于 before，再写回 after。
+    Restore { before: String, after: String },
     /// create_file：文件由本次写入产生，当前内容与写入一致时直接删除。
     Delete { content: String },
 }
@@ -88,6 +90,16 @@ fn apply_ops(path: &Path, ops: &[RevertOp]) -> Result<(), String> {
     for op in ops.iter().rev() {
         match op {
             RevertOp::Replace { before, after } => content = revert_replace(&content, before, after)?,
+            RevertOp::Restore { before, after } => {
+                if content != *before {
+                    return Err(pix_error_detail(
+                        "revertContentChanged",
+                        "文件内容已变化，无法自动撤销: {detail}",
+                        path.display(),
+                    ));
+                }
+                content = after.clone();
+            }
             RevertOp::Delete { content: expected } => {
                 if content != *expected {
                     return Err(pix_error_detail(

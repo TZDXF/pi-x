@@ -7,7 +7,12 @@ const { chromium } = await import(
 )
 const server = await createServer({ server: { port: 1441, strictPort: true } })
 await server.listen()
-const browser = await chromium.launch({ channel: process.env.PI_BROWSER_CHANNEL || "msedge", headless: true })
+const executablePath = process.env.PI_BROWSER_EXECUTABLE
+const browser = await chromium.launch({
+  channel: executablePath ? undefined : process.env.PI_BROWSER_CHANNEL || "msedge",
+  executablePath,
+  headless: true,
+})
 const page = await browser.newPage()
 const errors = []
 page.on("pageerror", error => errors.push(error.message))
@@ -24,6 +29,7 @@ const pkg = (name, description = name) => ({
   detailUrl: `https://pi.dev/packages/${name}`,
 })
 let failMore = true
+let appConfig = {}
 let releaseSlow
 const slowGate = new Promise(resolve => {
   releaseSlow = resolve
@@ -52,6 +58,11 @@ await page.route("**/api/invoke", async route => {
             : [pkg(args.query)]
     data = { packages, hasMore: args.query === "init" && args.page === 1 }
   } else if (command === "package_list" || /sessions|projects/.test(command)) data = []
+  else if (command === "app_config_get") data = appConfig
+  else if (command === "app_config_save") {
+    appConfig = args.config
+    data = null
+  }
   else if (command === "rpc_running") data = false
   else if (command === "trust_status") data = { needsDecision: false }
   await route.fulfill({ json: { data } })
@@ -110,8 +121,17 @@ try {
   await panel.getByText(/没有匹配|No packages match/).waitFor()
   await input.fill("")
   await expectNames(["alpha-tool", "beta-skill"])
+
+  await page.getByRole("tab", { name: /内置|Built-in/ }).click()
+  await panel.getByText(/文件变更追踪|File change tracking/).waitFor()
+  const toggle = panel.getByRole("switch", { name: /文件变更追踪|File change tracking/ })
+  assert.equal(await toggle.isChecked(), true)
+  await toggle.click()
+  assert.equal(await toggle.isChecked(), false)
+  assert.equal(appConfig.builtinFileChanges, false)
+
   assert.deepEqual(errors, [])
-  console.log("Package marketplace server search, pagination, retry, filters and stale responses passed")
+  console.log("Package marketplace and built-in plugin toggle passed")
 } finally {
   await browser.close()
   await server.close()
