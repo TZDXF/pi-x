@@ -137,7 +137,7 @@ export default {
     previewTitle: "PiX browser preview",
   },
   projectless: {
-    name: "Tasks",
+    name: "No-project Tasks",
     description: "Start chatting in PiX's own workspace without picking a folder.",
     settingsLabel: "Tasks directory",
     settingsDesc:

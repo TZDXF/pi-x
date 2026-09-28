@@ -135,7 +135,7 @@ export default {
     previewTitle: "PiX 浏览器预览",
   },
   projectless: {
-    name: "任务",
+    name: "无项目任务",
     description: "不选择文件夹，直接在 PiX 的工作目录中开始对话。",
     settingsLabel: "任务目录",
     settingsDesc: "不打开项目时，对话使用以下目录：{path}。留空或重置将恢复默认位置。",
