@@ -443,6 +443,10 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or_else(|| pix_error("missingArchived", "缺少 archived 参数"))?).await?;
             Ok(Value::Null)
         }
+        "session_delete" => {
+            crate::sessions::session_delete(text("file")?).await?;
+            Ok(Value::Null)
+        }
         "session_duplicate" => Ok(Value::String(crate::sessions::session_duplicate(text("file")?).await?)),
         "session_last_error" => Ok(serde_json::to_value(crate::sessions::session_last_error(text("file")?).await?).map_err(|e| e.to_string())?),
         "session_history" => Ok(Value::Array(crate::sessions::session_history(text("file")?).await?)),
@@ -490,6 +494,9 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         ).map_err(|e| e.to_string())?),
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
+        }
+        "session_list_archived" => {
+            Ok(serde_json::to_value(crate::sessions::session_list_archived().await?).unwrap())
         }
         "list_project_directory" => Ok(serde_json::to_value(
             commands::list_project_directory(text("project")?, text("path")?).await?,

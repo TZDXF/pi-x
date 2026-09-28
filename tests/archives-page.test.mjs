@@ -21,3 +21,11 @@ test("archived sessions use a workspace route outside settings", () => {
   assert.match(page, /restore\(s\)/)
   assert.match(page, /async function remove\(s: SessionMeta\)/)
 })
+
+test("archived session list, restore and delete work through remote dispatch", () => {
+  const remote = read("../src-tauri/src/remote.rs")
+
+  assert.match(remote, /"session_list_archived" =>/)
+  assert.match(remote, /"session_update" =>/)
+  assert.match(remote, /"session_delete" =>/)
+})
