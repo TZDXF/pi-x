@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { WorkspaceSelection } from "@/api/piClient"
 import { sendCountdown } from "@/lib/sendCountdown"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { averageCacheRate } from "@/lib/cacheRate"
@@ -132,13 +133,14 @@ const { t, te } = useI18n()
 
 const props = defineProps<{
   project: string
-  ensureStarted: () => Promise<boolean>
+  ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
   connecting: boolean
   selectingProject?: boolean
   connected: boolean
 }>()
 const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
 const workspace = useWorkspaceStore()
+const workspaceSelection = ref<WorkspaceSelection | null>(null)
 const currentTitle = computed(
   () => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title,
 )
@@ -152,6 +154,16 @@ watch(
   () => bridge.value?.textInput,
   text => {
     if (text !== undefined) recordComposerDraft(draftProject(), draftTarget(), text)
+  },
+)
+// A deferred checkout change keeps this composer mounted; move its draft key too.
+watch(
+  () => props.project,
+  (project, previous) => {
+    const text = bridge.value?.textInput ?? ""
+    recordComposerDraft(previous, draftTarget(), "")
+    draftFile.value = session.sessionFile
+    recordComposerDraft(project, draftTarget(), text)
   },
 )
 // Loading an existing session can set its file after the editor has mounted.
@@ -518,7 +530,7 @@ async function onSubmit(message: { text?: string; files?: { url?: string }[] }) 
     ui.pushToast(t("chat.invalidSendDelay"), "error")
     throw new Error(t("chat.invalidSendDelay"))
   }
-  if (!(await props.ensureStarted())) {
+  if (!(await props.ensureStarted(session.entries.length ? null : workspaceSelection.value))) {
     bridge.value?.setTextInput(text)
     throw new Error(t("completion.startFailed"))
   }
@@ -988,19 +1000,24 @@ onBeforeUnmount(() => {
       <!-- composer -->
       <div class="composer-dock mx-auto w-full max-w-3xl px-6 pt-3 shrink-0 pb-3 max-[900px]:pl-4 max-[900px]:pr-4">
         <WorkspaceContext
+          v-model="workspaceSelection"
+          :disabled="workspace.gitBusy || connecting"
           v-if="
             !session.promptQueue.length &&
             !session.entries.length &&
             !session.isStreaming &&
-            (!connecting || selectingProject) &&
+            (!connecting || selectingProject || workspace.gitBusy) &&
             !session.historyLoading
           "
           :project="project"
           @select-project="emit('selectProject', $event)"
           @open-project="emit('openProject')"
         />
+        <p v-if="workspace.gitBusy" role="status" class="px-2 py-1 text-xs text-muted-foreground">
+          {{ t("workspace.preparing") }}
+        </p>
         <section
-          v-else-if="session.promptQueue.length"
+          v-if="session.promptQueue.length"
           class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2"
           :aria-label="t('chat.queuedPrompts')"
         >

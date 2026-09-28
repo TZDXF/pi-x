@@ -59,6 +59,34 @@ pub async fn workspace_git_info(project: String) -> Result<GitInfo, String> {
 }
 #[tauri::command]
 pub async fn workspace_git_create(project: String, branch: String, worktree: bool) -> Result<String, String> {
+    create_from(project, branch, worktree, "HEAD").await
+}
+
+/// Prepare a draft only when its first message is submitted. The selected branch
+/// is a base, never the branch to check out in the new worktree (it may be in use).
+#[tauri::command]
+pub async fn workspace_git_prepare(project: String, branch: String, worktree: bool) -> Result<String, String> {
+    if branch.is_empty() || branch.starts_with('-') || branch.starts_with('@') {
+        return Err(pix_error("branchNameInvalid", "请输入有效的分支名"));
+    }
+    git(&project, &["check-ref-format", "--branch", &branch]).await?;
+    let reference = format!("refs/heads/{branch}^{{commit}}");
+    let commit = git(&project, &["rev-parse", "--verify", &reference]).await?;
+    if worktree {
+        let name = format!("pix/{}", uuid::Uuid::new_v4().simple());
+        create_from(project, name, true, &commit).await
+    } else {
+        // Local mode means the main checkout, even when the draft was opened
+        // from a linked worktree. Git refuses unsafe switches; never force them.
+        let list = git(&project, &["worktree", "list", "--porcelain"]).await?;
+        let main = parse_worktrees(&list).into_iter().next()
+            .ok_or_else(|| pix_error("worktreeParentUnknown", "无法确定工作树父目录"))?.path;
+        git(&main, &["switch", &branch]).await?;
+        Ok(main)
+    }
+}
+
+async fn create_from(project: String, branch: String, worktree: bool, base: &str) -> Result<String, String> {
     let branch = branch.trim();
     if branch.is_empty() || branch.starts_with('-') || branch.starts_with('@') {
         return Err(pix_error("branchNameInvalid", "请输入有效的分支名"));
@@ -73,7 +101,7 @@ pub async fn workspace_git_create(project: String, branch: String, worktree: boo
         let path = parent.join(".pix-worktrees").join(format!("{repo_name}-{slug}-{}", &suffix[..8]));
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let target = path.to_string_lossy().to_string();
-        git(&project, &["worktree", "add", "-b", branch, &target, "HEAD"]).await?;
+        git(&project, &["worktree", "add", "-b", branch, &target, base]).await?;
         Ok(target)
     } else {
         git(&project, &["switch", "-c", branch]).await?;
@@ -125,6 +153,39 @@ mod tests {
         assert_eq!(workspace_git_info(project.clone()).await.unwrap().branch, "feature/local");
         assert!(Path::new(&project).join("untracked.txt").exists());
         assert!(workspace_git_create(project, "feature/local".into(), false).await.is_err());
+    }
+    #[tokio::test]
+    async fn prepares_worktree_from_selected_branch_not_head() {
+        let repo = repo().await;
+        let project = repo.0.join("repo").to_string_lossy().to_string();
+        let initial = git(&project, &["rev-parse", "HEAD"]).await.unwrap();
+        git(&project, &["switch", "-c", "feature/base"]).await.unwrap();
+        git(&project, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "base only"]).await.unwrap();
+        let base = git(&project, &["rev-parse", "HEAD"]).await.unwrap();
+        git(&project, &["switch", "main"]).await.unwrap();
+        std::fs::write(repo.0.join("repo/untracked.txt"), "keep").unwrap();
+        let tree = workspace_git_prepare(project.clone(), "feature/base".into(), true).await.unwrap();
+        assert_eq!(git(&tree, &["rev-parse", "HEAD"]).await.unwrap(), base);
+        assert_eq!(git(&project, &["rev-parse", "HEAD"]).await.unwrap(), initial);
+        assert!(workspace_git_info(tree.clone()).await.unwrap().branch.starts_with("pix/"));
+        assert!(!Path::new(&tree).join("untracked.txt").exists());
+        assert!(Path::new(&project).join("untracked.txt").exists());
+        // The current branch can also be a base even though it is checked out.
+        let other = workspace_git_prepare(project.clone(), "main".into(), true).await.unwrap();
+        assert_ne!(tree, other);
+        assert_eq!(git(&other, &["rev-parse", "HEAD"]).await.unwrap(), initial);
+    }
+    #[tokio::test]
+    async fn prepares_existing_local_branch_and_rejects_missing_base() {
+        let repo = repo().await;
+        let project = repo.0.join("repo").to_string_lossy().to_string();
+        git(&project, &["branch", "feature/local"]).await.unwrap();
+        workspace_git_prepare(project.clone(), "feature/local".into(), false).await.unwrap();
+        assert_eq!(workspace_git_info(project.clone()).await.unwrap().branch, "feature/local");
+        for branch in ["missing", "--help", "@{-1}", "main~1"] {
+            assert!(workspace_git_prepare(project.clone(), branch.into(), true).await.is_err());
+        }
+        assert!(!repo.0.join(".pix-worktrees").exists());
     }
     #[tokio::test]
     async fn rejects_invalid_branch_without_changes() {

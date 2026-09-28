@@ -120,6 +120,7 @@ pub fn run() {
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,
             workspace_git::workspace_git_create,
+            workspace_git::workspace_git_prepare,
             session_revert::session_revert_changes,
             session_checkpoint::session_checkpoint_create,
             session_checkpoint::session_checkpoint_delete,

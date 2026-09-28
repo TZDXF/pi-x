@@ -411,6 +411,14 @@ export interface GitWorktree {
   branch: string
   current: boolean
 }
+export interface WorkspaceSelection {
+  project: string
+  worktree: boolean
+  branch: string
+}
+export const prepareWorkspaceGit = (selection: WorkspaceSelection) =>
+  invoke<string>("workspace_git_prepare", { ...selection })
+
 export interface WorkspaceGitInfo {
   branch: string
   branches: string[]

@@ -68,6 +68,33 @@ test("first page is asynchronous and limited to 30 entries; pages preserve order
   assert.equal(store.hasOlderHistory.value, false)
 })
 
+test("a long tool run and empty failure retries do not hide its question on the first page", async () => {
+  const { store } = harness()
+  const longTurn = Array.from({ length: 55 }, (_, i) => [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: `call-${i}`, name: "read", arguments: {} }],
+      timestamp: 2000 + i,
+    },
+    { role: "toolResult", toolCallId: `call-${i}`, content: "ok" },
+  ]).flat()
+  await store.loadMessages([
+    { role: "user", content: "older question", timestamp: 100 },
+    { role: "assistant", content: [{ type: "text", text: "older answer" }], timestamp: 200 },
+    { role: "user", content: "long question", timestamp: 1000 },
+    ...longTurn,
+    ...Array.from({ length: 11 }, () => ({ role: "assistant", content: [], stopReason: "error" })),
+  ])
+  assert.equal(store.entries.value[0].kind, "user")
+  assert.equal(store.entries.value[0].text, "long question")
+  assert.equal(store.entries.value.length, 56)
+  assert.equal(store.entries.value.filter(entry => entry.kind === "assistant").length, 55)
+  assert.equal(store.hasOlderHistory.value, true)
+  await store.loadOlderHistory()
+  assert.equal(store.entries.value[0].text, "older question")
+  assert.equal(store.hasOlderHistory.value, false)
+})
+
 test("tool results survive page boundaries and image-only user messages are retained", async () => {
   const { store } = harness()
   await store.loadMessages([
@@ -121,14 +148,19 @@ test("failed history request resets loading and can be retried", async () => {
 test("history retains question and answer timestamps across pagination", async () => {
   const { store } = harness()
   await store.loadMessages([
+    { role: "user", content: "older question", timestamp: 100 },
+    { role: "assistant", content: [{ type: "text", text: "older answer" }], timestamp: 200 },
     { role: "user", content: "question", timestamp: 1000 },
     { role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 7500 },
     ...messages(29),
   ])
-  assert.equal(store.entries.value[0].timestamp, 7500)
-  await store.loadOlderHistory()
   assert.equal(store.entries.value[0].timestamp, 1000)
   assert.equal(store.entries.value[1].timestamp, 7500)
+  await store.loadOlderHistory()
+  assert.equal(store.entries.value[0].timestamp, 100)
+  assert.equal(store.entries.value[1].timestamp, 200)
+  assert.equal(store.entries.value[2].timestamp, 1000)
+  assert.equal(store.entries.value[3].timestamp, 7500)
 })
 
 test("file change totals remain safe across idle, history loading, completion and clear", async () => {

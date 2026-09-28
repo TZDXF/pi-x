@@ -41,7 +41,10 @@ test("legacy Windows path variants merge with pins, groups and order", () => {
   const storage = new Map([
     ["pix.recentProjects", JSON.stringify(["C:\\code\\pi-x", "C:/code/pi-x", "C:\\code\\other"])],
     ["pix.pinnedProjects", JSON.stringify(["C:/code/pi-x"])],
-    ["pix.projectGroups", JSON.stringify({ "C:/code/pi-x": { name: "PiX", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] } })],
+    [
+      "pix.projectGroups",
+      JSON.stringify({ "C:/code/pi-x": { name: "PiX", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] } }),
+    ],
     ["pix.sessionOrder", JSON.stringify({ "C:\\code\\pi-x": ["chat.jsonl"] })],
   ])
   const h = harness(storage)
@@ -261,4 +264,62 @@ test("removing a project also clears its session order", () => {
   h.store.reorderSessions("one", ["a"])
   h.store.removeProject("one")
   assert.deepEqual(JSON.parse(h.storage.get("pix.sessionOrder")), {})
+})
+
+test("worktrees merge into their main project without losing sessions, pins or ordering", () => {
+  const h = harness(
+    new Map([
+      ["pix.recentProjects", JSON.stringify(["C:/trees/pi-x", "C:/code/pi-x"])],
+      ["pix.pinnedProjects", JSON.stringify(["C:/trees/pi-x"])],
+      ["pix.sessionOrder", JSON.stringify({ "C:/trees/pi-x": ["tree-session"] })],
+    ]),
+  )
+  h.store.histories.value["C:/trees/pi-x"] = [{ file: "tree-session", cwd: "C:/trees/pi-x", mtimeMs: 1 }]
+  h.store.histories.value["C:/code/pi-x"] = [{ file: "main-session", cwd: "C:/code/pi-x", mtimeMs: 2 }]
+  h.store.registerWorktrees({ worktrees: [{ path: "C:/code/pi-x" }, { path: "C:/trees/pi-x" }] })
+  assert.deepEqual(Array.from(h.store.projects.value), ["C:/code/pi-x"])
+  assert.equal(h.store.projectRoot("C:\\trees\\pi-x"), "C:/code/pi-x")
+  assert.equal(h.store.isWorktree("C:/trees/pi-x"), true)
+  assert.equal(h.store.isWorktree("C:/code/pi-x"), false)
+  assert.deepEqual(
+    Array.from(h.store.orderedSessions("C:/code/pi-x"), s => s.file),
+    ["tree-session", "main-session"],
+  )
+  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), ["C:/code/pi-x"])
+  h.store.remember("C:/trees/pi-x")
+  assert.equal(h.store.projects.value.length, 1)
+})
+
+test("opening an external worktree registers only its main project", async () => {
+  const h = harness()
+  h.context.workspaceGitInfo = async () => ({ worktrees: [{ path: "C:/main" }, { path: "C:/tree" }] })
+  await h.store.rememberWorkspace("C:/tree")
+  assert.deepEqual(Array.from(h.store.projects.value), ["C:/main"])
+  assert.deepEqual(Array.from(h.store.projectFolders("C:/main")), ["C:/main", "C:/tree"])
+})
+
+test("worktrees of a grouped folder belong to the named project", () => {
+  const h = harness()
+  h.store.createProject({ name: "Combined", primary: "C:/front", folders: ["C:/front", "C:/back"] })
+  h.store.registerWorktrees({ worktrees: [{ path: "C:/back" }, { path: "C:/back-tree" }] })
+  assert.equal(h.store.projectRoot("C:/back-tree"), "C:/front")
+  assert.deepEqual(Array.from(h.store.projectFolders("C:/front")), ["C:/front", "C:/back", "C:/back-tree"])
+})
+
+test("non-Git directories still register normally", async () => {
+  const h = harness()
+  h.context.workspaceGitInfo = async () => {
+    throw new Error("not a repository")
+  }
+  await h.store.rememberWorkspace("C:/plain")
+  assert.deepEqual(Array.from(h.store.projects.value), ["C:/plain"])
+})
+
+test("explicitly configured worktree projects keep their grouping and get a badge", () => {
+  const h = harness()
+  h.store.createProject({ name: "Intentional", primary: "C:/tree", folders: ["C:/tree"] })
+  h.store.registerWorktrees({ worktrees: [{ path: "C:/main" }, { path: "C:/tree" }] })
+  assert.equal(h.store.projectRoot("C:/tree"), "C:/tree")
+  assert.equal(h.store.isWorktree("C:/tree"), true)
+  assert.equal(h.store.projectName("C:/tree"), "Intentional")
 })

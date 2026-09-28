@@ -452,6 +452,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "session_history" => Ok(Value::Array(crate::sessions::session_history(text("file")?).await?)),
         "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
         "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
+        "workspace_git_prepare" => Ok(Value::String(crate::workspace_git::workspace_git_prepare(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
         "session_revert_changes" => {
             let files: Vec<crate::session_revert::RevertFile> = serde_json::from_value(a["files"].clone())
                 .map_err(|e| pix_error_with("missingFiles", format!("缺少 files 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;

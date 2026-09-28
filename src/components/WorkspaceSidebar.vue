@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   Clock,
+  Layers,
   Copy,
   Folder,
   FolderPlus,
@@ -295,7 +296,7 @@ function onRowDragLeave(e: DragEvent) {
 watch(
   () => props.project,
   path => {
-    workspace.remember(path)
+    void workspace.rememberWorkspace(path)
     if (path) void refresh(path)
   },
   { immediate: true },
@@ -306,8 +307,15 @@ watch(
     if (props.ready && !session.isStreaming && props.project) void refresh(props.project)
   },
 )
-for (const path of workspace.projects)
-  for (const folder of workspace.projectFolders(path)) if (folder !== props.project) void refresh(folder)
+for (const path of workspace.projects.flatMap(project => workspace.projectFolders(project)))
+  void workspace.rememberWorkspace(path)
+watch(
+  () => workspace.projects.flatMap(path => workspace.projectFolders(path)),
+  folders => {
+    for (const folder of new Set(folders)) void refresh(folder)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -514,6 +522,14 @@ for (const path of workspace.projects)
               class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9"
               aria-current="page"
             >
+              <Layers
+                v-if="workspace.isWorktree(project)"
+                :size="13"
+                class="shrink-0 text-muted-foreground"
+                role="img"
+                :aria-label="t('workspace.worktree')"
+                :title="t('workspace.worktree')"
+              />
               <span class="truncate">{{ t("chat.newSession") }}</span>
             </div>
             <div
@@ -529,6 +545,14 @@ for (const path of workspace.projects)
                 :aria-label="queueTitle(pending.promptQueue)"
                 ><Clock class="size-3"
               /></span>
+              <Layers
+                v-if="workspace.isWorktree(pending.cwd)"
+                :size="13"
+                class="shrink-0 text-muted-foreground"
+                role="img"
+                :aria-label="t('workspace.worktree')"
+                :title="t('workspace.worktree')"
+              />
               <Button
                 size="content"
                 variant="session-link"
@@ -580,6 +604,14 @@ for (const path of workspace.projects)
                     :aria-label="queueTitle(findConversation(s.file)?.promptQueue)"
                     ><Clock class="size-3"
                   /></span>
+                  <Layers
+                    v-if="workspace.isWorktree(s.cwd)"
+                    :size="13"
+                    class="shrink-0 text-muted-foreground"
+                    role="img"
+                    :aria-label="t('workspace.worktree')"
+                    :title="t('workspace.worktree')"
+                  />
                   <Button
                     size="content"
                     variant="session-link"

@@ -3,6 +3,7 @@ import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
+import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
 import { invoke } from "@/api/transport"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
@@ -24,6 +25,7 @@ export interface ProjectGroup {
 
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
+  const worktreeOwners = ref<Record<string, string>>({})
   const projects = ref<string[]>([])
   const pinnedProjects = ref<string[]>([])
   const projectGroups = ref<Record<string, ProjectGroup>>({})
@@ -61,7 +63,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         if (Array.isArray(files)) {
           const key = projects.value.find(project => samePath(project, path)) || normalizeProjectPath(path)
           sessionOrder.value[key] = [
-            ...new Set([...(sessionOrder.value[key] || []), ...files.filter((f): f is string => typeof f === "string")]),
+            ...new Set([
+              ...(sessionOrder.value[key] || []),
+              ...files.filter((f): f is string => typeof f === "string"),
+            ]),
           ]
         }
       }
@@ -178,6 +183,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function projectRoot(path: string) {
     path = normalizeProjectPath(path)
+    const explicit = Object.values(projectGroups.value).find(group =>
+      group.folders.some(folder => samePath(folder, path)),
+    )
+    if (explicit) return explicit.primary
+    path = Object.entries(worktreeOwners.value).find(([tree]) => samePath(tree, path))?.[1] || path
     return (
       Object.values(projectGroups.value).find(group => group.folders.some(folder => samePath(folder, path)))?.primary ||
       projects.value.find(existing => samePath(existing, path)) ||
@@ -241,11 +251,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function projectName(path: string) {
     path = normalizeProjectPath(path)
     if (isProjectless(path)) return i18n.global.t("projectless.name")
-    return projectGroups.value[projectRoot(path)]?.name || baseName(path) || path
+    return projectGroups.value[projectRoot(path)]?.name || baseName(projectRoot(path)) || path
   }
   function projectFolders(path: string) {
     path = normalizeProjectPath(path)
-    return projectGroups.value[projectRoot(path)]?.folders || [path]
+    const root = projectRoot(path)
+    const folders = projectGroups.value[root]?.folders || [root]
+    return [
+      ...folders,
+      ...Object.keys(worktreeOwners.value).filter(
+        tree => samePath(projectRoot(tree), root) && !folders.some(folder => samePath(folder, tree)),
+      ),
+    ]
   }
   function togglePin(path: string) {
     path = projectRoot(path)
@@ -266,6 +283,43 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     for (const [file, row] of pending) if (samePath(row.cwd, path)) pending.delete(file)
     persistProjects()
     persistSessionOrder()
+  }
+  /** Git lists the main checkout first, regardless of the queried worktree. */
+  function registerWorktrees(info: WorkspaceGitInfo) {
+    const main = info.worktrees[0]?.path
+    if (!main) return
+    const primary = normalizeProjectPath(main)
+    for (const tree of info.worktrees.slice(1)) {
+      const path = normalizeProjectPath(tree.path)
+      worktreeOwners.value[path] = primary
+      // Explicitly configured projects retain their ownership.
+      if (Object.values(projectGroups.value).some(group => group.folders.some(folder => samePath(folder, path))))
+        continue
+      const root = projectRoot(primary)
+      const duplicate = projects.value.find(p => samePath(p, path))
+      if (!duplicate) continue
+      projects.value = projects.value.map(p => (p === duplicate ? root : p))
+      projects.value = projects.value.filter((p, i, all) => all.findIndex(other => samePath(p, other)) === i)
+      pinnedProjects.value = [...new Set(pinnedProjects.value.map(p => (p === duplicate ? root : p)))]
+      sessionOrder.value[root] = [
+        ...new Set([...(sessionOrder.value[root] || []), ...(sessionOrder.value[duplicate] || [])]),
+      ]
+      delete sessionOrder.value[duplicate]
+    }
+    persistProjects()
+    persistSessionOrder()
+  }
+  async function rememberWorkspace(path: string) {
+    if (!path) return
+    try {
+      registerWorktrees(await workspaceGitInfo(path))
+    } catch {
+      // Non-Git and unavailable directories remain ordinary projects.
+    }
+    remember(projectRoot(path))
+  }
+  function isWorktree(path: string) {
+    return Object.keys(worktreeOwners.value).some(tree => samePath(tree, path))
   }
   function remember(path: string) {
     path = normalizeProjectPath(path)
@@ -330,6 +384,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   return {
     gitBusy,
+    registerWorktrees,
+    rememberWorkspace,
+    isWorktree,
     projects,
     pinnedProjects,
     projectGroups,

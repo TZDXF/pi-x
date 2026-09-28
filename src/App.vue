@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n"
 import { isDesktop } from "@/api/transport"
 import {
   detectPi,
+  prepareWorkspaceGit,
+  workspaceGitInfo,
   exportSessionFileHtml,
   listRunningSessions,
   getConfig,
@@ -22,7 +24,7 @@ import {
   trustSave,
   trustStatus,
 } from "@/api/piClient"
-import type { AppConfig, RunningSession, TrustStatus, WorkspaceContext } from "@/api/piClient"
+import type { AppConfig, RunningSession, TrustStatus, WorkspaceContext, WorkspaceSelection } from "@/api/piClient"
 import {
   useSessionStore,
   sessionFor,
@@ -37,6 +39,7 @@ import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
@@ -46,7 +49,7 @@ import ChatView from "@/components/ChatView.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
-import { normalizeProjectPath, normalizeSlashes } from "@/lib/paths"
+import { normalizeProjectPath, normalizeSlashes, samePath } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
@@ -98,7 +101,10 @@ watch(
 const runtimeWorkspaces = new Map<string, string>()
 function contextFor(dir: string): WorkspaceContext | undefined {
   const group = workspace.projectGroups[workspace.projectRoot(dir)]
-  return group ? { name: group.name, primary: group.primary, roots: [...group.folders] } : undefined
+  if (!group) return undefined
+  // A linked checkout must belong to the runtime's declared roots too.
+  const roots = group.folders.some(path => samePath(path, dir)) ? [...group.folders] : [...group.folders, dir]
+  return { name: group.name, primary: group.primary, roots }
 }
 function contextSignature(dir: string) {
   return JSON.stringify(contextFor(dir) ?? null)
@@ -379,7 +385,81 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
   }
 }
 
-async function start(): Promise<boolean> {
+// Keep the composer mounted while asking about resources in the new checkout.
+const workspaceTrust = ref<TrustStatus | null>(null)
+let resolveWorkspaceTrust: ((allowed: boolean) => void) | undefined
+function finishWorkspaceTrust(allowed: boolean) {
+  workspaceTrust.value = null
+  resolveWorkspaceTrust?.(allowed)
+  resolveWorkspaceTrust = undefined
+}
+async function decideWorkspaceTrust(trusted: boolean, trustParent: boolean) {
+  try {
+    if (workspaceTrust.value) await trustSave(workspaceTrust.value.projectPath, trusted, trustParent)
+    finishWorkspaceTrust(trusted)
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+    finishWorkspaceTrust(false)
+  }
+}
+// Cache successful creation before later initialization/trust steps. Retrying a
+// failed first send must reuse its checkout, not create another one.
+const preparedWorkspaces = new Map<string, { key: string; path: string }>()
+async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
+  if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
+  if (selection?.worktree && !selection.branch) {
+    ui.pushToast(t("workspace.selectBaseBranch"), "error")
+    return false
+  }
+  if (!selection || !selection.branch) return startRuntime()
+  const owner = sessionFor(activeRuntimeId.value)
+  if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime()
+  workspace.gitBusy = true
+  connecting.value = true
+  try {
+    const key = JSON.stringify(selection)
+    const cached = preparedWorkspaces.get(owner.runtimeId)
+    let path = cached?.key === key ? cached.path : undefined
+    if (!path || !selection.worktree) {
+      const info = await workspaceGitInfo(selection.project)
+      // An unchanged local selection doesn't switch away from an existing checkout.
+      path =
+        !selection.worktree && info.branch === selection.branch
+          ? selection.project
+          : await prepareWorkspaceGit(selection)
+      path = normalizeProjectPath(path)
+      preparedWorkspaces.set(owner.runtimeId, { key, path })
+    }
+    await workspace.rememberWorkspace(path)
+    const status = await trustStatus(path)
+    if (status.needsDecision) {
+      const allowed = await new Promise<boolean>(resolve => {
+        resolveWorkspaceTrust = resolve
+        workspaceTrust.value = status
+      })
+      if (!allowed) return false
+    }
+    // Completion may already have started an empty worker in the original cwd.
+    // Reuse the conversation identity (and composer), but never that old worker.
+    if (owner.started) await killPi(owner.runtimeId)
+    owner.started = false
+    owner.clear()
+    owner.cwd = path
+    project.value = path
+    config.value.lastProject = path
+    await saveConfig({ ...config.value })
+    return await startRuntime()
+  } catch (e) {
+    lastError.value = String(e)
+    uiFor(owner.runtimeId).pushToast(tBackendError(String(e)), "error")
+    return false
+  } finally {
+    connecting.value = false
+    workspace.gitBusy = false
+  }
+}
+
+async function startRuntime(): Promise<boolean> {
   // Completion can request a runtime while the draft remains editable.
   if (selectingProject.value || phase.value !== "chat") return false
   const owner = sessionFor(activeRuntimeId.value)
@@ -672,7 +752,7 @@ onUnmounted(() => {
       v-show="sidebarOpen && route.name !== 'settings'"
       :project="project"
       :ready="phase === 'chat'"
-      :busy="navigating || workspace.gitBusy || connecting || phase === 'trust'"
+      :busy="navigating || workspace.gitBusy || phase === 'trust'"
       :navigation-busy="workspace.gitBusy || phase === 'trust'"
       @switch-project="requestWorkspaceNavigation(switchProject)"
       @select-project="path => requestWorkspaceNavigation(() => selectProject(path))"
@@ -767,6 +847,19 @@ onUnmounted(() => {
       @close="closeProjectDialog"
       @save="saveProject"
     />
+    <Dialog
+      :open="!!workspaceTrust"
+      @update:open="
+        open => {
+          if (!open) finishWorkspaceTrust(false)
+        }
+      "
+    >
+      <DialogContent class="sm:max-w-lg">
+        <DialogTitle class="sr-only">{{ t("trust.title") }}</DialogTitle>
+        <TrustDialog v-if="workspaceTrust" :info="workspaceTrust" @done="decideWorkspaceTrust" />
+      </DialogContent>
+    </Dialog>
     <!-- global toasts -->
     <div class="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
       <div

@@ -96,6 +96,7 @@ function harness(group = null) {
     registerSessionMtimeSync: () => {},
     useRoute: () => ({}),
     navigate: () => {},
+    samePath: pathsModule().samePath,
     normalizeSlashes: pathsModule().normalizeSlashes,
     normalizeProjectPath: pathsModule().normalizeProjectPath,
     window: { addEventListener() {}, removeEventListener() {} },
@@ -195,7 +196,8 @@ test("cross-project drafts stay visible during checks while sending remains bloc
   assert.equal(context.actions.connecting.value, false)
   assert.deepEqual(calls, [])
   const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
-  assert.equal(view.split("(!connecting || selectingProject)").length - 1, 2)
+  assert.equal(view.split("(!connecting || selectingProject)").length - 1, 1)
+  assert.match(view, /\(!connecting \|\| selectingProject \|\| workspace.gitBusy\)/)
   assert.match(view, /:disabled="editBusy \|\| workspace.gitBusy \|\| connecting"/)
 })
 

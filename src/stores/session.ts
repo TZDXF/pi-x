@@ -593,6 +593,16 @@ export const createSessionStore = (runtimeId = "default") =>
             if (version !== historyVersion) return
           }
         }
+        // A long tool run (or repeated empty provider failures) may exceed a
+        // page by itself. Include its question so the first page is navigable
+        // without relying on the timeline to fetch older history.
+        while (start > 0 && source[start].role !== "user") {
+          start--
+          if ((end - start) % 100 === 0) {
+            await yieldHistory()
+            if (version !== historyVersion) return
+          }
+        }
         const page: Entry[] = []
         const pageRuns: Record<string, ToolRun> = {}
         for (let i = start; i < end; i++) {
