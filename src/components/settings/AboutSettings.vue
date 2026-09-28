@@ -9,6 +9,7 @@ import { getVersion } from "@tauri-apps/api/app"
 import { ask } from "@tauri-apps/plugin-dialog"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import { Markdown } from "vue-stream-markdown"
+import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { isDesktop, listen } from "@/api/transport"
@@ -304,7 +305,7 @@ onUnmounted(() => {
         :aria-label="t('appUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown :content="appStatus.releaseNotes" />
+        <Markdown :link-options="markdownLinkOptions" :content="appStatus.releaseNotes" />
       </div>
       <button
         v-if="appStatus.releaseUrl"
@@ -370,7 +371,7 @@ onUnmounted(() => {
         :aria-label="t('piUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown :content="status.releaseNotes" />
+        <Markdown :link-options="markdownLinkOptions" :content="status.releaseNotes" />
       </div>
       <button
         v-if="status.releaseUrl"

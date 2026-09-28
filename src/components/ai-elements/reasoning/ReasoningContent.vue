@@ -4,6 +4,7 @@ import { CollapsibleContent } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import { computed, useSlots } from 'vue'
 import { Markdown } from 'vue-stream-markdown'
+import { markdownLinkOptions } from '@/lib/linkOptions'
 import 'vue-stream-markdown/index.css'
 
 interface Props {
@@ -41,6 +42,6 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
       props.class,
     )"
   >
-    <Markdown :content="md" :enable-animate="props.animate" />
+    <Markdown :content="md" :link-options="markdownLinkOptions" :enable-animate="props.animate" />
   </CollapsibleContent>
 </template>

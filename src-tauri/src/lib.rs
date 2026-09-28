@@ -32,6 +32,7 @@ mod pi_data;
 
 use rpc::RpcState;
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -49,8 +50,15 @@ pub fn run() {
             schedules::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
+            let handle = app.handle().clone();
             tauri::WebviewWindowBuilder::from_config(app, &config)?
                 .data_directory(data_dir::root().join("webview"))
+                // window.open() and target=_blank links open in the system
+                // browser instead of being blocked by the webview.
+                .on_new_window(move |url, _features| {
+                    let _ = handle.opener().open_url(url.to_string(), None::<&str>);
+                    tauri::webview::NewWindowResponse::Deny
+                })
                 .build()?;
             desktop::setup(app.handle())?;
             #[cfg(feature = "remote-access")]

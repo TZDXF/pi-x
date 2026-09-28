@@ -14,6 +14,7 @@ import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { Markdown } from "vue-stream-markdown"
+import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 
 interface FilePreview {
@@ -302,7 +303,7 @@ onBeforeUnmount(closeComment)
           v-else-if="showRenderedMarkdown"
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
-          <Markdown :content="text" class="text-sm" />
+          <Markdown :content="text" :link-options="markdownLinkOptions" class="text-sm" />
         </div>
         <!-- 代码视图：原生滚动而非 ScrollArea，横竖双向滚动直接交给 overflow -->
         <div
