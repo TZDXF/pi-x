@@ -24,7 +24,7 @@ const RELEASES_API: &str = "https://api.github.com/repos/TZDXF/pi-x/releases?per
 pub const PROGRESS_EVENT: &str = "pix://app-update";
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 struct GhRelease {
     tag_name: String,
     prerelease: bool,
@@ -397,6 +397,32 @@ mod tests {
     fn strips_release_tag_prefixes() {
         assert_eq!(release_version("preview-v2026.9.27"), Some("2026.9.27"));
         assert_eq!(release_version("v0.1.0"), Some("0.1.0"));
+    }
+
+    #[test]
+    fn parses_github_release_json_fields() {
+        // GitHub Releases API uses snake_case fields; camelCase previously
+        // caused `missing field tagName` even when the endpoint returned 200.
+        let input = r#"[
+            {
+                "tag_name": "preview-v2026.9.27",
+                "prerelease": true,
+                "draft": false,
+                "published_at": "2026-09-27T00:55:13Z",
+                "body": "preview",
+                "html_url": "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.27",
+                "assets": [
+                    {
+                        "name": "latest.json",
+                        "browser_download_url": "https://example.com/latest.json"
+                    }
+                ]
+            }
+        ]"#;
+        let releases: Vec<GhRelease> = serde_json::from_str(input).unwrap();
+        assert_eq!(releases[0].tag_name, "preview-v2026.9.27");
+        assert_eq!(releases[0].html_url, "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.27");
+        assert_eq!(releases[0].assets[0].name, "latest.json");
     }
 
     #[test]
