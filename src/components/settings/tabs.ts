@@ -36,13 +36,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./ShortcutsSettings.vue")),
   },
   {
-    id: "workspace",
-    nav: "settings.workspace",
-    title: "settings.workspaceTitle",
-    desc: "settings.workspaceDesc",
-    component: defineAsyncComponent(() => import("./WorkspaceSettings.vue")),
-  },
-  {
     id: "notifications",
     nav: "settings.notifications",
     title: "settings.notifications",
@@ -72,14 +65,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     title: "titleGeneration.page",
     desktopOnly: true,
     component: defineAsyncComponent(() => import("./TitleModelSettings.vue")),
-  },
-  {
-    id: "retry",
-    nav: "retrySettings.title",
-    title: "retrySettings.title",
-    desc: "retrySettings.description",
-    desktopOnly: true,
-    component: defineAsyncComponent(() => import("./RetrySettings.vue")),
   },
   {
     id: "packages",
@@ -112,13 +97,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
   },
 ]
 
-export type SettingsGroupId =
-  | "general"
-  | "workspace"
-  | "modelConversation"
-  | "extensions"
-  | "notificationsRemote"
-  | "system"
+export type SettingsGroupId = "general" | "modelConversation" | "extensions" | "notificationsRemote" | "system"
 
 export interface SettingsGroupDef {
   id: SettingsGroupId
@@ -128,14 +107,13 @@ export interface SettingsGroupDef {
   tabIds: readonly SettingsTab[]
 }
 
-/** The visible information architecture; route ids remain stable for deep links. */
+/** The visible information architecture; unknown deep links fall back to the default tab. */
 export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   { id: "general", labelKey: "settings.groups.general", tabIds: ["general", "shortcuts"] },
-  { id: "workspace", labelKey: "settings.groups.workspace", tabIds: ["workspace"] },
   {
     id: "modelConversation",
     labelKey: "settings.groups.modelConversation",
-    tabIds: ["models", "model-config", "retry"],
+    tabIds: ["models", "model-config"],
   },
   { id: "extensions", labelKey: "settings.groups.extensions", tabIds: ["packages", "agent-config", "skills"] },
   {

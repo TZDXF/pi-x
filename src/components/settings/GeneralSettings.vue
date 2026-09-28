@@ -3,9 +3,10 @@ import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
 import KeyHint from "@/components/shared/KeyHint.vue"
-/** General preferences page: appearance, behavior, language, and shortcuts. */
+/** General preferences page: workspace, appearance, behavior, language, and shortcuts. */
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
+import { isDesktop } from "@/api/transport"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
@@ -14,6 +15,8 @@ import { theme, setTheme, type ThemePreference } from "@/lib/theme"
 import { navigate } from "@/lib/router"
 import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib/runningBehavior"
 import { Button } from "@/components/ui/button"
+import WorkspaceSettings from "@/components/settings/WorkspaceSettings.vue"
+import RetrySettings from "@/components/settings/RetrySettings.vue"
 
 const { t } = useI18n()
 
@@ -27,6 +30,7 @@ function applyLocale(v: Locale) {
 </script>
 
 <template>
+  <WorkspaceSettings />
   <SettingRow>
     <div class="min-w-0">
       <SettingHeading id="theme-label">{{ t("settings.theme") }}</SettingHeading>
@@ -75,6 +79,7 @@ function applyLocale(v: Locale) {
       </SelectContent>
     </Select>
   </SettingRow>
+  <RetrySettings v-if="isDesktop" />
   <SettingRow>
     <div class="min-w-0">
       <SettingHeading>{{ t("settings.shortcutsTitle") }}</SettingHeading>

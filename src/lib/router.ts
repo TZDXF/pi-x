@@ -25,12 +25,10 @@ export interface Route {
 
 export const SETTINGS_TABS = [
   "general",
-  "workspace",
   "notifications",
   "remote",
   "models",
   "model-config",
-  "retry",
   "shortcuts",
   "packages",
   "agent-config",

@@ -166,8 +166,6 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "general", labelKey: "chat.runningBehavior" },
   { tab: "general", labelKey: "settings.language" },
   { tab: "shortcuts", labelKey: "settings.shortcutsTitle" },
-  { tab: "workspace", labelKey: "openWith.default" },
-  { tab: "workspace", labelKey: "projectless.settingsLabel" },
   { tab: "notifications", labelKey: "settings.turnComplete" },
   { tab: "notifications", labelKey: "settings.questionNotify" },
   { tab: "notifications", labelKey: "settings.notifySound" },
@@ -186,7 +184,7 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "agent-config", labelKey: "agentConfig.files" },
   { tab: "skills", labelKey: "skillsConfig.hosted" },
   { tab: "skills", labelKey: "skillsConfig.discovered" },
-  { tab: "retry", labelKey: "retrySettings.maxRetries" },
+  { tab: "general", labelKey: "retrySettings.maxRetries" },
   { tab: "about", labelKey: "appUpdate.title" },
   { tab: "about", labelKey: "piUpdate.title" },
   { tab: "about", labelKey: "settings.dataDirectory" },
@@ -194,7 +192,15 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
 /** Low-weight fallback text so synonyms and field labels locate the owning menu. */
 const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
-  general: ["settings.theme", "settings.runningBehaviorDesc", "settings.language"],
+  general: [
+    "settings.workspace",
+    "openWith",
+    "projectless",
+    "settings.theme",
+    "settings.runningBehaviorDesc",
+    "settings.language",
+    "retrySettings",
+  ],
   shortcuts: [
     "shortcuts.actions.newSession",
     "shortcuts.actions.focusComposer",
@@ -204,7 +210,6 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "shortcuts.actions.attachFile",
     "shortcuts.actions.terminal",
   ],
-  workspace: ["openWith", "projectless", "sessionArchive.description"],
   notifications: [
     "settings.turnCompleteDesc",
     "settings.questionNotifyDesc",
@@ -238,7 +243,6 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   "model-config": ["titleGeneration"],
   "agent-config": ["agentConfig"],
   skills: ["skillsConfig"],
-  retry: ["retrySettings"],
   about: ["settings.aboutBody", "appUpdate", "piUpdate", "settings.dataDirectory"],
 }
 
@@ -258,10 +262,15 @@ interface SettingsSearchResult {
   order: number
 }
 
+/** Rows merged into General can be desktop-only even though the page itself is not. */
+const desktopOnlySearchEntries = new Set(["retrySettings.maxRetries"])
+
 const searchEntries = computed<readonly SettingsSearchEntry[]>(() =>
   visibleTabs.value.flatMap(def => [
     { tab: def.id, labelKey: def.nav },
-    ...SETTINGS_SEARCH_ENTRIES.filter(entry => entry.tab === def.id),
+    ...SETTINGS_SEARCH_ENTRIES.filter(
+      entry => entry.tab === def.id && (isDesktop || !desktopOnlySearchEntries.has(entry.labelKey)),
+    ),
   ]),
 )
 
@@ -276,7 +285,10 @@ const searchResults = computed<readonly SettingsSearchResult[]>(() => {
         category: `${t(settingsGroupForTab(entry.tab).labelKey)} ${t(tab.nav)}`,
         key: entry.labelKey,
         details: isMenuTitle
-          ? SETTINGS_SEARCH_DETAIL_KEYS[entry.tab].map(key => settingsSearchText(tm(key))).join(" ")
+          ? SETTINGS_SEARCH_DETAIL_KEYS[entry.tab]
+              .filter(key => isDesktop || key !== "retrySettings")
+              .map(key => settingsSearchText(tm(key)))
+              .join(" ")
           : "",
       })
       return hit ? { ...entry, ...hit, order } : null

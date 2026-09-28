@@ -111,10 +111,11 @@ test("load failures support retry", async () => {
   assert.equal(h.api.attempts.value, 3)
 })
 
-test("settings registers a dedicated desktop-only retry page", () => {
+test("settings embeds retry controls in the general page", () => {
   const tabs = readFileSync(new URL("../src/components/settings/tabs.ts", import.meta.url), "utf8")
-  assert.match(tabs, /id: "retry",[\s\S]*?\.\/RetrySettings\.vue/)
-  assert.match(tabs, /nav: "retrySettings\.title"/)
+  const general = readFileSync(new URL("../src/components/settings/GeneralSettings.vue", import.meta.url), "utf8")
+  assert.match(general, /<RetrySettings v-if="isDesktop" \/>/)
+  assert.doesNotMatch(tabs, /id: "retry",/)
   const router = readFileSync(new URL("../src/lib/router.ts", import.meta.url), "utf8")
-  assert.match(router, /"model-config",\s*\n\s*"retry",/)
+  assert.doesNotMatch(router, /"retry",/)
 })

@@ -616,12 +616,9 @@ export default {
     searchEmpty: "No matching settings menus",
     resizeNav: "Resize settings menu",
     workspace: "Workspace & files",
-    workspaceTitle: "Workspace & files",
-    workspaceDesc: "Manage how review files open and where projectless sessions run.",
 
     groups: {
       general: "General",
-      workspace: "Workspace & files",
       modelConversation: "Models & conversation",
       extensions: "Extensions & prompts",
       notificationsRemote: "Notifications & remote",

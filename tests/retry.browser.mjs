@@ -70,12 +70,12 @@ const waitForSaves = async count => {
   })
 }
 try {
-  await page.goto("http://localhost:1448/__retry_test#/settings/retry")
-  await page.getByRole("heading", { name: "自动重试", level: 1 }).waitFor()
+  await page.goto("http://localhost:1448/__retry_test#/settings/general")
+  await page.getByRole("heading", { name: "常规", level: 1 }).waitFor()
   assert.equal(
     await page.getByRole("button", { name: "自动重试", exact: true }).count(),
-    1,
-    "settings nav lists the retry page",
+    0,
+    "retry is embedded instead of listed as a separate page",
   )
 
   const attempts = page.getByRole("spinbutton", { name: "重试次数" })
