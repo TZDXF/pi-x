@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
@@ -12,15 +11,15 @@ test("browser drawers resize by dragging their top handles", () => {
   const panel = read("../src/components/browser/BrowserPanel.vue")
   // 两个抽屉都由 drawerHeights 驱动高度,顶部把手按抽屉名启动拖拽。
   for (const drawer of ["annotations", "console"]) {
-    assert.match(panel, new RegExp(`onDrawerResizeStart\\('${drawer}', `), `${drawer} drawer needs a resize handle`)
-    assert.match(panel, new RegExp(`drawerHeights\\.${drawer}`))
+    expect(panel, `${drawer} drawer needs a resize handle`).toMatch(new RegExp(`onDrawerResizeStart\\('${drawer}', `))
+    expect(panel).toMatch(new RegExp(`drawerHeights\\.${drawer}`))
   }
   // 拖拽用指针捕获保证移出把手后仍跟手,并有最小高度与舞台空间约束。
-  assert.match(panel, /setPointerCapture/)
-  assert.match(panel, /DRAWER_MIN_HEIGHT/)
-  assert.match(panel, /stageRef\.value\?\.clientHeight/)
+  expect(panel).toMatch(/setPointerCapture/)
+  expect(panel).toMatch(/DRAWER_MIN_HEIGHT/)
+  expect(panel).toMatch(/stageRef\.value\?\.clientHeight/)
   // 把手禁用触摸滚动,远程触屏设备也能拖拽。
-  assert.match(panel, /cursor-row-resize touch-none/)
+  expect(panel).toMatch(/cursor-row-resize touch-none/)
 })
 
 test("drawer heights are no longer fixed tailwind sizes", () => {
@@ -31,8 +30,8 @@ test("drawer heights are no longer fixed tailwind sizes", () => {
         `v-if="show${drawer[0].toUpperCase()}${drawer.slice(1)}"[\\s\\S]*?class="([^"]*)"\\n[\\s\\S]*?:style="\\{ height:`,
       ),
     )
-    assert.ok(root, `${drawer} drawer must bind its height via :style`)
-    assert.doesNotMatch(root[1], /\bh-(?:40|48)\b/)
+    expect(root, `${drawer} drawer must bind its height via :style`).toBeTruthy()
+    expect(root[1]).not.toMatch(/\bh-(?:40|48)\b/)
   }
 })
 
@@ -40,13 +39,13 @@ test("proxy initialization does not touch TDZ state", () => {
   const panel = read("../src/components/browser/BrowserPanel.vue")
   const initIndex = panel.indexOf("let initPromise")
   const watchIndex = panel.indexOf("watch(")
-  assert.ok(initIndex >= 0, "initPromise must be declared")
-  assert.ok(watchIndex >= 0, "visible watcher must exist")
-  assert.ok(initIndex < watchIndex, "immediate watcher must not call initProxy before initPromise exists")
+  expect(initIndex >= 0, "initPromise must be declared").toBeTruthy()
+  expect(watchIndex >= 0, "visible watcher must exist").toBeTruthy()
+  expect(initIndex < watchIndex, "immediate watcher must not call initProxy before initPromise exists").toBeTruthy()
 })
 
 test("panel posts bridge commands to the proxy origin", () => {
   const panel = read("../src/components/browser/BrowserPanel.vue")
-  assert.match(panel, /const targetOrigin = proxyBase\.value \? new URL\(proxyBase\.value\)\.origin : "\*"/)
-  assert.doesNotMatch(panel, /targetOrigin = proxyBase\.value \?\? "\*"/)
+  expect(panel).toMatch(/const targetOrigin = proxyBase\.value \? new URL\(proxyBase\.value\)\.origin : "\*"/)
+  expect(panel).not.toMatch(/targetOrigin = proxyBase\.value \?\? "\*"/)
 })

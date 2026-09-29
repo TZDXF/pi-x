@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 const load = name => loadTsSource(readFileSync(new URL(`../src/lib/${name}.ts`, import.meta.url), "utf8"))
@@ -10,10 +9,10 @@ test("review file tree sorts directories first and preserves selection data", ()
   const files = [{ path: "z.ts" }, { path: "src/b.ts" }, { path: "src/a.ts" }]
   const tree = buildFileTree(files)
   const rows = flattenVisibleTree(tree, new Set())
-  assert.equal(rows.map(row => row.name).join(","), "src,a.ts,b.ts,z.ts")
-  assert.equal(rows[1].data, files[2])
-  assert.equal(flattenVisibleTree(tree, new Set(["src"])).length, 2)
-  assert.equal(flatFileRows(files)[1].fullPath, "src/b.ts")
+  expect(rows.map(row => row.name).join(",")).toBe("src,a.ts,b.ts,z.ts")
+  expect(rows[1].data).toBe(files[2])
+  expect(flattenVisibleTree(tree, new Set(["src"])).length).toBe(2)
+  expect(flatFileRows(files)[1].fullPath).toBe("src/b.ts")
 })
 test("split panes omit artificial blank rows for unequal replacements", () => {
   const rows = toSideBySideRows([
@@ -21,9 +20,9 @@ test("split panes omit artificial blank rows for unequal replacements", () => {
     { kind: "del", text: "-old2", oldLine: 2, newLine: null },
     { kind: "add", text: "+new", oldLine: null, newLine: 1 },
   ])
-  assert.equal(buildPaneRows(rows, "left").length, 2)
-  assert.equal(buildPaneRows(rows, "right").length, 1)
+  expect(buildPaneRows(rows, "left").length).toBe(2)
+  expect(buildPaneRows(rows, "right").length).toBe(1)
   const offsets = buildPaneRowOffsets(rows)
-  assert.equal(offsets.left.at(-1), 2)
-  assert.equal(offsets.right.at(-1), 1)
+  expect(offsets.left.at(-1)).toBe(2)
+  expect(offsets.right.at(-1)).toBe(1)
 })

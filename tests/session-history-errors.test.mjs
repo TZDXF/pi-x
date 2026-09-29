@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { contentModule, loadTsModule, loadTsSource, pathsModule } from "./lib/load-ts.mjs"
 
@@ -89,9 +88,9 @@ test("history does not render mid-conversation error messages", async () => {
   await store.loadHistory()
   const entries = store.entries.value
   // The failed attempt stays hidden; only real content renders.
-  assert.equal(entries.map(e => e.kind).join(","), "user,assistant")
-  assert.equal(errorEntries(store).length, 0)
-  assert.equal(entries[1].blocks[0].text, "recovered")
+  expect(entries.map(e => e.kind).join(",")).toBe("user,assistant")
+  expect(errorEntries(store).length).toBe(0)
+  expect(entries[1].blocks[0].text).toBe("recovered")
 })
 
 test("a final failure is appended after the conversation", async () => {
@@ -101,13 +100,13 @@ test("a final failure is appended after the conversation", async () => {
   })
   await store.loadHistory()
   const entries = store.entries.value
-  assert.equal(entries.length, 3)
+  expect(entries.length).toBe(3)
   const last = entries.at(-1)
-  assert.equal(last.kind, "assistant")
-  assert.match(last.blocks[0].text, /chat\.errorLabel/)
+  expect(last.kind).toBe("assistant")
+  expect(last.blocks[0].text).toMatch(/chat\.errorLabel/)
   // Provider JSON payloads unwrap to "status · message".
-  assert.match(last.blocks[0].text, /503 · provider overloaded/)
-  assert.equal(entries[1].blocks[0].text, "working")
+  expect(last.blocks[0].text).toMatch(/503 · provider overloaded/)
+  expect(entries[1].blocks[0].text).toBe("working")
 })
 
 test("a recovered retry is not a stop reason", async () => {
@@ -121,9 +120,9 @@ test("a recovered retry is not a stop reason", async () => {
     lastError: { timestamp: 3500, errorMessage: '503: {"type":"http_error","message":"provider overloaded"}' },
   })
   await store.loadHistory()
-  assert.equal(store.entries.value.length, 3)
-  assert.equal(errorEntries(store).length, 0)
-  assert.equal(store.entries.value.at(-1).blocks[0].text, "done")
+  expect(store.entries.value.length).toBe(3)
+  expect(errorEntries(store).length).toBe(0)
+  expect(store.entries.value.at(-1).blocks[0].text).toBe("done")
 })
 
 test("a failure followed by a newer user prompt is not a stop reason", async () => {
@@ -132,8 +131,8 @@ test("a failure followed by a newer user prompt is not a stop reason", async () 
     lastError: { timestamp: 1500, errorMessage: "503 boom" },
   })
   await store.loadHistory()
-  assert.equal(store.entries.value.length, 4)
-  assert.equal(errorEntries(store).length, 0)
+  expect(store.entries.value.length).toBe(4)
+  expect(errorEntries(store).length).toBe(0)
 })
 
 test("an in-progress turn never gets a mid-conversation stop reason", async () => {
@@ -145,11 +144,11 @@ test("an in-progress turn never gets a mid-conversation stop reason", async () =
   // later live events append after whatever loadHistory added.
   store.handleEvent({ type: "agent_start" })
   await store.loadHistory()
-  assert.equal(errorEntries(store).length, 0)
+  expect(errorEntries(store).length).toBe(0)
   // Once the turn is over, the same history surfaces the stop reason again.
   store.handleEvent({ type: "agent_settled" })
   await store.loadHistory()
-  assert.equal(errorEntries(store).length, 1)
+  expect(errorEntries(store).length).toBe(1)
 })
 
 test("history without errors loads unchanged", async () => {
@@ -159,6 +158,6 @@ test("history without errors loads unchanged", async () => {
   })
   await store.loadHistory()
   const entries = store.entries.value
-  assert.equal(entries.length, 2)
-  assert.equal(entries[1].blocks[0].text, "ok")
+  expect(entries.length).toBe(2)
+  expect(entries[1].blocks[0].text).toBe("ok")
 })

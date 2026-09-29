@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { webcrypto } from "node:crypto"
 import { loadTsSource, pathsModule } from "./lib/load-ts.mjs"
@@ -9,11 +8,11 @@ const source = readFileSync(new URL("../src/lib/uuid.ts", import.meta.url), "utf
 test("UUID generation uses the native method with its crypto receiver", () => {
   const crypto = {
     randomUUID() {
-      assert.equal(this, crypto)
+      expect(this).toBe(crypto)
       return "native-uuid"
     },
   }
-  assert.equal(loadTsSource(source, { crypto }).createUuid(), "native-uuid")
+  expect(loadTsSource(source, { crypto }).createUuid()).toBe("native-uuid")
 })
 
 test("HTTP fallback sets UUID v4 version and variant bits", () => {
@@ -23,12 +22,12 @@ test("HTTP fallback sets UUID v4 version and variant bits", () => {
   ]) {
     const crypto = {
       getRandomValues(bytes) {
-        assert.equal(this, crypto)
-        assert.equal(bytes.length, 16)
+        expect(this).toBe(crypto)
+        expect(bytes.length).toBe(16)
         return bytes.fill(fill)
       },
     }
-    assert.equal(loadTsSource(source, { crypto }).createUuid(), expected)
+    expect(loadTsSource(source, { crypto }).createUuid()).toBe(expected)
   }
 })
 
@@ -52,10 +51,10 @@ test("creating conversations works without randomUUID on LAN HTTP", () => {
   const ids = new Set()
   for (let i = 0; i < 100; i++) {
     const store = createConversation("/project")
-    assert.equal(store.cwd, "/project")
-    assert.equal(activeRuntimeId.value, store.runtimeId)
-    assert.match(store.runtimeId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(store.cwd).toBe("/project")
+    expect(activeRuntimeId.value).toBe(store.runtimeId)
+    expect(store.runtimeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     ids.add(store.runtimeId)
   }
-  assert.equal(ids.size, 100)
+  expect(ids.size).toBe(100)
 })

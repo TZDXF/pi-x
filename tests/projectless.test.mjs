@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -48,88 +47,88 @@ function storeHarness({ dir = DEFAULT_DIR, defaultDir = DEFAULT_DIR, failures = 
 
 test("无项目会话目录在首次使用时解析并复用同一次请求", async () => {
   const h = storeHarness()
-  assert.equal(h.store.projectless.value, "")
-  assert.equal(await h.store.ensureProjectless(), DEFAULT_DIR)
-  assert.equal(await h.store.ensureProjectless(), DEFAULT_DIR)
-  assert.equal(h.calls.length, 1)
-  assert.equal(h.store.projectless.value, DEFAULT_DIR)
-  assert.equal(h.store.projectlessDefault.value, DEFAULT_DIR)
+  expect(h.store.projectless.value).toBe("")
+  expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
+  expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
+  expect(h.calls.length).toBe(1)
+  expect(h.store.projectless.value).toBe(DEFAULT_DIR)
+  expect(h.store.projectlessDefault.value).toBe(DEFAULT_DIR)
 })
 
 test("设置改动后重新解析无项目会话目录", async () => {
   const h = storeHarness({ dir: "D:/pix/scratch", defaultDir: DEFAULT_DIR })
-  assert.equal(await h.store.ensureProjectless(), "D:/pix/scratch")
-  assert.equal(h.store.isProjectless("D:/pix/scratch"), true)
-  assert.equal(await h.store.refreshProjectless(), "D:/pix/scratch")
+  expect(await h.store.ensureProjectless()).toBe("D:/pix/scratch")
+  expect(h.store.isProjectless("D:/pix/scratch")).toBe(true)
+  expect(await h.store.refreshProjectless()).toBe("D:/pix/scratch")
   // refresh 必须绕过缓存，否则设置改动要等重启才生效。
-  assert.equal(h.calls.length, 2)
+  expect(h.calls.length).toBe(2)
 })
 
 test("解析失败不缓存，重试仍可成功", async () => {
   const h = storeHarness({ failures: 1 })
-  await assert.rejects(h.store.ensureProjectless())
-  assert.equal(h.store.projectless.value, "")
-  assert.equal(await h.store.ensureProjectless(), DEFAULT_DIR)
+  await expect(h.store.ensureProjectless()).rejects.toThrow()
+  expect(h.store.projectless.value).toBe("")
+  expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
 })
 
 test("isProjectless 忽略分隔符、尾斜杠与 Windows 大小写", async () => {
   const h = storeHarness()
   await h.store.ensureProjectless()
-  assert.equal(h.store.isProjectless("C:\\Users\\you\\.pix\\workspace"), true)
-  assert.equal(h.store.isProjectless("c:/users/you/.pix/workspace/"), true)
-  assert.equal(h.store.isProjectless("C:/Users/you/.pix/workspace-notes"), false)
-  assert.equal(h.store.isProjectless(""), false)
+  expect(h.store.isProjectless("C:\\Users\\you\\.pix\\workspace")).toBe(true)
+  expect(h.store.isProjectless("c:/users/you/.pix/workspace/")).toBe(true)
+  expect(h.store.isProjectless("C:/Users/you/.pix/workspace-notes")).toBe(false)
+  expect(h.store.isProjectless("")).toBe(false)
 })
 
 test("未解析时不会把任何路径当成无项目会话", () => {
   const h = storeHarness()
-  assert.equal(h.store.isProjectless("C:/Users/you/.pix/workspace"), false)
+  expect(h.store.isProjectless("C:/Users/you/.pix/workspace")).toBe(false)
 })
 
 test("无项目会话显示专用名称，普通项目仍显示目录名或项目名", async () => {
   const h = storeHarness()
   await h.store.ensureProjectless()
   h.store.createProject({ name: "工作区", folders: ["C:/code/app"], primary: "C:/code/app" })
-  assert.equal(h.store.projectName(DEFAULT_DIR), LABEL)
-  assert.equal(h.store.projectName("C:\\Users\\you\\.pix\\workspace"), LABEL)
-  assert.equal(h.store.projectName("C:/code/demo"), "demo")
-  assert.equal(h.store.projectName("C:/code/app"), "工作区")
+  expect(h.store.projectName(DEFAULT_DIR)).toBe(LABEL)
+  expect(h.store.projectName("C:\\Users\\you\\.pix\\workspace")).toBe(LABEL)
+  expect(h.store.projectName("C:/code/demo")).toBe("demo")
+  expect(h.store.projectName("C:/code/app")).toBe("工作区")
 })
 
 test("isAbsolutePath 只接受绝对路径与 ~ 前缀", () => {
   for (const value of ["C:\\work", "D:/work", "/home/you/work", "\\\\server\\share", "~", "~/work", "~\\work"]) {
-    assert.equal(isAbsolutePath(value), true, `${value} 应被接受`)
+    expect(isAbsolutePath(value), `${value} 应被接受`).toBe(true)
   }
   for (const value of ["work", "./work", "../work", "C:work", "~other/work"]) {
-    assert.equal(isAbsolutePath(value), false, `${value} 应被拒绝`)
+    expect(isAbsolutePath(value), `${value} 应被拒绝`).toBe(false)
   }
 })
 
 test("samePath 归一化分隔符与尾斜杠，POSIX 路径区分大小写", () => {
-  assert.equal(samePath("C:\\Users\\you\\work", "c:/users/you/work/"), true)
-  assert.equal(samePath("/home/you/work", "/home/you/work/"), true)
-  assert.equal(samePath("/home/you/Work", "/home/you/work"), false)
-  assert.equal(samePath("a/../b", "b"), false)
-  assert.equal(samePath("", "/home/you"), false)
+  expect(samePath("C:\\Users\\you\\work", "c:/users/you/work/")).toBe(true)
+  expect(samePath("/home/you/work", "/home/you/work/")).toBe(true)
+  expect(samePath("/home/you/Work", "/home/you/work")).toBe(false)
+  expect(samePath("a/../b", "b")).toBe(false)
+  expect(samePath("", "/home/you")).toBe(false)
   // 同前缀但不是同一目录时不能误判。
-  assert.equal(samePath("/home/you/work", "/home/you/work-notes"), false)
+  expect(samePath("/home/you/work", "/home/you/work-notes")).toBe(false)
 })
 
 test("入口、设置项与后端命令均已接线", () => {
   const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
   // 后端：默认目录在 .pix 下、命令已注册、远程端可代理并保存该配置。
-  assert.match(read("../src-tauri/src/data_dir.rs"), /join\("workspace"\)/)
-  assert.match(read("../src-tauri/src/lib.rs"), /commands::projectless_dir_resolve/)
-  assert.match(read("../src-tauri/src/remote.rs"), /"projectless_dir_resolve" =>/)
-  assert.match(read("../src-tauri/src/remote.rs"), /cfg\.projectless_dir = a\["config"\]\["projectlessDir"\]/)
+  expect(read("../src-tauri/src/data_dir.rs")).toMatch(/join\("workspace"\)/)
+  expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::projectless_dir_resolve/)
+  expect(read("../src-tauri/src/remote.rs")).toMatch(/"projectless_dir_resolve" =>/)
+  expect(read("../src-tauri/src/remote.rs")).toMatch(/cfg\.projectless_dir = a\["config"\]\["projectlessDir"\]/)
   // 前端：欢迎页/侧栏入口、设置页，以及会话空状态使用项目显示名。
-  assert.match(read("../src/App.vue"), /@open-projectless="openProjectless"/)
-  assert.match(read("../src/App.vue"), /@projectless="openProjectlessFromSidebar"/)
-  assert.match(read("../src/components/WelcomeView.vue"), /emit\('openProjectless'\)/)
-  assert.match(read("../src/components/WorkspaceSidebar.vue"), /emit\('projectless'\)/)
-  assert.match(read("../src/components/settings/WorkspaceSettings.vue"), /<ProjectlessSettings \/>/)
-  assert.match(read("../src/components/settings/ProjectlessSettings.vue"), /projectlessDir: next \?\? undefined/)
-  assert.match(read("../src/components/ChatView.vue"), /workspace\.projectName\(project\)/)
+  expect(read("../src/App.vue")).toMatch(/@open-projectless="openProjectless"/)
+  expect(read("../src/App.vue")).toMatch(/@projectless="openProjectlessFromSidebar"/)
+  expect(read("../src/components/WelcomeView.vue")).toMatch(/emit\('openProjectless'\)/)
+  expect(read("../src/components/WorkspaceSidebar.vue")).toMatch(/emit\('projectless'\)/)
+  expect(read("../src/components/settings/WorkspaceSettings.vue")).toMatch(/<ProjectlessSettings \/>/)
+  expect(read("../src/components/settings/ProjectlessSettings.vue")).toMatch(/projectlessDir: next \?\? undefined/)
+  expect(read("../src/components/ChatView.vue")).toMatch(/workspace\.projectName\(project\)/)
 })
 
 test("无项目会话文案在两种语言中保持同步", async () => {
@@ -146,14 +145,14 @@ test("无项目会话文案在两种语言中保持同步", async () => {
         : [`${prefix}${key}`],
     )
   const keys = { "zh-CN": flatten(messages["zh-CN"]).sort(), en: flatten(messages.en).sort() }
-  assert.deepEqual(keys["zh-CN"], keys.en)
+  expect(keys["zh-CN"]).toEqual(keys.en)
   for (const key of Object.keys(messages["zh-CN"].projectless)) {
     for (const locale of ["zh-CN", "en"]) {
-      assert.ok(keys[locale].includes(`projectless.${key}`), `${locale} 缺少 projectless.${key}`)
-      assert.ok(messages[locale].projectless[key].trim().length > 0, `${locale}.projectless.${key} 不能为空`)
+      expect(keys[locale].includes(`projectless.${key}`)).toBeTruthy()
+      expect(messages[locale].projectless[key].trim().length > 0).toBeTruthy()
     }
   }
   // 设置说明必须带默认目录占位符，否则前端传参无效。
-  assert.match(messages["zh-CN"].projectless.settingsDesc, /\{path\}/)
-  assert.match(messages.en.projectless.settingsDesc, /\{path\}/)
+  expect(messages["zh-CN"].projectless.settingsDesc).toMatch(/\{path\}/)
+  expect(messages.en.projectless.settingsDesc).toMatch(/\{path\}/)
 })

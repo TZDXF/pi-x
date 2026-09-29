@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { contentModule, loadTsModule, pathsModule } from "./lib/load-ts.mjs"
 
 function loadStore(name, modules) {
@@ -88,19 +87,19 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 test("first message is visible immediately; title is independent of unfinished conversation", async () => {
   const h = sessionHarness()
   await h.store.send("Fix login\nplease")
-  assert.equal(h.previews[0].preview, "Fix login please")
-  assert.equal(h.calls[0].type, "prompt")
-  assert.equal(h.calls[1].type, "title")
-  assert.equal(h.titles.length, 0)
+  expect(h.previews[0].preview).toBe("Fix login please")
+  expect(h.calls[0].type).toBe("prompt")
+  expect(h.calls[1].type).toBe("title")
+  expect(h.titles.length).toBe(0)
   h.finish("Login fix")
   await tick()
-  assert.deepEqual(h.titles, [["one.jsonl", "Login fix"]])
+  expect(h.titles).toEqual([["one.jsonl", "Login fix"]])
 })
 test("subsequent messages never trigger a second title request", async () => {
   const h = sessionHarness()
   await h.store.send("first")
   await h.store.send("second")
-  assert.equal(h.calls.filter(c => c.type === "title").length, 1)
+  expect(h.calls.filter(c => c.type === "title").length).toBe(1)
 })
 test("switching sessions while generating keeps the result attached to the original file", async () => {
   const h = sessionHarness()
@@ -109,23 +108,23 @@ test("switching sessions while generating keeps the result attached to the origi
   h.store.cwd.value = "project-two"
   h.finish("First title")
   await tick()
-  assert.deepEqual(h.titles, [["one.jsonl", "First title"]])
-  assert.deepEqual(h.refreshed, ["project-one"])
+  expect(h.titles).toEqual([["one.jsonl", "First title"]])
+  expect(h.refreshed).toEqual(["project-one"])
 })
 test("failure leaves preview intact and does not add an error to the conversation", async () => {
   const h = sessionHarness()
   await h.store.send("first")
   h.fail()
   await tick()
-  assert.equal(h.titles.length, 0)
-  assert.equal(h.previews[0].preview, "first")
-  assert.equal(h.store.entries.value.length, 1)
+  expect(h.titles.length).toBe(0)
+  expect(h.previews[0].preview).toBe("first")
+  expect(h.store.entries.value.length).toBe(1)
 })
 test("resumed nonempty sessions do not generate new titles", async () => {
   const h = sessionHarness()
   h.store.state.value.messageCount = 5
   await h.store.send("continue")
-  assert.equal(h.calls.filter(c => c.type === "title").length, 0)
+  expect(h.calls.filter(c => c.type === "title").length).toBe(0)
 })
 test("workspace preserves previews before pi persists and does not overwrite manual titles", async () => {
   let disk = []
@@ -141,14 +140,14 @@ test("workspace preserves previews before pi persists and does not overwrite man
   })
   store.preview({ file: "one", cwd: "project", preview: "first", mtimeMs: 1 })
   await store.refresh("project")
-  assert.equal(store.histories.value.project[0].preview, "first")
+  expect(store.histories.value.project[0].preview).toBe("first")
   store.generatedTitle("one", "Generated")
-  assert.equal(store.histories.value.project[0].title, "Generated")
+  expect(store.histories.value.project[0].title).toBe("Generated")
   await store.update(store.histories.value.project[0], "Manual", true)
   store.generatedTitle("one", "Late generated title")
-  assert.equal(store.histories.value.project[0].title, "Manual")
+  expect(store.histories.value.project[0].title).toBe("Manual")
   disk = [{ file: "one", cwd: "project", title: "Manual", archived: true, mtimeMs: 2 }]
   await store.refresh("project")
-  assert.equal(store.histories.value.project.length, 1)
-  assert.equal(store.histories.value.project[0].archived, true)
+  expect(store.histories.value.project.length).toBe(1)
+  expect(store.histories.value.project[0].archived).toBe(true)
 })

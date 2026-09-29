@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -35,7 +34,7 @@ test("projects are persisted without duplicates", () => {
   h.store.remember("C:/one")
   h.store.remember("C:/one")
   h.store.remember("C:/two")
-  assert.deepEqual(JSON.parse(h.storage.get("pix.recentProjects")), ["C:/two", "C:/one"])
+  expect(JSON.parse(h.storage.get("pix.recentProjects"))).toEqual(["C:/two", "C:/one"])
 })
 test("legacy Windows path variants merge with pins, groups and order", () => {
   const storage = new Map([
@@ -48,33 +47,35 @@ test("legacy Windows path variants merge with pins, groups and order", () => {
     ["pix.sessionOrder", JSON.stringify({ "C:\\code\\pi-x": ["chat.jsonl"] })],
   ])
   const h = harness(storage)
-  assert.deepEqual(Array.from(h.store.projects.value), ["C:/code/pi-x", "C:/code/other"])
-  assert.deepEqual(JSON.parse(storage.get("pix.pinnedProjects")), ["C:/code/pi-x"])
-  assert.equal(h.store.projectName("C:\\code\\pi-x"), "PiX")
-  assert.deepEqual(JSON.parse(storage.get("pix.sessionOrder"))["C:/code/pi-x"], ["chat.jsonl"])
+  expect(Array.from(h.store.projects.value)).toEqual(["C:/code/pi-x", "C:/code/other"])
+  expect(JSON.parse(storage.get("pix.pinnedProjects"))).toEqual(["C:/code/pi-x"])
+  expect(h.store.projectName("C:\\code\\pi-x")).toBe("PiX")
+  expect(JSON.parse(storage.get("pix.sessionOrder"))["C:/code/pi-x"]).toEqual(["chat.jsonl"])
   h.store.remember("C:\\CODE\\pi-x\\")
-  assert.equal(h.store.projects.value.length, 2)
+  expect(h.store.projects.value.length).toBe(2)
 })
 test("new project folders are stored with forward slashes and reject equivalent paths", () => {
   const h = harness()
   h.store.createProject({ name: "PiX", primary: "C:\\code\\pi-x", folders: ["C:\\code\\pi-x"] })
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["C:/code/pi-x"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.projectGroups"))["C:/code/pi-x"].folders, ["C:/code/pi-x"])
-  assert.throws(() => h.store.createProject({ name: "Duplicate", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] }))
+  expect(Array.from(h.store.orderedProjects())).toEqual(["C:/code/pi-x"])
+  expect(JSON.parse(h.storage.get("pix.projectGroups"))["C:/code/pi-x"].folders).toEqual(["C:/code/pi-x"])
+  expect(() =>
+    h.store.createProject({ name: "Duplicate", primary: "C:/code/pi-x", folders: ["C:/code/pi-x"] }),
+  ).toThrow()
 })
 test("named projects keep all folders and selected primary without duplicating navigation entries", () => {
   const h = harness()
   h.store.createProject({ name: "Workspace", folders: ["C:/frontend", "C:/backend"], primary: "C:/backend" })
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["C:/backend"])
-  assert.equal(h.store.projectName("C:/backend"), "Workspace")
-  assert.deepEqual(Array.from(h.store.projectFolders("C:/backend")), ["C:/frontend", "C:/backend"])
-  assert.equal(JSON.parse(h.storage.get("pix.projectGroups"))["C:/backend"].primary, "C:/backend")
+  expect(Array.from(h.store.orderedProjects())).toEqual(["C:/backend"])
+  expect(h.store.projectName("C:/backend")).toBe("Workspace")
+  expect(Array.from(h.store.projectFolders("C:/backend"))).toEqual(["C:/frontend", "C:/backend"])
+  expect(JSON.parse(h.storage.get("pix.projectGroups"))["C:/backend"].primary).toBe("C:/backend")
   const reopened = harness(h.storage)
-  assert.equal(reopened.store.projectName("C:/backend"), "Workspace")
-  assert.deepEqual(Array.from(reopened.store.projectFolders("C:/backend")), ["C:/frontend", "C:/backend"])
-  assert.throws(() => h.store.createProject({ name: "Duplicate", folders: ["C:/frontend"], primary: "C:/frontend" }))
+  expect(reopened.store.projectName("C:/backend")).toBe("Workspace")
+  expect(Array.from(reopened.store.projectFolders("C:/backend"))).toEqual(["C:/frontend", "C:/backend"])
+  expect(() => h.store.createProject({ name: "Duplicate", folders: ["C:/frontend"], primary: "C:/frontend" })).toThrow()
   h.store.removeProject("C:/backend")
-  assert.deepEqual(JSON.parse(h.storage.get("pix.projectGroups")), {})
+  expect(JSON.parse(h.storage.get("pix.projectGroups"))).toEqual({})
 })
 test("editing a project rekeys its primary and pin while preserving folder session caches", () => {
   const h = harness()
@@ -82,39 +83,39 @@ test("editing a project rekeys its primary and pin while preserving folder sessi
   h.store.togglePin("C:/old")
   h.store.histories.value["C:/old"] = [{ file: "old-chat", cwd: "C:/old" }]
   h.store.updateProject("C:/old", { name: "After", folders: ["C:/old", "C:/new"], primary: "C:/new" })
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["C:/new"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), ["C:/new"])
-  assert.equal(h.store.projectRoot("C:/old"), "C:/new")
-  assert.equal(h.store.projectName("C:/old"), "After")
-  assert.equal(h.store.histories.value["C:/old"][0].file, "old-chat")
+  expect(Array.from(h.store.orderedProjects())).toEqual(["C:/new"])
+  expect(JSON.parse(h.storage.get("pix.pinnedProjects"))).toEqual(["C:/new"])
+  expect(h.store.projectRoot("C:/old")).toBe("C:/new")
+  expect(h.store.projectName("C:/old")).toBe("After")
+  expect(h.store.histories.value["C:/old"][0].file).toBe("old-chat")
   h.store.remember("C:/old")
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["C:/new"])
-  assert.equal(harness(h.storage).store.projectName("C:/new"), "After")
-  assert.throws(() =>
+  expect(Array.from(h.store.orderedProjects())).toEqual(["C:/new"])
+  expect(harness(h.storage).store.projectName("C:/new")).toBe("After")
+  expect(() =>
     h.store.updateProject("C:/new", { name: "Nope", folders: ["C:/old", "C:/old"], primary: "C:/old" }),
-  )
+  ).toThrow()
 })
 test("removed projects stay removed until they are explicitly re-added", async () => {
   const h = harness()
   h.store.remember("C:/one")
   h.store.removeProject("C:/one")
-  assert.deepEqual(Array.from(h.store.projects.value), [])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.removedProjects")), ["C:/one"])
+  expect(Array.from(h.store.projects.value)).toEqual([])
+  expect(JSON.parse(h.storage.get("pix.removedProjects"))).toEqual(["C:/one"])
   // Automatic paths (sidebar watcher, session restore) must not resurrect it.
   await h.store.rememberWorkspace("C:/one")
-  assert.deepEqual(Array.from(h.store.projects.value), [])
+  expect(Array.from(h.store.projects.value)).toEqual([])
   // Reloading the store from the same storage keeps it removed.
   const reopened = harness(h.storage)
   await reopened.store.rememberWorkspace("C:/one")
-  assert.deepEqual(Array.from(reopened.store.projects.value), [])
+  expect(Array.from(reopened.store.projects.value)).toEqual([])
   // Explicitly creating the project again lifts the marker.
   reopened.store.createProject({ name: "One", primary: "C:/one", folders: ["C:/one"] })
-  assert.deepEqual(Array.from(reopened.store.projects.value), ["C:/one"])
-  assert.deepEqual(JSON.parse(reopened.storage.get("pix.removedProjects")), [])
+  expect(Array.from(reopened.store.projects.value)).toEqual(["C:/one"])
+  expect(JSON.parse(reopened.storage.get("pix.removedProjects"))).toEqual([])
   reopened.store.removeProject("C:/one")
   reopened.store.unremoveProject("C:/one")
   reopened.store.remember("C:/one")
-  assert.deepEqual(Array.from(reopened.store.projects.value), ["C:/one"])
+  expect(Array.from(reopened.store.projects.value)).toEqual(["C:/one"])
 })
 test("refresh sorts by time and ignores stale responses", async () => {
   const h = harness()
@@ -127,19 +128,19 @@ test("refresh sorts by time and ignores stale responses", async () => {
   await b
   h.requests[0].resolve([{ file: "stale", mtimeMs: 30 }])
   await a
-  assert.equal(h.store.histories.value.project[0].file, "new")
+  expect(h.store.histories.value.project[0].file).toBe("new")
 })
 test("rename and archive persist and update shared state; restore keeps title", async () => {
   const h = harness()
   const row = { file: "one.jsonl", preview: "first message" }
   h.store.histories.value.project = [row]
   await h.store.update(row, "new title", true)
-  assert.equal(row.title, "new title")
-  assert.equal(row.archived, true)
+  expect(row.title).toBe("new title")
+  expect(row.archived).toBe(true)
   await h.store.update(row, row.title, false)
-  assert.equal(row.archived, false)
-  assert.equal(row.title, "new title")
-  assert.deepEqual(h.writes[0], ["one.jsonl", "new title", true])
+  expect(row.archived).toBe(false)
+  expect(row.title).toBe("new title")
+  expect(h.writes[0]).toEqual(["one.jsonl", "new title", true])
 })
 test("failed metadata write does not change visible title", async () => {
   const h = harness()
@@ -148,9 +149,9 @@ test("failed metadata write does not change visible title", async () => {
   h.context.updateSession = async () => {
     throw new Error("disk full")
   }
-  await assert.rejects(h.store.update(row, "changed", true), /disk full/)
-  assert.equal(row.title, "original")
-  assert.equal(row.archived, false)
+  await expect(h.store.update(row, "changed", true)).rejects.toThrow(/disk full/)
+  expect(row.title).toBe("original")
+  expect(row.archived).toBe(false)
 })
 test("a stale list request cannot undo a successful rename", async () => {
   const h = harness()
@@ -160,18 +161,18 @@ test("a stale list request cannot undo a successful rename", async () => {
   await h.store.update(row, "updated", false)
   h.requests[0].resolve([{ file: "one", title: "original" }])
   await refresh
-  assert.equal(h.store.histories.value.project[0].title, "updated")
+  expect(h.store.histories.value.project[0].title).toBe("updated")
 })
 test("pinning moves a project to the top and unpinning restores normal order", () => {
   const h = harness()
   h.store.remember("one")
   h.store.remember("two")
   h.store.togglePin("one")
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["one", "two"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), ["one"])
+  expect(Array.from(h.store.orderedProjects())).toEqual(["one", "two"])
+  expect(JSON.parse(h.storage.get("pix.pinnedProjects"))).toEqual(["one"])
   h.store.togglePin("one")
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["two", "one"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), [])
+  expect(Array.from(h.store.orderedProjects())).toEqual(["two", "one"])
+  expect(JSON.parse(h.storage.get("pix.pinnedProjects"))).toEqual([])
 })
 test("removing a project clears its pin and cached list but does not modify conversations", async () => {
   const h = harness()
@@ -183,24 +184,24 @@ test("removing a project clears its pin and cached list but does not modify conv
   h.store.removeProject("one")
   h.requests[0].resolve([{ file: "chat.jsonl" }])
   await request
-  assert.deepEqual(JSON.parse(h.storage.get("pix.recentProjects")), ["two"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), [])
-  assert.equal(h.store.histories.value.one, undefined)
-  assert.equal(h.writes.length, 0)
+  expect(JSON.parse(h.storage.get("pix.recentProjects"))).toEqual(["two"])
+  expect(JSON.parse(h.storage.get("pix.pinnedProjects"))).toEqual([])
+  expect(h.store.histories.value.one).toBe(undefined)
+  expect(h.writes.length).toBe(0)
   // A removed project must not come back through automatic paths.
   h.store.remember("one")
-  assert.deepEqual(Array.from(h.store.projects.value), ["two"])
+  expect(Array.from(h.store.projects.value)).toEqual(["two"])
   // Explicitly clearing the removal marker re-registers it.
   h.store.unremoveProject("one")
   h.store.remember("one")
-  assert.deepEqual(Array.from(h.store.projects.value), ["one", "two"])
+  expect(Array.from(h.store.projects.value)).toEqual(["one", "two"])
 })
 test("opening more projects does not evict pinned projects", () => {
   const h = harness()
   h.store.remember("pinned")
   h.store.togglePin("pinned")
   for (let i = 0; i < 10; i++) h.store.remember(`project-${i}`)
-  assert.equal(h.store.orderedProjects()[0], "pinned")
+  expect(h.store.orderedProjects()[0]).toBe("pinned")
 })
 test("manual project order persists and keeps pinned projects on top", () => {
   const h = harness()
@@ -208,10 +209,10 @@ test("manual project order persists and keeps pinned projects on top", () => {
   h.store.remember("two")
   h.store.remember("three")
   h.store.reorderProjects(["two", "three", "one"])
-  assert.deepEqual(Array.from(h.store.projects.value), ["two", "three", "one"])
-  assert.deepEqual(JSON.parse(h.storage.get("pix.recentProjects")), ["two", "three", "one"])
+  expect(Array.from(h.store.projects.value)).toEqual(["two", "three", "one"])
+  expect(JSON.parse(h.storage.get("pix.recentProjects"))).toEqual(["two", "three", "one"])
   h.store.togglePin("one")
-  assert.deepEqual(Array.from(h.store.orderedProjects()), ["one", "two", "three"])
+  expect(Array.from(h.store.orderedProjects())).toEqual(["one", "two", "three"])
 })
 test("manual session order persists, merges with archived rows, and refresh keeps it", async () => {
   const h = harness()
@@ -221,11 +222,8 @@ test("manual session order persists, merges with archived rows, and refresh keep
     { file: "c", mtimeMs: 1, archived: true },
   ]
   h.store.reorderSessions("project", ["b", "a"])
-  assert.deepEqual(
-    Array.from(h.store.histories.value.project, r => r.file),
-    ["b", "a", "c"],
-  )
-  assert.deepEqual(JSON.parse(h.storage.get("pix.sessionOrder")).project, ["b", "a"])
+  expect(Array.from(h.store.histories.value.project, r => r.file)).toEqual(["b", "a", "c"])
+  expect(JSON.parse(h.storage.get("pix.sessionOrder")).project).toEqual(["b", "a"])
   const refresh = h.store.refresh("project")
   h.requests[0].resolve([
     { file: "a", mtimeMs: 3 },
@@ -233,10 +231,7 @@ test("manual session order persists, merges with archived rows, and refresh keep
     { file: "c", mtimeMs: 1, archived: true },
   ])
   await refresh
-  assert.deepEqual(
-    Array.from(h.store.histories.value.project, r => r.file),
-    ["b", "a", "c"],
-  )
+  expect(Array.from(h.store.histories.value.project, r => r.file)).toEqual(["b", "a", "c"])
 })
 test("drag order spans every folder in a grouped project and survives refresh", async () => {
   const h = harness()
@@ -246,40 +241,28 @@ test("drag order spans every folder in a grouped project and survives refresh", 
     { file: "c", mtimeMs: 10, archived: true },
   ]
   h.store.histories.value.back = [{ file: "b", mtimeMs: 20 }]
-  assert.deepEqual(
-    Array.from(h.store.orderedSessions("front"), r => r.file),
-    ["a", "b", "c"],
-  )
+  expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["a", "b", "c"])
   h.store.reorderSessions("front", ["b", "a"])
-  assert.deepEqual(
-    Array.from(h.store.orderedSessions("front"), r => r.file),
-    ["b", "a", "c"],
-  )
+  expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])
   const refresh = h.store.refresh("front")
   h.requests[0].resolve([
     { file: "a", mtimeMs: 30 },
     { file: "c", mtimeMs: 10, archived: true },
   ])
   await refresh
-  assert.deepEqual(
-    Array.from(h.store.orderedSessions("front"), r => r.file),
-    ["b", "a", "c"],
-  )
-  assert.deepEqual(JSON.parse(h.storage.get("pix.sessionOrder")).front, ["b", "a"])
+  expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])
+  expect(JSON.parse(h.storage.get("pix.sessionOrder")).front).toEqual(["b", "a"])
   const reopened = harness(h.storage)
   reopened.store.histories.value.front = h.store.histories.value.front
   reopened.store.histories.value.back = h.store.histories.value.back
-  assert.deepEqual(
-    Array.from(reopened.store.orderedSessions("front"), r => r.file),
-    ["b", "a", "c"],
-  )
+  expect(Array.from(reopened.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])
 })
 test("removing a session deletes its checkpoint manifest", async () => {
   const h = harness()
   h.store.histories.value.project = [{ file: "session.jsonl" }]
   h.store.removeSession("session.jsonl")
   await Promise.resolve()
-  assert.deepEqual(JSON.parse(JSON.stringify(h.invokes)), [
+  expect(JSON.parse(JSON.stringify(h.invokes))).toEqual([
     ["session_checkpoint_manifest_delete", { file: "session.jsonl" }],
   ])
 })
@@ -290,7 +273,7 @@ test("removing a project also clears its session order", () => {
   h.store.histories.value.one = [{ file: "a", mtimeMs: 1 }]
   h.store.reorderSessions("one", ["a"])
   h.store.removeProject("one")
-  assert.deepEqual(JSON.parse(h.storage.get("pix.sessionOrder")), {})
+  expect(JSON.parse(h.storage.get("pix.sessionOrder"))).toEqual({})
 })
 
 test("worktrees merge into their main project without losing sessions, pins or ordering", () => {
@@ -304,33 +287,30 @@ test("worktrees merge into their main project without losing sessions, pins or o
   h.store.histories.value["C:/trees/pi-x"] = [{ file: "tree-session", cwd: "C:/trees/pi-x", mtimeMs: 1 }]
   h.store.histories.value["C:/code/pi-x"] = [{ file: "main-session", cwd: "C:/code/pi-x", mtimeMs: 2 }]
   h.store.registerWorktrees({ worktrees: [{ path: "C:/code/pi-x" }, { path: "C:/trees/pi-x" }] })
-  assert.deepEqual(Array.from(h.store.projects.value), ["C:/code/pi-x"])
-  assert.equal(h.store.projectRoot("C:\\trees\\pi-x"), "C:/code/pi-x")
-  assert.equal(h.store.isWorktree("C:/trees/pi-x"), true)
-  assert.equal(h.store.isWorktree("C:/code/pi-x"), false)
-  assert.deepEqual(
-    Array.from(h.store.orderedSessions("C:/code/pi-x"), s => s.file),
-    ["tree-session", "main-session"],
-  )
-  assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), ["C:/code/pi-x"])
+  expect(Array.from(h.store.projects.value)).toEqual(["C:/code/pi-x"])
+  expect(h.store.projectRoot("C:\\trees\\pi-x")).toBe("C:/code/pi-x")
+  expect(h.store.isWorktree("C:/trees/pi-x")).toBe(true)
+  expect(h.store.isWorktree("C:/code/pi-x")).toBe(false)
+  expect(Array.from(h.store.orderedSessions("C:/code/pi-x"), s => s.file)).toEqual(["tree-session", "main-session"])
+  expect(JSON.parse(h.storage.get("pix.pinnedProjects"))).toEqual(["C:/code/pi-x"])
   h.store.remember("C:/trees/pi-x")
-  assert.equal(h.store.projects.value.length, 1)
+  expect(h.store.projects.value.length).toBe(1)
 })
 
 test("opening an external worktree registers only its main project", async () => {
   const h = harness()
   h.context.workspaceGitInfo = async () => ({ worktrees: [{ path: "C:/main" }, { path: "C:/tree" }] })
   await h.store.rememberWorkspace("C:/tree")
-  assert.deepEqual(Array.from(h.store.projects.value), ["C:/main"])
-  assert.deepEqual(Array.from(h.store.projectFolders("C:/main")), ["C:/main", "C:/tree"])
+  expect(Array.from(h.store.projects.value)).toEqual(["C:/main"])
+  expect(Array.from(h.store.projectFolders("C:/main"))).toEqual(["C:/main", "C:/tree"])
 })
 
 test("worktrees of a grouped folder belong to the named project", () => {
   const h = harness()
   h.store.createProject({ name: "Combined", primary: "C:/front", folders: ["C:/front", "C:/back"] })
   h.store.registerWorktrees({ worktrees: [{ path: "C:/back" }, { path: "C:/back-tree" }] })
-  assert.equal(h.store.projectRoot("C:/back-tree"), "C:/front")
-  assert.deepEqual(Array.from(h.store.projectFolders("C:/front")), ["C:/front", "C:/back", "C:/back-tree"])
+  expect(h.store.projectRoot("C:/back-tree")).toBe("C:/front")
+  expect(Array.from(h.store.projectFolders("C:/front"))).toEqual(["C:/front", "C:/back", "C:/back-tree"])
 })
 
 test("non-Git directories still register normally", async () => {
@@ -339,14 +319,14 @@ test("non-Git directories still register normally", async () => {
     throw new Error("not a repository")
   }
   await h.store.rememberWorkspace("C:/plain")
-  assert.deepEqual(Array.from(h.store.projects.value), ["C:/plain"])
+  expect(Array.from(h.store.projects.value)).toEqual(["C:/plain"])
 })
 
 test("explicitly configured worktree projects keep their grouping and get a badge", () => {
   const h = harness()
   h.store.createProject({ name: "Intentional", primary: "C:/tree", folders: ["C:/tree"] })
   h.store.registerWorktrees({ worktrees: [{ path: "C:/main" }, { path: "C:/tree" }] })
-  assert.equal(h.store.projectRoot("C:/tree"), "C:/tree")
-  assert.equal(h.store.isWorktree("C:/tree"), true)
-  assert.equal(h.store.projectName("C:/tree"), "Intentional")
+  expect(h.store.projectRoot("C:/tree")).toBe("C:/tree")
+  expect(h.store.isWorktree("C:/tree")).toBe(true)
+  expect(h.store.projectName("C:/tree")).toBe("Intentional")
 })

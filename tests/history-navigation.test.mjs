@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -39,10 +38,10 @@ test("navigation stays serialized and the latest pending selection wins", async 
   context.navigate(async () => {
     calls.push("latest")
   })
-  assert.deepEqual(calls, ["first"])
+  expect(calls).toEqual(["first"])
   finish()
   await new Promise(resolve => setTimeout(resolve, 0))
-  assert.deepEqual(calls, ["first", "latest"])
+  expect(calls).toEqual(["first", "latest"])
 })
 
 test("history prefetches near the top, suppresses duplicates and preserves the reading position", async () => {
@@ -69,27 +68,26 @@ test("history prefetches near the top, suppresses duplicates and preserves the r
   }
   run(code + "\nglobalThis.scroll = onHistoryScroll", context)
   await context.scroll({ target: viewport })
-  assert.equal(requests, 0)
+  expect(requests).toBe(0)
   viewport.scrollTop = 500
   const pending = context.scroll({ target: viewport })
   await context.scroll({ target: viewport })
-  assert.equal(requests, 1)
+  expect(requests).toBe(1)
   viewport.scrollTop = 450 // Reader continues scrolling while the page is loaded.
   viewport.scrollHeight = 3200
   finish()
   await pending
-  assert.equal(viewport.scrollTop, 1650)
+  expect(viewport.scrollTop).toBe(1650)
 })
 
 test("conversation mounts immediately with instant initial positioning; loading stays silent", () => {
   const chat = source("../src/components/ChatView.vue")
-  assert.match(chat, /<Conversation[^>]*ref="conversation"[^>]+initial="instant"/)
-  assert.match(
-    chat,
+  expect(chat).toMatch(/<Conversation[^>]*ref="conversation"[^>]+initial="instant"/)
+  expect(chat).toMatch(
     /v-if="session.entries.length === 0 && !session.historyLoading && \(!connecting \|\| selectingProject\)"/,
   )
-  assert.doesNotMatch(chat, /v-if="connecting \|\| session.historyLoading"/)
-  assert.doesNotMatch(chat, /@click="loadOlderHistory"/)
+  expect(chat).not.toMatch(/v-if="connecting \|\| session.historyLoading"/)
+  expect(chat).not.toMatch(/@click="loadOlderHistory"/)
 })
 
 test("streaming navigation switches without aborting the running generation", async () => {
@@ -118,13 +116,13 @@ test("streaming navigation switches without aborting the running generation", as
   run(code + "\nglobalThis.navigate = requestNavigation", context)
   context.navigate(async () => calls.push("switch"))
   await new Promise(resolve => setTimeout(resolve, 0))
-  assert.deepEqual(calls, ["switch"])
+  expect(calls).toEqual(["switch"])
 })
 
 test("streaming composer shows send for text or attachments and stop only when empty", () => {
   const chat = source("../src/components/ChatView.vue")
   const declaration = chat.slice(chat.indexOf("const showStopButton"), chat.indexOf("const sendDelayMinutes")).trimEnd()
-  assert.ok(declaration)
+  expect(declaration).toBeTruthy()
   const session = { isStreaming: true }
   const delayedSend = { value: false }
   const bridge = { value: { textInput: "", files: [] } }
@@ -145,26 +143,25 @@ test("streaming composer shows send for text or attachments and stop only when e
     }),
   }
   run(`${declaration}\nglobalThis.shouldStop = () => showStopButton.value`, context)
-  assert.equal(context.shouldStop(), true)
+  expect(context.shouldStop()).toBe(true)
   bridge.value.textInput = "hello"
-  assert.equal(context.shouldStop(), false)
+  expect(context.shouldStop()).toBe(false)
   bridge.value.textInput = "   "
-  assert.equal(context.shouldStop(), true)
+  expect(context.shouldStop()).toBe(true)
   bridge.value.files.push({ id: "image" })
-  assert.equal(context.shouldStop(), false)
+  expect(context.shouldStop()).toBe(false)
   bridge.value.files.length = 0
   delayedSend.value = true
-  assert.equal(context.shouldStop(), false)
+  expect(context.shouldStop()).toBe(false)
   delayedSend.value = false
   session.isStreaming = false
-  assert.equal(context.shouldStop(), false)
+  expect(context.shouldStop()).toBe(false)
   const submitRegion = chat.slice(chat.indexOf("<PromptInputSubmit"), chat.indexOf("</PromptInputSubmit>"))
   const ariaLabel = submitRegion
     .match(/:aria-label="([\s\S]*?)"/)?.[1]
     .replace(/\s+/g, " ")
     .trim()
-  assert.equal(
-    ariaLabel,
+  expect(ariaLabel).toBe(
     "showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : t('chat.sendMessage')",
   )
 })
@@ -172,17 +169,16 @@ test("streaming composer shows send for text or attachments and stop only when e
 test("streaming input reaches command dispatch; the submit button doubles as stop while streaming", () => {
   const chat = source("../src/components/ChatView.vue")
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
-  assert.doesNotMatch(submit, /if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?:status="showStopButton \? 'streaming' : undefined"/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?:type="showStopButton \? 'button' : 'submit'"/)
-  assert.match(chat, /<PromptInputSubmit[\s\S]*?@click="showStopButton && abort\(\)"/)
+  expect(submit).not.toMatch(/if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
+  expect(chat).toMatch(/<PromptInputSubmit[\s\S]*?:status="showStopButton \? 'streaming' : undefined"/)
+  expect(chat).toMatch(/<PromptInputSubmit[\s\S]*?:type="showStopButton \? 'button' : 'submit'"/)
+  expect(chat).toMatch(/<PromptInputSubmit[\s\S]*?@click="showStopButton && abort\(\)"/)
   // /compact queues behind the active run; the store executes it from the queue.
-  assert.doesNotMatch(submit, /await abort\(\)/)
-  assert.match(
-    submit,
+  expect(submit).not.toMatch(/await abort\(\)/)
+  expect(submit).toMatch(
     /else if \(commandName === "compact"\) await session\.send\(text, undefined, undefined, runningBehavior\.value\)/,
   )
-  assert.match(submit, /if \(commandName === "new"\) emit\("newSession"\)/)
+  expect(submit).toMatch(/if \(commandName === "new"\) emit\("newSession"\)/)
   const sidebar = source("../src/components/WorkspaceSidebar.vue")
-  assert.doesNotMatch(sidebar, /const navigationDisabled = .*session.isStreaming/)
+  expect(sidebar).not.toMatch(/const navigationDisabled = .*session.isStreaming/)
 })

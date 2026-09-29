@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -59,8 +58,8 @@ function harness({ desktop = true, directory = "C:\\exports", rpcSuccess = true 
 
 test("desktop export lets the user choose a folder and writes HTML there", async () => {
   const { calls, exportHtml } = harness()
-  assert.equal(await exportHtml("runtime-1", "C:\\sessions\\chat.jsonl", "Choose directory"), true)
-  assert.deepEqual(calls, [
+  expect(await exportHtml("runtime-1", "C:\\sessions\\chat.jsonl", "Choose directory")).toBe(true)
+  expect(calls).toEqual([
     ["choose", true, "Choose directory"],
     ["join", "C:\\exports", "pi-session-chat.html"],
     ["rpc", "export_html", "C:\\exports/pi-session-chat.html", "runtime-1"],
@@ -70,14 +69,14 @@ test("desktop export lets the user choose a folder and writes HTML there", async
 
 test("canceling directory selection does not export or claim success", async () => {
   const { calls, exportHtml } = harness({ directory: null })
-  assert.equal(await exportHtml("runtime-1", "chat.jsonl"), false)
-  assert.deepEqual(calls, [["choose", true, undefined]])
+  expect(await exportHtml("runtime-1", "chat.jsonl")).toBe(false)
+  expect(calls).toEqual([["choose", true, undefined]])
 })
 
 test("remote export downloads HTML instead of opening the host path", async () => {
   const { calls, exportHtml } = harness({ desktop: false })
-  assert.equal(await exportHtml("runtime-2"), true)
-  assert.deepEqual(calls, [
+  expect(await exportHtml("runtime-2")).toBe(true)
+  expect(calls).toEqual([
     ["invoke", "session_export_html", { runtimeId: "runtime-2" }],
     ["append", "session.html"],
     ["click"],
@@ -88,17 +87,14 @@ test("remote export downloads HTML instead of opening the host path", async () =
 
 test("failed desktop export does not try to open a file", async () => {
   const { calls, exportHtml } = harness({ rpcSuccess: false })
-  await assert.rejects(exportHtml("runtime-1", "chat.jsonl"), /Nothing to export yet/)
-  assert.deepEqual(
-    calls.map(call => call[0]),
-    ["choose", "join", "rpc"],
-  )
+  await expect(exportHtml("runtime-1", "chat.jsonl")).rejects.toThrow(/Nothing to export yet/)
+  expect(calls.map(call => call[0])).toEqual(["choose", "join", "rpc"])
 })
 
 test("sidebar export targets a saved file without selecting or starting a runtime", async () => {
   const { calls, exportFile } = harness()
-  assert.equal(await exportFile("C:\\sessions\\other.jsonl", "Choose directory"), true)
-  assert.deepEqual(calls, [
+  expect(await exportFile("C:\\sessions\\other.jsonl", "Choose directory")).toBe(true)
+  expect(calls).toEqual([
     ["choose", true, "Choose directory"],
     ["join", "C:\\exports", "pi-session-other.html"],
     [
@@ -112,8 +108,8 @@ test("sidebar export targets a saved file without selecting or starting a runtim
 
 test("remote sidebar export downloads the requested file, not the current runtime", async () => {
   const { calls, exportFile } = harness({ desktop: false })
-  assert.equal(await exportFile("/host/sessions/other.jsonl"), true)
-  assert.deepEqual(calls, [
+  expect(await exportFile("/host/sessions/other.jsonl")).toBe(true)
+  expect(calls).toEqual([
     ["invoke", "session_export_html", { file: "/host/sessions/other.jsonl" }],
     ["append", "session.html"],
     ["click"],
@@ -145,7 +141,7 @@ test("sidebar export never navigates or calls resumeSession", async () => {
     context,
   )
   await context.action("other.jsonl", "export")
-  assert.deepEqual(calls, [
+  expect(calls).toEqual([
     ["export", "other.jsonl"],
     ["toast", "chat.toastExported", "info"],
   ])

@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsModule, contentModule } from "./lib/load-ts.mjs"
 
@@ -83,32 +82,32 @@ test("running prompt: waits for abort, then resends in the same session with ima
   const images = [{ data: "YWJj", mimeType: "image/png" }]
   const pending = h.store.resendPrompt("revised", images, "revised expanded")
   await tick()
-  assert.deepEqual(
-    h.calls.map(call => call.type),
-    ["clear_queue", "abort"],
-  )
-  assert.equal(h.store.isResending.value, true)
+  expect(h.calls.map(call => call.type)).toEqual(["clear_queue", "abort"])
+  expect(h.store.isResending.value).toBe(true)
   finishAbort({ success: true })
   await pending
-  assert.deepEqual(
-    h.calls.slice(0, 5).map(call => call.type),
-    ["clear_queue", "abort", "get_state", "rewind_prompt", "prompt"],
-  )
+  expect(h.calls.slice(0, 5).map(call => call.type)).toEqual([
+    "clear_queue",
+    "abort",
+    "get_state",
+    "rewind_prompt",
+    "prompt",
+  ])
   const prompt = h.calls.find(call => call.type === "prompt")
-  assert.equal(prompt.message, "revised expanded")
-  assert.equal(prompt.streamingBehavior, undefined)
-  assert.equal(prompt.images[0].data, "YWJj")
-  assert.equal(h.store.sessionFile.value, "current.jsonl")
-  assert.equal(h.store.entries.value.length, 1)
-  assert.equal(h.store.entries.value[0].id, 1)
-  assert.equal(h.store.entries.value[0].text, "revised")
-  assert.equal(h.store.isStreaming.value, true)
-  assert.equal(h.store.isResending.value, false)
-  assert.ok(
+  expect(prompt.message).toBe("revised expanded")
+  expect(prompt.streamingBehavior).toBe(undefined)
+  expect(prompt.images[0].data).toBe("YWJj")
+  expect(h.store.sessionFile.value).toBe("current.jsonl")
+  expect(h.store.entries.value.length).toBe(1)
+  expect(h.store.entries.value[0].id).toBe(1)
+  expect(h.store.entries.value[0].text).toBe("revised")
+  expect(h.store.isStreaming.value).toBe(true)
+  expect(h.store.isResending.value).toBe(false)
+  expect(
     h.calls.every(
       call => !["fork", "get_fork_messages", "get_messages", "new_session", "switch_session"].includes(call.type),
     ),
-  )
+  ).toBeTruthy()
 })
 
 test("agent-end during abort cannot dispatch queued prompts ahead of the edited question", async () => {
@@ -122,14 +121,8 @@ test("agent-end during abort cannot dispatch queued prompts ahead of the edited 
   h.store.isStreaming.value = true
   await h.store.send("local queued", undefined, undefined, "queue")
   await h.store.resendPrompt("revised")
-  assert.deepEqual(
-    h.calls.filter(call => call.type === "prompt").map(call => call.message),
-    ["revised"],
-  )
-  assert.deepEqual(
-    Array.from(h.store.promptQueue.value, item => item.text),
-    ["remote queued", "local queued"],
-  )
+  expect(h.calls.filter(call => call.type === "prompt").map(call => call.message)).toEqual(["revised"])
+  expect(Array.from(h.store.promptQueue.value, item => item.text)).toEqual(["remote queued", "local queued"])
 })
 
 for (const [label, overrides] of [
@@ -150,26 +143,20 @@ for (const [label, overrides] of [
   test(`${label}: does not resend or erase the current conversation`, async () => {
     const h = harness(overrides)
     h.store.isStreaming.value = true
-    await assert.rejects(h.store.resendPrompt("revised"))
-    assert.equal(
-      h.calls.some(call => call.type === "prompt"),
-      false,
-    )
-    assert.equal(h.store.entries.value.length, 1)
-    assert.equal(h.store.sessionFile.value, "current.jsonl")
-    assert.equal(h.store.isResending.value, false)
+    await expect(h.store.resendPrompt("revised")).rejects.toThrow()
+    expect(h.calls.some(call => call.type === "prompt")).toBe(false)
+    expect(h.store.entries.value.length).toBe(1)
+    expect(h.store.sessionFile.value).toBe("current.jsonl")
+    expect(h.store.isResending.value).toBe(false)
   })
 }
 
 test("idle conversation resends without abort; empty text is ignored unless images are present", async () => {
   const h = harness()
   await h.store.resendPrompt("   ")
-  assert.equal(h.calls.length, 0)
+  expect(h.calls.length).toBe(0)
   await h.store.resendPrompt("", [{ data: "YWJj", mimeType: "image/png" }])
-  assert.deepEqual(
-    h.calls.slice(0, 3).map(call => call.type),
-    ["get_state", "rewind_prompt", "prompt"],
-  )
+  expect(h.calls.slice(0, 3).map(call => call.type)).toEqual(["get_state", "rewind_prompt", "prompt"])
 })
 
 test("duplicate clicks and a session switch during abort never submit a second question", async () => {
@@ -187,12 +174,9 @@ test("duplicate clicks and a session switch during abort never submit a second q
   h.store.clear()
   h.store.sessionFile.value = "other.jsonl"
   finishAbort({ success: true })
-  await assert.rejects(pending, /editSessionChanged/)
-  assert.equal(
-    h.calls.some(call => call.type === "prompt"),
-    false,
-  )
-  assert.equal(h.store.isResending.value, false)
+  await expect(pending).rejects.toThrow(/editSessionChanged/)
+  expect(h.calls.some(call => call.type === "prompt")).toBe(false)
+  expect(h.store.isResending.value).toBe(false)
 })
 
 test("late rejection of the interrupted prompt cannot fail the replacement run", async () => {
@@ -210,34 +194,33 @@ test("late rejection of the interrupted prompt cannot fail the replacement run",
   await h.store.resendPrompt("revised")
   rejectOld(new Error("old run aborted"))
   await tick()
-  assert.equal(h.store.isStreaming.value, true)
-  assert.equal(h.store.entries.value.at(-1).text, "revised")
+  expect(h.store.isStreaming.value).toBe(true)
+  expect(h.store.entries.value.at(-1).text).toBe("revised")
 })
 
 test("edit UI allows a running answer and preserves the draft when stopping fails", () => {
   const edit = source("../src/composables/usePromptEdit.ts")
-  assert.doesNotMatch(edit, /session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
-  assert.match(edit, /await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
+  expect(edit).not.toMatch(/session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
+  expect(edit).toMatch(/await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
   const app = source("../src/App.vue")
   const reload = app.slice(
     app.indexOf("async function reloadExternalConversation"),
     app.indexOf("async function selectProject"),
   )
-  assert.equal((reload.match(/owner\.isResending/g) ?? []).length, 2)
+  expect((reload.match(/owner\.isResending/g) ?? []).length).toBe(2)
 })
 
 test("only the latest question offers inline editing, and stale edits cannot be resent", () => {
   const chat = source("../src/components/ChatView.vue")
   const edit = source("../src/composables/usePromptEdit.ts")
-  assert.match(edit, /const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
-  assert.match(
-    chat,
+  expect(edit).toMatch(/const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
+  expect(chat).toMatch(
     /v-if="entry\.id === lastUserPromptId && editedPrompt\?\.id !== entry\.id"[^>]*@click="startEditPrompt\(entry\)"/,
   )
-  assert.match(edit, /if \(editBlocked\.value \|\| entry\.id !== lastUserPromptId\.value\) return/)
-  assert.match(edit, /if \(!entry \|\| entry\.id !== lastUserPromptId\.value \|\| editBlocked\.value/)
-  assert.match(chat, /v-if="editedPrompt\?\.id === entry\.id"[\s\S]*<Textarea[\s\S]*v-model="editedText"/)
-  assert.doesNotMatch(chat, /<Dialog :open="editedPrompt !== null"/)
+  expect(edit).toMatch(/if \(editBlocked\.value \|\| entry\.id !== lastUserPromptId\.value\) return/)
+  expect(edit).toMatch(/if \(!entry \|\| entry\.id !== lastUserPromptId\.value \|\| editBlocked\.value/)
+  expect(chat).toMatch(/v-if="editedPrompt\?\.id === entry\.id"[\s\S]*<Textarea[\s\S]*v-model="editedText"/)
+  expect(chat).not.toMatch(/<Dialog :open="editedPrompt !== null"/)
 })
 
 test("starting a new session while aborting releases the resend lock without sending", async () => {
@@ -253,21 +236,18 @@ test("starting a new session while aborting releases the resend lock without sen
   await tick()
   await h.store.newSession()
   finishAbort({ success: true })
-  await assert.rejects(pending, /editSessionChanged/)
-  assert.equal(h.store.isResending.value, false)
-  assert.equal(
-    h.calls.some(call => call.type === "prompt"),
-    false,
-  )
+  await expect(pending).rejects.toThrow(/editSessionChanged/)
+  expect(h.store.isResending.value).toBe(false)
+  expect(h.calls.some(call => call.type === "prompt")).toBe(false)
 })
 
 test("editing removes the superseded answer and keeps the original question position", async () => {
   const h = harness()
   h.store.entries.value.push({ kind: "assistant", id: 2, blocks: [{ type: "text", text: "old answer" }] })
   await h.store.resendPrompt("replacement")
-  assert.equal(h.store.entries.value.length, 1)
-  assert.equal(h.store.entries.value[0].id, 1)
-  assert.equal(h.store.entries.value[0].text, "replacement")
+  expect(h.store.entries.value.length).toBe(1)
+  expect(h.store.entries.value[0].id).toBe(1)
+  expect(h.store.entries.value[0].text).toBe("replacement")
 })
 
 test("editing refreshes the question timestamp so turn duration restarts", async () => {
@@ -277,8 +257,8 @@ test("editing refreshes the question timestamp so turn duration restarts", async
   const before = Date.now()
   await h.store.resendPrompt("replacement")
   const timestamp = h.store.entries.value[0].timestamp
-  assert.ok(timestamp >= before && timestamp <= Date.now())
-  assert.notEqual(timestamp, stale)
+  expect(timestamp >= before && timestamp <= Date.now()).toBeTruthy()
+  expect(timestamp).not.toBe(stale)
 })
 test("history prepended while rewinding does not shift the replacement target", async () => {
   const h = harness({
@@ -288,9 +268,6 @@ test("history prepended while rewinding does not shift the replacement target", 
     },
   })
   await h.store.resendPrompt("replacement")
-  assert.deepEqual(
-    Array.from(h.store.entries.value, entry => entry.text),
-    ["earlier question", "replacement"],
-  )
-  assert.equal(h.store.entries.value[1].id, 1)
+  expect(Array.from(h.store.entries.value, entry => entry.text)).toEqual(["earlier question", "replacement"])
+  expect(h.store.entries.value[1].id).toBe(1)
 })

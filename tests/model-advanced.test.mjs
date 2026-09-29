@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
 const source = readFileSync(new URL("../src/lib/modelAdvanced.ts", import.meta.url), "utf8")
@@ -15,14 +14,13 @@ test("advanced fields round-trip without losing false or unknown pi options", ()
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
     futureOption: { enabled: true },
   }
-  assert.deepEqual(
+  expect(
     parseModelAdvanced(modelAdvancedJson({ id: "test", api: "openai-completions", reasoning: true, ...extra })),
-    extra,
-  )
+  ).toEqual(extra)
 })
 test("empty advanced settings remove overrides and inherit pi defaults", () => {
-  assert.deepEqual(parseModelAdvanced(""), {})
-  assert.deepEqual(parseModelAdvanced("{}"), {})
+  expect(parseModelAdvanced("")).toEqual({})
+  expect(parseModelAdvanced("{}")).toEqual({})
 })
 test("reject malformed JSON, basic field overrides and invalid common types", () => {
   for (const raw of [
@@ -38,22 +36,22 @@ test("reject malformed JSON, basic field overrides and invalid common types", ()
     '{"cost":null}',
     '{"baseUrl":false}',
   ]) {
-    assert.throws(() => parseModelAdvanced(raw), raw)
+    expect(() => parseModelAdvanced(raw)).toThrow()
   }
 })
 test("advanced settings are available for both add and edit forms", () => {
   const panel = readFileSync(new URL("../src/components/settings/models/ModelSettings.vue", import.meta.url), "utf8")
-  assert.equal((panel.match(/<ModelEditForm\b/g) ?? []).length, 2)
+  expect((panel.match(/<ModelEditForm\b/g) ?? []).length).toBe(2)
   const form = readFileSync(new URL("../src/components/settings/models/ModelEditForm.vue", import.meta.url), "utf8")
-  assert.match(form, /<ModelAdvancedSettings /)
+  expect(form).toMatch(/<ModelAdvancedSettings /)
   const logic = readFileSync(new URL("../src/components/settings/models/modelForm.ts", import.meta.url), "utf8")
-  assert.match(logic, /parseModelAdvanced\(f\.advanced\)/)
-  assert.match(logic, /advanced: modelAdvancedJson\(m\)/)
+  expect(logic).toMatch(/parseModelAdvanced\(f\.advanced\)/)
+  expect(logic).toMatch(/advanced: modelAdvancedJson\(m\)/)
 })
 
 test("thinking level maps reject non-string provider values", () => {
-  assert.throws(() => parseModelAdvanced('{"thinkingLevelMap":{"high":1}}'), /thinkingLevelMap.high/)
-  assert.deepEqual(parseModelAdvanced('{"thinkingLevelMap":{"low":null,"xhigh":"extended"}}'), {
+  expect(() => parseModelAdvanced('{"thinkingLevelMap":{"high":1}}')).toThrow(/thinkingLevelMap.high/)
+  expect(parseModelAdvanced('{"thinkingLevelMap":{"low":null,"xhigh":"extended"}}')).toEqual({
     thinkingLevelMap: { low: null, xhigh: "extended" },
   })
 })
@@ -62,7 +60,7 @@ test("advanced settings expose thinking modes and mappings", () => {
     new URL("../src/components/settings/ModelAdvancedSettings.vue", import.meta.url),
     "utf8",
   )
-  assert.match(component, /ALL_THINKING_LEVELS/)
-  assert.match(component, /THINKING_DISABLED/)
-  assert.match(component, /setThinkingMapping/)
+  expect(component).toMatch(/ALL_THINKING_LEVELS/)
+  expect(component).toMatch(/THINKING_DISABLED/)
+  expect(component).toMatch(/setThinkingMapping/)
 })

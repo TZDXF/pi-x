@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { contentModule, fileChangeArtifactsModule, loadTsModule, loadTsSource, pathsModule } from "./lib/load-ts.mjs"
 
@@ -55,18 +54,18 @@ const messages = count => Array.from({ length: count }, (_, i) => ({ role: "user
 test("first page is asynchronous and limited to 30 entries; pages preserve ordering and ids", async () => {
   const { store } = harness()
   const loading = store.loadMessages(messages(75))
-  assert.equal(store.entries.value.length, 0)
+  expect(store.entries.value.length).toBe(0)
   await loading
-  assert.equal(store.entries.value.length, 30)
-  assert.equal(store.entries.value[0].text, "message 45")
+  expect(store.entries.value.length).toBe(30)
+  expect(store.entries.value[0].text).toBe("message 45")
   const id = store.entries.value[0].id
   await Promise.all([store.loadOlderHistory(), store.loadOlderHistory()])
-  assert.equal(store.entries.value.length, 60)
-  assert.equal(store.entries.value[30].id, id)
+  expect(store.entries.value.length).toBe(60)
+  expect(store.entries.value[30].id).toBe(id)
   await store.loadOlderHistory()
-  assert.equal(store.entries.value.length, 75)
-  assert.equal(store.entries.value[0].text, "message 0")
-  assert.equal(store.hasOlderHistory.value, false)
+  expect(store.entries.value.length).toBe(75)
+  expect(store.entries.value[0].text).toBe("message 0")
+  expect(store.hasOlderHistory.value).toBe(false)
 })
 
 test("a long tool run and empty failure retries do not hide its question on the first page", async () => {
@@ -86,14 +85,14 @@ test("a long tool run and empty failure retries do not hide its question on the 
     ...longTurn,
     ...Array.from({ length: 11 }, () => ({ role: "assistant", content: [], stopReason: "error" })),
   ])
-  assert.equal(store.entries.value[0].kind, "user")
-  assert.equal(store.entries.value[0].text, "long question")
-  assert.equal(store.entries.value.length, 56)
-  assert.equal(store.entries.value.filter(entry => entry.kind === "assistant").length, 55)
-  assert.equal(store.hasOlderHistory.value, true)
+  expect(store.entries.value[0].kind).toBe("user")
+  expect(store.entries.value[0].text).toBe("long question")
+  expect(store.entries.value.length).toBe(56)
+  expect(store.entries.value.filter(entry => entry.kind === "assistant").length).toBe(55)
+  expect(store.hasOlderHistory.value).toBe(true)
   await store.loadOlderHistory()
-  assert.equal(store.entries.value[0].text, "older question")
-  assert.equal(store.hasOlderHistory.value, false)
+  expect(store.entries.value[0].text).toBe("older question")
+  expect(store.hasOlderHistory.value).toBe(false)
 })
 
 test("tool results survive page boundaries and image-only user messages are retained", async () => {
@@ -104,11 +103,11 @@ test("tool results survive page boundaries and image-only user messages are reta
     ...messages(29),
     { role: "user", content: [{ type: "image", mimeType: "image/png", data: "abc" }] },
   ])
-  assert.equal(store.entries.value.length, 30)
-  assert.equal(store.entries.value[29].images[0].url, "data:image/png;base64,abc")
+  expect(store.entries.value.length).toBe(30)
+  expect(store.entries.value[29].images[0].url).toBe("data:image/png;base64,abc")
   await store.loadOlderHistory()
-  assert.equal(store.runs.value.call.outputText, "result")
-  assert.equal(store.entries.value[0].blocks[0].callId, "call")
+  expect(store.runs.value.call.outputText).toBe("result")
+  expect(store.entries.value[0].blocks[0].callId).toBe("call")
 })
 
 test("clear cancels pending page processing", async () => {
@@ -116,9 +115,9 @@ test("clear cancels pending page processing", async () => {
   const pending = store.loadMessages(messages(100))
   store.clear()
   await pending
-  assert.equal(store.entries.value.length, 0)
-  assert.equal(store.olderHistoryLoading.value, false)
-  assert.equal(store.hasOlderHistory.value, false)
+  expect(store.entries.value.length).toBe(0)
+  expect(store.olderHistoryLoading.value).toBe(false)
+  expect(store.hasOlderHistory.value).toBe(false)
 })
 
 test("out-of-order history requests cannot overwrite a newer session", async () => {
@@ -130,20 +129,20 @@ test("out-of-order history requests cannot overwrite a newer session", async () 
   await current
   requests[0]({ success: true, data: { messages: messages(99) } })
   await old
-  assert.equal(store.entries.value.length, 1)
-  assert.equal(store.historyLoading.value, false)
+  expect(store.entries.value.length).toBe(1)
+  expect(store.historyLoading.value).toBe(false)
 })
 
 test("failed history request resets loading and can be retried", async () => {
   const { store, requests } = harness()
   const failed = store.loadHistory()
   requests[0]({ success: false, error: "offline" })
-  await assert.rejects(failed, /offline/)
-  assert.equal(store.historyLoading.value, false)
+  await expect(failed).rejects.toThrow(/offline/)
+  expect(store.historyLoading.value).toBe(false)
   const retry = store.loadHistory()
   requests[1]({ success: true, data: { messages: [] } })
   await retry
-  assert.equal(store.hasOlderHistory.value, false)
+  expect(store.hasOlderHistory.value).toBe(false)
 })
 
 test("history retains question and answer timestamps across pagination", async () => {
@@ -155,19 +154,19 @@ test("history retains question and answer timestamps across pagination", async (
     { role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 7500 },
     ...messages(29),
   ])
-  assert.equal(store.entries.value[0].timestamp, 1000)
-  assert.equal(store.entries.value[1].timestamp, 7500)
+  expect(store.entries.value[0].timestamp).toBe(1000)
+  expect(store.entries.value[1].timestamp).toBe(7500)
   await store.loadOlderHistory()
-  assert.equal(store.entries.value[0].timestamp, 100)
-  assert.equal(store.entries.value[1].timestamp, 200)
-  assert.equal(store.entries.value[2].timestamp, 1000)
-  assert.equal(store.entries.value[3].timestamp, 7500)
+  expect(store.entries.value[0].timestamp).toBe(100)
+  expect(store.entries.value[1].timestamp).toBe(200)
+  expect(store.entries.value[2].timestamp).toBe(1000)
+  expect(store.entries.value[3].timestamp).toBe(7500)
 })
 
 test("file change totals remain safe across idle, history loading, completion and clear", async () => {
   const { store } = harness()
-  assert.equal(store.partialBlocks.value, null)
-  assert.equal(store.fileChanges.value.length, 0)
+  expect(store.partialBlocks.value).toBe(null)
+  expect(store.fileChanges.value.length).toBe(0)
   const loading = store.loadMessages([
     {
       role: "assistant",
@@ -177,17 +176,17 @@ test("file change totals remain safe across idle, history loading, completion an
     },
     { role: "toolResult", toolCallId: "edit-1", content: "ok" },
   ])
-  assert.doesNotThrow(() => store.fileChanges.value)
+  expect(() => store.fileChanges.value).not.toThrow()
   await loading
-  assert.equal(store.partialBlocks.value, null)
-  assert.equal(store.fileChanges.value[0].added, 1)
-  assert.equal(store.fileChanges.value[0].removed, 1)
+  expect(store.partialBlocks.value).toBe(null)
+  expect(store.fileChanges.value[0].added).toBe(1)
+  expect(store.fileChanges.value[0].removed).toBe(1)
   store.partialBlocks.value = []
-  assert.equal(store.fileChanges.value.length, 1)
+  expect(store.fileChanges.value.length).toBe(1)
   store.partialBlocks.value = null
-  assert.equal(store.fileChanges.value.length, 1)
+  expect(store.fileChanges.value.length).toBe(1)
   store.clear()
-  assert.equal(store.fileChanges.value.length, 0)
+  expect(store.fileChanges.value.length).toBe(0)
 })
 
 test("compaction summaries materialize as in-position markers", async () => {
@@ -197,9 +196,9 @@ test("compaction summaries materialize as in-position markers", async () => {
     { role: "compactionSummary", summary: "collapsed history", tokensBefore: 120000, timestamp: 42 },
     { role: "user", content: "after" },
   ])
-  assert.equal(store.entries.value.map(e => e.kind).join(","), "user,compaction,user")
+  expect(store.entries.value.map(e => e.kind).join(",")).toBe("user,compaction,user")
   const marker = store.entries.value[1]
-  assert.equal(marker.summary, "collapsed history")
-  assert.equal(marker.tokensBefore, 120000)
-  assert.equal(marker.timestamp, 42)
+  expect(marker.summary).toBe("collapsed history")
+  expect(marker.tokensBefore).toBe(120000)
+  expect(marker.timestamp).toBe(42)
 })

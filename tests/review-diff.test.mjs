@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { codeToTokens } from "shiki"
 import { loadTsSource, pathsModule } from "./lib/load-ts.mjs"
@@ -14,7 +13,7 @@ const { tokensToLineHtml, highlightDiffLines, diffLangOf } = load("reviewHighlig
 const plain = value => JSON.parse(JSON.stringify(value))
 test("reference diff parser retains independent before and after line numbers", () => {
   const lines = parseDiff("@@ -10,2 +10,3 @@\n-const x = 1\n+const x = 20\n+extra\n tail")
-  assert.deepEqual(plain(lines.slice(1).map(l => [l.oldLine, l.newLine])), [
+  expect(plain(lines.slice(1).map(l => [l.oldLine, l.newLine]))).toEqual([
     [10, null],
     [null, 10],
     [null, 11],
@@ -24,14 +23,14 @@ test("reference diff parser retains independent before and after line numbers", 
 test("intraline emphasis isolates changed text and split mode pairs unequal blocks", () => {
   const lines = parseDiff("@@ -1 +1,2 @@\n-const x = 1;\n+const x = 20;\n+extra").slice(1)
   const ranges = intralineRanges(lines)
-  assert.deepEqual(plain(ranges.get(lines[0])), [10, 11])
-  assert.deepEqual(plain(ranges.get(lines[1])), [10, 12])
+  expect(plain(ranges.get(lines[0]))).toEqual([10, 11])
+  expect(plain(ranges.get(lines[1]))).toEqual([10, 12])
   const rows = toSideBySideRows(lines)
-  assert.equal(rows.length, 2)
-  assert.equal(rows[0].left, lines[0])
-  assert.equal(rows[0].right, lines[1])
-  assert.equal(rows[1].left, null)
-  assert.equal(rows[1].right, lines[2])
+  expect(rows.length).toBe(2)
+  expect(rows[0].left).toBe(lines[0])
+  expect(rows[0].right).toBe(lines[1])
+  expect(rows[1].left).toBe(null)
+  expect(rows[1].right).toBe(lines[2])
 })
 test("unchanged context folds and expands without losing source line numbers", () => {
   const lines = Array.from({ length: 30 }, (_, i) => ({
@@ -41,26 +40,26 @@ test("unchanged context folds and expands without losing source line numbers", (
     newLine: i + 1,
   }))
   const folded = foldContextLines(lines, new Set())
-  assert.equal(folded.length, 7)
-  assert.equal(folded[3].count, 24)
-  assert.equal(folded[4].newLine, 28)
+  expect(folded.length).toBe(7)
+  expect(folded[3].count).toBe(24)
+  expect(folded[4].newLine).toBe(28)
   const expanded = foldContextLines(lines, new Set([folded[3].key]))
-  assert.equal(expanded.length, 30)
-  assert.equal(toSideBySideRows(folded)[3].kind, "fold")
+  expect(expanded.length).toBe(30)
+  expect(toSideBySideRows(folded)[3].kind).toBe("fold")
 })
 test("tool snippets retain full context and relative line numbering", () => {
   const prefix = Array.from({ length: 20 }, (_, i) => `same ${i}`).join("\n")
   const lines = changedLines(`${prefix}\nold\ntail`, `${prefix}\nnew\nextra\ntail`)
-  assert.equal(lines[0].oldLine, 1)
-  assert.equal(lines.find(l => l.kind === "remove").oldLine, 21)
-  assert.equal(lines.find(l => l.kind === "add").newLine, 21)
-  assert.equal(lines.at(-1).oldLine, 22)
-  assert.equal(lines.at(-1).newLine, 23)
+  expect(lines[0].oldLine).toBe(1)
+  expect(lines.find(l => l.kind === "remove").oldLine).toBe(21)
+  expect(lines.find(l => l.kind === "add").newLine).toBe(21)
+  expect(lines.at(-1).oldLine).toBe(22)
+  expect(lines.at(-1).newLine).toBe(23)
 })
 test("large writes do not exceed the JavaScript argument stack limit", () => {
   const lines = changedLines("", "line\n".repeat(150_000))
-  assert.equal(lines.length, 150_000)
-  assert.equal(lines.at(-1).newLine, 150_000)
+  expect(lines.length).toBe(150_000)
+  expect(lines.at(-1).newLine).toBe(150_000)
 })
 test("highlighting escapes source HTML and preserves theme colors", () => {
   const html = tokensToLineHtml(
@@ -68,24 +67,24 @@ test("highlighting escapes source HTML and preserves theme colors", () => {
     [1, 7],
     "diff-word-add",
   )
-  assert.ok(html.includes("&lt;"))
-  assert.ok(html.includes("&amp;"))
-  assert.ok(html.includes("--shiki-light:#000"))
-  assert.ok(html.includes("diff-word-add"))
-  assert.ok(!html.includes("<script>"))
-  assert.equal(diffLangOf("C:\\src\\test.ts"), "typescript")
-  assert.equal(diffLangOf("unknown.xyz123"), "text")
+  expect(html.includes("&lt;")).toBeTruthy()
+  expect(html.includes("&amp;")).toBeTruthy()
+  expect(html.includes("--shiki-light:#000")).toBeTruthy()
+  expect(html.includes("diff-word-add")).toBeTruthy()
+  expect(!html.includes("<script>")).toBeTruthy()
+  expect(diffLangOf("C:\\src\\test.ts")).toBe("typescript")
+  expect(diffLangOf("unknown.xyz123")).toBe("text")
 })
 test("real syntax highlighting supports deletion-only diffs and inline ranges", async () => {
   const deleted = parseDiff("@@ -1 +0,0 @@\n-const n = 1;").slice(1)
   const deletionHtml = await highlightDiffLines(deleted, "test.ts")
-  assert.ok(deletionHtml.get(deleted[0]).includes("--shiki-light"))
+  expect(deletionHtml.get(deleted[0]).includes("--shiki-light")).toBeTruthy()
   const lines = parseDiff("@@ -1 +1 @@\n-const n = 1;\n+const n = 2;").slice(1)
   const result = await highlightDiffLines(lines, "test.ts", intralineRanges(lines))
-  assert.ok(result.get(lines[0]).includes("diff-word-del"))
-  assert.ok(result.get(lines[1]).includes("diff-word-add"))
+  expect(result.get(lines[0]).includes("diff-word-del")).toBeTruthy()
+  expect(result.get(lines[1]).includes("diff-word-add")).toBeTruthy()
 })
 test("very large diffs skip grammar processing", async () => {
   const lines = Array.from({ length: 5001 }, () => ({ kind: "add", text: "+x", oldLine: null, newLine: 1 }))
-  assert.equal(await highlightDiffLines(lines, "test.ts"), null)
+  expect(await highlightDiffLines(lines, "test.ts")).toBe(null)
 })

@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -53,13 +52,13 @@ function harness(currentProject = "C:/chat-project") {
 test("project install waits for an explicit target instead of using the chat project", async () => {
   const h = harness()
   h.api.chooseProjectForInstall("npm:pi-mcp-adapter")
-  assert.equal(h.api.pendingProjectSource.value, "npm:pi-mcp-adapter")
+  expect(h.api.pendingProjectSource.value).toBe("npm:pi-mcp-adapter")
   await h.api.confirmProjectInstall("")
-  assert.equal(h.calls.length, 0)
+  expect(h.calls.length).toBe(0)
   await h.api.confirmProjectInstall("C:/recent-project")
-  assert.deepEqual(h.calls, [["npm:pi-mcp-adapter", "project", "C:/recent-project"]])
-  assert.equal(h.api.viewedProject.value, "C:/recent-project")
-  assert.equal(h.api.pendingProjectSource.value, "")
+  expect(h.calls).toEqual([["npm:pi-mcp-adapter", "project", "C:/recent-project"]])
+  expect(h.api.viewedProject.value).toBe("C:/recent-project")
+  expect(h.api.pendingProjectSource.value).toBe("")
 })
 
 test("custom project install asks for a target and preserves it on failure", async () => {
@@ -67,14 +66,14 @@ test("custom project install asks for a target and preserves it on failure", asy
   h.api.customScope.value = "project"
   h.api.customSource.value = "npm:other"
   await h.api.installCustom()
-  assert.equal(h.calls.length, 0)
-  assert.equal(h.api.pendingProjectSource.value, "npm:other")
+  expect(h.calls.length).toBe(0)
+  expect(h.api.pendingProjectSource.value).toBe("npm:other")
   h.fail(true)
   await h.api.confirmProjectInstall("C:/other-project")
-  assert.equal(h.api.pendingProjectSource.value, "npm:other")
-  assert.equal(h.api.customSource.value, "npm:other")
+  expect(h.api.pendingProjectSource.value).toBe("npm:other")
+  expect(h.api.customSource.value).toBe("npm:other")
   h.fail(false)
   await h.api.confirmProjectInstall("C:/other-project")
-  assert.equal(h.api.customSource.value, "")
-  assert.equal(h.api.pendingProjectSource.value, "")
+  expect(h.api.customSource.value).toBe("")
+  expect(h.api.pendingProjectSource.value).toBe("")
 })

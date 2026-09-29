@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync, readdirSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 
@@ -19,53 +18,51 @@ const t = (key, params) => {
 
 test("coded errors round trip through encode and parse", () => {
   const encoded = encodeCodedError("piNotFound", "未找到 pi")
-  assert.ok(encoded.startsWith(CODED_ERROR_PREFIX))
+  expect(encoded.startsWith(CODED_ERROR_PREFIX)).toBeTruthy()
   // 逐字段断言：loadTsSource 的对象来自独立 VM realm，无法跨 realm 做深度相等。
   const parsed = parseCodedError(encoded)
-  assert.equal(parsed.code, "piNotFound")
-  assert.equal(parsed.fallback, "未找到 pi")
-  assert.equal(parsed.params, undefined)
+  expect(parsed.code).toBe("piNotFound")
+  expect(parsed.fallback).toBe("未找到 pi")
+  expect(parsed.params).toBe(undefined)
 })
 
 test("coded errors carry named params", () => {
   const parsed = parseCodedError(
     encodeCodedError("portListenFailed", "无法监听端口 {port}: {detail}", { port: "1421", detail: "denied" }),
   )
-  assert.equal(parsed.params.port, "1421")
-  assert.equal(parsed.params.detail, "denied")
+  expect(parsed.params.port).toBe("1421")
+  expect(parsed.params.detail).toBe("denied")
 })
 
 test("plain text and malformed payloads are not treated as coded errors", () => {
-  assert.equal(parseCodedError("启动 pi 失败: boom"), null)
-  assert.equal(parseCodedError(`${CODED_ERROR_PREFIX}not-json`), null)
-  assert.equal(parseCodedError(`${CODED_ERROR_PREFIX}{"code":42}`), null)
+  expect(parseCodedError("启动 pi 失败: boom")).toBe(null)
+  expect(parseCodedError(`${CODED_ERROR_PREFIX}not-json`)).toBe(null)
+  expect(parseCodedError(`${CODED_ERROR_PREFIX}{"code":42}`)).toBe(null)
 })
 
 test("formatCodedError translates known codes and interpolates params", () => {
-  assert.equal(
-    formatCodedError(t, encodeCodedError("startPiFailed", "启动 pi 失败: boom", { detail: "boom" })),
+  expect(formatCodedError(t, encodeCodedError("startPiFailed", "启动 pi 失败: boom", { detail: "boom" }))).toBe(
     "启动 pi 失败: boom",
   )
-  assert.equal(
+  expect(
     formatCodedError(
       t,
       encodeCodedError("portListenFailed", "无法监听端口 {port}: {detail}", { port: "1421", detail: "denied" }),
     ),
-    "无法监听端口 1421: denied",
-  )
+  ).toBe("无法监听端口 1421: denied")
 })
 
 test("formatCodedError falls back to the embedded copy for unknown codes", () => {
-  assert.equal(formatCodedError(t, encodeCodedError("someFutureCode", "未知编码的兜底文案")), "未知编码的兜底文案")
-  assert.equal(formatCodedError(t, `${CODED_ERROR_PREFIX}broken`), `${CODED_ERROR_PREFIX}broken`)
+  expect(formatCodedError(t, encodeCodedError("someFutureCode", "未知编码的兜底文案"))).toBe("未知编码的兜底文案")
+  expect(formatCodedError(t, `${CODED_ERROR_PREFIX}broken`)).toBe(`${CODED_ERROR_PREFIX}broken`)
 })
 
 test("formatCodedError strips the String(error) prefix and passes plain text through", () => {
   const coded = encodeCodedError("startPiFailed", "启动 pi 失败: boom", { detail: "boom" })
-  assert.equal(formatCodedError(t, `Error: ${coded}`), "启动 pi 失败: boom")
-  assert.equal(formatCodedError(t, "pi request failed: 500"), "pi request failed: 500")
-  assert.equal(formatCodedError(t, ""), "")
-  assert.equal(formatCodedError(t, null), "")
+  expect(formatCodedError(t, `Error: ${coded}`)).toBe("启动 pi 失败: boom")
+  expect(formatCodedError(t, "pi request failed: 500")).toBe("pi request failed: 500")
+  expect(formatCodedError(t, "")).toBe("")
+  expect(formatCodedError(t, null)).toBe("")
 })
 
 /** 语言包是纯对象字面量（无 import），去掉 `export default` 后可直接求值。 */
@@ -78,12 +75,10 @@ test("backend error catalogs exist with matching keys in zh-CN and en", () => {
   const catalogs = {}
   for (const locale of ["zh-CN", "en"]) {
     catalogs[locale] = loadMessages(locale).backendErrors
-    assert.ok(catalogs[locale], `${locale} is missing the backendErrors section`)
+    expect(catalogs[locale], `${locale} is missing the backendErrors section`).toBeTruthy()
   }
-  assert.deepEqual(
-    Object.keys(catalogs["zh-CN"]).sort(),
+  expect(Object.keys(catalogs["zh-CN"]).sort(), "zh-CN and en backendErrors keys must match").toEqual(
     Object.keys(catalogs.en).sort(),
-    "zh-CN and en backendErrors keys must match",
   )
 })
 
@@ -121,14 +116,14 @@ test("every Rust and transport error code is present in both catalogs, with no o
     }
   }
 
-  assert.ok(codes.size > 50, `expected the full error inventory, found ${codes.size}`)
+  expect(codes.size > 50, `expected the full error inventory, found ${codes.size}`).toBeTruthy()
 
   for (const code of codes) {
-    assert.ok(catalogs["zh-CN"][code] !== undefined, `zh-CN is missing backendErrors.${code}`)
-    assert.ok(catalogs.en[code] !== undefined, `en is missing backendErrors.${code}`)
+    expect(catalogs["zh-CN"][code] !== undefined, `zh-CN is missing backendErrors.${code}`).toBeTruthy()
+    expect(catalogs.en[code] !== undefined, `en is missing backendErrors.${code}`).toBeTruthy()
   }
   for (const [locale, catalog] of Object.entries(catalogs)) {
     const orphans = Object.keys(catalog).filter(code => !codes.has(code))
-    assert.deepEqual(orphans, [], `${locale} has catalog entries without a Rust/transport call site`)
+    expect(orphans, `${locale} has catalog entries without a Rust/transport call site`).toEqual([])
   }
 })

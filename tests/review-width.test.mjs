@@ -1,18 +1,17 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 const { clampReviewWidth } = loadTsSource(readFileSync(new URL("../src/lib/reviewWidth.ts", import.meta.url), "utf8"))
 test("review resize keeps chat space and clamps both bounds", () => {
-  assert.equal(clampReviewWidth(100, 1200, false), 280)
-  assert.equal(clampReviewWidth(1000, 1200, false), 840)
-  assert.equal(clampReviewWidth(500, 1200, false), 500)
-  assert.equal(clampReviewWidth(2000, 2000, false), 900)
+  expect(clampReviewWidth(100, 1200, false)).toBe(280)
+  expect(clampReviewWidth(1000, 1200, false)).toBe(840)
+  expect(clampReviewWidth(500, 1200, false)).toBe(500)
+  expect(clampReviewWidth(2000, 2000, false)).toBe(900)
 })
 test("review resize fits small containers and overlay mode", () => {
-  assert.equal(clampReviewWidth(420, 600, false), 240)
-  assert.equal(clampReviewWidth(420, 320, true), 320)
-  assert.equal(clampReviewWidth(100, 200, true), 200)
-  assert.equal(clampReviewWidth(420, 0, false), 0)
-  assert.equal(clampReviewWidth(NaN, 1200, false), 420)
+  expect(clampReviewWidth(420, 600, false)).toBe(240)
+  expect(clampReviewWidth(420, 320, true)).toBe(320)
+  expect(clampReviewWidth(100, 200, true)).toBe(200)
+  expect(clampReviewWidth(420, 0, false)).toBe(0)
+  expect(clampReviewWidth(NaN, 1200, false)).toBe(420)
 })

@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 const source = readFileSync(new URL("../src/lib/openWith.ts", import.meta.url), "utf8").replace(
@@ -49,40 +48,40 @@ function harness(saved = null, desktop = true) {
 }
 test("defaults safely and restores only valid editor preferences", () => {
   for (const value of [null, "{", '{"kind":"arbitrary-command"}'])
-    assert.equal(harness(value).openWithPreference.value.kind, "vscode")
-  assert.equal(harness('{"kind":"cursor"}').openWithPreference.value.kind, "cursor")
+    expect(harness(value).openWithPreference.value.kind).toBe("vscode")
+  expect(harness('{"kind":"cursor"}').openWithPreference.value.kind).toBe("cursor")
 })
 test("persists default and custom executable and synchronizes other windows", () => {
   const h = harness()
   h.setOpenWith("custom", " C:/Program Files/My IDE/ide.exe ")
-  assert.equal(JSON.parse(h.stored()).executable, "C:/Program Files/My IDE/ide.exe")
+  expect(JSON.parse(h.stored()).executable).toBe("C:/Program Files/My IDE/ide.exe")
   h.storage('{"kind":"system"}')
-  assert.equal(h.openWithPreference.value.kind, "system")
+  expect(h.openWithPreference.value.kind).toBe("system")
   h.failStorage()
-  assert.throws(() => h.setOpenWith("cursor"), /blocked/)
-  assert.equal(h.openWithPreference.value.kind, "system")
+  expect(() => h.setOpenWith("cursor")).toThrow(/blocked/)
+  expect(h.openWithPreference.value.kind).toBe("system")
 })
 test("passes the file and project separately without shell interpolation", async () => {
   const h = harness()
   h.setOpenWith("cursor")
   await h.openFileInEditor("src/file & 中文.ts", "C:/my project")
-  assert.equal(h.calls[0].command, "open_in_editor")
-  assert.equal(h.calls[0].args.path, "src/file & 中文.ts")
-  assert.equal(h.calls[0].args.project, "C:/my project")
-  assert.equal(h.calls[0].args.kind, "cursor")
-  assert.equal(h.calls[0].args.executable, null)
+  expect(h.calls[0].command).toBe("open_in_editor")
+  expect(h.calls[0].args.path).toBe("src/file & 中文.ts")
+  expect(h.calls[0].args.project).toBe("C:/my project")
+  expect(h.calls[0].args.kind).toBe("cursor")
+  expect(h.calls[0].args.executable).toBe(null)
   h.setOpenWith("custom", "C:/ide.exe")
   await h.openFileInEditor("a.ts", "C:/project")
-  assert.equal(h.calls[1].args.executable, "C:/ide.exe")
+  expect(h.calls[1].args.executable).toBe("C:/ide.exe")
 })
 test("does not launch an editor from remote web mode", async () => {
   const h = harness(null, false)
-  await assert.rejects(h.openFileInEditor("a.ts", "/project"), /desktop/)
-  assert.equal(h.calls.length, 0)
+  await expect(h.openFileInEditor("a.ts", "/project")).rejects.toThrow(/desktop/)
+  expect(h.calls.length).toBe(0)
 })
 test("both split panes reuse the shared themed scrollbars", () => {
   const split = readFileSync(new URL("../src/components/ReviewSplitDiff.vue", import.meta.url), "utf8")
-  assert.equal((split.match(/<ScrollArea\s/g) ?? []).length, 2)
-  assert.equal((split.match(/orientation="both"/g) ?? []).length, 2)
-  assert.equal((split.match(/@viewport-scroll=/g) ?? []).length, 2)
+  expect((split.match(/<ScrollArea\s/g) ?? []).length).toBe(2)
+  expect((split.match(/orientation="both"/g) ?? []).length).toBe(2)
+  expect((split.match(/@viewport-scroll=/g) ?? []).length).toBe(2)
 })

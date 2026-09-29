@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -27,7 +26,7 @@ function harness(t, packageCatalog) {
   })
   vm.runInContext(ts.transpile(script, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
   const scope = effectScope()
-  t.after(() => scope.stop())
+  t.onTestFinished(() => scope.stop())
   const api = scope.run(() => context.exports.usePackages(() => undefined))
   return { api, scope }
 }
@@ -54,8 +53,8 @@ test("catalog searches the server, preserves server-only matches, and maps filte
   api.sortBy.value = "updated"
   api.typeFilter.value = "skill"
   await api.loadCatalog()
-  assert.deepEqual(calls, [["init", "recent", "skill", 1]])
-  assert.deepEqual(names(api), ["doompi-web-contracts"])
+  expect(calls).toEqual([["init", "recent", "skill", 1]])
+  expect(names(api)).toEqual(["doompi-web-contracts"])
 })
 
 test("pagination retains results on failure, retries the same page, and deduplicates", async t => {
@@ -72,17 +71,14 @@ test("pagination retains results on failure, retries the same page, and deduplic
   })
   await api.loadCatalog()
   await api.loadMoreCatalog()
-  assert.deepEqual(names(api), ["first"])
-  assert.match(api.catalogError.value, /offline/)
-  assert.equal(api.catalogHasMore.value, true)
+  expect(names(api)).toEqual(["first"])
+  expect(api.catalogError.value).toMatch(/offline/)
+  expect(api.catalogHasMore.value).toBe(true)
   await api.loadMoreCatalog()
-  assert.deepEqual(names(api), ["first", "second"])
-  assert.deepEqual(
-    calls.map(args => args[3]),
-    [1, 2, 2],
-  )
-  assert.equal(api.catalogHasMore.value, false)
-  assert.equal(api.catalogError.value, "")
+  expect(names(api)).toEqual(["first", "second"])
+  expect(calls.map(args => args[3])).toEqual([1, 2, 2])
+  expect(api.catalogHasMore.value).toBe(false)
+  expect(api.catalogError.value).toBe("")
 })
 
 for (const fails of [false, true]) {
@@ -95,10 +91,10 @@ for (const fails of [false, true]) {
     if (fails) old.reject(Error("stale error"))
     else old.resolve(result(["old"], true))
     await initial
-    assert.deepEqual(names(api), ["new"])
-    assert.equal(api.catalogError.value, "")
-    assert.equal(api.catalogHasMore.value, false)
-    assert.equal(api.catalogLoading.value, false)
+    expect(names(api)).toEqual(["new"])
+    expect(api.catalogError.value).toBe("")
+    expect(api.catalogHasMore.value).toBe(false)
+    expect(api.catalogLoading.value).toBe(false)
   })
 }
 
@@ -109,9 +105,9 @@ test("query changes invalidate in-flight responses before the debounce fires", a
   api.query.value = "init"
   old.resolve(result(["old"], true))
   await initial
-  assert.deepEqual(names(api), [])
-  assert.equal(api.catalogLoading.value, true)
-  assert.equal(api.catalogHasMore.value, false)
+  expect(names(api)).toEqual([])
+  expect(api.catalogLoading.value).toBe(true)
+  expect(api.catalogHasMore.value).toBe(false)
 })
 
 test("disposing the scope ignores pending catalog results", async t => {
@@ -121,5 +117,5 @@ test("disposing the scope ignores pending catalog results", async t => {
   scope.stop()
   pending.resolve(result(["old"]))
   await initial
-  assert.deepEqual(names(api), [])
+  expect(names(api)).toEqual([])
 })

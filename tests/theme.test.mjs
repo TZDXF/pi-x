@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -78,42 +77,42 @@ test("first paint and runtime agree for every preference and invalid storage", (
     for (const system of [false, true]) {
       const h = harness(stored, system)
       const expected = stored === "system" ? system : stored !== "light"
-      assert.equal(h.initialDark, expected)
-      assert.equal(h.dark(), expected)
+      expect(h.initialDark).toBe(expected)
+      expect(h.dark()).toBe(expected)
     }
   }
 })
 test("selection applies immediately, persists and restores", () => {
   const h = harness("dark")
   h.setTheme("light")
-  assert.equal(h.dark(), false)
-  assert.equal(h.stored(), "light")
-  assert.equal(harness(h.stored()).dark(), false)
+  expect(h.dark()).toBe(false)
+  expect(h.stored()).toBe("light")
+  expect(harness(h.stored()).dark()).toBe(false)
   h.setTheme("dark")
-  assert.equal(h.dark(), true)
+  expect(h.dark()).toBe(true)
 })
 test("system changes only affect system preference", () => {
   const h = harness("system")
   h.system(true)
-  assert.equal(h.dark(), true)
+  expect(h.dark()).toBe(true)
   h.system(false)
-  assert.equal(h.dark(), false)
+  expect(h.dark()).toBe(false)
   h.setTheme("light")
   h.system(true)
-  assert.equal(h.dark(), false)
+  expect(h.dark()).toBe(false)
 })
 test("unavailable storage does not prevent switching", () => {
   const h = harness(null, false, true)
   h.setTheme("light")
-  assert.equal(h.dark(), false)
+  expect(h.dark()).toBe(false)
 })
 test("other windows synchronize preferences; invalid input is ignored", () => {
   const h = harness("dark")
   h.storage("light")
-  assert.equal(h.theme.value, "light")
-  assert.equal(h.dark(), false)
+  expect(h.theme.value).toBe("light")
+  expect(h.dark()).toBe(false)
   h.setTheme("invalid")
-  assert.equal(h.theme.value, "light")
+  expect(h.theme.value).toBe("light")
   h.storage(null)
-  assert.equal(h.dark(), true)
+  expect(h.dark()).toBe(true)
 })

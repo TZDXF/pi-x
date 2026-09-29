@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -118,9 +117,9 @@ test("hosted skills load from the .pix store and enabled paths come from Pi", as
   }
   const h = harness({ __hosted: [skill] })
   await h.mount()
-  assert.equal(h.api.skills.value.length, 1)
-  assert.equal(h.api.skills.value[0].enabled, true)
-  assert.equal(h.api.error.value, "")
+  expect(h.api.skills.value.length).toBe(1)
+  expect(h.api.skills.value[0].enabled).toBe(true)
+  expect(h.api.error.value).toBe("")
 })
 
 test("toggling enables by registering paths in Pi settings; failure reverts", async () => {
@@ -136,13 +135,13 @@ test("toggling enables by registering paths in Pi settings; failure reverts", as
   await h.mount()
 
   await h.api.toggle(disabled, true)
-  assert.equal(disabled.enabled, true)
-  assert.deepEqual(h.savedEnabled(), [enabled.path, disabled.path])
+  expect(disabled.enabled).toBe(true)
+  expect(h.savedEnabled()).toEqual([enabled.path, disabled.path])
 
   h.failWrite(true)
   await h.api.toggle(disabled, false)
-  assert.equal(disabled.enabled, true, "optimistic change is reverted on failure")
-  assert.equal(h.toasts.at(-1)[1], "error")
+  expect(disabled.enabled, "optimistic change is reverted on failure").toBe(true)
+  expect(h.toasts.at(-1)[1]).toBe("error")
 })
 
 test("opening the hosted directory and deleting requires confirmation", async () => {
@@ -151,57 +150,54 @@ test("opening the hosted directory and deleting requires confirmation", async ()
   await h.mount()
 
   await h.api.openDirectory()
-  assert.equal(h.opened(), 1)
+  expect(h.opened()).toBe(1)
   h.failOpen(true)
   await h.api.openDirectory()
-  assert.equal(h.opened(), 1)
-  assert.equal(h.toasts.at(-1)[1], "error")
+  expect(h.opened()).toBe(1)
+  expect(h.toasts.at(-1)[1]).toBe("error")
 
   h.askResult(false)
   await h.api.remove(skill)
-  assert.deepEqual(h.deletedPaths(), [])
+  expect(h.deletedPaths()).toEqual([])
 
   h.askResult(true)
   await h.api.remove(skill)
-  assert.deepEqual(h.deletedPaths(), [skill.path])
+  expect(h.deletedPaths()).toEqual([skill.path])
 })
 
 test("load failures support retry", async () => {
   const h = harness()
   h.failRead(true)
   await h.mount()
-  assert.match(h.api.error.value, /read failure/)
+  expect(h.api.error.value).toMatch(/read failure/)
   h.failRead(false)
   await h.api.load()
-  assert.equal(h.api.error.value, "")
+  expect(h.api.error.value).toBe("")
 })
 
 test("prompt page shows missing files, creates edits, and preserves drafts across selection", async () => {
   const h = harness({ __promptFiles: { "SYSTEM.md": "old" }, piPath: "pi" }, "AgentSettings")
   await h.mount()
-  assert.deepEqual(
-    Array.from(h.api.files.value, file => file.fileName),
-    ["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md"],
-  )
-  assert.equal(h.api.selectedFile.value.content, "old")
-  assert.equal(h.api.selectedFile.value.exists, true)
+  expect(Array.from(h.api.files.value, file => file.fileName)).toEqual(["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md"])
+  expect(h.api.selectedFile.value.content).toBe("old")
+  expect(h.api.selectedFile.value.exists).toBe(true)
   h.api.selectedName.value = "AGENTS.md"
-  assert.equal(h.api.selectedFile.value.exists, false)
+  expect(h.api.selectedFile.value.exists).toBe(false)
   h.api.updatePrompt("中文")
   h.api.selectedName.value = "SYSTEM.md"
   h.api.updatePrompt("new system prompt")
   h.api.selectedName.value = "AGENTS.md"
-  assert.equal(h.api.selectedFile.value.content, "中文", "switching files preserves unsaved edits")
+  expect(h.api.selectedFile.value.content, "switching files preserves unsaved edits").toBe("中文")
   await h.api.save()
-  assert.equal(h.prompts()["AGENTS.md"], "中文")
-  assert.equal(h.api.selectedFile.value.exists, true)
-  assert.equal(h.api.selectedFile.value.savedContent, "中文")
-  assert.equal(h.prompts()["SYSTEM.md"], "old", "only the selected file was saved")
-  assert.equal(h.config().piPath, "pi")
+  expect(h.prompts()["AGENTS.md"]).toBe("中文")
+  expect(h.api.selectedFile.value.exists).toBe(true)
+  expect(h.api.selectedFile.value.savedContent).toBe("中文")
+  expect(h.prompts()["SYSTEM.md"], "only the selected file was saved").toBe("old")
+  expect(h.config().piPath).toBe("pi")
   h.api.updatePrompt("")
   await h.api.save()
-  assert.equal(h.prompts()["AGENTS.md"], "")
-  assert.equal(h.api.selectedFile.value.exists, false)
+  expect(h.prompts()["AGENTS.md"]).toBe("")
+  expect(h.api.selectedFile.value.exists).toBe(false)
 })
 
 test("failed prompt save retains the draft and file status", async () => {
@@ -210,16 +206,16 @@ test("failed prompt save retains the draft and file status", async () => {
   h.api.updatePrompt("new content")
   h.failWrite(true)
   await h.api.save()
-  assert.equal(h.api.selectedFile.value.savedContent, "")
-  assert.equal(h.api.selectedFile.value.exists, false)
-  assert.equal(h.api.selectedFile.value.content, "new content")
-  assert.equal(h.toasts.at(-1)[1], "error")
+  expect(h.api.selectedFile.value.savedContent).toBe("")
+  expect(h.api.selectedFile.value.exists).toBe(false)
+  expect(h.api.selectedFile.value.content).toBe("new content")
+  expect(h.toasts.at(-1)[1]).toBe("error")
 })
 
 test("settings exposes separate prompt and skills pages", () => {
   const tabs = readFileSync(new URL("../src/components/settings/tabs.ts", import.meta.url), "utf8")
-  assert.match(tabs, /id: "agent-config",[\s\S]*?\.\/AgentSettings\.vue/)
-  assert.match(tabs, /id: "skills",[\s\S]*?\.\/SkillSettings\.vue/)
+  expect(tabs).toMatch(/id: "agent-config",[\s\S]*?\.\/AgentSettings\.vue/)
+  expect(tabs).toMatch(/id: "skills",[\s\S]*?\.\/SkillSettings\.vue/)
   const prompt = readFileSync(new URL("../src/components/settings/AgentSettings.vue", import.meta.url), "utf8")
-  assert.doesNotMatch(prompt, /managedSkills|manage-skills/)
+  expect(prompt).not.toMatch(/managedSkills|manage-skills/)
 })

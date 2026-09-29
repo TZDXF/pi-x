@@ -20,7 +20,7 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
 - `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
-- `pnpm run test:web` / `pnpm test`：分别运行 Node / Rust 单元测试。
+- `pnpm run test:web` / `pnpm run test:web:watch` / `pnpm test`：分别运行 Vitest 单元测试、启动 Vitest watch，以及运行 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
 
 ## 代码风格与命名
@@ -31,7 +31,7 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 
 ## 测试要求
 
-Node 测试使用 `node:test` 与 `node:assert/strict`，文件命名为 `tests/<feature>.test.mjs`；修复缺陷时补充回归用例。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
+前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.mjs`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
 
 提交前运行 `pnpm run check`、`pnpm run test:web` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
 

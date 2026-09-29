@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsModule, loadTsSource } from "./lib/load-ts.mjs"
 
@@ -81,16 +80,13 @@ function harness(storage = new Map(), options = {}) {
 test("Pi defaults are displayed offline but never overwrite a restored session", async () => {
   const { store, calls, state } = harness()
   await store.loadOfflineModels()
-  assert.equal(store.offlineDefaultModelKey.value, "pi/default")
-  assert.equal(store.desiredModelKey.value, null)
-  assert.equal(store.desiredThinkingLevel.value, null)
+  expect(store.offlineDefaultModelKey.value).toBe("pi/default")
+  expect(store.desiredModelKey.value).toBe(null)
+  expect(store.desiredThinkingLevel.value).toBe(null)
   await store.init("project")
-  assert.equal(state.model.provider, "restored")
-  assert.equal(state.thinkingLevel, "low")
-  assert.equal(
-    calls.some(c => c.type === "set_model" || c.type === "set_thinking_level"),
-    false,
-  )
+  expect(state.model.provider).toBe("restored")
+  expect(state.thinkingLevel).toBe("low")
+  expect(calls.some(c => c.type === "set_model" || c.type === "set_thinking_level")).toBe(false)
 })
 
 test("explicit choices persist for fresh conversations but never overwrite restored sessions", async () => {
@@ -98,14 +94,14 @@ test("explicit choices persist for fresh conversations but never overwrite resto
   store.setDesiredModel("chosen/vendor/model")
   store.setDesiredThinkingLevel("high")
   await store.init("project", true)
-  assert.equal(calls.filter(c => c.type === "set_model").length, 1)
-  assert.equal(calls.find(c => c.type === "set_model").modelId, "vendor/model")
-  assert.equal(calls.filter(c => c.type === "set_thinking_level").length, 1)
-  assert.equal(store.desiredModelKey.value, null)
-  assert.equal(store.desiredThinkingLevel.value, null)
+  expect(calls.filter(c => c.type === "set_model").length).toBe(1)
+  expect(calls.find(c => c.type === "set_model").modelId).toBe("vendor/model")
+  expect(calls.filter(c => c.type === "set_thinking_level").length).toBe(1)
+  expect(store.desiredModelKey.value).toBe(null)
+  expect(store.desiredThinkingLevel.value).toBe(null)
   await store.init("other-project")
-  assert.equal(calls.filter(c => c.type === "set_model").length, 1)
-  assert.equal(calls.filter(c => c.type === "set_thinking_level").length, 1)
+  expect(calls.filter(c => c.type === "set_model").length).toBe(1)
+  expect(calls.filter(c => c.type === "set_thinking_level").length).toBe(1)
 })
 
 test("model and thinking selection survive restarting the UI and are visible before Pi starts", async () => {
@@ -114,14 +110,14 @@ test("model and thinking selection survive restarting the UI and are visible bef
   await first.store.setModel("chosen", "vendor/model")
   await first.store.setThinkingLevel("high")
   const next = harness(storage)
-  assert.equal(next.store.offlineDefaultModelKey.value, "chosen/vendor/model")
-  assert.equal(next.store.thinkingLevel.value, "high")
-  assert.equal(next.store.models.value[0].id, "vendor/model")
+  expect(next.store.offlineDefaultModelKey.value).toBe("chosen/vendor/model")
+  expect(next.store.thinkingLevel.value).toBe("high")
+  expect(next.store.models.value[0].id).toBe("vendor/model")
   await next.store.loadOfflineModels()
-  assert.ok(next.store.models.value.some(m => m.id === "vendor/model"))
+  expect(next.store.models.value.some(m => m.id === "vendor/model")).toBeTruthy()
   await next.store.init("new-project", true)
-  assert.equal(next.state.model.provider, "chosen")
-  assert.equal(next.state.thinkingLevel, "high")
+  expect(next.state.model.provider).toBe("chosen")
+  expect(next.state.thinkingLevel).toBe("high")
 })
 
 test("new_session reapplies remembered choices without changing a resumed session first", async () => {
@@ -131,17 +127,17 @@ test("new_session reapplies remembered choices without changing a resumed sessio
   await first.store.setThinkingLevel("high")
   const next = harness(storage)
   await next.store.init("resumed-project")
-  assert.equal(next.state.model.provider, "restored")
-  assert.equal(next.state.thinkingLevel, "low")
+  expect(next.state.model.provider).toBe("restored")
+  expect(next.state.thinkingLevel).toBe("low")
   await next.store.newSession()
-  assert.equal(next.state.model.provider, "chosen")
-  assert.equal(next.state.thinkingLevel, "high")
+  expect(next.state.model.provider).toBe("chosen")
+  expect(next.state.thinkingLevel).toBe("high")
 })
 
 test("corrupt browser preference does not block loading Pi defaults", async () => {
   const h = harness(new Map([["pix.conversationSelection", "{bad"]]))
   await h.store.loadOfflineModels()
-  assert.equal(h.store.offlineDefaultModelKey.value, "pi/default")
+  expect(h.store.offlineDefaultModelKey.value).toBe("pi/default")
 })
 
 test("model and thinking changes mark their session-file writes before refreshing state", async () => {
@@ -149,20 +145,14 @@ test("model and thinking changes mark their session-file writes before refreshin
   await store.init("project")
   calls.length = 0
   await store.setModel("chosen", "vendor/model")
-  assert.equal(store.syncedSessionMtime.value, 1)
-  assert.deepEqual(
-    calls.slice(0, 3).map(c => c.type),
-    ["set_model", "session_mtime", "get_state"],
-  )
-  assert.equal(calls[1].file, "session.jsonl")
+  expect(store.syncedSessionMtime.value).toBe(1)
+  expect(calls.slice(0, 3).map(c => c.type)).toEqual(["set_model", "session_mtime", "get_state"])
+  expect(calls[1].file).toBe("session.jsonl")
 
   calls.length = 0
   await store.setThinkingLevel("high")
-  assert.equal(store.syncedSessionMtime.value, 2)
-  assert.deepEqual(
-    calls.slice(0, 3).map(c => c.type),
-    ["set_thinking_level", "session_mtime", "get_state"],
-  )
+  expect(store.syncedSessionMtime.value).toBe(2)
+  expect(calls.slice(0, 3).map(c => c.type)).toEqual(["set_thinking_level", "session_mtime", "get_state"])
 })
 
 test("a model switch is announced before the next question, without changing the prompt sent to Pi", async () => {
@@ -173,20 +163,20 @@ test("a model switch is announced before the next question, without changing the
   await store.setModel("next", "model-b")
   store.isStreaming.value = true
   await store.send("queued question", undefined, undefined, "queue")
-  assert.equal(store.entries.value.length, 0)
+  expect(store.entries.value.length).toBe(0)
   store.isStreaming.value = false
   store.dispatchQueuedPrompt()
   const first = store.entries.value[0]
-  assert.deepEqual(JSON.parse(JSON.stringify(first.modelChange)), {
+  expect(JSON.parse(JSON.stringify(first.modelChange))).toEqual({
     from: "restored/session-model",
     to: "next/model-b",
   })
-  assert.equal(calls.findLast(c => c.type === "prompt").message, "queued question")
+  expect(calls.findLast(c => c.type === "prompt").message).toBe("queued question")
   await store.send("another question")
-  assert.equal(store.entries.value[1].modelChange, undefined)
+  expect(store.entries.value[1].modelChange).toBe(undefined)
   await store.setModel("next", "model-b")
   await store.send("same model")
-  assert.equal(store.entries.value[2].modelChange, undefined)
+  expect(store.entries.value[2].modelChange).toBe(undefined)
 })
 
 test("new sessions do not inherit an unconsumed model-change announcement", async () => {
@@ -196,5 +186,5 @@ test("new sessions do not inherit an unconsumed model-change announcement", asyn
   await store.setModel("next", "model-b")
   await store.newSession()
   await store.send("new conversation")
-  assert.equal(store.entries.value[0].modelChange, undefined)
+  expect(store.entries.value[0].modelChange).toBe(undefined)
 })

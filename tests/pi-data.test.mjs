@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname, basename } from "node:path"
@@ -10,10 +9,10 @@ const dist = process.env.PI_TEST_SDK
 const script = readFileSync(new URL("../src-tauri/src/pi_data.mjs", import.meta.url), "utf8")
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pix-pi-data-test-"))
-  t.after(() => {
+  t.onTestFinished(() => {
     const target = realpathSync(root)
-    assert.equal(dirname(target), realpathSync(tmpdir()))
-    assert.ok(basename(target).startsWith("pix-pi-data-test-"))
+    expect(dirname(target)).toBe(realpathSync(tmpdir()))
+    expect(basename(target).startsWith("pix-pi-data-test-")).toBeTruthy()
     rmSync(target, { recursive: true, force: true })
   })
   const agent = join(root, "agent"),
@@ -29,10 +28,10 @@ function fixture(t) {
       timeout: 15000,
     })
     if (!success) {
-      assert.notEqual(child.status, 0)
+      expect(child.status).not.toBe(0)
       return child.stderr
     }
-    assert.equal(child.status, 0, child.stderr || String(child.error))
+    expect(child.status, child.stderr || String(child.error)).toBe(0)
     return JSON.parse(child.stdout)
   }
   return { root, agent, project, call }
@@ -45,32 +44,32 @@ test("installed Pi persists settings without a PiX copy and retains unrelated da
   call({ op: "settings_save", settings: { defaultProvider: "test", defaultModel: "vendor/model" } })
   call({ op: "settings_save", settings: { skills: ["C:/skill.md", "!**/excluded/**"] } })
   let saved = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(saved.defaultProvider, "test")
-  assert.equal(saved.defaultModel, "vendor/model")
-  assert.equal(saved.theme, "dark")
-  assert.equal(saved.retry.enabled, false)
-  assert.equal(call({ op: "settings_get" }).defaultThinkingLevel, "high")
-  assert.deepEqual(saved.skills, ["C:/skill.md", "!**/excluded/**"])
+  expect(saved.defaultProvider).toBe("test")
+  expect(saved.defaultModel).toBe("vendor/model")
+  expect(saved.theme).toBe("dark")
+  expect(saved.retry.enabled).toBe(false)
+  expect(call({ op: "settings_get" }).defaultThinkingLevel).toBe("high")
+  expect(saved.skills).toEqual(["C:/skill.md", "!**/excluded/**"])
   call({ op: "settings_save", settings: { defaultProvider: null, defaultModel: null } })
   saved = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(saved.defaultProvider, undefined)
-  assert.equal(saved.defaultModel, undefined)
-  assert.equal(existsSync(join(root, ".pix")), false)
+  expect(saved.defaultProvider).toBe(undefined)
+  expect(saved.defaultModel).toBe(undefined)
+  expect(existsSync(join(root, ".pix"))).toBe(false)
 })
 
 test("Pi trust handles resources, parent inheritance, and explicit denial", { skip: !dist }, t => {
   const { agent, root, project, call } = fixture(t)
   mkdirSync(join(project, ".pi"))
   writeFileSync(join(project, ".pi", "settings.json"), "{}")
-  assert.equal(call({ op: "trust_status", project }).needsDecision, true)
+  expect(call({ op: "trust_status", project }).needsDecision).toBe(true)
   call({ op: "trust_save", project, trusted: true, trustParent: true })
-  assert.equal(call({ op: "trust_status", project }).decision, true)
+  expect(call({ op: "trust_status", project }).decision).toBe(true)
   let stored = JSON.parse(readFileSync(join(agent, "trust.json"), "utf8"))
-  assert.equal(stored[root], true)
+  expect(stored[root]).toBe(true)
   call({ op: "trust_save", project, trusted: false, trustParent: false })
-  assert.equal(call({ op: "trust_status", project }).decision, false)
+  expect(call({ op: "trust_status", project }).decision).toBe(false)
   stored = JSON.parse(readFileSync(join(agent, "trust.json"), "utf8"))
-  assert.equal(stored[project], false)
+  expect(stored[project]).toBe(false)
 })
 
 test("Pi native session names roundtrip and automatic names preserve manual names", { skip: !dist }, t => {
@@ -98,16 +97,16 @@ test("Pi native session names roundtrip and automatic names preserve manual name
       .map(v => JSON.stringify(v))
       .join("\n") + "\n",
   )
-  assert.equal(call({ op: "session_name", file, title: "Manual" }), "Manual")
-  assert.equal(call({ op: "session_name", file, title: "Auto", onlyIfEmpty: true }), "Manual")
-  assert.equal(call({ op: "session_name", file }), "Manual")
+  expect(call({ op: "session_name", file, title: "Manual" })).toBe("Manual")
+  expect(call({ op: "session_name", file, title: "Auto", onlyIfEmpty: true })).toBe("Manual")
+  expect(call({ op: "session_name", file })).toBe("Manual")
   const entries = readFileSync(file, "utf8")
     .trim()
     .split("\n")
     .map(v => JSON.parse(v))
-  assert.equal(entries.at(-1).type, "session_info")
-  assert.equal(entries.at(-1).name, "Manual")
-  assert.equal(existsSync(file.replace(".jsonl", ".pix.json")), false)
+  expect(entries.at(-1).type).toBe("session_info")
+  expect(entries.at(-1).name).toBe("Manual")
+  expect(existsSync(file.replace(".jsonl", ".pix.json"))).toBe(false)
 })
 
 test("Pi exports a saved session file directly without opening a runtime", { skip: !dist }, t => {
@@ -129,15 +128,15 @@ test("Pi exports a saved session file directly without opening a runtime", { ski
       .map(v => JSON.stringify(v))
       .join("\n") + "\n",
   )
-  assert.equal(call({ op: "session_export_html", file, outputPath }), outputPath)
-  assert.ok(readFileSync(outputPath, "utf8").startsWith("<!DOCTYPE html>"))
+  expect(call({ op: "session_export_html", file, outputPath })).toBe(outputPath)
+  expect(readFileSync(outputPath, "utf8").startsWith("<!DOCTYPE html>")).toBeTruthy()
 })
 
 test("retry count merges into the global file and invalid patches are rejected", { skip: !dist }, t => {
   const { agent, call } = fixture(t)
   const path = join(agent, "settings.json")
   writeFileSync(path, "{}")
-  assert.deepEqual(call({ op: "settings_get" }).retry, { maxRetries: 3 }, "the default comes from Pi")
+  expect(call({ op: "settings_get" }).retry, "the default comes from Pi").toEqual({ maxRetries: 3 })
 
   writeFileSync(
     path,
@@ -148,12 +147,12 @@ test("retry count merges into the global file and invalid patches are rejected",
   )
   call({ op: "settings_save", settings: { retry: { maxRetries: 5 } } })
   let saved = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(saved.retry.maxRetries, 5)
-  assert.equal(saved.theme, "dark")
-  assert.equal(saved.retry.enabled, false, "untouched retry keys survive the patch")
-  assert.equal(saved.retry.baseDelayMs, 500)
-  assert.deepEqual(saved.retry.provider, { maxRetries: 2 })
-  assert.deepEqual(call({ op: "settings_get" }).retry, { maxRetries: 5 })
+  expect(saved.retry.maxRetries).toBe(5)
+  expect(saved.theme).toBe("dark")
+  expect(saved.retry.enabled, "untouched retry keys survive the patch").toBe(false)
+  expect(saved.retry.baseDelayMs).toBe(500)
+  expect(saved.retry.provider).toEqual({ maxRetries: 2 })
+  expect(call({ op: "settings_get" }).retry).toEqual({ maxRetries: 5 })
 
   for (const retry of [
     { maxRetries: -1 },
@@ -166,8 +165,8 @@ test("retry count merges into the global file and invalid patches are rejected",
     call({ op: "settings_save", settings: { retry } }, false)
   }
   saved = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(saved.retry.maxRetries, 5, "invalid patches never reach the file")
-  assert.equal(saved.retry.enabled, false)
+  expect(saved.retry.maxRetries, "invalid patches never reach the file").toBe(5)
+  expect(saved.retry.enabled).toBe(false)
 })
 
 test("malformed Pi settings and invalid patches fail without replacing the file", { skip: !dist }, t => {
@@ -176,8 +175,8 @@ test("malformed Pi settings and invalid patches fail without replacing the file"
   writeFileSync(file, "{broken")
   call({ op: "settings_get" }, false)
   call({ op: "settings_save", settings: { skills: [] } }, false)
-  assert.equal(readFileSync(file, "utf8"), "{broken")
+  expect(readFileSync(file, "utf8")).toBe("{broken")
   writeFileSync(file, "{}")
   call({ op: "settings_save", settings: { defaultProvider: "p", defaultModel: "m", skills: false } }, false)
-  assert.equal(readFileSync(file, "utf8"), "{}")
+  expect(readFileSync(file, "utf8")).toBe("{}")
 })

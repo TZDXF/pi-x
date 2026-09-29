@@ -1,11 +1,10 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 
 const source = readFileSync(new URL("../src/components/ReviewPanel.vue", import.meta.url), "utf8")
 
 test("artifact diffs take precedence over broader checkpoint spans", () => {
-  assert.match(source, /const artifactBacked = computed/)
-  assert.match(source, /if \(artifactBacked\.value\) return null/)
-  assert.match(source, /v-for="\(change, operation\) in activeFile\.changes"/)
+  expect(source).toMatch(/const artifactBacked = computed/)
+  expect(source).toMatch(/if \(artifactBacked\.value\) return null/)
+  expect(source).toMatch(/v-for="\(change, operation\) in activeFile\.changes"/)
 })

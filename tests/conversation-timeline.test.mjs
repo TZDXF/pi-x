@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
 import vm from "node:vm"
@@ -33,9 +32,9 @@ test("groups each question with subsequent replies and excludes reasoning/tools"
     ],
     [text("streaming")],
   )
-  assert.equal(result.length, 2)
-  assert.equal(result[0].answer, "answer continued")
-  assert.equal(result[1].answer, "streaming")
+  expect(result.length).toBe(2)
+  expect(result[0].answer).toBe("answer continued")
+  expect(result[1].answer).toBe("streaming")
 })
 test("answer keeps only text after the last tool call, dropping run commentary", () => {
   const tool = { type: "toolCall", callId: "c1", name: "bash", argsText: "ls" }
@@ -43,28 +42,28 @@ test("answer keeps only text after the last tool call, dropping run commentary",
     user(1, "提交代码"),
     assistant(text("我先看一下工作区改动"), tool, text("已提交 17d0e8c，终端功能已提交。")),
   ])
-  assert.equal(result[0].answer, "已提交 17d0e8c，终端功能已提交。")
+  expect(result[0].answer).toBe("已提交 17d0e8c，终端功能已提交。")
   const trailing = turns([user(1, "q"), assistant(tool, text("done"), text(" all")), assistant(text("final"))])
-  assert.equal(trailing[0].answer, "done all final")
+  expect(trailing[0].answer).toBe("done all final")
   const toolOnly = turns([user(1, "q"), assistant(text("commentary"), tool)])
-  assert.equal(toolOnly[0].answer, "")
+  expect(toolOnly[0].answer).toBe("")
 })
 test("handles empty/image questions, unanswered turns, and bounded excerpts", () => {
-  assert.equal(turns([]).length, 0)
-  assert.equal(turns([user(1)])[0].answer, "")
-  assert.equal(turns([user(1)])[0].question, "")
-  assert.equal(turns([user(1, "x".repeat(300))])[0].question.length, 181)
-  assert.equal(turns([user(1, " a\n b ")])[0].question, "a b")
+  expect(turns([]).length).toBe(0)
+  expect(turns([user(1)])[0].answer).toBe("")
+  expect(turns([user(1)])[0].question).toBe("")
+  expect(turns([user(1, "x".repeat(300))])[0].question.length).toBe(181)
+  expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
 test("rendered entries have anchors and navigation stops automatic following", () => {
   const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
-  assert.match(chat, /:data-message-id="entry.id"/)
+  expect(chat).toMatch(/:data-message-id="entry.id"/)
   const conversation = readFileSync(
     new URL("../src/components/ai-elements/conversation/Conversation.vue", import.meta.url),
     "utf8",
   )
-  assert.match(conversation, /context.stopScroll\(\)[\s\S]*viewport.scrollTo/)
-  assert.match(conversation, /prefers-reduced-motion/)
+  expect(conversation).toMatch(/context.stopScroll\(\)[\s\S]*viewport.scrollTo/)
+  expect(conversation).toMatch(/prefers-reduced-motion/)
 })
 
 // ---- buildTimelineTurns: full-session timeline over paginated history ----
@@ -92,16 +91,16 @@ test("unmaterialized turns show with synthetic ids; materialized ones map to ent
     { kind: "assistant", id: 51, blocks: [text("a3")] },
   ]
   const result = build(messages, 4, entries)
-  assert.equal(result.length, 3)
-  assert.equal(result.map(t => t.question).join("|"), "q1|q2|q3")
-  assert.equal(result[0].id, -1)
-  assert.equal(result[0].entryId, null)
-  assert.equal(result[1].id, -3)
-  assert.equal(result[1].entryId, null)
-  assert.equal(result[2].id, 50)
-  assert.equal(result[2].entryId, 50)
-  assert.equal(result[1].answer, "a2")
-  assert.equal(result[0].answer, "a1")
+  expect(result.length).toBe(3)
+  expect(result.map(t => t.question).join("|")).toBe("q1|q2|q3")
+  expect(result[0].id).toBe(-1)
+  expect(result[0].entryId).toBe(null)
+  expect(result[1].id).toBe(-3)
+  expect(result[1].entryId).toBe(null)
+  expect(result[2].id).toBe(50)
+  expect(result[2].entryId).toBe(50)
+  expect(result[1].answer).toBe("a2")
+  expect(result[0].answer).toBe("a1")
 })
 
 test("live entries appended after the snapshot extend the timeline", () => {
@@ -113,10 +112,10 @@ test("live entries appended after the snapshot extend the timeline", () => {
     { kind: "assistant", id: 13, blocks: [text("a2 live")], live: true },
   ]
   const result = build(messages, 2, entries)
-  assert.equal(result.length, 2)
-  assert.equal(result[1].id, 12)
-  assert.equal(result[1].entryId, 12)
-  assert.equal(result[1].answer, "a2 live")
+  expect(result.length).toBe(2)
+  expect(result[1].id).toBe(12)
+  expect(result[1].entryId).toBe(12)
+  expect(result[1].answer).toBe("a2 live")
 })
 
 test("empty snapshot falls back to entries-only turns (fully materialized session)", () => {
@@ -126,21 +125,21 @@ test("empty snapshot falls back to entries-only turns (fully materialized sessio
     liveUser(3, "q2"),
   ]
   const result = build([], 0, entries)
-  assert.equal(result.length, 2)
-  assert.equal(result[0].entryId, 1)
-  assert.equal(result[1].entryId, 3)
-  assert.equal(result[1].answer, "")
+  expect(result.length).toBe(2)
+  expect(result[0].entryId).toBe(1)
+  expect(result[1].entryId).toBe(3)
+  expect(result[1].answer).toBe("")
 })
 
 test("empty or image-only raw user messages are skipped, matching materialization", () => {
   const messages = [rawUser(""), rawUser("q1", [{ type: "image", data: "x", mimeType: "image/png" }])]
   const result = build(messages, 0, [])
-  assert.equal(result.length, 1)
-  assert.equal(result[0].question, "q1")
-  assert.equal(result[0].entryId, null)
+  expect(result.length).toBe(1)
+  expect(result[0].question).toBe("q1")
+  expect(result[0].entryId).toBe(null)
   const imageOnly = build([rawUser("", [{ type: "image", data: "x", mimeType: "image/png" }])], 0, [])
-  assert.equal(imageOnly.length, 1)
-  assert.equal(imageOnly[0].question, "")
+  expect(imageOnly.length).toBe(1)
+  expect(imageOnly[0].question).toBe("")
 })
 
 test("compaction markers are skipped without breaking turn grouping", () => {
@@ -152,8 +151,8 @@ test("compaction markers are skipped without breaking turn grouping", () => {
     user(2, "second"),
     assistant(text("two")),
   ])
-  assert.equal(result.map(t => t.question).join(","), "first,second")
-  assert.equal(result[1].answer, "two")
+  expect(result.map(t => t.question).join(",")).toBe("first,second")
+  expect(result[1].answer).toBe("two")
 })
 
 test("timeline includes compaction nodes with materialized entry ids", () => {
@@ -166,11 +165,11 @@ test("timeline includes compaction nodes with materialized entry ids", () => {
   ]
   // Nothing materialized yet: the node is positioned but has no entry id.
   let timeline = buildTimelineTurns(messages, 5, [])
-  assert.equal(timeline.length, 3)
-  assert.equal(timeline[1].compaction.tokensBefore, 100000)
-  assert.equal(timeline[1].compaction.tokensAfter, 30000)
-  assert.equal(timeline[1].entryId, null)
-  assert.equal(timeline[1].id, -3)
+  expect(timeline.length).toBe(3)
+  expect(timeline[1].compaction.tokensBefore).toBe(100000)
+  expect(timeline[1].compaction.tokensAfter).toBe(30000)
+  expect(timeline[1].entryId).toBe(null)
+  expect(timeline[1].id).toBe(-3)
   // Materialize the page: the compaction entry lines up with its message.
   const entries = [
     { kind: "user", id: 11, text: "first" },
@@ -180,12 +179,12 @@ test("timeline includes compaction nodes with materialized entry ids", () => {
     { kind: "assistant", id: 15, blocks: [{ type: "text", text: "two" }] },
   ]
   timeline = buildTimelineTurns(messages, 0, entries)
-  assert.equal(timeline.map(t => t.entryId).join(","), "11,13,14")
-  assert.equal(timeline[2].answer, "two")
+  expect(timeline.map(t => t.entryId).join(",")).toBe("11,13,14")
+  expect(timeline[2].answer).toBe("two")
   // A live compaction appended after the snapshot appears at the end.
   timeline = buildTimelineTurns(messages, 0, [...entries, { kind: "compaction", id: 16, summary: "live", live: true }])
-  assert.equal(timeline.at(-1).entryId, 16)
-  assert.equal(timeline.at(-1).compaction.tokensBefore, undefined)
+  expect(timeline.at(-1).entryId).toBe(16)
+  expect(timeline.at(-1).compaction.tokensBefore).toBe(undefined)
 })
 
 test("timeline without a snapshot keeps compaction nodes from entries", () => {
@@ -194,7 +193,7 @@ test("timeline without a snapshot keeps compaction nodes from entries", () => {
     { kind: "compaction", id: 2, summary: "s", tokensBefore: 10 },
     { kind: "assistant", id: 3, blocks: [{ type: "text", text: "a" }] },
   ])
-  assert.equal(timeline.length, 2)
-  assert.equal(timeline[1].compaction.tokensBefore, 10)
-  assert.equal(timeline[1].entryId, 2)
+  expect(timeline.length).toBe(2)
+  expect(timeline[1].compaction.tokensBefore).toBe(10)
+  expect(timeline[1].entryId).toBe(2)
 })

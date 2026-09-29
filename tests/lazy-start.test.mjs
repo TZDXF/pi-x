@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -123,41 +122,40 @@ test("opening the app, selecting projects and drafting a new chat do not start p
   await context.mount()
   await context.actions.selectProject("other")
   await context.actions.newProjectSession("other")
-  assert.deepEqual(calls, [])
+  expect(calls).toEqual([])
 })
 test("clicking new session reuses the pristine draft until a message is sent", async () => {
   const { context, calls } = harness()
   await context.mount()
   await context.actions.newProjectSession("project")
-  assert.equal(context.activeRuntimeId.value, "rt1")
+  expect(context.activeRuntimeId.value).toBe("rt1")
   await context.actions.newProjectSession("project")
-  assert.equal(context.activeRuntimeId.value, "rt1")
+  expect(context.activeRuntimeId.value).toBe("rt1")
   context.sessionFor("rt1").entries = [{ kind: "user" }]
   await context.actions.newProjectSession("project")
-  assert.equal(context.activeRuntimeId.value, "rt2")
-  assert.deepEqual(calls, [])
+  expect(context.activeRuntimeId.value).toBe("rt2")
+  expect(calls).toEqual([])
 })
 test("first conversation starts pi and reuses the initialized process", async () => {
   const { context, calls } = harness()
   await context.mount()
-  assert.equal(await context.actions.start(), true)
-  assert.equal(await context.actions.start(), true)
-  assert.deepEqual(calls, ["spawn", "init"])
+  expect(await context.actions.start()).toBe(true)
+  expect(await context.actions.start()).toBe(true)
+  expect(calls).toEqual(["spawn", "init"])
 })
 test("opening a saved conversation starts pi on demand", async () => {
   const { context, calls } = harness()
   await context.mount()
   await context.actions.resumeSession("session.jsonl")
-  assert.deepEqual(calls, ["spawn", "init"])
+  expect(calls).toEqual(["spawn", "init"])
 })
 
 test("only fresh process startup applies remembered selection", () => {
   const source = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
-  assert.match(
-    source,
+  expect(source).toMatch(
     /await spawnWorkspacePi\(project.value, undefined, owner.runtimeId\)\s+await owner.init\(project.value, true\)/,
   )
-  assert.equal((source.match(/\.init\(project.value, true\)/g) || []).length, 1)
+  expect((source.match(/\.init\(project.value, true\)/g) || []).length).toBe(1)
 })
 
 test("a grouped project passes every root to Pi and refreshes context on the next prompt after edits", async () => {
@@ -165,16 +163,16 @@ test("a grouped project passes every root to Pi and refreshes context on the nex
   const { context, calls, spawnArgs } = harness(group)
   await context.mount()
   await context.actions.selectProject("project")
-  assert.equal(await context.actions.start(), true)
-  assert.ok(spawnArgs[0][3], JSON.stringify(spawnArgs))
-  assert.equal(spawnArgs[0].length, 4, "worker startup has no tool-permission arguments")
-  assert.deepEqual(Array.from(spawnArgs[0][3].roots), ["project", "other"])
-  assert.equal(spawnArgs[0][3].name, "Both")
+  expect(await context.actions.start()).toBe(true)
+  expect(spawnArgs[0][3], JSON.stringify(spawnArgs)).toBeTruthy()
+  expect(spawnArgs[0].length, "worker startup has no tool-permission arguments").toBe(4)
+  expect(Array.from(spawnArgs[0][3].roots)).toEqual(["project", "other"])
+  expect(spawnArgs[0][3].name).toBe("Both")
   context.sessionFor(context.activeRuntimeId.value).sessionFile = "saved.jsonl"
   group.name = "Renamed"
-  assert.equal(await context.actions.start(), true)
-  assert.equal(spawnArgs[1][3].name, "Renamed")
-  assert.deepEqual(calls, ["spawn", "init", "spawn", "init"])
+  expect(await context.actions.start()).toBe(true)
+  expect(spawnArgs[1][3].name).toBe("Renamed")
+  expect(calls).toEqual(["spawn", "init", "spawn", "init"])
 })
 
 test("cross-project drafts stay visible during checks while sending remains blocked", async () => {
@@ -187,23 +185,23 @@ test("cross-project drafts stay visible during checks while sending remains bloc
     })
   const pending = context.actions.newProjectSession("other")
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(context.sessionFor(context.activeRuntimeId.value).cwd, "other")
-  assert.equal(context.actions.phase.value, "chat")
-  assert.equal(context.actions.selectingProject.value, true)
-  assert.equal(context.actions.connecting.value, true)
-  assert.equal(await context.actions.start(), false)
-  assert.deepEqual(calls, [])
+  expect(context.sessionFor(context.activeRuntimeId.value).cwd).toBe("other")
+  expect(context.actions.phase.value).toBe("chat")
+  expect(context.actions.selectingProject.value).toBe(true)
+  expect(context.actions.connecting.value).toBe(true)
+  expect(await context.actions.start()).toBe(false)
+  expect(calls).toEqual([])
   resolveTrust({ needsDecision: true })
   await pending
-  assert.equal(context.actions.phase.value, "trust")
-  assert.equal(await context.actions.start(), false)
-  assert.equal(context.actions.selectingProject.value, false)
-  assert.equal(context.actions.connecting.value, false)
-  assert.deepEqual(calls, [])
+  expect(context.actions.phase.value).toBe("trust")
+  expect(await context.actions.start()).toBe(false)
+  expect(context.actions.selectingProject.value).toBe(false)
+  expect(context.actions.connecting.value).toBe(false)
+  expect(calls).toEqual([])
   const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
-  assert.equal(view.split("(!connecting || selectingProject)").length - 1, 1)
-  assert.match(view, /\(!connecting \|\| selectingProject \|\| workspace.gitBusy\)/)
-  assert.match(view, /:disabled="editBusy \|\| workspace.gitBusy \|\| connecting"/)
+  expect(view.split("(!connecting || selectingProject)").length - 1).toBe(1)
+  expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| workspace.gitBusy\)/)
+  expect(view).toMatch(/:disabled="editBusy \|\| workspace.gitBusy \|\| connecting"/)
 })
 
 test("project selection keeps the editor enabled without bypassing other edit guards", () => {
@@ -218,20 +216,20 @@ test("project selection keeps the editor enabled without bypassing other edit gu
     selectingProject: true,
     completion: null,
   }
-  assert.equal(disabled(state), false)
-  assert.equal(disabled({ ...state, selectingProject: false }), true)
-  assert.equal(disabled({ ...state, editBusy: true }), true)
-  assert.equal(disabled({ ...state, workspace: { gitBusy: true } }), true)
+  expect(disabled(state)).toBe(false)
+  expect(disabled({ ...state, selectingProject: false })).toBe(true)
+  expect(disabled({ ...state, editBusy: true })).toBe(true)
+  expect(disabled({ ...state, workspace: { gitBusy: true } })).toBe(true)
 })
 
 test("disabled accessory buttons do not dim the entire composer", () => {
   const group = readFileSync(new URL("../src/components/ui/input-group/InputGroup.vue", import.meta.url), "utf8")
-  assert.doesNotMatch(group, /has-disabled:/)
+  expect(group).not.toMatch(/has-disabled:/)
   for (const style of ["bg-input/50", "bg-input/80", "opacity-50"]) {
-    assert.ok(group.includes(`has-[[data-slot=input-group-control]:disabled]:${style}`))
+    expect(group.includes(`has-[[data-slot=input-group-control]:disabled]:${style}`)).toBeTruthy()
   }
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
-  assert.ok(editor.includes("aria-disabled:opacity-50"))
+  expect(editor.includes("aria-disabled:opacity-50")).toBeTruthy()
 })
 
 test("resuming across projects selects the saved identity before startup and loads history in parallel", async () => {
@@ -244,12 +242,12 @@ test("resuming across projects selects the saved identity before startup and loa
     })
   const pending = context.actions.resumeSession("saved.jsonl", "other")
   const owner = context.sessionFor(context.activeRuntimeId.value)
-  assert.equal(owner.sessionFile, "saved.jsonl")
-  assert.equal(owner.cwd, "other")
-  assert.equal(context.actions.selectingProject.value, false)
+  expect(owner.sessionFile).toBe("saved.jsonl")
+  expect(owner.cwd).toBe("other")
+  expect(context.actions.selectingProject.value).toBe(false)
   // Wait for trust/config checks to reach worker startup.
   for (let i = 0; i < 20 && !releaseSpawn; i++) await Promise.resolve()
-  assert.ok(releaseSpawn)
+  expect(releaseSpawn).toBeTruthy()
   let releaseInit
   let historyLoaded = false
   owner.clear = () => {
@@ -264,11 +262,11 @@ test("resuming across projects selects the saved identity before startup and loa
   }
   releaseSpawn()
   for (let i = 0; i < 20 && !releaseInit; i++) await Promise.resolve()
-  assert.equal(historyLoaded, true)
-  assert.equal(owner.sessionFile, "saved.jsonl")
+  expect(historyLoaded).toBe(true)
+  expect(owner.sessionFile).toBe("saved.jsonl")
   releaseInit()
   await pending
-  assert.equal(owner.started, true)
+  expect(owner.started).toBe(true)
 })
 
 test("selecting a queued new conversation reattaches its runtime without clearing or restarting", async () => {
@@ -279,11 +277,11 @@ test("selecting a queued new conversation reattaches its runtime without clearin
   pending.promptQueue = [{ text: "later", sendAt: Date.now() + 60000 }]
   const id = context.activeRuntimeId.value
   await context.actions.newProjectSession("project")
-  assert.notEqual(context.activeRuntimeId.value, id)
+  expect(context.activeRuntimeId.value).not.toBe(id)
   await context.actions.selectQueuedConversation(id)
-  assert.equal(context.activeRuntimeId.value, id)
-  assert.equal(pending.promptQueue.length, 1)
-  assert.deepEqual(calls, [])
+  expect(context.activeRuntimeId.value).toBe(id)
+  expect(pending.promptQueue.length).toBe(1)
+  expect(calls).toEqual([])
 })
 
 test("opening a running scheduled session attaches to its existing worker without spawning", async () => {
@@ -296,12 +294,12 @@ test("opening a running scheduled session attaches to its existing worker withou
     { runtimeId: owner.runtimeId, project: "project", state: { sessionFile: "scheduled.jsonl", isStreaming: true } },
   ]
   await context.actions.resumeSession("scheduled.jsonl", "project")
-  assert.equal(context.activeRuntimeId.value, owner.runtimeId)
-  assert.equal(owner.started, true)
-  assert.equal(owner.isStreaming, true)
-  assert.equal(owner.sessionFile, "scheduled.jsonl")
-  assert.equal(calls.includes("spawn"), false)
-  assert.equal(context.actions.phase.value, "chat")
+  expect(context.activeRuntimeId.value).toBe(owner.runtimeId)
+  expect(owner.started).toBe(true)
+  expect(owner.isStreaming).toBe(true)
+  expect(owner.sessionFile).toBe("scheduled.jsonl")
+  expect(calls.includes("spawn")).toBe(false)
+  expect(context.actions.phase.value).toBe("chat")
 })
 
 test("opening an observed scheduled session preserves its live output", async () => {
@@ -317,9 +315,9 @@ test("opening an observed scheduled session preserves its live output", async ()
   })
   context.findConversation = () => owner
   await context.actions.resumeSession("scheduled.jsonl", "project")
-  assert.equal(context.activeRuntimeId.value, owner.runtimeId)
-  assert.equal(owner.partialBlocks[0].text, "Working")
-  assert.deepEqual(calls, [])
+  expect(context.activeRuntimeId.value).toBe(owner.runtimeId)
+  expect(owner.partialBlocks[0].text).toBe("Working")
+  expect(calls).toEqual([])
 })
 
 test("failed attachment never kills a backend-owned scheduled worker", async () => {
@@ -335,5 +333,5 @@ test("failed attachment never kills a backend-owned scheduled worker", async () 
     { runtimeId: owner.runtimeId, project: "project", state: { sessionFile: "scheduled.jsonl", isStreaming: true } },
   ]
   await context.actions.resumeSession("scheduled.jsonl", "project")
-  assert.deepEqual(killed, [])
+  expect(killed).toEqual([])
 })

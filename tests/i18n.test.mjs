@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
 import { createI18n } from "vue-i18n"
@@ -19,18 +18,18 @@ for (const locale of ["zh-CN", "en"]) {
       locale === "en"
         ? "Supports npm:pkg@version, git:repo URLs, https:// URLs, and local paths."
         : "支持 npm:包名@版本、git:仓库地址、https:// 或本地路径。"
-    assert.equal(i18n.global.t("packages.customHint"), expected)
+    expect(i18n.global.t("packages.customHint")).toBe(expected)
   })
 
   test(`${locale}: edit prompt cancel button has a translation`, () => {
-    assert.equal(i18n.global.t("chat.editCancel"), locale === "en" ? "Cancel" : "取消")
+    expect(i18n.global.t("chat.editCancel")).toBe(locale === "en" ? "Cancel" : "取消")
   })
 
   // 内置浏览器面板的文案:与 BrowserPanel.vue 使用的 key 保持同步,
   // 防止 locale 文件被覆盖后 key 丢失导致界面显示原始 key。
   test(`${locale}: browser panel keys exist`, () => {
     const zh = locale === "zh-CN"
-    assert.equal(i18n.global.t("sidebarTabs.browser"), zh ? "浏览器" : "Browser")
+    expect(i18n.global.t("sidebarTabs.browser")).toBe(zh ? "浏览器" : "Browser")
     for (const key of [
       "browse",
       "browseHint",
@@ -60,7 +59,7 @@ for (const locale of ["zh-CN", "en"]) {
       "chatComment",
     ]) {
       const rendered = i18n.global.t(`browser.${key}`)
-      assert.notEqual(rendered, `browser.${key}`, `browser.${key} is missing`)
+      expect(rendered, `browser.${key} is missing`).not.toBe(`browser.${key}`)
     }
   })
 
@@ -75,7 +74,7 @@ for (const locale of ["zh-CN", "en"]) {
     }
     for (const key of extracted) {
       const rendered = i18n.global.t(key)
-      assert.notEqual(rendered, key, `${key} is missing`)
+      expect(rendered, `${key} is missing`).not.toBe(key)
     }
   })
 }

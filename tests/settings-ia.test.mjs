@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 
 const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
@@ -11,21 +10,25 @@ test("settings menus use the grouped information architecture", () => {
   const workspace = read("../src/components/settings/WorkspaceSettings.vue")
   const page = read("../src/components/SettingsPage.vue")
 
-  assert.doesNotMatch(router, /"workspace",/)
-  assert.doesNotMatch(router, /"retry",/)
-  assert.match(tabs, /SETTINGS_GROUP_DEFS/)
-  assert.doesNotMatch(tabs, /id: "workspace",/)
-  assert.doesNotMatch(tabs, /id: "retry",/)
-  assert.match(tabs, /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/)
-  assert.match(tabs, /"capabilities",[\s\S]*?tabIds: \["models", "model-config", "packages", "agent-config", "skills"\]/)
-  assert.match(general, /<WorkspaceSettings \/>/)
-  assert.match(general, /<RetrySettings v-if="isDesktop" \/>/)
-  assert.match(workspace, /OpenWithSettings/)
-  assert.match(workspace, /ProjectlessSettings/)
-  assert.match(page, /v-for="group in visibleGroups"/)
-  assert.match(page, /<ScrollArea class="settings-menu/)
-  assert.match(page, /NAV_WIDTH_STORAGE_KEY = "pix\.settings-nav-width"/)
-  assert.match(page, /startNavResize/)
-  assert.match(page, /resizeNavWithKeyboard/)
-  assert.match(page, /17rem/)
+  expect(router).not.toMatch(/"workspace",/)
+  expect(router).not.toMatch(/"retry",/)
+  expect(tabs).toMatch(/SETTINGS_GROUP_DEFS/)
+  expect(tabs).not.toMatch(/id: "workspace",/)
+  expect(tabs).not.toMatch(/id: "retry",/)
+  expect(tabs).toMatch(
+    /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/,
+  )
+  expect(tabs).toMatch(
+    /"capabilities",[\s\S]*?tabIds: \["models", "model-config", "packages", "agent-config", "skills"\]/,
+  )
+  expect(general).toMatch(/<WorkspaceSettings \/>/)
+  expect(general).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  expect(workspace).toMatch(/OpenWithSettings/)
+  expect(workspace).toMatch(/ProjectlessSettings/)
+  expect(page).toMatch(/v-for="group in visibleGroups"/)
+  expect(page).toMatch(/<ScrollArea class="settings-menu/)
+  expect(page).toMatch(/NAV_WIDTH_STORAGE_KEY = "pix\.settings-nav-width"/)
+  expect(page).toMatch(/startNavResize/)
+  expect(page).toMatch(/resizeNavWithKeyboard/)
+  expect(page).toMatch(/17rem/)
 })

@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsModule, loadTsSource } from "./lib/load-ts.mjs"
 
@@ -114,81 +113,75 @@ const plain = value => JSON.parse(JSON.stringify(value))
 
 test("totals aggregate lines across files", () => {
   const h = harness([file("a.ts", { added: 2, removed: 1 }), file("b.ts", { added: 0, removed: 3 })])
-  assert.deepEqual(plain(h.totals.value), { added: 2, removed: 4 })
+  expect(plain(h.totals.value)).toEqual({ added: 2, removed: 4 })
 })
 
 test("rows show project files as relative paths with a dimmed directory part", () => {
   const h = harness([file("C:/code/demo/src/lib/a.ts"), file("D:/other/b.ts")])
-  assert.deepEqual(plain(h.rows.value.map(row => ({ display: row.display, dir: row.dir, base: row.base }))), [
+  expect(plain(h.rows.value.map(row => ({ display: row.display, dir: row.dir, base: row.base })))).toEqual([
     { display: "src/lib/a.ts", dir: "src/lib/", base: "a.ts" },
     { display: "D:/other/b.ts", dir: "D:/other/", base: "b.ts" },
   ])
   // 行内保留原始路径作为审查定位与回滚的标识。
-  assert.deepEqual(
-    h.rows.value.map(row => row.file.path),
-    ["C:/code/demo/src/lib/a.ts", "D:/other/b.ts"],
-  )
+  expect(h.rows.value.map(row => row.file.path)).toEqual(["C:/code/demo/src/lib/a.ts", "D:/other/b.ts"])
 })
 
 test("git snapshot revert takes precedence and swaps the checkpoint direction", async () => {
   const h = harness([file("src/a.ts", { added: 2, removed: 1 }), file("conflict.ts")], {
     checkpoint: checkpointRecord("active"),
   })
-  assert.equal(h.gitRevertible.value, true)
+  expect(h.gitRevertible.value).toBe(true)
   await h.revert(h.revertibleFiles.value, true)
-  assert.equal(h.restoreCalls.length, 1)
-  assert.equal(h.restoreCalls[0].project, "C:/code/demo")
+  expect(h.restoreCalls.length).toBe(1)
+  expect(h.restoreCalls[0].project).toBe("C:/code/demo")
   // 回滚 = 从结束态恢复到轮开始前的快照；整轮回滚不传路径子集。
-  assert.equal(h.restoreCalls[0].from, "end-oid")
-  assert.equal(h.restoreCalls[0].to, "start-oid")
-  assert.equal(h.restoreCalls[0].paths, undefined)
+  expect(h.restoreCalls[0].from).toBe("end-oid")
+  expect(h.restoreCalls[0].to).toBe("start-oid")
+  expect(h.restoreCalls[0].paths).toBe(undefined)
   const event = h.emitted.find(([name]) => name === "reverted")
-  assert.equal(event[1].length, 2)
-  assert.equal(event[1][0].ok, true)
-  assert.equal(event[1][1].ok, false)
+  expect(event[1].length).toBe(2)
+  expect(event[1][0].ok).toBe(true)
+  expect(event[1][1].ok).toBe(false)
   // 存在冲突时不发 revertedAll（未完全回滚）。
-  assert.equal(
-    h.emitted.some(([name]) => name === "revertedAll"),
-    false,
-  )
+  expect(h.emitted.some(([name]) => name === "revertedAll")).toBe(false)
 })
 
 test("full git revert success emits revertedAll; single file passes a path subset", async () => {
   const h = harness([file("src/a.ts")], { checkpoint: checkpointRecord("active") })
   await h.revert(h.revertibleFiles.value, true)
-  assert.ok(h.emitted.some(([name]) => name === "revertedAll"))
+  expect(h.emitted.some(([name]) => name === "revertedAll")).toBeTruthy()
 
   await h.revert([h.props.files[0]], false)
-  assert.deepEqual(h.restoreCalls.at(-1).paths, ["src/a.ts"])
+  expect(h.restoreCalls.at(-1).paths).toEqual(["src/a.ts"])
 })
 
 test("turn without a checkpoint falls back to content replay", async () => {
   const h = harness([file("a.ts", { ops: [{ kind: "replace", before: "x", after: "y" }] })])
-  assert.equal(h.gitRevertible.value, false)
+  expect(h.gitRevertible.value).toBe(false)
   await h.revert(h.revertibleFiles.value, true)
-  assert.equal(h.restoreCalls.length, 0)
-  assert.equal(h.revertCalls.length, 1)
-  assert.deepEqual(h.revertCalls[0].list[0].ops, [{ kind: "replace", before: "x", after: "y" }])
-  assert.ok(h.emitted.some(([name]) => name === "revertedAll"))
+  expect(h.restoreCalls.length).toBe(0)
+  expect(h.revertCalls.length).toBe(1)
+  expect(h.revertCalls[0].list[0].ops).toEqual([{ kind: "replace", before: "x", after: "y" }])
+  expect(h.emitted.some(([name]) => name === "revertedAll")).toBeTruthy()
 })
 
 test("reverted turns keep the badge and drop the undo affordances", () => {
   const h = harness([file("a.ts")], { checkpoint: checkpointRecord("reverted") })
-  assert.equal(h.turnReverted.value, true)
-  assert.equal(h.gitRevertible.value, false)
-  assert.equal(h.revertibleFiles.value.length, 1)
+  expect(h.turnReverted.value).toBe(true)
+  expect(h.gitRevertible.value).toBe(false)
+  expect(h.revertibleFiles.value.length).toBe(1)
   // 模板：已回滚徽标 + 头部按钮隐藏 + 行内显示成功图标。
-  assert.ok(source.includes(`v-if="(revertibleFiles.length || hasArtifacts) && !isTurnReverted"`))
-  assert.ok(source.includes(`v-if="isTurnReverted || reverted.has(row.file.path)"`))
+  expect(source.includes(`v-if="(revertibleFiles.length || hasArtifacts) && !isTurnReverted"`)).toBeTruthy()
+  expect(source.includes(`v-if="isTurnReverted || reverted.has(row.file.path)"`)).toBeTruthy()
 })
 
 test("template wires expand toggle, review opening and per-file actions", () => {
-  assert.ok(source.includes(':aria-expanded="expanded"'))
-  assert.ok(source.includes(`emit('openReview', row.file.path)`))
-  assert.ok(source.includes("confirmOpen = true"))
-  assert.ok(source.includes('@click="confirmRevertAll"'))
-  assert.ok(source.includes("revert([row.file], false)"))
-  assert.ok(source.includes(':disabled="busy || !row.file.revertible"'))
+  expect(source.includes(':aria-expanded="expanded"')).toBeTruthy()
+  expect(source.includes(`emit('openReview', row.file.path)`)).toBeTruthy()
+  expect(source.includes("confirmOpen = true")).toBeTruthy()
+  expect(source.includes('@click="confirmRevertAll"')).toBeTruthy()
+  expect(source.includes("revert([row.file], false)")).toBeTruthy()
+  expect(source.includes(':disabled="busy || !row.file.revertible"')).toBeTruthy()
 })
 
 const artifact = () => ({
@@ -207,24 +200,24 @@ test("artifact preview blocks apply when any file is unsafe", async () => {
     ignoredFiles: [],
   }
   const h = harness([file("a.ts")], { artifacts: [artifact()], preview: unsafe })
-  assert.equal(h.hasArtifacts.value, true)
+  expect(h.hasArtifacts.value).toBe(true)
   await h.openArtifactRewind()
-  assert.equal(h.rewindOpen.value, true)
-  assert.equal(h.rewindPreview.value.canApply, false)
-  assert.equal(h.previewCalls.length, 1)
+  expect(h.rewindOpen.value).toBe(true)
+  expect(h.rewindPreview.value.canApply).toBe(false)
+  expect(h.previewCalls.length).toBe(1)
   await h.confirmArtifactRewind()
-  assert.equal(h.applyCalls.length, 0)
-  assert.ok(source.includes('t("turnChanges.rewindUnsafe")'))
-  assert.ok(source.includes('t("turnChanges.rewindReasonExternalModified")'))
+  expect(h.applyCalls.length).toBe(0)
+  expect(source.includes('t("turnChanges.rewindUnsafe")')).toBeTruthy()
+  expect(source.includes('t("turnChanges.rewindReasonExternalModified")')).toBeTruthy()
 })
 
 test("artifact preview applies safe files and persists the reverted state", async () => {
   const h = harness([file("a.ts")], { artifacts: [artifact()] })
   await h.openArtifactRewind()
-  assert.equal(h.rewindPreview.value.canApply, true)
+  expect(h.rewindPreview.value.canApply).toBe(true)
   await h.confirmArtifactRewind()
-  assert.equal(h.applyCalls.length, 1)
-  assert.equal(h.isTurnReverted.value, true)
-  assert.ok(h.emitted.some(([name]) => name === "revertedAll"))
-  assert.ok(source.includes('t("turnChanges.rewindApply")'))
+  expect(h.applyCalls.length).toBe(1)
+  expect(h.isTurnReverted.value).toBe(true)
+  expect(h.emitted.some(([name]) => name === "revertedAll")).toBeTruthy()
+  expect(source.includes('t("turnChanges.rewindApply")')).toBeTruthy()
 })

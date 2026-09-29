@@ -1,6 +1,5 @@
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { test } from "node:test"
-import assert from "node:assert/strict"
 import ts from "typescript"
 
 const source = readFileSync(new URL("../src/stores/composerDrafts.ts", import.meta.url), "utf8")
@@ -18,21 +17,21 @@ const load = () => import(`data:text/javascript;base64,${Buffer.from(js).toStrin
 test("a project new-session draft is restored, then cleared after sending", async () => {
   const drafts = await load()
   drafts.recordComposerDraft("C:/project", null, "unsent project text")
-  assert.equal(drafts.composerDraftText("C:/project", null), "unsent project text")
-  assert.equal(drafts.composerDraftText("C:/other-project", null), "")
+  expect(drafts.composerDraftText("C:/project", null)).toBe("unsent project text")
+  expect(drafts.composerDraftText("C:/other-project", null)).toBe("")
 
   const restored = await load()
-  assert.equal(restored.composerDraftText("C:/project", null), "unsent project text")
+  expect(restored.composerDraftText("C:/project", null)).toBe("unsent project text")
   restored.recordComposerDraft("C:/project", null, "")
   restored.recordComposerDraft("C:/project", "C:/sessions/one.jsonl", "")
-  assert.equal(restored.composerDraftText("C:/project", null), "")
-  assert.equal(restored.composerDraftText("C:/project", "C:/sessions/one.jsonl"), "")
+  expect(restored.composerDraftText("C:/project", null)).toBe("")
+  expect(restored.composerDraftText("C:/project", "C:/sessions/one.jsonl")).toBe("")
 })
 
 test("saved session drafts remain independent from the project new-session input", async () => {
   const drafts = await load()
   drafts.recordComposerDraft("C:/project", null, "next session")
   drafts.recordComposerDraft("C:/project", "C:/sessions/one.jsonl", "existing session")
-  assert.equal(drafts.composerDraftText("C:/project", null), "next session")
-  assert.equal(drafts.composerDraftText("C:/project", "C:/sessions/one.jsonl"), "existing session")
+  expect(drafts.composerDraftText("C:/project", null)).toBe("next session")
+  expect(drafts.composerDraftText("C:/project", "C:/sessions/one.jsonl")).toBe("existing session")
 })

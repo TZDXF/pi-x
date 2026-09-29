@@ -1,5 +1,4 @@
-import test from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -62,38 +61,38 @@ const plain = { closest: () => null }
 
 test("defaults resolve and overrides persist to storage", () => {
   const { api, storage } = harness(null)
-  assert.equal(api.shortcutCombo("app.newSession"), "ctrl+n")
-  assert.equal(api.isShortcutModified("app.newSession"), false)
+  expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
+  expect(api.isShortcutModified("app.newSession")).toBe(false)
 
   api.setShortcutOverride("app.newSession", "ctrl+alt+n")
-  assert.equal(api.shortcutCombo("app.newSession"), "ctrl+alt+n")
-  assert.equal(api.isShortcutModified("app.newSession"), true)
-  assert.deepEqual(JSON.parse(storage()), { "app.newSession": "ctrl+alt+n" })
+  expect(api.shortcutCombo("app.newSession")).toBe("ctrl+alt+n")
+  expect(api.isShortcutModified("app.newSession")).toBe(true)
+  expect(JSON.parse(storage())).toEqual({ "app.newSession": "ctrl+alt+n" })
 
   // overrides load from storage on startup
   const reloaded = harness(JSON.stringify({ "app.newSession": "ctrl+alt+n", bogus: "x" }))
-  assert.equal(reloaded.api.shortcutCombo("app.newSession"), "ctrl+alt+n")
+  expect(reloaded.api.shortcutCombo("app.newSession")).toBe("ctrl+alt+n")
 
   // resetting to the default removes the stored override
   api.setShortcutOverride("app.newSession", "ctrl+n")
-  assert.equal(api.isShortcutModified("app.newSession"), false)
-  assert.equal(storage(), null)
+  expect(api.isShortcutModified("app.newSession")).toBe(false)
+  expect(storage()).toBe(null)
 
   api.setShortcutOverride("app.newSession", "ctrl+alt+n")
   api.resetAllShortcuts()
-  assert.equal(api.shortcutCombo("app.newSession"), "ctrl+n")
-  assert.equal(storage(), null)
+  expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
+  expect(storage()).toBe(null)
 })
 
 test("comboFromEvent normalizes modifiers, keys, IME and modifiers-only presses", () => {
   const { api } = harness(null)
-  assert.equal(api.comboFromEvent(keyEvent("E", { ctrl: true, shift: true })), "ctrl+shift+e")
-  assert.equal(api.comboFromEvent(keyEvent("ArrowUp", { alt: true })), "alt+arrowup")
-  assert.equal(api.comboFromEvent(keyEvent(" ")), "space")
-  assert.equal(api.comboFromEvent(keyEvent("Escape")), "escape")
-  assert.equal(api.comboFromEvent(keyEvent("`", { ctrl: true })), "ctrl+`")
-  assert.equal(api.comboFromEvent(keyEvent("Shift")), null)
-  assert.equal(api.comboFromEvent(keyEvent("e", { ctrl: true, composing: true })), null)
+  expect(api.comboFromEvent(keyEvent("E", { ctrl: true, shift: true }))).toBe("ctrl+shift+e")
+  expect(api.comboFromEvent(keyEvent("ArrowUp", { alt: true }))).toBe("alt+arrowup")
+  expect(api.comboFromEvent(keyEvent(" "))).toBe("space")
+  expect(api.comboFromEvent(keyEvent("Escape"))).toBe("escape")
+  expect(api.comboFromEvent(keyEvent("`", { ctrl: true }))).toBe("ctrl+`")
+  expect(api.comboFromEvent(keyEvent("Shift"))).toBe(null)
+  expect(api.comboFromEvent(keyEvent("e", { ctrl: true, composing: true }))).toBe(null)
 })
 
 test("dispatchShortcut resolves handlers and respects scope and suppression", () => {
@@ -114,52 +113,52 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
   ]
 
   // sidebar action fires anywhere
-  assert.equal(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain)), true)
-  assert.equal(sidebarHits, 1)
+  expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(true)
+  expect(sidebarHits).toBe(1)
 
   // editor-scope action needs an editable target
-  assert.equal(api.dispatchShortcut(keyEvent("A", { ctrl: true, shift: true }, plain)), false)
-  assert.equal(editorHits, 0)
-  assert.equal(api.dispatchShortcut(keyEvent("A", { ctrl: true, shift: true }, editable)), true)
-  assert.equal(editorHits, 1)
+  expect(api.dispatchShortcut(keyEvent("A", { ctrl: true, shift: true }, plain))).toBe(false)
+  expect(editorHits).toBe(0)
+  expect(api.dispatchShortcut(keyEvent("A", { ctrl: true, shift: true }, editable))).toBe(true)
+  expect(editorHits).toBe(1)
 
   // bare keys never hijack typing, but Escape stays available
-  assert.equal(api.dispatchShortcut(keyEvent("a", {}, editable)), false)
-  assert.equal(api.dispatchShortcut(keyEvent("Escape", {}, editable)), true)
-  assert.equal(stopHits, 1)
+  expect(api.dispatchShortcut(keyEvent("a", {}, editable))).toBe(false)
+  expect(api.dispatchShortcut(keyEvent("Escape", {}, editable))).toBe(true)
+  expect(stopHits).toBe(1)
 
   // unbound combos do nothing
-  assert.equal(api.dispatchShortcut(keyEvent("k", { ctrl: true, alt: true }, plain)), false)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true, alt: true }, plain))).toBe(false)
 
   // suppressed while a dialog is open
   api.setShortcutsSuppressed("chat-dialogs", true)
-  assert.equal(api.shortcutsSuppressed.value, true)
-  assert.equal(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain)), false)
+  expect(api.shortcutsSuppressed.value).toBe(true)
+  expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(false)
   api.setShortcutsSuppressed("chat-dialogs", false)
-  assert.equal(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain)), true)
-  assert.equal(sidebarHits, 2)
+  expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(true)
+  expect(sidebarHits).toBe(2)
 
   offs.forEach(off => off())
-  assert.equal(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain)), false)
+  expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(false)
 })
 
 test("resolve and conflict detection cover custom bindings and locked keys", () => {
   const { api } = harness(null)
-  assert.equal(api.resolveShortcut("ctrl+shift+e"), "sidebar.files")
-  assert.equal(api.findShortcutConflict("ctrl+shift+e"), "sidebar.files")
-  assert.equal(api.findShortcutConflict("enter"), "editor.send")
-  assert.equal(api.findShortcutConflict("shift+enter"), "editor.newline")
+  expect(api.resolveShortcut("ctrl+shift+e")).toBe("sidebar.files")
+  expect(api.findShortcutConflict("ctrl+shift+e")).toBe("sidebar.files")
+  expect(api.findShortcutConflict("enter")).toBe("editor.send")
+  expect(api.findShortcutConflict("shift+enter")).toBe("editor.newline")
 
   api.setShortcutOverride("sidebar.files", "ctrl+shift+x")
-  assert.equal(api.resolveShortcut("ctrl+shift+x"), "sidebar.files")
-  assert.equal(api.resolveShortcut("ctrl+shift+e"), null)
-  assert.equal(api.findShortcutConflict("ctrl+shift+x", "sidebar.files"), null)
+  expect(api.resolveShortcut("ctrl+shift+x")).toBe("sidebar.files")
+  expect(api.resolveShortcut("ctrl+shift+e")).toBe(null)
+  expect(api.findShortcutConflict("ctrl+shift+x", "sidebar.files")).toBe(null)
 })
 
 test("formatComboParts renders human-readable key segments", () => {
   const { api } = harness(null)
-  assert.deepEqual([...api.formatComboParts("ctrl+shift+e")], ["Ctrl", "Shift", "E"])
-  assert.deepEqual([...api.formatComboParts("alt+arrowup")], ["Alt", "↑"])
-  assert.deepEqual([...api.formatComboParts("escape")], ["Esc"])
-  assert.deepEqual([...api.formatComboParts("ctrl+,")], ["Ctrl", ","])
+  expect([...api.formatComboParts("ctrl+shift+e")]).toEqual(["Ctrl", "Shift", "E"])
+  expect([...api.formatComboParts("alt+arrowup")]).toEqual(["Alt", "↑"])
+  expect([...api.formatComboParts("escape")]).toEqual(["Esc"])
+  expect([...api.formatComboParts("ctrl+,")]).toEqual(["Ctrl", ","])
 })

@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsModule, loadTsSource, pathsModule } from "./lib/load-ts.mjs"
 
@@ -24,12 +23,12 @@ test("collects successful edits grouped by file with line totals", () => {
     block("b", "edit", { path: "src/a.ts", oldText: "c", newText: "e" }),
   ]
   const files = turnFileChanges(blocks, { ...ok("a"), ...ok("b") })
-  assert.equal(files.length, 1)
-  assert.equal(files[0].path, "src/a.ts")
-  assert.equal(files[0].added, 3)
-  assert.equal(files[0].removed, 2)
-  assert.equal(files[0].revertible, true)
-  assert.deepEqual(plain(files[0].ops), [
+  expect(files.length).toBe(1)
+  expect(files[0].path).toBe("src/a.ts")
+  expect(files[0].added).toBe(3)
+  expect(files[0].removed).toBe(2)
+  expect(files[0].revertible).toBe(true)
+  expect(plain(files[0].ops)).toEqual([
     { kind: "replace", before: "a\nb\n", after: "a\nc\nd\n" },
     { kind: "replace", before: "c", after: "e" },
   ])
@@ -37,37 +36,32 @@ test("collects successful edits grouped by file with line totals", () => {
 
 test("ignores failed, running and malformed calls", () => {
   const edit = block("a", "edit", { path: "a", oldText: "x", newText: "y" })
-  assert.deepEqual(
+  expect(
     plain(
       turnFileChanges([edit], { a: { id: "a", name: "tool", argsText: "", outputText: "", state: "output-error" } }),
     ),
-    [],
-  )
-  assert.deepEqual(
+  ).toEqual([])
+  expect(
     plain(
       turnFileChanges([edit], { a: { id: "a", name: "tool", argsText: "", outputText: "", state: "input-available" } }),
     ),
-    [],
-  )
-  assert.deepEqual(plain(turnFileChanges([edit], {})), [])
-  assert.deepEqual(
-    plain(turnFileChanges([{ type: "toolCall", callId: "a", name: "edit", argsText: "{" }], ok("a"))),
-    [],
-  )
-  assert.deepEqual(plain(turnFileChanges([block("r", "read", { path: "a" })], ok("r"))), [])
-  assert.deepEqual(plain(turnFileChanges([block("s", "bash", { command: "sed -i s/a/b/" })], ok("s"))), [])
+  ).toEqual([])
+  expect(plain(turnFileChanges([edit], {}))).toEqual([])
+  expect(plain(turnFileChanges([{ type: "toolCall", callId: "a", name: "edit", argsText: "{" }], ok("a")))).toEqual([])
+  expect(plain(turnFileChanges([block("r", "read", { path: "a" })], ok("r")))).toEqual([])
+  expect(plain(turnFileChanges([block("s", "bash", { command: "sed -i s/a/b/" })], ok("s")))).toEqual([])
 })
 
 test("created files revert by deletion; plain writes are not revertible", () => {
   const [created] = turnFileChanges([block("c", "create_file", { path: "new.ts", content: "hello\n" })], ok("c"))
-  assert.equal(created.revertible, true)
-  assert.deepEqual(plain(created.ops), [{ kind: "delete", content: "hello\n" }])
+  expect(created.revertible).toBe(true)
+  expect(plain(created.ops)).toEqual([{ kind: "delete", content: "hello\n" }])
 
   const [written] = turnFileChanges([block("w", "write", { path: "a.ts", content: "hello\nworld" })], ok("w"))
-  assert.equal(written.unknown, true)
-  assert.equal(written.revertible, false)
+  expect(written.unknown).toBe(true)
+  expect(written.revertible).toBe(false)
   // 未知原内容按"全部为新增"统计。
-  assert.equal(written.added, 2)
+  expect(written.added).toBe(2)
 })
 
 test("a single non-revertible call marks the whole file as such", () => {
@@ -76,9 +70,9 @@ test("a single non-revertible call marks the whole file as such", () => {
     block("w", "write", { path: "a.ts", content: "overwritten" }),
   ]
   const [file] = turnFileChanges(blocks, { ...ok("a"), ...ok("w") })
-  assert.equal(file.revertible, false)
+  expect(file.revertible).toBe(false)
   // 可还原的编辑操作仍被记录，供失败提示与调试。
-  assert.deepEqual(plain(file.ops), [{ kind: "replace", before: "x", after: "y" }])
+  expect(plain(file.ops)).toEqual([{ kind: "replace", before: "x", after: "y" }])
 })
 
 test("multi-edit aliases produce ordered replace ops", () => {
@@ -94,8 +88,8 @@ test("multi-edit aliases produce ordered replace ops", () => {
     ],
     ok("m"),
   )
-  assert.equal(file.path, "a.ts")
-  assert.deepEqual(plain(file.ops), [
+  expect(file.path).toBe("a.ts")
+  expect(plain(file.ops)).toEqual([
     { kind: "replace", before: "a", after: "b" },
     { kind: "replace", before: "b", after: "c" },
   ])
@@ -103,5 +97,5 @@ test("multi-edit aliases produce ordered replace ops", () => {
 
 test("path separators are normalized for grouping", () => {
   const files = turnFileChanges([block("a", "edit", { path: "src\\lib\\a.ts", oldText: "x", newText: "y" })], ok("a"))
-  assert.equal(files[0].path, "src/lib/a.ts")
+  expect(files[0].path).toBe("src/lib/a.ts")
 })

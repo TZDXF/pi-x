@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 const { scheduleExpression, parseScheduleExpression } = loadTsSource(
@@ -18,11 +17,10 @@ test("all schedule presets round trip without shifting time or weekday", () => {
     ["monthly", "15 9 31 * *"],
   ]) {
     const expression = scheduleExpression(frequency, "09:15", "FRI", 31, "")
-    assert.equal(expression, expected)
+    expect(expression).toBe(expected)
     const parsed = parseScheduleExpression(expression)
-    assert.equal(parsed.frequency, frequency)
-    assert.equal(
-      scheduleExpression(parsed.frequency, parsed.time, parsed.weekday, parsed.day, parsed.custom),
+    expect(parsed.frequency).toBe(frequency)
+    expect(scheduleExpression(parsed.frequency, parsed.time, parsed.weekday, parsed.day, parsed.custom)).toBe(
       expression,
     )
   }
@@ -30,25 +28,23 @@ test("all schedule presets round trip without shifting time or weekday", () => {
 test("custom expressions are preserved when editing", () => {
   for (const expression of ["*/15 9-17 * * MON-FRI", "0 0 1,15 * *", "0 9 * 2 MON"]) {
     const parsed = parseScheduleExpression(expression)
-    assert.equal(parsed.frequency, "custom")
-    assert.equal(
-      scheduleExpression(parsed.frequency, parsed.time, parsed.weekday, parsed.day, parsed.custom),
+    expect(parsed.frequency).toBe("custom")
+    expect(scheduleExpression(parsed.frequency, parsed.time, parsed.weekday, parsed.day, parsed.custom)).toBe(
       expression,
     )
   }
 })
 test("rejects invalid preset values", () => {
   for (const time of ["24:00", "09:60", "", "9:00"])
-    assert.throws(() => scheduleExpression("daily", time, "MON", 1, ""))
-  for (const day of [0, 32, 1.5, NaN]) assert.throws(() => scheduleExpression("monthly", "09:00", "MON", day, ""))
-  assert.throws(() => scheduleExpression("weekly", "09:00", "INVALID", 1, ""))
+    expect(() => scheduleExpression("daily", time, "MON", 1, "")).toThrow()
+  for (const day of [0, 32, 1.5, NaN]) expect(() => scheduleExpression("monthly", "09:00", "MON", day, "")).toThrow()
+  expect(() => scheduleExpression("weekly", "09:00", "INVALID", 1, "")).toThrow()
 })
 test("shared thinking levels respect model capability maps", () => {
-  assert.deepEqual([...supportedThinkingLevels({ reasoning: false })], ["off"])
-  assert.deepEqual(
-    [...supportedThinkingLevels({ reasoning: true, thinkingLevelMap: { low: null, xhigh: "xhigh", max: null } })],
-    ["off", "minimal", "medium", "high", "xhigh"],
-  )
+  expect([...supportedThinkingLevels({ reasoning: false })]).toEqual(["off"])
+  expect([
+    ...supportedThinkingLevels({ reasoning: true, thinkingLevelMap: { low: null, xhigh: "xhigh", max: null } }),
+  ]).toEqual(["off", "minimal", "medium", "high", "xhigh"])
 })
 
 test("scheduled tasks use a workspace route and a page with the instructions last", () => {
@@ -56,34 +52,33 @@ test("scheduled tasks use a workspace route and a page with the instructions las
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
   const page = readFileSync(new URL("../src/components/ScheduledTasksPage.vue", import.meta.url), "utf8")
   const router = readFileSync(new URL("../src/lib/router.ts", import.meta.url), "utf8")
-  assert.match(router, /name: "schedules"/)
-  assert.match(app, /<ScheduledTasksPage[^>]*v-if="route.name === 'schedules'"/)
-  assert.match(sidebar, /@click="emit\('schedules'\)"/)
-  assert.doesNotMatch(sidebar, /ScheduledTasksDialog/)
-  assert.match(page, /<TimeFieldRoot[^>]*v-model="timeValue"/)
-  assert.match(
-    page,
+  expect(router).toMatch(/name: "schedules"/)
+  expect(app).toMatch(/<ScheduledTasksPage[^>]*v-if="route.name === 'schedules'"/)
+  expect(sidebar).toMatch(/@click="emit\('schedules'\)"/)
+  expect(sidebar).not.toMatch(/ScheduledTasksDialog/)
+  expect(page).toMatch(/<TimeFieldRoot[^>]*v-model="timeValue"/)
+  expect(page).toMatch(
     /<SelectItem v-for="path in projects"[^>]*>\s*{{\s*workspace\.projectName\(path\)\s*}}<\/SelectItem>/,
   )
-  assert.ok(page.indexOf("schedules.prompt") > page.indexOf('id="schedule-thinking"'))
+  expect(page.indexOf("schedules.prompt") > page.indexOf('id="schedule-thinking"')).toBeTruthy()
 })
 
 test("scheduled runs get unique Pix-owned runtimes and publish before prompting", () => {
   const source = readFileSync(new URL("../src-tauri/src/schedules.rs", import.meta.url), "utf8")
-  assert.match(source, /let id = format!\("schedule-\{}", uuid::Uuid::new_v4\(\)\);/)
-  assert.ok(
+  expect(source).toMatch(/let id = format!\("schedule-\{}", uuid::Uuid::new_v4\(\)\);/)
+  expect(
     source.indexOf('"type": "scheduled_session_created"') <
       source.indexOf('json!({"type":"prompt", "message":input.prompt})'),
-  )
-  assert.match(source, /current\.session_file = Some\(file\.clone\(\)\);[\s\S]*persist\(&updated\)\?;/)
-  assert.match(source, /notify_schedules_changed\(app\);[\s\S]*published = true/)
+  ).toBeTruthy()
+  expect(source).toMatch(/current\.session_file = Some\(file\.clone\(\)\);[\s\S]*persist\(&updated\)\?;/)
+  expect(source).toMatch(/notify_schedules_changed\(app\);[\s\S]*published = true/)
 })
 
 test("scheduled workers remain visible to Pix while retaining their backend event channel", () => {
   const source = readFileSync(new URL("../src-tauri/src/rpc.rs", import.meta.url), "utf8")
   const emit = source.slice(source.indexOf("fn emit_process_event"), source.indexOf("const CREATE_NO_WINDOW"))
-  assert.match(emit, /pi:\/\/schedule-/)
-  assert.match(emit, /crate::remote::emit\(app, event, payload\)/)
+  expect(emit).toMatch(/pi:\/\/schedule-/)
+  expect(emit).toMatch(/crate::remote::emit\(app, event, payload\)/)
   const list = source.slice(source.indexOf("pub async fn list"), source.indexOf("pub(crate) async fn set_session_name"))
-  assert.doesNotMatch(list, /starts_with\("schedule-"\)/)
+  expect(list).not.toMatch(/starts_with\("schedule-"\)/)
 })

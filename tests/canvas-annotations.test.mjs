@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 
@@ -53,18 +52,18 @@ test("applies color and width before drawing", () => {
     color: "#ff0000",
     strokeWidth: 3,
   })
-  assert.equal(ctx.props.strokeStyle, "#ff0000")
-  assert.equal(ctx.props.lineWidth, 3)
-  assert.deepEqual(ctx.calls[0], ["beginPath"])
-  assert.deepEqual(ctx.calls[1], ["moveTo", 0, 0])
-  assert.deepEqual(ctx.calls[2], ["lineTo", 10, 10])
-  assert.deepEqual(ctx.calls[3], ["stroke"])
+  expect(ctx.props.strokeStyle).toBe("#ff0000")
+  expect(ctx.props.lineWidth).toBe(3)
+  expect(ctx.calls[0]).toEqual(["beginPath"])
+  expect(ctx.calls[1]).toEqual(["moveTo", 0, 0])
+  expect(ctx.calls[2]).toEqual(["lineTo", 10, 10])
+  expect(ctx.calls[3]).toEqual(["stroke"])
 })
 
 test("pen strokes need at least two points", () => {
   const ctx = stubCtx()
   drawAnnotation(ctx, { id: "a", tool: "pen", points: [{ x: 1, y: 1 }], color: "#000", strokeWidth: 2 })
-  assert.deepEqual(ctx.calls, [])
+  expect(ctx.calls).toEqual([])
 })
 
 test("rect normalizes drag direction", () => {
@@ -79,7 +78,7 @@ test("rect normalizes drag direction", () => {
     color: "#000",
     strokeWidth: 2,
   })
-  assert.deepEqual(ctx.calls.at(-1), ["strokeRect", 40, 10, 60, 40])
+  expect(ctx.calls.at(-1)).toEqual(["strokeRect", 40, 10, 60, 40])
 })
 
 test("ellipse is centered on the drag bounds", () => {
@@ -95,11 +94,11 @@ test("ellipse is centered on the drag bounds", () => {
     strokeWidth: 2,
   })
   const [name, cx, cy, rx, ry] = ctx.calls.find(call => call[0] === "ellipse")
-  assert.equal(name, "ellipse")
-  assert.equal(cx, 50)
-  assert.equal(cy, 30)
-  assert.equal(rx, 50)
-  assert.equal(ry, 30)
+  expect(name).toBe("ellipse")
+  expect(cx).toBe(50)
+  expect(cy).toBe(30)
+  expect(rx).toBe(50)
+  expect(ry).toBe(30)
 })
 
 test("text uses a size derived from the stroke width", () => {
@@ -112,12 +111,12 @@ test("text uses a size derived from the stroke width", () => {
     strokeWidth: 2,
     text: "看这里",
   })
-  assert.equal(ctx.props.font, "22px sans-serif")
-  assert.deepEqual(ctx.calls.at(-1), ["fillText", "看这里", 5, 20])
+  expect(ctx.props.font).toBe("22px sans-serif")
+  expect(ctx.calls.at(-1)).toEqual(["fillText", "看这里", 5, 20])
   // 没有文字内容时不绘制。
   const empty = stubCtx()
   drawAnnotation(empty, { id: "b", tool: "text", points: [{ x: 5, y: 20 }], color: "#000", strokeWidth: 2 })
-  assert.deepEqual(empty.calls, [])
+  expect(empty.calls).toEqual([])
 })
 
 test("arrow draws a shaft and a triangular head", () => {
@@ -125,9 +124,9 @@ test("arrow draws a shaft and a triangular head", () => {
   ctx.lineWidth = 2
   drawArrow(ctx, { x: 0, y: 0 }, { x: 100, y: 0 })
   const strokes = ctx.calls.filter(call => call[0] === "moveTo")
-  assert.deepEqual(strokes[0], ["moveTo", 0, 0])
-  assert.deepEqual(strokes[1], ["moveTo", 100, 0])
+  expect(strokes[0]).toEqual(["moveTo", 0, 0])
+  expect(strokes[1]).toEqual(["moveTo", 100, 0])
   // 箭头头部由两条线段 + closePath + fill 构成。
-  assert.ok(ctx.calls.some(call => call[0] === "closePath"))
-  assert.ok(ctx.calls.some(call => call[0] === "fill"))
+  expect(ctx.calls.some(call => call[0] === "closePath")).toBeTruthy()
+  expect(ctx.calls.some(call => call[0] === "fill")).toBeTruthy()
 })

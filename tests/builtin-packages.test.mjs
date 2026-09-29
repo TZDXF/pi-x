@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -38,22 +37,22 @@ function harness(t, options = {}) {
   })
   vm.runInContext(ts.transpile(script, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
   const scope = effectScope()
-  t.after(() => scope.stop())
+  t.onTestFinished(() => scope.stop())
   return { api: scope.run(() => context.exports.usePackages(() => undefined)), saved }
 }
 
 test("built-in file tracking defaults to enabled and persists toggles", async t => {
   const { api, saved } = harness(t, { config: {} })
   await api.loadBuiltinPlugins()
-  assert.equal(api.builtinFileChanges.value, true)
+  expect(api.builtinFileChanges.value).toBe(true)
   await api.setBuiltinFileChanges(false)
-  assert.equal(api.builtinFileChanges.value, false)
-  assert.equal(saved.at(-1).builtinFileChanges, false)
+  expect(api.builtinFileChanges.value).toBe(false)
+  expect(saved.at(-1).builtinFileChanges).toBe(false)
 })
 
 test("failed built-in toggle rolls back the switch", async t => {
   const { api } = harness(t, { config: { builtinFileChanges: true }, failSave: true })
   await api.loadBuiltinPlugins()
   await api.setBuiltinFileChanges(false)
-  assert.equal(api.builtinFileChanges.value, true)
+  expect(api.builtinFileChanges.value).toBe(true)
 })

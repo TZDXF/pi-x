@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 
@@ -101,12 +100,9 @@ test("bridge reports ready and navigated to the panel", () => {
   const env = makeEnvironment()
   vm.createContext(env.win)
   vm.runInContext(bridgeSource, env.win)
-  assert.deepEqual(
-    env.posted.map(message => message.type),
-    ["navigated", "ready"],
-  )
-  assert.equal(env.posted[0].source, "pix-preview")
-  assert.equal(env.posted[0].url, "http://127.0.0.1:9/p/s/http/localhost:5173/")
+  expect(env.posted.map(message => message.type)).toEqual(["navigated", "ready"])
+  expect(env.posted[0].source).toBe("pix-preview")
+  expect(env.posted[0].url).toBe("http://127.0.0.1:9/p/s/http/localhost:5173/")
 })
 
 test("enabling inspect registers pointer handlers and clicks report pins", () => {
@@ -115,9 +111,9 @@ test("enabling inspect registers pointer handlers and clicks report pins", () =>
   vm.runInContext(bridgeSource, env.win)
 
   pageMessage(env, { target: "pix-preview-page", type: "inspect", enabled: true })
-  assert.ok(env.listeners["document:mousemove"])
-  assert.ok(env.listeners["document:mousedown"])
-  assert.ok(env.listeners["document:mouseup"])
+  expect(env.listeners["document:mousemove"]).toBeTruthy()
+  expect(env.listeners["document:mousedown"]).toBeTruthy()
+  expect(env.listeners["document:mouseup"]).toBeTruthy()
 
   const target = clickTarget()
   dispatch(env, "mousemove", { target, pageX: 12, pageY: 14 })
@@ -125,14 +121,14 @@ test("enabling inspect registers pointer handlers and clicks report pins", () =>
   dispatch(env, "mouseup", { ...noopEvent, target, pageX: 13, pageY: 15 })
 
   const selected = env.posted.find(message => message.type === "selected")
-  assert.ok(selected, "click must report a selection")
+  expect(selected).toBeTruthy()
   // JSON round-trip: the bridge runs in a VM realm whose object prototypes
   // differ from the host's, which deepStrictEqual would reject.
   const selection = JSON.parse(JSON.stringify(selected))
-  assert.equal(selection.pin.selector, "button:nth-of-type(1)")
-  assert.equal(selection.pin.text, "Save")
+  expect(selection.pin.selector).toBe("button:nth-of-type(1)")
+  expect(selection.pin.text).toBe("Save")
   // Document coordinates include the scroll offset.
-  assert.deepEqual(selection.pin.rect, { x: 15, y: 27, width: 100, height: 30 })
+  expect(selection.pin.rect).toEqual({ x: 15, y: 27, width: 100, height: 30 })
 })
 
 test("dragging beyond the threshold reports an area selection", () => {
@@ -147,10 +143,10 @@ test("dragging beyond the threshold reports an area selection", () => {
   dispatch(env, "mouseup", { ...noopEvent, target, pageX: 60, pageY: 80 })
 
   const selected = env.posted.find(message => message.type === "selected")
-  assert.ok(selected, "drag must report a selection")
+  expect(selected).toBeTruthy()
   const selection = JSON.parse(JSON.stringify(selected))
-  assert.equal(selection.pin, undefined)
-  assert.deepEqual(selection.area.rect, { x: 10, y: 10, width: 50, height: 70 })
+  expect(selection.pin).toBe(undefined)
+  expect(selection.area.rect).toEqual({ x: 10, y: 10, width: 50, height: 70 })
 })
 
 test("disabling inspect removes the pointer handlers", () => {
@@ -159,9 +155,9 @@ test("disabling inspect removes the pointer handlers", () => {
   vm.runInContext(bridgeSource, env.win)
   pageMessage(env, { target: "pix-preview-page", type: "inspect", enabled: true })
   pageMessage(env, { target: "pix-preview-page", type: "inspect", enabled: false })
-  assert.equal((env.listeners["document:mousemove"] ?? []).length, 0)
-  assert.equal((env.listeners["document:mousedown"] ?? []).length, 0)
-  assert.equal((env.listeners["document:mouseup"] ?? []).length, 0)
+  expect((env.listeners["document:mousemove"] ?? []).length).toBe(0)
+  expect((env.listeners["document:mousedown"] ?? []).length).toBe(0)
+  expect((env.listeners["document:mouseup"] ?? []).length).toBe(0)
 })
 
 test("messages without the page target are ignored", () => {
@@ -171,15 +167,15 @@ test("messages without the page target are ignored", () => {
   // Would call history.back() if the guard failed.
   pageMessage(env, { source: "pix-preview", type: "back" })
   pageMessage(env, { type: "inspect", enabled: true })
-  assert.equal(env.listeners["document:mousedown"], undefined)
+  expect(env.listeners["document:mousedown"]).toBe(undefined)
 })
 
 test("panel posts plain JSON payloads so structured clone accepts them", () => {
   const panel = readFileSync(new URL("../src/components/browser/BrowserPanel.vue", import.meta.url), "utf8")
   const postToPage = panel.match(/function postToPage\(message: BridgeOutbound\) \{([\s\S]*?)\n\}/)
-  assert.ok(postToPage, "postToPage must exist in BrowserPanel.vue")
-  assert.match(postToPage[1], /JSON\.parse\(JSON\.stringify\(message\)\)/)
-  assert.doesNotMatch(postToPage[1], /postMessage\(message\b/)
+  expect(postToPage).toBeTruthy()
+  expect(postToPage[1]).toMatch(/JSON\.parse\(JSON\.stringify\(message\)\)/)
+  expect(postToPage[1]).not.toMatch(/postMessage\(message\b/)
 
   // The failure mode: payloads built from deep-ref values are reactive
   // proxies, and postMessage's structured clone rejects proxies outright.
@@ -188,7 +184,7 @@ test("panel posts plain JSON payloads so structured clone accepts them", () => {
     pin: { selector: "#save", text: "Save", rect: { x: 1, y: 2, width: 3, height: 4 } },
   }
   const proxied = new Proxy(raw, {})
-  assert.throws(() => structuredClone(proxied), /could not be cloned/)
+  expect(() => structuredClone(proxied)).toThrow(/could not be cloned/)
   const flattened = JSON.parse(JSON.stringify(proxied))
-  assert.deepEqual(flattened, JSON.parse(JSON.stringify(raw)))
+  expect(flattened).toEqual(JSON.parse(JSON.stringify(raw)))
 })

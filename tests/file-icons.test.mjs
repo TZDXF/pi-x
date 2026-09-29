@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { loadTsModule } from "./lib/load-ts.mjs"
 
 // fileIcons.ts 依赖 vscode-icons-js（CJS），把真实包的命名空间注入 require
@@ -9,24 +8,24 @@ const fileIcons = loadTsModule(new URL("../src/lib/fileIcons.ts", import.meta.ur
 )
 
 test("fileIcon maps extensions and special filenames to vscode-icons iconify names", () => {
-  assert.equal(fileIcons.fileIcon("foo.ts"), "vscode-icons:file-type-typescript")
-  assert.equal(fileIcons.fileIcon("src/components/ChatView.vue"), "vscode-icons:file-type-vue")
-  assert.equal(fileIcons.fileIcon("package.json"), "vscode-icons:file-type-npm")
+  expect(fileIcons.fileIcon("foo.ts")).toBe("vscode-icons:file-type-typescript")
+  expect(fileIcons.fileIcon("src/components/ChatView.vue")).toBe("vscode-icons:file-type-vue")
+  expect(fileIcons.fileIcon("package.json")).toBe("vscode-icons:file-type-npm")
 })
 
 test("fileIcon matches on the basename of posix and windows paths", () => {
-  assert.equal(fileIcons.fileIcon("src/lib/fileKind.ts"), "vscode-icons:file-type-typescript")
-  assert.equal(fileIcons.fileIcon("C:\\code\\pi-x\\src\\lib\\fileIcons.ts"), "vscode-icons:file-type-typescript")
+  expect(fileIcons.fileIcon("src/lib/fileKind.ts")).toBe("vscode-icons:file-type-typescript")
+  expect(fileIcons.fileIcon("C:\\code\\pi-x\\src\\lib\\fileIcons.ts")).toBe("vscode-icons:file-type-typescript")
 })
 
 test("fileIcon falls back to the default file icon for unknown or empty names", () => {
-  assert.equal(fileIcons.fileIcon("unknownxyz"), "vscode-icons:default-file")
-  assert.equal(fileIcons.fileIcon(""), "vscode-icons:default-file")
+  expect(fileIcons.fileIcon("unknownxyz")).toBe("vscode-icons:default-file")
+  expect(fileIcons.fileIcon("")).toBe("vscode-icons:default-file")
 })
 
 test("folderIcon honors the open state and falls back to default folder icons", () => {
-  assert.equal(fileIcons.folderIcon("src", false), "vscode-icons:folder-type-src")
-  assert.equal(fileIcons.folderIcon("src", true), "vscode-icons:folder-type-src-opened")
-  assert.equal(fileIcons.folderIcon("unknownxyz", false), "vscode-icons:default-folder")
-  assert.equal(fileIcons.folderIcon("unknownxyz", true), "vscode-icons:default-folder-opened")
+  expect(fileIcons.folderIcon("src", false)).toBe("vscode-icons:folder-type-src")
+  expect(fileIcons.folderIcon("src", true)).toBe("vscode-icons:folder-type-src-opened")
+  expect(fileIcons.folderIcon("unknownxyz", false)).toBe("vscode-icons:default-folder")
+  expect(fileIcons.folderIcon("unknownxyz", true)).toBe("vscode-icons:default-folder-opened")
 })

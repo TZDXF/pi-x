@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
@@ -79,16 +78,16 @@ function harness(desktop = false, fragment = "#token=test-key") {
 
 test("browser moves fragment key to session storage and sends bearer-authenticated commands", async () => {
   const h = harness()
-  assert.equal(h.stored.get("pi-remote-token"), "test-key")
-  assert.equal(h.requests[0][2], "/")
-  assert.equal(await h.api.invoke("rpc_running"), 42)
-  assert.equal(h.requests[1].options.headers.Authorization, "Bearer test-key")
-  assert.equal(JSON.parse(h.requests[1].options.body).command, "rpc_running")
+  expect(h.stored.get("pi-remote-token")).toBe("test-key")
+  expect(h.requests[0][2]).toBe("/")
+  expect(await h.api.invoke("rpc_running")).toBe(42)
+  expect(h.requests[1].options.headers.Authorization).toBe("Bearer test-key")
+  expect(JSON.parse(h.requests[1].options.body).command).toBe("rpc_running")
 })
 test("desktop retains native IPC", async () => {
   const h = harness(true)
-  assert.equal(await h.api.invoke("rpc_running"), "desktop")
-  assert.equal(h.requests.filter(r => r.url).length, 0)
+  expect(await h.api.invoke("rpc_running")).toBe("desktop")
+  expect(h.requests.filter(r => r.url).length).toBe(0)
 })
 test("event subscribers share one socket and release their handlers", async () => {
   const h = harness()
@@ -97,20 +96,20 @@ test("event subscribers share one socket and release their handlers", async () =
     h.api.listen("pi://event", e => received.push(e.payload)),
     h.api.listen("pi://stderr", () => {}),
   ])
-  assert.equal(h.sockets.length, 1)
+  expect(h.sockets.length).toBe(1)
   h.sockets[0].onmessage({ data: JSON.stringify({ event: "pi://event", payload: "hello" }) })
-  assert.deepEqual(received, ["hello"])
+  expect(received).toEqual(["hello"])
   offA()
   h.sockets[0].onmessage({ data: JSON.stringify({ event: "pi://event", payload: "ignored" }) })
-  assert.deepEqual(received, ["hello"])
+  expect(received).toEqual(["hello"])
   offB()
-  assert.equal(h.sockets[0].readyState, 3)
+  expect(h.sockets[0].readyState).toBe(3)
 })
 test("invalid access keys produce a useful error", async () => {
   const h = harness()
   h.context.fetch = async () => ({ status: 401 })
   // The error carries the coded payload so the UI can translate it by locale.
-  await assert.rejects(h.api.invoke("rpc_running"), /PIXERR:.*remoteUnauthorized/)
+  await expect(h.api.invoke("rpc_running")).rejects.toThrow(/PIXERR:.*remoteUnauthorized/)
 })
 
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -120,7 +119,7 @@ test("unexpected drops reconnect with backoff and emit a reconnected event", asy
   const reconnected = []
   await h.api.listen("pi://reconnected", e => reconnected.push(e.payload))
   await h.api.listen("pi://event", () => {})
-  assert.equal(h.sockets.length, 1)
+  expect(h.sockets.length).toBe(1)
 
   // Simulate an unexpected transport drop.
   h.sockets[0].onclose()
@@ -128,26 +127,26 @@ test("unexpected drops reconnect with backoff and emit a reconnected event", asy
   await flush()
 
   // A fresh socket was created and listeners were told to re-sync.
-  assert.equal(h.sockets.length, 2)
-  assert.equal(h.sockets[1].url.includes("/api/events"), true)
-  assert.equal(reconnected.length, 1)
+  expect(h.sockets.length).toBe(2)
+  expect(h.sockets[1].url.includes("/api/events")).toBe(true)
+  expect(reconnected.length).toBe(1)
 
   // A second drop retries; the reconnect attempt reuses the shared socket.
   h.sockets[1].onclose()
   h.runTimers()
   await flush()
-  assert.equal(h.sockets.length, 3)
-  assert.equal(reconnected.length, 2)
+  expect(h.sockets.length).toBe(3)
+  expect(reconnected.length).toBe(2)
 })
 
 test("intentional close after the last listener unsubscribes does not reconnect", async () => {
   const h = harness()
   const off = await h.api.listen("pi://event", () => {})
   off()
-  assert.equal(h.sockets[0].readyState, 3)
+  expect(h.sockets[0].readyState).toBe(3)
   h.runTimers()
   await flush()
-  assert.equal(h.sockets.length, 1)
+  expect(h.sockets.length).toBe(1)
 })
 
 test("stale socket events cannot clobber a newer connection", async () => {
@@ -158,46 +157,42 @@ test("stale socket events cannot clobber a newer connection", async () => {
   first.onclose()
   h.runTimers()
   await flush()
-  assert.equal(h.sockets.length, 2)
+  expect(h.sockets.length).toBe(2)
   // Late close of the replaced socket must not trigger another reconnect
   // or dispatch disconnect events for the live connection.
   first.onclose()
   h.runTimers()
   await flush()
-  assert.equal(h.sockets.length, 2)
-  assert.equal(reconnected.length, 1)
+  expect(h.sockets.length).toBe(2)
+  expect(reconnected.length).toBe(1)
 })
 
 test("tokenless access can authenticate with a password without placing the key in the URL", async () => {
   const h = harness(false, "")
-  assert.equal(h.api.hasRemoteToken(), false)
+  expect(h.api.hasRemoteToken()).toBe(false)
   h.context.fetch = async (url, options) => {
     h.requests.push({ url, options })
     if (url === "/api/auth") return { ok: true, json: async () => ({ passwordEnabled: true, authenticated: false }) }
     if (url === "/api/auth/login") return { ok: true, status: 200, json: async () => ({ token: "session-key" }) }
     return { ok: true, status: 200, json: async () => ({ data: true }) }
   }
-  assert.equal((await h.api.remoteAuthStatus()).passwordEnabled, true)
-  assert.equal(await h.api.loginRemote("test-password"), "ok")
-  assert.equal(h.api.hasRemoteToken(), true)
-  assert.equal(h.stored.get("pi-remote-token"), "session-key")
-  assert.equal(
-    h.requests.find(r => r.url === "/api/auth/login").options.body,
+  expect((await h.api.remoteAuthStatus()).passwordEnabled).toBe(true)
+  expect(await h.api.loginRemote("test-password")).toBe("ok")
+  expect(h.api.hasRemoteToken()).toBe(true)
+  expect(h.stored.get("pi-remote-token")).toBe("session-key")
+  expect(h.requests.find(r => r.url === "/api/auth/login").options.body).toBe(
     JSON.stringify({ password: "test-password" }),
   )
   await h.api.invoke("rpc_running")
-  assert.equal(h.requests.at(-1).options.headers.Authorization, "Bearer session-key")
-  assert.equal(
-    h.requests.some(r => r.url?.includes("test-password")),
-    false,
-  )
+  expect(h.requests.at(-1).options.headers.Authorization).toBe("Bearer session-key")
+  expect(h.requests.some(r => r.url?.includes("test-password"))).toBe(false)
 })
 
 test("invalid and rate-limited password attempts do not store a token", async () => {
   const h = harness(false, "")
   h.context.fetch = async () => ({ status: 401 })
-  assert.equal(await h.api.loginRemote("wrong-password"), "invalid")
+  expect(await h.api.loginRemote("wrong-password")).toBe("invalid")
   h.context.fetch = async () => ({ status: 429 })
-  assert.equal(await h.api.loginRemote("wrong-password"), "limited")
-  assert.equal(h.api.hasRemoteToken(), false)
+  expect(await h.api.loginRemote("wrong-password")).toBe("limited")
+  expect(h.api.hasRemoteToken()).toBe(false)
 })

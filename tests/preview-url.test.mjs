@@ -1,5 +1,4 @@
-import { test } from "node:test"
-import assert from "node:assert/strict"
+import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { loadTsSource } from "./lib/load-ts.mjs"
 
@@ -10,27 +9,27 @@ const previewUrl = loadTsSource(readFileSync(new URL("../src/lib/previewUrl.ts",
 const { normalizeInputUrl, isHttpUrl, toProxyUrl, resolveProxyBase } = previewUrl
 
 test("normalizes typed addresses into previewable URLs", () => {
-  assert.equal(normalizeInputUrl("  example.com  "), "https://example.com")
-  assert.equal(normalizeInputUrl("https://example.com/a?b=1"), "https://example.com/a?b=1")
-  assert.equal(normalizeInputUrl("http://example.com"), "http://example.com")
-  assert.equal(normalizeInputUrl(""), null)
-  assert.equal(normalizeInputUrl("   "), null)
-  assert.equal(normalizeInputUrl("file:///C:/x"), null)
-  assert.equal(normalizeInputUrl("javascript:alert(1)"), null)
+  expect(normalizeInputUrl("  example.com  ")).toBe("https://example.com")
+  expect(normalizeInputUrl("https://example.com/a?b=1")).toBe("https://example.com/a?b=1")
+  expect(normalizeInputUrl("http://example.com")).toBe("http://example.com")
+  expect(normalizeInputUrl("")).toBe(null)
+  expect(normalizeInputUrl("   ")).toBe(null)
+  expect(normalizeInputUrl("file:///C:/x")).toBe(null)
+  expect(normalizeInputUrl("javascript:alert(1)")).toBe(null)
 })
 
 test("dev-server style loopback input becomes http", () => {
-  assert.equal(normalizeInputUrl("localhost:5173"), "http://localhost:5173")
-  assert.equal(normalizeInputUrl("localhost:5173/app/page"), "http://localhost:5173/app/page")
-  assert.equal(normalizeInputUrl("localhost"), "http://localhost")
-  assert.equal(normalizeInputUrl("127.0.0.1:3000/x?y=1"), "http://127.0.0.1:3000/x?y=1")
+  expect(normalizeInputUrl("localhost:5173")).toBe("http://localhost:5173")
+  expect(normalizeInputUrl("localhost:5173/app/page")).toBe("http://localhost:5173/app/page")
+  expect(normalizeInputUrl("localhost")).toBe("http://localhost")
+  expect(normalizeInputUrl("127.0.0.1:3000/x?y=1")).toBe("http://127.0.0.1:3000/x?y=1")
 })
 
 test("isHttpUrl only accepts http(s)", () => {
-  assert.equal(isHttpUrl("https://example.com"), true)
-  assert.equal(isHttpUrl("http://localhost:5173"), true)
-  assert.equal(isHttpUrl("file:///a"), false)
-  assert.equal(isHttpUrl("example.com"), false)
+  expect(isHttpUrl("https://example.com")).toBe(true)
+  expect(isHttpUrl("http://localhost:5173")).toBe(true)
+  expect(isHttpUrl("file:///a")).toBe(false)
+  expect(isHttpUrl("example.com")).toBe(false)
 })
 
 test("toProxyUrl embeds scheme, host and path after the proxy prefix", () => {
@@ -38,23 +37,20 @@ test("toProxyUrl embeds scheme, host and path after the proxy prefix", () => {
   // Per-host token: fnv1a(secret + host[:port]) replaces the shared secret.
   const localhostToken = "45fff6de6864c280" // fnv1a("secret" + "localhost:5173")
   const exampleToken = "5c5f619405520e22" // fnv1a("secret" + "example.com")
-  assert.equal(
-    toProxyUrl(base, "http://localhost:5173/app?x=1"),
+  expect(toProxyUrl(base, "http://localhost:5173/app?x=1")).toBe(
     `http://127.0.0.1:1234/p/${localhostToken}/http/localhost:5173/app?x=1`,
   )
-  assert.equal(toProxyUrl(base, "https://example.com"), `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/`)
+  expect(toProxyUrl(base, "https://example.com")).toBe(`http://127.0.0.1:1234/p/${exampleToken}/https/example.com/`)
   // Default ports are omitted by the URL parser.
-  assert.equal(
-    toProxyUrl(base, "https://example.com:443/a"),
+  expect(toProxyUrl(base, "https://example.com:443/a")).toBe(
     `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/a`,
   )
-  assert.equal(
-    toProxyUrl(base + "/", "https://example.com"),
+  expect(toProxyUrl(base + "/", "https://example.com")).toBe(
     `http://127.0.0.1:1234/p/${exampleToken}/https/example.com/`,
   )
 })
 
 test("resolveProxyBase supports remote-relative and absolute bases", () => {
-  assert.equal(resolveProxyBase("/api/preview/secret"), "http://192.168.1.5:1421/api/preview/secret")
-  assert.equal(resolveProxyBase("http://127.0.0.1:9/p/secret/"), "http://127.0.0.1:9/p/secret")
+  expect(resolveProxyBase("/api/preview/secret")).toBe("http://192.168.1.5:1421/api/preview/secret")
+  expect(resolveProxyBase("http://127.0.0.1:9/p/secret/")).toBe("http://127.0.0.1:9/p/secret")
 })

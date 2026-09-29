@@ -98,7 +98,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `pnpm run dev`                   | 仅浏览器预览，不启动 Pi 进程            |
 | `pnpm run dev:desktop:remote`    | 构建前端并启用远程访问开发模式          |
 | `pnpm run check`                 | oxlint、类型检查、前端构建与 Rust check |
-| `pnpm run test:web`              | Node 单元测试                           |
+| `pnpm run test:web`              | Vitest 单元测试                          |
 | `pnpm test`                      | Rust 单元测试                           |
 | `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
