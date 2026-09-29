@@ -6,6 +6,7 @@ import { reactive, ref } from "vue"
 import * as vueRuntime from "vue"
 import appSource from "@/App.vue?raw"
 import * as paths from "@/lib/paths"
+import * as backendError from "@/lib/backendError"
 
 async function loadVueSetup(source, require) {
   const { descriptor } = parse(source, { filename: "App.vue" })
@@ -139,6 +140,7 @@ async function harness(group = null) {
     },
     "@/stores/sessionRunStatus": { acknowledgeSessionRunStatus: () => {}, sessionRunStatus: () => undefined },
     "@/lib/paths": paths,
+    "@/lib/backendError": backendError,
     "@/i18n": { tBackendError: value => value },
     "@/lib/shortcuts": { dispatchShortcut: () => false, registerShortcutHandler: () => () => {} },
   }
@@ -149,6 +151,7 @@ async function harness(group = null) {
     newProjectSession: bindings.newProjectSession,
     resumeSession: bindings.resumeSession,
     selectQueuedConversation: bindings.selectQueuedConversation,
+    spawnWorkspacePi: bindings.spawnWorkspacePi,
     connecting: bindings.connecting,
     selectingProject: bindings.selectingProject,
     phase: bindings.phase,
@@ -376,3 +379,16 @@ test("failed attachment never kills a backend-owned scheduled worker", async () 
   await context.actions.resumeSession("scheduled.jsonl", "project")
   expect(killed).toEqual([])
 })
+
+test("an empty project directory never reaches spawn and reports a coded error", async () => {
+  const { context, calls } = await harness()
+  await context.mount()
+  // 回归：空目录曾直接传给后端并以晦涩的 os error 123 失败。
+  await expect(context.actions.spawnWorkspacePi("")).rejects.toThrow("projectDirMissing")
+  expect(calls).toEqual([])
+  // 空目录同样不能创建会话：selectProject 与 newProjectSession 直接忽略。
+  await context.actions.selectProject("")
+  await context.actions.newProjectSession("")
+  expect(calls).toEqual([])
+})
+

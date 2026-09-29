@@ -63,6 +63,7 @@ import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 import { normalizeProjectPath, normalizeSlashes, samePath } from "@/lib/paths"
+import { encodeCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
@@ -130,6 +131,8 @@ function contextSignature(dir: string) {
   return JSON.stringify(contextFor(dir) ?? null)
 }
 async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
+  // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
+  if (!dir) throw new Error(encodeCodedError("projectDirMissing", "项目目录不存在"))
   const context = contextFor(dir)
   await spawnPi(dir, file, runtimeId, context)
   runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
@@ -410,6 +413,8 @@ async function reloadExternalConversation(file: string) {
 
 async function selectProject(dir: string) {
   dir = normalizeProjectPath(dir)
+  // 空目录（如无项目目录尚未解析完成）不能创建会话，否则 spawn 必然失败。
+  if (!dir) return
   if (workspace.gitBusy || connecting.value) return
   connecting.value = true
   selectingProject.value = true
@@ -838,6 +843,7 @@ async function openSessionAction(file: string, action: "export") {
 
 async function newProjectSession(path: string) {
   path = normalizeProjectPath(path)
+  if (!path) return
   if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {

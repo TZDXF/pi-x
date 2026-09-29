@@ -262,6 +262,15 @@ async fn workspace_args(project: &str, workspace: Option<WorkspaceContext>) -> R
     Ok(args)
 }
 
+/// spawn 前校验项目目录。空字符串会让 CreateProcessW 以晦涩的
+/// 「文件名、目录名或卷标语法不正确 (os error 123)」失败，这里统一转成编码错误。
+fn validate_project_dir(project: &str) -> Result<(), String> {
+    if project.trim().is_empty() || !Path::new(project).is_dir() {
+        return Err(pix_error("projectDirMissing", "项目目录不存在"));
+    }
+    Ok(())
+}
+
 /// Spawn `pi --mode rpc` for `project`, resolving the pi executable from app
 /// config (falling back to auto-detection). `session_file` optionally resumes
 /// a stored session via `--session <path>`.
@@ -274,6 +283,7 @@ pub async fn rpc_spawn(
     runtime_id: Option<String>,
     workspace: Option<WorkspaceContext>,
 ) -> Result<(), String> {
+    validate_project_dir(&project)?;
     let cfg = app_config_get(app.clone())?;
     let extra_args = workspace_args(&project, workspace).await?;
     let info = pi_locate::detect(cfg.pi_path).await;
@@ -555,6 +565,18 @@ mod tests {
         assert_eq!(value["piPath"], "pi");
         assert!(value.get("managedSkills").is_none());
         assert!(value.get("defaultModel").is_none());
+    }
+
+    #[test]
+    fn spawn_rejects_empty_or_missing_project_dir() {
+        // 空串会传导到 CreateProcessW 并报 os error 123，必须在 spawn 前拦截。
+        assert!(validate_project_dir("").is_err());
+        assert!(validate_project_dir("   ").is_err());
+        assert!(validate_project_dir("Z:/definitely/missing/dir").is_err());
+        let dir = std::env::temp_dir().join(format!("pix-spawn-proj-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(validate_project_dir(dir.to_str().unwrap()).is_ok());
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]
