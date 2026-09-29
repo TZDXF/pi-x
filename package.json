@@ -22,7 +22,10 @@
     "package": "tauri build --features remote-access",
     "package:debug": "tauri build --features remote-access --debug",
     "package:nsis": "tauri build --features remote-access --bundles nsis",
-    "package:msi": "tauri build --features remote-access --bundles msi"
+    "package:msi": "tauri build --features remote-access --bundles msi",
+    "test:e2e": "playwright test",
+    "test:e2e:watch": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "@iconify-json/vscode-icons": "^1.2.81",

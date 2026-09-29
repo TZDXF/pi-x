@@ -7,7 +7,7 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `src/components/`：界面组件，其中 `ui/` 与 `ai-elements/` 为 vendored 上游组件（shadcn-vue / ai-elements），以 fork 模式自行维护；`stores/`：会话与 UI 状态；`composables/`：可复用组合逻辑。
 - `src/api/`：RPC 类型与桌面/远程传输；`src/lib/`：业务工具；`src/i18n/`：翻译。
 - `src/assets/`、`public/`：前端资源；`src-tauri/src/`：进程管理、信任、终端及 Git 等后端能力。
-- `tests/`：Node 单元测试与浏览器回归脚本；`tests/lib/`：测试辅助代码。Rust 单元测试位于后端源码中。
+- `tests/`：Vitest 单元测试；`e2e/`：Playwright TypeScript E2E 与本地 Vite harness。Rust 单元测试位于后端源码中。
 
 ## 构建、测试与开发命令
 
@@ -20,7 +20,7 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
 - `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
-- `pnpm run test:web` / `pnpm run test:web:watch` / `pnpm test`：分别运行 Vitest 单元测试、启动 Vitest watch，以及运行 Rust 单元测试。
+- `pnpm run test:web` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别运行 Vitest 单元测试、启动 Vitest watch、运行 Playwright E2E，以及运行 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
 
 ## 代码风格与命名
@@ -31,9 +31,9 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 
 ## 测试要求
 
-前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
+前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。E2E 使用 `e2e/*.spec.ts` 与 Playwright，不包含在 `test:web` 中；首次运行先执行 `pnpm run test:e2e:install`。E2E 通过本地 Vite harness 与确定性 mock 验证浏览器行为，禁止访问外部服务。
 
-提交前运行 `pnpm run check`、`pnpm run test:web` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
+提交前运行 `pnpm run check`、`pnpm run test:web`、`pnpm run test:e2e` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
 
 ## 提交与 Pull Request
 

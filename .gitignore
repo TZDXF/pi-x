@@ -32,3 +32,7 @@ src-tauri/gen/schemas
 
 # ZCode session workspace
 .zcode/
+
+# Local temporary files and Playwright artifacts
+test-results/
+temp/

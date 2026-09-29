@@ -99,17 +99,25 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `pnpm run dev:desktop:remote`    | 构建前端并启用远程访问开发模式          |
 | `pnpm run check`                 | oxlint、类型检查、前端构建与 Rust check |
 | `pnpm run test:web`              | Vitest 单元测试                         |
+| `pnpm run test:e2e`              | Playwright E2E 测试                     |
 | `pnpm test`                      | Rust 单元测试                           |
 | `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
 Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
+
+### E2E 测试
+
+- 首次执行前运行 `pnpm run test:e2e:install` 安装 Playwright 管理的 Chromium。
+- `pnpm run test:e2e` 运行 `e2e/*.spec.ts`，每个 spec 使用独立 Vite harness 和确定性 mock。
+- 如需继续使用本机 Edge，设置 `PI_BROWSER_CHANNEL=msedge`；默认使用 Playwright Chromium。
+- 报告与失败轨迹位于 `temp/playwright/`，两者均已忽略提交。
 
 ## 数据与平台
 
 - Pi 数据由 Pi 管理，默认在 `~/.pi/agent`，尊重 `PI_CODING_AGENT_DIR`；模型、凭据、信任、会话和扩展与终端 Pi 共用。
 - `.pix` 保存 PiX 自有设置、无项目任务目录和托管技能；会话标题使用 Pi 原生 `session_info`，不复制会话数据到私有格式。
 - PiX 主要在 Windows 上开发与验证；macOS 和 Linux 理论可用，尚未系统测试。
-- 推送和 PR 由 GitHub Actions 执行 lint、类型检查、前端构建、Node 测试与 Rust 检查；Release workflow 支持 Windows / macOS / Linux 产物和签名更新。
+- 推送和 PR 由 GitHub Actions 执行 lint、类型检查、前端构建、单元测试、E2E 测试与 Rust 检查；Release workflow 支持 Windows / macOS / Linux 产物和签名更新。
 
 ## 发布
 
