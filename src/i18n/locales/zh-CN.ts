@@ -353,6 +353,8 @@ export default {
   },
 
   app: {
+    goBack: "返回",
+    goForward: "前进",
     expandSidebar: "展开侧栏",
     starting: "正在启动 pi…",
     exited: "pi 进程已退出",

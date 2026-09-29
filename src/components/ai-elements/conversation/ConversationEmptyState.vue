@@ -10,7 +10,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   title: 'No messages yet',
-  description: 'Start a conversation to see messages here',
+  description: '',
 })
 </script>
 
@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<Props>(), {
       </div>
 
       <div class="space-y-1">
-        <h3 class="mb-3 font-serif text-[32px] font-medium tracking-[-0.01em] max-[640px]:text-[23px]">
+        <h3 :class="props.description ? 'mb-3' : ''" class="font-serif text-[32px] font-medium tracking-[-0.01em] max-[640px]:text-[23px]">
           {{ props.title }}
         </h3>
         <p v-if="props.description" class="text-muted-foreground text-sm">

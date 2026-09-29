@@ -124,7 +124,7 @@ test("入口、设置项与后端命令均已接线", () => {
   assert.match(read("../src-tauri/src/remote.rs"), /cfg\.projectless_dir = a\["config"\]\["projectlessDir"\]/)
   // 前端：欢迎页/侧栏入口、设置页，以及会话空状态使用项目显示名。
   assert.match(read("../src/App.vue"), /@open-projectless="openProjectless"/)
-  assert.match(read("../src/App.vue"), /@projectless="requestWorkspaceNavigation\(openProjectless\)"/)
+  assert.match(read("../src/App.vue"), /@projectless="openProjectlessFromSidebar"/)
   assert.match(read("../src/components/WelcomeView.vue"), /emit\('openProjectless'\)/)
   assert.match(read("../src/components/WorkspaceSidebar.vue"), /emit\('projectless'\)/)
   assert.match(read("../src/components/settings/WorkspaceSettings.vue"), /<ProjectlessSettings \/>/)

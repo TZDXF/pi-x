@@ -5,6 +5,7 @@ import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { averageCacheRate } from "@/lib/cacheRate"
 import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
+import PiXLogo from "@/components/PiXLogo.vue"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
@@ -755,8 +756,11 @@ onBeforeUnmount(() => {
             class="chat-empty flex-1 min-h-60"
             v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
             :title="t('workspace.emptyTitle', { project: workspace.projectName(project) })"
-            :description="t('chat.emptyDesc')"
-          />
+          >
+            <template #icon>
+              <PiXLogo style="width: 120px; height: 56px" />
+            </template>
+          </ConversationEmptyState>
 
           <VirtualMessage
             v-for="(entry, entryIndex) in renderedEntries"

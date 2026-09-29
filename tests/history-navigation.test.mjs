@@ -20,6 +20,9 @@ test("navigation stays serialized and the latest pending selection wins", async 
     navigating: { value: false },
     pendingResume: { value: null },
     disposed: false,
+    route: { value: { name: "home", params: {} } },
+    nextTick: async fn => fn?.(),
+    watch: () => {},
   }
   run(code + "\nglobalThis.navigate = requestNavigation", context)
   const calls = []
@@ -108,6 +111,9 @@ test("streaming navigation switches without aborting the running generation", as
     navigating: { value: false },
     pendingResume: { value: null },
     disposed: false,
+    route: { value: { name: "home", params: {} } },
+    nextTick: async fn => fn?.(),
+    watch: () => {},
   }
   run(code + "\nglobalThis.navigate = requestNavigation", context)
   context.navigate(async () => calls.push("switch"))

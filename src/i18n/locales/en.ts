@@ -363,6 +363,8 @@ export default {
   },
 
   app: {
+    goBack: "Back",
+    goForward: "Forward",
     expandSidebar: "Expand sidebar",
     starting: "Starting pi…",
     exited: "pi process exited",

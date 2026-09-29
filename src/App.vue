@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { isDesktop } from "@/api/transport"
 import {
@@ -43,11 +43,10 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
-import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
-import { useRoute, navigate, goHome } from "@/lib/router"
+import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 import { normalizeProjectPath, normalizeSlashes, samePath } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
@@ -90,7 +89,13 @@ const selectingProject = ref(false)
 // A terminal badge represents an unread result, not a permanent session state.
 watch(
   () => {
-    if (phase.value !== "chat" || route.value.name !== "home" || connecting.value || navigating.value) return null
+    if (
+      phase.value !== "chat" ||
+      (route.value.name !== "home" && route.value.name !== "session" && route.value.name !== "project") ||
+      connecting.value ||
+      navigating.value
+    )
+      return null
     const file = session.sessionFile
     const status = file ? sessionRunStatus(file) : undefined
     return status === "completed" || status === "error" ? file : null
@@ -197,11 +202,32 @@ onMounted(async () => {
 
     // Reattach after UI reload / remote connection without spawning duplicates.
     const restored = await reattachRunningSessions()
-    if (restored) return
+    if (restored) {
+      const file = restored.state.sessionFile
+      navigate(sessionRoute(file ?? restored.runtimeId, restored.project), true)
+      return
+    }
+    // A reload keeps its conversation deep link instead of falling back silently.
+    const initialRoute = route.value
+    if (initialRoute.name === "session" && initialRoute.params.conversation) {
+      const target = initialRoute.params.project || config.value.lastProject || ""
+      if (target) {
+        project.value = target
+        await workspace.rememberWorkspace(target)
+      }
+      await resumeSession(initialRoute.params.conversation, target)
+      return
+    }
+    if (initialRoute.name === "project" && initialRoute.params.project) {
+      await selectProject(initialRoute.params.project)
+      navigate(projectRoute(initialRoute.params.project), true)
+      return
+    }
     // Restore the workspace only; start pi when a conversation is opened.
     if (config.value.lastProject) {
       project.value = config.value.lastProject
       await selectProject(project.value)
+      navigate(projectRoute(project.value), true)
       return
     }
 
@@ -221,11 +247,36 @@ function requestNavigation(action: () => Promise<unknown>) {
   queuedNavigation = action
   void drainNavigation()
 }
-function requestWorkspaceNavigation(action: () => Promise<unknown>) {
+
+/** Push the conversation route first so browser back/forward replays it. */
+let suppressRouteAction = false
+function requestConversationNavigation(path: string, action: () => Promise<unknown>) {
   if (workspace.gitBusy || phase.value === "trust") return
-  navigate("/")
+  suppressRouteAction = true
+  // The initial home entry is only a shell state; make the first project route replace it.
+  navigate(path, route.value.name === "home")
   requestNavigation(action)
+  void nextTick(() => {
+    suppressRouteAction = false
+  })
 }
+
+/** Route changes from sidebar clicks are handled by `action`; history changes replay here. */
+watch(route, next => {
+  if (suppressRouteAction || (next.name !== "session" && next.name !== "project")) return
+  requestNavigation(() => followConversationRoute(next))
+})
+
+async function followConversationRoute(next: ReturnType<typeof useRoute>["value"]) {
+  if (next.name === "session" && next.params.conversation) {
+    const id = next.params.conversation
+    const targetProject = next.params.project || project.value
+    if (findConversation(id)) return selectQueuedConversation(id)
+    return resumeSession(id, targetProject)
+  }
+  if (next.name === "project" && next.params.project) return newProjectSession(next.params.project)
+}
+
 async function drainNavigation() {
   if (navigationRunning.value || connecting.value || navigating.value || disposed) return
   navigationRunning.value = true
@@ -521,6 +572,15 @@ async function openProjectless() {
   }
 }
 
+async function openProjectlessFromSidebar() {
+  if (workspace.gitBusy || navigating.value || connecting.value || phase.value === "trust") return
+  const path = await workspace.ensureProjectless().catch(e => {
+    ui.pushToast(tBackendError(e), "error")
+    return ""
+  })
+  if (path) requestConversationNavigation(projectRoute(path), () => selectProject(path))
+}
+
 function editProject(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
   editingProjectPath.value = path
@@ -545,6 +605,11 @@ async function saveProject(group: ProjectGroup) {
   } catch (e) {
     ui.pushToast(String(e), "error")
   }
+}
+
+function selectConversationFromSidebar(runtimeId: string) {
+  const cwd = sessionFor(runtimeId).cwd || project.value
+  requestConversationNavigation(sessionRoute(runtimeId, cwd), () => selectQueuedConversation(runtimeId))
 }
 
 async function selectQueuedConversation(runtimeId: string) {
@@ -692,21 +757,28 @@ function focusComposerFromShortcut() {
     el.focus()
     return
   }
-  if (route.value.name !== "home") navigate("/")
 }
 
 function switchSessionByOffset(offset: number) {
-  if (route.value.name !== "home" || connecting.value || navigating.value) return
+  if (
+    (route.value.name !== "home" && route.value.name !== "session" && route.value.name !== "project") ||
+    connecting.value ||
+    navigating.value
+  )
+    return
   const rows = workspace.orderedSessions(project.value)
   if (rows.length < 2) return
   const index = rows.findIndex(row => row.file === session.sessionFile)
   // No saved session yet (pristine draft): next = newest, prev = oldest.
   const target = index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
-  if (target) requestWorkspaceNavigation(() => resumeSession(target.file, target.cwd))
+  if (target)
+    requestConversationNavigation(sessionRoute(target.file, target.cwd), () => resumeSession(target.file, target.cwd))
 }
 
 const offShortcutHandlers = [
-  registerShortcutHandler("app.newSession", () => requestWorkspaceNavigation(() => newProjectSession(project.value))),
+  registerShortcutHandler("app.newSession", () =>
+    requestConversationNavigation(projectRoute(project.value), () => newProjectSession(project.value)),
+  ),
   registerShortcutHandler("app.focusComposer", focusComposerFromShortcut),
   registerShortcutHandler("app.toggleSidebar", () => {
     if (route.value.name === "home") sidebarOpen.value = !sidebarOpen.value
@@ -767,7 +839,7 @@ onUnmounted(() => {
     class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground"
     :style="isDesktop ? { paddingTop: '2.25rem' } : undefined"
   >
-    <WindowTitleBar v-if="isDesktop" />
+    <WindowTitleBar v-if="isDesktop" :sidebar-open="sidebarOpen" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
     <WorkspaceSidebar
       v-show="sidebarOpen && route.name !== 'settings'"
@@ -775,13 +847,15 @@ onUnmounted(() => {
       :ready="phase === 'chat'"
       :busy="navigating || workspace.gitBusy || phase === 'trust'"
       :navigation-busy="workspace.gitBusy || phase === 'trust'"
-      @switch-project="requestWorkspaceNavigation(switchProject)"
-      @select-project="path => requestWorkspaceNavigation(() => selectProject(path))"
-      @select-conversation="id => requestWorkspaceNavigation(() => selectQueuedConversation(id))"
-      @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
+      @switch-project="requestNavigation(() => switchProject())"
+      @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
+      @select-conversation="selectConversationFromSidebar"
+      @resume-session="
+        (file, path) => requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+      "
       @session-action="(file, action) => openSessionAction(file, action)"
-      @new-session="path => requestWorkspaceNavigation(() => newProjectSession(path))"
-      @projectless="requestWorkspaceNavigation(openProjectless)"
+      @new-session="path => requestConversationNavigation(projectRoute(path), () => newProjectSession(path))"
+      @projectless="openProjectlessFromSidebar"
       @remove-project="removeProject"
       @edit-project="editProject"
       @settings="navigate('/settings/general')"
@@ -796,21 +870,12 @@ onUnmounted(() => {
         <SettingsPage :project="project" />
       </template>
       <template v-else>
-        <Button
-          v-if="!sidebarOpen"
-          variant="quiet"
-          size="toolbar"
-          class="sidebar-restore absolute top-[17px] left-2.5 z-[10] bg-sidebar"
-          :title="t('app.expandSidebar')"
-          :aria-label="t('app.expandSidebar')"
-          @click="sidebarOpen = true"
-        >
-          <PanelLeft :size="18" />
-        </Button>
         <ScheduledTasksPage
           v-if="route.name === 'schedules'"
           :project="project"
-          @resume-session="(file, path) => requestWorkspaceNavigation(() => resumeSession(file, path))"
+          @resume-session="
+            (file, path) => requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+          "
         />
         <WelcomeView
           v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
@@ -833,9 +898,14 @@ onUnmounted(() => {
             :connecting="connecting"
             :selecting-project="selectingProject"
             :connected="started"
-            @select-project="path => requestNavigation(() => selectProject(path))"
+            @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
             @open-project="requestNavigation(switchProject)"
-            @new-session="requestNavigation(() => newProjectSession(workspace.projectRoot(project)))"
+            @new-session="
+              () =>
+                requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
+                  newProjectSession(workspace.projectRoot(project)),
+                )
+            "
           />
         </template>
 

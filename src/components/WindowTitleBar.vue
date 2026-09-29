@@ -2,9 +2,15 @@
 import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getCurrentWindow } from "@tauri-apps/api/window"
+import { ChevronLeft, ChevronRight, PanelLeft, Settings } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
+import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
+
+const props = defineProps<{ sidebarOpen?: boolean }>()
+const emit = defineEmits<{ toggleSidebar: [] }>()
 
 const { t } = useI18n()
+const route = useRoute()
 const appWindow = isDesktop ? getCurrentWindow() : null
 const maximized = ref(false)
 const maximizable = ref(true)
@@ -28,6 +34,14 @@ onUnmounted(() => {
   unlistenResized = null
 })
 
+function goBack() {
+  window.history.back()
+}
+
+function goForward() {
+  window.history.forward()
+}
+
 function minimize() {
   void appWindow?.minimize()
 }
@@ -47,14 +61,49 @@ function close() {
     data-testid="window-titlebar"
     class="fixed inset-x-0 top-0 z-[200] flex h-9 select-none items-center bg-background text-foreground shadow-[0_1px_0_var(--border)]"
   >
-    <div
-      data-tauri-drag-region
-      class="flex h-full min-w-0 flex-1 items-center gap-2 px-3"
-      title="PiX"
-      @dblclick="toggleMaximize"
-    >
-      <span data-tauri-drag-region class="text-sm font-semibold">PiX</span>
+    <div class="flex h-full items-center">
+      <button
+        type="button"
+        class="titlebar-control"
+        :disabled="route.name === 'settings'"
+        :title="props.sidebarOpen ? t('sidebar.collapse') : t('app.expandSidebar')"
+        :aria-label="props.sidebarOpen ? t('sidebar.collapse') : t('app.expandSidebar')"
+        @click="emit('toggleSidebar')"
+      >
+        <PanelLeft :size="16" />
+      </button>
+      <button
+        type="button"
+        class="titlebar-control"
+        :disabled="!canGoBack"
+        :title="t('app.goBack')"
+        :aria-label="t('app.goBack')"
+        @click="goBack"
+      >
+        <ChevronLeft :size="17" />
+      </button>
+      <button
+        type="button"
+        class="titlebar-control"
+        :disabled="!canGoForward"
+        :title="t('app.goForward')"
+        :aria-label="t('app.goForward')"
+        @click="goForward"
+      >
+        <ChevronRight :size="17" />
+      </button>
+      <button
+        type="button"
+        class="titlebar-control"
+        :aria-current="route.name === 'settings' ? 'page' : undefined"
+        :title="t('sidebar.settings')"
+        :aria-label="t('sidebar.settings')"
+        @click="navigate('/settings/general')"
+      >
+        <Settings :size="16" />
+      </button>
     </div>
+    <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
     <div class="flex h-full items-center">
       <button
         type="button"
@@ -103,20 +152,26 @@ function close() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
+  width: 40px;
   height: 100%;
   color: var(--muted-foreground);
   transition:
     background-color 0.15s ease,
     color 0.15s ease;
 }
-.titlebar-control:hover {
+.titlebar-control:hover:not(:disabled) {
   background: var(--accent);
   color: var(--accent-foreground);
+}
+.titlebar-control:disabled {
+  color: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
 }
 .titlebar-control:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -3px;
+}
+.titlebar-control[aria-current="page"] {
+  color: var(--foreground);
 }
 .titlebar-close:hover {
   background: #e81123;

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import PiXLogo from "@/components/PiXLogo.vue"
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
@@ -9,10 +8,8 @@ import {
   Folder,
   FolderPlus,
   Link,
-  PanelLeft,
   Plus,
   Search,
-  Settings,
   Archive,
   AlertTriangle,
   Pencil,
@@ -64,8 +61,6 @@ const emit = defineEmits<{
   newSession: [project: string]
   sessionAction: [file: string, action: "export"]
   schedules: []
-  settings: []
-  collapse: []
 }>()
 const session = useSessionStore()
 const ui = useUiStore()
@@ -323,16 +318,6 @@ watch(
     class="workspace-sidebar w-68 shrink-0 flex flex-col bg-sidebar border-r border-border pt-3.5 pr-[7px] pb-2 pl-[7px] min-h-0 overflow-hidden max-[640px]:absolute max-[640px]:[inset:0_auto_0_0] max-[640px]:z-[30] max-[640px]:shadow-[var(--sidebar-shadow)] max-[700px]:w-55"
     :aria-label="t('sidebar.ariaLabel')"
   >
-    <div class="sidebar-brand flex items-center gap-[9px] pt-0.5 pr-2 pb-3 pl-2 text-[17px] font-semibold shrink-0">
-      <PiXLogo /><Button
-        variant="quiet"
-        size="toolbar"
-        class="ml-auto"
-        :aria-label="t('sidebar.collapse')"
-        @click="emit('collapse')"
-        ><PanelLeft :size="17" class="size-auto shrink-0"
-      /></Button>
-    </div>
     <Button
       size="content"
       variant="sidebar-action"
@@ -826,11 +811,6 @@ watch(
         </div>
       </section>
     </ScrollArea>
-    <div class="sidebar-footer mt-auto pt-[7px] border-t border-border shrink-0">
-      <Button size="content" variant="sidebar-action" class="sidebar-action" @click="emit('settings')"
-        ><Settings :size="17" class="size-auto shrink-0" />{{ t("sidebar.settings") }}</Button
-      >
-    </div>
     <Dialog
       :open="!!renaming"
       @update:open="
