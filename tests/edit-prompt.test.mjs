@@ -1,10 +1,55 @@
-import { test, expect } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import { loadTsModule, contentModule } from "./lib/load-ts.mjs"
+import { createPinia, setActivePinia } from "pinia"
+
+const controls = vi.hoisted(() => {
+  const state = {}
+  return {
+    state,
+    piClient: {
+      sessionHistory: (...args) => state.sessionHistory(...args),
+      pixLog: (...args) => state.pixLog(...args),
+      sessionLastError: (...args) => state.sessionLastError(...args),
+      sessionMtime: (...args) => state.sessionMtime(...args),
+      generateSessionTitle: (...args) => state.generateSessionTitle(...args),
+      rpcRequest: (...args) => state.rpcRequest(...args),
+    },
+    workspace: {},
+  }
+})
+
+vi.mock("@/api/piClient", () => controls.piClient)
+vi.mock("@/api/transport", () => ({ invoke: async () => null }))
+vi.mock("@/i18n", () => ({
+  i18n: { global: { t: key => key } },
+  tBackendError: value => String(value ?? ""),
+}))
+vi.mock("@/lib/checkpoints", () => ({
+  createCheckpoint: async () => ({ refName: "r", commitOid: "oid" }),
+  diffCheckpoints: async () => [],
+  loadCheckpointManifest: async () => null,
+  saveCheckpointManifest: async () => {},
+}))
+vi.mock("@/lib/fileRewind", () => ({
+  fileRewindState: async () => [],
+  markFileRewindState: async () => [],
+}))
+vi.mock("@/lib/notifications", () => ({ notifyTurnComplete() {} }))
+vi.mock("@/stores/sessionRunStatus", () => ({ setSessionRunStatus() {} }))
+vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: () => controls.workspace }))
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 const source = path => readFileSync(new URL(path, import.meta.url), "utf8")
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
-function harness(overrides = {}) {
+
+async function harness(overrides = {}) {
   const calls = []
   const state = {
     sessionId: "current",
@@ -14,76 +59,49 @@ function harness(overrides = {}) {
     isCompacting: false,
     pendingMessageCount: 0,
   }
-  const api = {
+  Object.assign(controls.state, {
+    sessionHistory: async () => [],
+    sessionLastError: async () => null,
     sessionMtime: async () => 1,
+    pixLog() {},
     rpcRequest: async command => {
       calls.push(command)
       if (overrides[command.type]) return overrides[command.type](command)
       return { success: true, data: command.type === "get_state" ? state : {} }
     },
+  })
+  controls.workspace = {
+    histories: {},
+    projectName: () => "project",
+    preview() {},
+    generatedTitle() {},
+    refresh: async () => {},
   }
-  const modules = {
-    vue: {
-      ref: value => ({ value }),
-      shallowRef: value => ({ value }),
-      computed: get => ({
-        get value() {
-          return get()
-        },
-      }),
-      watch: (source, cb, options) => {
-        if (options?.immediate) cb(typeof source === "function" ? source() : source)
-        return () => {}
-      },
-    },
-    "@/lib/checkpoints": {
-      createCheckpoint: async () => ({ refName: "r", commitOid: "oid" }),
-      diffCheckpoints: async () => [],
-      loadCheckpointManifest: async () => null,
-      saveCheckpointManifest: async () => {},
-    },
-    pinia: { defineStore: (_, setup) => setup },
-    "@/api/piClient": { sessionHistory: async () => [], ...api },
-    "@/lib/content": contentModule(),
-    "@/stores/sessionRunStatus": { setSessionRunStatus() {} },
-    "@/i18n": { i18n: { global: { t: key => key } } },
-    "@/lib/notifications": { notifyTurnComplete() {} },
-    "@/stores/workspace": {
-      useWorkspaceStore: () => ({
-        histories: {},
-        projectName: () => "project",
-        preview() {},
-        generatedTitle() {},
-        refresh: async () => {},
-      }),
-    },
-  }
-  const { createSessionStore } = loadTsModule(
-    new URL("../src/stores/session.ts", import.meta.url),
-    name => modules[name],
-    { localStorage: { getItem: () => null } },
-  )
+  vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
+  setActivePinia(createPinia())
+  vi.resetModules()
+  const { createSessionStore } = await import("@/stores/session")
   const store = createSessionStore("editing")()
-  store.state.value = state
-  store.sessionFile.value = state.sessionFile
-  store.entries.value = [{ kind: "user", id: 1, text: "original" }]
+  store.state = state
+  store.sessionFile = state.sessionFile
+  store.entries = [{ kind: "user", id: 1, text: "original" }]
   return { store, calls, state }
 }
 
 test("running prompt: waits for abort, then resends in the same session with images", async () => {
   let finishAbort
-  const h = harness({
+  const h = await harness({
     abort: () =>
       new Promise(resolve => {
         finishAbort = resolve
       }),
   })
-  h.store.isStreaming.value = true
+  h.store.isStreaming = true
   const images = [{ data: "YWJj", mimeType: "image/png" }]
   const pending = h.store.resendPrompt("revised", images, "revised expanded")
   await tick()
   expect(h.calls.map(call => call.type)).toEqual(["clear_queue", "abort"])
-  expect(h.store.isResending.value).toBe(true)
+  expect(h.store.isResending).toBe(true)
   finishAbort({ success: true })
   await pending
   expect(h.calls.slice(0, 5).map(call => call.type)).toEqual([
@@ -97,12 +115,12 @@ test("running prompt: waits for abort, then resends in the same session with ima
   expect(prompt.message).toBe("revised expanded")
   expect(prompt.streamingBehavior).toBe(undefined)
   expect(prompt.images[0].data).toBe("YWJj")
-  expect(h.store.sessionFile.value).toBe("current.jsonl")
-  expect(h.store.entries.value.length).toBe(1)
-  expect(h.store.entries.value[0].id).toBe(1)
-  expect(h.store.entries.value[0].text).toBe("revised")
-  expect(h.store.isStreaming.value).toBe(true)
-  expect(h.store.isResending.value).toBe(false)
+  expect(h.store.sessionFile).toBe("current.jsonl")
+  expect(h.store.entries.length).toBe(1)
+  expect(h.store.entries[0].id).toBe(1)
+  expect(h.store.entries[0].text).toBe("revised")
+  expect(h.store.isStreaming).toBe(true)
+  expect(h.store.isResending).toBe(false)
   expect(
     h.calls.every(
       call => !["fork", "get_fork_messages", "get_messages", "new_session", "switch_session"].includes(call.type),
@@ -111,18 +129,18 @@ test("running prompt: waits for abort, then resends in the same session with ima
 })
 
 test("agent-end during abort cannot dispatch queued prompts ahead of the edited question", async () => {
-  const h = harness({
+  const h = await harness({
     clear_queue: async () => ({ success: true, data: { steering: ["remote queued"] } }),
     abort: async () => {
       h.store.handleEvent({ type: "agent_end" })
       return { success: true }
     },
   })
-  h.store.isStreaming.value = true
+  h.store.isStreaming = true
   await h.store.send("local queued", undefined, undefined, "queue")
   await h.store.resendPrompt("revised")
   expect(h.calls.filter(call => call.type === "prompt").map(call => call.message)).toEqual(["revised"])
-  expect(Array.from(h.store.promptQueue.value, item => item.text)).toEqual(["remote queued", "local queued"])
+  expect(Array.from(h.store.promptQueue, item => item.text)).toEqual(["remote queued", "local queued"])
 })
 
 for (const [label, overrides] of [
@@ -141,18 +159,18 @@ for (const [label, overrides] of [
   ["different session", { get_state: async () => ({ success: true, data: { sessionFile: "other.jsonl" } }) }],
 ]) {
   test(`${label}: does not resend or erase the current conversation`, async () => {
-    const h = harness(overrides)
-    h.store.isStreaming.value = true
+    const h = await harness(overrides)
+    h.store.isStreaming = true
     await expect(h.store.resendPrompt("revised")).rejects.toThrow()
     expect(h.calls.some(call => call.type === "prompt")).toBe(false)
-    expect(h.store.entries.value.length).toBe(1)
-    expect(h.store.sessionFile.value).toBe("current.jsonl")
-    expect(h.store.isResending.value).toBe(false)
+    expect(h.store.entries.length).toBe(1)
+    expect(h.store.sessionFile).toBe("current.jsonl")
+    expect(h.store.isResending).toBe(false)
   })
 }
 
 test("idle conversation resends without abort; empty text is ignored unless images are present", async () => {
-  const h = harness()
+  const h = await harness()
   await h.store.resendPrompt("   ")
   expect(h.calls.length).toBe(0)
   await h.store.resendPrompt("", [{ data: "YWJj", mimeType: "image/png" }])
@@ -161,28 +179,28 @@ test("idle conversation resends without abort; empty text is ignored unless imag
 
 test("duplicate clicks and a session switch during abort never submit a second question", async () => {
   let finishAbort
-  const h = harness({
+  const h = await harness({
     abort: () =>
       new Promise(resolve => {
         finishAbort = resolve
       }),
   })
-  h.store.isStreaming.value = true
+  h.store.isStreaming = true
   const pending = h.store.resendPrompt("revised")
   await tick()
   await h.store.resendPrompt("duplicate")
   h.store.clear()
-  h.store.sessionFile.value = "other.jsonl"
+  h.store.sessionFile = "other.jsonl"
   finishAbort({ success: true })
   await expect(pending).rejects.toThrow(/editSessionChanged/)
   expect(h.calls.some(call => call.type === "prompt")).toBe(false)
-  expect(h.store.isResending.value).toBe(false)
+  expect(h.store.isResending).toBe(false)
 })
 
 test("late rejection of the interrupted prompt cannot fail the replacement run", async () => {
   let rejectOld
   let promptCount = 0
-  const h = harness({
+  const h = await harness({
     prompt: () =>
       ++promptCount === 1
         ? new Promise((_, reject) => {
@@ -194,8 +212,8 @@ test("late rejection of the interrupted prompt cannot fail the replacement run",
   await h.store.resendPrompt("revised")
   rejectOld(new Error("old run aborted"))
   await tick()
-  expect(h.store.isStreaming.value).toBe(true)
-  expect(h.store.entries.value.at(-1).text).toBe("revised")
+  expect(h.store.isStreaming).toBe(true)
+  expect(h.store.entries.at(-1).text).toBe("revised")
 })
 
 test("edit UI allows a running answer and preserves the draft when stopping fails", () => {
@@ -225,49 +243,49 @@ test("only the latest question offers inline editing, and stale edits cannot be 
 
 test("starting a new session while aborting releases the resend lock without sending", async () => {
   let finishAbort
-  const h = harness({
+  const h = await harness({
     abort: () =>
       new Promise(resolve => {
         finishAbort = resolve
       }),
   })
-  h.store.isStreaming.value = true
+  h.store.isStreaming = true
   const pending = h.store.resendPrompt("revised")
   await tick()
   await h.store.newSession()
   finishAbort({ success: true })
   await expect(pending).rejects.toThrow(/editSessionChanged/)
-  expect(h.store.isResending.value).toBe(false)
+  expect(h.store.isResending).toBe(false)
   expect(h.calls.some(call => call.type === "prompt")).toBe(false)
 })
 
 test("editing removes the superseded answer and keeps the original question position", async () => {
-  const h = harness()
-  h.store.entries.value.push({ kind: "assistant", id: 2, blocks: [{ type: "text", text: "old answer" }] })
+  const h = await harness()
+  h.store.entries.push({ kind: "assistant", id: 2, blocks: [{ type: "text", text: "old answer" }] })
   await h.store.resendPrompt("replacement")
-  expect(h.store.entries.value.length).toBe(1)
-  expect(h.store.entries.value[0].id).toBe(1)
-  expect(h.store.entries.value[0].text).toBe("replacement")
+  expect(h.store.entries.length).toBe(1)
+  expect(h.store.entries[0].id).toBe(1)
+  expect(h.store.entries[0].text).toBe("replacement")
 })
 
 test("editing refreshes the question timestamp so turn duration restarts", async () => {
-  const h = harness()
+  const h = await harness()
   const stale = Date.now() - 3_000_000
-  h.store.entries.value[0] = { kind: "user", id: 1, text: "original", timestamp: stale }
+  h.store.entries[0] = { kind: "user", id: 1, text: "original", timestamp: stale }
   const before = Date.now()
   await h.store.resendPrompt("replacement")
-  const timestamp = h.store.entries.value[0].timestamp
+  const timestamp = h.store.entries[0].timestamp
   expect(timestamp >= before && timestamp <= Date.now()).toBeTruthy()
   expect(timestamp).not.toBe(stale)
 })
 test("history prepended while rewinding does not shift the replacement target", async () => {
-  const h = harness({
+  const h = await harness({
     rewind_prompt: async () => {
-      h.store.entries.value.unshift({ kind: "user", id: 99, text: "earlier question" })
+      h.store.entries.unshift({ kind: "user", id: 99, text: "earlier question" })
       return { success: true }
     },
   })
   await h.store.resendPrompt("replacement")
-  expect(Array.from(h.store.entries.value, entry => entry.text)).toEqual(["earlier question", "replacement"])
-  expect(h.store.entries.value[1].id).toBe(1)
+  expect(Array.from(h.store.entries, entry => entry.text)).toEqual(["earlier question", "replacement"])
+  expect(h.store.entries[1].id).toBe(1)
 })

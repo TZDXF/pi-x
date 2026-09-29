@@ -1,57 +1,84 @@
-import { test, expect } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import vm from "node:vm"
-import ts from "typescript"
-import { loadTsModule, pathsModule } from "./lib/load-ts.mjs"
+import { createPinia, setActivePinia } from "pinia"
 
-function harness() {
-  const statuses = new Map()
-  const notifications = []
-  const modules = {
-    pinia: { defineStore: (_, setup) => setup },
-    vue: {
-      ref: value => ({ value }),
-      shallowRef: value => ({ value }),
-      computed: get => ({
-        get value() {
-          return get()
-        },
-      }),
-      watch: (source, cb, options) => {
-        if (options?.immediate) cb(typeof source === "function" ? source() : source)
-        return () => {}
-      },
+const controls = vi.hoisted(() => {
+  const state = {}
+  return {
+    state,
+    statuses: new Map(),
+    notifications: [],
+    piClient: {
+      sessionHistory: (...args) => state.sessionHistory(...args),
+      pixLog: (...args) => state.pixLog(...args),
+      sessionLastError: (...args) => state.sessionLastError(...args),
+      sessionMtime: (...args) => state.sessionMtime(...args),
+      rpcRequest: (...args) => state.rpcRequest(...args),
     },
-    "@/lib/checkpoints": {
-      createCheckpoint: async () => ({ refName: "r", commitOid: "oid" }),
-      diffCheckpoints: async () => [],
-      loadCheckpointManifest: async () => null,
-      saveCheckpointManifest: async () => {},
-    },
-    "@/i18n": { i18n: { global: { t: key => key } } },
-    "@/api/piClient": { sessionHistory: async () => [], pixLog() {}, rpcRequest: () => new Promise(() => {}) },
-    "@/stores/workspace": { useWorkspaceStore: () => ({ histories: {}, projectName: () => "project" }) },
-    "@/lib/notifications": { notifyTurnComplete: (...args) => notifications.push(args) },
-    "@/stores/sessionRunStatus": {
-      setSessionRunStatus: (file, status) => {
-        if (status) statuses.set(file, status)
-        else statuses.delete(file)
-      },
-    },
+    workspace: {},
   }
-  const { createSessionStore } = loadTsModule(new URL("../src/stores/session.ts", import.meta.url), id => modules[id], {
-    localStorage: { getItem: () => null },
+})
+
+vi.mock("@/api/piClient", () => controls.piClient)
+vi.mock("@/api/transport", () => ({ invoke: async () => null }))
+vi.mock("@/i18n", () => ({
+  i18n: { global: { t: key => key } },
+  tBackendError: value => String(value ?? ""),
+}))
+vi.mock("@/lib/checkpoints", () => ({
+  createCheckpoint: async () => ({ refName: "r", commitOid: "oid" }),
+  diffCheckpoints: async () => [],
+  loadCheckpointManifest: async () => null,
+  saveCheckpointManifest: async () => {},
+}))
+vi.mock("@/lib/fileRewind", () => ({
+  fileRewindState: async () => [],
+  markFileRewindState: async () => [],
+}))
+vi.mock("@/lib/notifications", () => ({
+  notifyTurnComplete: (...args) => controls.notifications.push(args),
+}))
+vi.mock("@/stores/sessionRunStatus", () => ({
+  setSessionRunStatus: (file, status) => {
+    if (status) controls.statuses.set(file, status)
+    else controls.statuses.delete(file)
+  },
+}))
+vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: () => controls.workspace }))
+
+beforeEach(() => {
+  setActivePinia(createPinia())
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+async function harness() {
+  Object.assign(controls.state, {
+    sessionHistory: async () => [],
+    pixLog() {},
+    sessionLastError: async () => null,
+    sessionMtime: async () => 0,
+    rpcRequest: () => new Promise(() => {}),
   })
+  controls.statuses.clear()
+  controls.notifications.length = 0
+  controls.workspace = { histories: {}, projectName: () => "project" }
+  vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
+  setActivePinia(createPinia())
+  vi.resetModules()
+  const { createSessionStore } = await import("@/stores/session")
   function session(id, file) {
     const store = createSessionStore(id)()
-    store.sessionFile.value = file
+    store.sessionFile = file
     return store
   }
-  return { statuses, session, notifications }
+  return { statuses: controls.statuses, session, notifications: controls.notifications }
 }
 
-test("concurrent sessions show independent running, completed and error statuses", () => {
-  const { statuses, session } = harness()
+test("concurrent sessions show independent running, completed and error statuses", async () => {
+  const { statuses, session } = await harness()
   const first = session("first", "first.jsonl")
   const second = session("second", "second.jsonl")
   first.handleEvent({ type: "agent_start" })
@@ -83,8 +110,8 @@ test("concurrent sessions show independent running, completed and error statuses
   expect(statuses.get("second.jsonl")).toBe("completed")
 })
 
-test("aborted turns clear status; unexpected process exit marks running turn as error", () => {
-  const { statuses, session } = harness()
+test("aborted turns clear status; unexpected process exit marks running turn as error", async () => {
+  const { statuses, session } = await harness()
   const store = session("first", "first.jsonl")
   store.handleEvent({ type: "agent_start" })
   store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "aborted", content: [] } })
@@ -95,23 +122,22 @@ test("aborted turns clear status; unexpected process exit marks running turn as 
   store.markInterrupted()
   expect(statuses.get("first.jsonl")).toBe("error")
   // The interruption must be visible in the conversation, not just the badge.
-  const note = store.entries.value.at(-1)
+  const note = store.entries.at(-1)
   expect(note.kind).toBe("assistant")
   expect(note.blocks[0].text).toMatch(/processExited/)
   // An idle worker exiting silently is not an interruption; no noise added.
   const idle = session("idle", "idle.jsonl")
   idle.markInterrupted()
-  expect(idle.entries.value.length).toBe(0)
+  expect(idle.entries.length).toBe(0)
 })
 
-test("viewing a session acknowledges terminal badges without clearing running or other sessions", () => {
-  const source = readFileSync(new URL("../src/stores/sessionRunStatus.ts", import.meta.url), "utf8")
-  const context = vm.createContext({
-    exports: {},
-    require: name => (name === "vue" ? { reactive: value => value } : pathsModule()),
-  })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }), context)
-  const { setSessionRunStatus: set, sessionRunStatus: get, acknowledgeSessionRunStatus: acknowledge } = context.exports
+test("viewing a session acknowledges terminal badges without clearing running or other sessions", async () => {
+  vi.resetModules()
+  const {
+    setSessionRunStatus: set,
+    sessionRunStatus: get,
+    acknowledgeSessionRunStatus: acknowledge,
+  } = await vi.importActual("@/stores/sessionRunStatus")
   for (const terminal of ["completed", "error"]) {
     set("project/first.jsonl", terminal)
     set("second.jsonl", terminal)
@@ -127,38 +153,37 @@ test("viewing a session acknowledges terminal badges without clearing running or
   set("project/first.jsonl", "completed")
   expect(get("project/first.jsonl")).toBe("completed")
 })
-
 for (const success of [true, false]) {
-  test(`retry backoff stays running until retry finishes (success=${success})`, () => {
-    const { statuses, session } = harness()
+  test(`retry backoff stays running until retry finishes (success=${success})`, async () => {
+    const { statuses, session } = await harness()
     const store = session("retry", "retry.jsonl")
     store.handleEvent({ type: "agent_start" })
     store.handleEvent({ type: "agent_end" })
     for (let attempt = 1; attempt <= 3; attempt++) {
       store.handleEvent({ type: "auto_retry_start", attempt, maxAttempts: 3, errorMessage: "503" })
-      expect(store.isStreaming.value).toBe(true)
+      expect(store.isStreaming).toBe(true)
       expect(statuses.get("retry.jsonl")).toBe("running")
-      expect(store.retryInfo.value.errorMessage).toMatch(/503/)
+      expect(store.retryInfo.errorMessage).toMatch(/503/)
       store.handleEvent({ type: "agent_start" })
       store.handleEvent({ type: "agent_end" })
-      expect(store.isStreaming.value).toBe(true)
+      expect(store.isStreaming).toBe(true)
       expect(statuses.get("retry.jsonl")).toBe("running")
     }
     store.handleEvent({ type: "auto_retry_end", success })
-    if (success) expect(store.retryInfo.value).toBe(null)
-    else expect(store.retryInfo.value.errorMessage).toMatch(/503/)
+    if (success) expect(store.retryInfo).toBe(null)
+    else expect(store.retryInfo.errorMessage).toMatch(/503/)
     // auto_retry_end is not the end of the run; pi settles explicitly.
-    expect(store.isStreaming.value).toBe(true)
+    expect(store.isStreaming).toBe(true)
     expect(statuses.get("retry.jsonl")).toBe("running")
     store.handleEvent({ type: "agent_settled" })
-    expect(store.isStreaming.value).toBe(false)
-    expect(store.retryInfo.value).toBe(null)
+    expect(store.isStreaming).toBe(false)
+    expect(store.retryInfo).toBe(null)
     expect(statuses.get("retry.jsonl")).toBe(success ? "completed" : "error")
   })
 }
 
-test("failed attempt notifies only after the auto-retry finishes, exactly once", () => {
-  const { statuses, session, notifications } = harness()
+test("failed attempt notifies only after the auto-retry finishes, exactly once", async () => {
+  const { statuses, session, notifications } = await harness()
   const store = session("retry", "retry.jsonl")
   store.handleEvent({ type: "agent_start" })
   store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
@@ -169,7 +194,7 @@ test("failed attempt notifies only after the auto-retry finishes, exactly once",
   store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "503" })
   store.handleEvent({ type: "agent_start" })
   store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } })
-  expect(store.retryInfo.value).toBe(null)
+  expect(store.retryInfo).toBe(null)
   store.handleEvent({ type: "agent_end" })
   expect(notifications.length).toBe(0)
   store.handleEvent({ type: "auto_retry_end", success: true })
@@ -184,8 +209,8 @@ test("failed attempt notifies only after the auto-retry finishes, exactly once",
   expect(notifications.length).toBe(1)
 })
 
-test("normal run notifies exactly once across agent_end and agent_settled", () => {
-  const { session, notifications } = harness()
+test("normal run notifies exactly once across agent_end and agent_settled", async () => {
+  const { session, notifications } = await harness()
   const store = session("normal", "normal.jsonl")
   store.handleEvent({ type: "agent_start" })
   store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } })
@@ -195,8 +220,8 @@ test("normal run notifies exactly once across agent_end and agent_settled", () =
   expect(notifications.length).toBe(1)
 })
 
-test("finally-failed run surfaces the provider error in the conversation", () => {
-  const { statuses, session } = harness()
+test("finally-failed run surfaces the provider error in the conversation", async () => {
+  const { statuses, session } = await harness()
   const store = session("fail", "fail.jsonl")
   for (let attempt = 1; attempt <= 3; attempt++) {
     store.handleEvent({ type: "agent_start" })
@@ -213,7 +238,7 @@ test("finally-failed run surfaces the provider error in the conversation", () =>
     store.handleEvent({ type: "auto_retry_start", attempt, maxAttempts: 3, errorMessage: "503" })
   }
   // Transient failures must not leave error text behind.
-  expect(store.entries.value.some(e => e.blocks?.some(b => b.text?.includes("503")))).toBe(false)
+  expect(store.entries.some(e => e.blocks?.some(b => b.text?.includes("503")))).toBe(false)
   store.handleEvent({ type: "agent_start" })
   store.handleEvent({
     type: "message_end",
@@ -228,34 +253,34 @@ test("finally-failed run surfaces the provider error in the conversation", () =>
   store.handleEvent({ type: "auto_retry_end", success: false })
   store.handleEvent({ type: "agent_settled" })
   expect(statuses.get("fail.jsonl")).toBe("error")
-  const note = store.entries.value.at(-1)
+  const note = store.entries.at(-1)
   expect(note.blocks[0].text).toMatch(/chat\.errorLabel/)
   // The JSON payload is humanized: status code + inner message, no raw body.
   expect(note.blocks[0].text).toMatch(/503 · provider overloaded/)
   expect(note.blocks[0].text).not.toMatch(/http_error/)
 })
 
-test("settled request clears retry loading even without retry_end", () => {
-  const { statuses, session } = harness()
+test("settled request clears retry loading even without retry_end", async () => {
+  const { statuses, session } = await harness()
   const store = session("retry", "retry.jsonl")
   store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3 })
   store.handleEvent({ type: "agent_settled" })
-  expect(store.retryInfo.value).toBe(null)
-  expect(store.isStreaming.value).toBe(false)
+  expect(store.retryInfo).toBe(null)
+  expect(store.isStreaming).toBe(false)
   expect(statuses.get("retry.jsonl")).not.toBe("running")
 })
 
-test("retry status is structured and clears as soon as the retried response succeeds", () => {
-  const { session } = harness()
+test("retry status is structured and clears as soon as the retried response succeeds", async () => {
+  const { session } = await harness()
   const store = session("retry", "retry.jsonl")
   const errorMessage = '503: {"type":"http_error","message":"已尝试所有本地执行候选提供商，但没有任何候选成功完成请求"}'
   store.handleEvent({ type: "auto_retry_start", attempt: 2, maxAttempts: 3, errorMessage })
-  expect(store.retryInfo.value.attempt).toBe(2)
-  expect(store.retryInfo.value.maxAttempts).toBe(3)
-  expect(store.retryInfo.value.errorMessage).toBe("503 · 已尝试所有本地执行候选提供商，但没有任何候选成功完成请求")
+  expect(store.retryInfo.attempt).toBe(2)
+  expect(store.retryInfo.maxAttempts).toBe(3)
+  expect(store.retryInfo.errorMessage).toBe("503 · 已尝试所有本地执行候选提供商，但没有任何候选成功完成请求")
 
   store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [] } })
-  expect(store.retryInfo.value).toBe(null)
+  expect(store.retryInfo).toBe(null)
 })
 
 test("sidebar shows session statuses on the left with animated running and semantic result colors", () => {
