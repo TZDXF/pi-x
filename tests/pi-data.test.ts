@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 
 // Opt in with the dist directory of a real installed Pi. Never touch user data.
 const dist = process.env.PI_TEST_SDK
-const script = readFileSync(new URL("../src-tauri/src/pi_data.mjs", import.meta.url), "utf8")
+const script = readFileSync(new URL("../src-tauri/resources/pi_data.mjs", import.meta.url), "utf8")
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pix-pi-data-test-"))
   t.onTestFinished(() => {

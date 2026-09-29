@@ -5,7 +5,7 @@ import vm from "node:vm"
 // The bridge is executed against a stub DOM so the inspect wiring is
 // exercised end to end: enabling the mode must actually register the
 // pointer handlers, and clicks/drags must report `selected` to the panel.
-const bridgeSource = readFileSync(new URL("../src-tauri/src/preview_bridge.js", import.meta.url), "utf8")
+const bridgeSource = readFileSync(new URL("../src-tauri/resources/preview_bridge.js", import.meta.url), "utf8")
 
 function makeElement(name = "div") {
   const children = []

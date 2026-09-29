@@ -11,7 +11,7 @@ pub fn call(request: Value) -> Result<Value, String> {
     };
     let (node, dist) = crate::pi_locate::sdk_launcher(config["piPath"].as_str())?;
     let mut command = Command::new(node);
-    command.args(["--input-type=module", "--eval", include_str!("pi_data.mjs")]).arg(dist)
+    command.args(["--input-type=module", "--eval", include_str!("../resources/pi_data.mjs")]).arg(dist)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {

@@ -46,7 +46,7 @@ fn host_token(secret: &str, host: &str) -> String {
     format!("{:x}", fnv1a(&format!("{}{}", secret, host)))
 }
 
-const BRIDGE_JS: &str = include_str!("preview_bridge.js");
+const BRIDGE_JS: &str = include_str!("../resources/preview_bridge.js");
 /// Route root on the dedicated loopback server.
 const DESKTOP_ROOT: &str = "/p";
 /// Route root mounted by the remote access server.
