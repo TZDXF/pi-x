@@ -1,16 +1,10 @@
 <script setup lang="ts">
 import type { WorkspaceSelection } from "@/api/piClient"
-import { sendCountdown } from "@/lib/sendCountdown"
-import { compactNumber, formatMessageTime, formatPercent } from "@/lib/format"
-import { focusComposer } from "@/lib/composer"
-import { useCountdownNow } from "@/composables/useCountdownNow"
+import { compactNumber, formatMessageTime } from "@/lib/format"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { averageCacheRate } from "@/lib/cacheRate"
-import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
 import PiXLogo from "@/components/PiXLogo.vue"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { NumberFieldInput, NumberFieldRoot } from "reka-ui"
@@ -26,11 +20,14 @@ import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/componen
 import { PromptInput, PromptInputSubmit } from "@/components/ai-elements/prompt-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
-import { composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
-import type { ThinkingLevel } from "@/api/protocol"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PromptInputHeader } from "@/components/ai-elements/prompt-input"
+import ChatQueuePanel from "@/components/chat/ChatQueuePanel.vue"
+import ChatDialogs from "@/components/chat/ChatDialogs.vue"
+import { useTurnChanges } from "@/composables/useTurnChanges"
+import { useChatContextBreakdown } from "@/composables/useChatContextBreakdown"
+import { useComposerDraftSync } from "@/composables/useComposerDraftSync"
+import { useConversationModel } from "@/composables/useConversationModel"
 import {
   Context,
   ContextContent,
@@ -44,11 +41,6 @@ import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
 import TurnChangesCard from "@/components/TurnChangesCard.vue"
-import { turnFileChanges, type TurnFileChange } from "@/lib/turnChanges"
-import { turnFileChangesFromArtifacts } from "@/lib/fileChangeArtifacts"
-import type { TurnCheckpointRecord } from "@/lib/checkpoints"
-import { formatCodedError } from "@/lib/backendError"
-import type { RevertFileResult } from "@/lib/revertChanges"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import StatusBar from "@/components/StatusBar.vue"
@@ -72,19 +64,7 @@ import { isDesktop } from "@/api/transport"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 
 import { useWorkspaceStore } from "@/stores/workspace"
-import {
-  Copy,
-  GitBranch,
-  MessageSquareQuote,
-  PanelRight,
-  X,
-  GripVertical,
-  Paperclip,
-  Pencil,
-  RefreshCw,
-  Trash2,
-  Clock3,
-} from "@lucide/vue"
+import { Copy, GitBranch, MessageSquareQuote, PanelRight, X, Paperclip, Pencil, RefreshCw, Clock3 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -143,7 +123,7 @@ const changeTotals = computed(() =>
   ),
 )
 
-const { t, te } = useI18n()
+const { t } = useI18n()
 
 const props = defineProps<{
   project: string
@@ -179,40 +159,7 @@ const currentTitle = computed(
 )
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
-const draftFile = ref<string | null>(session.sessionFile)
-const draftProject = () => session.cwd || props.project
-const draftTarget = () => session.sessionFile ?? draftFile.value
-const initialDraft = composerDraftText(draftProject(), draftTarget())
-watch(
-  () => bridge.value?.textInput,
-  text => {
-    if (text !== undefined) recordComposerDraft(draftProject(), draftTarget(), text)
-  },
-)
-// A deferred checkout change keeps this composer mounted; move its draft key too.
-watch(
-  () => props.project,
-  (project, previous) => {
-    const text = bridge.value?.textInput ?? ""
-    recordComposerDraft(previous, draftTarget(), "")
-    draftFile.value = session.sessionFile
-    recordComposerDraft(project, draftTarget(), text)
-  },
-)
-// Loading an existing session can set its file after the editor has mounted.
-// Reconnecting may briefly clear sessionFile, so keep its last value as the key.
-watch(
-  () => session.sessionFile,
-  file => {
-    if (file) draftFile.value = file
-    if (!bridge.value) return
-    if (file && !bridge.value.textInput) {
-      const saved = composerDraftText(draftProject(), file)
-      if (saved) bridge.value.setTextInput(saved)
-    }
-    recordComposerDraft(draftProject(), draftTarget(), bridge.value.textInput)
-  },
-)
+const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge)
 // Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
 const { sessionDragOver, splitZone, onSessionDragOver, onSessionDragLeave, onSessionDrop } = useSessionDrop(
@@ -336,81 +283,14 @@ function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
 }
 
-// ---- per-turn file changes (summary card with git revert) ----
-// Streaming re-renders this list constantly; the cache keeps the line diffs
-// from being recomputed while the turn's calls and their run states stand still.
-const turnChangesCache = new Map<number, { signature: string; files: TurnFileChange[] }>()
-function changesForTurn(entry: AssistantTurn): TurnFileChange[] {
-  // Built-in file-change tracking records exact before/after content around
-  // write/edit calls. Prefer it over reconstructed snippets or turn snapshots.
-  const exact = turnFileChangesFromArtifacts(entry.blocks, session.runs, session.fileChangeArtifacts)
-  if (exact.length) return exact
-  // 有 Git 快照记录的轮次以快照差异为准（覆盖 bash 等工具的文件修改）。
-  const checkpoint = checkpointForTurn(entry)
-  if (checkpoint)
-    return checkpoint.files.map(file => ({
-      path: file.path,
-      added: file.added,
-      removed: file.removed,
-      unknown: false,
-      ops: [],
-      revertible: true,
-    }))
-  const signature = entry.blocks
-    .flatMap(block =>
-      block.type === "toolCall"
-        ? [`${block.callId}:${block.argsText.length}:${session.runs[block.callId]?.state ?? "-"}`]
-        : [],
-    )
-    .join("|")
-  const hit = turnChangesCache.get(entry.id)
-  if (hit && hit.signature === signature) return hit.files
-  const files = turnFileChanges(entry.blocks, session.runs)
-  turnChangesCache.set(entry.id, { signature, files })
-  return files
-}
-
-function artifactsForTurn(entry: AssistantTurn) {
-  const ids = new Set(entry.blocks.flatMap(block => (block.type === "toolCall" ? [block.callId] : [])))
-  return session.fileChangeArtifacts.filter(artifact => ids.has(artifact.toolCallId))
-}
-watch(
-  () => session.sessionFile,
-  () => turnChangesCache.clear(),
-)
-
-/** 渲染轮次对应的用户消息 turnIndex，与会话清单里的快照记录精确匹配。 */
-function turnUserTurnIndex(entry: AssistantTurn): number | undefined {
-  for (let index = Math.min(entry.lastIndex, session.entries.length - 1); index >= 0; index--) {
-    const candidate = session.entries[index]
-    if (candidate?.kind === "user") return candidate.turnIndex
-  }
-  return undefined
-}
-
-function checkpointForTurn(entry: AssistantTurn): TurnCheckpointRecord | null {
-  const turnIndex = turnUserTurnIndex(entry)
-  if (turnIndex === undefined) return null
-  return session.turnCheckpointRecords.find(record => record.turnIndex === turnIndex) ?? null
-}
-
-function onTurnReverted(results: RevertFileResult[]) {
-  const ok = results.filter(result => result.ok).length
-  if (ok) ui.pushToast(t("turnChanges.toastReverted", { count: ok }), "info")
-  for (const result of results) if (!result.ok) ui.pushToast(formatCodedError(t, result.error ?? ""), "error")
-}
-
-function onTurnRevertedAll(entry: AssistantTurn) {
-  const artifacts = artifactsForTurn(entry)
-  if (artifacts.length) void session.markFileRewinds(artifacts.map(artifact => artifact.toolCallId))
-  const checkpoint = checkpointForTurn(entry)
-  if (checkpoint) session.markTurnReverted(checkpoint.turnIndex)
-}
-
-function turnArtifactsReverted(entry: AssistantTurn): boolean {
-  const artifacts = artifactsForTurn(entry)
-  return artifacts.length > 0 && artifacts.every(artifact => session.revertedFileChangeCalls.has(artifact.toolCallId))
-}
+const {
+  changesForTurn,
+  artifactsForTurn,
+  checkpointForTurn,
+  onTurnReverted,
+  onTurnRevertedAll,
+  turnArtifactsReverted,
+} = useTurnChanges(session, ui)
 
 // Process blocks render lazily on first expand: they are hidden anyway, and
 // skipping them avoids a full markdown re-parse when a turn completes.
@@ -435,84 +315,15 @@ watch(
 )
 
 // ---- context usage and session-wide weighted cache hit rate ----
-const contextUsage = computed(() => session.stats?.contextUsage ?? null)
-const cacheRate = computed(() => averageCacheRate(session.stats?.tokens))
-const cacheRateText = computed(() =>
-  cacheRate.value === null
-    ? "—"
-    : formatPercent(cacheRate.value),
+const { contextUsage, cacheRateText, contextBreakdown, refreshContextBreakdown } = useChatContextBreakdown(
+  session,
+  rpcRequest,
 )
 
-const contextBreakdown = ref<ContextBreakdownPart[] | null>(null)
-let breakdownFetchedKey: string | null = null
-let breakdownLoading = false
-async function refreshContextBreakdown() {
-  const key = `${session.stats?.sessionId ?? ""}:${contextUsage.value?.tokens ?? ""}`
-  if (breakdownLoading || breakdownFetchedKey === key) return
-  breakdownLoading = true
-  contextBreakdown.value = null
-  try {
-    const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
-    if (!res.success) return
-    if (key !== `${session.stats?.sessionId ?? ""}:${contextUsage.value?.tokens ?? ""}`) return
-    breakdownFetchedKey = key
-    contextBreakdown.value = contextBreakdownParts(
-      estimateContextBreakdown(res.data?.messages ?? []),
-      contextUsage.value?.tokens,
-    )
-  } finally {
-    breakdownLoading = false
-  }
-}
-
-const modelKey = computed({
-  get: () => {
-    if (session.desiredModelKey) return session.desiredModelKey
-    if (!props.connected && session.offlineDefaultModelKey) return session.offlineDefaultModelKey
-    const m = session.currentModel
-    return m ? `${m.provider}/${m.id}` : ""
-  },
-  set: (key: string) => {
-    const [provider, ...rest] = key.split("/")
-    // pi starts lazily: queue the choice until init() applies it.
-    if (!props.connected) {
-      session.setDesiredModel(key)
-      return
-    }
-    session.setModel(provider, rest.join("/")).catch(e => ui.pushToast(String(e), "error"))
-  },
+const { modelKey, thinkingLabel, onThinkingChange } = useConversationModel(session, {
+  connected: () => props.connected,
+  onError: (e: unknown) => ui.pushToast(String(e), "error"),
 })
-
-const draggedPrompt = ref<number | null>(null)
-
-function startQueueDrag(event: DragEvent, id: number) {
-  draggedPrompt.value = id
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move"
-    event.dataTransfer.setData("text/plain", String(id))
-  }
-}
-
-function dropQueuedPrompt(targetId: number) {
-  if (draggedPrompt.value !== null) session.moveQueuedPrompt(draggedPrompt.value, targetId)
-  draggedPrompt.value = null
-}
-
-async function editQueuedPrompt(id: number) {
-  const item = session.removeQueuedPrompt(id)
-  if (!item || !bridge.value) return
-  // Keep any draft already being composed rather than silently discarding it.
-  const draft = bridge.value.textInput
-  bridge.value.setTextInput([draft, item.text].filter(Boolean).join("\n\n"))
-  for (const [index, image] of (item.images ?? []).entries()) {
-    const bytes = Uint8Array.from(atob(image.data), char => char.charCodeAt(0))
-    bridge.value.addFiles([new File([bytes], `queued-image-${index + 1}`, { type: image.mimeType })])
-  }
-  await nextTick()
-  focusComposer()
-}
-
-const queueNow = useCountdownNow(() => session.promptQueue.some(item => item.sendAt !== undefined))
 
 const delayedSend = ref(false)
 const showStopButton = computed(
@@ -595,21 +406,6 @@ async function onSubmit(message: { text?: string; files?: { url?: string }[] }) 
     if (comments.length) codeComments.clear()
     await session.send(text, images.length ? images : undefined, promptWithComments, runningBehavior.value)
   }
-}
-
-function thinkingLabel(lv: string) {
-  const key = `chat.thinkingLevels.${lv}`
-  return te(key) ? t(key) : lv
-}
-
-function onThinkingChange(v: unknown) {
-  if (typeof v !== "string") return
-  // pi starts lazily: queue the choice until init() applies it.
-  if (!props.connected) {
-    session.setDesiredThinkingLevel(v as ThinkingLevel)
-    return
-  }
-  session.setThinkingLevel(v as ThinkingLevel).catch(e => ui.pushToast(String(e), "error"))
 }
 
 async function abort() {
@@ -1065,90 +861,15 @@ onBeforeUnmount(() => {
         <p v-if="workspace.gitBusy" role="status" class="px-2 py-1 text-xs text-muted-foreground">
           {{ t("workspace.preparing") }}
         </p>
-        <section
+        <ChatQueuePanel
           v-if="session.promptQueue.length"
-          class="mb-2 rounded-xl border border-border bg-card/80 px-3 py-2"
-          :aria-label="t('chat.queuedPrompts')"
-        >
-          <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{{ t("chat.queuedPrompts") }} · {{ session.promptQueue.length }}</span>
-            <Button
-              v-if="!session.isStreaming"
-              type="button"
-              size="sm"
-              variant="ghost"
-              @click="session.dispatchQueuedPrompt()"
-              >{{ t("chat.resumeQueue") }}</Button
-            >
-          </div>
-          <ul class="mt-1 max-h-40 overflow-y-auto">
-            <li
-              v-for="item in session.promptQueue"
-              :key="item.id"
-              class="flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-1 py-2 text-sm hover:bg-muted"
-              :class="{ 'opacity-50': draggedPrompt === item.id }"
-              @dragover.prevent
-              @drop.prevent.stop="dropQueuedPrompt(item.id)"
-            >
-              <span
-                draggable="true"
-                class="shrink-0 cursor-grab p-1"
-                :title="t('chat.dragQueue')"
-                @dragstart="startQueueDrag($event, item.id)"
-                @dragend="draggedPrompt = null"
-                ><GripVertical class="size-4"
-              /></span>
-              <div class="min-w-0 flex-1 basis-40 space-y-1">
-                <p class="truncate text-foreground" :title="item.text">
-                  {{ item.text || t("chat.queuedImages", { count: item.images?.length ?? 0 }) }}
-                </p>
-                <p v-if="item.text && item.images?.length" class="text-xs text-muted-foreground">
-                  {{ t("chat.queuedImages", { count: item.images.length }) }}
-                </p>
-              </div>
-              <div class="ml-auto flex shrink-0 items-center gap-1">
-                <span
-                  v-if="item.sendAt !== undefined"
-                  class="mr-1 text-xs tabular-nums text-muted-foreground"
-                  :title="t('chat.scheduledSendAt', { time: new Date(item.sendAt).toLocaleString() })"
-                  :aria-label="t('chat.sendCountdown', { time: sendCountdown(item.sendAt, queueNow) })"
-                  >{{ sendCountdown(item.sendAt, queueNow) }}</span
-                >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  :disabled="
-                    workspace.gitBusy ||
-                    props.connecting ||
-                    !props.connected ||
-                    editBusy ||
-                    session.isResending ||
-                    session.isCompacting
-                  "
-                  @click="session.executeQueuedPrompt(item.id)"
-                  >{{ t("chat.executeQueuedPrompt") }}</Button
-                >
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  :aria-label="t('chat.editQueuedPrompt')"
-                  @click="editQueuedPrompt(item.id)"
-                  ><Pencil class="size-3"
-                /></Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  :aria-label="t('chat.deleteQueuedPrompt')"
-                  @click="session.removeQueuedPrompt(item.id)"
-                  ><Trash2 class="size-3"
-                /></Button>
-              </div>
-            </li>
-          </ul>
-        </section>
+          :session="session"
+          :bridge="bridge"
+          :git-busy="workspace.gitBusy"
+          :connecting="connecting"
+          :connected="connected"
+          :edit-busy="editBusy"
+        />
         <PromptInput
           :group-class="[
             'relative rounded-[22px] bg-card p-2 shadow-[var(--composer-shadow)]',
@@ -1371,46 +1092,12 @@ onBeforeUnmount(() => {
         <StatusBar :session-id="runtimeId" />
       </div>
 
-      <!-- fork dialog -->
-      <Dialog v-model:open="forkOpen">
-        <DialogContent class="flex max-h-[70dvh] max-w-lg flex-col overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>{{ t("chat.forkTitle") }}</DialogTitle>
-          </DialogHeader>
-          <p class="text-muted-foreground text-xs">
-            {{ t("chat.forkDesc") }}
-          </p>
-          <ScrollArea class="min-h-0" viewport-class="max-h-[45dvh]">
-            <div class="flex flex-col gap-1">
-              <Button
-                type="button"
-                v-for="m in forkMessages"
-                :key="m.entryId"
-                variant="outline"
-                class="h-auto justify-start px-3 py-2 text-left text-xs"
-                @click="doFork(m.entryId)"
-              >
-                <span class="line-clamp-2">{{ m.text }}</span>
-              </Button>
-              <p v-if="!forkMessages.length" class="text-muted-foreground text-xs">
-                {{ t("chat.forkEmpty") }}
-              </p>
-            </div>
-          </ScrollArea>
-        </DialogContent>
-      </Dialog>
-
-      <!-- extension UI dialogs -->
-      <Dialog :open="!!previewImage" @update:open="previewImage = null">
-        <DialogContent class="max-w-4xl p-2">
-          <img
-            v-if="previewImage"
-            :src="previewImage"
-            class="max-h-[80dvh] w-full rounded-md object-contain"
-            alt="preview"
-          />
-        </DialogContent>
-      </Dialog>
+      <ChatDialogs
+        v-model:fork-open="forkOpen"
+        :fork-messages="forkMessages"
+        @fork="doFork"
+        v-model:preview-image="previewImage"
+      />
 
       <ExtensionDialog :session-id="runtimeId" />
     </div>
