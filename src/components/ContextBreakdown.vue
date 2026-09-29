@@ -2,6 +2,7 @@
 import type { HTMLAttributes } from "vue"
 import type { ContextBreakdownPart } from "@/lib/contextBreakdown"
 import { cn } from "@/lib/utils"
+import { compactNumber, formatPercent } from "@/lib/format"
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 
@@ -12,15 +13,12 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const percentFormatter = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 })
-const tokenFormatter = new Intl.NumberFormat("en-US", { notation: "compact" })
-
 const rows = computed(() =>
   props.parts.map(part => ({
     ...part,
     label: t(`chat.contextParts.${part.key}`),
-    percentText: percentFormatter.format(part.percent),
-    tokensText: tokenFormatter.format(part.tokens),
+    percentText: formatPercent(part.percent),
+    tokensText: compactNumber(part.tokens),
   })),
 )
 </script>

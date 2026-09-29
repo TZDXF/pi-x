@@ -30,6 +30,7 @@ import {
   type ScheduleFrequency,
 } from "@/lib/schedules"
 import { tBackendError } from "@/i18n"
+import { formatDateTime } from "@/lib/format"
 import { supportedThinkingLevels } from "@/lib/thinkingLevels"
 import type { ThinkingLevel } from "@/api/protocol"
 
@@ -190,9 +191,6 @@ async function save() {
     })
     editing.value = false
   })
-}
-function formatDate(value: number) {
-  return new Date(value).toLocaleString()
 }
 function describeExpression(expression: string): string {
   const parsed = parseScheduleExpression(expression)
@@ -404,7 +402,7 @@ function openResult(task: ScheduledTask) {
           <p class="text-xs text-muted-foreground break-all">
             {{ workspace.projectName(task.project) }} · {{ task.provider }}/{{ task.model }} ·
             {{ describeExpression(task.expression)
-            }}<template v-if="task.enabled"> · {{ t("schedules.next") }} {{ formatDate(task.nextRun) }}</template
+            }}<template v-if="task.enabled"> · {{ t("schedules.next") }} {{ formatDateTime(task.nextRun) }}</template
             ><template v-else> · {{ t("schedules.paused") }}</template>
           </p>
           <p v-if="task.error" class="text-xs text-destructive break-words">{{ tBackendError(task.error) }}</p>

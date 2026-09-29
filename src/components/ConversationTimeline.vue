@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n"
 import type { Block } from "@/stores/conversations"
 import { appendPartial, type TimelineTurn } from "@/lib/conversationTimeline"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { compactNumber } from "@/lib/format"
 
 const props = defineProps<{ turns: TimelineTurn[]; partial: Block[] | null }>()
 const emit = defineEmits<{ navigate: [turn: TimelineTurn] }>()
@@ -20,7 +21,6 @@ const turns = computed(() => {
   return list.map(turn => ({ ...turn, rank: turn.compaction ? 0 : ++rank }))
 })
 const selected = ref<number | null>(null)
-const compactTokens = (n: number) => new Intl.NumberFormat("en-US", { notation: "compact" }).format(n)
 // 当轮次很多时压缩节点高度，保证时间线在可视区内完整显示：
 // 默认 20px，最多压缩到 6px（圆点同步缩小）；仍放不下（超多
 // 轮次）时回退为内部滚动，并以边缘渐隐提示还有更多节点。
@@ -127,9 +127,9 @@ function onViewportScroll() {
               <div v-if="turn.compaction" class="space-y-2">
                 <p class="line-clamp-1 font-medium leading-snug">{{ t("chat.compacted") }}</p>
                 <p v-if="turn.compaction.tokensBefore" class="leading-snug opacity-80">
-                  {{ compactTokens(turn.compaction.tokensBefore)
+                  {{ compactNumber(turn.compaction.tokensBefore)
                   }}<template v-if="turn.compaction.tokensAfter">
-                    → {{ compactTokens(turn.compaction.tokensAfter) }}</template
+                    → {{ compactNumber(turn.compaction.tokensAfter) }}</template
                   >
                 </p>
               </div>

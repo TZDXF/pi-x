@@ -27,6 +27,7 @@ import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient
 import type { QueuedPrompt } from "@/stores/session"
 import { sendCountdown } from "@/lib/sendCountdown"
 import { pendingConversations } from "@/lib/pendingConversations"
+import { useCountdownNow } from "@/composables/useCountdownNow"
 import { copyWithToast } from "@/lib/clipboard"
 import { allConversations, activeRuntimeId, findConversation, useSessionStore } from "@/stores/conversations"
 import { sessionRunStatus } from "@/stores/sessionRunStatus"
@@ -105,20 +106,8 @@ const taskPath = computed(() => workspace.projectless)
 const visibleProjects = computed(() =>
   projectsCollapsed.value ? [] : workspace.orderedProjects().filter(p => !workspace.isProjectless(p)),
 )
-const queueNow = ref(Date.now())
-let countdownTimer: ReturnType<typeof setInterval> | undefined
-watch(
-  () => allConversations().some(conversation => conversation.promptQueue.some(item => item.sendAt !== undefined)),
-  hasScheduled => {
-    if (countdownTimer !== undefined) clearInterval(countdownTimer)
-    countdownTimer = undefined
-    queueNow.value = Date.now()
-    if (hasScheduled)
-      countdownTimer = setInterval(() => {
-        queueNow.value = Date.now()
-      }, 1000)
-  },
-  { immediate: true },
+const queueNow = useCountdownNow(() =>
+  allConversations().some(conversation => conversation.promptQueue.some(item => item.sendAt !== undefined)),
 )
 function queueTitle(queue: QueuedPrompt[] | undefined) {
   const nextSendAt =
@@ -180,7 +169,6 @@ function renameOnDoubleClick(s: SessionMeta) {
 }
 onBeforeUnmount(() => {
   clearTimeout(openTimer)
-  if (countdownTimer !== undefined) clearInterval(countdownTimer)
 })
 async function saveTitle() {
   if (!renaming.value || !title.value.trim() || saving.value) return

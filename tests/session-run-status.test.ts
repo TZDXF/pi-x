@@ -351,5 +351,5 @@ test("queued prompts show a left-hand clock without a count and hover for the li
     expect(row).toMatch(/:title="queueTitle\(/)
   }
   expect(sidebar).toMatch(/sendCountdown\(nextSendAt, queueNow.value\)/)
-  expect(sidebar).toMatch(/setInterval\(\(\) => \{[\s\S]*?queueNow\.value = Date\.now\(\)[\s\S]*?\}, 1000\)/)
+  expect(sidebar).toMatch(/queueNow = useCountdownNow\(/)
 })

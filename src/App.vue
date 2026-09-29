@@ -46,6 +46,7 @@ import {
   type PaneLeaf,
 } from "@/stores/splitView"
 import { createUuid } from "@/lib/uuid"
+import { focusComposer } from "@/lib/composer"
 import { useWorkspaceStore, registerSessionMtimeSync, type ProjectGroup } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
@@ -865,11 +866,7 @@ function onGlobalKeydown(event: KeyboardEvent) {
 }
 
 function focusComposerFromShortcut() {
-  const el = document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")
-  if (el) {
-    el.focus()
-    return
-  }
+  focusComposer()
 }
 
 function switchSessionByOffset(offset: number) {

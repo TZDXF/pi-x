@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
+import { formatDateTime } from "@/lib/format"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -29,7 +30,7 @@ const query = ref("")
 
 const projectName = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
-const when = (s: SessionMeta) => new Date(s.mtimeMs).toLocaleString()
+const when = (s: SessionMeta) => formatDateTime(s.mtimeMs)
 
 /** Search matches the session title/preview and the project path or name. */
 function matches(s: SessionMeta, q: string) {

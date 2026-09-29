@@ -1,6 +1,7 @@
 import { nextTick, ref, type ComputedRef, type Ref } from "vue"
 import { sessionReference, type KnownSession } from "@/lib/completion"
 import { resolveDropZone, type SplitDropZone } from "@/lib/splitDropZone"
+import { focusComposer } from "@/lib/composer"
 import type { SessionStore } from "@/stores/session"
 import type PromptInputBridge from "@/components/PromptInputBridge.vue"
 
@@ -73,7 +74,7 @@ export function useSessionDrop(
     const reference = sessionReference(file)
     const previous = bridge.value?.textInput ?? ""
     bridge.value?.setTextInput(previous + (previous && !/\s$/.test(previous) ? " " : "") + reference + " ")
-    nextTick(() => document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")?.focus())
+    nextTick(() => focusComposer())
   }
 
   return { sessionDragOver, splitZone, onSessionDragOver, onSessionDragLeave, onSessionDrop }

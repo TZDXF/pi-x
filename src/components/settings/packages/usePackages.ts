@@ -17,7 +17,7 @@ import {
 } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { currentLocale } from "@/i18n"
+import { compactNumber, formatRelativeTime } from "@/lib/format"
 
 export function usePackages(project: () => string | undefined) {
   const ui = useUiStore()
@@ -198,19 +198,11 @@ export function usePackages(project: () => string | undefined) {
   }
 
   function fmtDownloads(n: number): string {
-    return new Intl.NumberFormat(currentLocale(), { notation: "compact" }).format(n)
+    return compactNumber(n)
   }
 
   function fmtUpdated(ms: number): string {
-    if (!ms) return ""
-    const diff = Date.now() - ms
-    const rtf = new Intl.RelativeTimeFormat(currentLocale(), { numeric: "auto" })
-    const days = Math.round(diff / 86400000)
-    if (days < 1) return rtf.format(-Math.max(1, Math.round(diff / 3600000)), "hour")
-    if (days < 30) return rtf.format(-days, "day")
-    const months = Math.round(days / 30)
-    if (months < 12) return rtf.format(-months, "month")
-    return rtf.format(-Math.round(months / 12), "year")
+    return formatRelativeTime(ms)
   }
 
   function typeLabel(type: string): string {

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import type { WorkspaceSelection } from "@/api/piClient"
 import { sendCountdown } from "@/lib/sendCountdown"
+import { compactNumber, formatMessageTime, formatPercent } from "@/lib/format"
+import { focusComposer } from "@/lib/composer"
+import { useCountdownNow } from "@/composables/useCountdownNow"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { averageCacheRate } from "@/lib/cacheRate"
 import { contextBreakdownParts, estimateContextBreakdown, type ContextBreakdownPart } from "@/lib/contextBreakdown"
@@ -301,8 +304,6 @@ function blocksText(blocks: { type: string; text?: string }[]): string {
     .join("\n\n")
 }
 
-const compactTokens = (n: number) => new Intl.NumberFormat("en-US", { notation: "compact" }).format(n)
-
 const renderedEntries = computed(() => {
   const streaming = session.isStreaming || !!session.partialBlocks
   const turns = responseTurns(session.entries, streaming)
@@ -418,14 +419,6 @@ function onProcessToggle(id: number, event: Event) {
   if ((event.target as HTMLDetailsElement).open) openedProcesses.add(id)
 }
 
-function formatMessageTime(ts?: number): string {
-  if (!ts) return ""
-  const d = new Date(ts)
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  if (d.toDateString() === new Date().toDateString()) return time
-  return `${d.toLocaleDateString([], { month: "numeric", day: "numeric" })} ${time}`
-}
-
 function copyText(text: string) {
   return copyWithToast(ui, text, t("chat.toastCopied"))
 }
@@ -447,7 +440,7 @@ const cacheRate = computed(() => averageCacheRate(session.stats?.tokens))
 const cacheRateText = computed(() =>
   cacheRate.value === null
     ? "—"
-    : new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(cacheRate.value),
+    : formatPercent(cacheRate.value),
 )
 
 const contextBreakdown = ref<ContextBreakdownPart[] | null>(null)
@@ -516,27 +509,10 @@ async function editQueuedPrompt(id: number) {
     bridge.value.addFiles([new File([bytes], `queued-image-${index + 1}`, { type: image.mimeType })])
   }
   await nextTick()
-  document.querySelector<HTMLElement>(".composer-dock .composer-rich-editor")?.focus()
+  focusComposer()
 }
 
-const queueNow = ref(Date.now())
-let countdownTimer: ReturnType<typeof setInterval> | undefined
-watch(
-  () => session.promptQueue.some(item => item.sendAt !== undefined),
-  hasScheduled => {
-    if (countdownTimer !== undefined) clearInterval(countdownTimer)
-    countdownTimer = undefined
-    queueNow.value = Date.now()
-    if (hasScheduled)
-      countdownTimer = setInterval(() => {
-        queueNow.value = Date.now()
-      }, 1000)
-  },
-  { immediate: true },
-)
-onBeforeUnmount(() => {
-  if (countdownTimer !== undefined) clearInterval(countdownTimer)
-})
+const queueNow = useCountdownNow(() => session.promptQueue.some(item => item.sendAt !== undefined))
 
 const delayedSend = ref(false)
 const showStopButton = computed(
@@ -831,8 +807,8 @@ onBeforeUnmount(() => {
                   {{ t("chat.compacted") }}
                   <template v-if="entry.tokensBefore">
                     <span aria-hidden="true">&middot;</span>
-                    {{ compactTokens(entry.tokensBefore)
-                    }}<template v-if="entry.tokensAfter"> &rarr; {{ compactTokens(entry.tokensAfter) }}</template>
+                    {{ compactNumber(entry.tokensBefore)
+                    }}<template v-if="entry.tokensAfter"> &rarr; {{ compactNumber(entry.tokensAfter) }}</template>
                   </template>
                 </span>
                 <span class="h-px flex-1 bg-border"></span>
