@@ -213,12 +213,11 @@ async function archive(s: SessionMeta) {
 
 // ---- drag & drop ordering（VueDraggable/Sortable 接管；整行可拖，无把手图标）----
 /** 统一起拖载荷：主界面 @引用 读取 x-pix-session，分屏投放读取 x-pix-session-drag。 */
-function onSessionDragStart(event: { item?: HTMLElement; originalEvent?: DragEvent }) {
-  const item = event.item
-  const file = item?.dataset.file
-  const path = item?.dataset.path
-  const transfer = event.originalEvent?.dataTransfer
-  if (!file || !path || !transfer) return
+// Sortable 的 start 异步触发；必须在原生 dragstart 的 setData 回调中写入载荷。
+function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
+  const file = item.dataset.file
+  const path = item.dataset.path
+  if (!file || !path) return
   transfer.effectAllowed = "copyMove"
   transfer.setData("application/x-pix-session", file)
   transfer.setData("text/plain", file)
@@ -518,7 +517,7 @@ watch(
                 :animation="150"
                 :disabled="disabled || !!query"
                 chosen-class="drag-source"
-                @start="onSessionDragStart"
+                :set-data="setSessionDragData"
                 @update:model-value="(next: string[]) => workspace.reorderSessions(path, next)"
               >
                 <ContextMenu v-for="s in rows(path)" :key="s.file">
@@ -696,7 +695,7 @@ watch(
             :animation="150"
             :disabled="disabled || !!query"
             chosen-class="drag-source"
-            @start="onSessionDragStart"
+            :set-data="setSessionDragData"
             @update:model-value="(next: string[]) => workspace.reorderSessions(taskPath, next)"
           >
             <ContextMenu v-for="s in rows(taskPath)" :key="s.file">

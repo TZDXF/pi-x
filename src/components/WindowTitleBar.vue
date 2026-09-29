@@ -2,13 +2,13 @@
 import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { ChevronLeft, ChevronRight, PanelLeft, Settings } from "@lucide/vue"
+import { ChevronLeft, ChevronRight, PanelLeft, PanelRight, Settings } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { isDesktop } from "@/api/transport"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
 
-const props = defineProps<{ sidebarOpen?: boolean }>()
-const emit = defineEmits<{ toggleSidebar: [] }>()
+const props = defineProps<{ sidebarOpen?: boolean; rightSidebarOpen?: boolean; showRightSidebar?: boolean }>()
+const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: [] }>()
 
 const { t } = useI18n()
 const route = useRoute()
@@ -59,7 +59,6 @@ function close() {
 
 <template>
   <header
-    v-if="isDesktop"
     data-testid="window-titlebar"
     class="fixed inset-x-0 top-0 z-[200] flex h-9 select-none items-center bg-background text-foreground shadow-[0_1px_0_var(--border)]"
   >
@@ -113,7 +112,18 @@ function close() {
       </Badge>
     </div>
     <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
-    <div class="flex h-full items-center">
+    <button
+      v-if="showRightSidebar"
+      type="button"
+      class="titlebar-control"
+      :title="t('sidebarTabs.toggle')"
+      :aria-label="t('sidebarTabs.toggle')"
+      :aria-expanded="rightSidebarOpen"
+      @click="emit('toggleRightSidebar')"
+    >
+      <PanelRight :size="16" />
+    </button>
+    <div v-if="isDesktop" class="flex h-full items-center">
       <button
         type="button"
         class="titlebar-control"

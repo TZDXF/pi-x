@@ -8,7 +8,7 @@ test("right sidebar hosts review, files and terminal as addable tabs", () => {
   const sidebar = read("../src/components/RightSidebar.vue")
   const terminal = read("../src/components/terminal/TerminalPanel.vue")
   expect(chat).toMatch(
-    /<RightSidebar\s+v-show="sidebarOpen"\s+:open="sidebarOpen"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/,
+    /<RightSidebar\s+v-show="sidebarVisible"\s+:open="sidebarVisible"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/,
   )
   expect(sidebar).toMatch(/role="tablist"/)
   expect(sidebar).toMatch(/v-for="tab in tabs"/)

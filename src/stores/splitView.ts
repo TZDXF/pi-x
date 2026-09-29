@@ -78,6 +78,21 @@ export function enterSplit(primaryRuntimeId: string, secondaryRuntimeId: string,
   splitView.suspendedTree = null
 }
 
+/** Apply an edge drop relative to the target, including the first split. */
+export function splitAtEdge(targetRuntimeId: string, zone: "left" | "right" | "top" | "bottom", newRuntimeId: string) {
+  if (newRuntimeId === targetRuntimeId || isMember(newRuntimeId)) return false
+  if (!splitView.tree) {
+    const direction = zone === "left" || zone === "right" ? "horizontal" : "vertical"
+    if (zone === "left" || zone === "top") enterSplit(newRuntimeId, targetRuntimeId, direction)
+    else enterSplit(targetRuntimeId, newRuntimeId, direction)
+  } else {
+    const target = leafByRuntime(targetRuntimeId)
+    if (!target) return false
+    insertAdjacent(target.id, zone, newRuntimeId)
+  }
+  return true
+}
+
 /**
  * Insert a new pane beside the target leaf. A left/right zone creates a nested
  * horizontal group, while top/bottom creates a nested vertical group.

@@ -47,10 +47,11 @@ export function useSessionDrop(
     }
   }
   function onSessionDrop(event: DragEvent) {
+    sessionDragOver.value = false
+    splitZone.value = null
     if (event.dataTransfer?.types.includes("application/x-pix-session-drag")) {
       const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
       const zone = resolveDropZone(event.clientX, event.clientY, rect)
-      splitZone.value = null
       // The center keeps the @session reference behavior below.
       if (zone !== "center") {
         event.preventDefault()
@@ -61,10 +62,9 @@ export function useSessionDrop(
         } catch {
           // Malformed payload: ignore the split attempt.
         }
+        return
       }
-      return
     }
-    sessionDragOver.value = false
     if (!event.dataTransfer?.types.includes("application/x-pix-session")) return
     event.preventDefault()
     event.stopPropagation()

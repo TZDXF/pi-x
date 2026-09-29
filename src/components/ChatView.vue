@@ -73,6 +73,7 @@ import {
   GitBranch,
   MessageSquareQuote,
   PanelRight,
+  X,
   GripVertical,
   Paperclip,
   Pencil,
@@ -85,7 +86,17 @@ import { Textarea } from "@/components/ui/textarea"
 
 import RightSidebar, { type SidebarTabItem, type SidebarTabType } from "@/components/RightSidebar.vue"
 
-const sidebarOpen = ref(false)
+const localSidebarOpen = ref(false)
+const sidebarOpen = computed({
+  get: () => (props.sidebarTarget ? !!props.rightSidebarOpen : localSidebarOpen.value),
+  set: value => {
+    localSidebarOpen.value = value
+    emit("update:rightSidebarOpen", value)
+  },
+})
+const sidebarVisible = computed(
+  () => sidebarOpen.value && (!props.sidebarTarget || activeRuntimeId.value === runtimeId),
+)
 const sidebarTabs = ref<SidebarTabItem[]>([])
 const activeTabId = ref<number | null>(null)
 let nextTabId = 1
@@ -134,6 +145,10 @@ const props = defineProps<{
   project: string
   /** 所属会话 id；缺省跟随当前激活会话，分屏时由父层传入各窗格的会话。 */
   sessionId?: string
+  splitPane?: boolean
+  /** Render the session's tools outside the split tree, in the workspace shell. */
+  sidebarTarget?: string
+  rightSidebarOpen?: boolean
   ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
   connecting: boolean
   selectingProject?: boolean
@@ -146,6 +161,8 @@ const session = sessionFor(runtimeId)
 const ui = uiFor(runtimeId)
 const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const emit = defineEmits<{
+  "update:rightSidebarOpen": [open: boolean]
+  closePane: []
   selectProject: [path: string]
   openProject: []
   newSession: []
@@ -741,7 +758,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="header-actions flex items-center gap-1 shrink-0 max-[900px]:flex-wrap max-[640px]:gap-0">
           <Button
-            v-if="!sidebarOpen"
+            v-if="!sidebarTarget && !sidebarOpen"
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -752,6 +769,18 @@ onBeforeUnmount(() => {
             @click="sidebarOpen = !sidebarOpen"
           >
             <PanelRight />
+          </Button>
+          <Button
+            v-if="splitPane"
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            :title="t('split.closePane')"
+            :aria-label="t('split.closePane')"
+            @mousedown.stop
+            @click.stop="emit('closePane')"
+          >
+            <X />
           </Button>
         </div>
       </header>
@@ -1413,21 +1442,23 @@ onBeforeUnmount(() => {
 
       <ExtensionDialog :session-id="runtimeId" />
     </div>
-    <RightSidebar
-      v-show="sidebarOpen"
-      :open="sidebarOpen"
-      :tabs="sidebarTabs"
-      :active-id="activeTabId"
-      :changes="session.fileChanges"
-      :project="session.cwd || project"
-      :focus="reviewFocus"
-      :totals="changeTotals"
-      :checkpoints="session.turnCheckpointRecords"
-      @update:active-id="activeTabId = $event"
-      @add-tab="addSidebarTab"
-      @close-tab="closeSidebarTab"
-      @close="sidebarOpen = false"
-      @send-to-chat="insertIntoComposer"
-    />
+    <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget" defer>
+      <RightSidebar
+        v-show="sidebarVisible"
+        :open="sidebarVisible"
+        :tabs="sidebarTabs"
+        :active-id="activeTabId"
+        :changes="session.fileChanges"
+        :project="session.cwd || project"
+        :focus="reviewFocus"
+        :totals="changeTotals"
+        :checkpoints="session.turnCheckpointRecords"
+        @update:active-id="activeTabId = $event"
+        @add-tab="addSidebarTab"
+        @close-tab="closeSidebarTab"
+        @close="sidebarOpen = false"
+        @send-to-chat="insertIntoComposer"
+      />
+    </Teleport>
   </div>
 </template>

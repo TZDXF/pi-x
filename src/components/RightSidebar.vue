@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
-import { FileCode, FolderTree, Globe, PanelRight, Plus, SquareTerminal, X } from "@lucide/vue"
+import { FileCode, FolderTree, Globe, Plus, SquareTerminal, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { isDesktop } from "@/api/transport"
@@ -270,14 +270,6 @@ onBeforeUnmount(() => {
           </PopoverContent>
         </Popover>
       </div>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        class="shrink-0"
-        :aria-label="t('sidebarTabs.toggle')"
-        @click="$emit('close')"
-        ><PanelRight
-      /></Button>
     </div>
     <template v-for="tab in tabs" :key="tab.id">
       <ReviewPanel

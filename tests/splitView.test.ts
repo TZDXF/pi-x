@@ -2,6 +2,7 @@ import { beforeEach, test, expect } from "vitest"
 import {
   clear,
   enterSplit,
+  splitAtEdge,
   insertAdjacent,
   closePane,
   replaceLeaf,
@@ -129,4 +130,26 @@ test("leafByRuntime and firstLeafRuntime address leaves in the active tree", () 
 
   closePane(leafByRuntime("stacked")!.id)
   expect(firstLeafRuntime()).toBe("primary")
+})
+for (const zone of ["left", "right", "top", "bottom"] as const) {
+  test(`first ${zone} drop places the new session on the requested side`, () => {
+    expect(splitAtEdge("target", zone, "new")).toBe(true)
+    const before = zone === "left" || zone === "top"
+    expect(leafRuntimeIds(splitView.tree!)).toEqual(before ? ["new", "target"] : ["target", "new"])
+    expect(splitView.tree?.kind === "group" && splitView.tree.direction).toBe(
+      zone === "left" || zone === "right" ? "horizontal" : "vertical",
+    )
+  })
+}
+
+test("edge drops reject duplicate sessions and missing targets without changing the tree", () => {
+  expect(splitAtEdge("primary", "left", "primary")).toBe(false)
+  expect(splitView.tree).toBeNull()
+  enterSplit("primary", "secondary", "horizontal")
+  const before = JSON.stringify(splitView.tree)
+  expect(splitAtEdge("primary", "left", "secondary")).toBe(false)
+  expect(splitAtEdge("missing", "top", "new")).toBe(false)
+  expect(JSON.stringify(splitView.tree)).toBe(before)
+  expect(splitAtEdge("secondary", "top", "new")).toBe(true)
+  expect(leafRuntimeIds(splitView.tree!)).toEqual(["primary", "new", "secondary"])
 })

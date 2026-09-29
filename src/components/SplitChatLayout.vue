@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { PaneGroup, PaneLeaf } from "@/stores/splitView"
-import { useI18n } from "vue-i18n"
 import { onBeforeUnmount, onMounted, ref } from "vue"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 
@@ -11,15 +10,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   activate: [runtimeId: string]
-  close: [runtimeId: string]
 }>()
 
 defineSlots<{
-  "pane-title"?: (props: { runtimeId: string }) => unknown
   pane?: (props: { runtimeId: string; active: boolean }) => unknown
 }>()
 
-const { t } = useI18n()
 const el = ref<HTMLElement | null>(null)
 
 const paneSize = (group: PaneGroup, index: number) => group.sizes?.[index] ?? 100 / group.children.length
@@ -40,7 +36,7 @@ onBeforeUnmount(() => el.value?.removeEventListener("mousedown", handlePointerDo
 </script>
 
 <template>
-  <div ref="el" class="h-full min-w-0">
+  <div ref="el" class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <template v-if="tree.kind === 'group'">
       <ResizablePanelGroup :key="tree.id" :direction="tree.direction" @layout="onLayout">
         <template v-for="(child, index) in tree.children" :key="child.id">
@@ -54,25 +50,10 @@ onBeforeUnmount(() => el.value?.removeEventListener("mousedown", handlePointerDo
             <section
               data-pane-runtime-id=""
               :data-runtime-id="child.runtimeId"
-              class="flex h-full min-w-0 flex-col overflow-hidden rounded-md border bg-background"
+              class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border bg-background"
               :class="child.id === activeLeafId ? 'border-primary' : 'border-border'"
             >
-              <header class="flex h-8 shrink-0 items-center gap-2 border-border border-b px-2">
-                <div class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                  <slot name="pane-title" :runtime-id="child.runtimeId" />
-                </div>
-                <button
-                  type="button"
-                  class="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :aria-label="t('split.closePane')"
-                  :title="t('split.closePane')"
-                  @mousedown.stop
-                  @click.stop="emit('close', child.runtimeId)"
-                >
-                  ×
-                </button>
-              </header>
-              <div class="min-h-0 flex-1 overflow-hidden">
+              <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <slot name="pane" :runtime-id="child.runtimeId" :active="child.id === activeLeafId" />
               </div>
             </section>
@@ -82,11 +63,7 @@ onBeforeUnmount(() => el.value?.removeEventListener("mousedown", handlePointerDo
               :tree="child"
               :active-leaf-id="activeLeafId"
               @activate="runtimeId => emit('activate', runtimeId)"
-              @close="runtimeId => emit('close', runtimeId)"
             >
-              <template #pane-title="{ runtimeId }">
-                <slot name="pane-title" :runtime-id="runtimeId" />
-              </template>
               <template #pane="{ runtimeId, active }">
                 <slot name="pane" :runtime-id="runtimeId" :active="active" />
               </template>
@@ -99,25 +76,9 @@ onBeforeUnmount(() => el.value?.removeEventListener("mousedown", handlePointerDo
       v-else
       data-pane-runtime-id=""
       :data-runtime-id="tree.runtimeId"
-      class="flex h-full min-w-0 flex-col overflow-hidden rounded-md border bg-background"
-      :class="tree.id === activeLeafId ? 'border-primary' : 'border-border'"
+      class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background"
     >
-      <header class="flex h-8 shrink-0 items-center gap-2 border-border border-b px-2">
-        <div class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          <slot name="pane-title" :runtime-id="tree.runtimeId" />
-        </div>
-        <button
-          type="button"
-          class="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          :aria-label="t('split.closePane')"
-          :title="t('split.closePane')"
-          @mousedown.stop
-          @click.stop="emit('close', tree.runtimeId)"
-        >
-          ×
-        </button>
-      </header>
-      <div class="min-h-0 flex-1 overflow-hidden">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <slot name="pane" :runtime-id="tree.runtimeId" :active="tree.id === activeLeafId" />
       </div>
     </section>
