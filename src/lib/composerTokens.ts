@@ -49,6 +49,29 @@ export function composerParts(text: string, sessionLabels: Record<string, string
   return parts
 }
 
+/** Compute a whole-chip deletion, including the invisible delimiter that completion inserts. */
+export function composerChipDeletion(
+  text: string,
+  parts: ComposerPart[],
+  key: "Backspace" | "Delete",
+  caret: number,
+): { chipIndex: number; start: number; end: number; caret: number } | null {
+  let cursor = 0
+  let chipIndex = -1
+  for (const part of parts) {
+    const end = cursor + part.raw.length
+    if (part.kind !== "text") {
+      chipIndex++
+      if (key === "Backspace" && (end === caret || (end + 1 === caret && /\s/.test(text[end] ?? ""))))
+        return { chipIndex, start: cursor, end: end === caret ? end : caret, caret: cursor }
+      if (key === "Delete" && (cursor === caret || (cursor === caret + 1 && /\s/.test(text[caret] ?? ""))))
+        return { chipIndex, start: cursor === caret ? cursor : caret, end, caret }
+    }
+    cursor = end
+  }
+  return null
+}
+
 /** DOM length differs from displayed text length for atomic reference chips. */
 function isEditorCaretBreak(node: Node): boolean {
   return node instanceof HTMLElement && node.nodeName === "BR" && node.dataset.editorCaret !== undefined

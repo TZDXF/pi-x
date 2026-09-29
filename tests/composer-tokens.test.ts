@@ -1,6 +1,6 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { composerParts } from "@/lib/composerTokens"
+import { composerChipDeletion, composerParts } from "@/lib/composerTokens"
 import { normalizeSlashes } from "@/lib/paths"
 
 test("composer chips hide paths and slash prefixes without changing raw text", () => {
@@ -43,7 +43,7 @@ test("rich editor preserves browser newline and undo behavior for plain text", (
   expect(editor).toMatch(/insertLineBreak/)
   expect(editor).toMatch(/editorRequiresRender\(editor\.value, value\)/)
   expect(editor).not.toMatch(/replaceSelection/)
-  expect(editor).toMatch(/Leave ordinary text deletion to the browser/)
+  expect(editor).toMatch(/composerChipDeletion\(textInput\.value, parts, key, caret\)/)
 })
 
 test("rich editor wires workspace session titles into chip rendering", () => {
@@ -66,4 +66,38 @@ test("rendered user messages reuse the composer chip styling", () => {
   for (const source of [display, editor]) {
     expect(source).not.toMatch(/inline-flex max-w-52 items-center/)
   }
+})
+
+test("backspace and delete remove reference chips at their whole boundaries", () => {
+  const raw = '@"src/my file.ts"'
+  const text = `before ${raw} after`
+  const parts = composerParts(text)
+  const start = 7
+  const end = start + raw.length
+
+  expect(composerChipDeletion(text, parts, "Backspace", end)).toEqual({
+    chipIndex: 0,
+    start,
+    end,
+    caret: start,
+  })
+  expect(composerChipDeletion(text, parts, "Backspace", end + 1)).toEqual({
+    chipIndex: 0,
+    start,
+    end: end + 1,
+    caret: start,
+  })
+  expect(composerChipDeletion(text, parts, "Delete", start)).toEqual({
+    chipIndex: 0,
+    start,
+    end,
+    caret: start,
+  })
+  expect(composerChipDeletion(text, parts, "Delete", start - 1)).toEqual({
+    chipIndex: 0,
+    start: start - 1,
+    end,
+    caret: start - 1,
+  })
+  expect(composerChipDeletion(text, parts, "Backspace", text.length)).toBeNull()
 })

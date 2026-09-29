@@ -5,6 +5,7 @@ import { useSessionLabels } from "@/composables/useSessionLabels"
 import {
   composerChipClass,
   composerChipText,
+  composerChipDeletion,
   composerParts,
   editorSelection,
   editorText,
@@ -85,39 +86,15 @@ function insertAtSelection(value: string, lineBreak = false): boolean {
   return document.execCommand("insertText", false, value)
 }
 
-function deleteAtomicChip(key: string, caret: number): boolean {
+function deleteAtomicChip(key: "Backspace" | "Delete", caret: number): boolean {
   const root = editor.value
   if (!root) return false
   const parts = composerParts(textInput.value, sessionLabels.value)
-  let cursor = 0
-  let chipIndex = -1
-  let targetIndex = -1
-  let targetCursor = 0
-  let targetEnd = 0
-  for (const part of parts) {
-    const next = cursor + part.raw.length
-    if (part.kind !== "text") {
-      chipIndex++
-      if ((key === "Backspace" && next === caret) || (key === "Delete" && cursor === caret)) {
-        targetIndex = chipIndex
-        targetCursor = cursor
-        targetEnd = next
-      }
-    }
-    cursor = next
-  }
-  if (targetIndex < 0) return false
-  const chip = Array.from(root.querySelectorAll<HTMLElement>("[data-raw]"))[targetIndex]
-  if (!chip) return false
-  const range = document.createRange()
-  range.selectNode(chip)
-  const selection = window.getSelection()
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-  if (document.execCommand("delete")) return true
-  const updated = textInput.value.slice(0, targetCursor) + textInput.value.slice(targetEnd)
+  const target = composerChipDeletion(textInput.value, parts, key, caret)
+  if (!target) return false
+  const updated = textInput.value.slice(0, target.start) + textInput.value.slice(target.end)
   setTextInput(updated)
-  render(updated, targetCursor)
+  render(updated, target.caret)
   root.dispatchEvent(new Event("input", { bubbles: true }))
   return true
 }
@@ -127,7 +104,7 @@ function onKeydown(event: KeyboardEvent) {
   if ((event.key === "Backspace" || event.key === "Delete") && editor.value) {
     const { start, end } = editorSelection(editor.value)
     if (start === end && deleteAtomicChip(event.key, start)) return
-    // Leave ordinary text deletion to the browser so native undo remains intact.
+    // Chips are applied to the model as one unit so invisible delimiters cannot split deletion.
   }
   if (event.key === "Enter") {
     event.preventDefault()

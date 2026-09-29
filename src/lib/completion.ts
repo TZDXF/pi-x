@@ -84,6 +84,18 @@ export function insertCompletion(text: string, token: CompletionToken, value: st
   return { text: text.slice(0, token.start) + insertion + remaining, caret: token.start + insertion.length }
 }
 
+/** Slash commands group by source while preserving the original order within each source. */
+export function sortCommands<T extends { source: string }>(commands: T[]): T[] {
+  const rank = (source: string) => (source === "skill" ? 0 : source === "builtin" ? 1 : source === "extension" ? 2 : 3)
+  return [...commands].sort((a, b) => rank(a.source) - rank(b.source))
+}
+
+/** References show workspace files before known conversations. */
+export function sortReferences<T extends { kind: "file" | "session" }>(references: T[]): T[] {
+  const rank = (item: T) => (item.kind === "file" ? 0 : 1)
+  return [...references].sort((a, b) => rank(a) - rank(b))
+}
+
 /** Interleave results so the primary root cannot hide every secondary hit. */
 export function mergeWorkspaceFiles<T extends { path: string; name: string; dir: string }>(
   current: string,

@@ -11,6 +11,8 @@ const {
   fileReference,
   withSessionReferences,
   mergeWorkspaceFiles,
+  sortCommands,
+  sortReferences,
 } = completion
 
 test("built-in slash commands exclude export while keeping new and compact", () => {
@@ -85,4 +87,20 @@ test("session mentions complete independently of file references and expand only
   expect(expanded).toMatch(/JSONL session files/)
   expect(expanded).toMatch(/C:\/Users\/me/)
   expect(withSessionReferences(`${mention} ${mention}`, [{ file }]).match(/"file":/g)?.length).toBe(1)
+})
+
+test("completion lists group references and slash commands by requested type order", () => {
+  const references = sortReferences([
+    { kind: "session" as const, value: "session", label: "session" },
+    { kind: "file" as const, value: "file", label: "file" },
+  ])
+  expect(references.map(item => item.value)).toEqual(["file", "session"])
+
+  const commands = sortCommands([
+    { name: "extension", source: "extension" },
+    { name: "compact", source: "builtin" },
+    { name: "prompt", source: "prompt" },
+    { name: "skill", source: "skill" },
+  ])
+  expect(commands.map(command => command.name)).toEqual(["skill", "compact", "extension", "prompt"])
 })

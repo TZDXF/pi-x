@@ -10,6 +10,8 @@ import {
   insertSessionCompletion,
   desktopCommands,
   mergeWorkspaceFiles,
+  sortCommands,
+  sortReferences,
 } from "@/lib/completion"
 import { editorSelection, setEditorCaret } from "@/lib/composerTokens"
 import {
@@ -103,17 +105,18 @@ const sessionItems = computed(() => {
 })
 const items = computed(() =>
   token.value?.kind === "command"
-    ? commands.value
-        .filter(c => `${c.name} ${c.description ?? ""}`.toLowerCase().includes(token.value!.query.toLowerCase()))
-        .map(c => ({
-          kind: "command" as const,
-          value: c.name,
-          label: `/${c.name}`,
-          description: c.description ?? "",
-          source: t(`completion.${c.source}`),
-        }))
-    : [
-        ...sessionItems.value,
+    ? sortCommands(
+        commands.value.filter(c =>
+          `${c.name} ${c.description ?? ""}`.toLowerCase().includes(token.value!.query.toLowerCase()),
+        ),
+      ).map(c => ({
+        kind: "command" as const,
+        value: c.name,
+        label: `/${c.name}`,
+        description: c.description ?? "",
+        source: t(`completion.${c.source}`),
+      }))
+    : sortReferences([
         ...files.value.map(f => ({
           kind: "file" as const,
           value: f.path,
@@ -121,7 +124,8 @@ const items = computed(() =>
           description: f.path,
           source: t("chat.files"),
         })),
-      ],
+        ...sessionItems.value,
+      ]),
 )
 
 function syncAccessibility() {

@@ -135,8 +135,7 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   expect(compact?.args.command?.customInstructions).toBe("keep decisions")
 
   await editor.fill("/")
-  await expect(rows.filter({ hasText: "/review" })).toBeVisible()
-  await editor.press("ArrowDown")
+  await expect(rows.filter({ hasText: "/skill:check" })).toBeVisible()
   await editor.press("Enter")
   await expectEditorText(editor, "/skill:check ")
   expect(calls.filter(call => call.args.command?.type === "prompt")).toHaveLength(0)
@@ -195,6 +194,10 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await expect(rows.filter({ hasText: "index.ts" })).toBeVisible()
   await rows.filter({ hasText: "index.ts" }).click()
   await expectEditorText(editor, "before @src/index.ts after")
+
+  await editor.fill('检查 @"src/index.ts" ')
+  await editor.press("Backspace")
+  await expectEditorText(editor, "检查")
 
   await editor.fill("@src")
   await expect(rows.first()).toBeVisible()
