@@ -68,6 +68,7 @@
   },
   "devDependencies": {
     "@copilotkit/aimock": "^1.43.0",
+    "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2",
     "@types/node": "^26.6.2",
     "@vitejs/plugin-vue": "^6.0.7",

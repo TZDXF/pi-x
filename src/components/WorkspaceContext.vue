@@ -103,9 +103,9 @@ watch(() => props.project, refresh, { immediate: true })
     <Popover v-model:open="projectOpen"
       ><PopoverTrigger as-child
         ><Button variant="context-chip" size="content" class="context-chip" :disabled="blocked" :title="project"
-          ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(project) }}</span
-          /></Button
-      ></PopoverTrigger>
+          ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(project) }}</span></Button
+        ></PopoverTrigger
+      >
       <PopoverContent side="top" align="start" class="w-72 p-2">
         <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
         <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
@@ -156,9 +156,10 @@ watch(() => props.project, refresh, { immediate: true })
           ><Layers v-if="selection?.worktree" :size="14" class="size-auto shrink-0" /><Laptop
             v-else
             :size="14"
-            class="size-auto shrink-0" />{{ selection?.worktree ? t("workspace.createWorktree") : t("workspace.local")
-          }}</Button
-      ></PopoverTrigger>
+            class="size-auto shrink-0"
+          />{{ selection?.worktree ? t("workspace.createWorktree") : t("workspace.local") }}</Button
+        ></PopoverTrigger
+      >
       <PopoverContent side="top" align="start" class="w-64 p-2"
         ><Button
           variant="context-menu-item"
@@ -191,11 +192,12 @@ watch(() => props.project, refresh, { immediate: true })
           ><LoaderCircle v-if="loading" :size="14" class="size-auto shrink-0 animate-spin" /><GitBranch
             v-else
             :size="14"
-            class="size-auto shrink-0" /><span class="truncate">{{
+            class="size-auto shrink-0"
+          /><span class="truncate">{{
             loading ? t("sidebar.loading") : selection?.branch || info?.branch || t("workspace.noGit")
-          }}</span
-          /></Button
-      ></PopoverTrigger>
+          }}</span></Button
+        ></PopoverTrigger
+      >
       <PopoverContent side="top" align="start" class="w-64 p-2">
         <p class="px-2 py-2 text-xs text-muted-foreground">
           {{ t(selection?.worktree ? "workspace.baseBranch" : "workspace.currentBranch") }}
