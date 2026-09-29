@@ -12,6 +12,7 @@ import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
+import { Badge } from "@/components/ui/badge"
 import { isDesktop, listen } from "@/api/transport"
 import {
   checkPiUpdate,
@@ -34,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { AcceptableValue } from "reka-ui"
 
 const { t } = useI18n()
+const isDevelopment = import.meta.env.DEV
 
 // ---- PiX 应用自身更新 ----
 
@@ -229,7 +231,16 @@ onUnmounted(() => {
 <template>
   <SettingRow>
     <div class="min-w-0">
-      <SettingHeading><PiXLogo /></SettingHeading>
+      <SettingHeading class="flex items-center gap-2">
+        <PiXLogo />
+        <Badge
+          v-if="isDevelopment"
+          variant="destructive"
+          class="border-destructive/20 bg-transparent text-[11px] dark:border-destructive/30"
+        >
+          {{ t("app.development") }}
+        </Badge>
+      </SettingHeading>
       <SettingDescription>{{ t("settings.aboutBody") }}</SettingDescription>
     </div>
   </SettingRow>

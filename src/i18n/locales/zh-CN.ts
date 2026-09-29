@@ -366,6 +366,7 @@ export default {
     windowMaximize: "最大化",
     windowRestore: "还原",
     windowClose: "关闭",
+    development: "开发环境",
   },
 
   tray: {

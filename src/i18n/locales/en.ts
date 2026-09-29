@@ -377,6 +377,7 @@ export default {
     windowMaximize: "Maximize",
     windowRestore: "Restore",
     windowClose: "Close",
+    development: "Development",
   },
 
   tray: {

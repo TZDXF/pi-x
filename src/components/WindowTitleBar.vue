@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { ChevronLeft, ChevronRight, PanelLeft, Settings } from "@lucide/vue"
+import { Badge } from "@/components/ui/badge"
 import { isDesktop } from "@/api/transport"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
 
@@ -11,6 +12,7 @@ const emit = defineEmits<{ toggleSidebar: [] }>()
 
 const { t } = useI18n()
 const route = useRoute()
+const isDevelopment = import.meta.env.DEV
 const appWindow = isDesktop ? getCurrentWindow() : null
 const maximized = ref(false)
 const maximizable = ref(true)
@@ -102,6 +104,13 @@ function close() {
       >
         <Settings :size="16" />
       </button>
+      <Badge
+        v-if="isDevelopment"
+        variant="destructive"
+        class="text-muted-foreground pointer-events-none mr-1 ml-1 select-none border-destructive/20 bg-transparent text-[10px] dark:border-destructive/30 dark:text-destructive"
+      >
+        {{ t("app.development") }}
+      </Badge>
     </div>
     <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
     <div class="flex h-full items-center">
