@@ -27,6 +27,7 @@ import { duplicateSessionFile, openPath, type SessionMeta } from "@/api/piClient
 import type { QueuedPrompt } from "@/stores/session"
 import { sendCountdown } from "@/lib/sendCountdown"
 import { pendingConversations } from "@/lib/pendingConversations"
+import { copyWithToast } from "@/lib/clipboard"
 import { allConversations, activeRuntimeId, findConversation, useSessionStore } from "@/stores/conversations"
 import { sessionRunStatus } from "@/stores/sessionRunStatus"
 import { useUiStore } from "@/stores/conversations"
@@ -152,13 +153,8 @@ function rename(s: SessionMeta) {
   renaming.value = s
   title.value = label(s)
 }
-async function copySessionLink(s: SessionMeta) {
-  try {
-    await navigator.clipboard.writeText(s.file)
-    ui.pushToast(t("workspace.linkCopied"), "info")
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
+function copySessionLink(s: SessionMeta) {
+  return copyWithToast(ui, s.file, t("workspace.linkCopied"))
 }
 async function duplicateSession(s: SessionMeta) {
   try {

@@ -64,6 +64,7 @@ import { useSessionDrop, type SessionDragPayload } from "@/composables/useSessio
 import type { SplitDropZone } from "@/lib/splitDropZone"
 import { runningBehavior } from "@/lib/runningBehavior"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
+import { copyWithToast } from "@/lib/clipboard"
 import { isDesktop } from "@/api/transport"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 
@@ -425,13 +426,8 @@ function formatMessageTime(ts?: number): string {
   return `${d.toLocaleDateString([], { month: "numeric", day: "numeric" })} ${time}`
 }
 
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    ui.pushToast(t("chat.toastCopied"), "info")
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
+function copyText(text: string) {
+  return copyWithToast(ui, text, t("chat.toastCopied"))
 }
 
 // extensions can push text into the editor (set_editor_text))

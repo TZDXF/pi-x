@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n"
 import { Copy } from "@lucide/vue"
 import { QrcodeSvg } from "qrcode.vue"
 import { isDesktop } from "@/api/transport"
+import { copyWithToast } from "@/lib/clipboard"
 import { remoteStatus, remoteSet, remotePasswordSet, type RemoteStatus } from "@/api/piClient"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -50,13 +51,8 @@ async function savePassword(value: string | null) {
   }
 }
 
-async function copyLink(url: string) {
-  try {
-    await navigator.clipboard.writeText(url)
-    ui.pushToast(t("settings.remoteLinkCopied"), "info")
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-  }
+function copyLink(url: string) {
+  return copyWithToast(ui, url, t("settings.remoteLinkCopied"))
 }
 </script>
 
