@@ -2,7 +2,6 @@ import { afterEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { createPinia, setActivePinia } from "pinia"
 import { isAbsolutePath, samePath } from "@/lib/paths"
-import { useWorkspaceStore } from "@/stores/workspace"
 import en from "@/i18n/locales/en"
 import zhCN from "@/i18n/locales/zh-CN"
 
@@ -31,6 +30,11 @@ vi.mock("@/i18n", () => ({
 
 const DEFAULT_DIR = "C:/Users/you/.pix/workspace"
 const LABEL = "无项目会话"
+
+// isolate:false 下，先前文件的 mock 可能已随 workspace store 一起实例化并被模块缓存；
+// 重置缓存后动态导入，确保 store 的 piClient 绑定到本文件的 mock。
+vi.resetModules()
+const { useWorkspaceStore } = await import("@/stores/workspace")
 
 afterEach(() => {
   vi.unstubAllGlobals()
