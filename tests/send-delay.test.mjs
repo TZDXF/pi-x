@@ -1,10 +1,6 @@
 import { test, expect } from "vitest"
+import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const { parseSendDelay, stepSendDelayWheel } = loadTsSource(
-  readFileSync(new URL("../src/lib/sendDelay.ts", import.meta.url), "utf8"),
-)
 
 test("delayed send accepts minutes:seconds with a 365-day limit", () => {
   expect(parseSendDelay("10:00")).toBe(600_000)

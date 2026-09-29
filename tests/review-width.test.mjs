@@ -1,7 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-const { clampReviewWidth } = loadTsSource(readFileSync(new URL("../src/lib/reviewWidth.ts", import.meta.url), "utf8"))
+import { clampReviewWidth } from "@/lib/reviewWidth"
 test("review resize keeps chat space and clamps both bounds", () => {
   expect(clampReviewWidth(100, 1200, false)).toBe(280)
   expect(clampReviewWidth(1000, 1200, false)).toBe(840)

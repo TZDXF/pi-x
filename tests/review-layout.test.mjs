@@ -1,10 +1,7 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-const load = name => loadTsSource(readFileSync(new URL(`../src/lib/${name}.ts`, import.meta.url), "utf8"))
-const { buildFileTree, flattenVisibleTree, flatFileRows } = load("reviewFileTree")
-const { buildPaneRows, buildPaneRowOffsets } = load("reviewLayout")
-const { toSideBySideRows } = load("reviewDiff")
+import { buildFileTree, flattenVisibleTree, flatFileRows } from "@/lib/reviewFileTree"
+import { buildPaneRows, buildPaneRowOffsets } from "@/lib/reviewLayout"
+import { toSideBySideRows } from "@/lib/reviewDiff"
 test("review file tree sorts directories first and preserves selection data", () => {
   const files = [{ path: "z.ts" }, { path: "src/b.ts" }, { path: "src/a.ts" }]
   const tree = buildFileTree(files)

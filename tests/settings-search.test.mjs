@@ -1,9 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const source = readFileSync(new URL("../src/lib/settings-search.ts", import.meta.url), "utf8")
-const { matchesSettingsSearch, scoreSettingsSearch, searchSnippet, settingsSearchText } = loadTsSource(source)
+import { matchesSettingsSearch, scoreSettingsSearch, searchSnippet, settingsSearchText } from "@/lib/settings-search"
 
 test("settings search matches every whitespace-separated term", () => {
   expect(matchesSettingsSearch("主题", "常规 外观主题")).toBe(true)

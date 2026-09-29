@@ -1,8 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const { sendCountdown } = loadTsSource(readFileSync(new URL("../src/lib/sendCountdown.ts", import.meta.url), "utf8"))
+import { sendCountdown } from "@/lib/sendCountdown"
 
 test("countdown displays padded minutes and seconds, retaining total minutes for hours", () => {
   expect(sendCountdown(5000, 0)).toBe("00:05")

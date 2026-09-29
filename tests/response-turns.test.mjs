@@ -1,8 +1,6 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const { responseTurns } = loadTsSource(readFileSync(new URL("../src/lib/responseTurns.ts", import.meta.url), "utf8"))
+import { responseTurns } from "@/lib/responseTurns"
 const user = id => ({ kind: "user", id, text: "question" })
 const text = text => ({ type: "text", text })
 const assistant = (id, ...blocks) => ({ kind: "assistant", id, blocks })

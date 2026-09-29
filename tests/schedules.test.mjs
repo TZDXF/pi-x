@@ -1,12 +1,7 @@
 import { test, expect } from "vitest"
+import { scheduleExpression, parseScheduleExpression } from "@/lib/schedules"
+import { supportedThinkingLevels } from "@/lib/thinkingLevels"
 import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-const { scheduleExpression, parseScheduleExpression } = loadTsSource(
-  readFileSync(new URL("../src/lib/schedules.ts", import.meta.url), "utf8"),
-)
-const { supportedThinkingLevels } = loadTsSource(
-  readFileSync(new URL("../src/lib/thinkingLevels.ts", import.meta.url), "utf8"),
-)
 
 test("all schedule presets round trip without shifting time or weekday", () => {
   for (const [frequency, expected] of [

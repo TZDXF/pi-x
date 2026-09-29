@@ -1,58 +1,71 @@
-import { test, expect } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import vm from "node:vm"
-import ts from "typescript"
-import { loadTsSource } from "./lib/load-ts.mjs"
+import { createPinia, setActivePinia } from "pinia"
+import { isAbsolutePath, samePath } from "@/lib/paths"
+import { useWorkspaceStore } from "@/stores/workspace"
+import en from "@/i18n/locales/en"
+import zhCN from "@/i18n/locales/zh-CN"
 
-const paths = loadTsSource(readFileSync(new URL("../src/lib/paths.ts", import.meta.url), "utf8"))
-const { isAbsolutePath, samePath } = paths
+const mocks = vi.hoisted(() => ({
+  resolveProjectlessDir: async () => {
+    throw new Error("resolveProjectlessDir was not configured")
+  },
+}))
+
+vi.mock("@/api/piClient", () => ({
+  listSessions: async () => [],
+  updateSession: async () => 0,
+  resolveProjectlessDir: (...args) => mocks.resolveProjectlessDir(...args),
+  workspaceGitInfo: async () => ({}),
+}))
+vi.mock("@/api/transport", () => ({
+  invoke: async () => null,
+}))
+vi.mock("@/i18n", () => ({
+  i18n: {
+    global: {
+      t: key => (key === "projectless.name" ? "无项目会话" : key),
+    },
+  },
+}))
 
 const DEFAULT_DIR = "C:/Users/you/.pix/workspace"
 const LABEL = "无项目会话"
 
-/**
- * 工作区 store 的 vm 测试环境：import 由 harness 提供，其中
- * `resolveProjectlessDir` 为后端解析命令的桩，`i18n`/`samePath` 用真实实现。
- */
+afterEach(() => {
+  vi.unstubAllGlobals()
+  setActivePinia(undefined)
+})
+
+/** 建立 Pinia 真实 setup store；后端解析命令按用例注入。 */
 function storeHarness({ dir = DEFAULT_DIR, defaultDir = DEFAULT_DIR, failures = 0 } = {}) {
-  const source =
-    readFileSync(new URL("../src/stores/workspace.ts", import.meta.url), "utf8")
-      .replace(/^import .*$/gm, "")
-      .replace(/export /g, "") + "\nglobalThis.store = useWorkspaceStore();"
   const calls = []
   const storage = new Map()
   let remaining = failures
-  const context = vm.createContext({
-    defineStore: (_, setup) => setup,
-    ref: value => ({ value }),
-    localStorage: { getItem: key => storage.get(key), setItem: (k, v) => storage.set(k, v) },
-    listSessions: async () => [],
-    updateSession: async () => 0,
-    samePath,
-    baseName: paths.baseName,
-    normalizeProjectPath: paths.normalizeProjectPath,
-    i18n: { global: { t: key => (key === "projectless.name" ? LABEL : key) } },
-    resolveProjectlessDir: async () => {
-      calls.push(1)
-      if (remaining > 0) {
-        remaining--
-        throw new Error('PIXERR:{"code":"projectlessDirUnusable","fallback":"无法使用无项目会话目录"}')
-      }
-      return { dir, defaultDir, isDefault: samePath(dir, defaultDir) }
-    },
+  mocks.resolveProjectlessDir = async () => {
+    calls.push(1)
+    if (remaining > 0) {
+      remaining--
+      throw new Error('PIXERR:{"code":"projectlessDirUnusable","fallback":"无法使用无项目会话目录"}')
+    }
+    return { dir, defaultDir, isDefault: samePath(dir, defaultDir) }
+  }
+  vi.stubGlobal("localStorage", {
+    getItem: key => storage.get(key),
+    setItem: (key, value) => storage.set(key, value),
   })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
-  return { store: context.store, calls, storage }
+  setActivePinia(createPinia())
+  return { store: useWorkspaceStore(), calls, storage }
 }
 
 test("无项目会话目录在首次使用时解析并复用同一次请求", async () => {
   const h = storeHarness()
-  expect(h.store.projectless.value).toBe("")
+  expect(h.store.projectless).toBe("")
   expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
   expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
   expect(h.calls.length).toBe(1)
-  expect(h.store.projectless.value).toBe(DEFAULT_DIR)
-  expect(h.store.projectlessDefault.value).toBe(DEFAULT_DIR)
+  expect(h.store.projectless).toBe(DEFAULT_DIR)
+  expect(h.store.projectlessDefault).toBe(DEFAULT_DIR)
 })
 
 test("设置改动后重新解析无项目会话目录", async () => {
@@ -67,7 +80,7 @@ test("设置改动后重新解析无项目会话目录", async () => {
 test("解析失败不缓存，重试仍可成功", async () => {
   const h = storeHarness({ failures: 1 })
   await expect(h.store.ensureProjectless()).rejects.toThrow()
-  expect(h.store.projectless.value).toBe("")
+  expect(h.store.projectless).toBe("")
   expect(await h.store.ensureProjectless()).toBe(DEFAULT_DIR)
 })
 
@@ -131,13 +144,8 @@ test("入口、设置项与后端命令均已接线", () => {
   expect(read("../src/components/ChatView.vue")).toMatch(/workspace\.projectName\(project\)/)
 })
 
-test("无项目会话文案在两种语言中保持同步", async () => {
-  const messages = {}
-  for (const locale of ["zh-CN", "en"]) {
-    const source = readFileSync(new URL(`../src/i18n/locales/${locale}.ts`, import.meta.url), "utf8")
-    const js = ts.transpile(source, { module: ts.ModuleKind.ESNext })
-    messages[locale] = (await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`)).default
-  }
+test("无项目会话文案在两种语言中保持同步", () => {
+  const messages = { "zh-CN": zhCN, en }
   const flatten = (value, prefix = "") =>
     Object.entries(value).flatMap(([key, entry]) =>
       entry && typeof entry === "object" && !Array.isArray(entry)

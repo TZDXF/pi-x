@@ -1,10 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource, pathsModule } from "./lib/load-ts.mjs"
-const { sessionChanges, changedLines } = loadTsSource(
-  readFileSync(new URL("../src/lib/sessionChanges.ts", import.meta.url), "utf8"),
-  { require: () => pathsModule() },
-)
+import { sessionChanges, changedLines } from "@/lib/sessionChanges"
 const call = (id, name, args) => ({ type: "toolCall", id, name, arguments: args })
 const history = (block, isError = false) => [
   { role: "assistant", content: [block] },
