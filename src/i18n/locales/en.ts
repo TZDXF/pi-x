@@ -793,11 +793,8 @@ export default {
       "Edit additional model fields such as headers, cost, samplingParams, and thinkingLevelMap; omit fields already in the basic form.",
     modelThinkingLevels: "Thinking levels",
     modelThinkingLevelsHint:
-      "Choose whether each Pi thinking level is inherited, enabled, or unavailable. Custom values are saved to thinkingLevelMap. Extra high and Max require explicit enabling; map the Off level to a provider-specific disabled value when needed.",
-    modelThinkingInherit: "Inherit Pi default",
-    modelThinkingDefault: "Enabled (same-name mapping)",
-    modelThinkingDisabled: "Unavailable / off",
-    modelThinkingCustom: "Custom mapping",
+      "All levels are enabled by default and follow the Pi default. Click a level to turn it off (null in thinkingLevelMap) and click again to restore it; double-click a level to map it to a provider-specific value.",
+    modelThinkingLevelHint: "{level}: click to enable or disable, double-click to edit the mapped value",
     modelThinkingMappingLabel: "Mapped value",
     modelAdvancedJson: "Advanced fields JSON (excluding basic fields above)",
 

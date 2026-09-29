@@ -854,6 +854,7 @@ export const createSessionStore = (runtimeId = "default") =>
               provider,
               baseUrl: entry.baseUrl ?? "",
               reasoning: m.reasoning ?? false,
+              thinkingLevelMap: m.thinkingLevelMap as Record<string, string | null> | undefined,
               input: m.input ?? ["text"],
               contextWindow: m.contextWindow ?? 0,
               maxTokens: m.maxTokens ?? 0,

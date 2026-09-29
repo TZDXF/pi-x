@@ -19,6 +19,7 @@ export interface Model {
   provider: string
   baseUrl: string
   reasoning: boolean
+  thinkingLevelMap?: Record<string, string | null>
   input: string[]
   contextWindow: number
   maxTokens: number
