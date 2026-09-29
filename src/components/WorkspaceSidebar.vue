@@ -444,7 +444,7 @@ watch(
                       :aria-label="`${t('workspace.projectActions')} · ${name(path)}`"
                       ><MoreHorizontal :size="16" class="size-auto shrink-0" /></Button
                   ></DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="bottom">
+                  <DropdownMenuContent align="start" side="bottom" class="w-auto">
                     <DropdownMenuItem @select="workspace.togglePin(path)"
                       ><PinOff
                         v-if="workspace.pinnedProjects.includes(path)"
