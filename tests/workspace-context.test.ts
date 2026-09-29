@@ -104,7 +104,7 @@ function harness(overrides = {}) {
     tBackendError: String,
     ...overrides,
   })
-  const code = app.slice(app.indexOf("const workspaceTrust ="), app.indexOf("async function startRuntime()"))
+  const code = app.slice(app.indexOf("const workspaceTrust ="), app.indexOf("async function startRuntime(runtimeId"))
   vm.runInContext(
     ts.transpile(code) + "\nglobalThis.api = {start, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
     context,

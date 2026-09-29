@@ -3,6 +3,7 @@ import { createUuid } from "../lib/uuid"
 import { normalizeSlashes } from "../lib/paths"
 import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
+import { isMember } from "./splitView"
 import { createUiStore } from "./ui"
 import { activeRuntimeId } from "./runtime"
 
@@ -54,7 +55,7 @@ export function pruneDormantConversations() {
   if (sessions.size <= MAX_OPEN_CONVERSATIONS) return
   for (const [id, store] of [...sessions]) {
     if (sessions.size <= MAX_OPEN_CONVERSATIONS) break
-    if (id === activeRuntimeId.value || store.started || store.isStreaming) continue
+    if (isMember(id) || id === activeRuntimeId.value || store.started || store.isStreaming) continue
     sessions.delete(id)
     interfaces.delete(id)
     // Remove the cached Pinia instance as well, or its state stays in memory.

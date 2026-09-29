@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { useSessionStore } from "@/stores/conversations"
+import { sessionFor, activeRuntimeId } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { searchFiles, type FileHit } from "@/api/piClient"
 import {
@@ -24,9 +24,15 @@ import {
 } from "@/components/ai-elements/prompt-input"
 import { Loader } from "@/components/ai-elements/loader"
 
-const props = defineProps<{ project: string; connected: boolean; ensureStarted: () => Promise<boolean> }>()
+const props = defineProps<{
+  project: string
+  /** 所属会话 id；缺省跟随当前激活会话，分屏时由 ChatView 传入所属窗格会话。 */
+  sessionId?: string
+  connected: boolean
+  ensureStarted: () => Promise<boolean>
+}>()
 const { t } = useI18n()
-const session = useSessionStore()
+const session = sessionFor(props.sessionId ?? activeRuntimeId.value)
 const workspace = useWorkspaceStore()
 const roots = computed(() => workspace.projectFolders(props.project))
 const { textInput, setTextInput } = usePromptInput()

@@ -90,6 +90,9 @@ export default {
     newTerminal: "Terminal",
     newBrowser: "Browser",
   },
+  split: {
+    closePane: "Close pane",
+  },
   browser: {
     back: "Back",
     forward: "Forward",

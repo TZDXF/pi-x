@@ -10,12 +10,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { useUiStore } from "@/stores/conversations"
+import { uiFor, activeRuntimeId } from "@/stores/conversations"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
-const ui = useUiStore()
+const props = defineProps<{
+  /** 所属会话 id；缺省跟随当前激活会话，分屏时由 ChatView 传入所属窗格会话。 */
+  sessionId?: string
+}>()
+const ui = uiFor(props.sessionId ?? activeRuntimeId.value)
 const { t } = useI18n()
 const input = ref("")
 const editing = ref("")

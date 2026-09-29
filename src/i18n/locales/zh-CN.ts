@@ -88,6 +88,9 @@ export default {
     newTerminal: "终端",
     newBrowser: "浏览器",
   },
+  split: {
+    closePane: "关闭此窗格",
+  },
   browser: {
     back: "后退",
     forward: "前进",

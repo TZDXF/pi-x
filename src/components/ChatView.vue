@@ -60,7 +60,8 @@ import { buildPromptWithCodeComments } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { useSessionFork } from "@/composables/useSessionFork"
 import { usePromptEdit, type PromptEditTextarea } from "@/composables/usePromptEdit"
-import { useSessionDrop } from "@/composables/useSessionDrop"
+import { useSessionDrop, type SessionDragPayload } from "@/composables/useSessionDrop"
+import type { SplitDropZone } from "@/lib/splitDropZone"
 import { runningBehavior } from "@/lib/runningBehavior"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
 import { isDesktop } from "@/api/transport"
@@ -127,20 +128,29 @@ const changeTotals = computed(() =>
   ),
 )
 
-const runtimeId = activeRuntimeId.value
-const session = sessionFor(runtimeId)
-const ui = uiFor(runtimeId)
-const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const { t, te } = useI18n()
 
 const props = defineProps<{
   project: string
+  /** 所属会话 id；缺省跟随当前激活会话，分屏时由父层传入各窗格的会话。 */
+  sessionId?: string
   ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
   connecting: boolean
   selectingProject?: boolean
   connected: boolean
 }>()
-const emit = defineEmits<{ selectProject: [path: string]; openProject: []; newSession: [] }>()
+
+// 组件按会话 id 定向绑定（单屏由 App 以 :key 重挂载切换），分屏时每个窗格各自持有 id。
+const runtimeId = props.sessionId ?? activeRuntimeId.value
+const session = sessionFor(runtimeId)
+const ui = uiFor(runtimeId)
+const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
+const emit = defineEmits<{
+  selectProject: [path: string]
+  openProject: []
+  newSession: []
+  splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
+}>()
 const workspace = useWorkspaceStore()
 const workspaceSelection = ref<WorkspaceSelection | null>(null)
 const currentTitle = computed(
@@ -184,10 +194,11 @@ watch(
 )
 // Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
-const { sessionDragOver, onSessionDragOver, onSessionDragLeave, onSessionDrop } = useSessionDrop(
+const { sessionDragOver, splitZone, onSessionDragOver, onSessionDragLeave, onSessionDrop } = useSessionDrop(
   session,
   bridge,
   knownSessions,
+  (payload, zone) => emit("splitDrop", payload, zone),
 )
 
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
@@ -700,6 +711,25 @@ onBeforeUnmount(() => {
     @dragleave="onSessionDragLeave"
     @drop.capture="onSessionDrop"
   >
+    <!-- 分屏投放热区预览：边缘高亮，中心保留 @引用 行为 -->
+    <div v-if="splitZone" class="pointer-events-none absolute inset-0 z-50">
+      <div
+        v-if="splitZone === 'left'"
+        class="border-primary bg-primary/15 absolute inset-y-0 left-0 w-1/4 rounded-r-md border-l-4"
+      />
+      <div
+        v-else-if="splitZone === 'right'"
+        class="border-primary bg-primary/15 absolute inset-y-0 right-0 w-1/4 rounded-l-md border-r-4"
+      />
+      <div
+        v-else-if="splitZone === 'top'"
+        class="border-primary bg-primary/15 absolute inset-x-0 top-0 h-1/4 rounded-b-md border-t-4"
+      />
+      <div
+        v-else-if="splitZone === 'bottom'"
+        class="border-primary bg-primary/15 absolute inset-x-0 bottom-0 h-1/4 rounded-t-md border-b-4"
+      />
+    </div>
     <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
       <header
         class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border max-[900px]:flex-wrap max-[900px]:gap-1.5"
@@ -1191,6 +1221,7 @@ onBeforeUnmount(() => {
           </PromptInputHeader>
           <ComposerCompletion
             ref="completion"
+            :session-id="runtimeId"
             :project="project"
             :connected="connected"
             :ensure-started="ensureStarted"
@@ -1336,7 +1367,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </PromptInput>
-        <StatusBar />
+        <StatusBar :session-id="runtimeId" />
       </div>
 
       <!-- fork dialog -->
@@ -1380,7 +1411,7 @@ onBeforeUnmount(() => {
         </DialogContent>
       </Dialog>
 
-      <ExtensionDialog />
+      <ExtensionDialog :session-id="runtimeId" />
     </div>
     <RightSidebar
       v-show="sidebarOpen"

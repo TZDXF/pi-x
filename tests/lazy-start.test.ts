@@ -194,9 +194,9 @@ test("opening a saved conversation starts pi on demand", async () => {
 test("only fresh process startup applies remembered selection", () => {
   const source = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
   expect(source).toMatch(
-    /await spawnWorkspacePi\(project.value, undefined, owner.runtimeId\)\s+await owner.init\(project.value, true\)/,
+    /await spawnWorkspacePi\(owner.cwd \|\| project.value, undefined, owner.runtimeId\)\s+await owner.init\(owner.cwd \|\| project.value, true\)/,
   )
-  expect((source.match(/\.init\(project.value, true\)/g) || []).length).toBe(1)
+  expect((source.match(/\.init\(owner\.cwd \|\| project\.value, true\)/g) || []).length).toBe(1)
 })
 
 test("a grouped project passes every root to Pi and refreshes context on the next prompt after edits", async () => {

@@ -33,7 +33,21 @@ import {
   activateSession,
   createConversation,
   findConversation,
+  pruneDormantConversations,
 } from "@/stores/conversations"
+import {
+  splitView,
+  enterSplit,
+  insertAdjacent,
+  isMember,
+  leafByRuntime,
+  firstLeafRuntime,
+  restoreIfMember,
+  suspend,
+  closePane,
+  type PaneLeaf,
+} from "@/stores/splitView"
+import { createUuid } from "@/lib/uuid"
 import { useWorkspaceStore, registerSessionMtimeSync, type ProjectGroup } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import WelcomeView from "@/components/WelcomeView.vue"
@@ -45,6 +59,7 @@ import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
+import SplitChatLayout from "@/components/SplitChatLayout.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
@@ -463,15 +478,21 @@ async function decideWorkspaceTrust(trusted: boolean, trustParent: boolean) {
 // Cache successful creation before later initialization/trust steps. Retrying a
 // failed first send must reuse its checkout, not create another one.
 const preparedWorkspaces = new Map<string, { key: string; path: string }>()
+/** 单屏入口：始终启动当前激活会话。 */
 async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
+  return startSession(activeRuntimeId.value, selection)
+}
+
+/** 指定会话的启动流程；分屏时各窗格携带各自 runtimeId 调用，行为与激活会话一致。 */
+async function startSession(runtimeId: string, selection?: WorkspaceSelection | null): Promise<boolean> {
   if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
   if (selection?.worktree && !selection.branch) {
     ui.pushToast(t("workspace.selectBaseBranch"), "error")
     return false
   }
-  if (!selection || !selection.branch) return startRuntime()
-  const owner = sessionFor(activeRuntimeId.value)
-  if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime()
+  if (!selection || !selection.branch) return startRuntime(runtimeId)
+  const owner = sessionFor(runtimeId)
+  if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime(runtimeId)
   workspace.gitBusy = true
   connecting.value = true
   try {
@@ -508,7 +529,7 @@ async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
     project.value = path
     config.value.lastProject = path
     await saveConfig({ ...config.value })
-    return await startRuntime()
+    return await startRuntime(runtimeId)
   } catch (e) {
     lastError.value = String(e)
     uiFor(owner.runtimeId).pushToast(tBackendError(String(e)), "error")
@@ -519,10 +540,10 @@ async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
   }
 }
 
-async function startRuntime(): Promise<boolean> {
+async function startRuntime(runtimeId: string): Promise<boolean> {
   // Completion can request a runtime while the draft remains editable.
   if (selectingProject.value || phase.value !== "chat") return false
-  const owner = sessionFor(activeRuntimeId.value)
+  const owner = sessionFor(runtimeId)
   if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value))
     return true
   if (owner.started && owner.isStreaming) {
@@ -538,8 +559,8 @@ async function startRuntime(): Promise<boolean> {
   }
   connecting.value = true
   try {
-    await spawnWorkspacePi(project.value, undefined, owner.runtimeId)
-    await owner.init(project.value, true)
+    await spawnWorkspacePi(owner.cwd || project.value, undefined, owner.runtimeId)
+    await owner.init(owner.cwd || project.value, true)
     owner.started = true
     return true
   } catch (e) {
@@ -711,6 +732,114 @@ async function resumeSession(file: string, targetProject?: string) {
   }
 }
 
+// ---- 会话分屏：状态跟随激活会话，树在非成员会话展示期间挂起保留 ----
+const splitLeaf = computed<PaneLeaf | null>(() => leafByRuntime(activeRuntimeId.value))
+watch(activeRuntimeId, id => {
+  if (phase.value !== "chat") return
+  if (isMember(id)) restoreIfMember(id)
+  else if (splitView.tree) suspend()
+})
+
+function paneTitle(runtimeId: string) {
+  const owner = sessionFor(runtimeId)
+  const dir = owner.cwd || project.value
+  const history = workspace.histories[dir]?.find(item => item.file === owner.sessionFile)
+  const title = history?.title || owner.entries.find(entry => entry.kind === "user")?.text || t("chat.newSession")
+  return `${workspace.projectName(dir)} · ${title}`
+}
+
+/** Load a sidebar session for a split pane without touching the active
+ * conversation or project. Reuses the trust dialog, running-session attach
+ * and dormant-spawn paths of resumeSession. */
+async function ensureSessionForSplit(file: string, targetProject?: string): Promise<string | null> {
+  const attached = findConversation(file)
+  if (attached?.started) return attached.runtimeId
+  if (workspace.gitBusy || navigating.value || connecting.value) return null
+  connecting.value = true
+  let owner = findConversation(file)
+  let attaching = false
+  try {
+    const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
+    if (!owner) {
+      // 分屏装载不得抢占激活会话，绕过 createConversation 的激活副作用。
+      pruneDormantConversations()
+      owner = sessionFor(createUuid())
+      owner.cwd = dir
+    }
+    owner.sessionFile = file
+    const status = await trustStatus(dir)
+    if (status.needsDecision) {
+      const allowed = await new Promise<boolean>(resolve => {
+        resolveWorkspaceTrust = resolve
+        workspaceTrust.value = status
+      })
+      if (!allowed) return null
+    }
+    if (!owner.started) {
+      // The scheduler and other PiX windows may already run this session.
+      const running = await listRunningSessions()
+      const runtime = running.find(
+        item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file),
+      )
+      if (runtime) {
+        const placeholder = owner
+        owner = sessionFor(runtime.runtimeId)
+        attaching = true
+        if (placeholder && placeholder !== owner) placeholder.sessionFile = null
+        if (!owner.started) {
+          owner.sessionFile = file
+          await owner.init(runtime.project)
+          await owner.loadHistory()
+          owner.isStreaming = runtime.state.isStreaming
+          owner.started = true
+          if (owner.isStreaming) owner.markRunning()
+        }
+      }
+    }
+    if (!owner.started) {
+      owner.clear()
+      owner.sessionFile = file
+      await spawnWorkspacePi(dir, file, owner.runtimeId)
+      await Promise.all([owner.init(dir), owner.loadHistory()])
+      owner.started = true
+    }
+    return owner.runtimeId
+  } catch (e) {
+    if (owner && !attaching) await killPi(owner.runtimeId).catch(() => {})
+    ui.pushToast(String(e), "error")
+    return null
+  } finally {
+    connecting.value = false
+  }
+}
+
+/** Drop a session onto a pane edge: grow the split tree around the target. */
+async function handleSplitDrop(
+  payload: { file: string; path: string },
+  zone: "left" | "right" | "top" | "bottom",
+  targetRuntimeId: string,
+) {
+  const newId = await ensureSessionForSplit(payload.file, payload.path)
+  if (!newId || newId === targetRuntimeId || isMember(newId)) return
+  const direction = zone === "left" || zone === "right" ? "horizontal" : "vertical"
+  if (!splitView.tree) enterSplit(activeRuntimeId.value, newId, direction)
+  else {
+    const targetLeaf = leafByRuntime(targetRuntimeId)
+    if (!targetLeaf) return
+    insertAdjacent(targetLeaf.id, zone, newId)
+  }
+  activateSession(newId)
+}
+
+function closeSplitPane(runtimeId: string) {
+  const leaf = leafByRuntime(runtimeId)
+  if (!leaf) return
+  closePane(leaf.id)
+  if (!leafByRuntime(activeRuntimeId.value) && splitView.tree) {
+    const fallback = firstLeafRuntime()
+    if (fallback) activateSession(fallback)
+  }
+}
 /** Export a sidebar session directly from its saved file. Never change the
  * active project or conversation just to perform an action on that file. */
 async function openSessionAction(file: string, action: "export") {
@@ -891,8 +1020,42 @@ onUnmounted(() => {
         </div>
 
         <template v-else-if="phase === 'chat'">
+          <SplitChatLayout
+            v-if="splitView.tree && splitLeaf"
+            :key="splitView.tree.id"
+            :tree="splitView.tree"
+            :active-leaf-id="splitLeaf.id"
+            @activate="id => activateSession(id)"
+            @close="closeSplitPane"
+          >
+            <template #pane-title="{ runtimeId }">
+              <span class="truncate">{{ paneTitle(runtimeId) }}</span>
+            </template>
+            <template #pane="{ runtimeId }">
+              <ChatView
+                :key="runtimeId"
+                :session-id="runtimeId"
+                :project="sessionFor(runtimeId).cwd || project"
+                :ensure-started="selection => startSession(runtimeId, selection)"
+                :connecting="connecting"
+                :selecting-project="selectingProject"
+                :connected="sessionFor(runtimeId).started"
+                @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
+                @open-project="requestNavigation(switchProject)"
+                @new-session="
+                  () =>
+                    requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
+                      newProjectSession(workspace.projectRoot(project)),
+                    )
+                "
+                @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
+              />
+            </template>
+          </SplitChatLayout>
           <ChatView
+            v-else
             :key="activeRuntimeId"
+            :session-id="activeRuntimeId"
             :project="project"
             :ensure-started="start"
             :connecting="connecting"
@@ -906,6 +1069,7 @@ onUnmounted(() => {
                   newProjectSession(workspace.projectRoot(project)),
                 )
             "
+            @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
           />
         </template>
 
