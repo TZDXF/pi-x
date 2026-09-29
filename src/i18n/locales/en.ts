@@ -1,5 +1,8 @@
 /** English locale */
 export default {
+  logo: {
+    reassemble: "PiX · Click to reassemble pixels",
+  },
   schedules: {
     progress: "View progress",
     title: "Scheduled tasks",

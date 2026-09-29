@@ -1,5 +1,8 @@
 /** 简体中文语言包 */
 export default {
+  logo: {
+    reassemble: "PiX · 点击重新拼装像素",
+  },
   schedules: {
     progress: "查看执行过程",
     title: "定时任务",
