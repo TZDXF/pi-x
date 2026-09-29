@@ -91,16 +91,16 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
 ### 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `pnpm install --frozen-lockfile` | 安装依赖 |
-| `pnpm run dev:desktop` | 桌面开发，前端热更新 |
-| `pnpm run dev` | 仅浏览器预览，不启动 Pi 进程 |
-| `pnpm run dev:desktop:remote` | 构建前端并启用远程访问开发模式 |
-| `pnpm run check` | oxlint、类型检查、前端构建与 Rust check |
-| `pnpm run test:web` | Node 单元测试 |
-| `pnpm test` | Rust 单元测试 |
-| `pnpm run package` | 构建包含远程访问的桌面安装包 |
+| 命令                             | 说明                                    |
+| -------------------------------- | --------------------------------------- |
+| `pnpm install --frozen-lockfile` | 安装依赖                                |
+| `pnpm run dev:desktop`           | 桌面开发，前端热更新                    |
+| `pnpm run dev`                   | 仅浏览器预览，不启动 Pi 进程            |
+| `pnpm run dev:desktop:remote`    | 构建前端并启用远程访问开发模式          |
+| `pnpm run check`                 | oxlint、类型检查、前端构建与 Rust check |
+| `pnpm run test:web`              | Node 单元测试                           |
+| `pnpm test`                      | Rust 单元测试                           |
+| `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
 Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
 

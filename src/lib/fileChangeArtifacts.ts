@@ -34,15 +34,17 @@ export function fileChangeArtifactFromEntry(entry: any): FileChangeArtifact | nu
 
   const files = data.files.flatMap((file: any): FileChangeArtifactFile[] => {
     if (!file || typeof file !== "object" || typeof file.path !== "string" || !file.path.trim()) return []
-    return [{
-      path: normalizeSlashes(file.path),
-      existedBefore: file.existedBefore === true,
-      beforeContent: typeof file.beforeContent === "string" ? file.beforeContent : null,
-      afterContent: typeof file.afterContent === "string" ? file.afterContent : null,
-      beforeHash: typeof file.beforeHash === "string" ? file.beforeHash : null,
-      afterHash: typeof file.afterHash === "string" ? file.afterHash : null,
-      unsupportedReason: typeof file.unsupportedReason === "string" ? file.unsupportedReason : undefined,
-    }]
+    return [
+      {
+        path: normalizeSlashes(file.path),
+        existedBefore: file.existedBefore === true,
+        beforeContent: typeof file.beforeContent === "string" ? file.beforeContent : null,
+        afterContent: typeof file.afterContent === "string" ? file.afterContent : null,
+        beforeHash: typeof file.beforeHash === "string" ? file.beforeHash : null,
+        afterHash: typeof file.afterHash === "string" ? file.afterHash : null,
+        unsupportedReason: typeof file.unsupportedReason === "string" ? file.unsupportedReason : undefined,
+      },
+    ]
   })
   if (!files.length) return null
 
@@ -51,15 +53,20 @@ export function fileChangeArtifactFromEntry(entry: any): FileChangeArtifact | nu
     createdAt: typeof data.createdAt === "string" ? data.createdAt : undefined,
     toolCallId: data.toolCallId,
     toolName: typeof data.toolName === "string" ? data.toolName : "tool",
-    entryId: typeof (entry._entryId ?? entry.id ?? entry.entry?.id) === "string"
-      ? String(entry._entryId ?? entry.id ?? entry.entry?.id)
-      : undefined,
+    entryId:
+      typeof (entry._entryId ?? entry.id ?? entry.entry?.id) === "string"
+        ? String(entry._entryId ?? entry.id ?? entry.entry?.id)
+        : undefined,
     files,
   }
 }
 
 /** Convert one artifact operation into the diff shape used by the review panel. */
-export function fileChangeFromArtifact(artifact: FileChangeArtifact, file: FileChangeArtifactFile, index: number): FileChange {
+export function fileChangeFromArtifact(
+  artifact: FileChangeArtifact,
+  file: FileChangeArtifactFile,
+  index: number,
+): FileChange {
   const before = file.beforeContent ?? ""
   const after = file.afterContent ?? ""
   const lines = changedLines(before, after)
@@ -88,8 +95,7 @@ export function mergeArtifactChanges(fallback: FileChange[], artifacts: FileChan
 function revertOpForFile(file: FileChangeArtifactFile): RevertOp | null {
   if (file.unsupportedReason) return null
   if (file.afterContent === null) return null
-  if (!file.existedBefore || file.beforeContent === null)
-    return { kind: "delete", content: file.afterContent }
+  if (!file.existedBefore || file.beforeContent === null) return { kind: "delete", content: file.afterContent }
   return { kind: "restore", before: file.afterContent, after: file.beforeContent }
 }
 

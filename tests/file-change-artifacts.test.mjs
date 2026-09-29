@@ -5,7 +5,9 @@ import { fileChangeArtifactsModule } from "./lib/load-ts.mjs"
 const artifacts = fileChangeArtifactsModule()
 const plain = value => JSON.parse(JSON.stringify(value))
 const block = (callId, name) => ({ type: "toolCall", callId, name, argsText: "{}" })
-const run = callId => ({ [callId]: { id: callId, name: "write", argsText: "", outputText: "", state: "output-available" } })
+const run = callId => ({
+  [callId]: { id: callId, name: "write", argsText: "", outputText: "", state: "output-available" },
+})
 
 test("parses custom entries and replaces tool-argument snippets", () => {
   const artifact = artifacts.fileChangeArtifactFromEntry({

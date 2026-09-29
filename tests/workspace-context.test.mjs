@@ -39,6 +39,13 @@ test("environment and branch menus only record draft choices", () => {
   assert.equal(context.selection.value.worktree, true)
 })
 
+test("workspace menus open upward without trigger arrows", () => {
+  const contents = source.match(/<PopoverContent\b[^>]*>/g) || []
+  assert.equal(contents.length, 3)
+  for (const content of contents) assert.match(content, /side="top"/)
+  assert.doesNotMatch(source, /ChevronDown/)
+})
+
 function harness(overrides = {}) {
   const events = []
   const owner = {

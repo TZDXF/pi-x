@@ -62,8 +62,7 @@ await page.route("**/api/invoke", async route => {
   else if (command === "app_config_save") {
     appConfig = args.config
     data = null
-  }
-  else if (command === "rpc_running") data = false
+  } else if (command === "rpc_running") data = false
   else if (command === "trust_status") data = { needsDecision: false }
   await route.fulfill({ json: { data } })
 })

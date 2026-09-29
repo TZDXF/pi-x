@@ -22,7 +22,16 @@ const innerTab = ref("market")
 const ctx = usePackages(() => props.project)
 const resPkg = ref<InstalledPackage | null>(null)
 
-const { installed, catalogLoading, installedLoading, builtinLoading, pendingProjectSource, recentProjects, viewedProject, busy } = ctx
+const {
+  installed,
+  catalogLoading,
+  installedLoading,
+  builtinLoading,
+  pendingProjectSource,
+  recentProjects,
+  viewedProject,
+  busy,
+} = ctx
 const { activate, loadCatalog, loadBuiltinPlugins, refreshInstalled, confirmProjectInstall } = ctx
 
 function refreshActiveTab() {

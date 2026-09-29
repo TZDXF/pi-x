@@ -4,9 +4,8 @@ import { readFileSync } from "node:fs"
 import ts from "typescript"
 const source = readFileSync(new URL("../src/lib/paths.ts", import.meta.url), "utf8")
 const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, normalizeProjectPath, baseName } = await import(
-  `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
-)
+const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, normalizeProjectPath, baseName } =
+  await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`)
 
 test("windows paths use backslashes when joined", () => {
   assert.equal(joinDisplayPath("C:\\code\\pi-x", ".pi", "settings.json"), "C:\\code\\pi-x\\.pi\\settings.json")

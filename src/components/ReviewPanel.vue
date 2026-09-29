@@ -113,8 +113,8 @@ const coveredPaths = computed(() => {
 })
 // Artifact-backed changes already carry exact before/after content. Never
 // replace them with a broader checkpoint span from another turn.
-const artifactBacked = computed(() =>
-  activeFile.value?.changes.some(change => change.id.startsWith("artifact:")) ?? false,
+const artifactBacked = computed(
+  () => activeFile.value?.changes.some(change => change.id.startsWith("artifact:")) ?? false,
 )
 const coverage = computed(() => {
   if (artifactBacked.value) return null

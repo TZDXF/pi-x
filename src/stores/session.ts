@@ -17,11 +17,7 @@ import {
 } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { sessionChanges } from "@/lib/sessionChanges"
-import {
-  fileChangeArtifactFromEntry,
-  mergeArtifactChanges,
-  type FileChangeArtifact,
-} from "@/lib/fileChangeArtifacts"
+import { fileChangeArtifactFromEntry, mergeArtifactChanges, type FileChangeArtifact } from "@/lib/fileChangeArtifacts"
 import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
@@ -224,12 +220,11 @@ export const createSessionStore = (runtimeId = "default") =>
       const artifact = fileChangeArtifactFromEntry(entry)
       if (!artifact) return
       const key = `${artifact.entryId ?? ""}:${artifact.toolCallId}`
-      const index = fileChangeArtifacts.value.findIndex(
-        item => `${item.entryId ?? ""}:${item.toolCallId}` === key,
-      )
-      fileChangeArtifacts.value = index >= 0
-        ? fileChangeArtifacts.value.map((item, i) => (i === index ? artifact : item))
-        : [...fileChangeArtifacts.value, artifact]
+      const index = fileChangeArtifacts.value.findIndex(item => `${item.entryId ?? ""}:${item.toolCallId}` === key)
+      fileChangeArtifacts.value =
+        index >= 0
+          ? fileChangeArtifacts.value.map((item, i) => (i === index ? artifact : item))
+          : [...fileChangeArtifacts.value, artifact]
     }
 
     // streaming assembly

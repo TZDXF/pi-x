@@ -92,9 +92,12 @@ export function usePackages(project: () => string | undefined) {
     builtinBusy.value = "fileChanges"
     try {
       await saveConfig(next)
-      ui.pushToast(t(enabled ? "packages.builtinEnabledToast" : "packages.builtinDisabledToast", {
-        name: t("packages.builtin.fileChanges.name"),
-      }), "info")
+      ui.pushToast(
+        t(enabled ? "packages.builtinEnabledToast" : "packages.builtinDisabledToast", {
+          name: t("packages.builtin.fileChanges.name"),
+        }),
+        "info",
+      )
     } catch (e) {
       appConfig.value = previous
       ui.pushToast(String(e), "error")

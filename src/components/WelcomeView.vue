@@ -6,7 +6,7 @@ import { MessagesSquare } from "@lucide/vue"
 import { detectPi, saveConfig } from "@/api/piClient"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import type { AppConfig, PiInfo } from "@/api/piClient"
+import type { AppConfig } from "@/api/piClient"
 
 const props = defineProps<{
   phase: "detecting" | "no-pi" | "pick"
@@ -20,7 +20,6 @@ const emit = defineEmits<{
 }>()
 
 const customPath = ref(props.config.piPath ?? "")
-const info = ref<PiInfo | null>(null)
 const busy = ref(false)
 const { t } = useI18n()
 
@@ -28,8 +27,8 @@ async function saveAndDetect() {
   busy.value = true
   try {
     await saveConfig({ ...props.config, piPath: customPath.value || undefined })
-    info.value = await detectPi(customPath.value || undefined)
-    if (info.value.found) emit("configured")
+    const detected = await detectPi(customPath.value || undefined)
+    if (detected.found) emit("configured")
   } finally {
     busy.value = false
   }
@@ -38,30 +37,20 @@ async function saveAndDetect() {
 
 <template>
   <div class="flex flex-1 items-center justify-center p-8">
-    <div class="w-full max-w-xl space-y-8">
-      <div class="space-y-2 text-center">
-        <h1><PiXLogo style="width: 120px; height: 56px" /></h1>
-        <p class="text-muted-foreground text-sm">{{ t("welcome.subtitle") }}</p>
+    <div class="w-full max-w-sm space-y-8">
+      <div class="text-center">
+        <h1 class="flex justify-center"><PiXLogo style="width: 120px; height: 56px" /></h1>
       </div>
 
       <p v-if="phase === 'detecting'" class="text-center text-sm text-muted-foreground animate-pulse">
         {{ t("welcome.connecting") }}
       </p>
 
-      <!-- pi not found: install guidance -->
-      <div v-if="phase === 'no-pi'" class="space-y-4 rounded-lg border p-5">
-        <div>
-          <h2 class="font-medium">{{ t("welcome.noPiTitle") }}</h2>
-          <p class="text-muted-foreground mt-1 text-sm">
-            {{
-              t("welcome.noPiDesc", {
-                code: "pi --mode rpc",
-              })
-            }}
-          </p>
-        </div>
-        <div class="bg-muted flex items-center gap-2 rounded-md px-3 py-2 font-mono text-xs">
-          <span class="min-w-0 flex-1 whitespace-pre-wrap break-words"
+      <!-- pi not found -->
+      <div v-if="phase === 'no-pi'" class="space-y-4">
+        <h2 class="text-center font-medium">{{ t("welcome.noPiTitle") }}</h2>
+        <div class="bg-muted rounded-md px-3 py-2 font-mono text-xs">
+          <span class="block whitespace-pre-wrap break-words"
             >npm install -g --ignore-scripts @earendil-works/pi-coding-agent</span
           >
         </div>
@@ -73,15 +62,8 @@ async function saveAndDetect() {
         </div>
       </div>
 
-      <!-- pi found: pick project -->
-      <div v-if="phase === 'pick'" class="space-y-4 rounded-lg border p-5">
-        <div class="flex items-center gap-2">
-          <span class="size-2 rounded-full bg-green-500" />
-          <span class="text-sm">
-            Pi {{ t("welcome.ready") }}
-            <span v-if="info?.version" class="text-muted-foreground">({{ info.version }})</span>
-          </span>
-        </div>
+      <!-- pi found -->
+      <div v-if="phase === 'pick'" class="space-y-3">
         <Button class="h-11 w-full" @click="emit('openProject')">
           {{ t("welcome.openFolder") }}
         </Button>
@@ -89,9 +71,6 @@ async function saveAndDetect() {
           <MessagesSquare :size="16" class="size-auto shrink-0" />
           {{ t("projectless.name") }}
         </Button>
-        <p class="text-muted-foreground text-center text-xs">
-          {{ t("welcome.pickHint") }}<br />{{ t("projectless.description") }}
-        </p>
       </div>
     </div>
   </div>

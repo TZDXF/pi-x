@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, GitBranch, Laptop, Layers, MessagesSquare, ChevronDown, Plus, LoaderCircle } from "@lucide/vue"
+import { Folder, GitBranch, Laptop, Layers, MessagesSquare, Plus, LoaderCircle } from "@lucide/vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
@@ -104,9 +104,9 @@ watch(() => props.project, refresh, { immediate: true })
       ><PopoverTrigger as-child
         ><Button variant="context-chip" size="content" class="context-chip" :disabled="blocked" :title="project"
           ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(project) }}</span
-          ><ChevronDown :size="12" class="size-auto shrink-0" /></Button
+          /></Button
       ></PopoverTrigger>
-      <PopoverContent align="start" class="w-72 p-2">
+      <PopoverContent side="top" align="start" class="w-72 p-2">
         <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
         <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
           <Button
@@ -157,9 +157,9 @@ watch(() => props.project, refresh, { immediate: true })
             v-else
             :size="14"
             class="size-auto shrink-0" />{{ selection?.worktree ? t("workspace.createWorktree") : t("workspace.local")
-          }}<ChevronDown :size="12" class="size-auto shrink-0" /></Button
+          }}</Button
       ></PopoverTrigger>
-      <PopoverContent align="start" class="w-64 p-2"
+      <PopoverContent side="top" align="start" class="w-64 p-2"
         ><Button
           variant="context-menu-item"
           size="content"
@@ -194,9 +194,9 @@ watch(() => props.project, refresh, { immediate: true })
             class="size-auto shrink-0" /><span class="truncate">{{
             loading ? t("sidebar.loading") : selection?.branch || info?.branch || t("workspace.noGit")
           }}</span
-          ><ChevronDown v-if="info" :size="12" class="size-auto shrink-0" /></Button
+          /></Button
       ></PopoverTrigger>
-      <PopoverContent align="start" class="w-64 p-2">
+      <PopoverContent side="top" align="start" class="w-64 p-2">
         <p class="px-2 py-2 text-xs text-muted-foreground">
           {{ t(selection?.worktree ? "workspace.baseBranch" : "workspace.currentBranch") }}
         </p>

@@ -208,7 +208,8 @@ export default {
       "The files below will be restored to their state before this turn. Files changed again after the turn are skipped.",
     confirmAction: "Roll back",
     rewindPreviewTitle: "File rewind preview",
-    rewindPreviewDesc: "Current file contents are verified before rewinding. Apply is available only when every file is safe.",
+    rewindPreviewDesc:
+      "Current file contents are verified before rewinding. Apply is available only when every file is safe.",
     rewindSafe: "Safe to rewind",
     rewindUnsafe: "Unsafe",
     rewindIgnored: "Ignored",
@@ -901,13 +902,15 @@ export default {
     cancel: "Cancel",
     installedBadge: "Installed",
     builtinBadge: "Built-in",
-    builtinHint: "Built-in plugins ship with PiX. Changes apply to new sessions; reopen the current session to load them.",
+    builtinHint:
+      "Built-in plugins ship with PiX. Changes apply to new sessions; reopen the current session to load them.",
     builtinEnabledToast: "Enabled built-in plugin {name}",
     builtinDisabledToast: "Disabled built-in plugin {name}",
     builtin: {
       fileChanges: {
         name: "File change tracking",
-        description: "Captures the original file before a tool runs and the new content after write/edit, enabling accurate review and verified rewind.",
+        description:
+          "Captures the original file before a tool runs and the new content after write/edit, enabling accurate review and verified rewind.",
       },
     },
     details: "Details",
