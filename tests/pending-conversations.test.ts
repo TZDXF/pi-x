@@ -1,11 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource, pathsModule } from "./lib/load-ts.mjs"
-
-const { pendingConversations } = loadTsSource(
-  readFileSync(new URL("../src/lib/pendingConversations.ts", import.meta.url), "utf8"),
-  { require: () => pathsModule() },
-)
+import { pendingConversations } from "@/lib/pendingConversations"
 const draft = (sessionFile, text = "Send later", cwd = "project") => ({ cwd, sessionFile, promptQueue: [{ text }] })
 
 test("new queued conversations appear before a history file or row exists", () => {

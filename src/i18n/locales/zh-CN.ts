@@ -914,7 +914,7 @@ export default {
   },
 
   // 后端（src-tauri）与 transport 层编码错误的当前语言文案；键与 Rust 调用点的错误码一致，
-  // 回归测试（tests/backend-errors.test.mjs）校验三方同步。
+  // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
     piNotFound: "未找到 pi，请先在设置中配置 pi 路径",
     piLaunchUnknown: "无法确定 pi 启动方式",

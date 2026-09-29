@@ -1,12 +1,39 @@
-import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import vm from "node:vm"
-import ts from "typescript"
-import { pathsModule } from "./lib/load-ts.mjs"
-function harness(group = null) {
-  const calls = [],
-    spawnArgs = []
-  const workspace = {
+import { afterEach, test, expect, vi } from "vitest"
+import { parse, compileScript } from "vue/compiler-sfc"
+import { transpileModule, ModuleKind, ScriptTarget } from "typescript"
+import { reactive, ref } from "vue"
+import * as vueRuntime from "vue"
+import appSource from "@/App.vue?raw"
+import * as paths from "@/lib/paths"
+
+async function loadVueSetup(source, require) {
+  const { descriptor } = parse(source, { filename: "App.vue" })
+  const compiled = compileScript(descriptor, { id: "app-test" }).content
+  const output = transpileModule(compiled, {
+    compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+  }).outputText
+  const module = { exports: {} }
+  const requireModule = id => (id in require ? require[id] : {})
+  new Function("exports", "require", "module", "__filename", "__dirname", output)(
+    module.exports,
+    requireModule,
+    module,
+    "App.vue",
+    import.meta.dirname,
+  )
+  return module.exports.default.setup({}, { expose: () => {}, emit: () => {} })
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+async function harness(group = null) {
+  vi.stubGlobal("window", { addEventListener() {}, removeEventListener() {} })
+  const calls = []
+  const spawnArgs = []
+  const workspace = reactive({
     projectRoot: path => path,
     projectName: path => path,
     projectGroups: group ? { project: group } : {},
@@ -17,13 +44,9 @@ function harness(group = null) {
     // 移除项目标记：默认没有任何已移除项目。
     isRemovedProject: () => false,
     unremoveProject: () => {},
-  }
-  const source = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
-    .split('<script setup lang="ts">')[1]
-    .split("</script>")[0]
-    .replace(/^import[\s\S]*?from ["'][^"']+["']\s*$/gm, "")
+  })
   const stores = new Map()
-  const activeRuntimeId = { value: "default" }
+  const activeRuntimeId = ref("default")
   let seq = 0
   const sessionFor = id => {
     if (!stores.has(id))
@@ -40,92 +63,110 @@ function harness(group = null) {
       })
     return stores.get(id)
   }
-  const context = vm.createContext({
-    watch: () => {},
-    ref: value => ({ value }),
-    computed: def => ({
-      get value() {
-        return (typeof def === "function" ? def : def.get)()
-      },
-    }),
-    onMounted: fn => {
-      // App registers multiple mount hooks; chain them in registration order.
-      const previous = context.mount
-      context.mount = async () => {
-        if (previous) await previous()
-        await fn()
-      }
-    },
-    onUnmounted: () => {},
-    useI18n: () => ({ t: x => x, locale: { value: "en" } }),
-    useSessionStore: () => new Proxy({}, { get: (_, k) => sessionFor(activeRuntimeId.value)[k] }),
-    useWorkspaceStore: () => workspace,
-    useUiStore: () => ({ clear() {}, pushToast() {} }),
-    sessionFor,
-    uiFor: () => ({ pushToast() {}, handleRequest() {}, pushStderr() {} }),
-    activeRuntimeId,
-    activateSession: id => {
-      sessionFor(id)
-      activeRuntimeId.value = id
-    },
-    createConversation: project => {
-      const id = "rt" + ++seq
-      const s = sessionFor(id)
-      s.cwd = project
-      activeRuntimeId.value = id
-      return s
-    },
+  const context = {
+    mount: undefined,
     findConversation: () => undefined,
-    getConfig: async () => ({ lastProject: "project" }),
-    setTrayLabels: async () => {},
-    tBackendError: x => x,
-    onPiEvent: async () => () => {},
-    onPiExit: async () => () => {},
-    onPiStderr: async () => () => {},
-    onReconnected: async () => () => {},
     trustStatus: async () => ({ needsDecision: false }),
-    saveConfig: async () => {},
     spawnPi: async (...args) => {
       spawnArgs.push(args)
       calls.push("spawn")
     },
     killPi: async () => {},
-    pixLog() {},
     listRunningSessions: async () => [],
-    detectPi: async () => ({ found: true }),
-    onSessionsChanged: async () => () => {},
-    sessionMtime: async () => 0,
-    registerSessionMtimeSync: () => {},
-    useRoute: () => ({ value: { name: "home", params: {} } }),
-    navigate: () => {},
-    projectRoute: path => `/project/${encodeURIComponent(path)}`,
-    sessionRoute: (id, project = "") => `/session/${encodeURIComponent(id)}/${encodeURIComponent(project)}`,
-    samePath: pathsModule().samePath,
-    normalizeSlashes: pathsModule().normalizeSlashes,
-    normalizeProjectPath: pathsModule().normalizeProjectPath,
-    window: { addEventListener() {}, removeEventListener() {} },
-    dispatchShortcut: () => false,
-    registerShortcutHandler: () => () => {},
-  })
-  vm.runInContext(
-    ts.transpile(
-      source +
-        "\nglobalThis.actions = { start, selectProject, newProjectSession, resumeSession, selectQueuedConversation, connecting, selectingProject, phase };",
-      { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
-    ),
-    context,
-  )
+  }
+  let mountHooks = []
+  const dependencies = {
+    vue: {
+      ...vueRuntime,
+      onMounted: fn => {
+        mountHooks.push(fn)
+        context.mount = async () => {
+          for (const hook of mountHooks) await hook()
+        }
+      },
+      onUnmounted: () => {},
+      watch: () => {},
+    },
+    "vue-i18n": { useI18n: () => ({ t: x => x, locale: ref("en") }) },
+    "@/api/transport": { isDesktop: false },
+    "@/api/piClient": {
+      detectPi: async () => ({ found: true }),
+      prepareWorkspaceGit: async () => ({}),
+      workspaceGitInfo: async () => ({}),
+      exportSessionFileHtml: async () => true,
+      listRunningSessions: (...args) => context.listRunningSessions(...args),
+      getConfig: async () => ({ lastProject: "project" }),
+      killPi: (...args) => context.killPi(...args),
+      onPiEvent: async () => () => {},
+      pixLog: () => {},
+      onPiExit: async () => () => {},
+      onPiStderr: async () => () => {},
+      onReconnected: async () => () => {},
+      onSessionsChanged: async () => () => {},
+      saveConfig: async () => {},
+      sessionMtime: async () => 0,
+      setTrayLabels: async () => {},
+      spawnPi: (...args) => context.spawnPi(...args),
+      trustSave: async () => {},
+      trustStatus: (...args) => context.trustStatus(...args),
+    },
+    "@/stores/conversations": {
+      useSessionStore: () => new Proxy({}, { get: (_, key) => sessionFor(activeRuntimeId.value)[key] }),
+      sessionFor,
+      uiFor: () => ({ pushToast() {}, handleRequest() {}, pushStderr() {} }),
+      activeRuntimeId,
+      activateSession: id => {
+        sessionFor(id)
+        activeRuntimeId.value = id
+      },
+      createConversation: project => {
+        const id = `rt${++seq}`
+        const session = sessionFor(id)
+        session.cwd = project
+        activeRuntimeId.value = id
+        return session
+      },
+      findConversation: (...args) => context.findConversation(...args),
+      useUiStore: () => ({ clear() {}, pushToast() {} }),
+    },
+    "@/stores/workspace": { useWorkspaceStore: () => workspace, registerSessionMtimeSync: () => {} },
+    "@/lib/router": {
+      useRoute: () => ref({ name: "home", params: {} }),
+      navigate: () => {},
+      goHome: () => {},
+      projectRoute: path => `/project/${encodeURIComponent(path)}`,
+      sessionRoute: (id, project = "") => `/session/${encodeURIComponent(id)}/${encodeURIComponent(project)}`,
+    },
+    "@/stores/sessionRunStatus": { acknowledgeSessionRunStatus: () => {}, sessionRunStatus: () => undefined },
+    "@/lib/paths": paths,
+    "@/i18n": { tBackendError: value => value },
+    "@/lib/shortcuts": { dispatchShortcut: () => false, registerShortcutHandler: () => () => {} },
+  }
+  const bindings = await loadVueSetup(appSource, dependencies)
+  context.actions = {
+    start: bindings.start,
+    selectProject: bindings.selectProject,
+    newProjectSession: bindings.newProjectSession,
+    resumeSession: bindings.resumeSession,
+    selectQueuedConversation: bindings.selectQueuedConversation,
+    connecting: bindings.connecting,
+    selectingProject: bindings.selectingProject,
+    phase: bindings.phase,
+  }
+  context.activeRuntimeId = bindings.activeRuntimeId ?? activeRuntimeId
+  context.sessionFor = bindings.sessionFor ?? sessionFor
   return { context, calls, spawnArgs, workspace }
 }
+
 test("opening the app, selecting projects and drafting a new chat do not start pi", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   await context.actions.selectProject("other")
   await context.actions.newProjectSession("other")
   expect(calls).toEqual([])
 })
 test("clicking new session reuses the pristine draft until a message is sent", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   await context.actions.newProjectSession("project")
   expect(context.activeRuntimeId.value).toBe("rt1")
@@ -137,14 +178,14 @@ test("clicking new session reuses the pristine draft until a message is sent", a
   expect(calls).toEqual([])
 })
 test("first conversation starts pi and reuses the initialized process", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   expect(await context.actions.start()).toBe(true)
   expect(await context.actions.start()).toBe(true)
   expect(calls).toEqual(["spawn", "init"])
 })
 test("opening a saved conversation starts pi on demand", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   await context.actions.resumeSession("session.jsonl")
   expect(calls).toEqual(["spawn", "init"])
@@ -160,7 +201,7 @@ test("only fresh process startup applies remembered selection", () => {
 
 test("a grouped project passes every root to Pi and refreshes context on the next prompt after edits", async () => {
   const group = { name: "Both", primary: "project", folders: ["project", "other"] }
-  const { context, calls, spawnArgs } = harness(group)
+  const { context, calls, spawnArgs } = await harness(group)
   await context.mount()
   await context.actions.selectProject("project")
   expect(await context.actions.start()).toBe(true)
@@ -176,7 +217,7 @@ test("a grouped project passes every root to Pi and refreshes context on the nex
 })
 
 test("cross-project drafts stay visible during checks while sending remains blocked", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   let resolveTrust
   context.trustStatus = () =>
@@ -208,7 +249,6 @@ test("project selection keeps the editor enabled without bypassing other edit gu
   const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
   const editor = view.split("<ComposerRichEditor")[1].split("/>")[0]
   const expression = editor.match(/:disabled="([^"]+)"/)[1]
-  const disabled = values => vm.runInNewContext(expression, values)
   const state = {
     editBusy: false,
     workspace: { gitBusy: false },
@@ -216,6 +256,7 @@ test("project selection keeps the editor enabled without bypassing other edit gu
     selectingProject: true,
     completion: null,
   }
+  const disabled = values => new Function(...Object.keys(values), `return (${expression})`)(...Object.values(values))
   expect(disabled(state)).toBe(false)
   expect(disabled({ ...state, selectingProject: false })).toBe(true)
   expect(disabled({ ...state, editBusy: true })).toBe(true)
@@ -233,7 +274,7 @@ test("disabled accessory buttons do not dim the entire composer", () => {
 })
 
 test("resuming across projects selects the saved identity before startup and loads history in parallel", async () => {
-  const { context } = harness()
+  const { context } = await harness()
   await context.mount()
   let releaseSpawn
   context.spawnPi = () =>
@@ -270,7 +311,7 @@ test("resuming across projects selects the saved identity before startup and loa
 })
 
 test("selecting a queued new conversation reattaches its runtime without clearing or restarting", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   const pending = context.sessionFor(context.activeRuntimeId.value)
   pending.started = true
@@ -285,7 +326,7 @@ test("selecting a queued new conversation reattaches its runtime without clearin
 })
 
 test("opening a running scheduled session attaches to its existing worker without spawning", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   const owner = context.sessionFor("schedule-unique-run")
   owner.cwd = "project"
@@ -303,7 +344,7 @@ test("opening a running scheduled session attaches to its existing worker withou
 })
 
 test("opening an observed scheduled session preserves its live output", async () => {
-  const { context, calls } = harness()
+  const { context, calls } = await harness()
   await context.mount()
   const owner = context.sessionFor("schedule-observed")
   Object.assign(owner, {
@@ -321,7 +362,7 @@ test("opening an observed scheduled session preserves its live output", async ()
 })
 
 test("failed attachment never kills a backend-owned scheduled worker", async () => {
-  const { context } = harness()
+  const { context } = await harness()
   await context.mount()
   const owner = context.sessionFor("schedule-failed-attach")
   owner.init = async () => {

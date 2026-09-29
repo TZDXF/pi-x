@@ -1,8 +1,5 @@
 import { test, expect } from "vitest"
-import { loadTsModule } from "./lib/load-ts.mjs"
-
-const fileKind = loadTsModule(new URL("../src/lib/fileKind.ts", import.meta.url))
-const { extOf, isImageExt, isMarkdownExt, IMAGE_EXTS, MD_EXTS } = fileKind
+import { extOf, isImageExt, isMarkdownExt, IMAGE_EXTS, MD_EXTS } from "@/lib/fileKind"
 
 test("extOf extracts the lowercased extension from posix and windows paths", () => {
   expect(extOf("src/stores/session.ts")).toBe("ts")

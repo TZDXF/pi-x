@@ -1,10 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const { estimateContextBreakdown, contextBreakdownParts, annotateCompactionEstimates } = loadTsSource(
-  readFileSync(new URL("../src/lib/contextBreakdown.ts", import.meta.url), "utf8"),
-)
+import { estimateContextBreakdown, contextBreakdownParts, annotateCompactionEstimates } from "@/lib/contextBreakdown"
 
 const system = (sections, toolsAdded, extra = {}) => ({
   role: "system",

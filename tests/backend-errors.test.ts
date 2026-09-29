@@ -1,9 +1,8 @@
 import { test, expect } from "vitest"
 import { readFileSync, readdirSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const backendError = loadTsSource(readFileSync(new URL("../src/lib/backendError.ts", import.meta.url), "utf8"))
-const { CODED_ERROR_PREFIX, encodeCodedError, parseCodedError, formatCodedError } = backendError
+import { CODED_ERROR_PREFIX, encodeCodedError, parseCodedError, formatCodedError } from "@/lib/backendError"
+import zhCNMessages from "@/i18n/locales/zh-CN"
+import enMessages from "@/i18n/locales/en"
 
 const t = (key, params) => {
   // 与 vue-i18n 一致的桩实现：命中返回插值文案，缺失返回 key 本身。
@@ -19,7 +18,6 @@ const t = (key, params) => {
 test("coded errors round trip through encode and parse", () => {
   const encoded = encodeCodedError("piNotFound", "未找到 pi")
   expect(encoded.startsWith(CODED_ERROR_PREFIX)).toBeTruthy()
-  // 逐字段断言：loadTsSource 的对象来自独立 VM realm，无法跨 realm 做深度相等。
   const parsed = parseCodedError(encoded)
   expect(parsed.code).toBe("piNotFound")
   expect(parsed.fallback).toBe("未找到 pi")
@@ -65,17 +63,10 @@ test("formatCodedError strips the String(error) prefix and passes plain text thr
   expect(formatCodedError(t, null)).toBe("")
 })
 
-/** 语言包是纯对象字面量（无 import），去掉 `export default` 后可直接求值。 */
-function loadMessages(locale) {
-  const source = readFileSync(new URL(`../src/i18n/locales/${locale}.ts`, import.meta.url), "utf8")
-  return new Function(`${source.replace("export default", "return")}`)()
-}
-
 test("backend error catalogs exist with matching keys in zh-CN and en", () => {
-  const catalogs = {}
-  for (const locale of ["zh-CN", "en"]) {
-    catalogs[locale] = loadMessages(locale).backendErrors
-    expect(catalogs[locale], `${locale} is missing the backendErrors section`).toBeTruthy()
+  const catalogs = { "zh-CN": zhCNMessages.backendErrors, en: enMessages.backendErrors }
+  for (const [locale, catalog] of Object.entries(catalogs)) {
+    expect(catalog, `${locale} is missing the backendErrors section`).toBeTruthy()
   }
   expect(Object.keys(catalogs["zh-CN"]).sort(), "zh-CN and en backendErrors keys must match").toEqual(
     Object.keys(catalogs.en).sort(),
@@ -83,7 +74,7 @@ test("backend error catalogs exist with matching keys in zh-CN and en", () => {
 })
 
 test("every Rust and transport error code is present in both catalogs, with no orphans", () => {
-  const catalogs = { "zh-CN": loadMessages("zh-CN").backendErrors, en: loadMessages("en").backendErrors }
+  const catalogs = { "zh-CN": zhCNMessages.backendErrors, en: enMessages.backendErrors }
 
   const codes = new Set()
   const rustDir = new URL("../src-tauri/src/", import.meta.url)

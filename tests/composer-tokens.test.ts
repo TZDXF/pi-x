@@ -1,16 +1,12 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { loadTsModule, pathsModule } from "./lib/load-ts.mjs"
-
-const { composerParts } = loadTsModule(new URL("../src/lib/composerTokens.ts", import.meta.url))
-const { normalizeSlashes } = pathsModule()
-// VM 内创建的对象原型与测试环境不同，deepStrictEqual 会因原型差异而失败。
-const plain = value => JSON.parse(JSON.stringify(value))
+import { composerParts } from "@/lib/composerTokens"
+import { normalizeSlashes } from "@/lib/paths"
 
 test("composer chips hide paths and slash prefixes without changing raw text", () => {
   const text = '/review @"C:/project/src/my file.ts" @session("C:/sessions/old.jsonl") with @src/App.vue '
   const parts = composerParts(text)
-  expect(plain(parts.filter(p => p.kind !== "text").map(p => [p.kind, p.label]))).toEqual([
+  expect(parts.filter(p => p.kind !== "text").map(p => [p.kind, p.label])).toEqual([
     ["command", "review"],
     ["file", "my file.ts"],
     ["session", "old.jsonl"],

@@ -1,11 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const canvasAnnotations = loadTsSource(
-  readFileSync(new URL("../src/lib/canvasAnnotations.ts", import.meta.url), "utf8"),
-)
-const { drawAnnotation, drawArrow } = canvasAnnotations
+import { drawAnnotation, drawArrow } from "@/lib/canvasAnnotations"
 
 // 记录型 2D 上下文桩:收集调用与属性赋值,无需真实 canvas。
 function stubCtx() {

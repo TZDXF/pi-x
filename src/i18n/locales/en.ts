@@ -945,7 +945,7 @@ export default {
 
   // Current-locale copy for coded errors from the Rust backend and the
   // transport layer; keys mirror the error codes at the Rust call sites.
-  // tests/backend-errors.test.mjs verifies the three stay in sync.
+  // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
     piNotFound: "pi not found. Configure the pi path in Settings first.",
     piLaunchUnknown: "Cannot determine how to launch pi.",

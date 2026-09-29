@@ -31,7 +31,7 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 
 ## 测试要求
 
-前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.mjs`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
+前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。浏览器脚本 `*.browser.mjs` 需单独执行，不包含在 `test:web` 中，环境配置参见 README。
 
 提交前运行 `pnpm run check`、`pnpm run test:web` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
 

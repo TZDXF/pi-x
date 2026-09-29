@@ -51,8 +51,7 @@ async function harness() {
     pixLog() {},
     sessionLastError: async () => null,
     sessionMtime: async () => 0,
-    rpcRequest:
-      () =>
+    rpcRequest: () =>
       new Promise(resolve => {
         requests.push(resolve)
       }),

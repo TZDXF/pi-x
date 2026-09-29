@@ -1,15 +1,6 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsModule, loadTsSource, pathsModule } from "./lib/load-ts.mjs"
+import { turnFileChanges } from "@/lib/turnChanges"
 
-const sessionChanges = loadTsSource(readFileSync(new URL("../src/lib/sessionChanges.ts", import.meta.url), "utf8"), {
-  require: () => pathsModule(),
-})
-const { turnFileChanges } = loadTsModule(new URL("../src/lib/turnChanges.ts", import.meta.url), id =>
-  id === "@/lib/sessionChanges" ? sessionChanges : undefined,
-)
-
-// VM 内创建的对象原型与测试环境不同，deepStrictEqual 会因原型差异而失败。
 const plain = value => JSON.parse(JSON.stringify(value))
 
 const block = (callId, name, args) => ({ type: "toolCall", callId, name, argsText: JSON.stringify(args) })

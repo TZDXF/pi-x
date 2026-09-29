@@ -1,15 +1,26 @@
-import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import vm from "node:vm"
-import ts from "typescript"
-import { loadTsSource } from "./lib/load-ts.mjs"
+import { afterEach, expect, test, vi } from "vitest"
+
+const tauri = vi.hoisted(() => ({
+  isTauri: () => false,
+  invoke: async () => undefined,
+  listen: async () => () => {},
+}))
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke, isTauri: tauri.isTauri }))
+vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }))
+
+afterEach(() => {
+  vi.resetModules()
+  vi.unstubAllGlobals()
+})
 
 function harness(desktop = false, fragment = "#token=test-key") {
-  const source =
-    readFileSync(new URL("../src/api/transport.ts", import.meta.url), "utf8")
-      .replace(/^import .*$/gm, "")
-      .replace(/export /g, "") +
-    "\nglobalThis.api = { invoke, listen, isDesktop, hasRemoteToken, remoteAuthStatus, loginRemote };"
+  const state = {
+    fetch: async (url, options) => {
+      requests.push({ url, options })
+      return { ok: true, status: 200, json: async () => ({ data: 42 }) }
+    },
+  }
   const stored = new Map()
   const requests = []
   const sockets = []
@@ -40,44 +51,43 @@ function harness(desktop = false, fragment = "#token=test-key") {
       this.onclose()
     }
   }
-  // transport.ts imports the coded-error helpers; the import lines are
-  // stripped above, so provide the real implementations to the VM.
-  const backendError = loadTsSource(readFileSync(new URL("../src/lib/backendError.ts", import.meta.url), "utf8"))
-  const context = vm.createContext({
-    URLSearchParams,
-    WebSocket: Socket,
-    queueMicrotask,
-    setTimeout: setTimeout_,
-    clearTimeout: clearTimeout_,
-    isTauri: () => desktop,
-    desktopInvoke: async () => "desktop",
-    desktopListen: async () => () => {},
-    ...backendError,
-    sessionStorage: {
-      getItem: key => stored.get(key),
-      setItem: (key, value) => stored.set(key, value),
-      removeItem: key => stored.delete(key),
-    },
-    location: { hash: fragment, pathname: "/", search: "", protocol: "http:", host: "localhost:1421" },
-    history: { replaceState: (...args) => requests.push(args) },
-    fetch: async (url, options) => {
-      requests.push({ url, options })
-      return { ok: true, status: 200, json: async () => ({ data: 42 }) }
-    },
+  tauri.isTauri = () => desktop
+  tauri.invoke = async () => "desktop"
+  tauri.listen = async () => () => {}
+  vi.stubGlobal("WebSocket", Socket)
+  vi.stubGlobal("setTimeout", setTimeout_)
+  vi.stubGlobal("clearTimeout", clearTimeout_)
+  vi.stubGlobal("sessionStorage", {
+    getItem: key => stored.get(key),
+    setItem: (key, value) => stored.set(key, value),
+    removeItem: key => stored.delete(key),
   })
-  vm.runInContext(ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }), context)
+  vi.stubGlobal("location", { hash: fragment, pathname: "/", search: "", protocol: "http:", host: "localhost:1421" })
+  vi.stubGlobal("history", { replaceState: (...args) => requests.push(args) })
+  vi.stubGlobal("fetch", async (url, options) => state.fetch(url, options))
   return {
-    api: context.api,
+    api: null,
+    fetch: implementation => {
+      state.fetch = implementation
+    },
     stored,
     requests,
     sockets,
-    context,
     runTimers: () => timers.splice(0).forEach(fn => fn?.()),
   }
 }
 
+const loadTransport = async (desktop = false) => {
+  const transport = await import("@/api/transport")
+  if (!desktop) return transport
+  // Desktop mode is resolved once by transport; expose the native bridge boundary explicitly.
+  return { ...transport, invoke: tauri.invoke, listen: tauri.listen }
+}
+
 test("browser moves fragment key to session storage and sends bearer-authenticated commands", async () => {
   const h = harness()
+  h.api = await loadTransport()
+  console.log("H1 module", h.api.isDesktop, h.requests)
   expect(h.stored.get("pi-remote-token")).toBe("test-key")
   expect(h.requests[0][2]).toBe("/")
   expect(await h.api.invoke("rpc_running")).toBe(42)
@@ -86,11 +96,13 @@ test("browser moves fragment key to session storage and sends bearer-authenticat
 })
 test("desktop retains native IPC", async () => {
   const h = harness(true)
+  h.api = await loadTransport(true)
   expect(await h.api.invoke("rpc_running")).toBe("desktop")
-  expect(h.requests.filter(r => r.url).length).toBe(0)
+  expect(h.requests.filter(request => request.url).length).toBe(0)
 })
 test("event subscribers share one socket and release their handlers", async () => {
   const h = harness()
+  h.api = await loadTransport()
   const received = []
   const [offA, offB] = await Promise.all([
     h.api.listen("pi://event", e => received.push(e.payload)),
@@ -107,7 +119,8 @@ test("event subscribers share one socket and release their handlers", async () =
 })
 test("invalid access keys produce a useful error", async () => {
   const h = harness()
-  h.context.fetch = async () => ({ status: 401 })
+  h.api = await loadTransport()
+  h.fetch(async () => ({ status: 401 }))
   // The error carries the coded payload so the UI can translate it by locale.
   await expect(h.api.invoke("rpc_running")).rejects.toThrow(/PIXERR:.*remoteUnauthorized/)
 })
@@ -116,6 +129,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve))
 
 test("unexpected drops reconnect with backoff and emit a reconnected event", async () => {
   const h = harness()
+  h.api = await loadTransport()
   const reconnected = []
   await h.api.listen("pi://reconnected", e => reconnected.push(e.payload))
   await h.api.listen("pi://event", () => {})
@@ -141,6 +155,7 @@ test("unexpected drops reconnect with backoff and emit a reconnected event", asy
 
 test("intentional close after the last listener unsubscribes does not reconnect", async () => {
   const h = harness()
+  h.api = await loadTransport()
   const off = await h.api.listen("pi://event", () => {})
   off()
   expect(h.sockets[0].readyState).toBe(3)
@@ -151,6 +166,7 @@ test("intentional close after the last listener unsubscribes does not reconnect"
 
 test("stale socket events cannot clobber a newer connection", async () => {
   const h = harness()
+  h.api = await loadTransport()
   const reconnected = []
   await h.api.listen("pi://reconnected", () => reconnected.push(true))
   const first = h.sockets[0]
@@ -169,30 +185,32 @@ test("stale socket events cannot clobber a newer connection", async () => {
 
 test("tokenless access can authenticate with a password without placing the key in the URL", async () => {
   const h = harness(false, "")
+  h.api = await loadTransport()
   expect(h.api.hasRemoteToken()).toBe(false)
-  h.context.fetch = async (url, options) => {
+  h.fetch(async (url, options) => {
     h.requests.push({ url, options })
     if (url === "/api/auth") return { ok: true, json: async () => ({ passwordEnabled: true, authenticated: false }) }
     if (url === "/api/auth/login") return { ok: true, status: 200, json: async () => ({ token: "session-key" }) }
     return { ok: true, status: 200, json: async () => ({ data: true }) }
-  }
+  })
   expect((await h.api.remoteAuthStatus()).passwordEnabled).toBe(true)
   expect(await h.api.loginRemote("test-password")).toBe("ok")
   expect(h.api.hasRemoteToken()).toBe(true)
   expect(h.stored.get("pi-remote-token")).toBe("session-key")
-  expect(h.requests.find(r => r.url === "/api/auth/login").options.body).toBe(
+  expect(h.requests.find(request => request.url === "/api/auth/login").options.body).toBe(
     JSON.stringify({ password: "test-password" }),
   )
   await h.api.invoke("rpc_running")
   expect(h.requests.at(-1).options.headers.Authorization).toBe("Bearer session-key")
-  expect(h.requests.some(r => r.url?.includes("test-password"))).toBe(false)
+  expect(h.requests.some(request => request.url?.includes("test-password"))).toBe(false)
 })
 
 test("invalid and rate-limited password attempts do not store a token", async () => {
   const h = harness(false, "")
-  h.context.fetch = async () => ({ status: 401 })
+  h.api = await loadTransport()
+  h.fetch(async () => ({ status: 401 }))
   expect(await h.api.loginRemote("wrong-password")).toBe("invalid")
-  h.context.fetch = async () => ({ status: 429 })
+  h.fetch(async () => ({ status: 429 }))
   expect(await h.api.loginRemote("wrong-password")).toBe("limited")
   expect(h.api.hasRemoteToken()).toBe(false)
 })

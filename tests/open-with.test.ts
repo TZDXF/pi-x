@@ -1,38 +1,46 @@
-import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-const source = readFileSync(new URL("../src/lib/openWith.ts", import.meta.url), "utf8").replace(
-  /^if \(import\.meta\.hot\).*$/m,
-  "",
-)
-function harness(saved = null, desktop = true) {
+import { afterEach, expect, test, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  desktop: true,
+  invoke: async () => undefined,
+}))
+
+vi.mock("@/api/transport", () => ({
+  get isDesktop() {
+    return mocks.desktop
+  },
+  invoke: (command, args) => mocks.invoke(command, args),
+}))
+
+afterEach(() => {
+  vi.resetModules()
+  vi.unstubAllGlobals()
+})
+
+async function harness(saved = null, desktop = true) {
   let stored = saved
   let failStorage = false
-  const calls = [],
-    listeners = {}
-  const api = loadTsSource(source, {
-    require: id =>
-      id === "vue"
-        ? { ref: value => ({ value }), readonly: value => value }
-        : {
-            isDesktop: desktop,
-            invoke: async (command, args) => {
-              calls.push({ command, args })
-            },
-          },
-    localStorage: {
-      getItem: () => stored,
-      setItem: (_, value) => {
-        if (failStorage) throw Error("blocked")
-        stored = value
-      },
-    },
-    window: {
-      addEventListener: (name, fn) => {
-        listeners[name] = fn
-      },
+  const calls = []
+  const listeners = {}
+  mocks.desktop = desktop
+  mocks.invoke = async (command, args) => {
+    calls.push({ command, args })
+  }
+  vi.stubGlobal("localStorage", {
+    getItem: () => stored,
+    setItem: (_, value) => {
+      if (failStorage) throw Error("blocked")
+      stored = value
     },
   })
+  vi.stubGlobal("window", {
+    addEventListener: (name, fn) => {
+      listeners[name] = fn
+    },
+  })
+  vi.resetModules()
+  const api = await import("@/lib/openWith")
   return {
     ...api,
     calls,
@@ -46,13 +54,13 @@ function harness(saved = null, desktop = true) {
     },
   }
 }
-test("defaults safely and restores only valid editor preferences", () => {
+test("defaults safely and restores only valid editor preferences", async () => {
   for (const value of [null, "{", '{"kind":"arbitrary-command"}'])
-    expect(harness(value).openWithPreference.value.kind).toBe("vscode")
-  expect(harness('{"kind":"cursor"}').openWithPreference.value.kind).toBe("cursor")
+    expect((await harness(value)).openWithPreference.value.kind).toBe("vscode")
+  expect((await harness('{"kind":"cursor"}')).openWithPreference.value.kind).toBe("cursor")
 })
-test("persists default and custom executable and synchronizes other windows", () => {
-  const h = harness()
+test("persists default and custom executable and synchronizes other windows", async () => {
+  const h = await harness()
   h.setOpenWith("custom", " C:/Program Files/My IDE/ide.exe ")
   expect(JSON.parse(h.stored()).executable).toBe("C:/Program Files/My IDE/ide.exe")
   h.storage('{"kind":"system"}')
@@ -62,7 +70,7 @@ test("persists default and custom executable and synchronizes other windows", ()
   expect(h.openWithPreference.value.kind).toBe("system")
 })
 test("passes the file and project separately without shell interpolation", async () => {
-  const h = harness()
+  const h = await harness()
   h.setOpenWith("cursor")
   await h.openFileInEditor("src/file & 中文.ts", "C:/my project")
   expect(h.calls[0].command).toBe("open_in_editor")
@@ -75,7 +83,7 @@ test("passes the file and project separately without shell interpolation", async
   expect(h.calls[1].args.executable).toBe("C:/ide.exe")
 })
 test("does not launch an editor from remote web mode", async () => {
-  const h = harness(null, false)
+  const h = await harness(null, false)
   await expect(h.openFileInEditor("a.ts", "/project")).rejects.toThrow(/desktop/)
   expect(h.calls.length).toBe(0)
 })

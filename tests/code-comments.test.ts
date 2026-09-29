@@ -1,17 +1,11 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const {
+import {
   selectionLineRange,
   formatCodeComment,
   buildCodeCommentsBlock,
   buildPromptWithCodeComments,
   MAX_SELECTED_TEXT_LENGTH,
-} = loadTsSource(readFileSync(new URL("../src/lib/codeComments.ts", import.meta.url), "utf8"))
-
-// VM 内创建的对象原型与测试环境不同，deepStrictEqual 会因原型差异而失败。
-const plain = value => JSON.parse(JSON.stringify(value))
+} from "@/lib/codeComments"
 
 // ---- DOM 桩：最小化实现 anchorLine 依赖的 nodeType/closest/contains/dataset ----
 
@@ -37,17 +31,17 @@ test("selectionLineRange returns null for collapsed or empty selections", () => 
 
 test("selectionLineRange maps anchors to the enclosing line range", () => {
   const root = { contains: () => true }
-  expect(plain(selectionLineRange(root, selectionOf(nodeInRow(3, true), nodeInRow(7, true))))).toEqual({
+  expect(selectionLineRange(root, selectionOf(nodeInRow(3, true), nodeInRow(7, true)))).toEqual({
     start: 3,
     end: 7,
   })
   // 反向选区（focus 在 anchor 之前）同样归一化为 start <= end。
-  expect(plain(selectionLineRange(root, selectionOf(nodeInRow(9, false), nodeInRow(4, true))))).toEqual({
+  expect(selectionLineRange(root, selectionOf(nodeInRow(9, false), nodeInRow(4, true)))).toEqual({
     start: 4,
     end: 9,
   })
   // 单行内的普通文本选区。
-  expect(plain(selectionLineRange(root, selectionOf(nodeInRow(5, true), nodeInRow(5, false))))).toEqual({
+  expect(selectionLineRange(root, selectionOf(nodeInRow(5, true), nodeInRow(5, false)))).toEqual({
     start: 5,
     end: 5,
   })

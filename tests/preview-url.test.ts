@@ -1,12 +1,8 @@
-import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
+import { afterAll, test, expect, vi } from "vitest"
+import { normalizeInputUrl, isHttpUrl, toProxyUrl, resolveProxyBase } from "@/lib/previewUrl"
 
-const previewUrl = loadTsSource(readFileSync(new URL("../src/lib/previewUrl.ts", import.meta.url), "utf8"), {
-  URL,
-  window: { location: { origin: "http://192.168.1.5:1421" } },
-})
-const { normalizeInputUrl, isHttpUrl, toProxyUrl, resolveProxyBase } = previewUrl
+vi.stubGlobal("window", { location: { origin: "http://192.168.1.5:1421" } })
+afterAll(vi.unstubAllGlobals)
 
 test("normalizes typed addresses into previewable URLs", () => {
   expect(normalizeInputUrl("  example.com  ")).toBe("https://example.com")

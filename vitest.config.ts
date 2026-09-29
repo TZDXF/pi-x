@@ -11,7 +11,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/*.test.mjs"],
+    include: ["tests/*.test.ts"],
     exclude: ["tests/*.browser.mjs"],
     isolate: false,
     fileParallelism: false,

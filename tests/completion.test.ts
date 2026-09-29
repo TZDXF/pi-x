@@ -1,6 +1,7 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import { loadTsModule } from "./lib/load-ts.mjs"
+import * as completion from "@/lib/completion"
+
 const {
   desktopCommands,
   completionToken,
@@ -11,7 +12,7 @@ const {
   withFileReferences,
   withSessionReferences,
   mergeWorkspaceFiles,
-} = loadTsModule(new URL("../src/lib/completion.ts", import.meta.url))
+} = completion
 
 test("built-in slash commands exclude export while keeping new and compact", () => {
   expect([...desktopCommands]).toEqual(["new", "compact"])

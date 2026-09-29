@@ -5,7 +5,12 @@ const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8"
 
 test("global stylesheet is an import-only entry point with separate theme blocks", () => {
   const entry = read("src/style.css")
-  expect(entry.replace(/^@import.*;$/gm, "").trim()).toBe("")
+  const entryWithoutImports = entry.replace(/^@import.*;$/gm, "").trim()
+  // The entry may self-host fonts, but all non-import CSS must be a local
+  // @font-face block and may never fetch a remote stylesheet or font.
+  expect(entryWithoutImports.replace(/^\/\*.*?\*\/\s*@font-face\s*\{[\s\S]*\}\s*$/, "")).toBe("")
+  expect(entryWithoutImports).toMatch(/^\/\* .* \*\/\s*@font-face\s*\{[\s\S]*\.woff2/)
+  expect(entry).not.toMatch(/url\(["']?https?:\/\//i)
   for (const file of ["tokens", "light", "dark"]) {
     expect(entry.includes(`./styles/theme/${file}.css`)).toBeTruthy()
   }

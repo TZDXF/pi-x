@@ -1,12 +1,5 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import { loadTsSource } from "./lib/load-ts.mjs"
-
-const previewAnnotations = loadTsSource(
-  readFileSync(new URL("../src/lib/previewAnnotations.ts", import.meta.url), "utf8"),
-  { URL },
-)
-const { formatAnnotationsForChat, annotationsForPage, sameUrl, nextAnnotationId } = previewAnnotations
+import { formatAnnotationsForChat, annotationsForPage, sameUrl, nextAnnotationId } from "@/lib/previewAnnotations"
 
 const labels = { page: "网页标注", element: "元素", area: "区域", comment: "评论" }
 
