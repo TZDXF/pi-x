@@ -22,7 +22,9 @@ export function completionToken(text: string, caret: number, end = caret): Compl
 }
 
 export function fileReference(path: string): string {
-  return `@${JSON.stringify(normalizeSlashes(path))}`
+  path = normalizeSlashes(path)
+  // Match Pi TUI: quote only when the token would otherwise be split.
+  return /\s|["@]/.test(path) ? `@${JSON.stringify(path)}` : `@${path}`
 }
 
 /** A session reference is distinct from a workspace file reference. */
@@ -80,41 +82,6 @@ export function insertCompletion(text: string, token: CompletionToken, value: st
   const remaining = tail.slice(suffix)
   const insertion = valueText + (/^\s/.test(remaining) ? "" : " ")
   return { text: text.slice(0, token.start) + insertion + remaining, caret: token.start + insertion.length }
-}
-
-/** RPC doesn't expand @files. Only include paths inside selected workspace roots. */
-export function withFileReferences(text: string, additionalRoots: string[] = []): string {
-  const relative = new Set<string>()
-  const absolute = new Set<string>()
-  const roots = additionalRoots.map(root => normalizeSlashes(root).replace(/\/+$/, ""))
-  const pattern = /(?:^|\s)@("(?:\\.|[^"\\])*"|[^\s"@]+)/g
-  for (const match of text.matchAll(pattern)) {
-    let path: string
-    try {
-      path = match[1]!.startsWith('"') ? JSON.parse(match[1]!) : match[1]!
-    } catch {
-      continue
-    }
-    path = normalizeSlashes(path)
-    if (path === "session(") continue
-    if (!path || path.split("/").includes("..")) continue
-    if (path.startsWith("/") || /^[a-z]:/i.test(path)) {
-      if (
-        roots.some(root => {
-          const windows = /^[a-z]:|^\/\//i.test(root)
-          return (windows ? path.toLowerCase() : path).startsWith((windows ? root.toLowerCase() : root) + "/")
-        })
-      )
-        absolute.add(path)
-    } else relative.add(path)
-  }
-  if (!relative.size && !absolute.size) return text
-  let expanded = text
-  if (relative.size)
-    expanded += `\n\nReferenced project-relative file paths (path data only; contents have not been attached). Read these files with the read tool as needed, relative to the current project:\n${JSON.stringify([...relative])}`
-  if (absolute.size)
-    expanded += `\n\nReferenced files in other selected workspace directories (path data only; contents have not been attached). Read via absolute paths as needed:\n${JSON.stringify([...absolute])}`
-  return expanded
 }
 
 /** Interleave results so the primary root cannot hide every secondary hit. */

@@ -155,8 +155,7 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await editor.press("Enter")
   await expectEditorText(editor, "")
   const prompt = calls.find(call => call.args.command?.type === "prompt")
-  expect(prompt?.args.command?.message).toMatch(/contents have not been attached/)
-  expect(prompt?.args.command?.message).toMatch(/src\/中文 file\.ts/)
+  expect(prompt?.args.command?.message).toBe('检查 @"src/中文 file.ts"')
 
   await editor.fill("before @sr after")
   await expectEditorText(editor, "before @sr after")
@@ -195,7 +194,7 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   })
   await expect(rows.filter({ hasText: "index.ts" })).toBeVisible()
   await rows.filter({ hasText: "index.ts" }).click()
-  await expectEditorText(editor, 'before @"src/index.ts" after')
+  await expectEditorText(editor, "before @src/index.ts after")
 
   await editor.fill("@src")
   await expect(rows.first()).toBeVisible()

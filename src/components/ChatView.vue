@@ -53,7 +53,7 @@ import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
 import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import ComposerText from "@/components/ComposerText.vue"
-import { withFileReferences, withSessionReferences, desktopCommands } from "@/lib/completion"
+import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { baseName } from "@/lib/paths"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { buildPromptWithCodeComments } from "@/lib/codeComments"
@@ -583,12 +583,7 @@ async function onSubmit(message: { text?: string; files?: { url?: string }[] }) 
     }
   }
   const extensionCommand = commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-  const expandedText = extensionCommand
-    ? text
-    : withFileReferences(
-        withSessionReferences(text, knownSessions.value),
-        workspace.projectFolders(props.project).filter(path => path !== props.project),
-      )
+  const expandedText = extensionCommand ? text : withSessionReferences(text, knownSessions.value)
   // 批注只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
   const comments = [...pendingComments.value]
   const promptWithComments = comments.length ? buildPromptWithCodeComments(expandedText, comments) : expandedText

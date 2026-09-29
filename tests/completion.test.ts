@@ -9,7 +9,6 @@ const {
   insertSessionCompletion,
   sessionReference,
   fileReference,
-  withFileReferences,
   withSessionReferences,
   mergeWorkspaceFiles,
 } = completion
@@ -33,12 +32,13 @@ test("file completion uses caret, excludes emails and selections", () => {
   const caret = text.indexOf(" 然后")
   const token = completionToken(text, caret)
   expect(token.query).toBe("src/in")
-  expect(insertCompletion(text, token, "src/index.ts").text).toBe('检查 @"src/index.ts" 然后继续')
+  expect(insertCompletion(text, token, "src/index.ts").text).toBe("检查 @src/index.ts 然后继续")
   expect(completionToken("mail@example.com", 16)).toBe(null)
   expect(completionToken("@src", 2, 4)).toBe(null)
 })
 test("quoted paths, Windows separators, unicode and mid-token edits", () => {
   expect(fileReference("src\\中文 name.ts")).toBe('@"src/中文 name.ts"')
+  expect(fileReference("src\\中文.ts")).toBe("@src/中文.ts")
   const text = 'read @"my folder/old.ts" please'
   const caret = text.indexOf("old") + 2
   const result = insertCompletion(text, completionToken(text, caret), "my folder/new.ts")
@@ -49,32 +49,6 @@ test("quoted paths, Windows separators, unicode and mid-token edits", () => {
 test("command selection preserves following arguments and replaces token suffix", () => {
   const text = "/revie old args"
   expect(insertCompletion(text, completionToken(text, 4), "review").text).toBe("/review old args")
-})
-test("references append explicit path-only context and retain slash dispatch prefix", () => {
-  const text = '/review @"src/my file.ts" @src/index.ts @src/index.ts'
-  const expanded = withFileReferences(text)
-  expect(expanded.startsWith(text)).toBeTruthy()
-  expect(JSON.parse(expanded.slice(expanded.lastIndexOf("\n") + 1))).toEqual(["src/my file.ts", "src/index.ts"])
-  expect(expanded).toMatch(/contents have not been attached/)
-})
-test("external and traversal paths are not added as project references", () => {
-  for (const text of [
-    "plain text",
-    "user@example.com",
-    "@../secret",
-    "@C:\\secret",
-    "@/etc/passwd",
-    '@"a/../../secret"',
-  ])
-    expect(withFileReferences(text)).toBe(text)
-})
-test("selected secondary root references use absolute paths while unrelated roots stay excluded", () => {
-  const text = 'Compare @"C:/code/frontend/src/App.vue" @"C:/other/secret" @"C:/code/frontend/../secret"'
-  const expanded = withFileReferences(text, ["C:/code/frontend"])
-  expect(JSON.parse(expanded.slice(expanded.lastIndexOf("\n") + 1))).toEqual(["C:/code/frontend/src/App.vue"])
-  expect(expanded).toMatch(/absolute paths as needed/)
-  expect(withFileReferences('@"C:/other/secret"', ["C:/code/frontend"])).toBe('@"C:/other/secret"')
-  expect(withFileReferences('@"/Repo/file.ts"', ["/repo"])).toBe('@"/Repo/file.ts"')
 })
 test("multi-root completions interleave folders and use absolute secondary paths", () => {
   const primary = [
@@ -105,7 +79,6 @@ test("session mentions complete independently of file references and expand only
   const text = "Compare @prev with this session"
   const completed = insertSessionCompletion(text, completionToken(text, 13), file).text
   expect(completed).toBe(`Compare ${mention} with this session`)
-  expect(withFileReferences(completed)).toBe(completed)
   expect(withSessionReferences(completed, [])).toBe(completed)
   const expanded = withSessionReferences(completed, [{ file, title: "Previous work" }])
   expect(expanded).toMatch(/Previous work/)

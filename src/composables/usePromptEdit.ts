@@ -1,6 +1,6 @@
 import { computed, nextTick, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { withFileReferences, withSessionReferences } from "@/lib/completion"
+import { withSessionReferences } from "@/lib/completion"
 import { dataUrlToImage } from "@/lib/attachments"
 import type { KnownSession } from "@/lib/completion"
 import type { SessionStore, UserEntry } from "@/stores/session"
@@ -32,7 +32,7 @@ export function usePromptEdit(deps: {
 }) {
   const { t } = useI18n()
   const { session, ui, workspace, editTextarea } = deps
-  const { project, connecting, connected, knownSessions } = deps
+  const { connecting, connected, knownSessions } = deps
 
   // Resend the edited question in this session, interrupting the current answer first.
   const editedPrompt = ref<UserEntry | null>(null)
@@ -91,10 +91,7 @@ export function usePromptEdit(deps: {
       await session.resendPrompt(
         text,
         images.length ? (images as { data: string; mimeType: string }[]) : undefined,
-        withFileReferences(
-          withSessionReferences(text, knownSessions()),
-          workspace.projectFolders(project()).filter(path => path !== project()),
-        ),
+        withSessionReferences(text, knownSessions()),
       )
       editedPrompt.value = null
     } catch (error) {
