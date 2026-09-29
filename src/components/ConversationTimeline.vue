@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import type { Block } from "@/stores/conversations"
 import { appendPartial, type TimelineTurn } from "@/lib/conversationTimeline"
@@ -42,12 +42,48 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(updateNodeHeight)
   if (navRef.value) resizeObserver.observe(navRef.value)
   updateNodeHeight()
+  viewportEl = navRef.value?.parentElement?.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]") ?? null
+  viewportEl?.addEventListener("scroll", onViewportScroll, { passive: true })
+  nextTick(updateCurrent)
 })
-onBeforeUnmount(() => resizeObserver?.disconnect())
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  viewportEl?.removeEventListener("scroll", onViewportScroll)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+})
 watch(() => turns.value.length, updateNodeHeight)
+watch(turns, () => nextTick(updateCurrent))
 function navigate(turn: TimelineTurn) {
   selected.value = turn.id
   emit("navigate", turn)
+}
+// 跟随会话滚动条指示当前位置：视口顶部越过的最后一个问题即为当前轮次，
+// 该节点按 hover 样式显示数字（不额外高亮）。时间线位于 Conversation 的
+// overlay 内，滚动视口是其父级 ScrollAreaRoot 下的 reka-ui viewport。
+const currentId = ref<number | null>(null)
+let viewportEl: HTMLElement | null = null
+let scrollFrame = 0
+function updateCurrent() {
+  const viewport = viewportEl
+  if (!viewport) return
+  const threshold = viewport.getBoundingClientRect().top + Math.min(80, viewport.clientHeight / 3)
+  let current: number | null = null
+  for (const turn of turns.value) {
+    if (turn.compaction || turn.entryId == null) continue
+    const el = viewport.querySelector<HTMLElement>(`[data-message-id="${turn.entryId}"]`)
+    // 未物化的轮次没有 DOM 锚点，跳过；消息自上而下排列，越过阈值即可停止。
+    if (!el) continue
+    if (el.getBoundingClientRect().top > threshold) break
+    current = turn.id
+  }
+  currentId.value = current
+}
+function onViewportScroll() {
+  if (scrollFrame) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0
+    updateCurrent()
+  })
 }
 </script>
 
@@ -67,7 +103,11 @@ function navigate(turn: TimelineTurn) {
               <button
                 type="button"
                 class="timeline-node"
-                :class="{ 'is-selected': selected === turn.id, 'is-compaction': !!turn.compaction }"
+                :class="{
+                  'is-selected': selected === turn.id,
+                  'is-compaction': !!turn.compaction,
+                  'is-current': currentId === turn.id,
+                }"
                 :aria-label="
                   turn.compaction
                     ? t('chat.timelineCompaction')
@@ -195,6 +235,18 @@ function navigate(turn: TimelineTurn) {
 }
 .timeline-node:hover .timeline-number,
 .timeline-node:focus-visible .timeline-number {
+  opacity: 1;
+}
+/* 当前位置：像 hover 一样只露出数字，不显示圆点也不高亮；
+   悬停时恢复圆点，保持原有 hover 观感。 */
+.timeline-node.is-current .timeline-number {
+  opacity: 1;
+}
+.timeline-node.is-current .timeline-dot {
+  opacity: 0;
+}
+.timeline-node.is-current:hover .timeline-dot,
+.timeline-node.is-current:focus-visible .timeline-dot {
   opacity: 1;
 }
 .timeline-node.is-selected .timeline-dot {

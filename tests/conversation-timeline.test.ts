@@ -197,3 +197,24 @@ test("timeline without a snapshot keeps compaction nodes from entries", () => {
   expect(timeline[1].compaction.tokensBefore).toBe(10)
   expect(timeline[1].entryId).toBe(2)
 })
+
+// NOTE: 源码正则断言，不验证运行时行为（项目未引入组件挂载依赖）。
+test("timeline tracks the scroll position and reveals only the current number", () => {
+  const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
+  // 组件在 Conversation overlay 内自行定位 reka-ui 滚动视口并监听滚动。
+  expect(component).toMatch(/parentElement\?\.querySelector<HTMLElement>\("\[data-reka-scroll-area-viewport\]"\)/)
+  expect(component).toMatch(/addEventListener\("scroll", onViewportScroll/)
+  // 当前轮次 = 视口顶部越过的最后一个问题，依据 data-message-id 锚点判定。
+  expect(component).toMatch(/querySelector<HTMLElement>\(`\[data-message-id="\$\{turn\.entryId\}"\]`\)/)
+  expect(component).toMatch(/'is-current': currentId === turn\.id/)
+  // 当前位置只露出数字：不显示圆点，也不新增高亮样式。
+  expect(component).toMatch(/\.timeline-node\.is-current \.timeline-number \{\n  opacity: 1;\n\}/)
+  expect(component).toMatch(/\.timeline-node\.is-current \.timeline-dot \{\n  opacity: 0;\n\}/)
+  // 仅检查 is-current 自己的规则块，确认没有附加 background/outline 高亮。
+  const rules = component.match(/\.timeline-node\.is-current[^{]*\{[^}]*\}/g) ?? []
+  expect(rules.length).toBeGreaterThan(0)
+  for (const rule of rules) {
+    expect(rule).not.toMatch(/background:/)
+    expect(rule).not.toMatch(/outline:/)
+  }
+})
