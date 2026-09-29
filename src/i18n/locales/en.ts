@@ -439,6 +439,7 @@ export default {
   sidebar: {
     ariaLabel: "Projects and sessions",
     collapse: "Collapse sidebar",
+    resizeWidth: "Resize sidebar",
     newSession: "New session",
     search: "Search sessions",
     tasks: "Tasks",

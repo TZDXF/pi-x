@@ -2,6 +2,9 @@
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
+import { useMediaQuery, useWindowSize } from "@vueuse/core"
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
+import { usePanelKeyboardResize, type ResizablePanelApi } from "@/composables/usePanelKeyboardResize"
 import {
   detectPi,
   prepareWorkspaceGit,
@@ -82,6 +85,59 @@ const rightSidebarOpen = ref(false)
 const sidebarOpen = ref(true)
 const projectDialogOpen = ref(false)
 const editingProjectPath = ref<string | null>(null)
+
+// ---- 工作区侧栏宽度（reka Splitter，像素单位并持久化）----
+const SIDEBAR_WIDTH_STORAGE_KEY = "pix.sidebar-width"
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_DEFAULT_WIDTH = 272 // 与侧栏旧默认宽度 w-68 对齐
+const { width: windowWidth } = useWindowSize()
+const isNarrowViewport = useMediaQuery("(max-width: 640px)")
+const sidebarVisible = computed(() => sidebarOpen.value && route.value.name !== "settings")
+/** 窄屏下侧栏以覆盖层悬浮，面板需让出全部宽度。 */
+const sidebarCollapsed = computed(() => !sidebarVisible.value || isNarrowViewport.value)
+const sidebarMaxWidth = computed(() => Math.min(480, Math.max(280, windowWidth.value - 360)))
+const preferredSidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
+try {
+  const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
+  if (Number.isFinite(saved) && saved > 0) preferredSidebarWidth.value = saved
+} catch {
+  /* Storage may be unavailable in restricted browsers. */
+}
+/** reka 只在首次布局读取 default-size；初始折叠态直接体现到默认尺寸，避免布局就绪前调用命令式 API。 */
+const defaultSidebarWidth = sidebarCollapsed.value
+  ? 0
+  : Math.min(SIDEBAR_DEFAULT_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, preferredSidebarWidth.value))
+const sidebarPanel = ref<ResizablePanelApi | null>(null)
+
+function clampSidebarWidth(width: number) {
+  return Math.min(sidebarMaxWidth.value, Math.max(SIDEBAR_MIN_WIDTH, width))
+}
+
+function onSidebarResize(width: number) {
+  if (width <= 0 || isNarrowViewport.value) return
+  preferredSidebarWidth.value = Math.round(width)
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(preferredSidebarWidth.value))
+  } catch {
+    /* Optional preference. */
+  }
+}
+
+watch(
+  sidebarCollapsed,
+  collapsed => {
+    const panel = sidebarPanel.value
+    if (!panel) return
+    if (collapsed) panel.collapse()
+    else panel.resize(clampSidebarWidth(preferredSidebarWidth.value))
+  },
+  { flush: "post" },
+)
+
+const resizeSidebarWithKeyboard = usePanelKeyboardResize(sidebarPanel, () => ({
+  min: SIDEBAR_MIN_WIDTH,
+  max: sidebarMaxWidth.value,
+}))
 
 function closeProjectDialog() {
   projectDialogOpen.value = false
@@ -960,78 +1016,127 @@ onUnmounted(() => {
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
     />
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
-    <WorkspaceSidebar
-      v-show="sidebarOpen && route.name !== 'settings'"
-      :project="project"
-      :ready="phase === 'chat'"
-      :busy="navigating || workspace.gitBusy || phase === 'trust'"
-      :navigation-busy="workspace.gitBusy || phase === 'trust'"
-      @switch-project="requestNavigation(() => switchProject())"
-      @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
-      @select-conversation="selectConversationFromSidebar"
-      @resume-session="
-        (file, path) => requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
-      "
-      @session-action="(file, action) => openSessionAction(file, action)"
-      @new-session="path => requestConversationNavigation(projectRoute(path), () => newProjectSession(path))"
-      @projectless="openProjectlessFromSidebar"
-      @remove-project="removeProject"
-      @edit-project="editProject"
-      @settings="navigate('/settings/general')"
-      @schedules="navigate('/schedules')"
-      @collapse="sidebarOpen = false"
-    />
-    <main
-      id="workspace-main"
-      class="workspace-main flex-1 min-h-0 min-w-0 flex relative overflow-hidden"
-      :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }"
-    >
-      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <template v-if="route.name === 'settings'">
-          <SettingsPage :project="project" />
-        </template>
-        <template v-else>
-          <ScheduledTasksPage
-            v-if="route.name === 'schedules'"
-            :project="project"
-            @resume-session="
-              (file, path) => requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
-            "
-          />
-          <WelcomeView
-            v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
-            :phase
-            :config
-            @configured="phase = 'pick'"
-            @open-project="switchProject"
-            @open-projectless="openProjectless"
-          />
+    <ResizablePanelGroup direction="horizontal" class="flex-1 min-h-0 min-w-0">
+      <ResizablePanel
+        ref="sidebarPanel"
+        class="min-h-0"
+        size-unit="px"
+        :default-size="defaultSidebarWidth"
+        :min-size="SIDEBAR_MIN_WIDTH"
+        :max-size="sidebarMaxWidth"
+        collapsible
+        @resize="onSidebarResize"
+      >
+        <WorkspaceSidebar
+          v-show="sidebarOpen && route.name !== 'settings'"
+          :project="project"
+          :ready="phase === 'chat'"
+          :busy="navigating || workspace.gitBusy || phase === 'trust'"
+          :navigation-busy="workspace.gitBusy || phase === 'trust'"
+          @switch-project="requestNavigation(() => switchProject())"
+          @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
+          @select-conversation="selectConversationFromSidebar"
+          @resume-session="
+            (file, path) => requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+          "
+          @session-action="(file, action) => openSessionAction(file, action)"
+          @new-session="path => requestConversationNavigation(projectRoute(path), () => newProjectSession(path))"
+          @projectless="openProjectlessFromSidebar"
+          @remove-project="removeProject"
+          @edit-project="editProject"
+          @settings="navigate('/settings/general')"
+          @schedules="navigate('/schedules')"
+          @collapse="sidebarOpen = false"
+        />
+      </ResizablePanel>
+      <ResizableHandle
+        v-show="sidebarVisible && !isNarrowViewport"
+        class="sidebar-resize-handle bg-transparent"
+        :aria-label="t('sidebar.resizeWidth')"
+        :title="t('sidebar.resizeWidth')"
+        :aria-valuenow="preferredSidebarWidth"
+        :aria-valuemin="SIDEBAR_MIN_WIDTH"
+        :aria-valuemax="sidebarMaxWidth"
+        @keydown="resizeSidebarWithKeyboard"
+      />
+      <ResizablePanel class="min-h-0">
+        <main
+          id="workspace-main"
+          class="workspace-main h-full min-h-0 min-w-0 flex relative overflow-hidden"
+          :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }"
+        >
+          <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <template v-if="route.name === 'settings'">
+              <SettingsPage :project="project" />
+            </template>
+            <template v-else>
+              <ScheduledTasksPage
+                v-if="route.name === 'schedules'"
+                :project="project"
+                @resume-session="
+                  (file, path) =>
+                    requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+                "
+              />
+              <WelcomeView
+                v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
+                :phase
+                :config
+                @configured="phase = 'pick'"
+                @open-project="switchProject"
+                @open-projectless="openProjectless"
+              />
 
-          <div v-else-if="phase === 'trust' && trustInfo" class="flex flex-1 items-center justify-center">
-            <TrustDialog :info="trustInfo" @done="onTrustDecision" />
-          </div>
+              <div v-else-if="phase === 'trust' && trustInfo" class="flex flex-1 items-center justify-center">
+                <TrustDialog :info="trustInfo" @done="onTrustDecision" />
+              </div>
 
-          <template v-else-if="phase === 'chat'">
-            <SplitChatLayout
-              v-if="splitView.tree && splitLeaf"
-              :key="splitView.tree.id"
-              :tree="splitView.tree"
-              :active-leaf-id="splitLeaf.id"
-              @activate="id => activateSession(id)"
-            >
-              <template #pane="{ runtimeId }">
+              <template v-else-if="phase === 'chat'">
+                <SplitChatLayout
+                  v-if="splitView.tree && splitLeaf"
+                  :key="splitView.tree.id"
+                  :tree="splitView.tree"
+                  :active-leaf-id="splitLeaf.id"
+                  @activate="id => activateSession(id)"
+                >
+                  <template #pane="{ runtimeId }">
+                    <ChatView
+                      :key="runtimeId"
+                      :session-id="runtimeId"
+                      :split-pane="splitView.tree.kind === 'group'"
+                      sidebar-target="#workspace-main"
+                      v-model:right-sidebar-open="rightSidebarOpen"
+                      @close-pane="closeSplitPane(runtimeId)"
+                      :project="sessionFor(runtimeId).cwd || project"
+                      :ensure-started="selection => startSession(runtimeId, selection)"
+                      :connecting="connecting"
+                      :selecting-project="selectingProject"
+                      :connected="sessionFor(runtimeId).started"
+                      @select-project="
+                        path => requestConversationNavigation(projectRoute(path), () => selectProject(path))
+                      "
+                      @open-project="requestNavigation(switchProject)"
+                      @new-session="
+                        () =>
+                          requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
+                            newProjectSession(workspace.projectRoot(project)),
+                          )
+                      "
+                      @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
+                    />
+                  </template>
+                </SplitChatLayout>
                 <ChatView
-                  :key="runtimeId"
-                  :session-id="runtimeId"
-                  :split-pane="splitView.tree.kind === 'group'"
+                  v-else
                   sidebar-target="#workspace-main"
                   v-model:right-sidebar-open="rightSidebarOpen"
-                  @close-pane="closeSplitPane(runtimeId)"
-                  :project="sessionFor(runtimeId).cwd || project"
-                  :ensure-started="selection => startSession(runtimeId, selection)"
+                  :key="activeRuntimeId"
+                  :session-id="activeRuntimeId"
+                  :project="project"
+                  :ensure-started="start"
                   :connecting="connecting"
                   :selecting-project="selectingProject"
-                  :connected="sessionFor(runtimeId).started"
+                  :connected="started"
                   @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
                   @open-project="requestNavigation(switchProject)"
                   @new-session="
@@ -1040,57 +1145,36 @@ onUnmounted(() => {
                         newProjectSession(workspace.projectRoot(project)),
                       )
                   "
-                  @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
+                  @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
                 />
               </template>
-            </SplitChatLayout>
-            <ChatView
-              v-else
-              sidebar-target="#workspace-main"
-              v-model:right-sidebar-open="rightSidebarOpen"
-              :key="activeRuntimeId"
-              :session-id="activeRuntimeId"
-              :project="project"
-              :ensure-started="start"
-              :connecting="connecting"
-              :selecting-project="selectingProject"
-              :connected="started"
-              @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
-              @open-project="requestNavigation(switchProject)"
-              @new-session="
-                () =>
-                  requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
-                    newProjectSession(workspace.projectRoot(project)),
-                  )
-              "
-              @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
-            />
-          </template>
 
-          <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
-            <p class="text-lg font-medium">{{ t("app.exited") }}</p>
-            <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
-              {{ lastError }}
-            </p>
-            <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
-              <p class="text-muted-foreground mb-1 text-xs font-medium">
-                {{ t("app.stderr") }}
-              </p>
-              <ScrollArea viewport-class="max-h-48">
-                <pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
-                  ui.stderrLines.slice(-12).join("\n")
-                }}</pre>
-              </ScrollArea>
-            </div>
-            <div class="flex gap-2">
-              <Button variant="outline" @click="switchProject">
-                {{ t("app.chooseProject") }}
-              </Button>
-            </div>
+              <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+                <p class="text-lg font-medium">{{ t("app.exited") }}</p>
+                <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
+                  {{ lastError }}
+                </p>
+                <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
+                  <p class="text-muted-foreground mb-1 text-xs font-medium">
+                    {{ t("app.stderr") }}
+                  </p>
+                  <ScrollArea viewport-class="max-h-48">
+                    <pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
+                      ui.stderrLines.slice(-12).join("\n")
+                    }}</pre>
+                  </ScrollArea>
+                </div>
+                <div class="flex gap-2">
+                  <Button variant="outline" @click="switchProject">
+                    {{ t("app.chooseProject") }}
+                  </Button>
+                </div>
+              </div>
+            </template>
           </div>
-        </template>
-      </div>
-    </main>
+        </main>
+      </ResizablePanel>
+    </ResizablePanelGroup>
     <CreateProjectDialog
       :open="projectDialogOpen"
       :edit-path="editingProjectPath"
@@ -1127,3 +1211,39 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* reka 手柄本体只有 1px，用 ::before 扩大命中区而不占布局空间。 */
+.sidebar-resize-handle {
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+}
+
+.sidebar-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms;
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+.sidebar-resize-handle[data-resize-handle-state="drag"]::after,
+.sidebar-resize-handle[data-resize-handle-active="keyboard"]::after {
+  background: var(--primary);
+}
+</style>

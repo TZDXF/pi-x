@@ -89,6 +89,11 @@ async function harness(group = null) {
       watch: () => {},
     },
     "vue-i18n": { useI18n: () => ({ t: x => x, locale: ref("en") }) },
+    "@vueuse/core": {
+      useMediaQuery: () => ref(false),
+      useWindowSize: () => ({ width: ref(1200), height: ref(800) }),
+    },
+    "@/composables/usePanelKeyboardResize": { usePanelKeyboardResize: () => () => {} },
     "@/api/transport": { isDesktop: false },
     "@/api/piClient": {
       detectPi: async () => ({ found: true }),
@@ -391,4 +396,3 @@ test("an empty project directory never reaches spawn and reports a coded error",
   await context.actions.newProjectSession("")
   expect(calls).toEqual([])
 })
-

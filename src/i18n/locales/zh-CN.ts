@@ -426,6 +426,7 @@ export default {
   sidebar: {
     ariaLabel: "项目与会话",
     collapse: "收起侧栏",
+    resizeWidth: "调整侧栏宽度",
     newSession: "新会话",
     search: "搜索会话",
     tasks: "任务",
