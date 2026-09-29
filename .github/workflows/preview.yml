@@ -1,12 +1,12 @@
 name: Preview Release
 
-# 预览版：每天北京时间 00:00（UTC 16:00）检测 dev 分支，
+# 预览版：每天北京时间 04:00（UTC 20:00）检测 dev 分支，
 # 相对上一个预览版有新提交时自动构建并发布 prerelease，版本号为当天日期（如 2026.9.27）。
 # 也可在 Actions 页面手动触发（可勾选 force 跳过更新检测）。
 
 on:
   schedule:
-    - cron: "0 16 * * *"
+    - cron: "0 20 * * *"
   workflow_dispatch:
     inputs:
       force:
