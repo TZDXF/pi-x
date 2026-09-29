@@ -1,7 +1,6 @@
 import { invoke } from "@/api/transport"
 
 export interface CheckpointMeta {
-  refName: string
   commitOid: string
 }
 export type CheckpointDiffKind = "added" | "deleted" | "modified" | "renamed"
@@ -21,7 +20,7 @@ export interface CheckpointRestoreResult {
   conflicts: CheckpointConflict[]
 }
 
-/** 单轮回滚记录；快照本体存于项目 Git 仓库的隐藏 ref，清单存桌面端数据目录。 */
+/** 单轮回滚记录；快照本体存于项目 Git 仓库的非标准对象目录，清单存桌面端数据目录。 */
 export interface TurnCheckpointRecord {
   turnIndex: number
   /** 本轮用户消息在会话文件中的时间戳；重开会话后据此精确匹配渲染的轮次。 */
@@ -31,7 +30,7 @@ export interface TurnCheckpointRecord {
   state: "active" | "reverted"
   /** 本轮的文件差异（结算时计算并持久化，避免重开会话重新 diff）。 */
   files: CheckpointFileDiff[]
-  /** 创建结束快照时使用的 checkpointId，用于精确删除 Git ref。 */
+  /** 创建结束快照时的本地 ID，仅用于兼容旧清单。 */
   checkpointId?: string
 }
 export interface CheckpointManifest {
@@ -41,11 +40,6 @@ export interface CheckpointManifest {
 
 export function createCheckpoint(project: string, checkpointId: string): Promise<CheckpointMeta> {
   return invoke<CheckpointMeta>("session_checkpoint_create", { project, checkpointId })
-}
-
-/** 删除 checkpoint 的 Git 引用（对齐 ZCode 的 deleteCheckpoint API） */
-export function deleteCheckpoint(project: string, checkpointId: string): Promise<void> {
-  return invoke<void>("session_checkpoint_delete", { project, checkpointId })
 }
 
 export function diffCheckpoints(project: string, from: string, to: string): Promise<CheckpointFileDiff[]> {

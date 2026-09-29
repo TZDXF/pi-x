@@ -129,7 +129,6 @@ pub fn run() {
             session_file_rewind::session_file_rewind_state_get,
             session_file_rewind::session_file_rewind_state_mark,
             session_checkpoint::session_checkpoint_create,
-            session_checkpoint::session_checkpoint_delete,
             session_checkpoint::session_checkpoint_diff,
             session_checkpoint::session_checkpoint_restore,
             session_checkpoint::session_checkpoint_manifest_get,

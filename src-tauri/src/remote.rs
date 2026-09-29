@@ -510,10 +510,6 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             crate::session_checkpoint::session_checkpoint_manifest_delete(text("file")?).await?;
             Ok(Value::Null)
         }
-        "session_checkpoint_delete" => {
-            crate::session_checkpoint::session_checkpoint_delete(text("project")?, text("checkpointId")?).await?;
-            Ok(Value::Null)
-        }
         "session_checkpoint_content" => Ok(serde_json::to_value(
             crate::session_checkpoint::session_checkpoint_content(text("project")?, text("oid")?, text("path")?).await?,
         ).map_err(|e| e.to_string())?),

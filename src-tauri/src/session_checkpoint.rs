@@ -1,7 +1,7 @@
 //! 轮次级 Git 快照（checkpoint），移植自 zai-org/ZCode 的 gitCheckpointRepo 设计：
-//! - 用临时 GIT_INDEX_FILE 把当前工作区固化成隐藏 commit（write-tree → commit-tree），
-//!   挂在 `refs/pix/checkpoints/<workspace>/<id>` 下，不污染用户 index / 分支历史；
-//! - diff 用 `git diff --name-status/--numstat -z` 计算两个快照间的文件变更；
+//! - 用临时 GIT_INDEX_FILE 把当前工作区固化成 commit（write-tree → commit-tree）；
+//! - 快照对象写入 `.git/pix/checkpoint-objects/<workspace>`，不创建 Git ref，因此不会
+//!   出现在 `git log --all`、分支图或 Git 工具的提交记录中；
 //! - 恢复前先做 blob hash 冲突检测（当前磁盘必须仍等于声明基线），`git restore
 //!   --worktree` 只恢复文件、不动暂存区，最后再校验落盘结果。
 
@@ -18,14 +18,12 @@ use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
 use crate::sessions::validate_session_path;
 
-// 使用 refs/pix-internal/ 前缀，避免用户在 `git log --all` 或 Git 工具中注意到
-// checkpoint 提交。这些 ref 是内部实现细节，不属于用户可见的 Git 历史。
-const CHECKPOINT_REF_PREFIX: &str = "refs/pix-internal/checkpoints";
+// 快照对象放在 .git 内的非标准目录：仍可按 OID 读取，但不是 ref，用户 Git 历史不可见。
+const CHECKPOINT_OBJECT_DIR: &str = "pix/checkpoint-objects";
+const LEGACY_CHECKPOINT_REF_PREFIX: &str = "refs/pix-internal/checkpoints";
 
 #[derive(Serialize, Debug)]
 pub struct CheckpointMeta {
-    #[serde(rename = "refName")]
-    pub ref_name: String,
     #[serde(rename = "commitOid")]
     pub commit_oid: String,
 }
@@ -58,6 +56,10 @@ struct RepoLayout {
     repo_root: PathBuf,
     /// 项目目录相对仓库根的路径，"." 表示项目即仓库根。
     workspace_in_repo: String,
+    /// Git 默认对象库；快照对象通过 alternates 继续引用仓库内已有 blob。
+    objects_dir: PathBuf,
+    /// 本 workspace 专用的快照对象库（位于 .git/pix 下，非 refs）。
+    checkpoint_objects_dir: PathBuf,
 }
 
 fn git_in(repo_root: &Path, args: &[&str], env: Option<&HashMap<&str, String>>) -> Result<String, String> {
@@ -80,9 +82,16 @@ fn git_in(repo_root: &Path, args: &[&str], env: Option<&HashMap<&str, String>>) 
 }
 
 /// 与 git_in 相同，但返回原始字节：cat-file blob 的内容必须逐字节保留。
-fn git_raw_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+type GitEnv<'a> = Option<&'a HashMap<&'static str, String>>;
+
+fn git_raw_bytes(repo_root: &Path, args: &[&str], env: GitEnv<'_>) -> Result<Vec<u8>, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(repo_root).args(args);
+    if let Some(env) = env {
+        for (key, value) in env {
+            command.env(key, value);
+        }
+    }
     #[cfg(windows)]
     command.creation_flags(0x08000000);
     let output = command
@@ -122,12 +131,22 @@ fn resolve_repo(project: &str) -> Result<RepoLayout, String> {
         .map(|relative| relative.to_string_lossy().replace('\\', "/"))
         .filter(|relative| !relative.is_empty())
         .unwrap_or_else(|| ".".into());
-    Ok(RepoLayout { repo_root, workspace_in_repo })
+    let objects_dir = git_in(&repo_root, &["rev-parse", "--git-path", "objects"], None)?;
+    let objects_dir = dunce::canonicalize(repo_root.join(objects_dir)).map_err(|e| e.to_string())?;
+    let checkpoint_objects_dir = git_in(
+        &repo_root,
+        &["rev-parse", "--git-path", &format!("{CHECKPOINT_OBJECT_DIR}/{}", fnv1a(&workspace_in_repo))],
+        None,
+    )?;
+    let checkpoint_objects_dir = repo_root.join(checkpoint_objects_dir);
+    Ok(RepoLayout { repo_root, workspace_in_repo, objects_dir, checkpoint_objects_dir })
 }
 
-fn checkpoint_env(temp_index: &Path) -> HashMap<&'static str, String> {
+fn checkpoint_env(layout: &RepoLayout, temp_index: &Path) -> HashMap<&'static str, String> {
     HashMap::from([
         ("GIT_INDEX_FILE", temp_index.to_string_lossy().to_string()),
+        ("GIT_OBJECT_DIRECTORY", layout.checkpoint_objects_dir.to_string_lossy().to_string()),
+        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", layout.objects_dir.to_string_lossy().to_string()),
         ("GIT_AUTHOR_NAME", "PiX Checkpoint".into()),
         ("GIT_AUTHOR_EMAIL", "checkpoint@pix.local".into()),
         ("GIT_COMMITTER_NAME", "PiX Checkpoint".into()),
@@ -135,13 +154,37 @@ fn checkpoint_env(temp_index: &Path) -> HashMap<&'static str, String> {
     ])
 }
 
-fn create_checkpoint(layout: &RepoLayout, ref_name: &str, checkpoint_id: &str) -> Result<CheckpointMeta, String> {
+/// 读取快照 commit 时必须显式挂载非标准对象库；alternates 提供仓库既有对象。
+fn checkpoint_object_env(layout: &RepoLayout) -> HashMap<&'static str, String> {
+    HashMap::from([
+        ("GIT_OBJECT_DIRECTORY", layout.checkpoint_objects_dir.to_string_lossy().to_string()),
+        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", layout.objects_dir.to_string_lossy().to_string()),
+    ])
+}
+
+/// 旧实现曾把快照挂成 refs/pix-internal/checkpoints/...，但 `git log --all` 会展开
+/// 该命名空间。删除遗留 ref 后快照仍可通过 manifest 中的 OID 读取；旧 ref 指向的对象
+/// 在下一次 Git GC 前仍存在，必要时由 manifest 里的持久化 diff 继续兜底。
+fn delete_legacy_checkpoint_refs(layout: &RepoLayout) -> Result<(), String> {
+    let refs = git_in(
+        &layout.repo_root,
+        &["for-each-ref", "--format=%(refname)", &format!("{LEGACY_CHECKPOINT_REF_PREFIX}/")],
+        None,
+    )?;
+    for ref_name in refs.lines().filter(|line| !line.is_empty()) {
+        git_in(&layout.repo_root, &["update-ref", "-d", ref_name], None)?;
+    }
+    Ok(())
+}
+
+fn create_checkpoint(layout: &RepoLayout, checkpoint_id: &str) -> Result<CheckpointMeta, String> {
+    std::fs::create_dir_all(&layout.checkpoint_objects_dir).map_err(|e| e.to_string())?;
     let temp_root = std::env::temp_dir().join("pix-checkpoint-index");
     std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
     let temp_dir = temp_root.join(format!("index-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_index = temp_dir.join("index");
-    let env = checkpoint_env(&temp_index);
+    let env = checkpoint_env(layout, &temp_index);
     let pathspec = layout.workspace_in_repo.clone();
 
     let result = (|| {
@@ -169,8 +212,8 @@ fn create_checkpoint(layout: &RepoLayout, ref_name: &str, checkpoint_id: &str) -
             Some(&env),
         )?;
         let commit_oid = commit.trim().to_string();
-        git_in(&layout.repo_root, &["update-ref", ref_name, &commit_oid], None)?;
-        Ok(CheckpointMeta { ref_name: ref_name.to_string(), commit_oid })
+        // 只保存 commit OID，不创建 ref；快照对象位于非标准对象库，不会进入用户 Git 历史。
+        Ok(CheckpointMeta { commit_oid })
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -181,32 +224,9 @@ fn create_checkpoint(layout: &RepoLayout, ref_name: &str, checkpoint_id: &str) -
 pub async fn session_checkpoint_create(project: String, checkpoint_id: String) -> Result<CheckpointMeta, String> {
     spawn_blocking(move || {
         let layout = resolve_repo(&project)?;
-        let ref_name = format!(
-            "{}/{:016x}/{}",
-            CHECKPOINT_REF_PREFIX,
-            fnv1a(&layout.workspace_in_repo),
-            fnv1a(&format!("{}:{}", project, checkpoint_id)),
-        );
-        create_checkpoint(&layout, &ref_name, &checkpoint_id)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 删除一个 checkpoint 的 Git 引用（对齐 ZCode 的 deleteCheckpoint API）
-#[tauri::command]
-pub async fn session_checkpoint_delete(project: String, checkpoint_id: String) -> Result<(), String> {
-    spawn_blocking(move || {
-        let layout = resolve_repo(&project)?;
-        let ref_name = format!(
-            "{}/{:016x}/{}",
-            CHECKPOINT_REF_PREFIX,
-            fnv1a(&layout.workspace_in_repo),
-            fnv1a(&format!("{}:{}", project, checkpoint_id)),
-        );
-        // 删除 Git ref（允许不存在时静默成功）
-        git_in(&layout.repo_root, &["update-ref", "-d", &ref_name], None)?;
-        Ok(())
+        // 清理旧版本写入的 refs，避免历史会话遗留后仍出现在 git log --all 中。
+        let _ = delete_legacy_checkpoint_refs(&layout);
+        create_checkpoint(&layout, &checkpoint_id)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -224,15 +244,16 @@ pub async fn session_checkpoint_content(
     spawn_blocking(move || {
         let layout = resolve_repo(&project)?;
         let spec = format!("{oid}:{}", to_repo_relative(&layout, &path));
+        let env = checkpoint_object_env(&layout);
         // 用 cat-file -e 检查存在性，避免 stderr 文本本地化误判
-        if git_in(&layout.repo_root, &["cat-file", "-e", &spec], None).is_err() {
+        if git_in(&layout.repo_root, &["cat-file", "-e", &spec], Some(&env)).is_err() {
             return Ok(None);
         }
-        let size = git_in(&layout.repo_root, &["cat-file", "-s", &spec], None)?;
+        let size = git_in(&layout.repo_root, &["cat-file", "-s", &spec], Some(&env))?;
         if size.trim().parse::<u64>().unwrap_or(u64::MAX) > MAX_CONTENT_BYTES {
             return Err(pix_error_detail("checkpointContentTooLarge", "快照文件过大，无法展示差异: {detail}", path));
         }
-        match git_raw_bytes(&layout.repo_root, &["cat-file", "blob", &spec]) {
+        match git_raw_bytes(&layout.repo_root, &["cat-file", "blob", &spec], Some(&env)) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(content) => Ok(Some(content)),
                 // 非 UTF-8 内容（二进制文件）返回 null
@@ -254,15 +275,16 @@ pub async fn session_checkpoint_diff(
     spawn_blocking(move || {
         let layout = resolve_repo(&project)?;
         let pathspec = layout.workspace_in_repo.clone();
+        let env = checkpoint_object_env(&layout);
         let name_status = git_in(
             &layout.repo_root,
             &["diff", "--name-status", "--find-renames", "-z", &from, &to, "--", &pathspec],
-            None,
+            Some(&env),
         )?;
         let numstat = git_in(
             &layout.repo_root,
             &["diff", "--numstat", "--find-renames", "-z", &from, &to, "--", &pathspec],
-            None,
+            Some(&env),
         )?;
         let stats = parse_numstat(&numstat);
         Ok(merge_diff(&layout, &parse_name_status(&name_status), &stats))
@@ -297,11 +319,12 @@ fn restore_between(
     paths: Option<&[String]>,
     tool_touched_files: Option<&[String]>,
 ) -> Result<CheckpointRestoreResult, String> {
+    let env = checkpoint_object_env(layout);
     let mut affected: Vec<String> = match paths {
         Some(list) if !list.is_empty() => {
             list.iter().map(|path| to_repo_relative(layout, path)).collect()
         }
-        _ => diff_paths_between(layout, from, to)?,
+        _ => diff_paths_between(layout, from, to, Some(&env))?,
     };
     // 只恢复 tool_touched_files 中的文件，避免覆盖用户手改
     if let Some(tool_files) = tool_touched_files {
@@ -315,7 +338,7 @@ fn restore_between(
     }
 
     // 三方安全检查：当前磁盘必须仍停留在 from 基线，否则拒绝写入。
-    let conflicts = collect_conflicts(layout, from, &affected);
+    let conflicts = collect_conflicts(layout, from, &affected, Some(&env));
     if !conflicts.is_empty() {
         return Ok(CheckpointRestoreResult {
             restored: vec![],
@@ -332,7 +355,7 @@ fn restore_between(
     let mut restore_paths = Vec::new();
     let mut delete_paths = Vec::new();
     let affected_set: std::collections::HashSet<&String> = affected.iter().collect();
-    let entries: Vec<NameStatusEntry> = parse_name_status(&diff_name_status(layout, from, to)?)
+    let entries: Vec<NameStatusEntry> = parse_name_status(&diff_name_status(layout, from, to, Some(&env))?)
         .into_iter()
         // 指定路径子集回滚时，差异必须收敛在受影响路径内，避免误恢复无关文件。
         .filter(|entry| {
@@ -359,7 +382,7 @@ fn restore_between(
         for chunk in restore_paths.chunks(BATCH_SIZE) {
             let mut args: Vec<&str> = vec!["restore", &source, "--worktree", "--"];
             args.extend(chunk.iter().map(String::as_str));
-            git_in(&layout.repo_root, &args, None)?;
+            git_in(&layout.repo_root, &args, Some(&env))?;
         }
     }
     for path in &delete_paths {
@@ -377,7 +400,7 @@ fn restore_between(
     }
 
     // 恢复后再校验一次，确保磁盘确实到达目标基线。
-    if !collect_conflicts(layout, to, &affected).is_empty() {
+    if !collect_conflicts(layout, to, &affected, Some(&env)).is_empty() {
         return Err(pix_error("checkpointRestoreVerifyFailed", "快照恢复后校验失败"));
     }
     Ok(CheckpointRestoreResult {
@@ -386,17 +409,17 @@ fn restore_between(
     })
 }
 
-fn diff_name_status(layout: &RepoLayout, from: &str, to: &str) -> Result<String, String> {
+fn diff_name_status(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>) -> Result<String, String> {
     git_in(
         &layout.repo_root,
         &["diff", "--name-status", "--find-renames", "-z", from, to],
-        None,
+        env,
     )
 }
 
-fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str) -> Result<Vec<String>, String> {
+fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>) -> Result<Vec<String>, String> {
     let mut set = Vec::new();
-    for entry in parse_name_status(&diff_name_status(layout, from, to)?) {
+    for entry in parse_name_status(&diff_name_status(layout, from, to, env)?) {
         set.push(entry.path);
         if let Some(original) = entry.original_path {
             set.push(original);
@@ -407,13 +430,13 @@ fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str) -> Result<Vec<S
 
 /// 当前磁盘在 `baseline` 的受影响路径上是否仍与基线一致（blob hash 级比较）。
 /// 分批处理避免超出 Windows 命令行 32K 上限。
-fn collect_conflicts(layout: &RepoLayout, baseline: &str, repo_paths: &[String]) -> Vec<(String, String)> {
+fn collect_conflicts(layout: &RepoLayout, baseline: &str, repo_paths: &[String], env: GitEnv<'_>) -> Vec<(String, String)> {
     const BATCH_SIZE: usize = 100;
     let mut conflicts = Vec::new();
     for chunk in repo_paths.chunks(BATCH_SIZE) {
         let mut args: Vec<&str> = vec!["ls-tree", "-r", "-z", baseline, "--"];
         args.extend(chunk.iter().map(String::as_str));
-        let tree = match git_in(&layout.repo_root, &args, None) {
+        let tree = match git_in(&layout.repo_root, &args, env) {
             Ok(output) => parse_ls_tree(&output),
             Err(_) => {
                 for path in chunk {
@@ -594,7 +617,7 @@ fn merge_diff(
         .collect()
 }
 
-/// 回滚状态清单：按会话文件存储（快照 ref 本身在 Git 仓库中持久存在）。
+/// 回滚状态清单：按会话文件存储（快照对象存于仓库 .git/pix 下的私有对象目录）。
 fn manifest_path(file: &Path) -> PathBuf {
     data_dir::root()
         .join("checkpoints")
@@ -786,6 +809,8 @@ mod tests {
         let layout = RepoLayout {
             repo_root: PathBuf::from("/repo"),
             workspace_in_repo: "packages/app".into(),
+            objects_dir: PathBuf::new(),
+            checkpoint_objects_dir: PathBuf::new(),
         };
         assert_eq!(to_workspace_relative(&layout, "packages/app/src/a.ts"), "src/a.ts");
         assert_eq!(to_workspace_relative(&layout, "other/b.ts"), "other/b.ts");

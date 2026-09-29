@@ -26,7 +26,7 @@ vi.mock("@/i18n", () => ({
   tBackendError: value => String(value ?? ""),
 }))
 vi.mock("@/lib/checkpoints", () => ({
-  createCheckpoint: async () => ({ refName: "r", commitOid: "oid" }),
+  createCheckpoint: async () => ({ commitOid: "oid" }),
   diffCheckpoints: async () => [],
   loadCheckpointManifest: async () => null,
   saveCheckpointManifest: async () => {},

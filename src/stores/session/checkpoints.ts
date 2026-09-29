@@ -1,7 +1,6 @@
 import { ref, watch, type Ref } from "vue"
 import {
   createCheckpoint,
-  deleteCheckpoint,
   diffCheckpoints,
   loadCheckpointManifest,
   saveCheckpointManifest,
@@ -17,20 +16,17 @@ export interface TurnCheckpointTracker {
   onAgentSettled: () => void
   /** 回滚成功后把该轮标记为已回滚并持久化。 */
   markReverted: (turnIndex: number) => void
-  /** 清理旧的 checkpoint refs，只保留最近的 N 个（对齐 ZCode 的清理机制）。 */
-  cleanupOldCheckpoints?: (keepCount?: number) => Promise<void>
 }
 
 /**
  * 结合 pi 事件流的轮次 Git 快照编排（移植自 ZCode 的 checkpoint 设计）：
- * agent_start 时对工作区做隐藏 ref 快照，agent_settled 时再做一次并计算
+ * agent_start 时对工作区做私有 commit 快照（不创建 Git ref），agent_settled 时再做一次并计算
  * 两者差异作为本轮文件修改；回滚即把工作区从结束态恢复到开始态。
  * 非 Git 项目等失败场景静默跳过，前端降级为工具参数回放回滚。
  *
- * 对齐 ZCode 的改进：
- * 1. 添加 deleteCheckpoint API
- * 2. 添加定期清理机制（cleanupOldCheckpoints）
- * 3. 使用隐藏 ref 前缀（refs/pix-internal/checkpoints）
+ * 与旧实现的差异：
+ * 1. 快照只保存 commit OID，不创建任何 Git ref
+ * 2. 因此不会污染 `git log --all` 或分支图，也不需要按 ref 清理
  */
 export function createTurnCheckpoints(ctx: {
   cwd: Ref<string>
@@ -118,9 +114,6 @@ export function createTurnCheckpoints(ctx: {
           { turnIndex, checkpointId, startOid: from, endOid, state: "active", files },
         ]
         persist()
-        // The API keeps hidden Git refs bounded; this is intentionally async and
-        // non-blocking for the completed turn.
-        void cleanupOldCheckpoints()
       })
       .catch(() => {
         /* 快照/差异失败：本轮仅失去回滚能力 */
@@ -134,35 +127,5 @@ export function createTurnCheckpoints(ctx: {
     persist()
   }
 
-  /**
-   * 清理旧的 checkpoint refs，只保留最近的 N 个（对齐 ZCode 的清理机制）。
-   * 这可以防止 checkpoint 提交无限累积，保持 Git 仓库整洁。
-   */
-  async function cleanupOldCheckpoints(keepCount: number = 10): Promise<void> {
-    const project = ctx.cwd.value
-    const file = ctx.sessionFile.value
-    if (!project || !file || records.value.length <= keepCount) return
-
-    // turnIndex is the stable order used by rollback and rendering. Unlike the
-    // display timestamp it is available immediately for newly settled turns.
-    const sorted = [...records.value].sort((a, b) => b.turnIndex - a.turnIndex)
-    const toDelete = sorted.slice(keepCount)
-
-    // 并行删除旧的 checkpoint refs
-    await Promise.allSettled(
-      toDelete.map(record =>
-        record.checkpointId ? deleteCheckpoint(project, record.checkpointId) : Promise.resolve(),
-      ),
-    )
-    if (ctx.sessionFile.value !== file) return
-
-    // 从 records 中移除
-    const deleteSet = new Set(toDelete.map(r => r.turnIndex))
-    const next = records.value.filter(r => !deleteSet.has(r.turnIndex))
-    if (next.length === records.value.length) return
-    records.value = next
-    persist()
-  }
-
-  return { records, onAgentStart, onAgentSettled, markReverted, cleanupOldCheckpoints }
+  return { records, onAgentStart, onAgentSettled, markReverted }
 }
