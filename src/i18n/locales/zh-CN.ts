@@ -337,6 +337,7 @@ export default {
     currentBranch: "当前分支",
     branchName: "新分支名称",
     noGit: "Git 不可用",
+    noCommitsYet: "尚未提交",
     detachedHead: "游离 HEAD",
     creating: "正在创建…",
     create: "创建并切换",

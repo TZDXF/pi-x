@@ -346,6 +346,7 @@ export default {
     currentBranch: "Current branch",
     branchName: "New branch name",
     noGit: "Git unavailable",
+    noCommitsYet: "No commits yet",
     detachedHead: "Detached HEAD",
     creating: "Creating…",
     create: "Create and switch",

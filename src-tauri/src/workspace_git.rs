@@ -18,7 +18,7 @@ async fn git(project: &str, args: &[&str]) -> Result<String, String> {
 #[derive(Debug, Serialize)]
 pub struct GitWorktree { path: String, branch: String, current: bool }
 #[derive(Serialize)]
-pub struct GitInfo { branch: String, branches: Vec<String>, worktree: bool, worktrees: Vec<GitWorktree> }
+pub struct GitInfo { branch: String, branches: Vec<String>, unborn_branch: bool, worktree: bool, worktrees: Vec<GitWorktree> }
 
 /// `git worktree list --porcelain` always lists the current working tree first,
 /// which is how the entries get flagged instead of comparing platform-dependent paths.
@@ -46,13 +46,18 @@ fn parse_worktrees(list: &str) -> Vec<GitWorktree> {
 #[tauri::command]
 pub async fn workspace_git_info(project: String) -> Result<GitInfo, String> {
     let branch = git(&project, &["branch", "--show-current"]).await?;
-    let branches = git(&project, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).await?;
+    let refs = git(&project, &["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).await?;
+    let branches: Vec<String> = refs.lines().map(String::from).collect();
+    // A fresh repository has a symbolic HEAD (for example `main`) but no branch
+    // ref yet. Keep it visible without exposing it as a worktree base commit.
+    let unborn_branch = !branch.is_empty() && !branches.iter().any(|name| name.as_str() == branch);
     let dir = git(&project, &["rev-parse", "--absolute-git-dir"]).await?;
     let common = git(&project, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await?;
     let list = git(&project, &["worktree", "list", "--porcelain"]).await?;
     Ok(GitInfo {
         branch: if branch.is_empty() { "HEAD (detached)".into() } else { branch },
-        branches: branches.lines().map(String::from).collect(),
+        branches,
+        unborn_branch,
         worktree: dir != common,
         worktrees: parse_worktrees(&list),
     })
@@ -130,6 +135,20 @@ mod tests {
         git(p, &["init", "-b", "main"]).await.unwrap();
         git(p, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "initial"]).await.unwrap();
         Repo(root)
+    }
+    #[tokio::test]
+    async fn lists_unborn_branch_without_offering_a_base_ref() {
+        let root = std::env::temp_dir().join(format!("pix-git-test-{}", uuid::Uuid::new_v4()));
+        let project = root.join("repo");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.to_str().unwrap();
+        git(path, &["init", "-b", "main"]).await.unwrap();
+        let _repo = Repo(root);
+        let info = workspace_git_info(path.to_string()).await.unwrap();
+        assert_eq!(info.branch, "main");
+        assert!(info.branches.is_empty());
+        assert!(info.unborn_branch);
+        assert!(workspace_git_prepare(path.to_string(), "main".into(), true).await.is_err());
     }
     #[tokio::test]
     async fn creates_branch_and_isolated_worktree() {

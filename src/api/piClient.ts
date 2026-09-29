@@ -424,6 +424,7 @@ export const prepareWorkspaceGit = (selection: WorkspaceSelection) =>
 export interface WorkspaceGitInfo {
   branch: string
   branches: string[]
+  unborn_branch: boolean
   worktree: boolean
   worktrees: GitWorktree[]
 }

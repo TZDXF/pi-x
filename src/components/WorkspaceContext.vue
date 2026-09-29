@@ -27,6 +27,15 @@ const modeOpen = ref(false)
 const branchOpen = ref(false)
 const blocked = computed(() => props.disabled || workspace.gitBusy)
 const name = (path: string) => workspace.projectName(path)
+// An unborn HEAD is the current branch, but it has no commit to use as a base.
+const branchOptions = computed(() => {
+  const result = info.value
+  if (!result) return []
+  return result.unborn_branch && !result.branches.includes(result.branch)
+    ? [result.branch, ...result.branches]
+    : result.branches
+})
+const unbornBranch = (branch: string) => info.value?.unborn_branch && info.value.branch === branch
 // 项目下拉：搜索框 + 两组选项（上方为普通项目，底部固定为无项目会话与添加项目）。
 const projectQuery = ref("")
 watch(projectOpen, open => {
@@ -193,15 +202,22 @@ watch(() => props.project, refresh, { immediate: true })
         </p>
         <ScrollArea viewport-class="max-h-64">
           <Button
-            v-for="branch in info?.branches"
+            v-for="branch in branchOptions"
             :key="branch"
             variant="context-menu-item"
             size="content"
             class="context-menu-item"
+            :disabled="blocked || (selection?.worktree && unbornBranch(branch))"
+            :title="unbornBranch(branch) ? t('workspace.noCommitsYet') : undefined"
             :aria-current="selection?.branch === branch ? 'true' : undefined"
             @click="selectBranch(branch)"
             ><GitBranch :size="14" class="size-auto shrink-0" /><span class="truncate">{{ branch }}</span
-            ><span v-if="selection?.branch === branch" class="ml-auto">✓</span></Button
+            ><span class="ml-auto flex shrink-0 items-center gap-2"
+              ><span v-if="unbornBranch(branch)" class="text-xs text-muted-foreground">{{
+                t("workspace.noCommitsYet")
+              }}</span
+              ><span v-if="selection?.branch === branch">✓</span></span
+            ></Button
           >
         </ScrollArea>
       </PopoverContent>
