@@ -41,6 +41,7 @@ const derivedName = computed(() =>
       <span class="font-medium text-sm">{{ props.title ?? derivedName }}</span>
     </div>
     <div class="flex shrink-0 items-center gap-2">
+      <slot name="meta" />
       <StatusBadge :state="props.state" />
       <ChevronDownIcon
         class="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"

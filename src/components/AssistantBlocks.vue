@@ -143,7 +143,9 @@ function elapsedMs(block: ToolCallBlock): number | null {
 
 function elapsedText(block: ToolCallBlock): string {
   const ms = elapsedMs(block)
-  return ms == null ? "" : formatElapsed(ms)
+  // Sub-second commands do not need a visible timer; this also avoids a
+  // transient badge for commands that complete almost immediately.
+  return ms == null || ms < 1_000 ? "" : formatElapsed(ms)
 }
 
 /** Long-running tools stand out: amber past 30s, destructive past 2 minutes. */
@@ -190,7 +192,6 @@ function toolBase(block: ToolCallBlock): string {
   return block.name.toLowerCase().split(/[.:/]/).pop()!
 }
 
-
 const { t } = useI18n()
 </script>
 
@@ -219,14 +220,18 @@ const { t } = useI18n()
           :icon="SquareTerminal"
           :title="commandPreview(block) || undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
-        />
-        <div
-          v-if="elapsedText(block)"
-          class="flex items-center justify-end gap-1 px-3 pb-1.5 -mt-1 text-xs tabular-nums"
-          :class="elapsedClass(block)"
         >
-          {{ elapsedText(block) }}
-        </div>
+          <template #meta>
+            <span
+              class="w-12 text-right text-xs tabular-nums"
+              :class="elapsedText(block) ? elapsedClass(block) : ''"
+              :title="elapsedText(block) ? t('blocks.elapsed') : undefined"
+              :aria-label="elapsedText(block) ? t('blocks.elapsed') : undefined"
+            >
+              {{ elapsedText(block) }}
+            </span>
+          </template>
+        </ToolHeader>
         <ToolContent>
           <div class="p-3">
             <Terminal
