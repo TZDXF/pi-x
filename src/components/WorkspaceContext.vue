@@ -27,6 +27,10 @@ const modeOpen = ref(false)
 const branchOpen = ref(false)
 const blocked = computed(() => props.disabled || workspace.gitBusy)
 const name = (path: string) => workspace.projectName(path)
+// 空项目仅作为无项目会话的初始展示；真正切换仍由父组件完成。
+const isProjectless = computed(() => !props.project || workspace.isProjectless(props.project))
+const projectTitle = computed(() => props.project || workspace.projectless)
+const projectLabel = computed(() => (props.project ? name(props.project) : t("projectless.name")))
 // An unborn HEAD is the current branch, but it has no commit to use as a base.
 const branchOptions = computed(() => {
   const result = info.value
@@ -49,6 +53,7 @@ const filteredProjects = computed(() => {
 })
 let request = 0
 async function refresh() {
+  if (!props.project) return
   const id = ++request
   loading.value = true
   info.value = null
@@ -102,8 +107,13 @@ watch(() => props.project, refresh, { immediate: true })
   >
     <Popover v-model:open="projectOpen"
       ><PopoverTrigger as-child
-        ><Button variant="context-chip" size="content" class="context-chip" :disabled="blocked" :title="project"
-          ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(project) }}</span></Button
+        ><Button
+          variant="context-chip"
+          size="content"
+          class="context-chip"
+          :disabled="blocked"
+          :title="projectTitle || undefined"
+          ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ projectLabel }}</span></Button
         ></PopoverTrigger
       >
       <PopoverContent side="top" align="start" class="w-72 p-2">
@@ -131,13 +141,13 @@ watch(() => props.project, refresh, { immediate: true })
             variant="context-menu-item"
             size="content"
             class="context-menu-item"
-            :aria-current="workspace.isProjectless(project) ? 'true' : undefined"
+            :aria-current="isProjectless ? 'true' : undefined"
             :title="workspace.projectless"
             @click="select(workspace.projectless)"
             ><MessagesSquare :size="14" class="size-auto shrink-0" /><span class="truncate">{{
               name(workspace.projectless)
             }}</span
-            ><span v-if="workspace.isProjectless(project)" class="ml-auto">✓</span></Button
+            ><span v-if="isProjectless" class="ml-auto">✓</span></Button
           >
           <Button variant="context-menu-item" size="content" class="context-menu-item" @click="openProject"
             ><Plus :size="14" class="size-auto shrink-0" />{{ t("sidebar.openProject") }}</Button
@@ -145,7 +155,7 @@ watch(() => props.project, refresh, { immediate: true })
         </div>
       </PopoverContent>
     </Popover>
-    <Popover v-model:open="modeOpen"
+    <Popover v-if="!isProjectless" v-model:open="modeOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"
@@ -181,7 +191,7 @@ watch(() => props.project, refresh, { immediate: true })
         ></PopoverContent
       >
     </Popover>
-    <Popover v-model:open="branchOpen"
+    <Popover v-if="!isProjectless" v-model:open="branchOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"

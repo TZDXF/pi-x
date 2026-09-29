@@ -7,7 +7,7 @@ const source = readFileSync(new URL("../src/components/WorkspaceContext.vue", im
 const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 
 test("environment and branch menus only record draft choices", () => {
-  const menu = source.split('<Popover v-model:open="modeOpen"')[1].split("</Popover>")[0]
+  const menu = source.split('<Popover v-if="!isProjectless" v-model:open="modeOpen"')[1].split("</Popover>")[0]
   const content = menu.split("<PopoverContent")[1]
   expect((content.match(/<Button\b/g) || []).length).toBe(2)
   expect(content).toMatch(/@click="selectMode\(false\)"/)
@@ -36,6 +36,16 @@ test("environment and branch menus only record draft choices", () => {
   context.blocked.value = true
   context.selectMode(false)
   expect(context.selection.value.worktree).toBe(true)
+})
+
+test("projectless drafts show a default project and hide Git menus", () => {
+  expect(source).toMatch(
+    /const isProjectless = computed\(\(\) => !props\.project \|\| workspace\.isProjectless\(props\.project\)\)/,
+  )
+  expect(source).toMatch(/projectless\.name/)
+  expect(source).toMatch(/if \(!props\.project\) return/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="modeOpen"/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="branchOpen"/)
 })
 
 test("workspace menus open upward without trigger arrows", () => {
