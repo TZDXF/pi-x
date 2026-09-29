@@ -23,12 +23,12 @@ test.afterAll(async () => {
 test("pixels assemble on click and replay from the keyboard without changing layout", async ({ page }) => {
   await page.goto(harness.url)
   const logo = page.getByRole("button", { name: "PiX · Click to reassemble pixels" })
-  await expect(logo.locator("rect")).toHaveCount(37)
+  await expect(logo.locator(".pix-pixel")).toHaveCount(37)
   const bounds = await logo.boundingBox()
   expect(await logo.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(0)
   await logo.click()
   await expect(logo.locator(".pix-assembling")).toHaveCount(1)
-  expect(await logo.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(37)
+  expect(await logo.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(74)
   await logo.evaluate(async el => {
     await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished))
   })
@@ -47,33 +47,45 @@ test("reduced motion keeps all pixels visible without animation", async ({ page 
   const logo = page.getByRole("button")
   await logo.click()
   expect(await logo.evaluate(el => el.getAnimations({ subtree: true }).length)).toBe(0)
-  await expect(logo.locator("rect").first()).toHaveCSS("opacity", "1")
+  await expect(logo.locator(".pix-pixel").first()).toHaveCSS("opacity", "1")
 })
 
 test("pixels move directly into pi, then restore their original positions and colors", async ({ page }) => {
   await page.goto(harness.url)
   const logo = page.getByRole("button")
-  const original = await logo.locator("rect").evaluateAll(cells =>
-    cells.map(cell => ({
-      x: Number(cell.getAttribute("x")),
-      y: Number(cell.getAttribute("y")),
-      fill: getComputedStyle(cell).fill,
-    })),
+  // Pixels are laid out in percentages at 2x the wordmark units, whose grid starts at (5, 13).
+  const original = await logo.locator(".pix-pixel").evaluateAll(cells =>
+    cells.map(rawCell => {
+      const cell = rawCell as HTMLElement
+      const glow = getComputedStyle(cell, "::after")
+      return {
+        x: cell.offsetLeft / 2 + 5,
+        y: cell.offsetTop / 2 + 13,
+        fill: getComputedStyle(cell).backgroundColor,
+        glowColor: glow.backgroundColor,
+        glowOpacity: glow.opacity,
+      }
+    }),
   )
   await logo.click()
   const sample = async (time: number) =>
-    logo.evaluate((el, time) => {
+    logo.evaluate(async (el, time) => {
       for (const animation of el.getAnimations({ subtree: true })) {
         animation.pause()
         animation.currentTime = time
       }
-      return [...el.querySelectorAll("rect")].map(cell => {
+      // Composited animations report their effect to computed style a frame later.
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      return [...el.querySelectorAll<HTMLElement>(".pix-pixel")].map(cell => {
         const style = getComputedStyle(cell)
         const matrix = new DOMMatrix(style.transform)
+        const glow = getComputedStyle(cell, "::after")
         return {
-          x: Number(cell.getAttribute("x")) + matrix.e,
-          y: Number(cell.getAttribute("y")) + matrix.f,
-          fill: style.fill,
+          x: cell.offsetLeft / 2 + 5 + matrix.e / 2,
+          y: cell.offsetTop / 2 + 13 + matrix.f / 2,
+          fill: style.backgroundColor,
+          glowColor: glow.backgroundColor,
+          glowOpacity: glow.opacity,
         }
       })
     }, time)
@@ -92,6 +104,8 @@ test("pixels move directly into pi, then restore their original positions and co
   // The left foot extends left of its stem; the right foot extends right, not inward.
   const foot = pi.filter(cell => cell.y === 25).map(cell => cell.x)
   expect(foot).toEqual([13, 15, 23, 25, 27])
-  expect(new Set(pi.map(cell => cell.fill)).size).toBe(1)
+  // At the pi formation every pixel is fully covered by the uniform glow overlay.
+  expect(new Set(pi.map(cell => cell.glowColor)).size).toBe(1)
+  for (const cell of pi) expect(cell.glowOpacity).toBe("1")
   expect(await sample(2000)).toEqual(original)
 })

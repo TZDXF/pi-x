@@ -8,6 +8,7 @@ const replay = ref(0)
 const piPixels = ["011111111", "111111110", "001100110", "001100110", "001100110", "001100110", "011000111"].flatMap(
   (row, y) => [...row].flatMap((cell, x) => (cell === "1" ? [{ x: 11 + x * 2, y: 13 + y * 2 }] : [])),
 )
+// Grid spans x: 5-35, y: 13-27 in wordmark units; percentages keep the pixels scaling with the button.
 const pixels = (
   [
     [5, 13],
@@ -50,12 +51,15 @@ const pixels = (
   ] as const
 ).map(([x, y], index) => {
   const target = piPixels[index]!
+  // Each pixel is 2 units square, so a translation of N units equals N/2 of its own size.
   return {
     x,
     y,
     style: {
-      "--pi-x": `${target.x - x}px`,
-      "--pi-y": `${target.y - y}px`,
+      left: `${((x - 5) / 30) * 100}%`,
+      top: `${((y - 13) / 14) * 100}%`,
+      "--pi-x": `${((target.x - x) / 2) * 100}%`,
+      "--pi-y": `${((target.y - y) / 2) * 100}%`,
     },
   }
 })
@@ -68,28 +72,15 @@ const pixels = (
     :aria-label="t('logo.reassemble')"
     @click="replay++"
   >
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="5 13 30 14"
-      width="60"
-      height="28"
-      aria-hidden="true"
-      shape-rendering="crispEdges"
-    >
-      <g :key="replay" :class="{ 'pix-assembling': replay > 0 }">
-        <rect
-          v-for="(pixel, index) in pixels"
-          :key="index"
-          :x="pixel.x"
-          :y="pixel.y"
-          width="2"
-          height="2"
-          fill="currentColor"
-          :class="{ 'pix-wordmark-accent': pixel.x >= 25 }"
-          :style="pixel.style"
-        />
-      </g>
-    </svg>
+    <span :key="replay" class="pix-grid" :class="{ 'pix-assembling': replay > 0 }" aria-hidden="true">
+      <span
+        v-for="(pixel, index) in pixels"
+        :key="index"
+        class="pix-pixel"
+        :class="{ 'pix-wordmark-accent': pixel.x >= 25 }"
+        :style="pixel.style"
+      />
+    </span>
   </button>
 </template>
 
@@ -108,11 +99,36 @@ const pixels = (
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.pix-wordmark svg {
+.pix-grid {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
-  overflow: visible;
+  overflow: hidden;
+}
+.pix-pixel {
+  position: absolute;
+  width: calc(100% * 2 / 30);
+  height: calc(100% * 2 / 14);
+  background-color: var(--pixel-color, currentColor);
+  pointer-events: none;
+}
+/* Both pseudo layers overdraw 0.5px to hide hairline seams between adjacent
+   pixels at fractional device pixel ratios (e.g. Windows at 125% scale).
+   They must stay off the element box itself: translate percentages resolve
+   against the element size, and enlarging it would skew the morph. */
+.pix-pixel::before {
+  content: "";
+  position: absolute;
+  inset: -0.5px;
+  background-color: var(--pixel-color, currentColor);
+}
+.pix-pixel::after {
+  content: "";
+  position: absolute;
+  inset: -0.5px;
+  background-color: var(--pi-color);
+  opacity: 0;
 }
 .pix-wordmark:focus-visible {
   outline: 2px solid #28765b;
@@ -121,40 +137,56 @@ const pixels = (
 }
 .pix-wordmark-accent {
   --pixel-color: #28765b;
-  fill: var(--pixel-color);
 }
-:global(.dark) .pix-wordmark {
+/* :global must wrap the whole selector; a bare ":global(.dark) .descendant"
+   prefix compiles to just ".dark" in scoped styles. */
+:global(.dark .pix-wordmark) {
   --pi-color: #9ae5c6;
 }
-:global(.dark) .pix-wordmark-accent {
+:global(.dark .pix-wordmark-accent) {
   --pixel-color: #9ae5c6;
 }
-:global(.dark) .pix-wordmark:focus-visible {
+:global(.dark .pix-wordmark:focus-visible) {
   outline-color: #9ae5c6;
 }
-.pix-assembling rect {
-  transform-box: fill-box;
-  transform-origin: center;
+/* will-change plus transform/opacity-only keyframes keep the whole animation on
+   the compositor, so it stays smooth even when the main thread is busy. */
+.pix-assembling .pix-pixel {
+  will-change: transform;
   animation: pixel-assemble 2000ms steps(8, end) both;
+}
+.pix-assembling .pix-pixel::after {
+  animation: pixel-glow 2000ms steps(8, end) both;
 }
 @keyframes pixel-assemble {
   0% {
     transform: translate(0, 0);
-    fill: var(--pixel-color, currentColor);
   }
   30%,
   65% {
     transform: translate(var(--pi-x), var(--pi-y));
-    fill: var(--pi-color);
   }
   92%,
   100% {
     transform: translate(0, 0);
-    fill: var(--pixel-color, currentColor);
+  }
+}
+@keyframes pixel-glow {
+  0% {
+    opacity: 0;
+  }
+  30%,
+  65% {
+    opacity: 1;
+  }
+  92%,
+  100% {
+    opacity: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pix-assembling rect {
+  .pix-assembling .pix-pixel,
+  .pix-assembling .pix-pixel::after {
     animation: none;
   }
 }
