@@ -624,11 +624,8 @@ export default {
     workspace: "工作区与文件",
 
     groups: {
-      general: "通用",
-      modelConversation: "模型与对话",
-      extensions: "扩展与提示词",
-      notificationsRemote: "通知与远程",
-      system: "系统与更新",
+      general: "基础设置",
+      capabilities: "能力",
     },
 
     theme: "外观主题",

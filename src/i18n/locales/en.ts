@@ -640,10 +640,7 @@ export default {
 
     groups: {
       general: "General",
-      modelConversation: "Models & conversation",
-      extensions: "Extensions & prompts",
-      notificationsRemote: "Notifications & remote",
-      system: "System & updates",
+      capabilities: "Capabilities",
     },
 
     theme: "Appearance",

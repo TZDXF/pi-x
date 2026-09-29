@@ -104,7 +104,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
   },
 ]
 
-export type SettingsGroupId = "general" | "modelConversation" | "extensions" | "notificationsRemote" | "system"
+export type SettingsGroupId = "general" | "capabilities"
 
 export interface SettingsGroupDef {
   id: SettingsGroupId
@@ -116,19 +116,16 @@ export interface SettingsGroupDef {
 
 /** The visible information architecture; unknown deep links fall back to the default tab. */
 export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
-  { id: "general", labelKey: "settings.groups.general", tabIds: ["general", "shortcuts"] },
   {
-    id: "modelConversation",
-    labelKey: "settings.groups.modelConversation",
-    tabIds: ["models", "model-config"],
+    id: "general",
+    labelKey: "settings.groups.general",
+    tabIds: ["general", "shortcuts", "notifications", "remote", "archives", "about"],
   },
-  { id: "extensions", labelKey: "settings.groups.extensions", tabIds: ["packages", "agent-config", "skills"] },
   {
-    id: "notificationsRemote",
-    labelKey: "settings.groups.notificationsRemote",
-    tabIds: ["notifications", "remote"],
+    id: "capabilities",
+    labelKey: "settings.groups.capabilities",
+    tabIds: ["models", "model-config", "packages", "agent-config", "skills"],
   },
-  { id: "system", labelKey: "settings.groups.system", tabIds: ["archives", "about"] },
 ]
 
 export function settingsGroupForTab(tabId: SettingsTab): SettingsGroupDef {

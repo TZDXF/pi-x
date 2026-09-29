@@ -15,7 +15,7 @@ test("archived sessions live in a settings tab and the sidebar entry is gone", (
   assert.match(router, /segments\[0\] === "archives"[\s\S]*?tab: "archives"/)
   assert.doesNotMatch(router, /name: "archives"/)
   assert.match(tabs, /id: "archives"[\s\S]*?import\("@\/components\/ArchivedSessionsPage\.vue"\)/)
-  assert.match(tabs, /"system",[\s\S]*?tabIds: \["archives", "about"\]/)
+  assert.match(tabs, /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/)
   assert.match(app, /registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
   assert.doesNotMatch(sidebar, /emit\('archives'\)/)
   assert.doesNotMatch(sidebar, /archives: \[\]/)
