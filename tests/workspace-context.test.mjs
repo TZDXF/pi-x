@@ -60,7 +60,11 @@ function harness(overrides = {}) {
     selectingProject: { value: false },
     t: key => key,
     sessionFor: () => owner,
-    workspace: { gitBusy: false, rememberWorkspace: async path => events.push(`remember:${path}`) },
+    workspace: {
+      gitBusy: false,
+      rememberWorkspace: async path => events.push(`remember:${path}`),
+      unremoveProject: () => {},
+    },
     connecting: { value: false },
     project: { value: "C:/repo" },
     config: { value: {} },

@@ -47,7 +47,7 @@ import { PanelLeft } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
-import { useRoute, navigate } from "@/lib/router"
+import { useRoute, navigate, goHome } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
 import { normalizeProjectPath, normalizeSlashes, samePath } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
@@ -260,7 +260,10 @@ async function reattachRunningSessions(): Promise<RunningSession | null> {
     owner.isStreaming = runtime.state.isStreaming ?? false
     if (owner.isStreaming) owner.markRunning()
   }
-  const restored = running.find(runtime => runtime.project === config.value.lastProject) ?? running[0]
+  // Never auto-activate a project the user explicitly removed, even when its
+  // conversations keep running in the background.
+  const restorable = running.filter(runtime => !workspace.isRemovedProject(runtime.project))
+  const restored = restorable.find(runtime => runtime.project === config.value.lastProject) ?? restorable[0]
   if (restored) {
     activateSession(restored.runtimeId)
     project.value = restored.project
@@ -349,9 +352,13 @@ async function selectProject(dir: string) {
     // Selecting a project creates an independent, lazily started draft.
     createConversation(dir)
     project.value = dir
-    config.value.lastProject = dir
-    // Await so quick successive selections cannot persist out of order.
-    await saveConfig({ ...config.value })
+    // Route replays can land on a removed project; the sidebar keeps it
+    // removed, so it must not become the auto-restored project either.
+    if (!workspace.isRemovedProject(dir)) {
+      config.value.lastProject = dir
+      // Await so quick successive selections cannot persist out of order.
+      await saveConfig({ ...config.value })
+    }
     const status = await trustStatus(dir)
     if (status.needsDecision) {
       trustInfo.value = status
@@ -430,6 +437,8 @@ async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
       path = normalizeProjectPath(path)
       preparedWorkspaces.set(owner.runtimeId, { key, path })
     }
+    // The user explicitly picked this folder, so lift any earlier removal marker.
+    workspace.unremoveProject(path)
     await workspace.rememberWorkspace(path)
     const status = await trustStatus(path)
     if (status.needsDecision) {
@@ -570,8 +579,12 @@ async function resumeSession(file: string, targetProject?: string) {
     activateSession(owner.runtimeId)
     project.value = dir
     if (changingProject) {
-      config.value.lastProject = dir
-      await saveConfig({ ...config.value })
+      // A removed project can still be opened by its route, but it must not
+      // become the auto-restored project on the next launch.
+      if (!workspace.isRemovedProject(dir)) {
+        config.value.lastProject = dir
+        await saveConfig({ ...config.value })
+      }
       const status = await trustStatus(dir)
       if (status.needsDecision) {
         trustInfo.value = status
@@ -715,16 +728,24 @@ async function removeProject(path: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
   navigating.value = true
   try {
-    if (workspace.projectRoot(project.value) === path) {
+    const removingActive = workspace.projectRoot(project.value) === path
+    // A removed project must not come back on the next launch either, even
+    // when lastProject merely pointed at it while another project was active.
+    if (removingActive || (config.value.lastProject && workspace.projectRoot(config.value.lastProject) === path)) {
       const nextConfig = { ...config.value, lastProject: undefined }
       // Persist before altering UI so a failure does not silently re-open the project.
       await saveConfig(nextConfig)
       // Removing a navigation entry does not cancel background conversations.
       config.value = nextConfig
+    }
+    if (removingActive) {
       pendingResume.value = null
       trustInfo.value = null
       project.value = ""
       phase.value = "pick"
+      // Replace the stale conversation route so Back/Forward or a reload
+      // cannot replay the removed project into the sidebar.
+      goHome(true)
     }
     workspace.removeProject(path)
   } catch (e) {

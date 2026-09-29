@@ -15,6 +15,9 @@ function harness(group = null) {
     ensureProjectless: async () => "",
     projectlessDefault: "",
     isProjectless: () => false,
+    // 移除项目标记：默认没有任何已移除项目。
+    isRemovedProject: () => false,
+    unremoveProject: () => {},
   }
   const source = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
     .split('<script setup lang="ts">')[1]
@@ -94,8 +97,10 @@ function harness(group = null) {
     onSessionsChanged: async () => () => {},
     sessionMtime: async () => 0,
     registerSessionMtimeSync: () => {},
-    useRoute: () => ({}),
+    useRoute: () => ({ value: { name: "home", params: {} } }),
     navigate: () => {},
+    projectRoute: path => `/project/${encodeURIComponent(path)}`,
+    sessionRoute: (id, project = "") => `/session/${encodeURIComponent(id)}/${encodeURIComponent(project)}`,
     samePath: pathsModule().samePath,
     normalizeSlashes: pathsModule().normalizeSlashes,
     normalizeProjectPath: pathsModule().normalizeProjectPath,

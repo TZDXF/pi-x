@@ -99,6 +99,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   } catch {
     /* Optional storage. */
   }
+  // Projects the user explicitly removed: automatic paths (activating a
+  // session, route replay, restart restore) must never re-add them. Only
+  // explicit add flows (project dialog, folder pick) clear the marker.
+  const removedProjects = ref<string[]>([])
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("pix.removedProjects") || "[]")
+    if (Array.isArray(stored)) {
+      for (const item of stored) {
+        if (typeof item !== "string") continue
+        const path = normalizeProjectPath(item)
+        if (path && !removedProjects.value.some(existing => samePath(existing, path))) removedProjects.value.push(path)
+      }
+    }
+  } catch {
+    /* Optional storage. */
+  }
   function persistProjects() {
     try {
       localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
@@ -118,6 +134,26 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   // Normalize existing localStorage records once, including group keys and pinned/order metadata.
   persistProjects()
   persistSessionOrder()
+  function persistRemovedProjects() {
+    localStorage.setItem("pix.removedProjects", JSON.stringify(removedProjects.value))
+  }
+  /** Whether the user explicitly removed this project, so automatic paths must not re-add it. */
+  function isRemovedProject(path: string) {
+    path = normalizeProjectPath(path)
+    return !!path && removedProjects.value.some(existing => samePath(existing, path))
+  }
+  /** Clear the removed marker; only explicit add flows (dialog, folder pick) call this. */
+  function unremoveProject(path: string) {
+    path = normalizeProjectPath(path)
+    if (!path) return
+    const targets = [path]
+    const root = projectRoot(path)
+    if (root !== path) targets.push(root)
+    const next = removedProjects.value.filter(existing => !targets.some(target => samePath(existing, target)))
+    if (next.length === removedProjects.value.length) return
+    removedProjects.value = next
+    persistRemovedProjects()
+  }
   function orderedProjects() {
     return [...projects.value].sort(
       (a, b) => Number(pinnedProjects.value.includes(b)) - Number(pinnedProjects.value.includes(a)),
@@ -179,6 +215,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     projects.value = [primary, ...projects.value]
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
+    // Re-adding a project explicitly also lifts its removed marker.
+    unremoveProject(primary)
+    for (const folder of folders) unremoveProject(folder)
     persistProjects()
   }
   function projectRoot(path: string) {
@@ -246,6 +285,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     pinnedProjects.value = pinnedProjects.value.map(path => (path === oldPrimary ? primary : path))
     delete projectGroups.value[oldPrimary]
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
+    unremoveProject(primary)
+    for (const folder of folders) unremoveProject(folder)
     persistProjects()
   }
   function projectName(path: string) {
@@ -274,6 +315,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function removeProject(path: string) {
     path = projectRoot(path)
+    if (!isRemovedProject(path)) {
+      removedProjects.value = [path, ...removedProjects.value]
+      persistRemovedProjects()
+    }
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
     delete projectGroups.value[path]
@@ -323,7 +368,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function remember(path: string) {
     path = normalizeProjectPath(path)
-    if (!path) return
+    // Removed projects only come back through explicit add flows.
+    if (!path || isRemovedProject(path)) return
     if (!projects.value.includes(path) && projectRoot(path) === path) projects.value = [path, ...projects.value]
     persistProjects()
   }
@@ -405,6 +451,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     orderedSessions,
     togglePin,
     removeProject,
+    isRemovedProject,
+    unremoveProject,
     histories,
     reorderSessions,
     remember,

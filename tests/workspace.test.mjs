@@ -94,6 +94,28 @@ test("editing a project rekeys its primary and pin while preserving folder sessi
     h.store.updateProject("C:/new", { name: "Nope", folders: ["C:/old", "C:/old"], primary: "C:/old" }),
   )
 })
+test("removed projects stay removed until they are explicitly re-added", async () => {
+  const h = harness()
+  h.store.remember("C:/one")
+  h.store.removeProject("C:/one")
+  assert.deepEqual(Array.from(h.store.projects.value), [])
+  assert.deepEqual(JSON.parse(h.storage.get("pix.removedProjects")), ["C:/one"])
+  // Automatic paths (sidebar watcher, session restore) must not resurrect it.
+  await h.store.rememberWorkspace("C:/one")
+  assert.deepEqual(Array.from(h.store.projects.value), [])
+  // Reloading the store from the same storage keeps it removed.
+  const reopened = harness(h.storage)
+  await reopened.store.rememberWorkspace("C:/one")
+  assert.deepEqual(Array.from(reopened.store.projects.value), [])
+  // Explicitly creating the project again lifts the marker.
+  reopened.store.createProject({ name: "One", primary: "C:/one", folders: ["C:/one"] })
+  assert.deepEqual(Array.from(reopened.store.projects.value), ["C:/one"])
+  assert.deepEqual(JSON.parse(reopened.storage.get("pix.removedProjects")), [])
+  reopened.store.removeProject("C:/one")
+  reopened.store.unremoveProject("C:/one")
+  reopened.store.remember("C:/one")
+  assert.deepEqual(Array.from(reopened.store.projects.value), ["C:/one"])
+})
 test("refresh sorts by time and ignores stale responses", async () => {
   const h = harness()
   const a = h.store.refresh("project"),
@@ -165,6 +187,11 @@ test("removing a project clears its pin and cached list but does not modify conv
   assert.deepEqual(JSON.parse(h.storage.get("pix.pinnedProjects")), [])
   assert.equal(h.store.histories.value.one, undefined)
   assert.equal(h.writes.length, 0)
+  // A removed project must not come back through automatic paths.
+  h.store.remember("one")
+  assert.deepEqual(Array.from(h.store.projects.value), ["two"])
+  // Explicitly clearing the removal marker re-registers it.
+  h.store.unremoveProject("one")
   h.store.remember("one")
   assert.deepEqual(Array.from(h.store.projects.value), ["one", "two"])
 })
