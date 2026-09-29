@@ -35,6 +35,12 @@ export function parseModelAdvanced(raw: string): Record<string, unknown> {
   if (isObject(value.headers) && Object.values(value.headers).some(v => typeof v !== "string")) {
     throw new Error("headers: values must be strings / 值必须是字符串")
   }
+  if (isObject(value.thinkingLevelMap)) {
+    for (const [level, mapped] of Object.entries(value.thinkingLevelMap)) {
+      if (mapped !== null && typeof mapped !== "string")
+        throw new Error(`thinkingLevelMap.${level}: expected a string or null / 必须是字符串或 null`)
+    }
+  }
   if (isObject(value.compat)) {
     for (const key of compatFlags) {
       if (key in value.compat && typeof value.compat[key] !== "boolean")

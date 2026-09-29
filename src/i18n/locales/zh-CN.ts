@@ -754,6 +754,14 @@ export default {
     },
     modelAdvancedJsonHint:
       "编辑其他模型字段，例如 headers、cost、samplingParams 和 thinkingLevelMap；不要重复填写基础配置字段。",
+    modelThinkingLevels: "思考挡位",
+    modelThinkingLevelsHint:
+      "设置 Pi 思考挡位是否继承、启用或关闭；自定义映射值会写入 thinkingLevelMap。极高和最大挡位需要显式启用，off（关闭）挡位可映射为服务特定的关闭值。",
+    modelThinkingInherit: "继承 Pi 默认",
+    modelThinkingDefault: "启用（同名映射）",
+    modelThinkingDisabled: "不支持 / 关闭",
+    modelThinkingCustom: "自定义映射",
+    modelThinkingMappingLabel: "映射值",
     modelAdvancedJson: "高级字段 JSON（不包含上方基础字段）",
 
     modelReasoning: "支持思考",

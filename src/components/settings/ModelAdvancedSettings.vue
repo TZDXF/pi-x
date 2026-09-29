@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, useId } from "vue"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
 import { useI18n } from "vue-i18n"
+import { ALL_THINKING_LEVELS } from "@/lib/thinkingLevels"
+import type { ThinkingLevel } from "@/api/protocol"
 import { compatFlags, parseModelAdvanced } from "@/lib/modelAdvanced"
 const model = defineModel<string>({ required: true })
 defineProps<{ api: string }>()
@@ -28,6 +31,47 @@ function setCompat(key: string, selected: unknown) {
   if (Object.keys(compat).length) value.compat = compat
   else delete value.compat
   model.value = JSON.stringify(value, null, 2)
+}
+
+const THINKING_INHERIT = "__inherit__"
+const THINKING_DEFAULT = "__default__"
+const THINKING_DISABLED = "__disabled__"
+const THINKING_CUSTOM = "__custom__"
+const thinkingLevels = ALL_THINKING_LEVELS
+
+function thinkingMap(): Record<string, unknown> {
+  const map = parsed.value.value?.thinkingLevelMap
+  return map && typeof map === "object" && !Array.isArray(map) ? (map as Record<string, unknown>) : {}
+}
+function thinkingMode(level: ThinkingLevel): string {
+  const mapped = thinkingMap()[level]
+  if (mapped === null) return THINKING_DISABLED
+  if (typeof mapped !== "string") return THINKING_INHERIT
+  return mapped === level ? THINKING_DEFAULT : THINKING_CUSTOM
+}
+function thinkingMapping(level: ThinkingLevel): string {
+  const mapped = thinkingMap()[level]
+  return typeof mapped === "string" ? mapped : level
+}
+function setThinkingLevel(level: ThinkingLevel, mapped: string | null | undefined) {
+  if (!parsed.value.value) return
+  const value = { ...parsed.value.value }
+  const map = { ...(value.thinkingLevelMap as Record<string, unknown> | undefined) }
+  if (mapped === undefined) delete map[level]
+  else map[level] = mapped
+  if (Object.keys(map).length) value.thinkingLevelMap = map
+  else delete value.thinkingLevelMap
+  model.value = JSON.stringify(value, null, 2)
+}
+function setThinkingMode(level: ThinkingLevel, selected: unknown) {
+  if (typeof selected !== "string" || !parsed.value.value) return
+  if (selected === THINKING_INHERIT) setThinkingLevel(level, undefined)
+  else if (selected === THINKING_DISABLED) setThinkingLevel(level, null)
+  else setThinkingLevel(level, thinkingMapping(level))
+}
+function setThinkingMapping(level: ThinkingLevel, value: unknown) {
+  if (typeof value !== "string") return
+  setThinkingLevel(level, value)
 }
 </script>
 
@@ -74,6 +118,46 @@ function setCompat(key: string, selected: unknown) {
           </Select>
         </div>
       </template>
+      <div class="border-border space-y-2 rounded-md border p-2">
+        <div class="space-y-1">
+          <span class="font-medium">{{ t("settings.modelThinkingLevels") }}</span>
+          <p class="text-muted-foreground leading-relaxed">{{ t("settings.modelThinkingLevelsHint") }}</p>
+        </div>
+        <div class="grid gap-2 xl:grid-cols-2">
+          <div v-for="level in thinkingLevels" :key="level" class="space-y-1">
+            <label :for="id + '-thinking-' + level" class="flex items-center justify-between gap-2">
+              <span>{{ t("chat.thinkingLevels." + level) }}</span>
+              <code class="font-mono">{{ level }}</code>
+            </label>
+            <Select
+              :model-value="thinkingMode(level)"
+              :disabled="!!parsed.error"
+              @update:model-value="setThinkingMode(level, $event)"
+            >
+              <SelectTrigger :id="id + '-thinking-' + level" class="h-8 w-full text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="THINKING_INHERIT">{{ t("settings.modelThinkingInherit") }}</SelectItem>
+                <SelectItem v-if="level !== 'off'" :value="THINKING_DEFAULT">
+                  {{ t("settings.modelThinkingDefault") }}
+                </SelectItem>
+                <SelectItem :value="THINKING_DISABLED">{{ t("settings.modelThinkingDisabled") }}</SelectItem>
+                <SelectItem :value="THINKING_CUSTOM">{{ t("settings.modelThinkingCustom") }}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              v-if="thinkingMode(level) === THINKING_CUSTOM"
+              :id="id + '-thinking-' + level + '-map'"
+              :model-value="thinkingMapping(level)"
+              :placeholder="level"
+              :aria-label="t('settings.modelThinkingMappingLabel') + ' - ' + level"
+              class="h-8 font-mono text-xs"
+              @update:model-value="setThinkingMapping(level, $event)"
+            />
+          </div>
+        </div>
+      </div>
       <label class="block space-y-1">
         <span>{{ t("settings.modelAdvancedJson") }}</span>
         <span class="text-muted-foreground block leading-relaxed">{{ t("settings.modelAdvancedJsonHint") }}</span>

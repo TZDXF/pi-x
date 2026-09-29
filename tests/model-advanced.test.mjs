@@ -50,3 +50,19 @@ test("advanced settings are available for both add and edit forms", () => {
   assert.match(logic, /parseModelAdvanced\(f\.advanced\)/)
   assert.match(logic, /advanced: modelAdvancedJson\(m\)/)
 })
+
+test("thinking level maps reject non-string provider values", () => {
+  assert.throws(() => parseModelAdvanced('{"thinkingLevelMap":{"high":1}}'), /thinkingLevelMap.high/)
+  assert.deepEqual(parseModelAdvanced('{"thinkingLevelMap":{"low":null,"xhigh":"extended"}}'), {
+    thinkingLevelMap: { low: null, xhigh: "extended" },
+  })
+})
+test("advanced settings expose thinking modes and mappings", () => {
+  const component = readFileSync(
+    new URL("../src/components/settings/ModelAdvancedSettings.vue", import.meta.url),
+    "utf8",
+  )
+  assert.match(component, /ALL_THINKING_LEVELS/)
+  assert.match(component, /THINKING_DISABLED/)
+  assert.match(component, /setThinkingMapping/)
+})
