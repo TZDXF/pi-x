@@ -38,9 +38,14 @@ if (op.startsWith("trust_")) {
     const patch = request.settings;
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid settings");
     for (const key of Object.keys(patch)) {
-      if (!["defaultProvider", "defaultModel", "skills", "retry"].includes(key)) throw new Error(`Unsupported setting: ${key}`);
+      if (!["defaultProvider", "defaultModel", "skills", "retry", "followUpMode"].includes(key))
+        throw new Error(`Unsupported setting: ${key}`);
     }
     if ("skills" in patch && (!Array.isArray(patch.skills) || !patch.skills.every(p => typeof p === "string"))) throw new Error("Invalid skill paths");
+    if ("followUpMode" in patch) {
+      if (!["one-at-a-time", "all"].includes(patch.followUpMode)) throw new Error("Invalid followUpMode");
+      settings.setFollowUpMode(patch.followUpMode);
+    }
     if ("defaultProvider" in patch || "defaultModel" in patch) {
       if (![patch.defaultProvider, patch.defaultModel].every(v => v === null || typeof v === "string")) throw new Error("Invalid default model");
       settings.setDefaultModelAndProvider(patch.defaultProvider ?? undefined, patch.defaultModel ?? undefined);
@@ -55,7 +60,8 @@ if (op.startsWith("trust_")) {
   const global = settings.getGlobalSettings();
   result = { defaultProvider: global.defaultProvider, defaultModel: global.defaultModel,
     defaultThinkingLevel: global.defaultThinkingLevel, modelThinkingLevels: global.modelThinkingLevels,
-    skills: global.skills ?? [], retry: readRetrySettings(settings) };
+    skills: global.skills ?? [], retry: readRetrySettings(settings),
+    followUpMode: settings.getFollowUpMode() };
 } else if (op === "session_export_html") {
   const { exportFromFile } = await load("core/export-html/index.js");
   result = await exportFromFile(request.file, { outputPath: request.outputPath });

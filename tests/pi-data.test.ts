@@ -180,3 +180,23 @@ test("malformed Pi settings and invalid patches fail without replacing the file"
   call({ op: "settings_save", settings: { defaultProvider: "p", defaultModel: "m", skills: false } }, false)
   expect(readFileSync(file, "utf8")).toBe("{}")
 })
+
+test("follow-up delivery mode merges into the global file and invalid values are rejected", { skip: !dist }, t => {
+  const { agent, call } = fixture(t)
+  const path = join(agent, "settings.json")
+  writeFileSync(path, "{}")
+  expect(call({ op: "settings_get" }).followUpMode, "the default comes from Pi").toBe("one-at-a-time")
+
+  writeFileSync(path, JSON.stringify({ theme: "dark" }))
+  call({ op: "settings_save", settings: { followUpMode: "all" } })
+  let saved = JSON.parse(readFileSync(path, "utf8"))
+  expect(saved.followUpMode).toBe("all")
+  expect(saved.theme, "unrelated keys survive the patch").toBe("dark")
+  expect(call({ op: "settings_get" }).followUpMode).toBe("all")
+
+  for (const mode of ["sometimes", 3, null]) {
+    call({ op: "settings_save", settings: { followUpMode: mode } }, false)
+  }
+  saved = JSON.parse(readFileSync(path, "utf8"))
+  expect(saved.followUpMode, "invalid values never reach the file").toBe("all")
+})
