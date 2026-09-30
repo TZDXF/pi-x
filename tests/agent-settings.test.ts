@@ -181,9 +181,9 @@ test("prompt page shows missing files, creates edits, and preserves drafts acros
   const h = harness({ __promptFiles: { "SYSTEM.md": "old" }, piPath: "pi" }, "AgentSettings")
   await h.mount()
   expect(Array.from(h.api.files.value, file => file.fileName)).toEqual(["AGENTS.md", "SYSTEM.md", "APPEND_SYSTEM.md"])
-  expect(h.api.selectedFile.value.content).toBe("old")
-  expect(h.api.selectedFile.value.exists).toBe(true)
-  h.api.selectedName.value = "AGENTS.md"
+  // 全局提示词默认选中 AGENTS.md，它是尚未创建的缺失文件
+  expect(h.api.selectedFile.value.fileName).toBe("AGENTS.md")
+  expect(h.api.selectedFile.value.content).toBe("")
   expect(h.api.selectedFile.value.exists).toBe(false)
   h.api.updatePrompt("中文")
   h.api.selectedName.value = "SYSTEM.md"
