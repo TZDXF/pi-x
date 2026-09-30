@@ -39,6 +39,8 @@ export interface AppConfig {
   titleModel?: ModelRef
   /** Title generation follows the default model instead of titleModel. */
   titleFollowMain?: boolean
+  /** Translation model for package resource content. */
+  translationModel?: ModelRef
   /** 无项目会话的工作目录；缺省为 `~/.pix/workspace`。 */
   projectlessDir?: string
   /** PiX 内置文件变更插件；缺省为启用。 */
@@ -499,6 +501,15 @@ export const packageResources = (source: string, scope: "global" | "project", pr
   invoke<PackageResource[]>("package_resources", { source, scope, project: project ?? null })
 
 /** Enable or disable one resource of an installed package (writes +path / -path filters). */
+/** Read a package resource file's text content for preview. */
+export const packageReadResource = (
+  source: string, scope: "global" | "project", resourceType: PackageResource["resourceType"], path: string, project?: string,
+) => invoke<string>("package_read_resource", { source, scope, resourceType, path, project: project ?? null })
+
+/** Translate content using the configured translation model. */
+export const packageTranslate = (content: string, targetLang: string) =>
+  invoke<string>("package_translate", { content, targetLang })
+
 export const packageSetResource = (
   source: string,
   scope: "global" | "project",

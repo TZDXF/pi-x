@@ -854,6 +854,11 @@ export default {
     save: "保存",
   },
 
+  translation: {
+    model: "翻译模型",
+    modelHint: "用于翻译插件资源文件内容；未选择时回退到默认模型。",
+  },
+
   packages: {
     title: "插件",
     description: "浏览 Pi 插件市场，安装或管理插件。",
@@ -905,6 +910,13 @@ export default {
     toastUpdated: "更新完成",
     typeAll: "全部",
     manage: "资源管理",
+    resourcesNav: "插件资源",
+    resourcesPageTitle: "{name} 的资源",
+    backToPackages: "返回插件",
+    translate: "翻译",
+    loadingResource: "正在加载文件…",
+    extEnabledToast: "已启用 {name}",
+    extDisabledToast: "已关闭 {name}（含全部资源）",
     resourcesTitle: "管理 {name} 的资源",
     resourcesHint: "勾选启用，取消勾选禁用单个资源，等效于 pi config。",
     resourcesEmpty: "未发现可管理的资源（插件尚未安装或不含资源）。",
@@ -920,6 +932,13 @@ export default {
   // 后端（src-tauri）与 transport 层编码错误的当前语言文案；键与 Rust 调用点的错误码一致，
   // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
+    invalidResourceType: "无效的资源类型",
+    invalidResourcePath: "无效的资源路径",
+    resourceReadFailed: "读取资源文件失败",
+    noTranslationModel: "未配置翻译模型，请在模型配置中选择",
+    translationTimeout: "翻译超时（2 分钟）",
+    translationFailed: "翻译模型返回错误",
+    translationEmpty: "翻译结果为空",
     piNotFound: "未找到 pi，请先在设置中配置 pi 路径",
     piLaunchUnknown: "无法确定 pi 启动方式",
     operationTimeout: "操作超时（5 分钟）",

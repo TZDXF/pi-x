@@ -4,6 +4,8 @@ import { computed, onScopeDispose, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import {
   packageCatalog,
+  packageResources,
+  packageSetResource,
   getConfig,
   packageList,
   packageInstall,
@@ -36,6 +38,8 @@ export function usePackages(project: () => string | undefined) {
   // ---- installed ----
   const installed = ref<InstalledPackage[]>([])
   const installedLoading = ref(false)
+  /** source -> extension enabled (all extension files enabled). */
+  const extensionStates = ref<Map<string, boolean>>(new Map())
 
   // ---- built-in plugins ----
   const appConfig = ref<AppConfig | null>(null)
@@ -176,6 +180,20 @@ export function usePackages(project: () => string | undefined) {
     installedLoading.value = true
     try {
       installed.value = await packageList(viewedProject.value || undefined)
+      // Fetch each package's extension enabled state in parallel.
+      const entries = await Promise.all(
+        installed.value.map(async p => {
+          const project = p.scope === "project" ? viewedProject.value : undefined
+          try {
+            const res = await packageResources(p.source, p.scope, project)
+            const ext = res.filter(r => r.resourceType === "extensions")
+            return [p.source, ext.length > 0 && ext.every(r => r.enabled)] as const
+          } catch {
+            return [p.source, false] as const
+          }
+        }),
+      )
+      extensionStates.value = new Map(entries)
     } catch (e) {
       ui.pushToast(String(e), "error")
     } finally {
@@ -286,6 +304,31 @@ export function usePackages(project: () => string | undefined) {
     }
   }
 
+  /** Enable or disable a package's extension together with all of its
+   *  skills, prompts and themes (cascading toggle on the installed row). */
+  async function toggleExtension(pkg: InstalledPackage, enabled: boolean) {
+    const key = `ext:${pkg.source}`
+    if (busy.value) return
+    busy.value = key
+    try {
+      const project = pkg.scope === "project" ? viewedProject.value : undefined
+      const all = await packageResources(pkg.source, pkg.scope, project)
+      for (const r of all) {
+        if (r.enabled === enabled) continue
+        await packageSetResource(pkg.source, pkg.scope, r.resourceType, r.path, enabled, project)
+      }
+      ui.pushToast(
+        t(enabled ? "packages.extEnabledToast" : "packages.extDisabledToast", { name: packageNameOf(pkg.source) }),
+        "info",
+      )
+      await refreshInstalled()
+    } catch (e) {
+      ui.pushToast(String(e), "error")
+    } finally {
+      busy.value = null
+    }
+  }
+
   function filterSummary(filters: Record<string, unknown> | null): string {
     if (!filters) return ""
     return Object.entries(filters)
@@ -303,6 +346,7 @@ export function usePackages(project: () => string | undefined) {
     catalogHasMore,
     installed,
     installedLoading,
+    extensionStates,
     appConfig,
     builtinLoading,
     builtinBusy,
@@ -333,6 +377,7 @@ export function usePackages(project: () => string | undefined) {
     install,
     remove,
     update,
+    toggleExtension,
     installCustom,
     chooseProjectForInstall,
     confirmProjectInstall,

@@ -151,8 +151,11 @@ pub fn run() {
             packages::package_install,
             packages::package_remove,
             packages::package_update,
+            packages::package_read_resource,
             packages::package_resources,
             packages::package_set_resource,
+            packages::package_translate,
+            
             skills::skills_hosted_list,
             skills::skills_discovered_list,
             skills::skills_hosted_open_dir,

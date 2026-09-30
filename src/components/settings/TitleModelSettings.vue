@@ -18,6 +18,8 @@ const provider = ref("")
 const modelId = ref("")
 const defaultProvider = ref("")
 const defaultModelId = ref("")
+const translationProvider = ref("")
+const translationModelId = ref("")
 const loading = ref(true)
 const saving = ref(false)
 const loadError = ref("")
@@ -61,6 +63,15 @@ const defaultKey = computed({
     defaultModelId.value = parts[1]
   },
 })
+const translationKey = computed({
+  get: () => (translationProvider.value && translationModelId.value ? `${translationProvider.value}/${translationModelId.value}` : ""),
+  set: (key: string) => {
+    const parts = splitKey(key)
+    if (!parts) return
+    translationProvider.value = parts[0]
+    translationModelId.value = parts[1]
+  },
+})
 const canSave = computed(
   () =>
     !loading.value &&
@@ -82,6 +93,8 @@ async function load() {
     defaultMode.value = config.defaultModel ? "specific" : "none"
     defaultProvider.value = config.defaultModel?.provider ?? ""
     defaultModelId.value = config.defaultModel?.modelId ?? ""
+    translationProvider.value = config.translationModel?.provider ?? ""
+    translationModelId.value = config.translationModel?.modelId ?? ""
     try {
       const custom = await getModelsConfig()
       customModels.value = Object.entries(custom.providers ?? {}).flatMap(([provider, entry]) =>
@@ -116,6 +129,10 @@ async function save() {
           ? { provider: provider.value.trim(), modelId: modelId.value.trim() }
           : undefined,
       titleFollowMain: titleMode.value === "default" ? true : undefined,
+      translationModel:
+        translationProvider.value.trim() && translationModelId.value.trim()
+          ? { provider: translationProvider.value.trim(), modelId: translationModelId.value.trim() }
+          : undefined,
     })
     ui.pushToast(t("settings.toastSaved"), "info")
   } catch (error) {
@@ -210,7 +227,21 @@ async function save() {
             </div>
           </div>
         </div>
-      </section>
+            </section>
+
+      <section class="space-y-3 rounded-lg border border-border p-4">
+        <h3 class="text-sm font-medium">{{ t("translation.model") }}</h3>
+        <p class="text-muted-foreground text-xs">{{ t("translation.modelHint") }}</p>
+        <div class="space-y-2">
+          <ConversationModelSelect
+            id="translation-model"
+            v-model="translationKey"
+            :models="models"
+            :disabled="!models.length"
+            trigger-class="h-8 w-full text-xs"
+          />
+          <p v-if="!models.length" class="text-muted-foreground text-xs">{{ t("titleGeneration.noModels") }}</p>
+        </div></section>
       <Button type="submit" :disabled="!canSave">{{ saving ? t("settings.saving") : t("settings.save") }}</Button>
     </fieldset>
   </form>

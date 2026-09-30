@@ -75,6 +75,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./packages/PackageSettings.vue")),
   },
   {
+    id: "package-resources",
+    nav: "packages.title",
+    title: "packages.resourcesNav",
+    desktopOnly: true,
+    component: defineAsyncComponent(() => import("./packages/PackageResourcePage.vue")),
+  },
+  {
     id: "agent-config",
     nav: "agentConfig.title",
     title: "agentConfig.title",

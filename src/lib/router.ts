@@ -40,6 +40,7 @@ export const SETTINGS_TABS = [
   "model-config",
   "shortcuts",
   "packages",
+  "package-resources",
   "agent-config",
   "skills",
   "about",

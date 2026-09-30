@@ -882,6 +882,11 @@ export default {
     save: "Save",
   },
 
+  translation: {
+    model: "Translation model",
+    modelHint: "Used to translate package resource file content; falls back to the default model when unset.",
+  },
+
   packages: {
     title: "Packages",
     description: "Browse the Pi package catalog and manage installed packages.",
@@ -934,7 +939,14 @@ export default {
     toastRemoved: "Removed {name}",
     toastUpdated: "Update finished",
     typeAll: "All",
-    manage: "Resources",
+    manage: "Manage resources",
+    resourcesNav: "Package resources",
+    resourcesPageTitle: "Resources of {name}",
+    backToPackages: "Back to packages",
+    translate: "Translate",
+    loadingResource: "Loading file…",
+    extEnabledToast: "Enabled {name}",
+    extDisabledToast: "Disabled {name} (all resources)",
     resourcesTitle: "Manage resources of {name}",
     resourcesHint: "Check to enable, uncheck to disable individual resources (same as pi config).",
     resourcesEmpty: "No manageable resources found (package not installed yet or has none).",
@@ -951,6 +963,14 @@ export default {
   // transport layer; keys mirror the error codes at the Rust call sites.
   // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
+    invalidResourceType: "Invalid resource type",
+    invalidResourcePath: "Invalid resource path",
+    resourceReadFailed: "Failed to read resource file",
+    noTranslationModel: "No translation model configured; set one in model config",
+    translationTimeout: "Translation timed out (2 min)",
+    translationFailed: "Translation model returned an error",
+    translationEmpty: "Translation returned empty output",
+
     piNotFound: "pi not found. Configure the pi path in Settings first.",
     piLaunchUnknown: "Cannot determine how to launch pi.",
     operationTimeout: "Operation timed out (5 minutes).",

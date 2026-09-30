@@ -12,15 +12,24 @@ import { Separator } from "@/components/ui/separator"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { packageNameOf, type InstalledPackage } from "@/api/piClient"
 import { joinDisplayPath } from "@/lib/paths"
-import { Trash2, ArrowUpCircle, Plus, SlidersHorizontal } from "@lucide/vue"
+import { Trash2, ArrowUpCircle, Plus, FileBox } from "@lucide/vue"
+import { Switch } from "@/components/ui/switch"
+import { navigate } from "@/lib/router"
+import { selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
 import type { PackagesContext } from "./usePackages"
 
 const props = defineProps<{ ctx: PackagesContext }>()
-const emit = defineEmits<{ manage: [pkg: InstalledPackage] }>()
+
 const { t } = useI18n()
 
 const { customSource, customScope, globalInstalled, projectInstalled, viewedProject, busy } = props.ctx
-const { installCustom, update, remove, filterSummary } = props.ctx
+const { installCustom, update, remove, filterSummary, toggleExtension, extensionStates } = props.ctx
+
+function openResources(p: InstalledPackage) {
+  selectedResourcePackage.value = p
+  selectedResourceProject.value = p.scope === "project" ? viewedProject.value : ""
+  navigate("/settings/package-resources")
+}
 </script>
 
 <template>
@@ -68,8 +77,13 @@ const { installCustom, update, remove, filterSummary } = props.ctx
       <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
     </div>
     <div class="flex shrink-0 gap-2">
-      <Button variant="outline" size="sm" @click="emit('manage', p)">
-        <SlidersHorizontal :size="14" />
+      <Switch
+        :model-value="extensionStates.get(p.source) ?? false"
+        :disabled="busy !== null"
+        @update:model-value="v => toggleExtension(p, v)"
+      />
+      <Button variant="outline" size="sm" @click="openResources(p)">
+        <FileBox :size="14" />
         {{ t("packages.manage") }}
       </Button>
       <Button variant="outline" size="sm" :disabled="busy !== null" @click="update(p.source)">
@@ -101,8 +115,13 @@ const { installCustom, update, remove, filterSummary } = props.ctx
         <SettingDescription v-if="p.filters" class="text-xs">{{ filterSummary(p.filters) }}</SettingDescription>
       </div>
       <div class="flex shrink-0 gap-2">
-        <Button variant="outline" size="sm" @click="emit('manage', p)">
-          <SlidersHorizontal :size="14" />
+        <Switch
+          :model-value="extensionStates.get(p.source) ?? false"
+          :disabled="busy !== null"
+          @update:model-value="v => toggleExtension(p, v)"
+        />
+        <Button variant="outline" size="sm" @click="openResources(p)">
+          <FileBox :size="14" />
           {{ t("packages.manage") }}
         </Button>
         <Button variant="outline" size="sm" :disabled="busy !== null" @click="remove(p)">

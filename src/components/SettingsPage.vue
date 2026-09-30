@@ -167,6 +167,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.remoteLinks",
   ],
   packages: ["packages"],
+  "package-resources": ["packages"],
   models: [
     "settings.providers",
     "settings.models",

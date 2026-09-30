@@ -61,6 +61,13 @@ pub struct AppConfig {
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
+    /// Translation model for package resource file content translation.
+    #[serde(
+        rename = "translationModel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub translation_model: Option<ModelRef>,
     /// 无项目会话的工作目录；缺省为 `~/.pix/workspace`。
     #[serde(
         rename = "projectlessDir",

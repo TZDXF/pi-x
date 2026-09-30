@@ -7,20 +7,17 @@ import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RefreshCw } from "@lucide/vue"
-import type { InstalledPackage } from "@/api/piClient"
 import { usePackages } from "./usePackages"
 import PackageMarketTab from "./PackageMarketTab.vue"
 import PackageInstalledTab from "./PackageInstalledTab.vue"
 import BuiltinPackagesTab from "./BuiltinPackagesTab.vue"
 import PackageInstallDialog from "./PackageInstallDialog.vue"
-import PackageResourceDialog from "./PackageResourceDialog.vue"
 
 const props = defineProps<{ project?: string }>()
 const { t } = useI18n()
 
 const innerTab = ref("market")
 const ctx = usePackages(() => props.project)
-const resPkg = ref<InstalledPackage | null>(null)
 
 const {
   installed,
@@ -29,7 +26,6 @@ const {
   builtinLoading,
   pendingProjectSource,
   recentProjects,
-  viewedProject,
   busy,
 } = ctx
 const { activate, loadCatalog, loadBuiltinPlugins, refreshInstalled, confirmProjectInstall } = ctx
@@ -74,7 +70,7 @@ onMounted(activate)
     </TabsContent>
 
     <TabsContent value="installed" class="mt-0">
-      <PackageInstalledTab :ctx @manage="resPkg = $event" />
+      <PackageInstalledTab :ctx />
     </TabsContent>
   </Tabs>
 
@@ -85,7 +81,6 @@ onMounted(activate)
     @confirm="confirmProjectInstall"
     @cancel="pendingProjectSource = ''"
   />
-  <PackageResourceDialog :pkg="resPkg" :project="viewedProject" @close="resPkg = null" />
 </template>
 <style scoped>
 .recent-projects {
