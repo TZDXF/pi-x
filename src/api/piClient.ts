@@ -679,3 +679,16 @@ export interface McpStatusResult {
  *  user request only (no polling). */
 export const getMcpStatus = (project?: string) =>
   invoke<McpStatusResult>("mcp_status", { project: project ?? null })
+
+/** Result of a single-server MCP `initialize` handshake check. */
+export interface McpCheckResult {
+  ok: boolean
+  latencyMs: number | null
+  /** Encoded (PIXERR:) or plain error message; empty on success. */
+  error: string | null
+}
+
+/** Runs a real MCP initialize handshake against one server definition from
+ *  the scope's mcp.json (15s timeout), without touching other servers. */
+export const checkMcpServer = (scope: McpScope, name: string, project?: string) =>
+  invoke<McpCheckResult>("mcp_check", { scope, name, project: project ?? null })

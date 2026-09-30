@@ -150,6 +150,7 @@ pub fn run() {
             mcp::mcp_config_read,
             mcp::mcp_config_save,
             mcp::mcp_status,
+            mcp::mcp_check,
             packages::package_catalog,
             packages::package_list,
             packages::package_install,
