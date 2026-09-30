@@ -27,3 +27,12 @@ export function fileDirectoryEntries(files: string[], filter = ""): Record<strin
   append(buildFileTree(paths.map(path => ({ path }))), "")
   return result
 }
+
+/** A preferred initial document must exist; never silently open another file instead. */
+export function initialFilePath(files: string[], preferred?: string | null): string | null {
+  const normalized = files.map(normalizeSlashes)
+  if (preferred === undefined) return normalized[0] ?? null
+  if (preferred === null) return null
+  const path = normalizeSlashes(preferred).toLowerCase()
+  return normalized.find(file => file.toLowerCase() === path) ?? null
+}

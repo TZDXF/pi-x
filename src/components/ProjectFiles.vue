@@ -5,8 +5,8 @@ import { ChevronRight, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { invoke } from "@/api/transport"
-import { baseName, normalizeSlashes } from "@/lib/paths"
-import { fileDirectoryEntries, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
+import { baseName } from "@/lib/paths"
+import { fileDirectoryEntries, initialFilePath, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
@@ -18,6 +18,8 @@ const props = withDefaults(
     filter?: string
     preview?: boolean
     showHeader?: boolean
+    /** Static lists may request a specific initial document, without a first-file fallback. */
+    defaultSelectedPath?: string | null
   }>(),
   { filter: "", preview: true, showHeader: true },
 )
@@ -65,8 +67,7 @@ function reset() {
   errors.value = {}
   selected.value = null
   if (props.files !== undefined) {
-    expanded.value = new Set(Object.keys(directories.value))
-    selected.value = props.files[0] ? normalizeSlashes(props.files[0]) : null
+    selected.value = initialFilePath(props.files, props.defaultSelectedPath)
   } else void load("")
 }
 onMounted(reset)

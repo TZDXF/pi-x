@@ -15,7 +15,7 @@ import { joinDisplayPath } from "@/lib/paths"
 import { Trash2, ArrowUpCircle, Plus, FileBox } from "@lucide/vue"
 import { Switch } from "@/components/ui/switch"
 import { navigate } from "@/lib/router"
-import { selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
+import { packageSettingsTab, selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
 import type { PackagesContext } from "./usePackages"
 
 const props = defineProps<{ ctx: PackagesContext }>()
@@ -26,6 +26,7 @@ const { customSource, customScope, globalInstalled, projectInstalled, viewedProj
 const { installCustom, update, remove, filterSummary, toggleExtension, extensionStates } = props.ctx
 
 function openResources(p: InstalledPackage) {
+  packageSettingsTab.value = "installed"
   selectedResourcePackage.value = p
   selectedResourceProject.value = p.scope === "project" ? viewedProject.value : ""
   navigate("/settings/package-resources")

@@ -11,10 +11,11 @@ import { Spinner } from "@/components/ui/spinner"
 import { Button } from "@/components/ui/button"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
-import { MessageResponse } from "@/components/ai-elements/message"
+import { Markdown } from "vue-stream-markdown"
+import { markdownLinkOptions } from "@/lib/linkOptions"
 import { packageListFiles, packageReadFile, packageTranslate, packageNameOf } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
-import { selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
+import { packageSettingsTab, selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
 
 const { t, locale } = useI18n()
 const ui = useUiStore()
@@ -84,6 +85,11 @@ watch(
   { immediate: true },
 )
 
+function goBack() {
+  packageSettingsTab.value = "installed"
+  navigate("/settings/packages")
+}
+
 async function translate(content: string) {
   if (!content.trim() || translating.value) return
   const request = ++translationRequest
@@ -103,7 +109,7 @@ async function translate(content: string) {
 <template>
   <div data-package-resources class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div class="mb-3 flex shrink-0 items-center gap-2">
-      <Button variant="ghost" size="sm" @click="navigate('/settings/packages')">
+      <Button variant="ghost" size="sm" @click="goBack">
         <ArrowLeft :size="14" />
         {{ t("packages.backToPackages") }}
       </Button>
@@ -132,6 +138,7 @@ async function translate(content: string) {
           :project="project"
           :files="files"
           :filter="filter"
+          default-selected-path="README.md"
           :preview="false"
           :show-header="false"
         />
@@ -163,7 +170,13 @@ async function translate(content: string) {
         <template #after-content>
           <template v-if="translated">
             <div class="my-3 border-t" />
-            <MessageResponse :content="translated" class="text-sm" />
+            <Markdown
+              :content="translated"
+              mode="static"
+              :enable-animate="false"
+              :link-options="markdownLinkOptions"
+              class="text-sm"
+            />
           </template>
         </template>
       </ProjectFilePreview>

@@ -314,7 +314,13 @@ onBeforeUnmount(() => {
           data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
-          <Markdown :content="text" :link-options="markdownLinkOptions" class="text-sm" />
+          <Markdown
+            :content="text"
+            mode="static"
+            :enable-animate="false"
+            :link-options="markdownLinkOptions"
+            class="text-sm"
+          />
           <slot name="after-content" />
         </div>
         <!-- 代码视图：原生滚动而非 ScrollArea，横竖双向滚动直接交给 overflow -->

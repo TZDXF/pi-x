@@ -2,11 +2,12 @@
 /** Pi package management: browse the official pi.dev/packages catalog and
  *  install / remove / update packages via the pi CLI. Mounted by the
  *  #/settings/packages route and remounted on every visit. */
-import { onMounted, ref } from "vue"
+import { onMounted } from "vue"
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RefreshCw } from "@lucide/vue"
+import { packageSettingsTab } from "./selectedResourcePackage"
 import { usePackages } from "./usePackages"
 import PackageMarketTab from "./PackageMarketTab.vue"
 import PackageInstalledTab from "./PackageInstalledTab.vue"
@@ -16,18 +17,10 @@ import PackageInstallDialog from "./PackageInstallDialog.vue"
 const props = defineProps<{ project?: string }>()
 const { t } = useI18n()
 
-const innerTab = ref("market")
+const innerTab = packageSettingsTab
 const ctx = usePackages(() => props.project)
 
-const {
-  installed,
-  catalogLoading,
-  installedLoading,
-  builtinLoading,
-  pendingProjectSource,
-  recentProjects,
-  busy,
-} = ctx
+const { installed, catalogLoading, installedLoading, builtinLoading, pendingProjectSource, recentProjects, busy } = ctx
 const { activate, loadCatalog, loadBuiltinPlugins, refreshInstalled, confirmProjectInstall } = ctx
 
 function refreshActiveTab() {

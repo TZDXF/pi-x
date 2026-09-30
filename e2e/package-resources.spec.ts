@@ -19,7 +19,7 @@ createApp({ render: () => h('div', { style }, [h(settings ? SettingsPage : Packa
   .use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).use(createPinia()).mount('#app')
 </script></body></html>`
 
-const files = ["README.md", "docs/guides/Usage.MD", "docs/Reference.markdown", "src/index.ts", "assets/logo.png"]
+const files = ["docs/guides/Usage.MD", "README.md", "docs/Reference.markdown", "src/index.ts", "assets/logo.png"]
 const content: Record<string, string> = {
   "README.md":
     "# Package overview\n\n**Important** documentation.\n\n- First item\n- Second item\n\n```ts\nconst value = 1\n```",
@@ -62,6 +62,12 @@ test("shows only Markdown in a collapsible directory tree and renders original a
   await expect(tree.getByText("logo.png")).toHaveCount(0)
   await expect(tree.getByText("src", { exact: true })).toHaveCount(0)
   await expect(tree.getByText("assets", { exact: true })).toHaveCount(0)
+  await expect(tree.getByRole("button", { name: "docs", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await expect(tree.getByText("Usage.MD", { exact: true })).toHaveCount(0)
+  await expect(tree.getByText("Reference.markdown", { exact: true })).toHaveCount(0)
+  await tree.getByRole("button", { name: "docs", exact: true }).click()
+  await expect(tree.getByRole("button", { name: "guides", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await tree.getByRole("button", { name: "guides", exact: true }).click()
   await expect(tree.getByText("Usage.MD", { exact: true })).toBeVisible()
   await expect(tree.getByText("Reference.markdown", { exact: true })).toBeVisible()
 
@@ -134,6 +140,7 @@ test("ignores a stale file read after another Markdown document is selected", as
     await route.fulfill({ json: { data: content[args.path] ?? null } })
   })
   await page.goto(harness.url)
+  await page.getByPlaceholder("Filter files by path…").fill("Usage.MD")
   await page.locator("[data-package-resource-files]").getByText("Usage.MD", { exact: true }).click()
   await expect(page.getByRole("heading", { name: "Usage guide" })).toBeVisible()
   const staleResponse = page.waitForResponse(response => response.request().postDataJSON()?.args?.path === "README.md")
@@ -153,7 +160,10 @@ test("keeps the settings resource browser within the window with independently s
   const errors: string[] = []
   page.on("pageerror", error => errors.push(error.message))
   const fixture = {
-    files: Array.from({ length: 100 }, (_, i) => `docs/guides/document-${String(i).padStart(3, "0")}.md`),
+    files: [
+      "README.md",
+      ...Array.from({ length: 100 }, (_, i) => `docs/guides/document-${String(i).padStart(3, "0")}.md`),
+    ],
     content: Array.from({ length: 80 }, (_, i) => `## Section ${i}\n\nParagraph ${i} with **Markdown** content.`).join(
       "\n\n",
     ),
@@ -171,6 +181,10 @@ test("keeps the settings resource browser within the window with independently s
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto(`${harness.url}?settings#/settings/package-resources`)
   await expect(page.getByRole("heading", { name: "Section 0", exact: true })).toBeVisible()
+  const tree = page.locator("[data-package-resource-files]")
+  await expect(tree.getByRole("button", { name: "docs", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await tree.getByRole("button", { name: "docs", exact: true }).click()
+  await tree.getByRole("button", { name: "guides", exact: true }).click()
   const filesViewport = page.locator('[data-package-resource-files] [data-slot="scroll-area-viewport"]')
   const previewViewport = page.locator("[data-package-resource-preview] [data-file-preview-scroll]")
 
@@ -255,6 +269,7 @@ test("ignores a translation completed after switching to another resource", asyn
   const requested = page.waitForRequest(request => request.postDataJSON()?.command === "package_translate")
   await page.getByRole("button", { name: "Translate", exact: true }).click()
   await requested
+  await page.getByPlaceholder("Filter files by path…").fill("Usage.MD")
   await page.locator("[data-package-resource-files]").getByRole("button", { name: "Usage.MD", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Usage guide" })).toBeVisible()
   const response = page.waitForResponse(result => result.request().postDataJSON()?.command === "package_translate")
@@ -265,4 +280,64 @@ test("ignores a translation completed after switching to another resource", asyn
   )
   await expect(page.getByRole("heading", { name: "Stale translation" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Translate", exact: true })).toBeEnabled()
+})
+
+test("does not open any file when the package has no root README.md", async ({ page }) => {
+  const reads: string[] = []
+  await page.route("**/api/invoke", async route => {
+    const { command, args } = route.request().postDataJSON()
+    if (command === "package_read_file") reads.push(args.path)
+    await route.fulfill({
+      json: {
+        data: command === "package_list_files" ? ["docs/README.md", "docs/Usage.md"] : "# Manually selected document",
+      },
+    })
+  })
+  await page.goto(harness.url)
+  const tree = page.locator("[data-package-resource-files]")
+  await expect(tree.getByRole("button", { name: "docs", exact: true })).toHaveAttribute("aria-expanded", "false")
+  await expect(page.locator("[data-package-resource-preview]")).toHaveCount(0)
+  expect(reads).toEqual([])
+  await tree.getByRole("button", { name: "docs", exact: true }).click()
+  await tree.getByRole("button", { name: "Usage.md", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Manually selected document" })).toBeVisible()
+  expect(reads).toEqual(["docs/Usage.md"])
+})
+
+test("returns to the selected installed tab after browsing package resources", async ({ page }) => {
+  const errors: string[] = []
+  page.on("pageerror", error => errors.push(error.message))
+  await page.addInitScript(() => {
+    Reflect.set(window, "isTauri", true)
+    Reflect.set(window, "__TAURI_INTERNALS__", {
+      invoke: async (command: string) => {
+        if (command === "package_list") return [{ source: "npm:pi-docs", scope: "global", filters: null }]
+        if (command === "package_resources") return []
+        if (command === "app_config_get") return {}
+        if (command === "package_catalog") return { packages: [], hasMore: false }
+        if (command === "package_list_files") return ["README.md"]
+        if (command === "package_read_file") return "# Package navigation"
+        throw new Error(`Unexpected command: ${command}`)
+      },
+    })
+  })
+  await page.goto(`${harness.url}?settings#/settings/packages`)
+  const installed = page.getByRole("tab", { name: /^Installed/ })
+  await installed.click()
+  await expect(installed).toHaveAttribute("aria-selected", "true")
+  await page.getByRole("button", { name: "Manage resources", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Package navigation" })).toBeVisible()
+  await page.getByRole("button", { name: "Back to packages", exact: true }).click()
+  await expect(installed).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("button", { name: "Manage resources", exact: true })).toBeVisible()
+  // The tab state survives another settings route remount too.
+  await page.evaluate(() => {
+    window.location.hash = "/settings/shortcuts"
+  })
+  await expect(page.getByRole("heading", { name: "Keyboard shortcuts", exact: true })).toBeVisible()
+  await page.evaluate(() => {
+    window.location.hash = "/settings/packages"
+  })
+  await expect(installed).toHaveAttribute("aria-selected", "true")
+  expect(errors).toEqual([])
 })

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest"
-import { fileDirectoryEntries } from "@/lib/projectFiles"
+import { fileDirectoryEntries, initialFilePath } from "@/lib/projectFiles"
 
 test("static file sources preserve nested directories, sort directories first, and normalize Windows paths", () => {
   const entries = fileDirectoryEntries(["README.md", "docs\\Usage.MD", "docs/api/reference.md", "README.md"])
@@ -29,4 +29,13 @@ test("directory names do not collide with Object prototype properties", () => {
   expect(Object.keys(entries)).toContain("__proto__")
   expect(entries["__proto__"]).toEqual([{ name: "README.md", path: "__proto__/README.md", is_dir: false }])
   expect(entries.constructor).toEqual([{ name: "README.md", path: "constructor/README.md", is_dir: false }])
+})
+
+test("preferred initial README selects only a root document and never falls back to another file", () => {
+  expect(initialFilePath(["docs/Usage.md", "README.md"], "README.md")).toBe("README.md")
+  expect(initialFilePath(["readme.MD"], "README.md")).toBe("readme.MD")
+  expect(initialFilePath(["docs/README.md", "docs/Usage.md"], "README.md")).toBeNull()
+  expect(initialFilePath([], "README.md")).toBeNull()
+  expect(initialFilePath(["docs/Usage.md"], null)).toBeNull()
+  expect(initialFilePath(["docs\\Usage.md"])).toBe("docs/Usage.md")
 })

@@ -6,3 +6,6 @@ import type { InstalledPackage } from "@/api/piClient"
 
 export const selectedResourcePackage = ref<InstalledPackage | null>(null)
 export const selectedResourceProject = ref("")
+
+/** Retained across settings route remounts so returning from resources keeps the installed tab. */
+export const packageSettingsTab = ref<"market" | "builtin" | "installed">("market")
