@@ -43,6 +43,7 @@ export const SETTINGS_TABS = [
   "package-resources",
   "agent-config",
   "skills",
+  "mcp",
   "about",
 ] as const
 

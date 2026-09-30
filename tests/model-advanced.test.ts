@@ -1,11 +1,8 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import ts from "typescript"
-const source = readFileSync(new URL("../src/lib/modelAdvanced.ts", import.meta.url), "utf8")
-const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
-const { modelAdvancedJson, parseModelAdvanced } = await import(
-  `data:text/javascript;base64,${Buffer.from(js).toString("base64")}`
-)
+// modelAdvanced.ts imports the structured-field validators from @/lib/modelLimits,
+// so it is loaded through the alias instead of a transpiled data: URL.
+const { modelAdvancedJson, parseModelAdvanced } = await import("@/lib/modelAdvanced")
 
 test("advanced fields round-trip without losing false or unknown pi options", () => {
   const extra = {
@@ -43,7 +40,7 @@ test("advanced settings are available for both add and edit forms", () => {
   const panel = readFileSync(new URL("../src/components/settings/models/ModelSettings.vue", import.meta.url), "utf8")
   expect((panel.match(/<ModelEditForm\b/g) ?? []).length).toBe(2)
   const form = readFileSync(new URL("../src/components/settings/models/ModelEditForm.vue", import.meta.url), "utf8")
-  expect(form).toMatch(/<ModelAdvancedSettings /)
+  expect(form).toMatch(/<ModelAdvancedSettings\b/)
   const logic = readFileSync(new URL("../src/components/settings/models/modelForm.ts", import.meta.url), "utf8")
   expect(logic).toMatch(/parseModelAdvanced\(f\.advanced\)/)
   expect(logic).toMatch(/advanced: modelAdvancedJson\(m\)/)

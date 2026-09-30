@@ -65,7 +65,32 @@ export interface CompactionEntry {
   timestamp?: number
   live?: true
 }
-export type Entry = (UserEntry | AssistantEntry | CompactionEntry) & { turnIndex?: number }
+/** pi ≥0.87: append-only edit of an earlier context-producing entry. It only
+ *  affects future model context; the target entry, raw history, the rendered
+ *  conversation and session statistics stay unchanged. */
+export interface ContextEditEntry {
+  kind: "context_edit"
+  id: number
+  /** Session entry id of the edited message. */
+  targetId: string
+  /** true = the target content was replaced; false = the target is omitted
+   *  from the model context from now on. */
+  replaced: boolean
+  timestamp?: number
+  live?: true
+}
+/** Unknown extension entry (arbitrary pi type or customType, e.g.
+ *  "pi.bug-report"); rendered as a low-key placeholder or skipped. */
+export interface CustomEntry {
+  kind: "custom"
+  id: number
+  customType: string
+  timestamp?: number
+  live?: true
+}
+export type Entry = (
+  UserEntry | AssistantEntry | CompactionEntry | ContextEditEntry | CustomEntry
+) & { turnIndex?: number }
 
 export interface RetryInfo {
   attempt: number

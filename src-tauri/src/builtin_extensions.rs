@@ -9,6 +9,11 @@ use crate::{commands, data_dir, errors::pix_error_detail};
 const FILE_CHANGES_SOURCE: &str = include_str!("../extensions/pix-file-changes.js");
 const FILE_CHANGES_NAME: &str = "pix-file-changes.js";
 
+/// pi's prefix for a built-in extension name (`builtin:mcp`, `builtin:read`).
+const BUILTIN_PREFIX: &str = "builtin:";
+/// The built-in extension that registers the llama.cpp provider.
+const LLAMA_CPP_PROVIDER: &str = "llama.cpp";
+
 fn materialize_in(dir: &std::path::Path, name: &str, source: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| {
         pix_error_detail(
@@ -69,6 +74,20 @@ pub fn rpc_args(app: &AppHandle) -> Result<Vec<String>, String> {
     ])
 }
 
+/// Extra `--extension` arguments for an isolated pi process that runs with
+/// `--no-extensions`. Since pi 0.99 that flag also disables the built-in
+/// extensions, including the one registering the llama.cpp provider, so a
+/// helper configured to use that provider has to load it back explicitly.
+pub fn provider_extension_args(provider: &str) -> Vec<String> {
+    if provider.trim() == LLAMA_CPP_PROVIDER {
+        return vec![
+            "--extension".into(),
+            format!("{BUILTIN_PREFIX}{LLAMA_CPP_PROVIDER}"),
+        ];
+    }
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +97,16 @@ mod tests {
         assert!(FILE_CHANGES_SOURCE.contains("pix-file-change"));
         assert!(FILE_CHANGES_SOURCE.contains("tool_call"));
         assert!(FILE_CHANGES_NAME.ends_with(".js"));
+    }
+
+    #[test]
+    fn no_extensions_helpers_reload_only_the_needed_builtin_provider() {
+        assert_eq!(
+            provider_extension_args("llama.cpp"),
+            vec!["--extension".to_string(), "builtin:llama.cpp".to_string()]
+        );
+        assert!(provider_extension_args("openrouter").is_empty());
+        assert!(provider_extension_args("").is_empty());
     }
 
     #[test]

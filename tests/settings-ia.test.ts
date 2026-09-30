@@ -19,7 +19,7 @@ test("settings menus use the grouped information architecture", () => {
     /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/,
   )
   expect(tabs).toMatch(
-    /"capabilities",[\s\S]*?tabIds: \["models", "model-config", "packages", "agent-config", "skills"\]/,
+    /"capabilities",[\s\S]*?tabIds: \["models", "model-config", "packages", "agent-config", "skills", "mcp"\]/,
   )
   expect(general).toMatch(/<WorkspaceSettings \/>/)
   expect(general).toMatch(/<RetrySettings v-if="isDesktop" \/>/)

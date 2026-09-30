@@ -137,10 +137,11 @@ test("agent-end during abort cannot dispatch queued prompts ahead of the edited 
     },
   })
   h.store.isStreaming = true
-  await h.store.send("local queued", undefined, undefined, "queue")
+  // slash commands stay in the client queue; plain queued messages live in pi's follow_up queue
+  await h.store.send("/local queued", undefined, undefined, "queue")
   await h.store.resendPrompt("revised")
   expect(h.calls.filter(call => call.type === "prompt").map(call => call.message)).toEqual(["revised"])
-  expect(Array.from(h.store.promptQueue, item => item.text)).toEqual(["remote queued", "local queued"])
+  expect(Array.from(h.store.promptQueue, item => item.text)).toEqual(["remote queued", "/local queued"])
 })
 
 for (const [label, overrides] of [

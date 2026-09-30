@@ -1,3 +1,5 @@
+import { validateFallbackModels, validateInputLimits, validatePromptCache } from "@/lib/modelLimits"
+
 /** Fields owned by the basic model form, not the advanced JSON editor. */
 const basicFields = new Set(["id", "name", "api", "reasoning", "input", "contextWindow", "maxTokens"])
 export const compatFlags = [
@@ -26,9 +28,11 @@ export function parseModelAdvanced(raw: string): Record<string, unknown> {
   for (const key of Object.keys(value)) {
     if (basicFields.has(key)) throw new Error(`${key}: use the basic form / 请使用基础配置`)
   }
-  for (const key of ["compat", "headers", "cost", "samplingParams", "thinkingLevelMap"]) {
+  for (const key of ["compat", "headers", "cost", "samplingParams", "thinkingLevelMap", "inputLimits", "promptCache"]) {
     if (key in value && !isObject(value[key])) throw new Error(`${key}: expected an object / 必须是对象`)
   }
+  validateInputLimits(value.inputLimits)
+  validatePromptCache(value.promptCache)
   if ("baseUrl" in value && (typeof value.baseUrl !== "string" || !value.baseUrl.trim())) {
     throw new Error("baseUrl: expected a non-empty string / 必须是非空字符串")
   }
@@ -52,6 +56,7 @@ export function parseModelAdvanced(raw: string): Record<string, unknown> {
     ) {
       throw new Error("compat.maxTokensField: max_tokens | max_completion_tokens")
     }
+    validateFallbackModels(value.compat.allowedFallbackModels)
   }
   return value
 }

@@ -122,6 +122,8 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "agent-config", labelKey: "agentConfig.files" },
   { tab: "skills", labelKey: "skillsConfig.hosted" },
   { tab: "skills", labelKey: "skillsConfig.discovered" },
+  { tab: "mcp", labelKey: "mcpConfig.statusTitle" },
+  { tab: "mcp", labelKey: "mcpConfig.editorTitle" },
   { tab: "general", labelKey: "retrySettings.maxRetries" },
   { tab: "archives", labelKey: "sessionArchive.restore" },
   { tab: "archives", labelKey: "sessionArchive.delete" },
@@ -184,6 +186,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   "model-config": ["titleGeneration"],
   "agent-config": ["agentConfig"],
   skills: ["skillsConfig"],
+  mcp: ["mcpConfig"],
   archives: ["sessionArchive"],
   about: ["settings.aboutBody", "appUpdate", "piUpdate", "settings.dataDirectory"],
 }
@@ -363,15 +366,28 @@ function locateSetting(entry = searchResults.value[selectedIndex.value]) {
       @keydown="resizeNavWithKeyboard"
     />
     <ResizablePanel class="min-h-0">
-      <ScrollArea :key="active.id" class="settings-scroll h-full min-h-0">
-        <div class="settings-body min-w-0 py-9.5 px-9 wrap-anywhere max-[640px]:py-9.5 max-[640px]:px-4.5">
-          <header class="settings-header mb-7.5 text-left">
+      <!-- Resource previews own their scroll areas instead of scrolling the entire settings body. -->
+      <component
+        :is="active.id === 'package-resources' ? 'div' : ScrollArea"
+        :key="active.id"
+        class="settings-scroll h-full min-h-0"
+        :class="{ 'overflow-hidden': active.id === 'package-resources' }"
+      >
+        <div
+          class="settings-body min-w-0 py-9.5 px-9 wrap-anywhere max-[640px]:py-9.5 max-[640px]:px-4.5"
+          :class="{ 'flex h-full min-h-0 flex-col overflow-hidden': active.id === 'package-resources' }"
+        >
+          <header class="settings-header mb-7.5 shrink-0 text-left">
             <h1 class="text-lg font-semibold">{{ t(active.title) }}</h1>
             <p v-if="active.desc" class="mt-1.5 text-xs text-muted-foreground">{{ t(active.desc) }}</p>
           </header>
-          <component :is="active.component" v-bind="active.needsProject ? { project: props.project } : {}" />
+          <component
+            :is="active.component"
+            :class="{ 'min-h-0 flex-1': active.id === 'package-resources' }"
+            v-bind="active.needsProject ? { project: props.project } : {}"
+          />
         </div>
-      </ScrollArea>
+      </component>
     </ResizablePanel>
   </ResizablePanelGroup>
 </template>

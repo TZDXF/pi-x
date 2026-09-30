@@ -667,6 +667,9 @@ pub async fn package_translate(
         "--system-prompt",
         "You are a translator. Translate the user's input into the requested language. Preserve markdown formatting, code blocks, and inline code exactly. Output only the translation, no explanations.",
     ])
+    .args(crate::builtin_extensions::provider_extension_args(
+        &model.provider,
+    ))
     .current_dir(crate::trust::agent_dir())
     .stdin(std::process::Stdio::piped())
     .stdout(std::process::Stdio::piped())

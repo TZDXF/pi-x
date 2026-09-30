@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** Add/edit panel for one model entry. Rendered inline in the list while
  *  editing, or standalone below the list while adding. */
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -41,6 +41,9 @@ function pickFetched(m: FetchedModel) {
   form.value.id = m.id
   form.value.name = m.name ?? ""
 }
+
+/** The advanced panel owns the newer pi fields; an invalid one blocks saving. */
+const advancedInvalid = ref(false)
 </script>
 
 <template>
@@ -101,13 +104,17 @@ function pickFetched(m: FetchedModel) {
       </label>
     </div>
 
-    <ModelAdvancedSettings v-model="form.advanced" :api="form.api || props.provider?.api || ''" />
+    <ModelAdvancedSettings
+      v-model="form.advanced"
+      :api="form.api || props.provider?.api || ''"
+      @update:invalid="advancedInvalid = $event"
+    />
 
     <div class="flex justify-end gap-2 pt-1">
       <Button variant="outline" size="sm" type="button" @click="emit('cancel')">
         {{ t("common.cancel") }}
       </Button>
-      <Button size="sm" :disabled="props.busy" @click="emit('save')">
+      <Button size="sm" :disabled="props.busy || advancedInvalid" @click="emit('save')">
         {{ props.busy ? t("settings.saving") : t("settings.save") }}
       </Button>
     </div>

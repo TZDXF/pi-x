@@ -1,6 +1,7 @@
 import { i18n, tBackendError } from "@/i18n"
 import { pixLog } from "@/api/piClient"
 import { contentText } from "@/lib/content"
+import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -113,6 +114,51 @@ function safeJson(v: unknown): string {
   } catch {
     return String(v)
   }
+}
+
+// ---- session entry ingestion (entry_appended) ----
+
+/** Entry types pi already reports through dedicated events or that are pure
+ *  bookkeeping; they must never surface as conversation noise. */
+const IGNORED_ENTRY_TYPES = new Set([
+  "session",
+  "message",
+  "compaction",
+  "model_change",
+  "thinking_level_change",
+  "branch_summary",
+  "label",
+  "session_info",
+  "usage",
+  "custom_message",
+])
+/** Custom entries with their own render path or known-internal state. */
+const IGNORED_CUSTOM_TYPES = new Set(["pi.virtual-model-state", "pix-file-change"])
+
+/**
+ * Map one raw session entry delivered by RPC `entry_appended` to a UI entry;
+ * null means "skip silently". `context_edit` becomes a light marker, unknown
+ * extension entries (e.g. "pi.bug-report") become low-key placeholders, and
+ * everything else is ignored without breaking the conversation flow.
+ */
+export function uiEntryFromAppendedEntry(raw: any, id: number, timestamp: number): Entry | null {
+  if (!raw || typeof raw !== "object" || typeof raw.type !== "string") return null
+  if (raw.type === "context_edit")
+    return {
+      kind: "context_edit",
+      id,
+      targetId: typeof raw.targetId === "string" ? raw.targetId : "",
+      replaced: raw.replacement != null,
+      timestamp,
+      live: true,
+    }
+  if (IGNORED_ENTRY_TYPES.has(raw.type)) return null
+  if (raw.type === "custom") {
+    const customType = typeof raw.customType === "string" ? raw.customType : ""
+    if (!customType || IGNORED_CUSTOM_TYPES.has(customType)) return null
+    return { kind: "custom", id, customType, timestamp, live: true }
+  }
+  return { kind: "custom", id, customType: raw.type, timestamp, live: true }
 }
 
 /** Reactive state and store callbacks the event handler needs. */
@@ -343,9 +389,16 @@ export function createEventHandler(ctx: EventContext) {
         followUp.value = ev.followUp ?? []
         break
 
-      case "entry_appended":
+      case "entry_appended": {
+        // pi emits this for every session entry appended by extensions or
+        // internal subsystems (context edits, cache warming, bug reports...).
+        // File-change artifacts keep flowing to their merger; only what the
+        // conversation should show is materialized as a UI entry.
         customEntryAppended(ev.entry)
+        const entry = uiEntryFromAppendedEntry(ev.entry, nextId(), Date.now())
+        if (entry) entries.value.push(entry)
         break
+      }
 
       case "compaction_start":
         isCompacting.value = true
@@ -399,9 +452,13 @@ export function createEventHandler(ctx: EventContext) {
         break
       }
 
-      case "extension_error":
-        console.warn("[pi] extension error:", ev.extensionPath, ev.error)
+      case "extension_error": {
+        // Built-in extensions report a `builtin:<name>` pseudo-path; older pi
+        // versions used `<builtin:name>` / `<inline:name>`.
+        const path = typeof ev.extensionPath === "string" ? ev.extensionPath : ""
+        console.warn("[pi] extension error:", path && builtinExtensionPath(path), ev.error)
         break
+      }
     }
   }
 

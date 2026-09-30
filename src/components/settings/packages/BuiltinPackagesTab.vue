@@ -40,5 +40,6 @@ const { builtinLoading, builtinBusy, builtinFileChanges, setBuiltinFileChanges }
       </div>
     </div>
     <p class="text-muted-foreground text-xs">{{ t("packages.builtinHint") }}</p>
+    <p class="text-muted-foreground text-xs">{{ t("packages.builtinPiHint") }}</p>
   </div>
 </template>

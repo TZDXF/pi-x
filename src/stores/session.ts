@@ -21,6 +21,7 @@ import { fileChangeArtifactFromEntry, mergeArtifactChanges, type FileChangeArtif
 import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
+import { builtinExtensionPath, isBuiltinExtensionPath } from "@/lib/extensionNames"
 import type { CommandInfo, Model, SessionState, SessionStats, ThinkingLevel, Usage } from "@/api/protocol"
 import { blocksFromMessage, createEventHandler, errorBlockText } from "./session/events"
 import { createPromptQueue } from "./session/promptQueue"
@@ -31,6 +32,8 @@ export type {
   AssistantEntry,
   Block,
   CompactionEntry,
+  ContextEditEntry,
+  CustomEntry,
   Entry,
   QueuedPrompt,
   RetryInfo,
@@ -104,6 +107,10 @@ export const createSessionStore = (runtimeId = "default") =>
     const isStreaming = ref(false)
     const isCompacting = ref(false)
     const retryInfo = ref<RetryInfo | null>(null)
+    /** Last prompt/steer/follow_up response disposition that needs surfacing
+     *  (ChatView watches this and raises a toast). Null once consumed. */
+    const dispositionNotice = ref<{ seq: number; message: string } | null>(null)
+    let dispositionSeq = 0
     const promptQueue = ref<QueuedPrompt[]>([])
     const isResending = ref(false)
     let resendVersion = 0
@@ -316,6 +323,63 @@ export const createSessionStore = (runtimeId = "default") =>
     // ---- actions ----
     let conversationVersion = 0
 
+    /** Surface a response `data.disposition` (rpc-commands.md) as a diagnostic
+     *  log plus a notice whenever the message did NOT simply start a run: an
+     *  extension consumed it ("handled") or pi queued it ("queued"). */
+    function reportDisposition(command: string, data: unknown, queuedKey: string) {
+      const disposition = (data as { disposition?: string } | undefined)?.disposition
+      pixLog(`${command} disposition=${disposition ?? "unknown"}`, runtimeId)
+      if (disposition === "handled")
+        dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t("chat.dispositionHandled") }
+      else if (disposition === "queued")
+        dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t(queuedKey) }
+    }
+
+    /** Hand a message queued during a run to pi's native follow_up queue: pi
+     *  delivers it automatically once the agent finishes (and keeps running)
+     *  and reports progress through queue_update events, so the client no
+     *  longer has to re-send it after agent_settled. */
+    function queueNativeFollowUp(
+      trimmed: string,
+      images?: { data: string; mimeType: string }[],
+      expandedText?: string,
+    ) {
+      const version = conversationVersion
+      const modelChange = pendingModelChange ?? undefined
+      pendingModelChange = null
+      entries.value.push({
+        kind: "user",
+        id: nextId(),
+        turnIndex: ++userTurnCount,
+        timestamp: Date.now(),
+        text: trimmed,
+        modelChange,
+        images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
+        live: true,
+      })
+      const command: Record<string, unknown> = {
+        type: "follow_up",
+        message: expandedText || trimmed || "(see attached image)",
+      }
+      if (images?.length) command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
+      rpcRequest(command)
+        .then(res => {
+          if (version !== conversationVersion) return
+          if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
+          reportDisposition("follow_up", res.data, "chat.followUpQueued")
+        })
+        .catch(e => {
+          // The current run keeps going; only surface the rejected message.
+          if (version !== conversationVersion) return
+          entries.value.push({
+            kind: "assistant",
+            id: nextId(),
+            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }],
+            live: true,
+          })
+        })
+    }
+
     async function send(
       text: string,
       images?: { data: string; mimeType: string }[],
@@ -348,7 +412,14 @@ export const createSessionStore = (runtimeId = "default") =>
         return
       }
       if (isStreaming.value && behavior === "queue") {
-        promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
+        if (trimmed.startsWith("/")) {
+          // pi's steer/follow_up reject extension commands, so slash commands
+          // (including /compact) stay in the client queue and are sent via
+          // `prompt` once the session is idle again.
+          promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
+          return
+        }
+        queueNativeFollowUp(trimmed, images, expandedText)
         return
       }
       flow.queuePaused = false
@@ -389,6 +460,9 @@ export const createSessionStore = (runtimeId = "default") =>
       rpcRequest(command)
         .then(async res => {
           if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
+          // While steering, pi queues the message instead of starting a run;
+          // make that (and extension consumption) visible either way.
+          reportDisposition("prompt", res.data, wasStreaming ? "chat.steerQueued" : "chat.followUpQueued")
         })
         .catch(e => {
           if (version !== conversationVersion) return
@@ -819,13 +893,20 @@ export const createSessionStore = (runtimeId = "default") =>
       if (!res.success) throw new Error(res.error ?? "Failed to load commands")
       // Pi nests the resource file path in `sourceInfo` instead of a top-level
       // `path`; flatten it so the loaded-skills list and "import loaded" work.
-      commands.value = (res.data?.commands ?? []).map(({ sourceInfo, ...command }) => ({
-        ...command,
-        path: command.path ?? sourceInfo?.path,
-        location:
-          command.location ??
-          (sourceInfo?.scope === "user" || sourceInfo?.scope === "project" ? sourceInfo.scope : undefined),
-      }))
+      // Built-in extensions carry a `builtin:<name>` pseudo-path (older pi used
+      // `<builtin:name>` / `<inline:name>`), so normalize it and flag the
+      // command: pi still reports those as `source: "extension"`.
+      commands.value = (res.data?.commands ?? []).map(({ sourceInfo, ...command }) => {
+        const path = command.path ?? sourceInfo?.path
+        return {
+          ...command,
+          path: path && isBuiltinExtensionPath(path) ? builtinExtensionPath(path) : path,
+          builtin: isBuiltinExtensionPath(path),
+          location:
+            command.location ??
+            (sourceInfo?.scope === "user" || sourceInfo?.scope === "project" ? sourceInfo.scope : undefined),
+        }
+      })
     }
 
     async function refreshModels() {
@@ -932,6 +1013,7 @@ export const createSessionStore = (runtimeId = "default") =>
       isStreaming.value = false
       isCompacting.value = false
       retryInfo.value = null
+      dispositionNotice.value = null
       userTurnCount = 0
       sessionFile.value = null
       syncedSessionMtime.value = null
@@ -1015,6 +1097,7 @@ export const createSessionStore = (runtimeId = "default") =>
       markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
       isCompacting,
       retryInfo,
+      dispositionNotice,
       steering,
       followUp,
       state,

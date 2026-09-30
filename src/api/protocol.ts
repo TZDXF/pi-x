@@ -37,6 +37,16 @@ export interface Usage {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
 }
 
+/**
+ * `data.disposition` of prompt / steer / follow_up responses (rpc-commands.md):
+ * "handled" if an extension command or input handler consumed the message,
+ * "queued" if pi queued it, "started" if pi accepted it to start a run
+ * (prompt only — steer/follow_up never start a run themselves).
+ */
+export type PromptDisposition = "handled" | "queued" | "started"
+/** steer / follow_up responses only report "handled" or "queued". */
+export type QueueDisposition = Exclude<PromptDisposition, "started">
+
 export interface SessionState {
   model: Model | null
   thinkingLevel: ThinkingLevel
@@ -66,9 +76,15 @@ export interface SessionStats {
 export interface CommandInfo {
   name: string
   description?: string
+  /** Pi reports every extension-registered command as `extension`, built-ins
+   *  included; use `builtin` to tell the two apart. */
   source: "extension" | "prompt" | "skill"
   location?: "user" | "project" | "path"
+  /** File the command comes from, or the canonical `builtin:<name>` of a
+   *  built-in extension. */
   path?: string
+  /** True when `path` is a built-in extension name rather than a file. */
+  builtin?: boolean
 }
 
 export interface TextContent {

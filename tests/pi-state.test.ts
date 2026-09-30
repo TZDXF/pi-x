@@ -45,6 +45,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
 async function harness(storage = new Map(), options = {}) {
   const calls = []
   let mtime = 0
@@ -182,15 +184,15 @@ test("a model switch is announced before the next question, without changing the
   await store.setModel("next", "model-b")
   store.isStreaming = true
   await store.send("queued question", undefined, undefined, "queue")
-  expect(store.entries.length).toBe(0)
-  store.isStreaming = false
-  store.dispatchQueuedPrompt()
+  await tick()
   const first = store.entries[0]
   expect(JSON.parse(JSON.stringify(first.modelChange))).toEqual({
     from: "restored/session-model",
     to: "next/model-b",
   })
-  expect(calls.findLast(c => c.type === "prompt").message).toBe("queued question")
+  expect(calls.findLast(c => c.type === "follow_up").message).toBe("queued question")
+  expect(calls.some(c => c.type === "prompt")).toBe(false)
+  store.isStreaming = false
   await store.send("another question")
   expect(store.entries[1].modelChange).toBe(undefined)
   await store.setModel("next", "model-b")
@@ -206,4 +208,55 @@ test("new sessions do not inherit an unconsumed model-change announcement", asyn
   await store.newSession()
   await store.send("new conversation")
   expect(store.entries[0].modelChange).toBe(undefined)
+})
+
+test("built-in extension commands are flagged and their path normalized to builtin:<name>", async () => {
+  const { store, calls } = await harness()
+  controls.state.rpcRequest = async command => {
+    calls.push(command)
+    if (command.type !== "get_commands") return { success: true, data: {} }
+    return {
+      success: true,
+      data: {
+        commands: [
+          // pi 0.99 names built-in extensions builtin:<name> in RPC source info.
+          { name: "mcp", description: "Manage MCP servers", source: "extension", sourceInfo: { path: "builtin:mcp", scope: "temporary" } },
+          { name: "codemode", description: "Run scripts", source: "extension", sourceInfo: { path: "builtin:codemode", scope: "temporary" } },
+          // A third-party extension keeps a real file path.
+          { name: "adapter", description: "Adapter", source: "extension", sourceInfo: { path: "/home/u/.pi/agent/extensions/pi-mcp-adapter/index.js", scope: "user" } },
+          { name: "skill:review", source: "skill", sourceInfo: { path: "/home/u/.pi/agent/skills/review/SKILL.md", scope: "user" } },
+        ],
+      },
+    }
+  }
+  await store.refreshCommands()
+  const byName = new Map(store.commands.map(command => [command.name, command]))
+  expect(byName.get("mcp").builtin).toBe(true)
+  expect(byName.get("mcp").path).toBe("builtin:mcp")
+  // A built-in has no user or project scope, so no location is claimed.
+  expect(byName.get("mcp").location).toBe(undefined)
+  expect(byName.get("adapter").builtin).toBe(false)
+  expect(byName.get("adapter").location).toBe("user")
+  expect(byName.get("skill:review").builtin).toBe(false)
+})
+
+test("legacy <builtin:name> command paths are normalized on read", async () => {
+  const { store, calls } = await harness()
+  controls.state.rpcRequest = async command => {
+    calls.push(command)
+    return {
+      success: true,
+      data: {
+        commands: [
+          { name: "mcp", source: "extension", sourceInfo: { path: "<builtin:mcp>", scope: "temporary" } },
+          { name: "llama", source: "extension", sourceInfo: { path: "<inline:llama.cpp>", scope: "temporary" } },
+        ],
+      },
+    }
+  }
+  await store.refreshCommands()
+  expect(store.commands.map(command => [command.path, command.builtin])).toEqual([
+    ["builtin:mcp", true],
+    ["builtin:llama.cpp", true],
+  ])
 })

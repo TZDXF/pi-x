@@ -1,4 +1,4 @@
-import type { Block, CompactionEntry, Entry, UserEntry } from "@/stores/session"
+import type { Block, CompactionEntry, ContextEditEntry, CustomEntry, Entry, UserEntry } from "@/stores/session"
 
 export interface AssistantTurn {
   kind: "assistant"
@@ -14,8 +14,11 @@ export interface AssistantTurn {
 }
 
 /** Group a turn without changing store entries or indices used for branching. */
-export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry | AssistantTurn | CompactionEntry)[] {
-  const result: (UserEntry | AssistantTurn | CompactionEntry)[] = []
+export function responseTurns(
+  entries: Entry[],
+  streaming: boolean,
+): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | CustomEntry)[] {
+  const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | CustomEntry)[] = []
   let questionTime: number | undefined
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
@@ -28,6 +31,14 @@ export function responseTurns(entries: Entry[], streaming: boolean): (UserEntry 
       // Compaction markers break turn grouping and cross it no duration flows.
       result.push(entry)
       questionTime = undefined
+      continue
+    }
+    if (entry.kind === "context_edit" || entry.kind === "custom") {
+      // Light markers (context edits, extension entries) render in place and
+      // must not be swallowed by the assistant-turn grouping. They change no
+      // conversation content, so the question stays the duration anchor; the
+      // next assistant message simply starts a fresh turn after the marker.
+      result.push(entry)
       continue
     }
     const previous = result[result.length - 1]

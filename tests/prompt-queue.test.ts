@@ -45,7 +45,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function sessionHarness() {
+const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+async function sessionHarness(rpcOverrides: Record<string, (command: any) => unknown> = {}) {
   const calls = [],
     previews = [],
     titles = [],
@@ -58,6 +60,8 @@ async function sessionHarness() {
     pixLog() {},
     rpcRequest: command => {
       calls.push(command)
+      const override = rpcOverrides[command.type]
+      if (override) return Promise.resolve(override(command))
       return new Promise(() => {})
     },
     generateSessionTitle: (...args) => {
@@ -94,36 +98,37 @@ async function sessionHarness() {
   }
 }
 
-test("queue waits until settled, preserving images and expanded text", async () => {
-  const h = await sessionHarness()
+test("messages queued during a run go to pi's native follow_up queue", async () => {
+  const h = await sessionHarness({ follow_up: () => ({ success: true, data: { disposition: "queued" } }) })
   h.store.isStreaming = true
   const images = [{ data: "YWJj", mimeType: "image/png" }]
   await h.store.send("next", images, "expanded next", "queue")
-  expect(h.calls.length).toBe(0)
-  expect(h.store.entries.length).toBe(0)
-  expect(h.store.pendingCount).toBe(1)
-  h.store.handleEvent({ type: "agent_end" })
-  h.store.handleEvent({ type: "agent_settled" })
-  const prompts = h.calls.filter(c => c.type === "prompt")
-  expect(prompts.length).toBe(1)
-  expect(prompts[0].message).toBe("expanded next")
-  expect(prompts[0].images[0].data).toBe("YWJj")
-  expect(prompts[0].streamingBehavior).toBe(undefined)
+  await tick()
   expect(h.store.promptQueue.length).toBe(0)
+  expect(h.calls.filter(c => c.type === "prompt").length).toBe(0)
+  const followUps = h.calls.filter(c => c.type === "follow_up")
+  expect(followUps.length).toBe(1)
+  expect(followUps[0].message).toBe("expanded next")
+  expect(followUps[0].images[0].data).toBe("YWJj")
+  // the question is visible right away and pi reports the queue via queue_update
+  expect(h.store.entries[0].text).toBe("next")
+  expect(h.store.dispositionNotice?.message).toBe("chat.followUpQueued")
+  h.store.handleEvent({ type: "queue_update", steering: [], followUp: ["expanded next"] })
+  expect(h.store.pendingCount).toBe(1)
 })
 
 test("reorder and remove use stable IDs, including identical prompts", async () => {
   const h = await sessionHarness()
   h.store.isStreaming = true
-  for (const text of ["same", "same", "third"]) await h.store.send(text, undefined, undefined, "queue")
+  for (const text of ["/same", "/same", "/third"]) await h.store.send(text, undefined, undefined, "queue")
   const [a, b, c] = h.store.promptQueue.map(item => item.id)
   h.store.moveQueuedPrompt(c, a)
   expect(h.store.promptQueue[0].id).toBe(c)
-  expect(h.store.removeQueuedPrompt(b).text).toBe("same")
+  expect(h.store.removeQueuedPrompt(b).text).toBe("/same")
   h.store.moveQueuedPrompt(b, a) // stale drag must not remove another item
   expect(h.store.promptQueue.length).toBe(2)
   h.store.handleEvent({ type: "agent_settled" })
-  expect(h.calls.find(c => c.type === "prompt").message).toBe("third")
+  expect(h.calls.find(c => c.type === "prompt").message).toBe("/third")
   expect(h.store.promptQueue[0].id).toBe(a)
   h.store.dispatchQueuedPrompt() // must not send while the new run is starting
   expect(h.calls.filter(c => c.type === "prompt").length).toBe(1)
@@ -134,15 +139,41 @@ test("steering goes to the running agent without draining the queue", async () =
   h.store.isStreaming = true
   await h.store.send("later", undefined, undefined, "queue")
   await h.store.send("change direction", undefined, undefined, "steer")
-  expect(h.calls[0].streamingBehavior).toBe("steer")
-  expect(h.calls[0].message).toBe("change direction")
-  expect(h.store.promptQueue.length).toBe(1)
+  expect(h.calls.find(c => c.type === "follow_up")).toBeTruthy()
+  const prompt = h.calls.find(c => c.type === "prompt")
+  expect(prompt.streamingBehavior).toBe("steer")
+  expect(prompt.message).toBe("change direction")
+  expect(h.store.promptQueue.length).toBe(0)
+})
+
+test("steering disposition is surfaced as a notice", async () => {
+  const h = await sessionHarness({ prompt: () => ({ success: true, data: { disposition: "queued" } }) })
+  h.store.isStreaming = true
+  await h.store.send("change direction", undefined, undefined, "steer")
+  await tick()
+  expect(h.store.dispositionNotice?.message).toBe("chat.steerQueued")
+})
+
+test("a prompt consumed by an extension reports the handled disposition", async () => {
+  const h = await sessionHarness({ prompt: () => ({ success: true, data: { disposition: "handled" } }) })
+  await h.store.send("/mycommand")
+  await tick()
+  expect(h.store.dispositionNotice?.message).toBe("chat.dispositionHandled")
+})
+
+test("a rejected follow_up surfaces an error without touching the running turn", async () => {
+  const h = await sessionHarness({ follow_up: () => ({ success: false, error: "cannot queue" }) })
+  h.store.isStreaming = true
+  await h.store.send("next", undefined, undefined, "queue")
+  await tick()
+  expect(h.store.isStreaming).toBe(true)
+  expect(h.store.entries.at(-1).blocks[0].text).toContain("cannot queue")
 })
 
 test("clear removes pending prompts", async () => {
   const h = await sessionHarness()
-  h.store.isStreaming = true
-  await h.store.send("later", undefined, undefined, "queue")
+  h.store.schedulePrompt("later", 60_000)
+  expect(h.store.pendingCount).toBe(1)
   h.store.clear()
   expect(h.store.pendingCount).toBe(0)
 })
@@ -150,10 +181,9 @@ test("clear removes pending prompts", async () => {
 test("run now sends the selected item with attachments and leaves other items in order", async () => {
   const h = await sessionHarness()
   h.store.isStreaming = true
-  const images = [{ data: "YWJj", mimeType: "image/png" }]
-  await h.store.send("first", undefined, undefined, "queue")
-  await h.store.send("selected", images, "expanded selected", "queue")
-  await h.store.send("last", undefined, undefined, "queue")
+  h.store.schedulePrompt("first", 60_000)
+  h.store.schedulePrompt("selected", 60_000, [{ data: "YWJj", mimeType: "image/png" }], "expanded selected")
+  h.store.schedulePrompt("last", 60_000)
   const id = h.store.promptQueue[1].id
   h.store.executeQueuedPrompt(id)
   h.store.executeQueuedPrompt(id) // repeated clicks must not send twice
@@ -168,7 +198,7 @@ test("run now sends the selected item with attachments and leaves other items in
 test("run now starts an idle agent and is blocked during resend or compaction", async () => {
   const h = await sessionHarness()
   h.store.isStreaming = true
-  await h.store.send("selected", undefined, undefined, "queue")
+  h.store.schedulePrompt("selected", 60_000)
   const id = h.store.promptQueue[0].id
   h.store.isStreaming = false
   h.store.isResending = true
@@ -187,7 +217,7 @@ test("run now starts an idle agent and is blocked during resend or compaction", 
 test("queue sends only one message per run despite duplicate completion events", async () => {
   const h = await sessionHarness()
   h.store.isStreaming = true
-  for (const text of ["first", "second", "third"]) {
+  for (const text of ["/first", "/second", "/third"]) {
     await h.store.send(text, undefined, undefined, "queue")
   }
   const sent = () => h.calls.filter(c => c.type === "prompt").map(c => c.message)
@@ -195,20 +225,20 @@ test("queue sends only one message per run despite duplicate completion events",
   h.store.handleEvent({ type: "agent_settled" })
   h.store.handleEvent({ type: "agent_end" })
   h.store.dispatchQueuedPrompt()
-  expect(sent()).toEqual(["first"])
+  expect(sent()).toEqual(["/first"])
   expect(h.store.isStreaming).toBe(true)
   expect(h.store.promptQueue.length).toBe(2)
 
   h.store.handleEvent({ type: "agent_start" })
-  expect(sent()).toEqual(["first"])
+  expect(sent()).toEqual(["/first"])
   h.store.handleEvent({ type: "agent_end" })
   h.store.handleEvent({ type: "agent_settled" })
-  expect(sent()).toEqual(["first", "second"])
+  expect(sent()).toEqual(["/first", "/second"])
   expect(h.store.promptQueue.length).toBe(1)
 
   h.store.handleEvent({ type: "agent_start" })
   h.store.handleEvent({ type: "agent_settled" })
-  expect(sent()).toEqual(["first", "second", "third"])
+  expect(sent()).toEqual(["/first", "/second", "/third"])
   expect(h.store.promptQueue.length).toBe(0)
   expect(h.calls.filter(c => c.type === "prompt").every(c => !c.streamingBehavior)).toBeTruthy()
 })
@@ -220,10 +250,10 @@ test("delayed prompts wait until due and do not block ready prompts", async () =
   h.store.dispatchQueuedPrompt()
   expect(h.calls.length).toBe(0)
   h.store.isStreaming = true
-  await h.store.send("ready", undefined, undefined, "queue")
+  await h.store.send("/ready", undefined, undefined, "queue")
   h.store.isStreaming = false
   h.store.dispatchQueuedPrompt()
-  expect(h.calls.find(c => c.type === "prompt").message).toBe("ready")
+  expect(h.calls.find(c => c.type === "prompt").message).toBe("/ready")
   expect(h.store.promptQueue[0].text).toBe("later")
   h.store.clear()
 })
@@ -290,14 +320,14 @@ test("queued prompts continue after a queued compact finishes", async () => {
   const h = await sessionHarness()
   h.store.isStreaming = true
   await h.store.send("/compact", undefined, undefined, "queue")
-  await h.store.send("next question", undefined, undefined, "queue")
+  await h.store.send("/next question", undefined, undefined, "queue")
   h.store.handleEvent({ type: "agent_settled" })
   expect(h.calls.filter(c => c.type === "compact").length).toBe(1)
   expect(h.calls.filter(c => c.type === "prompt").length).toBe(0)
   expect(h.store.promptQueue.length).toBe(1)
   h.store.handleEvent({ type: "compaction_end", result: null, aborted: false })
   await new Promise(resolve => setTimeout(resolve, 0))
-  expect(h.calls.find(c => c.type === "prompt").message).toBe("next question")
+  expect(h.calls.find(c => c.type === "prompt").message).toBe("/next question")
   expect(h.store.promptQueue.length).toBe(0)
 })
 

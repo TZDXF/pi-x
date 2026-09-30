@@ -311,6 +311,31 @@ export function rpcRequest<T = unknown>(
   return invoke<RpcResponse<T>>("rpc_request", { command, runtimeId })
 }
 
+/** Image attachment of prompt / steer / follow_up commands (ImageContent). */
+export interface RpcImage {
+  type: "image"
+  data: string
+  mimeType: string
+}
+
+/** pi native `steer`: queue a message into the running agent; delivered after
+ *  the current assistant turn finishes its tool calls, before the next LLM
+ *  call. Extension commands are rejected (send those via `prompt`). */
+export function rpcSteer(message: string, images?: RpcImage[], runtimeId = activeRuntimeId.value) {
+  const command: Record<string, unknown> = { type: "steer", message }
+  if (images?.length) command.images = images
+  return rpcRequest<{ disposition?: import("./protocol").QueueDisposition }>(command, runtimeId)
+}
+
+/** pi native `follow_up`: queue a message to be processed right after the
+ *  agent finishes (pi owns the queue, delivers it automatically and emits
+ *  queue_update events). Extension commands are rejected (use `prompt`). */
+export function rpcFollowUp(message: string, images?: RpcImage[], runtimeId = activeRuntimeId.value) {
+  const command: Record<string, unknown> = { type: "follow_up", message }
+  if (images?.length) command.images = images
+  return rpcRequest<{ disposition?: import("./protocol").QueueDisposition }>(command, runtimeId)
+}
+
 /** Fire-and-forget write (extension_ui_response has no response record). */
 export function rpcNotify(
   command: ExtensionUiResponse | Record<string, unknown>,
@@ -357,15 +382,70 @@ export const previewProxyInfo = () => invoke<PreviewProxyInfo>("preview_proxy_in
 
 // ---- pi models.json (custom provider / model management) ----
 
+/** pi's per-model cost rates (models.json `cost`). pi also accepts extra keys
+ *  such as `tiers`, which must survive a round-trip through the editor. */
+export interface ModelCostRates {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  [key: string]: unknown
+}
+
+/** One server-side fallback model of `compat.allowedFallbackModels`. */
+export interface ModelFallbackModel {
+  provider: string
+  model: string
+  cost: ModelCostRates
+  [key: string]: unknown
+}
+
+/** pi's `compat` object; only the fallback list is typed, the boolean flags
+ *  stay in the advanced JSON editor. */
+export interface ModelCompat {
+  allowedFallbackModels?: ModelFallbackModel[]
+  [key: string]: unknown
+}
+
+/** Image resize profile applied before a new image enters history. */
+export interface ModelImageResize {
+  maxWidth?: number
+  maxHeight?: number
+  /** Max base64-encoded payload in bytes. */
+  maxBytes?: number
+  jpegQuality?: number
+}
+
+export interface ModelImageInputLimits {
+  resize?: ModelImageResize
+  maxPerMessage?: number
+  maxPerRequest?: number
+}
+
+/** pi's `inputLimits`: per model entry and per modelOverrides entry. */
+export interface ModelInputLimits {
+  maxRequestBytes?: number
+  images?: ModelImageInputLimits
+}
+
+/** Best-effort prompt cache lifetime in seconds per retention tier. */
+export interface ModelPromptCache {
+  short?: number
+  long?: number
+}
+
 /** One model entry inside a provider's `models` array. Unknown fields
- *  (cost, compat, headers, samplingParams, thinkingLevelMap, …) are kept
- *  verbatim so editing never silently drops pi features. */
+ *  (cost, headers, samplingParams, thinkingLevelMap, …) are kept verbatim so
+ *  editing never silently drops pi features. */
 export interface ModelEntry {
   id: string
   name?: string
   api?: string
   reasoning?: boolean
   input?: ("text" | "image")[]
+  inputLimits?: ModelInputLimits
+  promptCache?: ModelPromptCache
+  compat?: ModelCompat
   contextWindow?: number
   maxTokens?: number
   [key: string]: unknown
@@ -378,6 +458,7 @@ export interface ProviderEntry {
   api?: string
   apiKey?: string
   headers?: Record<string, string>
+  compat?: ModelCompat
   models?: ModelEntry[]
   [key: string]: unknown
 }
@@ -546,3 +627,53 @@ export interface RunningSession {
   state: import("./protocol").SessionState
 }
 export const listRunningSessions = () => invoke<RunningSession[]>("rpc_sessions")
+
+// ---- pi MCP servers (mcp.json editor + live status) ----
+
+export type McpScope = "global" | "project"
+
+/** Raw contents of a mcp.json; missing files come back with exists=false and
+ *  empty content. Text is passed through verbatim so unknown fields survive
+ *  a read/edit/save round trip. */
+export interface McpConfigFile {
+  path: string
+  exists: boolean
+  content: string
+}
+
+export const getMcpConfig = (scope: McpScope, project?: string) =>
+  invoke<McpConfigFile>("mcp_config_read", { scope, project: project ?? null })
+
+export const saveMcpConfig = (scope: McpScope, content: string, project?: string) =>
+  invoke<void>("mcp_config_save", { scope, content, project: project ?? null })
+
+/** One server report from `pi mcp list --json`. */
+export interface McpServerStatus {
+  name: string
+  scope: "global" | "project"
+  source: string
+  enabled: boolean
+  exposure: string
+  transport: string
+  state: string
+  tools: string[]
+  /** Connection error, e.g. the tail of a stdio server's stderr. */
+  error?: string | null
+  [key: string]: unknown
+}
+
+/** Parsed `pi mcp list --json` result. `ok` is false when pi exited with 1
+ *  (some server failed); `note` is set when an untrusted project's
+ *  .pi/mcp.json is ignored. */
+export interface McpStatusResult {
+  ok: boolean
+  exitCode: number
+  servers: McpServerStatus[]
+  errors: string[]
+  note?: string | null
+}
+
+/** Connects to every enabled server and can take a while; call on explicit
+ *  user request only (no polling). */
+export const getMcpStatus = (project?: string) =>
+  invoke<McpStatusResult>("mcp_status", { project: project ?? null })

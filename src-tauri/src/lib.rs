@@ -9,6 +9,7 @@ mod errors;
 mod file_preview;
 mod fs_search;
 mod logs;
+mod mcp;
 mod packages;
 mod pi_data;
 mod pi_locate;
@@ -146,6 +147,9 @@ pub fn run() {
             commands::models_config_get,
             commands::models_config_save,
             commands::models_fetch,
+            mcp::mcp_config_read,
+            mcp::mcp_config_save,
+            mcp::mcp_status,
             packages::package_catalog,
             packages::package_list,
             packages::package_install,

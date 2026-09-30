@@ -442,7 +442,8 @@ pub async fn session_last_error(file: String) -> Result<Option<SessionLastError>
 /// Read the full current-branch transcript from the session file, including
 /// turns collapsed by compaction (pi's RPC `get_messages` only returns the
 /// projected post-compaction context). Compaction entries are mapped to
-/// `compactionSummary` messages matching the RPC shape.
+/// `compactionSummary` messages matching the RPC shape; `context_edit` and
+/// unknown custom entries pass through with their raw pi entry shape.
 #[tauri::command]
 pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, String> {
     let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
@@ -546,6 +547,16 @@ fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
                     message["timestamp"] = ts.timestamp_millis().into();
                 }
                 messages.push(message);
+            }
+            // pi ≥0.87: edit of an earlier context-producing entry. Pass the
+            // raw entry through verbatim so the frontend can materialize its
+            // "context edited" marker.
+            Some("context_edit") => messages.push(entry.clone()),
+            // Unknown extension entries pass through verbatim too; the
+            // frontend decides which custom types render (internal ones like
+            // `pi.virtual-model-state` are skipped there).
+            Some("custom") if entry.get("customType").and_then(|v| v.as_str()).is_some() => {
+                messages.push(entry.clone())
             }
             _ => {}
         }
@@ -776,6 +787,41 @@ mod presentation_tests {
         assert_eq!(messages[3]["content"], "second");
         assert_eq!(messages[5]["customType"], "pix-file-change");
         assert_eq!(messages[5]["data"]["toolCallId"], "call-1");
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn history_passes_through_context_edit_and_custom_entries() {
+        let file =
+            std::env::temp_dir().join(format!("pix-history-edit-{}.jsonl", uuid::Uuid::new_v4()));
+        let content = concat!(
+            "{\"type\":\"session\",\"id\":\"h\",\"parentId\":null}\n",
+            "{\"type\":\"message\",\"id\":\"m1\",\"parentId\":\"h\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n",
+            "{\"type\":\"context_edit\",\"id\":\"ce1\",\"parentId\":\"m1\",\"timestamp\":\"2026-09-26T11:20:02.000Z\",\"targetId\":\"m1\",\"replacement\":null}\n",
+            "{\"type\":\"context_edit\",\"id\":\"ce2\",\"parentId\":\"ce1\",\"timestamp\":\"2026-09-26T11:20:03.000Z\",\"targetId\":\"m1\",\"replacement\":\"edited\"}\n",
+            "{\"type\":\"custom\",\"id\":\"cu1\",\"parentId\":\"ce2\",\"timestamp\":\"2026-09-26T11:20:04.000Z\",\"customType\":\"pi.bug-report\",\"data\":{\"note\":\"hi\"}}\n",
+            // Internal bookkeeping and known non-render entries stay dropped.
+            "{\"type\":\"custom\",\"id\":\"cu2\",\"parentId\":\"cu1\",\"customType\":\"pi.virtual-model-state\",\"data\":{}}\n",
+            "{\"type\":\"custom\",\"id\":\"cu3\",\"parentId\":\"cu2\",\"data\":{}}\n",
+            "{\"type\":\"model_change\",\"id\":\"mc1\",\"parentId\":\"cu3\",\"model\":{\"provider\":\"p\",\"modelId\":\"m\"}}\n",
+            // A forked-branch edit must not leak into the current branch.
+            "{\"type\":\"context_edit\",\"id\":\"cef\",\"parentId\":\"m1\",\"targetId\":\"m1\",\"replacement\":null}\n",
+            "{\"type\":\"message\",\"id\":\"m2\",\"parentId\":\"cu1\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+        );
+        std::fs::write(&file, content).unwrap();
+        let messages = read_session_history(&file).unwrap();
+        // m1, ce1, ce2, cu1, m2 — passthrough entries keep their raw shape.
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[1]["type"], "context_edit");
+        assert_eq!(messages[1]["id"], "ce1");
+        assert_eq!(messages[1]["targetId"], "m1");
+        assert_eq!(messages[1]["replacement"], serde_json::Value::Null);
+        assert_eq!(messages[2]["targetId"], "m1");
+        assert_eq!(messages[2]["replacement"], "edited");
+        assert_eq!(messages[3]["type"], "custom");
+        assert_eq!(messages[3]["customType"], "pi.bug-report");
+        assert_eq!(messages[3]["data"]["note"], "hi");
+        assert_eq!(messages[4]["role"], "assistant");
         std::fs::remove_file(file).unwrap();
     }
 

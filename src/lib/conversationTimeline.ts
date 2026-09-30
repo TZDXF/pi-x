@@ -9,10 +9,12 @@ export interface ConversationTurn {
 /** Turn with the id of its materialized user entry (null while history pages
  * are not loaded yet). Unmaterialized turns use a synthetic negative id
  * derived from their raw-message index: -(msgIndex + 1). Compaction nodes
- * (compaction set) mark where history was collapsed and are not questions. */
+ * (compaction set) mark where history was collapsed and are not questions;
+ * contextEdit nodes mark an append-only model-context edit. */
 export interface TimelineTurn extends ConversationTurn {
   entryId: number | null
   compaction?: { tokensBefore?: number; tokensAfter?: number }
+  contextEdit?: { replaced: boolean }
 }
 
 const excerpt = (text: string) => {
@@ -73,6 +75,13 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
     tokensBefore?: number,
     tokensAfter?: number,
   ): TimelineTurn => ({ id, question: "", answer: "", entryId, compaction: { tokensBefore, tokensAfter } })
+  const contextEditNode = (id: number, entryId: number | null, replaced: boolean): TimelineTurn => ({
+    id,
+    question: "",
+    answer: "",
+    entryId,
+    contextEdit: { replaced },
+  })
   if (!messages.length) {
     // Snapshot released: everything is materialized (or live) in entries.
     for (const entry of entries) {
@@ -80,6 +89,8 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
         turns.push({ id: entry.id, question: excerpt(entry.text), answer: "", entryId: entry.id })
       else if (entry.kind === "compaction")
         turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
+      else if (entry.kind === "context_edit")
+        turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
       else if (entry.kind === "assistant" && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
     }
     return turns
@@ -116,6 +127,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
       turns.push({ id: entry.id, question: excerpt(entry.text), answer: "", entryId: entry.id })
     else if (entry.kind === "compaction")
       turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
+    else if (entry.kind === "context_edit") turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
     else if (entry.kind === "assistant" && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
   }
   return turns

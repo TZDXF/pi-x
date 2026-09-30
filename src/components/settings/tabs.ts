@@ -97,6 +97,15 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./SkillSettings.vue")),
   },
   {
+    id: "mcp",
+    nav: "mcpConfig.title",
+    title: "mcpConfig.title",
+    desc: "mcpConfig.description",
+    desktopOnly: true,
+    needsProject: true,
+    component: defineAsyncComponent(() => import("./McpSettings.vue")),
+  },
+  {
     id: "archives",
     nav: "sessionArchive.nav",
     title: "sessionArchive.title",
@@ -131,7 +140,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "capabilities",
     labelKey: "settings.groups.capabilities",
-    tabIds: ["models", "model-config", "packages", "agent-config", "skills"],
+    tabIds: ["models", "model-config", "packages", "agent-config", "skills", "mcp"],
   },
 ]
 

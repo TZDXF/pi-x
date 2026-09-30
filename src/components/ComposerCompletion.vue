@@ -9,6 +9,7 @@ import {
   insertCompletion,
   insertSessionCompletion,
   desktopCommands,
+  isBuiltinCommand,
   mergeWorkspaceFiles,
   sortCommands,
   sortReferences,
@@ -120,7 +121,9 @@ const items = computed(() =>
         value: c.name,
         label: `/${c.name}`,
         description: c.description ?? "",
-        source: t(`completion.${c.source}`),
+        // Commands from a pi built-in extension arrive as `extension`; label and
+        // group them as built-in so `/mcp` & co. no longer read as third-party.
+        source: t(`completion.${isBuiltinCommand(c) ? "builtin" : c.source}`),
       }))
     : sortReferences([
         ...files.value.map(f => ({

@@ -314,6 +314,14 @@ watch(
   },
 )
 
+// pi's prompt/steer/follow_up disposition ("handled" / "queued") surfaces as a toast
+watch(
+  () => session.dispositionNotice,
+  notice => {
+    if (notice) ui.pushToast(notice.message)
+  },
+)
+
 // ---- context usage and session-wide weighted cache hit rate ----
 const { contextUsage, cacheRateText, contextBreakdown, refreshContextBreakdown } = useChatContextBreakdown(
   session,
@@ -615,6 +623,30 @@ onBeforeUnmount(() => {
                 {{ entry.summary }}
               </p>
             </details>
+            <!-- context edit: light marker that an earlier message was edited
+                 or omitted for future model context; history stays unchanged -->
+            <div
+              v-else-if="entry.kind === 'context_edit'"
+              class="flex items-center gap-3 text-xs text-muted-foreground"
+              role="status"
+            >
+              <span class="h-px flex-1 bg-border"></span>
+              <span class="flex items-center gap-1.5">
+                {{ entry.replaced ? t("chat.contextReplaced") : t("chat.contextEdited") }}
+              </span>
+              <span class="h-px flex-1 bg-border"></span>
+            </div>
+            <!-- unknown extension entry: low-key placeholder so custom session
+                 entries neither break nor clutter the conversation -->
+            <div
+              v-else-if="entry.kind === 'custom'"
+              class="flex items-center gap-3 text-xs text-muted-foreground/70"
+              role="status"
+            >
+              <span class="h-px flex-1 bg-border"></span>
+              <span>{{ t("chat.customEntry", { type: entry.customType }) }}</span>
+              <span class="h-px flex-1 bg-border"></span>
+            </div>
             <template v-else>
               <div
                 v-if="entry.kind === 'user' && entry.modelChange"
@@ -804,11 +836,14 @@ onBeforeUnmount(() => {
             </MessageContent>
           </Message>
 
-          <!-- pending steering / follow-up -->
+          <!-- pending steering / follow-up (pi-owned queue) -->
           <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
             <QueueList>
-              <QueueItem v-for="(s, i) in [...session.steering, ...session.followUp]" :key="i">
-                <QueueItemContent>{{ s }}</QueueItemContent>
+              <QueueItem v-for="(s, i) in session.steering" :key="`steer-${i}`">
+                <QueueItemContent>{{ t("chat.pendingSteering") }} · {{ s }}</QueueItemContent>
+              </QueueItem>
+              <QueueItem v-for="(s, i) in session.followUp" :key="`follow-up-${i}`">
+                <QueueItemContent>{{ t("chat.pendingFollowUp") }} · {{ s }}</QueueItemContent>
               </QueueItem>
             </QueueList>
           </QueueSection>

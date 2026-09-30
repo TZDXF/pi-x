@@ -78,3 +78,17 @@ for (const locale of ["zh-CN", "en"]) {
     }
   })
 }
+
+for (const locale of ["zh-CN", "en"]) {
+  const messages = await loadLocale(locale)
+  const i18n = createI18n({ legacy: false, locale, fallbackLocale: false, messages: { [locale]: messages } })
+
+  // 内置插件页新增的 pi 内置扩展说明,两个语言包必须同步。
+  test(`${locale}: built-in packages tab explains pi's own builtin extensions`, () => {
+    const hint = i18n.global.t("packages.builtinPiHint")
+    expect(hint).not.toBe("packages.builtinPiHint")
+    expect(hint).toContain("builtin:mcp")
+    expect(hint).toContain("-builtin:mcp")
+    expect(i18n.global.t("completion.builtin")).toBe(locale === "en" ? "Built-in" : "内置")
+  })
+}

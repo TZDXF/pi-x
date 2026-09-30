@@ -16,9 +16,9 @@ const turns = computed(() => {
     const last = [...list].reverse().find(turn => !turn.compaction)
     if (last) appendPartial(last, props.partial)
   }
-  // Compaction nodes are not questions; keep question numbering stable.
+  // Compaction and context-edit nodes are not questions; keep numbering stable.
   let rank = 0
-  return list.map(turn => ({ ...turn, rank: turn.compaction ? 0 : ++rank }))
+  return list.map(turn => ({ ...turn, rank: turn.compaction || turn.contextEdit ? 0 : ++rank }))
 })
 const selected = ref<number | null>(null)
 // 当轮次很多时压缩节点高度，保证时间线在可视区内完整显示：
@@ -69,7 +69,7 @@ function updateCurrent() {
   const threshold = viewport.getBoundingClientRect().top + Math.min(80, viewport.clientHeight / 3)
   let current: number | null = null
   for (const turn of turns.value) {
-    if (turn.compaction || turn.entryId == null) continue
+    if (turn.compaction || turn.contextEdit || turn.entryId == null) continue
     const el = viewport.querySelector<HTMLElement>(`[data-message-id="${turn.entryId}"]`)
     // 未物化的轮次没有 DOM 锚点，跳过；消息自上而下排列，越过阈值即可停止。
     if (!el) continue
@@ -111,11 +111,15 @@ function onViewportScroll() {
                 :aria-label="
                   turn.compaction
                     ? t('chat.timelineCompaction')
-                    : t('chat.timelineJump', { number: turn.rank }) + ': ' + (turn.question || t('chat.timelineImage'))
+                    : turn.contextEdit
+                      ? turn.contextEdit.replaced
+                        ? t('chat.contextReplaced')
+                        : t('chat.contextEdited')
+                      : t('chat.timelineJump', { number: turn.rank }) + ': ' + (turn.question || t('chat.timelineImage'))
                 "
                 @click="navigate(turn)"
               >
-                <template v-if="turn.compaction"><span class="timeline-dash" /></template>
+                <template v-if="turn.compaction || turn.contextEdit"><span class="timeline-dash" /></template>
                 <template v-else
                   ><span class="timeline-dot" /><span class="timeline-number" aria-hidden="true">{{
                     turn.rank
@@ -124,7 +128,12 @@ function onViewportScroll() {
               </button>
             </TooltipTrigger>
             <TooltipContent side="right" :side-offset="6" :collision-padding="16" class="timeline-preview">
-              <div v-if="turn.compaction" class="space-y-2">
+              <div v-if="turn.contextEdit" class="space-y-2">
+                <p class="line-clamp-2 font-medium leading-snug">
+                  {{ turn.contextEdit.replaced ? t("chat.contextReplaced") : t("chat.contextEdited") }}
+                </p>
+              </div>
+              <div v-else-if="turn.compaction" class="space-y-2">
                 <p class="line-clamp-1 font-medium leading-snug">{{ t("chat.compacted") }}</p>
                 <p v-if="turn.compaction.tokensBefore" class="leading-snug opacity-80">
                   {{ compactNumber(turn.compaction.tokensBefore)

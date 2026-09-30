@@ -338,7 +338,7 @@ async fn workspace_args(
 
 /// spawn 前校验项目目录。空字符串会让 CreateProcessW 以晦涩的
 /// 「文件名、目录名或卷标语法不正确 (os error 123)」失败，这里统一转成编码错误。
-fn validate_project_dir(project: &str) -> Result<(), String> {
+pub(crate) fn validate_project_dir(project: &str) -> Result<(), String> {
     if project.trim().is_empty() || !Path::new(project).is_dir() {
         return Err(pix_error("projectDirMissing", "项目目录不存在"));
     }

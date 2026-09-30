@@ -84,10 +84,23 @@ export function insertCompletion(text: string, token: CompletionToken, value: st
   return { text: text.slice(0, token.start) + insertion + remaining, caret: token.start + insertion.length }
 }
 
-/** Slash commands group by source while preserving the original order within each source. */
-export function sortCommands<T extends { source: string }>(commands: T[]): T[] {
-  const rank = (source: string) => (source === "skill" ? 0 : source === "builtin" ? 1 : source === "extension" ? 2 : 3)
-  return [...commands].sort((a, b) => rank(a.source) - rank(b.source))
+/** A command comes from a pi built-in extension when its source is a built-in
+ *  extension name rather than a file. Pi reports those as `extension`, so the
+ *  flag set on the command decides. */
+export function isBuiltinCommand(command: { source: string; builtin?: boolean }): boolean {
+  return command.source === "builtin" || command.builtin === true
+}
+
+/** Slash commands group by source while preserving the original order within each source.
+ *  Built-ins cover both the desktop-only commands and the ones registered by a pi
+ *  built-in extension (`builtin:<name>`). */
+export function sortCommands<T extends { source: string; builtin?: boolean }>(commands: T[]): T[] {
+  const rank = (command: T) => {
+    if (command.source === "skill") return 0
+    if (isBuiltinCommand(command)) return 1
+    return command.source === "extension" ? 2 : 3
+  }
+  return [...commands].sort((a, b) => rank(a) - rank(b))
 }
 
 /** References show workspace files before known conversations. */
