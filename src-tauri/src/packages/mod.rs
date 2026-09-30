@@ -6,7 +6,7 @@ mod resources;
 mod runner;
 
 pub use catalog::package_catalog;
-pub(crate) use resources::package_skill_paths;
+pub(crate) use resources::{package_skill_paths, walk_files};
 pub use resources::{package_list_files, package_read_file, package_resources, package_set_resource, package_translate};
 pub(crate) use runner::run_pi;
 pub use runner::{package_install, package_list, package_remove, package_update};

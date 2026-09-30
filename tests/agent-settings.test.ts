@@ -37,6 +37,8 @@ function harness(initial = {}, component = "SkillSettings") {
     onMounted: fn => {
       mount = fn
     },
+    // 预览区响应式副作用不在这批用例的覆盖范围内，提供空实现保证脚本可求值。
+    watch: () => {},
     useI18n: () => ({ t: key => key }),
     useUiStore: () => ({ pushToast: (...args) => toasts.push(args) }),
     listHostedSkills: async () => {

@@ -257,6 +257,8 @@ export default {
     refresh: "Refresh",
     empty: "No hosted skills yet.",
     enable: "Enable skill",
+    preview: "Preview files",
+    noPreviewFiles: "No previewable Markdown files in this skill.",
     delete: "Delete",
     deleteConfirm: "Delete “{name}”? This cannot be undone.",
     enabledSaved: "Saved. Applies on the next session start.",
@@ -299,12 +301,11 @@ export default {
       json: "JSON",
     },
     addServer: "Add server",
-    listEmpty:
-      "No servers yet. Click \"Add server\" to create one, or switch to JSON mode to paste a config.",
+    listEmpty: 'No servers yet. Click "Add server" to create one, or switch to JSON mode to paste a config.',
     unknownShape: "Unrecognized definition",
     edit: "Edit",
     delete: "Delete",
-    deleteConfirm: "Delete server \"{name}\"? The change is written to mcp.json only after saving.",
+    deleteConfirm: 'Delete server "{name}"? The change is written to mcp.json only after saving.',
     check: "Check connection",
     checking: "Checking connection…",
     checkOk: "Connected ({latency} ms)",
@@ -381,8 +382,7 @@ export default {
         notAnObject: "The content must be a JSON object.",
         noEntry: "Could not extract exactly one server definition.",
         entryNotAnObject: "The server definition must be a JSON object.",
-        unsupported:
-          "The definition has no command/url or uses a transport pi does not support (e.g. legacy SSE).",
+        unsupported: "The definition has no command/url or uses a transport pi does not support (e.g. legacy SSE).",
       },
       errors: {
         nameRequired: "Name is required.",
@@ -391,7 +391,7 @@ export default {
         urlRequired: "An HTTP server needs a URL.",
         urlInvalid: "The URL must be an http(s) address.",
       },
-      nameConflict: "A server named \"{name}\" already exists.",
+      nameConflict: 'A server named "{name}" already exists.',
     },
   },
   agentConfig: {
@@ -402,14 +402,6 @@ export default {
     files: "Global prompt files",
     exists: "Created",
     missing: "Not created",
-    hints: {
-      "AGENTS.md":
-        "User instructions added as context across projects. Suitable for coding standards, project conventions, and common commands.",
-      "SYSTEM.md":
-        "Replaces Pi's default system prompt. Suitable for role definitions, behavior constraints, and output formats.",
-      "APPEND_SYSTEM.md":
-        "Appends instructions to the end of Pi's system prompt. Suitable for additional supplementary rules or scenario-specific overrides.",
-    },
 
     defaultPromptHint: "Currently using Pi's built-in default system prompt. Enter content to replace it.",
 
@@ -1143,6 +1135,7 @@ export default {
   // transport layer; keys mirror the error codes at the Rust call sites.
   // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
+    skillNotFound: "Skill path not found",
     invalidResourcePath: "Invalid resource path",
     resourceReadFailed: "Failed to read resource file",
     resourceBinary: "Binary file; text preview is not supported",
@@ -1294,8 +1287,8 @@ export default {
     mcpStatusTimeout: "Timed out fetching MCP status (2 min); a server may be responding slowly.",
     mcpServerNotFound: "No such server in mcp.json: {detail}",
     mcpServerInvalid: "The server is missing command (stdio) or url (HTTP)",
-    mcpCheckTimeout: "Connection check timed out (15 s); the server did not answer initialize",
-    mcpCheckExited: "The server process exited before the handshake completed",
+    mcpCheckTimeout: "Connection check timed out (15 s); the server did not answer initialize{detail}",
+    mcpCheckExited: "The server process exited before the handshake completed{detail}",
     mcpCheckHttp: "The server returned HTTP {detail}",
     mcpCheckSpawnFailed: "Failed to start the server process: {detail}",
     mcpCheckWriteFailed: "Failed to write the initialize request: {detail}",

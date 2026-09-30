@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
+use crate::errors::{pix_error, pix_error_detail};
+
 pub fn skills_root() -> PathBuf {
     crate::data_dir::root().join("skills")
 }
@@ -521,6 +523,99 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Skill file preview (read-only)
+// ---------------------------------------------------------------------------
+
+/// Preview root of a skill: the skill directory itself, or the parent for a
+/// single-file skill.
+fn skill_preview_root(path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+    if p.is_file() {
+        p.parent().map(Path::to_path_buf).unwrap_or(p)
+    } else {
+        p
+    }
+}
+
+/// List files inside a skill for preview (relative posix paths): for a
+/// directory skill, every file below the skill root (same ignore rules as
+/// package file listing); for a single-file skill, the file itself.
+#[tauri::command]
+pub async fn skills_list_files(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let root = PathBuf::from(&path);
+        if !root.exists() {
+            return Err(pix_error("skillNotFound", "技能路径不存在"));
+        }
+        if root.is_file() {
+            return Ok(vec![dir_name(&root)]);
+        }
+        let mut files = Vec::new();
+        crate::packages::walk_files(&root, &root, &mut files);
+        files.sort();
+        Ok(files)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Read one file inside a skill for preview. `rel_path` is relative to the
+/// skill root with forward slashes; binary content is rejected.
+#[tauri::command]
+pub async fn skills_read_file(path: String, rel_path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let (_, canonical) = skill_read_target(&path, &rel_path)?;
+        let bytes = std::fs::read(&canonical).map_err(|e| {
+            pix_error_detail(
+                "resourceReadFailed",
+                format!("读取技能文件失败: {} ({e})", canonical.display()),
+                format!("{}: {e}", canonical.display()),
+            )
+        })?;
+        // Binary sniff (git style): NUL in the first 8 KB, or invalid UTF-8 overall.
+        let sniff_end = bytes.len().min(8_000);
+        if bytes[..sniff_end].contains(&0) {
+            return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
+        }
+        String::from_utf8(bytes)
+            .map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Reject traversal and resolve the exact file to read inside a skill: the
+/// canonical file must stay inside the canonical skill preview root. Split
+/// from `skills_read_file` so the guard stays testable.
+fn skill_read_target(path: &str, rel_path: &str) -> Result<(PathBuf, PathBuf), String> {
+    if rel_path.contains("..")
+        || rel_path.starts_with('/')
+        || rel_path.starts_with('\\')
+        || rel_path.contains(':')
+    {
+        return Err(pix_error("invalidResourcePath", "无效的技能文件路径"));
+    }
+    let root = skill_preview_root(path);
+    if !root.exists() {
+        return Err(pix_error("skillNotFound", "技能路径不存在"));
+    }
+    let file = root.join(rel_path);
+    let canonical = canonicalize(&file).map_err(|e| {
+        pix_error_detail(
+            "resourceReadFailed",
+            format!("读取技能文件失败: {} ({e})", file.display()),
+            format!("{}: {e}", file.display()),
+        )
+    })?;
+    let canonical_root = canonicalize(&root)
+        .map_err(|e| pix_error_detail("skillNotFound", format!("解析技能路径失败: {e}"), e))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(pix_error("invalidResourcePath", "技能文件路径越界"));
+    }
+    Ok((root, canonical))
+}
+
+// ---------------------------------------------------------------------------
 // File helpers
 // ---------------------------------------------------------------------------
 
@@ -655,5 +750,49 @@ mod tests {
         assert!(!root.join("y.md").exists());
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn preview_lists_skill_files() {
+        let root = temp_root("preview-list");
+        let skill = root.join("my-skill");
+        std::fs::create_dir_all(skill.join("references")).unwrap();
+        std::fs::write(skill.join("SKILL.md"), SKILL_MD).unwrap();
+        std::fs::write(skill.join("references").join("guide.md"), "guide").unwrap();
+        std::fs::write(skill.join("script.py"), "print()").unwrap();
+        std::fs::write(skill.join(".hidden.md"), "x").unwrap();
+        std::fs::create_dir_all(skill.join("node_modules")).unwrap();
+
+        let mut files = Vec::new();
+        crate::packages::walk_files(&skill, &skill, &mut files);
+        files.sort();
+        assert_eq!(files, vec!["SKILL.md", "references/guide.md", "script.py"]);
+
+        // Single-file skills list only the file itself.
+        let single = root.join("solo.md");
+        std::fs::write(&single, "---\ndescription: Solo\n---\n").unwrap();
+        assert_eq!(skill_preview_root(single.to_str().unwrap()), root);
+        assert_eq!(skill_preview_root(skill.to_str().unwrap()), skill);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_read_rejects_traversal() {
+        let root = temp_root("preview-read");
+        let skill = root.join("my-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), SKILL_MD).unwrap();
+        let skill_path = skill.to_str().unwrap();
+
+        let (_, target) = skill_read_target(skill_path, "SKILL.md").unwrap();
+        assert!(target.ends_with("SKILL.md"));
+        for bad in ["../escape.md", "/abs.md", "\\abs.md", "C:evil.md"] {
+            assert!(
+                skill_read_target(skill_path, bad).is_err(),
+                "rel path {bad} must be rejected"
+            );
+        }
+        assert!(skill_read_target(root.join("missing").to_str().unwrap(), "SKILL.md").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

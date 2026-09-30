@@ -251,6 +251,8 @@ export default {
     refresh: "刷新",
     empty: "尚未托管任何技能。",
     enable: "启用技能",
+    preview: "预览文件",
+    noPreviewFiles: "该技能下没有可预览的 Markdown 文件。",
     delete: "删除",
     deleteConfirm: "删除「{name}」？该操作不可恢复。",
     enabledSaved: "已保存，下次启动会话时生效",
@@ -277,8 +279,7 @@ export default {
     untrustedNote: "当前项目未被信任，项目级 .pi/mcp.json 被 pi 忽略。",
     untrustedWarning: "当前项目未被信任：项目级 mcp.json 只有在项目受信任后才会被 pi 读取。",
     untrustedSaveConfirm: "当前项目未被信任，保存的项目级 mcp.json 在项目受信任前不会生效。仍要保存吗？",
-    untrustedCheckConfirm:
-      "当前项目未被信任，检测连接会实际启动其 mcp.json 中定义的服务器进程。仍要检测吗？",
+    untrustedCheckConfirm: "当前项目未被信任，检测连接会实际启动其 mcp.json 中定义的服务器进程。仍要检测吗？",
     projectRequired: "打开项目会话后才能编辑项目级 mcp.json 与查看项目级服务器。",
     scope: {
       global: "全局",
@@ -389,11 +390,6 @@ export default {
     files: "全局提示词文件",
     exists: "已创建",
     missing: "尚未创建",
-    hints: {
-      "AGENTS.md": "跨项目生效的用户指令，作为上下文加入提示词。适合放置编码规范、项目约定、常用命令等。",
-      "SYSTEM.md": "替换 Pi 的默认系统提示词。适合放置角色定义、行为约束、输出格式等全局规则。",
-      "APPEND_SYSTEM.md": "追加到 Pi 的系统提示词末尾。适合放置额外的补充说明或覆盖特定场景的规则。",
-    },
 
     defaultPromptHint: "当前使用 Pi 内置的默认系统提示词。输入内容将替换默认提示词。",
 
@@ -1102,6 +1098,7 @@ export default {
   // 后端（src-tauri）与 transport 层编码错误的当前语言文案；键与 Rust 调用点的错误码一致，
   // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
+    skillNotFound: "技能路径不存在",
     invalidResourcePath: "无效的资源路径",
     resourceReadFailed: "读取资源文件失败",
     resourceBinary: "二进制文件，不支持文本预览",
@@ -1251,8 +1248,8 @@ export default {
     mcpStatusTimeout: "获取 MCP 状态超时（2 分钟），服务器可能响应过慢",
     mcpServerNotFound: "mcp.json 中不存在该服务器: {detail}",
     mcpServerInvalid: "该服务器缺少 command（stdio）或 url（HTTP）",
-    mcpCheckTimeout: "连接检测超时（15 秒），服务器未响应 initialize",
-    mcpCheckExited: "服务器进程在握手前退出",
+    mcpCheckTimeout: "连接检测超时（15 秒），服务器未响应 initialize{detail}",
+    mcpCheckExited: "服务器进程在握手前退出{detail}",
     mcpCheckHttp: "服务器返回 HTTP {detail}",
     mcpCheckSpawnFailed: "无法启动服务器进程: {detail}",
     mcpCheckWriteFailed: "写入 initialize 请求失败: {detail}",

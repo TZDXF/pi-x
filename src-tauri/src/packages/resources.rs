@@ -206,7 +206,7 @@ fn package_root_dir(
 
 const IGNORED_DIRS: [&str; 4] = ["node_modules", ".git", ".pi", "dist"];
 
-fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

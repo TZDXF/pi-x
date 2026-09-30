@@ -94,6 +94,12 @@ export interface DiscoveredSkill {
 }
 export const listDiscoveredSkills = () => invoke<DiscoveredSkill[]>("skills_discovered_list")
 
+/** List files inside a skill (relative posix paths) for preview. */
+export const skillListFiles = (path: string) => invoke<string[]>("skills_list_files", { path })
+
+/** Read one file inside a skill for preview; relPath is relative to the skill root. */
+export const skillReadFile = (path: string, relPath: string) => invoke<string>("skills_read_file", { path, relPath })
+
 export const detectPi = (customPath?: string) => invoke<PiInfo>("pi_detect", { customPath: customPath ?? null })
 
 export interface PiUpdateStatus {
@@ -677,8 +683,7 @@ export interface McpStatusResult {
 
 /** Connects to every enabled server and can take a while; call on explicit
  *  user request only (no polling). */
-export const getMcpStatus = (project?: string) =>
-  invoke<McpStatusResult>("mcp_status", { project: project ?? null })
+export const getMcpStatus = (project?: string) => invoke<McpStatusResult>("mcp_status", { project: project ?? null })
 
 /** Result of a single-server MCP `initialize` handshake check. */
 export interface McpCheckResult {
