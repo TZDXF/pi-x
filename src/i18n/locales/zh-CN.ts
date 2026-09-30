@@ -139,6 +139,11 @@ export default {
     clearAnnotations: "清除标注",
     export: "导出标注",
     previewTitle: "PiX 浏览器预览",
+    accessMode: "访问方式",
+    accessModeAuto: "自动",
+    accessModeDirect: "直连",
+    accessModeProxy: "代理",
+    browseHintDirect: "直连模式不支持元素检查与控制台，画笔标注仍可使用",
   },
   projectless: {
     name: "无项目任务",

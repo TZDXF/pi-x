@@ -1,5 +1,5 @@
 import { afterAll, test, expect, vi } from "vitest"
-import { normalizeInputUrl, isHttpUrl, toProxyUrl, resolveProxyBase } from "@/lib/previewUrl"
+import { normalizeInputUrl, isHttpUrl, toProxyUrl, resolveProxyBase, isIpHostname, resolveAccessMode } from "@/lib/previewUrl"
 
 vi.stubGlobal("window", { location: { origin: "http://192.168.1.5:1421" } })
 afterAll(vi.unstubAllGlobals)
@@ -49,4 +49,28 @@ test("toProxyUrl embeds scheme, host and path after the proxy prefix", () => {
 test("resolveProxyBase supports remote-relative and absolute bases", () => {
   expect(resolveProxyBase("/api/preview/secret")).toBe("http://192.168.1.5:1421/api/preview/secret")
   expect(resolveProxyBase("http://127.0.0.1:9/p/secret/")).toBe("http://127.0.0.1:9/p/secret")
+})
+
+test("isIpHostname recognizes literal IPv4 and IPv6 hosts only", () => {
+  expect(isIpHostname("192.168.1.10")).toBe(true)
+  expect(isIpHostname("127.0.0.1")).toBe(true)
+  expect(isIpHostname("::1")).toBe(true)
+  expect(isIpHostname("[::1]")).toBe(true)
+  expect(isIpHostname("fe80::1")).toBe(true)
+  expect(isIpHostname("localhost")).toBe(false)
+  expect(isIpHostname("example.com")).toBe(false)
+  expect(isIpHostname("dev.machine.lan")).toBe(false)
+  // Octets must be 0-255 without leading zeros.
+  expect(isIpHostname("256.1.1.1")).toBe(false)
+  expect(isIpHostname("01.2.3.4")).toBe(false)
+  expect(isIpHostname("")).toBe(false)
+})
+
+test("resolveAccessMode: desktop direct, web IP via proxy, web named host direct", () => {
+  expect(resolveAccessMode(true, "192.168.1.10")).toBe("direct")
+  expect(resolveAccessMode(true, "example.com")).toBe("direct")
+  expect(resolveAccessMode(false, "192.168.1.10")).toBe("proxy")
+  expect(resolveAccessMode(false, "[::1]")).toBe("proxy")
+  expect(resolveAccessMode(false, "example.com")).toBe("direct")
+  expect(resolveAccessMode(false, "localhost")).toBe("direct")
 })
