@@ -638,19 +638,13 @@ export default {
   titleGeneration: {
     loading: "正在加载模型配置…",
     retry: "重试",
-    chooseModel: "指定默认模型",
     off: "不生成标题",
-    specificModel: "使用独立模型",
-    selectModelHint: "请选择一个模型后再保存。",
+    useDefaultModel: "使用默认模型",
     page: "模型配置",
     defaultModel: "默认模型",
-    noDefault: "不设置默认模型",
-    defaultModelHint: "用于会话标题生成等附加功能的模型调用，与 Pi 的默认模型无关。",
+    defaultModelHint: "用于会话标题生成等附加功能的模型调用，与 Pi 的默认模型无关；未指定时使用列表中的第一个模型。",
     enabled: "自动生成会话标题",
     hint: "首次发送消息后生成标题；失败时保留消息预览，不覆盖手动标题。",
-    model: "标题生成模型",
-    followMain: "使用上方默认模型",
-    followMainHint: "标题生成需要指定默认模型；请在上方选择模型，或使用独立模型。",
     noModels: "请先打开项目以加载可用模型，或在设置中添加模型。",
     credentials: "复用 Pi 凭据；额外消耗模型用量，仅对新会话生效。",
   },
@@ -956,7 +950,7 @@ export default {
 
   translation: {
     model: "翻译模型",
-    modelHint: "用于翻译插件资源文件内容；未选择时回退到默认模型。",
+    modelHint: "用于翻译插件资源文件内容；选择默认模型时跟随上方默认模型。",
   },
 
   packages: {

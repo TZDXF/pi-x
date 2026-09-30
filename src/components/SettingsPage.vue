@@ -118,7 +118,7 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "models", labelKey: "settings.modelFetch" },
   { tab: "model-config", labelKey: "titleGeneration.defaultModel" },
   { tab: "model-config", labelKey: "titleGeneration.enabled" },
-  { tab: "model-config", labelKey: "titleGeneration.model" },
+  { tab: "model-config", labelKey: "translation.model" },
   { tab: "agent-config", labelKey: "agentConfig.files" },
   { tab: "skills", labelKey: "skillsConfig.hosted" },
   { tab: "skills", labelKey: "skillsConfig.discovered" },

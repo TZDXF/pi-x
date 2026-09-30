@@ -64,7 +64,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "titleGeneration.page",
     title: "titleGeneration.page",
     desktopOnly: true,
-    component: defineAsyncComponent(() => import("./TitleModelSettings.vue")),
+    component: defineAsyncComponent(() => import("./ModelConfigSettings.vue")),
   },
   {
     id: "packages",

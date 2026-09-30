@@ -656,19 +656,14 @@ export default {
   titleGeneration: {
     loading: "Loading model configuration…",
     retry: "Retry",
-    chooseModel: "Choose a default model",
     off: "Do not generate titles",
-    specificModel: "Use a separate model",
-    selectModelHint: "Select a model before saving.",
+    useDefaultModel: "Use the default model",
     page: "Model configuration",
     defaultModel: "Default model",
-    noDefault: "No default model",
-    defaultModelHint: "Used by auxiliary features such as session title generation. Independent of Pi's default model.",
+    defaultModelHint:
+      "Used by auxiliary features such as session title generation. Independent of Pi's default model; falls back to the first model in the list.",
     enabled: "Generate session titles automatically",
     hint: "Generate a title after the first message. On failure, keep the preview; never overwrite a manual title.",
-    model: "Title generation model",
-    followMain: "Use the default model above",
-    followMainHint: "Title generation needs a specified default model. Choose one above or use a separate model.",
     noModels: "Open a project to load available models, or add a model in settings.",
     credentials: "Uses Pi credentials. Additional model usage applies to new sessions only.",
   },
@@ -988,7 +983,8 @@ export default {
 
   translation: {
     model: "Translation model",
-    modelHint: "Used to translate package resource file content; falls back to the default model when unset.",
+    modelHint:
+      "Used to translate package resource file content; the default-model choice follows the default model above.",
   },
 
   packages: {
