@@ -355,6 +355,18 @@ fn resolve_windows_command(command: &str) -> String {
     command.to_string()
 }
 
+/// Build the command line handed to `cmd /s /c` for a .cmd/.bat shim (same
+/// shape cross-spawn builds): quoted executable plus quoted arguments.
+#[cfg(windows)]
+fn windows_cmd_line(resolved: &str, args: &[&str]) -> String {
+    let mut line = format!("\"{resolved}\"");
+    for arg in args {
+        line.push(' ');
+        line.push_str(&windows_quote_arg(arg));
+    }
+    line
+}
+
 /// Quote one argument for a `cmd /s /c` command line (same shape cross-spawn
 /// builds for .cmd/.bat shims).
 #[cfg(windows)]
@@ -370,25 +382,25 @@ fn windows_quote_arg(arg: &str) -> String {
                 backslashes += 1;
                 out.push('\\');
             }
-            '"' => {
-                for _ in 0..=backslashes {
-                    out.push('\\');
+                '"' => {
+                    for _ in 0..backslashes {
+                        out.push('\\');
+                    }
+                    backslashes = 0;
+                    out.push('"');
                 }
-                backslashes = 0;
-                out.push('"');
-            }
-            _ => {
-                backslashes = 0;
-                out.push(ch);
+                _ => {
+                    backslashes = 0;
+                    out.push(ch);
+                }
             }
         }
+        for _ in 0..backslashes {
+            out.push('\\');
+        }
+        out.push('"');
+        out
     }
-    for _ in 0..=backslashes {
-        out.push('\\');
-    }
-    out.push('"');
-    out
-}
 
 /// Build the spawn command for a stdio server definition (command + args +
 /// env + cwd). The child inherits this process's environment so PATH-based
@@ -418,14 +430,20 @@ fn spawn_command(def: &Value) -> Result<(Command, bool), String> {
         }
     };
     let mut cmd = if is_script {
-        // cross-spawn style: one quoted command line handed to `cmd /s /c`.
-        let mut line = format!("\"{resolved}\"");
-        for arg in &args {
-            line.push(' ');
-            line.push_str(&windows_quote_arg(arg));
-        }
         let mut c = Command::new("cmd");
-        c.arg("/d").arg("/s").arg("/c").arg(line);
+        c.arg("/d").arg("/s").arg("/c");
+        // The line is appended verbatim and wrapped in one outer quote pair:
+        // `cmd /s` strips exactly that pair and keeps the inner quotes intact.
+        // Handed over as a regular argument, the inner quotes would be
+        // \"-escaped by the standard quoting and cmd would fail to resolve
+        // the shim (exit before the MCP handshake). Verified against
+        // `npx`-style shims and paths containing spaces.
+        #[cfg(windows)]
+        c.raw_arg(format!("\"{}\"", windows_cmd_line(&resolved, &args)));
+        #[cfg(not(windows))]
+        {
+            let _ = (&resolved, &args);
+        }
         c
     } else {
         let mut c = Command::new(&resolved);
@@ -480,6 +498,48 @@ fn classify_response(value: &Value) -> Option<Result<(), String>> {
     Some(Err(message.to_string()))
 }
 
+/// How the initialize handshake failed. Error strings are built only after
+/// the child is gone so the stderr tail can be attached to the message.
+enum HandshakeFailure {
+    Write(std::io::Error),
+    Read(std::io::Error),
+    /// stdout hit EOF: the process died before answering.
+    Exited,
+    Timeout,
+    /// The server answered with a JSON-RPC error.
+    Rpc(String),
+}
+
+impl HandshakeFailure {
+    /// Build the coded error; `detail` is the pre-formatted stderr suffix
+    /// (empty when the server printed nothing).
+    fn into_error(self, detail: String) -> String {
+        match self {
+            HandshakeFailure::Write(e) => pix_error_detail(
+                "mcpCheckWriteFailed",
+                "写入 initialize 请求失败: {detail}",
+                e,
+            ),
+            HandshakeFailure::Read(e) => pix_error_detail(
+                "mcpCheckReadFailed",
+                "读取服务器输出失败: {detail}",
+                e,
+            ),
+            HandshakeFailure::Exited => pix_error_detail(
+                "mcpCheckExited",
+                "服务器进程在握手前退出{detail}",
+                detail,
+            ),
+            HandshakeFailure::Timeout => pix_error_detail(
+                "mcpCheckTimeout",
+                "连接检测超时（15 秒），服务器未响应 initialize{detail}",
+                detail,
+            ),
+            HandshakeFailure::Rpc(message) => message,
+        }
+    }
+}
+
 async fn check_stdio(def: &Value) -> Result<u128, String> {
     let (mut cmd, wrapped) = spawn_command(def)?;
     let mut child = cmd
@@ -496,8 +556,9 @@ async fn check_stdio(def: &Value) -> Result<u128, String> {
             .ok_or_else(|| pix_error("mcpCheckReadFailed", "无法读取服务器标准输出"))?,
     );
     // Drain stderr in the background so a chatty server cannot block on a full
-    // pipe; kept alive (but unused) until the end of the handshake.
-    let _stderr_task = child.stderr.take().map(|mut stderr| {
+    // pipe; the tail is collected once the handshake is over and attached to
+    // failure reports (a server that exits early usually explains why there).
+    let stderr_task = child.stderr.take().map(|mut stderr| {
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut buf = Vec::new();
@@ -520,36 +581,44 @@ async fn check_stdio(def: &Value) -> Result<u128, String> {
 
     use tokio::io::AsyncWriteExt;
     let request = initialize_request();
-    let write_error = |e: std::io::Error| {
-        pix_error_detail("mcpCheckWriteFailed", "写入 initialize 请求失败: {detail}", e)
-    };
-    stdin.write_all(request.as_bytes()).await.map_err(write_error)?;
-    stdin.write_all(b"\n").await.map_err(write_error)?;
-    stdin.flush().await.map_err(write_error)?;
-
     // Latency only covers the initialize handshake round trip, not the
     // process startup time (intentional).
-    let started = std::time::Instant::now();
-    let outcome = tokio::time::timeout(CHECK_TIMEOUT, async {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = tokio::io::AsyncBufReadExt::read_line(&mut stdout, &mut line)
-                .await
-                .map_err(|e| {
-                    pix_error_detail("mcpCheckReadFailed", "读取服务器输出失败: {detail}", e)
-                })?;
-            if n == 0 {
-                return Err(pix_error("mcpCheckExited", "服务器进程在握手前退出"));
-            }
-            if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
-                if let Some(classified) = classify_response(&value) {
-                    return classified;
+    let handshake = async {
+        if let Err(e) = stdin.write_all(request.as_bytes()).await {
+            return Err(HandshakeFailure::Write(e));
+        }
+        if let Err(e) = stdin.write_all(b"\n").await {
+            return Err(HandshakeFailure::Write(e));
+        }
+        if let Err(e) = stdin.flush().await {
+            return Err(HandshakeFailure::Write(e));
+        }
+        let started = std::time::Instant::now();
+        let read = async {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match tokio::io::AsyncBufReadExt::read_line(&mut stdout, &mut line).await {
+                    Ok(0) => return Err(HandshakeFailure::Exited),
+                    Ok(_) => {}
+                    Err(e) => return Err(HandshakeFailure::Read(e)),
+                }
+                if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
+                    if let Some(classified) = classify_response(&value) {
+                        return match classified {
+                            Ok(()) => Ok(started.elapsed().as_millis()),
+                            Err(message) => Err(HandshakeFailure::Rpc(message)),
+                        };
+                    }
                 }
             }
+        };
+        match tokio::time::timeout(CHECK_TIMEOUT, read).await {
+            Ok(result) => result,
+            Err(_) => Err(HandshakeFailure::Timeout),
         }
-    })
-    .await;
+    };
+    let outcome = handshake.await;
     // cmd.exe wrappers (npx & friends) fork the real server, so kill the
     // whole tree the same way pi-mcp does.
     #[cfg(not(windows))]
@@ -571,17 +640,25 @@ async fn check_stdio(def: &Value) -> Result<u128, String> {
     }
     let _ = child.kill().await;
     match outcome {
-        Err(_) => Err(pix_error(
-            "mcpCheckTimeout",
-            "连接检测超时（15 秒），服务器未响应 initialize",
-        )),
-        Ok(Err(message)) => Err(message),
-        Ok(Ok(())) => Ok(started.elapsed().as_millis()),
+        Ok(latency) => Ok(latency),
+        Err(failure) => {
+            // The child is gone, so the stderr pipe closes and the drain task
+            // finishes promptly; the timeout only guards a stuck pipe.
+            let tail = match stderr_task {
+                Some(task) => match tokio::time::timeout(Duration::from_secs(2), task).await {
+                    Ok(Ok(text)) => text.trim().to_string(),
+                    _ => String::new(),
+                },
+                None => String::new(),
+            };
+            let detail = if tail.is_empty() {
+                String::new()
+            } else {
+                format!(": {tail}")
+            };
+            Err(failure.into_error(detail))
+        }
     }
-    // Dropping _stderr_task detaches it rather than aborting it; the task
-    // finishes on its own once the child is killed and its stderr pipe closes.
-    // The error paths above already carry actionable messages, so its output
-    // is only drained, never reported.
 }
 
 fn check_http_client() -> Result<reqwest::Client, String> {
@@ -772,7 +849,11 @@ mod tests {
         )
         .unwrap();
         let (cmd, wrapped) = spawn_command(&def).unwrap();
-        assert!(format!("{cmd:?}").contains("npx"));
+        // The Debug output no longer carries the shim line (raw_arg), so only
+        // the wrap flag is asserted here; the line itself is covered below.
+        let _ = cmd;
+        #[cfg(windows)]
+        assert!(wrapped);
         let no_command: Value = serde_json::from_str(r#"{"args":[]}"#).unwrap();
         assert!(spawn_command(&no_command).is_err());
         // Resolution of a nonexistent bare name cannot wrap it in cmd.
@@ -781,6 +862,25 @@ mod tests {
         assert!(!wrapped_missing);
         // Keep the unused-variable shape identical on every platform.
         let _ = wrapped;
+    }
+
+    // `cmd /s /c` strips exactly one outer quote pair, so the whole line is
+    // double-wrapped before being handed to raw_arg verbatim. Without the
+    // outer pair a spaced path would be cut at the first space; passing the
+    // line as a regular argument would escape inner quotes to \" and cmd
+    // would fail to resolve the shim (regression: every npx-style stdio
+    // server exited before the MCP handshake on Windows).
+    #[cfg(windows)]
+    #[test]
+    fn windows_cmd_line_is_quoted_for_s_strip() {
+        assert_eq!(
+            windows_cmd_line(r"C:\Program Files\nodejs\npx.cmd", &["-y", "pkg"]),
+            r#""C:\Program Files\nodejs\npx.cmd" -y pkg"#
+        );
+        assert_eq!(
+            windows_cmd_line(r"C:\tools\x.cmd", &["a b", "c"]),
+            r#""C:\tools\x.cmd" "a b" c"#
+        );
     }
 
     #[cfg(windows)]
