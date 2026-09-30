@@ -6,7 +6,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { workspaceGitInfo, type WorkspaceGitInfo, type WorkspaceSelection } from "@/api/piClient"
+import { workspaceGitInfo, createWorkspaceGit, type WorkspaceGitInfo, type WorkspaceSelection } from "@/api/piClient"
+import { tBackendError } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 const props = defineProps<{ project: string; disabled?: boolean }>()
 const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
@@ -97,6 +98,35 @@ function selectBranch(branch: string) {
   if (blocked.value) return
   if (selection.value) selection.value = { ...selection.value, branch }
   branchOpen.value = false
+}
+// 分支下拉内直接创建并检出新分支；工作树模式下选中的只是基准分支，因此仅本地模式提供。
+const newBranch = ref("")
+const createError = ref("")
+const creating = ref(false)
+watch(branchOpen, open => {
+  if (open) {
+    newBranch.value = ""
+    createError.value = ""
+  }
+})
+async function createBranch() {
+  const branch = newBranch.value.trim()
+  if (blocked.value || creating.value || !branch) return
+  creating.value = true
+  workspace.gitBusy = true
+  createError.value = ""
+  try {
+    await createWorkspaceGit(props.project, branch, false)
+    newBranch.value = ""
+    // 创建后新分支即当前分支，重新拉取使下拉与草稿选择保持一致。
+    await refresh()
+    branchOpen.value = false
+  } catch (e) {
+    createError.value = tBackendError(e)
+  } finally {
+    creating.value = false
+    workspace.gitBusy = false
+  }
 }
 watch(() => props.project, refresh, { immediate: true })
 </script>
@@ -232,6 +262,31 @@ watch(() => props.project, refresh, { immediate: true })
             ></Button
           >
         </ScrollArea>
+        <div v-if="!selection?.worktree" class="mt-1 border-t border-border pt-1.5">
+          <p class="px-2 pb-1.5 text-xs text-muted-foreground">{{ t("workspace.branchHint") }}</p>
+          <div class="flex gap-1.5 px-2">
+            <Input
+              v-model="newBranch"
+              :placeholder="t('workspace.branchName')"
+              :disabled="blocked || creating"
+              class="h-7 text-xs"
+              @keydown.enter="createBranch"
+            />
+            <Button
+              variant="context-menu-item"
+              size="content"
+              class="context-menu-item shrink-0"
+              :disabled="blocked || creating || !newBranch.trim()"
+              @click="createBranch"
+              ><LoaderCircle v-if="creating" :size="14" class="size-auto shrink-0 animate-spin" /><Plus
+                v-else
+                :size="14"
+                class="size-auto shrink-0"
+              />{{ creating ? t("workspace.creating") : t("workspace.create") }}</Button
+            >
+          </div>
+          <p v-if="createError" class="px-2 pt-1.5 text-xs text-destructive">{{ createError }}</p>
+        </div>
       </PopoverContent>
     </Popover>
   </div>
