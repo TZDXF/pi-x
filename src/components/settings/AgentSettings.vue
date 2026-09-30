@@ -13,7 +13,7 @@ interface PromptDraft extends GlobalPromptFile {
 const { t } = useI18n()
 const ui = useUiStore()
 const files = ref<PromptDraft[]>([])
-const selectedName = ref("SYSTEM.md")
+const selectedName = ref("AGENTS.md")
 const selectedFile = computed(() => files.value.find(file => file.fileName === selectedName.value))
 const loading = ref(true)
 const showDefaultHint = computed(
@@ -27,6 +27,9 @@ async function load() {
   error.value = ""
   try {
     files.value = (await listGlobalPrompts()).map(file => ({ ...file, savedContent: file.content }))
+    if (!files.value.some(file => file.fileName === selectedName.value)) {
+      selectedName.value = files.value[0]?.fileName ?? ""
+    }
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -89,7 +92,6 @@ onMounted(load)
             t(selectedFile.exists ? "agentConfig.exists" : "agentConfig.missing")
           }}</span>
         </div>
-        <p class="text-xs text-muted-foreground">{{ t(`agentConfig.hints.${selectedFile.fileName}`) }}</p>
         <p v-if="showDefaultHint" class="text-xs text-blue-600 dark:text-blue-400">
           {{ t("agentConfig.defaultPromptHint") }}
         </p>
