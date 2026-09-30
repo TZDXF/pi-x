@@ -49,3 +49,20 @@ test("panel posts bridge commands to the proxy origin", () => {
   expect(panel).toMatch(/const targetOrigin = proxyBase\.value \? new URL\(proxyBase\.value\)\.origin : "\*"/)
   expect(panel).not.toMatch(/targetOrigin = proxyBase\.value \?\? "\*"/)
 })
+
+test("direct access mode bypasses the proxy and degrades bridge features", () => {
+  const panel = read("../src/components/browser/BrowserPanel.vue")
+  // 直连模式不使用沙箱属性,也不启动/调用预览代理。
+  expect(panel).toMatch(/const directMode = computed/)
+  expect(panel).toMatch(/if \(directMode\.value\) return undefined/)
+  expect(panel).toMatch(/if \(useProxy\.value\) await initProxy\(\)/)
+  expect(panel).toMatch(/if \(useProxy\.value\) initProxy\(\)/)
+  // bridge 消息在直连模式下被忽略(跨源页面无法注入 bridge)。
+  expect(panel).toMatch(/if \(directMode\.value\) return\n  postToPage/)
+  expect(panel).toMatch(/if \(directMode\.value\) return\n  const data = event\.data/)
+  // inspect 与控制台属于 bridge 专属功能,直连模式下隐藏。
+  expect(panel).toMatch(/v-if="!directMode"\n\s+variant="ghost"\n\s+size="icon-xs"\n\s+:title="t\('browser\.inspect'\)"/)
+  // 直连模式用自维护历史栈支持后退/前进。
+  expect(panel).toMatch(/directHistory\.value\[directIndex\.value\]/)
+  expect(panel).toMatch(/iframeKey\.value\+\+/)
+})

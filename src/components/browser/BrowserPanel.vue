@@ -49,11 +49,25 @@ import {
   nextAnnotationId,
   type PageAnnotation,
 } from "@/lib/previewAnnotations"
-import { normalizeInputUrl, resolveProxyBase, toProxyUrl } from "@/lib/previewUrl"
+import { normalizeInputUrl, resolveProxyBase, toProxyUrl, resolveAccessMode, type AccessMode } from "@/lib/previewUrl"
 import { drawAnnotation, type DrawAnnotation, type DrawTool, type Point } from "@/lib/canvasAnnotations"
 
 type Mode = "none" | "draw" | "inspect"
 type CanvasTool = DrawTool | "eraser"
+type AccessPref = "auto" | "direct" | "proxy"
+
+/** localStorage key for the manual access-mode override (web access only). */
+const ACCESS_PREF_KEY = "pix.browser.accessMode"
+
+function loadAccessPref(): AccessPref {
+  try {
+    const stored = localStorage.getItem(ACCESS_PREF_KEY)
+    return stored === "direct" || stored === "proxy" || stored === "auto" ? stored : "auto"
+  } catch {
+    /* Storage may be unavailable in restricted browsers. */
+    return "auto"
+  }
+}
 
 interface ConsoleEntry {
   id: number
@@ -67,6 +81,67 @@ const emit = defineEmits<{ "send-to-chat": [text: string] }>()
 const { t } = useI18n()
 
 // ---- preview proxy / navigation -------------------------------------------
+
+// ---- access mode: direct iframe vs preview proxy -----------------------------
+// Desktop always loads the target URL straight in the iframe (no proxy). In
+// web access the default is auto-detected from the address the app itself is
+// opened with — an IP host goes through the preview proxy, a named host goes
+// direct — and the toolbar toggle can override the detection.
+
+const accessPref = ref<AccessPref>(isDesktop ? "auto" : loadAccessPref())
+const autoAccessMode: AccessMode = resolveAccessMode(isDesktop, window.location.hostname)
+const effectiveAccessMode = computed<AccessMode>(() =>
+  accessPref.value === "auto" ? autoAccessMode : accessPref.value,
+)
+/** True when the iframe loads target URLs without the preview proxy. */
+const directMode = computed(() => effectiveAccessMode.value === "direct")
+const useProxy = computed(() => !directMode.value)
+
+/** Self-managed navigation stack for direct mode (bridge history is unavailable cross-origin). */
+const directHistory = ref<string[]>([])
+const directIndex = ref(-1)
+
+const accessModeLabel = computed(() => {
+  const mode = directMode.value ? t("browser.accessModeDirect") : t("browser.accessModeProxy")
+  return accessPref.value === "auto" ? `${t("browser.accessModeAuto")}·${mode}` : mode
+})
+const accessModeTitle = computed(() => `${t("browser.accessMode")}: ${accessModeLabel.value}`)
+
+function cycleAccessMode() {
+  const order: AccessPref[] = ["auto", "direct", "proxy"]
+  const next = order[(order.indexOf(accessPref.value) + 1) % order.length]
+  accessPref.value = next
+  try {
+    localStorage.setItem(ACCESS_PREF_KEY, next)
+  } catch {
+    /* Storage may be unavailable in restricted browsers. */
+  }
+  applyAccessModeChange()
+}
+
+/** Reloads the current page under the new access mode; bridge-only features degrade in direct mode. */
+function applyAccessModeChange() {
+  if (directMode.value) {
+    showConsole.value = false
+    showAnnotations.value = false
+    if (mode.value === "inspect") mode.value = "none"
+  }
+  if (!currentUrl.value) return
+  directHistory.value = [currentUrl.value]
+  directIndex.value = 0
+  loading.value = true
+  if (useProxy.value) {
+    void initProxy().then(() => {
+      if (proxyBase.value) {
+        activeSrc.value = toProxyUrl(proxyBase.value, currentUrl.value)
+        iframeKey.value++
+      }
+    })
+  } else {
+    activeSrc.value = currentUrl.value
+    iframeKey.value++
+  }
+}
 
 const proxyBase = ref<string | null>(null)
 const proxyError = ref(false)
@@ -83,6 +158,8 @@ const iframeRef = ref<HTMLIFrameElement | null>(null)
 const activeSrc = ref("")
 
 const sandboxAttr = computed(() => {
+  // Direct mode: no sandbox — the page runs like a normal cross-origin iframe.
+  if (directMode.value) return undefined
   if (proxyBase.value && isSameOrigin(proxyBase.value)) {
     return "allow-scripts allow-forms allow-popups allow-modals"
   }
@@ -105,7 +182,7 @@ watch(
   visible => {
     if (visible && !initialized) {
       initialized = true
-      initProxy()
+      if (useProxy.value) initProxy()
     }
   },
   { immediate: true },
@@ -127,30 +204,67 @@ async function doInitProxy() {
   }
 }
 
+/** Points the iframe at `url` under the active access mode. */
+function loadUrl(url: string) {
+  currentUrl.value = url
+  loading.value = true
+  if (directMode.value) {
+    activeSrc.value = url
+    directHistory.value = directHistory.value.slice(0, directIndex.value + 1)
+    if (directHistory.value[directIndex.value] !== url) {
+      directHistory.value.push(url)
+      directIndex.value = directHistory.value.length - 1
+    }
+  } else {
+    activeSrc.value = proxyBase.value ? toProxyUrl(proxyBase.value, url) : ""
+  }
+}
+
 async function navigate() {
-  await initProxy()
+  if (useProxy.value) await initProxy()
   const url = normalizeInputUrl(inputUrl.value)
   if (!url) return
   if (url === currentUrl.value) {
     reload()
     return
   }
-  currentUrl.value = url
-  activeSrc.value = proxyBase.value ? toProxyUrl(proxyBase.value, url) : ""
-  loading.value = true
+  loadUrl(url)
 }
 
 function reload() {
   if (!currentUrl.value) return
   loading.value = true
+  if (directMode.value) {
+    // Cross-origin pages cannot be reloaded from script; swap the iframe instead.
+    iframeKey.value++
+    return
+  }
   postToPage(bridgeCommand("reload"))
 }
 
 function goBack() {
+  if (!currentUrl.value) return
+  if (directMode.value) {
+    if (directIndex.value <= 0) return
+    directIndex.value--
+    currentUrl.value = directHistory.value[directIndex.value]
+    activeSrc.value = currentUrl.value
+    loading.value = true
+    return
+  }
   postToPage(bridgeCommand("back"))
 }
 
 function goForward() {
+  if (!currentUrl.value) return
+  if (directMode.value) {
+    if (directIndex.value >= directHistory.value.length - 1) return
+    directIndex.value++
+    currentUrl.value = directHistory.value[directIndex.value]
+    activeSrc.value = currentUrl.value
+    loading.value = true
+    return
+  }
   postToPage(bridgeCommand("forward"))
 }
 
@@ -161,6 +275,8 @@ function openExternal() {
 }
 
 function postToPage(message: BridgeOutbound) {
+  // Direct-mode pages carry no bridge (cross-origin injection is impossible).
+  if (directMode.value) return
   // Payloads carry objects read out of deep refs (selections, annotations),
   // which are reactive proxies; structured clone rejects proxies, so flatten
   // to plain JSON first — the bridge contract is JSON data anyway.
@@ -170,6 +286,7 @@ function postToPage(message: BridgeOutbound) {
 
 function onIframeLoad() {
   loading.value = false
+  if (directMode.value) return
   postToPage(bridgeInspect(mode.value === "inspect"))
   syncMarkers()
 }
@@ -185,6 +302,8 @@ function pushConsole(level: ConsoleEntry["level"], text: string) {
 }
 
 function onMessage(event: MessageEvent) {
+  // Bridge messages only exist under the proxy; direct pages cannot send them.
+  if (directMode.value) return
   const data = event.data
   if (!isBridgeInbound(data)) return
   if (!iframeRef.value || event.source !== iframeRef.value.contentWindow) return
@@ -651,10 +770,22 @@ onBeforeUnmount(() => {
   <div class="browser-panel flex h-full min-h-0 flex-col bg-background">
     <!-- 导航栏 -->
     <div class="flex items-center gap-1 border-b px-2 py-1.5">
-      <Button variant="ghost" size="icon-xs" :title="t('browser.back')" :disabled="!currentUrl" @click="goBack">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        :title="t('browser.back')"
+        :disabled="!currentUrl || (directMode && directIndex <= 0)"
+        @click="goBack"
+      >
         <ArrowLeft class="size-4" />
       </Button>
-      <Button variant="ghost" size="icon-xs" :title="t('browser.forward')" :disabled="!currentUrl" @click="goForward">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        :title="t('browser.forward')"
+        :disabled="!currentUrl || (directMode && directIndex >= directHistory.length - 1)"
+        @click="goForward"
+      >
         <ArrowRight class="size-4" />
       </Button>
       <Button variant="ghost" size="icon-xs" :title="t('browser.reload')" :disabled="!currentUrl" @click="reload">
@@ -670,6 +801,16 @@ onBeforeUnmount(() => {
           @keydown.enter="navigate"
         />
       </div>
+      <!-- Access mode toggle: web access only (desktop is always direct). -->
+      <button
+        v-if="!isDesktop"
+        type="button"
+        class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+        :title="accessModeTitle"
+        @click="cycleAccessMode"
+      >
+        {{ accessModeLabel }}
+      </button>
       <Button
         variant="ghost"
         size="icon-xs"
@@ -702,6 +843,7 @@ onBeforeUnmount(() => {
         <Pencil class="size-4" />
       </Button>
       <Button
+        v-if="!directMode"
         variant="ghost"
         size="icon-xs"
         :title="t('browser.inspect')"
@@ -773,10 +915,13 @@ onBeforeUnmount(() => {
       <span v-else-if="mode === 'inspect'" class="truncate text-xs text-muted-foreground">{{
         t("browser.inspectHint")
       }}</span>
-      <span v-else class="truncate text-xs text-muted-foreground">{{ t("browser.browseHint") }}</span>
+      <span v-else class="truncate text-xs text-muted-foreground">{{
+        directMode ? t("browser.browseHintDirect") : t("browser.browseHint")
+      }}</span>
 
       <div class="ml-auto flex items-center gap-1">
         <Button
+          v-if="!directMode"
           variant="ghost"
           size="icon-xs"
           :title="t('browser.console')"
@@ -786,6 +931,7 @@ onBeforeUnmount(() => {
           <SquareTerminal class="size-4" />
         </Button>
         <Button
+          v-if="!directMode"
           variant="ghost"
           size="icon-xs"
           :title="t('browser.annotations')"
@@ -801,7 +947,7 @@ onBeforeUnmount(() => {
     <!-- 内容区 -->
     <div ref="stageRef" class="relative min-h-0 flex-1 overflow-hidden">
       <div
-        v-if="proxyError"
+        v-if="useProxy && proxyError"
         class="flex h-full items-center justify-center p-6 text-center text-xs text-muted-foreground"
       >
         {{ t("browser.proxyUnavailable") }}

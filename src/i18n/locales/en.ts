@@ -141,6 +141,11 @@ export default {
     clearAnnotations: "Clear annotations",
     export: "Export annotations",
     previewTitle: "PiX browser preview",
+    accessMode: "Access mode",
+    accessModeAuto: "Auto",
+    accessModeDirect: "Direct",
+    accessModeProxy: "Proxy",
+    browseHintDirect: "Inspect and console are unavailable in direct mode; free-hand annotations still work",
   },
   projectless: {
     name: "No-project Tasks",
