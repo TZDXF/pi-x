@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 
-function harness(runtimeModels = [], custom = {}, saved = {}) {
+function harness(custom = {}, saved = {}) {
   const source = readFileSync(new URL("../src/components/settings/ModelConfigSettings.vue", import.meta.url), "utf8")
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
     .replace(/^import[\s\S]*?from ".*"$/gm, "")
@@ -26,7 +26,6 @@ function harness(runtimeModels = [], custom = {}, saved = {}) {
     },
     useI18n: () => ({ t: key => key }),
     useUiStore: () => ({ pushToast() {} }),
-    useSessionStore: () => ({ models: runtimeModels }),
     getConfig: async () => {
       if (loadFailure) throw new Error("load failed")
       return config
@@ -59,22 +58,21 @@ function harness(runtimeModels = [], custom = {}, saved = {}) {
   }
 }
 
-test("the model list uses the conversation models without appending duplicate custom models", async () => {
-  const runtime = [{ provider: "one", id: "model", name: "Model" }]
-  const h = harness(runtime, { one: { models: [{ id: "model" }, { id: "other" }] } })
+test("the model list comes from models.json and is not overridden by stale conversation state", async () => {
+  const h = harness({ one: { models: [{ id: "model" }, { id: "other" }] } })
   await h.mount()
-  expect(h.api.models.value).toBe(runtime)
+  expect(h.api.models.value.map(model => model.id)).toEqual(["model", "other"])
 })
 
-test("settings without a running conversation use configured model names", async () => {
-  const h = harness([], { custom: { models: [{ id: "small", name: "Small model" }] } })
+test("the model list uses configured model names from models.json", async () => {
+  const h = harness({ custom: { models: [{ id: "small", name: "Small model" }] } })
   await h.mount()
   expect(h.api.models.value[0].name).toBe("Small model")
   expect(h.api.models.value[0].provider).toBe("custom")
 })
 
 test("the default model falls back to the first available model and is saved on submit", async () => {
-  const h = harness([{ provider: "one", id: "model" }])
+  const h = harness({ one: { models: [{ id: "model" }] } })
   await h.mount()
   expect(h.api.effectiveDefaultKey.value).toBe("one/model")
   await h.api.save()
@@ -85,7 +83,7 @@ test("the default model falls back to the first available model and is saved on 
 })
 
 test("an explicit default selection overrides the first-model fallback and preserves unrelated settings", async () => {
-  const h = harness([], { one: { models: [{ id: "a" }, { id: "b" }] } }, { unrelated: "keep" })
+  const h = harness({ one: { models: [{ id: "a" }, { id: "b" }] } }, { unrelated: "keep" })
   await h.mount()
   expect(h.api.effectiveDefaultKey.value).toBe("one/a")
   h.api.defaultKey.value = "one/b"
@@ -96,7 +94,7 @@ test("an explicit default selection overrides the first-model fallback and prese
 })
 
 test("a previously saved default model stays visible when absent from the runtime list", async () => {
-  const h = harness([], {}, { defaultModel: { provider: "saved", modelId: "model" } })
+  const h = harness({}, { defaultModel: { provider: "saved", modelId: "model" } })
   await h.mount()
   expect(h.api.defaultKey.value).toBe("saved/model")
   expect(h.api.effectiveDefaultKey.value).toBe("saved/model")
@@ -105,7 +103,6 @@ test("a previously saved default model stays visible when absent from the runtim
 
 test("disabling title generation clears both title settings without changing the default model", async () => {
   const h = harness(
-    [],
     {},
     {
       titleModel: { provider: "one", modelId: "title" },
@@ -135,7 +132,7 @@ test("following the default model saves the flag and the default model", async (
 })
 
 test("a specific title model splits the provider from the full model id", async () => {
-  const h = harness([], { openrouter: { models: [{ id: "vendor/model" }] } })
+  const h = harness({ openrouter: { models: [{ id: "vendor/model" }] } })
   await h.mount()
   h.api.titleChoice.value = "openrouter/vendor/model"
   await h.api.save()
@@ -145,7 +142,7 @@ test("a specific title model splits the provider from the full model id", async 
 })
 
 test("the translation model defaults to the default model unless a specific model is chosen", async () => {
-  const h = harness([], { one: { models: [{ id: "m" }] } })
+  const h = harness({ one: { models: [{ id: "m" }] } })
   await h.mount()
   expect(h.api.translationChoice.value).toBe("default")
   await h.api.save()
@@ -156,13 +153,13 @@ test("the translation model defaults to the default model unless a specific mode
 })
 
 test("a saved configuration reloads with the same choices", async () => {
-  const h = harness([], { one: { models: [{ id: "m" }] } })
+  const h = harness({ one: { models: [{ id: "m" }] } })
   await h.mount()
   h.api.defaultKey.value = "one/m"
   h.api.titleChoice.value = "default"
   h.api.translationChoice.value = "one/m"
   await h.api.save()
-  const h2 = harness([], { one: { models: [{ id: "m" }] } }, h.config())
+  const h2 = harness({ one: { models: [{ id: "m" }] } }, h.config())
   await h2.mount()
   expect(h2.api.defaultKey.value).toBe("one/m")
   expect(h2.api.titleChoice.value).toBe("default")
@@ -178,8 +175,8 @@ test("without any model the page cannot be saved", async () => {
   expect(h.saves()).toBe(0)
 })
 
-test("duplicate saved selections are only appended once to the runtime model list", async () => {
-  const h = harness([{ provider: "one", id: "other" }])
+test("duplicate saved selections are only appended once to the model list", async () => {
+  const h = harness({ one: { models: [{ id: "other" }] } })
   h.setConfig({
     titleModel: { provider: "one", modelId: "missing" },
     defaultModel: { provider: "one", modelId: "missing" },

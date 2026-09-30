@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getConfig, saveConfig, getModelsConfig } from "@/api/piClient"
-import { useSessionStore, useUiStore } from "@/stores/conversations"
+import { useUiStore } from "@/stores/conversations"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import {
   Select,
@@ -16,7 +16,6 @@ import {
 import { Button } from "@/components/ui/button"
 
 const { t } = useI18n()
-const session = useSessionStore()
 const ui = useUiStore()
 const defaultKey = ref("")
 const titleChoice = ref("off")
@@ -26,8 +25,8 @@ const saving = ref(false)
 const loadError = ref("")
 const customModels = ref<{ provider: string; id: string; name?: string }[]>([])
 const models = computed(() => {
-  // Keep saved selections visible even when the active conversation offers fewer models.
-  const available = session.models.length ? session.models : customModels.value
+  // models.json is the single source; keep saved selections visible when it no longer lists them.
+  const available = customModels.value
   const saved: { provider: string; id: string; name?: string }[] = []
   for (const key of [defaultKey.value, modelChoiceKey(titleChoice.value), modelChoiceKey(translationChoice.value)]) {
     const parts = key ? splitKey(key) : null
