@@ -41,7 +41,11 @@ pub struct HostedSkill {
 /// Extract `name` / `description` from a skill Markdown frontmatter block.
 fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     let clean = |s: &str| {
-        s.trim().trim_matches('"').trim_matches('\'').trim().to_string()
+        s.trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string()
     };
     let mut lines = content.lines();
     if lines.next().map(str::trim) != Some("---") {
@@ -109,7 +113,9 @@ fn read_frontmatter(file: &Path) -> Result<(Option<String>, Option<String>), Str
 }
 
 pub(crate) fn valid_skill_markdown(file: &Path) -> bool {
-    read_frontmatter(file).ok().and_then(|(_, description)| description)
+    read_frontmatter(file)
+        .ok()
+        .and_then(|(_, description)| description)
         .is_some_and(|description| !description.trim().is_empty())
 }
 
@@ -121,7 +127,6 @@ pub(crate) fn valid_skill_markdown(file: &Path) -> bool {
 /// a directory containing `SKILL.md`, or a root Markdown file with
 /// frontmatter. Anything else is ignored.
 fn scan_root(root: &Path) -> Result<Vec<(PathBuf, &'static str)>, String> {
-
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -136,22 +141,32 @@ fn scan_root(root: &Path) -> Result<Vec<(PathBuf, &'static str)>, String> {
             if path.join("SKILL.md").is_file() {
                 out.push((path, "directory"));
             }
-        } else if path.extension().map(|e| e.to_ascii_lowercase() == "md").unwrap_or(false) {
+        } else if path
+            .extension()
+            .map(|e| e.to_ascii_lowercase() == "md")
+            .unwrap_or(false)
+        {
             out.push((path, "file"));
         }
     }
     out.sort_by_key(|(path, _)| {
-        path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()
+        path.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
     });
     Ok(out)
 }
 
 fn stem(path: &Path) -> String {
-    path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn dir_name(path: &Path) -> String {
-    path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn hosted_entry(root: &Path, path: &Path, kind: &str) -> Result<HostedSkill, String> {
@@ -211,13 +226,19 @@ fn pi_skill_paths() -> Result<Vec<String>, String> {
         .get("skills")
         .and_then(Value::as_array)
         .map(|array| {
-            array.iter().filter_map(Value::as_str).map(str::to_string).collect()
+            array
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
         })
         .unwrap_or_default())
 }
 
 fn save_pi_skill_paths(paths: Vec<String>) -> Result<(), String> {
-    crate::pi_data::call(serde_json::json!({ "op": "settings_save", "settings": { "skills": paths } }))?;
+    crate::pi_data::call(
+        serde_json::json!({ "op": "settings_save", "settings": { "skills": paths } }),
+    )?;
     Ok(())
 }
 
@@ -253,7 +274,9 @@ pub async fn skills_hosted_list() -> Result<Vec<HostedSkill>, String> {
 pub fn skills_hosted_open_dir(app: AppHandle) -> Result<(), String> {
     let root = skills_root();
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    app.opener().open_path(root.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_path(root.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Delete a hosted skill from `~/.pix/skills/` and unregister it from Pi
@@ -337,15 +360,23 @@ pub struct DiscoveredSkill {
 /// Pi's discovery rules: if `dir` contains `SKILL.md` it is a skill root and
 /// recursion stops; otherwise recurse into non-dot, non-node_modules
 /// subdirectories; root-level `.md` files only count at the scan root.
-fn collect_skill_entries(dir: &Path, include_root_files: bool, out: &mut Vec<(PathBuf, &'static str)>) {
+fn collect_skill_entries(
+    dir: &Path,
+    include_root_files: bool,
+    out: &mut Vec<(PathBuf, &'static str)>,
+) {
     if dir.join("SKILL.md").is_file() {
         out.push((dir.to_path_buf(), "directory"));
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
         if name.starts_with('.') || name == "node_modules" {
             continue;
         }
@@ -353,7 +384,10 @@ fn collect_skill_entries(dir: &Path, include_root_files: bool, out: &mut Vec<(Pa
         if path.is_dir() {
             collect_skill_entries(&path, false, out);
         } else if include_root_files
-            && path.extension().map(|e| e.to_ascii_lowercase() == "md").unwrap_or(false)
+            && path
+                .extension()
+                .map(|e| e.to_ascii_lowercase() == "md")
+                .unwrap_or(false)
         {
             out.push((path, "file"));
         }
@@ -362,7 +396,9 @@ fn collect_skill_entries(dir: &Path, include_root_files: bool, out: &mut Vec<(Pa
 
 #[tauri::command]
 pub async fn skills_discovered_list() -> Result<Vec<DiscoveredSkill>, String> {
-    tokio::task::spawn_blocking(skills_discovered).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(skills_discovered)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 type SkillLocation = (PathBuf, PathBuf, &'static str, &'static str, Option<String>);
@@ -375,14 +411,32 @@ fn add_root_locations(locations: &mut Vec<SkillLocation>, root: &Path, source: &
     }
 }
 
-fn add_explicit_locations(locations: &mut Vec<SkillLocation>, raw: &str, base: &Path, home: &Path, source: &'static str) {
-    let expanded = if raw == "~" { home.to_path_buf() }
-        else if raw.starts_with("~/") || raw.starts_with("~\\") { home.join(&raw[2..]) }
-        else { PathBuf::from(raw) };
-    let path = if expanded.is_absolute() { expanded } else { base.join(expanded) };
+fn add_explicit_locations(
+    locations: &mut Vec<SkillLocation>,
+    raw: &str,
+    base: &Path,
+    home: &Path,
+    source: &'static str,
+) {
+    let expanded = if raw == "~" {
+        home.to_path_buf()
+    } else if raw.starts_with("~/") || raw.starts_with("~\\") {
+        home.join(&raw[2..])
+    } else {
+        PathBuf::from(raw)
+    };
+    let path = if expanded.is_absolute() {
+        expanded
+    } else {
+        base.join(expanded)
+    };
     if path.is_dir() {
         add_root_locations(locations, &path, source);
-    } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+    } else if path.is_file()
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    {
         locations.push((path.clone(), path, "file", source, None));
     }
 }
@@ -392,7 +446,8 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     let agent_dir = crate::trust::agent_dir();
     let hosted_root = skills_root();
     let hosted_paths: HashSet<PathBuf> = scan_root(&hosted_root)
-        .unwrap_or_default().iter()
+        .unwrap_or_default()
+        .iter()
         .map(|(path, _)| canonicalize(path).unwrap_or_else(|_| path.clone()))
         .collect();
 
@@ -401,14 +456,32 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     // intentionally excluded.
     let mut locations: Vec<SkillLocation> = Vec::new();
     add_root_locations(&mut locations, &agent_dir.join("skills"), "globalPi");
-    add_root_locations(&mut locations, &home.join(".agents").join("skills"), "globalAgents");
+    add_root_locations(
+        &mut locations,
+        &home.join(".agents").join("skills"),
+        "globalAgents",
+    );
     for package in crate::packages::package_skill_paths(None) {
         let path = package.path;
-        let kind = if path.join("SKILL.md").is_file() { Some("directory") }
-            else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")) { Some("file") }
-            else { None };
+        let kind = if path.join("SKILL.md").is_file() {
+            Some("directory")
+        } else if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+        {
+            Some("file")
+        } else {
+            None
+        };
         if let Some(kind) = kind {
-            locations.push((path.clone(), path, kind, "packageGlobal", Some(package.source)));
+            locations.push((
+                path.clone(),
+                path,
+                kind,
+                "packageGlobal",
+                Some(package.source),
+            ));
         }
     }
     // Pi's explicit settings paths can point outside all discovery directories.
@@ -420,9 +493,15 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     let mut seen_paths = HashSet::new();
     for (root, path, kind, source_kind, source_name) in locations {
         let canonical = canonicalize(&path).unwrap_or_else(|_| path.clone());
-        if !seen_paths.insert(canonical.clone()) { continue; }
-        let Ok(entry) = hosted_entry(&root, &path, kind) else { continue };
-        if entry.description.trim().is_empty() { continue; }
+        if !seen_paths.insert(canonical.clone()) {
+            continue;
+        }
+        let Ok(entry) = hosted_entry(&root, &path, kind) else {
+            continue;
+        };
+        if entry.description.trim().is_empty() {
+            continue;
+        }
         out.push(DiscoveredSkill {
             hosted: hosted_paths.contains(&canonical),
             name: entry.name,
@@ -432,7 +511,12 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
             source_name,
         });
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.path.cmp(&b.path)));
+    out.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.path.cmp(&b.path))
+    });
     Ok(out)
 }
 
@@ -441,7 +525,11 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
 // ---------------------------------------------------------------------------
 
 fn remove_path(path: &Path) -> Result<(), String> {
-    let result = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) };
+    let result = if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
     result.map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -450,13 +538,13 @@ mod tests {
     use super::*;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir()
-            .join(format!("pix-skills-{tag}-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("pix-skills-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
     }
 
-    const SKILL_MD: &str = "---\nname: my-skill\ndescription: \"Does things.\"\n---\n\n# My Skill\n";
+    const SKILL_MD: &str =
+        "---\nname: my-skill\ndescription: \"Does things.\"\n---\n\n# My Skill\n";
 
     #[test]
     fn parses_frontmatter() {
@@ -470,8 +558,12 @@ mod tests {
             "---\nname: find-docs\ndescription: >-\n  Retrieves up-to-date documentation\n  for developer tools.\n\n  Use it for APIs.\nmetadata: test\n---\n"
         );
         assert_eq!(name.as_deref(), Some("find-docs"));
-        assert_eq!(description.as_deref(), Some("Retrieves up-to-date documentation for developer tools.\nUse it for APIs."));
-        let (_, description) = parse_frontmatter("---\ndescription: |\n  First line\n  Second line\n---\n");
+        assert_eq!(
+            description.as_deref(),
+            Some("Retrieves up-to-date documentation for developer tools.\nUse it for APIs.")
+        );
+        let (_, description) =
+            parse_frontmatter("---\ndescription: |\n  First line\n  Second line\n---\n");
         assert_eq!(description.as_deref(), Some("First line\nSecond line"));
     }
 
@@ -535,7 +627,13 @@ mod tests {
         std::fs::create_dir_all(&skill).unwrap();
         std::fs::write(skill.join("SKILL.md"), SKILL_MD).unwrap();
         let mut locations = Vec::new();
-        add_explicit_locations(&mut locations, "custom/my-skill", &root, &root, "settingsGlobal");
+        add_explicit_locations(
+            &mut locations,
+            "custom/my-skill",
+            &root,
+            &root,
+            "settingsGlobal",
+        );
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].1, skill);
         assert_eq!(locations[0].3, "settingsGlobal");

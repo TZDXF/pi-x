@@ -42,18 +42,14 @@ pub struct FileHit {
 fn score(path_lower: &str, name_lower: &str, q: &str) -> Option<u8> {
     if name_lower.starts_with(q) {
         Some(0)
-    }
-    else if name_lower.contains(q) {
+    } else if name_lower.contains(q) {
         Some(1)
-    }
-    else if path_lower.contains(q) {
+    } else if path_lower.contains(q) {
         Some(2)
-    }
-    else {
+    } else {
         None
     }
 }
-
 
 /// One directory at a time for the project-files sidebar. Never follow links or
 /// allow a relative path to escape the selected workspace.
@@ -67,9 +63,16 @@ pub struct ProjectEntry {
 pub async fn list_directory(project: String, path: String) -> Result<Vec<ProjectEntry>, String> {
     tokio::task::spawn_blocking(move || {
         let root = dunce::canonicalize(&project).map_err(|e| e.to_string())?;
-        if !root.is_dir() { return Err("Project is not a directory".into()); }
+        if !root.is_dir() {
+            return Err("Project is not a directory".into());
+        }
         let relative = Path::new(&path);
-        if relative.is_absolute() || (!path.is_empty() && relative.components().any(|part| !matches!(part, std::path::Component::Normal(_)))) {
+        if relative.is_absolute()
+            || (!path.is_empty()
+                && relative
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_))))
+        {
             return Err("Invalid project-relative path".into());
         }
         let directory = dunce::canonicalize(root.join(relative)).map_err(|e| e.to_string())?;
@@ -80,23 +83,45 @@ pub async fn list_directory(project: String, path: String) -> Result<Vec<Project
         for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let kind = entry.file_type().map_err(|e| e.to_string())?;
-            if kind.is_symlink() || !(kind.is_dir() || kind.is_file()) { continue; }
+            if kind.is_symlink() || !(kind.is_dir() || kind.is_file()) {
+                continue;
+            }
             #[cfg(windows)]
             {
                 use std::os::windows::fs::MetadataExt;
-                if entry.metadata().map_err(|e| e.to_string())?.file_attributes() & 0x400 != 0 { continue; }
+                if entry
+                    .metadata()
+                    .map_err(|e| e.to_string())?
+                    .file_attributes()
+                    & 0x400
+                    != 0
+                {
+                    continue;
+                }
             }
             let name = entry.file_name().to_string_lossy().to_string();
             entries.push(ProjectEntry {
-                path: if path.is_empty() { name.clone() } else { format!("{path}/{name}") },
+                path: if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                },
                 name,
                 is_dir: kind.is_dir(),
             });
-            if entries.len() >= 2000 { break; }
+            if entries.len() >= 2000 {
+                break;
+            }
         }
-        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
         Ok(entries)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub async fn search(project: String, query: String) -> Result<Vec<FileHit>, String> {
@@ -136,16 +161,26 @@ pub async fn search(project: String, query: String) -> Result<Vec<FileHit>, Stri
                     continue;
                 };
                 // Do not traverse symlinks/junctions or suggest files outside the project.
-                let Ok(kind) = entry.file_type() else { continue };
-                if kind.is_symlink() { continue; }
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_symlink() {
+                    continue;
+                }
                 #[cfg(windows)]
                 {
                     use std::os::windows::fs::MetadataExt;
-                    let Ok(metadata) = entry.metadata() else { continue };
-                    if metadata.file_attributes() & 0x400 != 0 { continue; }
+                    let Ok(metadata) = entry.metadata() else {
+                        continue;
+                    };
+                    if metadata.file_attributes() & 0x400 != 0 {
+                        continue;
+                    }
                 }
                 let is_dir = kind.is_dir();
-                if !is_dir && !kind.is_file() { continue; }
+                if !is_dir && !kind.is_file() {
+                    continue;
+                }
                 if is_dir {
                     if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
                         continue;
@@ -215,11 +250,15 @@ mod tests {
         std::fs::write(root.join("src").join("session.ts"), "").unwrap();
         std::fs::write(root.join("node_modules").join("evil.ts"), "").unwrap();
 
-        let hits = search(root.to_string_lossy().to_string(), "session".into()).await.unwrap();
+        let hits = search(root.to_string_lossy().to_string(), "session".into())
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path.replace('\\', "/"), "src/session.ts");
 
-        let empty = search(root.to_string_lossy().to_string(), "evil".into()).await.unwrap();
+        let empty = search(root.to_string_lossy().to_string(), "evil".into())
+            .await
+            .unwrap();
         assert!(empty.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -240,7 +279,10 @@ mod tests {
         assert_eq!(hits.len(), MAX_HITS);
         assert_eq!(hits[0].path, "file-000.ts");
         let again = search(project, "file".into()).await.unwrap();
-        assert_eq!(hits.iter().map(|h| &h.path).collect::<Vec<_>>(), again.iter().map(|h| &h.path).collect::<Vec<_>>());
+        assert_eq!(
+            hits.iter().map(|h| &h.path).collect::<Vec<_>>(),
+            again.iter().map(|h| &h.path).collect::<Vec<_>>()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -258,14 +300,17 @@ mod tests {
         assert_eq!(nested[0].path, "src/main.ts");
         assert!(!nested[0].is_dir);
         assert!(list_directory(project.clone(), "../".into()).await.is_err());
-        assert!(list_directory(project, root.to_string_lossy().to_string()).await.is_err());
+        assert!(list_directory(project, root.to_string_lossy().to_string())
+            .await
+            .is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
     async fn missing_project_reports_error_instead_of_empty_results() {
         let root = std::env::temp_dir().join(format!("pix-missing-{}", uuid::Uuid::new_v4()));
-        assert!(search(root.to_string_lossy().to_string(), "".into()).await.is_err());
+        assert!(search(root.to_string_lossy().to_string(), "".into())
+            .await
+            .is_err());
     }
-
 }

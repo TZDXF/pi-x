@@ -171,7 +171,11 @@ fn document_base(target: &Target) -> String {
 }
 
 async fn handle(req: Request) -> Response {
-    let root = if req.uri().path().starts_with(REMOTE_ROOT) { REMOTE_ROOT } else { DESKTOP_ROOT };
+    let root = if req.uri().path().starts_with(REMOTE_ROOT) {
+        REMOTE_ROOT
+    } else {
+        DESKTOP_ROOT
+    };
     let Some(target) = parse_target(root, req.uri().path()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -320,7 +324,11 @@ fn rewrite_location(location: &str, target: &Target, query: Option<&str>) -> Opt
         Some(port) => format!("{}:{port}", next.host_str()?),
         None => next.host_str()?.to_string(),
     };
-    let root = target.prefix.rsplit_once('/').map(|(root, _)| root).unwrap_or_default();
+    let root = target
+        .prefix
+        .rsplit_once('/')
+        .map(|(root, _)| root)
+        .unwrap_or_default();
     let token = host_token(&proxy().secret, &host);
     Some(format!(
         "{root}/{token}/{}/{}{}{}",
@@ -343,7 +351,9 @@ async fn forward_http(req: Request, target: &Target) -> Response {
     // checks inside the previewed page keep behaving. Only when the browser
     // actually sent one (GET navigations normally have no Origin).
     if parts.headers.contains_key(header::ORIGIN) {
-        if let Ok(value) = reqwest::header::HeaderValue::from_str(&format!("{}://{}", target.scheme, target.host)) {
+        if let Ok(value) =
+            reqwest::header::HeaderValue::from_str(&format!("{}://{}", target.scheme, target.host))
+        {
             headers.insert(reqwest::header::ORIGIN, value);
         }
     }
@@ -365,10 +375,11 @@ async fn forward_http(req: Request, target: &Target) -> Response {
                 StatusCode::BAD_GATEWAY,
                 "PiX preview proxy: failed to reach the target host",
             )
-                .into_response()
+                .into_response();
         }
     };
-    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
     let response_headers = headers_to_axum(response.headers());
     for (name, value) in response_headers.iter() {
@@ -467,7 +478,10 @@ fn rewrite_referer(parts: &axum::http::request::Parts, target: &Target) -> Optio
         "{}://{}{}{}",
         scheme,
         host,
-        segments.next().map(|path| format!("/{path}")).unwrap_or_else(|| "/".to_string()),
+        segments
+            .next()
+            .map(|path| format!("/{path}"))
+            .unwrap_or_else(|| "/".to_string()),
         parsed.query().map(|q| format!("?{q}")).unwrap_or_default(),
     ))
 }
@@ -481,7 +495,9 @@ fn rewrite_document(html: &[u8], target: &Target) -> Vec<u8> {
     // The bridge is addressed through the document's per-host prefix so the
     // page never learns the shared secret used to derive host capabilities.
     // The reserved filename avoids shadowing a common target "/bridge.js".
-    let script = format!(r#"<script>window.__pixPreviewBase="{base}";</script><script src="{base}/__pix-preview-bridge.js"></script>"#);
+    let script = format!(
+        r#"<script>window.__pixPreviewBase="{base}";</script><script src="{base}/__pix-preview-bridge.js"></script>"#
+    );
     // Non-UTF-8 documents (legacy charsets) are served unrewritten but still
     // get the bridge appended.
     let Ok(text) = std::str::from_utf8(html) else {
@@ -522,7 +538,9 @@ fn attribute_regex() -> &'static regex::Regex {
 
 fn css_url_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r#"url\(\s*(["']?)(/[^)"']*)(["']?)\s*\)"#).expect("css url regex"))
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"url\(\s*(["']?)(/[^)"']*)(["']?)\s*\)"#).expect("css url regex")
+    })
 }
 
 /// Prefixes root-relative URLs; protocol-relative (`//cdn`), absolute
@@ -583,22 +601,32 @@ fn find_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 async fn forward_ws(ws: WebSocketUpgrade, target: &Target) -> Response {
-    let scheme = if target.scheme == "https" { "wss" } else { "ws" };
+    let scheme = if target.scheme == "https" {
+        "wss"
+    } else {
+        "ws"
+    };
     let url = format!("{}://{}/{}", scheme, target.host, target.path);
     // A None connector lets tokio-tungstenite pick its rustls config with
     // webpki roots (enabled by the feature), covering both ws:// and wss://.
     ws.on_upgrade(move |socket| async move {
-        let remote = match tokio_tungstenite::connect_async_tls_with_config(&url, None, false, None).await {
-            Ok((stream, _)) => stream,
-            Err(_) => return,
-        };
+        let remote =
+            match tokio_tungstenite::connect_async_tls_with_config(&url, None, false, None).await {
+                Ok((stream, _)) => stream,
+                Err(_) => return,
+            };
         pump(socket, remote).await;
     })
 }
 
 /// Pumps frames both ways until either side closes; only Vite-style dev
 /// servers are expected on this path, so minimal conversion suffices.
-async fn pump(socket: WebSocket, remote: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) {
+async fn pump(
+    socket: WebSocket,
+    remote: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+) {
     let (mut client_sink, mut client_stream) = socket.split();
     let (mut remote_sink, mut remote_stream) = remote.split();
     let to_remote = async move {
@@ -713,7 +741,10 @@ mod tests {
     #[test]
     fn builds_target_url_with_query() {
         let target = target_for(&proxied("/http/localhost:3000"));
-        assert_eq!(target_url(&target, Some("a=1&b=%2F")), "http://localhost:3000/?a=1&b=%2F");
+        assert_eq!(
+            target_url(&target, Some("a=1&b=%2F")),
+            "http://localhost:3000/?a=1&b=%2F"
+        );
         assert_eq!(target_url(&target, None), "http://localhost:3000/");
     }
 
@@ -727,7 +758,10 @@ mod tests {
         );
         assert_eq!(
             rewrite_location("https://other.example.org/a/b", &target, None).unwrap(),
-            format!("/p/{}/https/other.example.org/a/b", host_token(&secret(), "other.example.org"))
+            format!(
+                "/p/{}/https/other.example.org/a/b",
+                host_token(&secret(), "other.example.org")
+            )
         );
         assert_eq!(
             rewrite_location("section", &target, None).unwrap(),
@@ -737,7 +771,10 @@ mod tests {
         // get a fresh token bound to the redirect target host.
         assert_eq!(
             rewrite_location("https://example.com/", &target, None).unwrap(),
-            format!("/p/{}/https/example.com/", host_token(&secret(), "example.com"))
+            format!(
+                "/p/{}/https/example.com/",
+                host_token(&secret(), "example.com")
+            )
         );
     }
 
@@ -745,7 +782,10 @@ mod tests {
     fn strips_framing_blocks_and_cookies_from_responses() {
         let mut source = reqwest::header::HeaderMap::new();
         source.insert("x-frame-options", "DENY".parse().unwrap());
-        source.insert("content-security-policy", "default-src 'none'".parse().unwrap());
+        source.insert(
+            "content-security-policy",
+            "default-src 'none'".parse().unwrap(),
+        );
         source.insert("set-cookie", "sid=1".parse().unwrap());
         source.insert("content-type", "text/html".parse().unwrap());
         let out = headers_to_axum(&source);
@@ -777,13 +817,17 @@ mod tests {
         assert!(out.contains(&format!(r#"src="{base}/logo.png""#)));
         assert!(out.contains(&format!(r#"srcset="{base}/a.png 1x, {base}/b.png 2x""#)));
         assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
-        assert!(out.contains(&format!(r#"<script src="{base}/__pix-preview-bridge.js"></script>"#)));
+        assert!(out.contains(&format!(
+            r#"<script src="{base}/__pix-preview-bridge.js"></script>"#
+        )));
         // Case-insensitive fallback.
-        let out = String::from_utf8(rewrite_document(b"<html><BODY></BODY></HTML>", &target)).unwrap();
+        let out =
+            String::from_utf8(rewrite_document(b"<html><BODY></BODY></HTML>", &target)).unwrap();
         assert!(out.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
         assert!(out.contains(r#"<script src="/p/"#));
         // Pages without closing tags still receive the bridge.
-        let out = String::from_utf8(rewrite_document(b"<html><body><p>truncated", &target)).unwrap();
+        let out =
+            String::from_utf8(rewrite_document(b"<html><body><p>truncated", &target)).unwrap();
         assert!(out.contains(r#"<script src="/p/"#));
     }
 
@@ -800,7 +844,11 @@ mod tests {
         assert!(out.contains(r##"href="#anchor""##));
         assert!(out.contains(r##"href="mailto:a@b.c""##));
         // Already prefixed: exactly one occurrence in the img, none added by the rewrite.
-        assert_eq!(out.matches(&format!(r##"src="{base}/prefixed.png""##)).count(), 1);
+        assert_eq!(
+            out.matches(&format!(r##"src="{base}/prefixed.png""##))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -833,7 +881,9 @@ mod tests {
         let token = host_token(&secret(), "localhost:5173");
         let request = HttpRequest::builder()
             .method("GET")
-            .uri(format!("http://127.0.0.1:9/p/{token}/http/localhost:5173/app"))
+            .uri(format!(
+                "http://127.0.0.1:9/p/{token}/http/localhost:5173/app"
+            ))
             .header(
                 header::REFERER,
                 format!("http://127.0.0.1:9/p/{token}/http/localhost:5173/app/page"),
@@ -841,7 +891,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let (parts, _) = request.into_parts();
-        assert_eq!(rewrite_referer(&parts, &target).unwrap(), "http://localhost:5173/app/page");
+        assert_eq!(
+            rewrite_referer(&parts, &target).unwrap(),
+            "http://localhost:5173/app/page"
+        );
         let request = HttpRequest::builder()
             .method("GET")
             .uri("http://127.0.0.1:9/")
@@ -875,7 +928,9 @@ mod tests {
     async fn proxies_pages_and_injects_the_bridge_end_to_end() {
         use axum::routing::get;
 
-        let target = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let target = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let target_port = target.local_addr().unwrap().port();
         let app = Router::new()
             .route(
@@ -890,7 +945,9 @@ mod tests {
             );
         tokio::spawn(async move { axum::serve(target, app).await.unwrap() });
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let proxy_port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, router()).await.unwrap() });
 
@@ -907,15 +964,25 @@ mod tests {
         let base = format!("/p/{token}/http/{target_host}");
         assert!(body.contains(&format!(r#"href="{base}/style.css""#)));
         assert!(body.contains(&format!(r#"window.__pixPreviewBase="{base}""#)));
-        assert!(body.contains(&format!("<script src=\"{base}/__pix-preview-bridge.js\"></script>")));
+        assert!(body.contains(&format!(
+            "<script src=\"{base}/__pix-preview-bridge.js\"></script>"
+        )));
 
-        let css = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/style.css")).await.unwrap();
-        assert_eq!(css.status(), 200);
-        assert!(css.text().await.unwrap().contains(&format!("url({base}/bg.png)")));
-
-        let bridge = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/__pix-preview-bridge.js"))
+        let css = reqwest::get(format!("http://127.0.0.1:{proxy_port}{base}/style.css"))
             .await
             .unwrap();
+        assert_eq!(css.status(), 200);
+        assert!(css
+            .text()
+            .await
+            .unwrap()
+            .contains(&format!("url({base}/bg.png)")));
+
+        let bridge = reqwest::get(format!(
+            "http://127.0.0.1:{proxy_port}{base}/__pix-preview-bridge.js"
+        ))
+        .await
+        .unwrap();
         assert_eq!(bridge.status(), 200);
         assert!(bridge.text().await.unwrap().contains("pix-preview"));
 

@@ -283,8 +283,16 @@ fn extract_from_pe(exe: &Path) -> Option<(u32, u32, Vec<u8>)> {
 
     /// 组图标条目的像素数(宽/高字节为 0 表示 256)
     fn entry_pixels(e: &GRPICONDIRENTRY) -> u32 {
-        let w = if e.bWidth == 0 { 256 } else { u32::from(e.bWidth) };
-        let h = if e.bHeight == 0 { 256 } else { u32::from(e.bHeight) };
+        let w = if e.bWidth == 0 {
+            256
+        } else {
+            u32::from(e.bWidth)
+        };
+        let h = if e.bHeight == 0 {
+            256
+        } else {
+            u32::from(e.bHeight)
+        };
         w * h
     }
 

@@ -4,7 +4,10 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{errors::{pix_error, pix_error_detail}, trust};
+use crate::{
+    errors::{pix_error, pix_error_detail},
+    trust,
+};
 
 use super::runner::package_list;
 
@@ -82,7 +85,9 @@ fn glob_match(pattern: &str, path: &str) -> bool {
         }
     }
     re.push('$');
-    regex::Regex::new(&re).map(|r| r.is_match(path)).unwrap_or(false)
+    regex::Regex::new(&re)
+        .map(|r| r.is_match(path))
+        .unwrap_or(false)
 }
 
 /// Whether a resource is enabled under the given filter patterns
@@ -97,7 +102,10 @@ fn resource_enabled(rel: &str, patterns: Option<&[String]>) -> bool {
         .iter()
         .filter(|p| !p.starts_with(['!', '+', '-']))
         .collect();
-    let mut enabled = includes.is_empty() || includes.iter().any(|p| glob_match(p.trim_end_matches("/*"), rel) || glob_match(p, rel));
+    let mut enabled = includes.is_empty()
+        || includes
+            .iter()
+            .any(|p| glob_match(p.trim_end_matches("/*"), rel) || glob_match(p, rel));
     for p in pats {
         let marker = p.chars().next();
         let target = strip_pattern_marker(p);
@@ -114,7 +122,11 @@ fn resource_enabled(rel: &str, patterns: Option<&[String]>) -> bool {
 /// Resolve the on-disk root of an installed package, mirroring pi's install
 /// layout (npm under `<base>/npm/node_modules/<name>`, git under
 /// `<base>/git/<host>/<path>`, local paths used verbatim).
-fn package_root_dir(source: &str, scope: &str, project: Option<&str>) -> Option<std::path::PathBuf> {
+fn package_root_dir(
+    source: &str,
+    scope: &str,
+    project: Option<&str>,
+) -> Option<std::path::PathBuf> {
     let agent_dir = trust::agent_dir();
     let project_dir = project.map(str::trim).filter(|s| !s.is_empty());
     let base = |sub: &str| -> std::path::PathBuf {
@@ -147,21 +159,26 @@ fn package_root_dir(source: &str, scope: &str, project: Option<&str>) -> Option<
         return dir.is_dir().then_some(dir);
     }
 
-    let git_spec = source
-        .strip_prefix("git:")
-        .or_else(|| {
-            (source.starts_with("https://")
-                || source.starts_with("http://")
-                || source.starts_with("ssh://"))
-            .then_some(source)
-        });
+    let git_spec = source.strip_prefix("git:").or_else(|| {
+        (source.starts_with("https://")
+            || source.starts_with("http://")
+            || source.starts_with("ssh://"))
+        .then_some(source)
+    });
     if let Some(spec) = git_spec {
-        let spec = spec.strip_prefix("https://").or_else(|| spec.strip_prefix("http://")).unwrap_or(spec);
+        let spec = spec
+            .strip_prefix("https://")
+            .or_else(|| spec.strip_prefix("http://"))
+            .unwrap_or(spec);
         let spec = spec.strip_prefix("ssh://").unwrap_or(spec);
         // `git@host:path` shorthand -> `host/path`
         let spec = match spec.split_once(':') {
             Some((prefix, rest)) if prefix.contains('@') => {
-                format!("{}/{}", prefix.split('@').next_back().unwrap_or(prefix), rest)
+                format!(
+                    "{}/{}",
+                    prefix.split('@').next_back().unwrap_or(prefix),
+                    rest
+                )
             }
             _ => spec.to_string(),
         };
@@ -190,7 +207,9 @@ fn package_root_dir(source: &str, scope: &str, project: Option<&str>) -> Option<
 const IGNORED_DIRS: [&str; 4] = ["node_modules", ".git", ".pi", "dist"];
 
 fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         let path = e.path();
@@ -232,7 +251,12 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
                     if target.is_file() {
                         out.push(e.trim_start_matches("./").to_string());
                     } else if target.is_dir() {
-                        out.extend(files.iter().filter(|f| f.starts_with(&*e.trim_start_matches("./"))).cloned());
+                        out.extend(
+                            files
+                                .iter()
+                                .filter(|f| f.starts_with(&*e.trim_start_matches("./")))
+                                .cloned(),
+                        );
                     }
                 }
             }
@@ -240,7 +264,12 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
         _ => {
             let dir = root.join(resource_type);
             if dir.is_dir() {
-                out.extend(files.iter().filter(|f| f.starts_with(resource_type)).cloned());
+                out.extend(
+                    files
+                        .iter()
+                        .filter(|f| f.starts_with(resource_type))
+                        .cloned(),
+                );
             }
         }
     }
@@ -248,23 +277,31 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
     if resource_type == "skills" {
         // A package can ship both SKILL.md directories and standalone Markdown
         // skills. Keep both instead of dropping files whenever a directory exists.
-        out = out.into_iter().filter_map(|rel| {
-            if rel == "SKILL.md" {
-                Some(".".to_string())
-            } else if let Some(dir) = rel.strip_suffix("/SKILL.md") {
-                Some(dir.to_string())
-            } else if rel.to_ascii_lowercase().ends_with(".md") {
-                Some(rel)
-            } else {
-                None
-            }
-        }).filter(|rel| {
-            let path = root.join(rel);
-            let nested_in_skill = path.ancestors().skip(1).take_while(|parent| *parent != root)
-                .any(|parent| parent.join("SKILL.md").is_file());
-            !nested_in_skill && (path.is_dir() && path.join("SKILL.md").is_file()
-                || path.is_file() && crate::skills::valid_skill_markdown(&path))
-        }).collect();
+        out = out
+            .into_iter()
+            .filter_map(|rel| {
+                if rel == "SKILL.md" {
+                    Some(".".to_string())
+                } else if let Some(dir) = rel.strip_suffix("/SKILL.md") {
+                    Some(dir.to_string())
+                } else if rel.to_ascii_lowercase().ends_with(".md") {
+                    Some(rel)
+                } else {
+                    None
+                }
+            })
+            .filter(|rel| {
+                let path = root.join(rel);
+                let nested_in_skill = path
+                    .ancestors()
+                    .skip(1)
+                    .take_while(|parent| *parent != root)
+                    .any(|parent| parent.join("SKILL.md").is_file());
+                !nested_in_skill
+                    && (path.is_dir() && path.join("SKILL.md").is_file()
+                        || path.is_file() && crate::skills::valid_skill_markdown(&path))
+            })
+            .collect();
     }
     out.sort();
     out.dedup();
@@ -281,15 +318,25 @@ pub(crate) struct PackageSkillPath {
 pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath> {
     let mut paths = Vec::new();
     for package in package_list(project.map(str::to_string)) {
-        let Some(root) = package_root_dir(&package.source, &package.scope, project) else { continue };
-        let patterns = package.filters.as_ref()
+        let Some(root) = package_root_dir(&package.source, &package.scope, project) else {
+            continue;
+        };
+        let patterns = package
+            .filters
+            .as_ref()
             .and_then(|filters| filters.get("skills"))
             .and_then(|v| v.as_array())
-            .map(|entries| entries.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>());
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            });
         for rel in collect_resources(&root, "skills") {
             if resource_enabled(&rel, patterns.as_deref()) {
                 paths.push(PackageSkillPath {
-                    path: root.join(rel), source: package.source.clone(),
+                    path: root.join(rel),
+                    source: package.source.clone(),
                 });
             }
         }
@@ -307,12 +354,18 @@ pub fn package_resources(
     let settings_file = settings_path_for(&scope, project.as_deref());
     let raw = std::fs::read_to_string(&settings_file)
         .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
-    let doc: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
-    let idx = find_package_entry(&doc, &source).ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
+    let doc: Value = serde_json::from_str(&raw)
+        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
+    let idx = find_package_entry(&doc, &source)
+        .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
     let entry = &doc["packages"][idx];
 
-    let root = package_root_dir(&source, &scope, project.as_deref())
-        .ok_or_else(|| pix_error("pluginInstallDirNotFound", "未找到插件安装目录（尚未安装或来源不支持）"))?;
+    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
+        pix_error(
+            "pluginInstallDirNotFound",
+            "未找到插件安装目录（尚未安装或来源不支持）",
+        )
+    })?;
 
     let mut out = Vec::new();
     for rt in RESOURCE_TYPES {
@@ -342,14 +395,23 @@ pub fn package_set_resource(
     enabled: bool,
 ) -> Result<(), String> {
     if !RESOURCE_TYPES.contains(&resource_type.as_str()) {
-        return Err(pix_error_detail("unknownResourceType", format!("未知资源类型: {resource_type}"), resource_type));
+        return Err(pix_error_detail(
+            "unknownResourceType",
+            format!("未知资源类型: {resource_type}"),
+            resource_type,
+        ));
     }
     let settings_file = settings_path_for(&scope, project.as_deref());
     let raw = std::fs::read_to_string(&settings_file).unwrap_or_else(|_| "{}".into());
-    let mut doc: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
+    let mut doc: Value = serde_json::from_str(&raw)
+        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
 
-    let idx = find_package_entry(&doc, &source).ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
-    let packages = doc.get_mut("packages").and_then(|v| v.as_array_mut()).ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
+    let idx = find_package_entry(&doc, &source)
+        .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
+    let packages = doc
+        .get_mut("packages")
+        .and_then(|v| v.as_array_mut())
+        .ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
 
     // ensure object form
     if packages[idx].is_string() {
@@ -375,10 +437,13 @@ pub fn package_set_resource(
         .collect();
     updated.push(format!("{}{}", if enabled { '+' } else { '-' }, path));
 
-    let obj = entry.as_object_mut().ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
-    obj.insert(resource_type, serde_json::Value::Array(
-        updated.into_iter().map(serde_json::Value::String).collect(),
-    ));
+    let obj = entry
+        .as_object_mut()
+        .ok_or_else(|| pix_error("packagesConfigInvalid", "packages 配置无效"))?;
+    obj.insert(
+        resource_type,
+        serde_json::Value::Array(updated.into_iter().map(serde_json::Value::String).collect()),
+    );
 
     // collapse back to a plain string when no filters remain
     let has_filters = RESOURCE_TYPES.iter().any(|k| {
@@ -394,7 +459,9 @@ pub fn package_set_resource(
 
     std::fs::write(
         &settings_file,
-        serde_json::to_string_pretty(&doc).map_err(|e| pix_error_detail("settingsSerializeFailed", format!("序列化设置失败: {e}"), e))?,
+        serde_json::to_string_pretty(&doc).map_err(|e| {
+            pix_error_detail("settingsSerializeFailed", format!("序列化设置失败: {e}"), e)
+        })?,
     )
     .map_err(|e| pix_error_detail("settingsWriteFailed", format!("写入设置失败: {e}"), e))
 }
@@ -440,26 +507,51 @@ mod tests {
         let skill = package.join("custom").join("demo");
         std::fs::create_dir_all(&skill).unwrap();
         std::fs::create_dir_all(project.join(".pi")).unwrap();
-        std::fs::write(skill.join("SKILL.md"), "---\nname: demo\ndescription: Demo\n---\n").unwrap();
-        std::fs::write(package.join("custom").join("single.md"), "---\ndescription: Single\n---\n").unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo\ndescription: Demo\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("custom").join("single.md"),
+            "---\ndescription: Single\n---\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(skill.join("references")).unwrap();
-        std::fs::write(skill.join("references").join("guide.md"),
-            "---\nname: not-a-skill\ndescription: Reference documentation\n---\n").unwrap();
-        std::fs::write(package.join("package.json"), r#"{"pi":{"skills":["./custom"]}}"#).unwrap();
-        std::fs::write(project.join(".pi").join("settings.json"),
-            r#"{"packages":[{"source":"plugin","skills":["-custom/demo"]}]}"#).unwrap();
+        std::fs::write(
+            skill.join("references").join("guide.md"),
+            "---\nname: not-a-skill\ndescription: Reference documentation\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"pi":{"skills":["./custom"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".pi").join("settings.json"),
+            r#"{"packages":[{"source":"plugin","skills":["-custom/demo"]}]}"#,
+        )
+        .unwrap();
 
         let resources = collect_resources(&package, "skills");
         assert_eq!(resources, vec!["custom/demo", "custom/single.md"]);
         let paths = package_skill_paths(Some(project.to_str().unwrap()));
         assert!(!paths.iter().any(|p| p.path == skill));
-        assert!(paths.iter().any(|p| p.path == package.join("custom").join("single.md")));
+        assert!(paths
+            .iter()
+            .any(|p| p.path == package.join("custom").join("single.md")));
 
-        std::fs::write(project.join(".pi").join("settings.json"),
-            r#"{"packages":["plugin"]}"#).unwrap();
+        std::fs::write(
+            project.join(".pi").join("settings.json"),
+            r#"{"packages":["plugin"]}"#,
+        )
+        .unwrap();
         let paths = package_skill_paths(Some(project.to_str().unwrap()));
         assert!(paths.iter().any(|p| p.path == skill));
-        assert!(paths.iter().any(|p| p.path == package.join("custom").join("single.md")));
+        assert!(paths
+            .iter()
+            .any(|p| p.path == package.join("custom").join("single.md")));
         std::fs::remove_dir_all(tmp).unwrap();
     }
 

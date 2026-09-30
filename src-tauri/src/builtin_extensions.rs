@@ -10,20 +10,40 @@ const FILE_CHANGES_SOURCE: &str = include_str!("../extensions/pix-file-changes.j
 const FILE_CHANGES_NAME: &str = "pix-file-changes.js";
 
 fn materialize_in(dir: &std::path::Path, name: &str, source: &str) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| pix_error_detail("builtinExtensionDirCreateFailed", "无法创建内置插件目录: {detail}", e))?;
+    std::fs::create_dir_all(dir).map_err(|e| {
+        pix_error_detail(
+            "builtinExtensionDirCreateFailed",
+            "无法创建内置插件目录: {detail}",
+            e,
+        )
+    })?;
     let path = dir.join(name);
     let current = std::fs::read_to_string(&path).ok();
     if current.as_deref() != Some(source) {
         let temporary = dir.join(format!("{name}.{}.tmp", uuid::Uuid::new_v4()));
-        std::fs::write(&temporary, source)
-            .map_err(|e| pix_error_detail("builtinExtensionWriteFailed", "无法写入内置插件: {detail}", e))?;
+        std::fs::write(&temporary, source).map_err(|e| {
+            pix_error_detail(
+                "builtinExtensionWriteFailed",
+                "无法写入内置插件: {detail}",
+                e,
+            )
+        })?;
         if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|e| pix_error_detail("builtinExtensionWriteFailed", "无法写入内置插件: {detail}", e))?;
+            std::fs::remove_file(&path).map_err(|e| {
+                pix_error_detail(
+                    "builtinExtensionWriteFailed",
+                    "无法写入内置插件: {detail}",
+                    e,
+                )
+            })?;
         }
-        std::fs::rename(&temporary, &path)
-            .map_err(|e| pix_error_detail("builtinExtensionWriteFailed", "无法写入内置插件: {detail}", e))?;
+        std::fs::rename(&temporary, &path).map_err(|e| {
+            pix_error_detail(
+                "builtinExtensionWriteFailed",
+                "无法写入内置插件: {detail}",
+                e,
+            )
+        })?;
     }
     Ok(path)
 }
@@ -43,7 +63,10 @@ pub fn rpc_args(app: &AppHandle) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
     let path = materialize(FILE_CHANGES_NAME, FILE_CHANGES_SOURCE)?;
-    Ok(vec!["--extension".into(), path.to_string_lossy().into_owned()])
+    Ok(vec![
+        "--extension".into(),
+        path.to_string_lossy().into_owned(),
+    ])
 }
 
 #[cfg(test)]

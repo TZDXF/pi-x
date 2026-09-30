@@ -6,17 +6,20 @@ mod resources;
 mod runner;
 
 pub use catalog::package_catalog;
-pub use resources::{package_resources, package_set_resource};
-pub use runner::{package_install, package_remove, package_update, package_list};
 pub(crate) use resources::package_skill_paths;
+pub use resources::{package_resources, package_set_resource};
 pub(crate) use runner::run_pi;
+pub use runner::{package_install, package_list, package_remove, package_update};
 
 // Re-export the command wrapper macros so `generate_handler![packages::<cmd>]`
 // resolves them under the same path as the command functions.
 #[doc(hidden)]
 pub use catalog::{__cmd__package_catalog, __tauri_command_name_package_catalog};
 #[doc(hidden)]
-pub use resources::{__cmd__package_resources, __cmd__package_set_resource, __tauri_command_name_package_resources, __tauri_command_name_package_set_resource};
+pub use resources::{
+    __cmd__package_resources, __cmd__package_set_resource, __tauri_command_name_package_resources,
+    __tauri_command_name_package_set_resource,
+};
 #[doc(hidden)]
 pub use runner::{
     __cmd__package_install, __cmd__package_list, __cmd__package_remove, __cmd__package_update,

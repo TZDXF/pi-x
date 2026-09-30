@@ -12,7 +12,10 @@ pub fn remote_status() -> Value {
 #[tauri::command]
 pub async fn remote_set(enabled: bool, port: u16) -> Result<Value, String> {
     if enabled {
-        return Err(pix_error("remoteNotBuiltHint", "当前构建未启用远程访问，请使用 npm run dev:desktop:remote 启动"));
+        return Err(pix_error(
+            "remoteNotBuiltHint",
+            "当前构建未启用远程访问，请使用 npm run dev:desktop:remote 启动",
+        ));
     }
     Ok(json!({"enabled": false, "port": port, "urls": []}))
 }

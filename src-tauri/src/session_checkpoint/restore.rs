@@ -5,10 +5,17 @@ use std::collections::HashSet;
 use crate::errors::{pix_error, pix_error_detail};
 
 use super::diff::{parse_ls_tree, parse_name_status};
-use super::git::{checkpoint_object_env, git_in, to_repo_relative, to_workspace_relative, GitEnv, RepoLayout};
+use super::git::{
+    checkpoint_object_env, git_in, to_repo_relative, to_workspace_relative, GitEnv, RepoLayout,
+};
 use super::{CheckpointConflict, CheckpointRestoreResult};
 
-fn diff_name_status(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>) -> Result<String, String> {
+fn diff_name_status(
+    layout: &RepoLayout,
+    from: &str,
+    to: &str,
+    env: GitEnv<'_>,
+) -> Result<String, String> {
     git_in(
         &layout.repo_root,
         &["diff", "--name-status", "--find-renames", "-z", from, to],
@@ -16,7 +23,12 @@ fn diff_name_status(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>) 
     )
 }
 
-fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>) -> Result<Vec<String>, String> {
+fn diff_paths_between(
+    layout: &RepoLayout,
+    from: &str,
+    to: &str,
+    env: GitEnv<'_>,
+) -> Result<Vec<String>, String> {
     let mut set = Vec::new();
     for entry in parse_name_status(&diff_name_status(layout, from, to, env)?) {
         set.push(entry.path);
@@ -29,7 +41,12 @@ fn diff_paths_between(layout: &RepoLayout, from: &str, to: &str, env: GitEnv<'_>
 
 /// 当前磁盘在 `baseline` 的受影响路径上是否仍与基线一致（blob hash 级比较）。
 /// 分批处理避免超出 Windows 命令行 32K 上限。
-fn collect_conflicts(layout: &RepoLayout, baseline: &str, repo_paths: &[String], env: GitEnv<'_>) -> Vec<(String, String)> {
+fn collect_conflicts(
+    layout: &RepoLayout,
+    baseline: &str,
+    repo_paths: &[String],
+    env: GitEnv<'_>,
+) -> Vec<(String, String)> {
     const BATCH_SIZE: usize = 100;
     let mut conflicts = Vec::new();
     for chunk in repo_paths.chunks(BATCH_SIZE) {
@@ -86,20 +103,27 @@ pub(super) fn restore_between(
 ) -> Result<CheckpointRestoreResult, String> {
     let env = checkpoint_object_env(layout);
     let mut affected: Vec<String> = match paths {
-        Some(list) if !list.is_empty() => {
-            list.iter().map(|path| to_repo_relative(layout, path)).collect()
-        }
+        Some(list) if !list.is_empty() => list
+            .iter()
+            .map(|path| to_repo_relative(layout, path))
+            .collect(),
         _ => diff_paths_between(layout, from, to, Some(&env))?,
     };
     // 只恢复 tool_touched_files 中的文件，避免覆盖用户手改
     if let Some(tool_files) = tool_touched_files {
         if !tool_files.is_empty() {
-            let tool_set: HashSet<String> = tool_files.iter().map(|p| to_repo_relative(layout, p)).collect();
+            let tool_set: HashSet<String> = tool_files
+                .iter()
+                .map(|p| to_repo_relative(layout, p))
+                .collect();
             affected.retain(|p| tool_set.contains(p));
         }
     }
     if affected.is_empty() {
-        return Ok(CheckpointRestoreResult { restored: vec![], conflicts: vec![] });
+        return Ok(CheckpointRestoreResult {
+            restored: vec![],
+            conflicts: vec![],
+        });
     }
 
     // 三方安全检查：当前磁盘必须仍停留在 from 基线，否则拒绝写入。
@@ -125,7 +149,11 @@ pub(super) fn restore_between(
         // 指定路径子集回滚时，差异必须收敛在受影响路径内，避免误恢复无关文件。
         .filter(|entry| {
             affected_set.contains(&entry.path)
-                || entry.original_path.as_ref().map(|path| affected_set.contains(path)).unwrap_or(false)
+                || entry
+                    .original_path
+                    .as_ref()
+                    .map(|path| affected_set.contains(path))
+                    .unwrap_or(false)
         })
         .collect();
     for entry in entries {
@@ -166,10 +194,16 @@ pub(super) fn restore_between(
 
     // 恢复后再校验一次，确保磁盘确实到达目标基线。
     if !collect_conflicts(layout, to, &affected, Some(&env)).is_empty() {
-        return Err(pix_error("checkpointRestoreVerifyFailed", "快照恢复后校验失败"));
+        return Err(pix_error(
+            "checkpointRestoreVerifyFailed",
+            "快照恢复后校验失败",
+        ));
     }
     Ok(CheckpointRestoreResult {
-        restored: affected.iter().map(|path| to_workspace_relative(layout, path)).collect(),
+        restored: affected
+            .iter()
+            .map(|path| to_workspace_relative(layout, path))
+            .collect(),
         conflicts: vec![],
     })
 }

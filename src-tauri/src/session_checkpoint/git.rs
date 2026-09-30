@@ -46,7 +46,11 @@ pub(super) fn git_in(repo_root: &Path, args: &[&str], env: GitEnv<'_>) -> Result
 }
 
 /// 与 git_in 相同，但返回原始字节：cat-file blob 的内容必须逐字节保留。
-pub(super) fn git_raw_bytes(repo_root: &Path, args: &[&str], env: GitEnv<'_>) -> Result<Vec<u8>, String> {
+pub(super) fn git_raw_bytes(
+    repo_root: &Path,
+    args: &[&str],
+    env: GitEnv<'_>,
+) -> Result<Vec<u8>, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(repo_root).args(args);
     if let Some(env) = env {
@@ -77,13 +81,19 @@ pub(super) fn fnv1a(text: &str) -> u64 {
 
 /// 解析项目对应的仓库与 workspace scope；非 Git 仓库返回专用错误码，前端据此降级。
 pub(super) fn resolve_repo(project: &str) -> Result<RepoLayout, String> {
-    let root = dunce::canonicalize(project).map_err(|_| pix_error("projectDirMissing", "项目目录不存在"))?;
+    let root = dunce::canonicalize(project)
+        .map_err(|_| pix_error("projectDirMissing", "项目目录不存在"))?;
     if !root.is_dir() {
         return Err(pix_error("projectDirMissing", "项目目录不存在"));
     }
     let toplevel = match git_in(&root, &["rev-parse", "--show-toplevel"], None) {
         Ok(path) => PathBuf::from(path),
-        Err(_) => return Err(pix_error("gitRepoMissing", "项目不是 Git 仓库，无法创建快照")),
+        Err(_) => {
+            return Err(pix_error(
+                "gitRepoMissing",
+                "项目不是 Git 仓库，无法创建快照",
+            ))
+        }
     };
     let repo_root = dunce::canonicalize(&toplevel).map_err(|e| e.to_string())?;
     let workspace_in_repo = root
@@ -93,21 +103,40 @@ pub(super) fn resolve_repo(project: &str) -> Result<RepoLayout, String> {
         .filter(|relative| !relative.is_empty())
         .unwrap_or_else(|| ".".into());
     let objects_dir = git_in(&repo_root, &["rev-parse", "--git-path", "objects"], None)?;
-    let objects_dir = dunce::canonicalize(repo_root.join(objects_dir)).map_err(|e| e.to_string())?;
+    let objects_dir =
+        dunce::canonicalize(repo_root.join(objects_dir)).map_err(|e| e.to_string())?;
     let checkpoint_objects_dir = git_in(
         &repo_root,
-        &["rev-parse", "--git-path", &format!("{CHECKPOINT_OBJECT_DIR}/{}", fnv1a(&workspace_in_repo))],
+        &[
+            "rev-parse",
+            "--git-path",
+            &format!("{CHECKPOINT_OBJECT_DIR}/{}", fnv1a(&workspace_in_repo)),
+        ],
         None,
     )?;
     let checkpoint_objects_dir = repo_root.join(checkpoint_objects_dir);
-    Ok(RepoLayout { repo_root, workspace_in_repo, objects_dir, checkpoint_objects_dir })
+    Ok(RepoLayout {
+        repo_root,
+        workspace_in_repo,
+        objects_dir,
+        checkpoint_objects_dir,
+    })
 }
 
-pub(super) fn checkpoint_env(layout: &RepoLayout, temp_index: &Path) -> HashMap<&'static str, String> {
+pub(super) fn checkpoint_env(
+    layout: &RepoLayout,
+    temp_index: &Path,
+) -> HashMap<&'static str, String> {
     HashMap::from([
         ("GIT_INDEX_FILE", temp_index.to_string_lossy().to_string()),
-        ("GIT_OBJECT_DIRECTORY", layout.checkpoint_objects_dir.to_string_lossy().to_string()),
-        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", layout.objects_dir.to_string_lossy().to_string()),
+        (
+            "GIT_OBJECT_DIRECTORY",
+            layout.checkpoint_objects_dir.to_string_lossy().to_string(),
+        ),
+        (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            layout.objects_dir.to_string_lossy().to_string(),
+        ),
         ("GIT_AUTHOR_NAME", "PiX Checkpoint".into()),
         ("GIT_AUTHOR_EMAIL", "checkpoint@pix.local".into()),
         ("GIT_COMMITTER_NAME", "PiX Checkpoint".into()),
@@ -118,8 +147,14 @@ pub(super) fn checkpoint_env(layout: &RepoLayout, temp_index: &Path) -> HashMap<
 /// 读取快照 commit 时必须显式挂载非标准对象库；alternates 提供仓库既有对象。
 pub(super) fn checkpoint_object_env(layout: &RepoLayout) -> HashMap<&'static str, String> {
     HashMap::from([
-        ("GIT_OBJECT_DIRECTORY", layout.checkpoint_objects_dir.to_string_lossy().to_string()),
-        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", layout.objects_dir.to_string_lossy().to_string()),
+        (
+            "GIT_OBJECT_DIRECTORY",
+            layout.checkpoint_objects_dir.to_string_lossy().to_string(),
+        ),
+        (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            layout.objects_dir.to_string_lossy().to_string(),
+        ),
     ])
 }
 
@@ -129,7 +164,11 @@ pub(super) fn checkpoint_object_env(layout: &RepoLayout) -> HashMap<&'static str
 pub(super) fn delete_legacy_checkpoint_refs(layout: &RepoLayout) -> Result<(), String> {
     let refs = git_in(
         &layout.repo_root,
-        &["for-each-ref", "--format=%(refname)", &format!("{LEGACY_CHECKPOINT_REF_PREFIX}/")],
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            &format!("{LEGACY_CHECKPOINT_REF_PREFIX}/"),
+        ],
         None,
     )?;
     for ref_name in refs.lines().filter(|line| !line.is_empty()) {

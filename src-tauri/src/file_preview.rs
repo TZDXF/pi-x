@@ -21,7 +21,9 @@ pub const IMAGE_PREVIEW_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 8_000;
 
 /// 嗅探为二进制后按这些扩展名走图片(base64)路径;svg 是文本,由前端渲染。
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "jfif", "gif", "webp", "ico", "bmp", "avif"];
+const IMAGE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "jfif", "gif", "webp", "ico", "bmp", "avif",
+];
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +75,10 @@ fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
     let root = dunce::canonicalize(project)
         .map_err(|_| crate::errors::pix_error("projectDirMissing", "项目目录不存在"))?;
     if !root.is_dir() {
-        return Err(crate::errors::pix_error("projectDirMissing", "项目目录不存在"));
+        return Err(crate::errors::pix_error(
+            "projectDirMissing",
+            "项目目录不存在",
+        ));
     }
     // 与 list_project_directory 同一安全口径:拒绝绝对路径与 .. 逃逸,
     // canonicalize 后仍要求落在项目根内(防符号链接跳出)。
@@ -142,7 +147,11 @@ fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
                 kind: "image".into(),
                 text: None,
                 truncated: false,
-                mime: Some(image_mime_of(&ext).unwrap_or("application/octet-stream").into()),
+                mime: Some(
+                    image_mime_of(&ext)
+                        .unwrap_or("application/octet-stream")
+                        .into(),
+                ),
                 data: Some(BASE64.encode(&bytes)),
             });
         }
@@ -277,7 +286,10 @@ mod tests {
         assert!(preview(&root, &outside.to_string_lossy()).is_err());
         assert!(preview(&root, "src/../../etc").is_err());
         assert!(preview(&root, "src/missing.txt").is_err());
-        assert!(preview(&root, "src").is_err(), "directories are not previewable");
+        assert!(
+            preview(&root, "src").is_err(),
+            "directories are not previewable"
+        );
         let out = preview(&root, "src/a.txt").unwrap();
         assert_eq!(out.text.as_deref(), Some("ok"));
         std::fs::remove_dir_all(&root).unwrap();
@@ -297,7 +309,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let err = preview(&root, "nope.txt").unwrap_err();
         let payload: Value =
-            serde_json::from_str(err.strip_prefix(crate::errors::CODED_ERROR_PREFIX).unwrap()).unwrap();
+            serde_json::from_str(err.strip_prefix(crate::errors::CODED_ERROR_PREFIX).unwrap())
+                .unwrap();
         assert_eq!(payload["code"], "previewPathInvalid");
         std::fs::remove_dir_all(&root).unwrap();
     }

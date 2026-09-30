@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 /// Match Pi's getAgentDir, including a user-supplied environment override.
 pub fn agent_dir() -> PathBuf {
-    resolve_agent_dir(std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
-        &dirs::home_dir().expect("Cannot locate user home directory"))
+    resolve_agent_dir(
+        std::env::var("PI_CODING_AGENT_DIR").ok().as_deref(),
+        &dirs::home_dir().expect("Cannot locate user home directory"),
+    )
 }
 
 fn resolve_agent_dir(value: Option<&str>, home: &std::path::Path) -> PathBuf {
@@ -19,11 +21,15 @@ fn resolve_agent_dir(value: Option<&str>, home: &std::path::Path) -> PathBuf {
 
 pub async fn status(project: &str) -> Result<Value, String> {
     let request = json!({"op": "trust_status", "project": project});
-    tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || crate::pi_data::call(request))
+        .await
+        .map_err(|e| e.to_string())?
 }
 pub async fn save(project: &str, trusted: bool, trust_parent: bool) -> Result<Value, String> {
     let request = json!({"op": "trust_save", "project": project, "trusted": trusted, "trustParent": trust_parent});
-    tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || crate::pi_data::call(request))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -34,7 +40,13 @@ mod tests {
         let home = std::path::Path::new("/home/test");
         assert_eq!(resolve_agent_dir(None, home), home.join(".pi/agent"));
         assert_eq!(resolve_agent_dir(Some(""), home), home.join(".pi/agent"));
-        assert_eq!(resolve_agent_dir(Some("~/custom"), home), home.join("custom"));
-        assert_eq!(resolve_agent_dir(Some("/custom/agent"), home), PathBuf::from("/custom/agent"));
+        assert_eq!(
+            resolve_agent_dir(Some("~/custom"), home),
+            home.join("custom")
+        );
+        assert_eq!(
+            resolve_agent_dir(Some("/custom/agent"), home),
+            PathBuf::from("/custom/agent")
+        );
     }
 }

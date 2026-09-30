@@ -21,7 +21,10 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItemBuilder::with_id("show", "显示 PiX").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出 PiX").build(app)?;
     let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
-    app.manage(TrayLabels { show: show.clone(), quit: quit.clone() });
+    app.manage(TrayLabels {
+        show: show.clone(),
+        quit: quit.clone(),
+    });
     let mut tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("PiX")
         .menu(&menu)
@@ -62,7 +65,11 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
 }
 
 #[tauri::command]
-pub fn set_tray_labels(app: AppHandle, show_label: String, quit_label: String) -> Result<(), String> {
+pub fn set_tray_labels(
+    app: AppHandle,
+    show_label: String,
+    quit_label: String,
+) -> Result<(), String> {
     let labels = app.state::<TrayLabels>();
     let (show, quit) = (labels.show.clone(), labels.quit.clone());
     // 菜单文本只能在主线程更新。

@@ -35,14 +35,18 @@ fn map_kind(status: &str) -> String {
 
 /// 解析 `git diff --name-status -z`：记录间以 NUL 分隔，rename 占三个字段。
 pub(super) fn parse_name_status(stdout: &str) -> Vec<NameStatusEntry> {
-    let records: Vec<&str> = stdout.split('\0').filter(|record| !record.is_empty()).collect();
+    let records: Vec<&str> = stdout
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .collect();
     let mut entries = Vec::new();
     let mut index = 0;
     while index < records.len() {
         let status = records[index];
         let kind = map_kind(status);
         if kind == "renamed" {
-            let (Some(original), Some(path)) = (records.get(index + 1), records.get(index + 2)) else {
+            let (Some(original), Some(path)) = (records.get(index + 1), records.get(index + 2))
+            else {
                 break;
             };
             entries.push(NameStatusEntry {
@@ -53,8 +57,14 @@ pub(super) fn parse_name_status(stdout: &str) -> Vec<NameStatusEntry> {
             index += 3;
             continue;
         }
-        let Some(path) = records.get(index + 1) else { break };
-        entries.push(NameStatusEntry { kind, path: (*path).to_string(), original_path: None });
+        let Some(path) = records.get(index + 1) else {
+            break;
+        };
+        entries.push(NameStatusEntry {
+            kind,
+            path: (*path).to_string(),
+            original_path: None,
+        });
         index += 2;
     }
     entries
@@ -62,7 +72,10 @@ pub(super) fn parse_name_status(stdout: &str) -> Vec<NameStatusEntry> {
 
 /// 解析 `git diff --numstat -z`：`added\tremoved\tpath`，rename 时路径拆成两段 NUL 记录。
 pub(super) fn parse_numstat(stdout: &str) -> HashMap<String, (u64, u64)> {
-    let records: Vec<&str> = stdout.split('\0').filter(|record| !record.is_empty()).collect();
+    let records: Vec<&str> = stdout
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .collect();
     let mut stats = HashMap::new();
     let mut index = 0;
     while index < records.len() {
@@ -93,7 +106,9 @@ pub(super) fn parse_numstat(stdout: &str) -> HashMap<String, (u64, u64)> {
 pub(super) fn parse_ls_tree(stdout: &str) -> HashMap<String, String> {
     let mut entries = HashMap::new();
     for record in stdout.split('\0').filter(|record| !record.is_empty()) {
-        let Some(tab) = record.find('\t') else { continue };
+        let Some(tab) = record.find('\t') else {
+            continue;
+        };
         let path = &record[tab + 1..];
         let header: Vec<&str> = record[..tab].split(' ').collect();
         if header.len() < 3 {
@@ -114,7 +129,12 @@ pub(super) fn merge_diff(
         .map(|entry| {
             let stat = stats
                 .get(&entry.path)
-                .or_else(|| entry.original_path.as_deref().and_then(|path| stats.get(path)))
+                .or_else(|| {
+                    entry
+                        .original_path
+                        .as_deref()
+                        .and_then(|path| stats.get(path))
+                })
                 .copied()
                 .unwrap_or((0, 0));
             CheckpointFileDiff {

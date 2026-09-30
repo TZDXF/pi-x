@@ -55,7 +55,9 @@ struct Target {
 enum Decision {
     UpToDate,
     /// 预览版退回正式通道：最新正式版不晚于当前预览版发布，不回退，等待下一次正式版。
-    WaitingStable { latest_stable: Target },
+    WaitingStable {
+        latest_stable: Target,
+    },
     Update(Target),
 }
 
@@ -84,7 +86,8 @@ struct UpdateProgress {
 
 /// `preview-v2026.9.27` → `2026.9.27`；`v0.1.0` → `0.1.0`。
 fn release_version(tag: &str) -> Option<&str> {
-    tag.strip_prefix("preview-v").or_else(|| tag.strip_prefix('v'))
+    tag.strip_prefix("preview-v")
+        .or_else(|| tag.strip_prefix('v'))
 }
 
 fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
@@ -149,13 +152,20 @@ fn pick_stable(releases: &[GhRelease]) -> Option<&GhRelease> {
 
 /// 预览版是否构成对当前版本的更新：同为预览版按日期比较；当前为正式版时
 /// 用预览版 `published_at` 与当前正式版的发布日期比较，避免把正式版"降级"为更旧的预览版。
-fn preview_supersedes(preview: &GhRelease, current: &str, current_release: Option<&GhRelease>) -> bool {
+fn preview_supersedes(
+    preview: &GhRelease,
+    current: &str,
+    current_release: Option<&GhRelease>,
+) -> bool {
     let Some(newer) = parse_date_version(&preview.tag_name[9..]) else {
         return false;
     };
     match parse_date_version(current) {
         Some(current) => newer > current,
-        None => match (published_date(preview), current_release.and_then(published_date)) {
+        None => match (
+            published_date(preview),
+            current_release.and_then(published_date),
+        ) {
             (Some(preview_date), Some(current_date)) => preview_date > current_date,
             _ => false,
         },
@@ -212,11 +222,14 @@ fn decide(current: &str, channel: UpdateChannel, releases: &[GhRelease]) -> Deci
                 None
             } else {
                 releases.iter().find(|r| {
-                    !r.draft && !r.prerelease
+                    !r.draft
+                        && !r.prerelease
                         && release_version(&r.tag_name).is_some_and(|v| v == current)
                 })
             };
-            if let Some(release) = pick_preview(releases).filter(|r| preview_supersedes(r, current, current_release)) {
+            if let Some(release) =
+                pick_preview(releases).filter(|r| preview_supersedes(r, current, current_release))
+            {
                 return Decision::Update(target_of(release));
             }
             if let Some(release) = pick_stable(releases).filter(|r| stable_supersedes(r, current)) {
@@ -249,12 +262,29 @@ async fn fetch_releases() -> Result<Vec<GhRelease>, String> {
             .set("Accept", "application/vnd.github+json")
             .timeout(std::time::Duration::from_secs(20))
             .call()
-            .map_err(|e| pix_error_detail("appUpdateReleasesFetchFailed", "获取发布列表失败: {detail}", e))?
+            .map_err(|e| {
+                pix_error_detail(
+                    "appUpdateReleasesFetchFailed",
+                    "获取发布列表失败: {detail}",
+                    e,
+                )
+            })?
             .into_string()
-            .map_err(|e| pix_error_detail("appUpdateReleasesReadFailed", "读取发布列表失败: {detail}", e))
+            .map_err(|e| {
+                pix_error_detail(
+                    "appUpdateReleasesReadFailed",
+                    "读取发布列表失败: {detail}",
+                    e,
+                )
+            })
             .and_then(|body| {
-                serde_json::from_str(&body)
-                    .map_err(|e| pix_error_detail("appUpdateReleasesParseFailed", "解析发布列表失败: {detail}", e))
+                serde_json::from_str(&body).map_err(|e| {
+                    pix_error_detail(
+                        "appUpdateReleasesParseFailed",
+                        "解析发布列表失败: {detail}",
+                        e,
+                    )
+                })
             })
     })
     .await
@@ -262,7 +292,10 @@ async fn fetch_releases() -> Result<Vec<GhRelease>, String> {
 }
 
 #[tauri::command]
-pub async fn app_update_check(app: AppHandle, channel: UpdateChannel) -> Result<AppUpdateStatus, String> {
+pub async fn app_update_check(
+    app: AppHandle,
+    channel: UpdateChannel,
+) -> Result<AppUpdateStatus, String> {
     let current_version = app.package_info().version.to_string();
     let releases = fetch_releases().await?;
     let current = current_version.clone();
@@ -318,13 +351,20 @@ async fn install(app: AppHandle, channel: UpdateChannel) -> Result<(), String> {
     let current_version = app.package_info().version.to_string();
     let releases = fetch_releases().await?;
     let Decision::Update(target) = decide(&current_version, channel, &releases) else {
-        return Err(pix_error("appUpdateNothingToInstall", "当前没有待安装的应用更新"));
+        return Err(pix_error(
+            "appUpdateNothingToInstall",
+            "当前没有待安装的应用更新",
+        ));
     };
     let Some(manifest) = target.manifest else {
-        return Err(pix_error("appUpdateManifestMissing", "该版本未包含自动更新数据，请到发布页手动下载"));
+        return Err(pix_error(
+            "appUpdateManifestMissing",
+            "该版本未包含自动更新数据，请到发布页手动下载",
+        ));
     };
-    let endpoint =
-        tauri::Url::parse(&manifest).map_err(|e| pix_error_detail("appUpdateManifestInvalid", "更新清单地址无效: {detail}", e))?;
+    let endpoint = tauri::Url::parse(&manifest).map_err(|e| {
+        pix_error_detail("appUpdateManifestInvalid", "更新清单地址无效: {detail}", e)
+    })?;
     let builder = app
         .updater_builder()
         .endpoints(vec![endpoint])
@@ -338,7 +378,13 @@ async fn install(app: AppHandle, channel: UpdateChannel) -> Result<(), String> {
     let update = updater
         .check()
         .await
-        .map_err(|e| pix_error_detail("appUpdateManifestFetchFailed", "获取更新数据失败: {detail}", e))?
+        .map_err(|e| {
+            pix_error_detail(
+                "appUpdateManifestFetchFailed",
+                "获取更新数据失败: {detail}",
+                e,
+            )
+        })?
         .ok_or_else(|| pix_error("appUpdateManifestEmpty", "更新清单中没有可安装的版本"))?;
     let app_for_chunk = app.clone();
     let app_for_finish = app.clone();
@@ -355,12 +401,26 @@ async fn install(app: AppHandle, channel: UpdateChannel) -> Result<(), String> {
                 );
             },
             || {
-                let _ = app_for_finish.emit(PROGRESS_EVENT, UpdateProgress { stage: "install", chunk_length: None, content_length: None });
+                let _ = app_for_finish.emit(
+                    PROGRESS_EVENT,
+                    UpdateProgress {
+                        stage: "install",
+                        chunk_length: None,
+                        content_length: None,
+                    },
+                );
             },
         )
         .await
         .map_err(|e| pix_error_detail("appUpdateInstallFailed", "安装更新失败: {detail}", e))?;
-    let _ = app.emit(PROGRESS_EVENT, UpdateProgress { stage: "installed", chunk_length: None, content_length: None });
+    let _ = app.emit(
+        PROGRESS_EVENT,
+        UpdateProgress {
+            stage: "installed",
+            chunk_length: None,
+            content_length: None,
+        },
+    );
     Ok(())
 }
 
@@ -421,7 +481,10 @@ mod tests {
         ]"#;
         let releases: Vec<GhRelease> = serde_json::from_str(input).unwrap();
         assert_eq!(releases[0].tag_name, "preview-v2026.9.27");
-        assert_eq!(releases[0].html_url, "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.27");
+        assert_eq!(
+            releases[0].html_url,
+            "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.27"
+        );
         assert_eq!(releases[0].assets[0].name, "latest.json");
     }
 
@@ -443,12 +506,15 @@ mod tests {
             release("preview-v2026.9.27", true, Some("2026-09-27T16:10:00Z")),
         ];
         let decision = decide("2026.9.27", UpdateChannel::Preview, &releases);
-        assert_eq!(decision, Decision::Update(Target {
-            version: "2026.9.28".into(),
-            notes: None,
-            release_url: "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.28".into(),
-            manifest: Some("https://example.com/latest.json".into()),
-        }));
+        assert_eq!(
+            decision,
+            Decision::Update(Target {
+                version: "2026.9.28".into(),
+                notes: None,
+                release_url: "https://github.com/TZDXF/pi-x/releases/tag/preview-v2026.9.28".into(),
+                manifest: Some("https://example.com/latest.json".into()),
+            })
+        );
         // 已是最新预览版，正式版虽然存在但更旧
         let decision = decide("2026.9.28", UpdateChannel::Preview, &releases);
         assert_eq!(decision, Decision::UpToDate);
@@ -457,21 +523,30 @@ mod tests {
     #[test]
     fn preview_channel_falls_back_to_newer_stable() {
         // 无任何预览发布：正式版 0.1.0 → 0.2.0 提示更新
-        let releases = [release("v0.2.0", false, Some("2026-09-25T10:00:00Z")), release("v0.1.0", false, None)];
+        let releases = [
+            release("v0.2.0", false, Some("2026-09-25T10:00:00Z")),
+            release("v0.1.0", false, None),
+        ];
         let decision = decide("0.1.0", UpdateChannel::Preview, &releases);
-        assert_eq!(decision, Decision::Update(Target {
-            version: "0.2.0".into(),
-            notes: None,
-            release_url: "https://github.com/TZDXF/pi-x/releases/tag/v0.2.0".into(),
-            manifest: Some("https://example.com/latest.json".into()),
-        }));
+        assert_eq!(
+            decision,
+            Decision::Update(Target {
+                version: "0.2.0".into(),
+                notes: None,
+                release_url: "https://github.com/TZDXF/pi-x/releases/tag/v0.2.0".into(),
+                manifest: Some("https://example.com/latest.json".into()),
+            })
+        );
         // 预览版停在 2026.9.27，此后的正式版反超（预览停更场景）
         let releases = [
             release("v0.2.0", false, Some("2026-09-28T10:00:00Z")),
             release("preview-v2026.9.27", true, Some("2026-09-27T16:10:00Z")),
         ];
         let decision = decide("2026.9.27", UpdateChannel::Preview, &releases);
-        assert!(matches!(decision, Decision::Update(_)), "expected stable update, got {decision:?}");
+        assert!(
+            matches!(decision, Decision::Update(_)),
+            "expected stable update, got {decision:?}"
+        );
     }
 
     #[test]
@@ -484,9 +559,15 @@ mod tests {
             decide("0.1.0", UpdateChannel::Stable, &releases),
             Decision::Update(_)
         ));
-        assert_eq!(decide("0.2.0", UpdateChannel::Stable, &releases), Decision::UpToDate);
+        assert_eq!(
+            decide("0.2.0", UpdateChannel::Stable, &releases),
+            Decision::UpToDate
+        );
         // 预览版发布不影响正式通道
-        assert_eq!(decide("0.3.0", UpdateChannel::Stable, &releases), Decision::UpToDate);
+        assert_eq!(
+            decide("0.3.0", UpdateChannel::Stable, &releases),
+            Decision::UpToDate
+        );
     }
 
     #[test]
@@ -500,19 +581,34 @@ mod tests {
         }
         // 同日发布的正式版也视为“未晚于”，不提示
         let releases = [release("v0.2.0", false, Some("2026-09-27T23:00:00Z"))];
-        assert!(matches!(decide("2026.9.27", UpdateChannel::Stable, &releases), Decision::WaitingStable { .. }));
+        assert!(matches!(
+            decide("2026.9.27", UpdateChannel::Stable, &releases),
+            Decision::WaitingStable { .. }
+        ));
         // 发布日期缺失时不提示
         let releases = [release("v0.2.0", false, None)];
-        assert!(matches!(decide("2026.9.27", UpdateChannel::Stable, &releases), Decision::WaitingStable { .. }));
+        assert!(matches!(
+            decide("2026.9.27", UpdateChannel::Stable, &releases),
+            Decision::WaitingStable { .. }
+        ));
         // 下一次正式版发布（晚于预览版构建日期）→ 提示更新
         let releases = [release("v0.2.0", false, Some("2026-09-28T10:00:00Z"))];
-        assert!(matches!(decide("2026.9.27", UpdateChannel::Stable, &releases), Decision::Update(_)));
+        assert!(matches!(
+            decide("2026.9.27", UpdateChannel::Stable, &releases),
+            Decision::Update(_)
+        ));
     }
 
     #[test]
     fn update_channel_serializes_lowercase() {
-        assert_eq!(serde_json::to_value(UpdateChannel::Stable).unwrap(), "stable");
-        assert_eq!(serde_json::to_value(UpdateChannel::Preview).unwrap(), "preview");
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Stable).unwrap(),
+            "stable"
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Preview).unwrap(),
+            "preview"
+        );
         let channel: UpdateChannel = serde_json::from_value("preview".into()).unwrap();
         assert_eq!(channel, UpdateChannel::Preview);
     }

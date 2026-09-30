@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::task::spawn_blocking;
 
-use crate::{data_dir, errors::{pix_error, pix_error_detail}, sessions};
+use crate::{
+    data_dir,
+    errors::{pix_error, pix_error_detail},
+    sessions,
+};
 
 const MISSING_HASH: &str = "missing";
 static REWIND_STATE_LOCK: Mutex<()> = Mutex::new(());
@@ -93,12 +97,18 @@ fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 fn hash_optional(content: Option<&str>) -> String {
-    content.map(|value| hash_bytes(value.as_bytes())).unwrap_or_else(|| MISSING_HASH.into())
+    content
+        .map(|value| hash_bytes(value.as_bytes()))
+        .unwrap_or_else(|| MISSING_HASH.into())
 }
 
 fn resolve_project_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let candidate = Path::new(raw);
-    let mut path = if candidate.is_absolute() { candidate.to_path_buf() } else { root.join(candidate) };
+    let mut path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
     if path.exists() {
         path = dunce::canonicalize(&path)
             .map_err(|_| pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw))?;
@@ -106,13 +116,13 @@ fn resolve_project_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
         let mut missing = Vec::new();
         let mut ancestor = path.as_path();
         while !ancestor.exists() {
-            let name = ancestor
-                .file_name()
-                .ok_or_else(|| pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw))?;
+            let name = ancestor.file_name().ok_or_else(|| {
+                pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw)
+            })?;
             missing.push(name.to_os_string());
-            ancestor = ancestor
-                .parent()
-                .ok_or_else(|| pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw))?;
+            ancestor = ancestor.parent().ok_or_else(|| {
+                pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw)
+            })?;
         }
         let mut resolved = dunce::canonicalize(ancestor)
             .map_err(|_| pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw))?;
@@ -122,7 +132,11 @@ fn resolve_project_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
         path = resolved;
     }
     if !path.starts_with(root) {
-        return Err(pix_error_detail("rewindPathInvalid", "无效的文件路径: {detail}", raw));
+        return Err(pix_error_detail(
+            "rewindPathInvalid",
+            "无效的文件路径: {detail}",
+            raw,
+        ));
     }
     Ok(path)
 }
@@ -141,11 +155,19 @@ fn is_ignored_shell(tool_name: &str) -> bool {
 
 fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
     match std::fs::read(path) {
-        Ok(bytes) => String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| pix_error_detail("rewindNotUtf8", "文件不是 UTF-8 文本: {detail}", path.display())),
+        Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| {
+            pix_error_detail(
+                "rewindNotUtf8",
+                "文件不是 UTF-8 文本: {detail}",
+                path.display(),
+            )
+        }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(pix_error_detail("rewindReadFailed", "读取文件失败: {detail}", e)),
+        Err(e) => Err(pix_error_detail(
+            "rewindReadFailed",
+            "读取文件失败: {detail}",
+            e,
+        )),
     }
 }
 
@@ -187,7 +209,8 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
     for artifact in artifacts {
         if is_ignored_shell(&artifact.tool_name) {
             for file in &artifact.files {
-                if let Some(existing) = ignored_files.iter_mut().find(|item| item.path == file.path) {
+                if let Some(existing) = ignored_files.iter_mut().find(|item| item.path == file.path)
+                {
                     existing.operation_count += 1;
                     if !existing.tool_names.contains(&artifact.tool_name) {
                         existing.tool_names.push(artifact.tool_name.clone());
@@ -295,7 +318,12 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
     let safe_files = safe_plans.iter().map(safe_file).collect::<Vec<_>>();
     let can_apply = !safe_files.is_empty() && unsafe_files.is_empty() && ignored_files.is_empty();
     RewindPlan {
-        preview: FileRewindPreview { can_apply, safe_files, unsafe_files, ignored_files },
+        preview: FileRewindPreview {
+            can_apply,
+            safe_files,
+            unsafe_files,
+            ignored_files,
+        },
         files: safe_plans,
     }
 }
@@ -320,7 +348,11 @@ fn remove_missing_ok(path: &Path) -> Result<(), String> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(pix_error_detail("rewindWriteFailed", "删除文件失败: {detail}", e)),
+        Err(e) => Err(pix_error_detail(
+            "rewindWriteFailed",
+            "删除文件失败: {detail}",
+            e,
+        )),
     }
 }
 
@@ -349,7 +381,10 @@ fn apply_plan(plan: &RewindPlan) -> Result<(), String> {
         };
         if hash_optional(previous.as_deref()) != file.expected_hash {
             compensate(&journal);
-            return Err(pix_error("rewindExternalModified", "文件已被外部修改，无法自动回滚"));
+            return Err(pix_error(
+                "rewindExternalModified",
+                "文件已被外部修改，无法自动回滚",
+            ));
         }
         journal.push((file.resolved.clone(), previous));
         let result = if file.delete {
@@ -382,7 +417,10 @@ fn state_path(file: &Path) -> PathBuf {
 
 fn read_state(file: &Path) -> RewindState {
     let Ok(raw) = std::fs::read_to_string(state_path(file)) else {
-        return RewindState { version: 1, reverted: Vec::new() };
+        return RewindState {
+            version: 1,
+            reverted: Vec::new(),
+        };
     };
     let mut state = serde_json::from_str::<RewindState>(&raw).unwrap_or_default();
     state.version = 1;
@@ -394,8 +432,9 @@ fn read_state(file: &Path) -> RewindState {
 fn write_state(file: &Path, state: &RewindState) -> Result<(), String> {
     let path = state_path(file);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e)
+        })?;
     }
     let body = serde_json::to_string_pretty(state)
         .map_err(|e| pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e))?;
@@ -438,7 +477,10 @@ pub async fn session_file_rewind_apply(
         Ok(FileRewindApplyResult {
             applied: true,
             preview: plan.preview,
-            response: format!("Rewound {count} file{} from summary checkpoints.", if count == 1 { "" } else { "s" }),
+            response: format!(
+                "Rewound {count} file{} from summary checkpoints.",
+                if count == 1 { "" } else { "s" }
+            ),
         })
     })
     .await
@@ -457,13 +499,18 @@ pub async fn session_file_rewind_state_get(file: String) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
-pub async fn session_file_rewind_state_mark(file: String, tool_call_ids: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn session_file_rewind_state_mark(
+    file: String,
+    tool_call_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
     spawn_blocking(move || {
         let path = sessions::validate_session_path(&file)?;
         let _guard = REWIND_STATE_LOCK.lock().map_err(|e| e.to_string())?;
         let mut state = read_state(&path);
         state.version = 1;
-        state.reverted.extend(tool_call_ids.into_iter().filter(|id| !id.trim().is_empty()));
+        state
+            .reverted
+            .extend(tool_call_ids.into_iter().filter(|id| !id.trim().is_empty()));
         state.reverted.sort();
         state.reverted.dedup();
         write_state(&path, &state)?;
@@ -477,7 +524,12 @@ pub async fn session_file_rewind_state_mark(file: String, tool_call_ids: Vec<Str
 mod tests {
     use super::*;
 
-    fn artifact(tool_name: &str, path: &str, before: Option<&str>, after: Option<&str>) -> FileRewindArtifact {
+    fn artifact(
+        tool_name: &str,
+        path: &str,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> FileRewindArtifact {
         FileRewindArtifact {
             tool_name: tool_name.into(),
             files: vec![FileRewindArtifactFile {
@@ -497,7 +549,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let plan = build_plan(&dir, &[artifact("write", "new.txt", None, Some("hello\n"))]);
         assert!(!plan.preview.can_apply);
-        assert_eq!(plan.preview.unsafe_files[0].reason.as_deref(), Some("external_modified"));
+        assert_eq!(
+            plan.preview.unsafe_files[0].reason.as_deref(),
+            Some("external_modified")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -507,7 +562,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("file.txt");
         std::fs::write(&path, "after\n").unwrap();
-        let plan = build_plan(&dir, &[artifact("write", "file.txt", Some("before\n"), Some("after\n"))]);
+        let plan = build_plan(
+            &dir,
+            &[artifact(
+                "write",
+                "file.txt",
+                Some("before\n"),
+                Some("after\n"),
+            )],
+        );
         assert!(plan.preview.can_apply);
         apply_plan(&plan).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), "before\n");
@@ -526,9 +589,20 @@ mod tests {
         assert!(plan.preview.can_apply);
         assert_eq!(plan.preview.safe_files[0].operation_count, 2);
 
-        let ignored = build_plan(&dir, &[artifact("bash", "file.txt", Some("before\n"), Some("after\n"))]);
+        let ignored = build_plan(
+            &dir,
+            &[artifact(
+                "bash",
+                "file.txt",
+                Some("before\n"),
+                Some("after\n"),
+            )],
+        );
         assert!(!ignored.preview.can_apply);
-        assert_eq!(ignored.preview.ignored_files[0].reason.as_deref(), Some("bash_ignored"));
+        assert_eq!(
+            ignored.preview.ignored_files[0].reason.as_deref(),
+            Some("bash_ignored")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

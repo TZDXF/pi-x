@@ -26,14 +26,18 @@ fn prune(today: chrono::NaiveDate) {
 }
 
 fn prune_dir(dir: &std::path::Path, today: chrono::NaiveDate) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         let Some(date) = name
             .strip_suffix(".log")
             .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        else { continue };
+        else {
+            continue;
+        };
         if (today - date).num_days() >= RETENTION_DAYS {
             let _ = std::fs::remove_file(entry.path());
         }
@@ -52,10 +56,17 @@ pub fn write(runtime_id: &str, message: &str) {
         }
     }
     let path = dir().join(format!("{today}.log"));
-    let line = format!("[{}] [{runtime_id}] {message}\n", now.format("%H:%M:%S%.3f"));
+    let line = format!(
+        "[{}] [{runtime_id}] {message}\n",
+        now.format("%H:%M:%S%.3f")
+    );
     let _guard = WRITE_LOCK.lock();
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = file.write_all(line.as_bytes());
     }
 }
@@ -68,14 +79,23 @@ mod tests {
     fn prune_removes_logs_older_than_seven_days() {
         let dir = std::env::temp_dir().join(format!("pix-logs-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["2026-09-18.log", "2026-09-19.log", "2026-09-20.log", "2026-09-26.log", "notes.txt"] {
+        for name in [
+            "2026-09-18.log",
+            "2026-09-19.log",
+            "2026-09-20.log",
+            "2026-09-26.log",
+            "notes.txt",
+        ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
         let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap();
         prune_dir(&dir, today);
         assert!(!dir.join("2026-09-18.log").exists());
         assert!(!dir.join("2026-09-19.log").exists(), "today-7: pruned");
-        assert!(dir.join("2026-09-20.log").exists(), "today-6: kept, 7 days total");
+        assert!(
+            dir.join("2026-09-20.log").exists(),
+            "today-6: kept, 7 days total"
+        );
         assert!(dir.join("2026-09-26.log").exists(), "today: kept");
         assert!(dir.join("notes.txt").exists(), "non-log files untouched");
         std::fs::remove_dir_all(&dir).unwrap();

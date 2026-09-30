@@ -105,8 +105,7 @@ pub async fn process_spawn(
                 let mut c = Command::new("cmd");
                 c.arg("/C").arg(&path).args(&args);
                 c
-            }
-            else {
+            } else {
                 let mut c = Command::new(&path);
                 c.args(&args);
                 c
@@ -122,13 +121,18 @@ pub async fn process_spawn(
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn pi: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn pi: {e}"))?;
     let session_label = session_file.clone().unwrap_or_else(|| "<new>".into());
     crate::logs::write(
         &state.runtime_id,
         &format!(
             "spawn pid={} project={} session={} args={:?}",
-            child.id().map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+            child
+                .id()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "?".into()),
             project,
             session_label,
             args
@@ -194,9 +198,17 @@ pub async fn process_spawn(
             // stdout closed => process exited (or is gone).
             // Only surface it if this reader still belongs to the current session.
             if generation.load(Ordering::Relaxed) == own_gen {
-                crate::logs::write(&runtime_id, "unexpected exit: stdout closed (pi process exited)");
+                crate::logs::write(
+                    &runtime_id,
+                    "unexpected exit: stdout closed (pi process exited)",
+                );
                 pending.lock().await.clear();
-                emit_process_event(&app, EXIT_EVENT, &runtime_id, json!({ "runtimeId": runtime_id }));
+                emit_process_event(
+                    &app,
+                    EXIT_EVENT,
+                    &runtime_id,
+                    json!({ "runtimeId": runtime_id }),
+                );
             }
         });
     }
@@ -223,7 +235,12 @@ pub async fn process_spawn(
                     let text = String::from_utf8_lossy(&line).to_string();
                     if !text.is_empty() {
                         crate::logs::write(&runtime_id, &format!("stderr: {text}"));
-                        emit_process_event(&app, STDERR_EVENT, &runtime_id, json!({ "line": text, "runtimeId": runtime_id }));
+                        emit_process_event(
+                            &app,
+                            STDERR_EVENT,
+                            &runtime_id,
+                            json!({ "line": text, "runtimeId": runtime_id }),
+                        );
                     }
                 }
             }
@@ -246,7 +263,10 @@ fn log_lifecycle_event(runtime_id: &str, value: &Value) {
     let ty = value["type"].as_str().unwrap_or("");
     let detail = match ty {
         "agent_start" | "agent_settled" => String::new(),
-        "agent_end" => format!(" willRetry={}", value["willRetry"].as_bool().unwrap_or(false)),
+        "agent_end" => format!(
+            " willRetry={}",
+            value["willRetry"].as_bool().unwrap_or(false)
+        ),
         "auto_retry_start" => format!(
             " attempt={}/{}",
             value["attempt"].as_u64().unwrap_or(0),
@@ -258,7 +278,10 @@ fn log_lifecycle_event(runtime_id: &str, value: &Value) {
             _ => return,
         },
         "compaction_start" => format!(" reason={}", value["reason"].as_str().unwrap_or("?")),
-        "compaction_end" => format!(" willRetry={}", value["willRetry"].as_bool().unwrap_or(false)),
+        "compaction_end" => format!(
+            " willRetry={}",
+            value["willRetry"].as_bool().unwrap_or(false)
+        ),
         _ => return,
     };
     crate::logs::write(runtime_id, &format!("event {ty}{detail}"));
@@ -296,10 +319,19 @@ pub async fn process_request(state: &ProcessState, mut command: Value) -> Result
 
 /// Same as `process_request`, with an optional per-request timeout. On timeout
 /// the pending entry is removed so a late response cannot be misattributed.
-pub async fn process_request_timeout(state: &ProcessState, command: &mut Value, timeout: Option<std::time::Duration>) -> Result<Value, String> {
-    let _navigation = if matches!(command["type"].as_str(), Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")) {
+pub async fn process_request_timeout(
+    state: &ProcessState,
+    command: &mut Value,
+    timeout: Option<std::time::Duration>,
+) -> Result<Value, String> {
+    let _navigation = if matches!(
+        command["type"].as_str(),
+        Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")
+    ) {
         Some(state.navigation.lock().await)
-    } else { None };
+    } else {
+        None
+    };
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
 
@@ -316,7 +348,8 @@ pub async fn process_request_timeout(state: &ProcessState, command: &mut Value, 
     drop(guard);
 
     let result = match timeout {
-        Some(t) => tokio::time::timeout(t, rx).await
+        Some(t) => tokio::time::timeout(t, rx)
+            .await
             .map_err(|_| format!("pi did not respond within {}s", t.as_secs()))
             .and_then(|r| r.map_err(|_| "pi exited before responding".into())),
         None => rx.await.map_err(|_| "pi exited before responding".into()),
@@ -340,7 +373,12 @@ fn normalize_session_file(reported: &str) -> std::path::PathBuf {
 }
 
 /// Serialize name writes with navigation so a delayed title cannot rename a different session.
-pub(crate) async fn process_set_session_name(state: &ProcessState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+pub(crate) async fn process_set_session_name(
+    state: &ProcessState,
+    path: &std::path::Path,
+    title: String,
+    only_if_empty: bool,
+) -> Result<Option<String>, String> {
     let _navigation = state.navigation.lock().await;
     let guard = state.inner.lock().await;
     if let Some(inner) = guard.as_ref() {
@@ -349,16 +387,23 @@ pub(crate) async fn process_set_session_name(state: &ProcessState, path: &std::p
         let active = data["sessionFile"].as_str().map(normalize_session_file);
         if active.as_deref() == Some(path) {
             if only_if_empty {
-                if let Some(name) = data["sessionName"].as_str().filter(|s| !s.is_empty()) { return Ok(Some(name.into())); }
+                if let Some(name) = data["sessionName"].as_str().filter(|s| !s.is_empty()) {
+                    return Ok(Some(name.into()));
+                }
             }
             name_request(inner, json!({"type": "set_session_name", "name": title})).await?;
             return Ok(Some(title));
         }
     }
     // Keep navigation locked while the SDK updates an inactive log as well.
-    if !path.is_file() { return Err("Pi session has not been persisted".into()); }
-    let request = json!({"op": "session_name", "file": path, "title": title, "onlyIfEmpty": only_if_empty});
-    let result = tokio::task::spawn_blocking(move || crate::pi_data::call(request)).await.map_err(|e| e.to_string())??;
+    if !path.is_file() {
+        return Err("Pi session has not been persisted".into());
+    }
+    let request =
+        json!({"op": "session_name", "file": path, "title": title, "onlyIfEmpty": only_if_empty});
+    let result = tokio::task::spawn_blocking(move || crate::pi_data::call(request))
+        .await
+        .map_err(|e| e.to_string())??;
     drop(guard);
     Ok(result.as_str().map(str::to_owned))
 }
@@ -370,12 +415,16 @@ async fn name_request(inner: &SessionInner, mut command: Value) -> Result<Value,
     inner.pending.lock().await.insert(id, tx);
     let result = async {
         write_line(inner, command.to_string()).await?;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx).await
+        let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
+            .await
             .map_err(|_| "Pi session name request timed out".to_string())?
             .map_err(|_| "Pi exited before responding".to_string())?;
-        if response["success"] != true { return Err(response["error"].to_string()); }
+        if response["success"] != true {
+            return Err(response["error"].to_string());
+        }
         Ok(response)
-    }.await;
+    }
+    .await;
     inner.pending.lock().await.remove(&id);
     result
 }
@@ -389,11 +438,20 @@ pub async fn process_notify(state: &ProcessState, command: Value) -> Result<(), 
 
 pub async fn process_running(state: &ProcessState) -> bool {
     let mut guard = state.inner.lock().await;
-    guard.as_mut().is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
+    guard
+        .as_mut()
+        .is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
 }
 
-async fn kill_inner(runtime_id: &str, inner: &mut SessionInner, reason: &str) -> Result<(), String> {
-    crate::logs::write(runtime_id, &format!("kill pid={:?} reason={reason}", inner.child.id()));
+async fn kill_inner(
+    runtime_id: &str,
+    inner: &mut SessionInner,
+    reason: &str,
+) -> Result<(), String> {
+    crate::logs::write(
+        runtime_id,
+        &format!("kill pid={:?} reason={reason}", inner.child.id()),
+    );
     // Drop pending response waiters first so callers fail fast.
     inner.pending.lock().await.clear();
     if let Some(pid) = inner.child.id() {
@@ -422,7 +480,6 @@ pub async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), Stri
     Ok(())
 }
 
-
 /// Each runtime owns a process, request correlation table and navigation lock.
 /// The pool lock is never held while waiting for an agent response.
 #[derive(Default)]
@@ -434,43 +491,81 @@ pub struct RpcState {
 
 impl RpcState {
     async fn process(&self, runtime_id: Option<&str>) -> Result<Arc<ProcessState>, String> {
-        let process = self.processes.lock().await.get(runtime_id.unwrap_or("default")).cloned()
+        let process = self
+            .processes
+            .lock()
+            .await
+            .get(runtime_id.unwrap_or("default"))
+            .cloned()
             .ok_or_else(|| "pi is not running".to_string())?;
-        self.last_activity.lock().await.insert(process.runtime_id.clone(), Instant::now());
+        self.last_activity
+            .lock()
+            .await
+            .insert(process.runtime_id.clone(), Instant::now());
         Ok(process)
     }
 }
 
-pub async fn spawn(app: AppHandle, state: &RpcState, pi: &PiInfo, project: &str,
-    session_file: Option<String>, mut extra_args: Vec<String>, runtime_id: Option<String>) -> Result<(), String> {
+pub async fn spawn(
+    app: AppHandle,
+    state: &RpcState,
+    pi: &PiInfo,
+    project: &str,
+    session_file: Option<String>,
+    mut extra_args: Vec<String>,
+    runtime_id: Option<String>,
+) -> Result<(), String> {
     extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
     let id = runtime_id.unwrap_or_else(|| "default".into());
     let mut pool = state.processes.lock().await;
     if let Some(existing) = pool.get(&id) {
-        if process_running(existing).await { return Err("Runtime is already running".into()); }
+        if process_running(existing).await {
+            return Err("Runtime is already running".into());
+        }
     }
     // Never open the same persisted conversation in two processes. Probes are
     // time-bounded: a hung pi process must not block spawning forever.
     if let Some(file) = &session_file {
         let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
         for process in pool.values() {
-            if !process_running(process).await { continue; }
+            if !process_running(process).await {
+                continue;
+            }
             let mut probe = json!({"type": "get_state"});
-            let Ok(response) = process_request_timeout(process, &mut probe, Some(PROBE_TIMEOUT)).await else { continue };
-            if response["data"]["sessionFile"].as_str()
-                .and_then(|f| dunce::canonicalize(f).ok()).as_ref() == Some(&path) {
-                return Err(format!("Session already open in runtime {}", process.runtime_id));
+            let Ok(response) =
+                process_request_timeout(process, &mut probe, Some(PROBE_TIMEOUT)).await
+            else {
+                continue;
+            };
+            if response["data"]["sessionFile"]
+                .as_str()
+                .and_then(|f| dunce::canonicalize(f).ok())
+                .as_ref()
+                == Some(&path)
+            {
+                return Err(format!(
+                    "Session already open in runtime {}",
+                    process.runtime_id
+                ));
             }
         }
     }
-    let process = Arc::new(ProcessState { runtime_id: id.clone(), project: project.into(), ..Default::default() });
+    let process = Arc::new(ProcessState {
+        runtime_id: id.clone(),
+        project: project.into(),
+        ..Default::default()
+    });
     process_spawn(app, &process, pi, project, session_file, extra_args).await?;
     pool.insert(id.clone(), process);
     state.last_activity.lock().await.insert(id, Instant::now());
     Ok(())
 }
 
-pub async fn request(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<Value, String> {
+pub async fn request(
+    state: &RpcState,
+    command: Value,
+    runtime_id: Option<&str>,
+) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
     if command["type"] == "rewind_prompt" {
         return rewind_prompt(&process, &command).await;
@@ -491,25 +586,43 @@ async fn rewind_prompt(state: &ProcessState, command: &Value) -> Result<Value, S
     let inner = guard.as_ref().ok_or("pi is not running")?;
     let status = name_request(inner, json!({"type": "get_state"})).await?;
     let data = &status["data"];
-    if data["sessionFile"] != command["sessionFile"] || data["isStreaming"] == true
-        || data["isCompacting"] == true || data["pendingMessageCount"].as_u64().unwrap_or(0) > 0 {
+    if data["sessionFile"] != command["sessionFile"]
+        || data["isStreaming"] == true
+        || data["isCompacting"] == true
+        || data["pendingMessageCount"].as_u64().unwrap_or(0) > 0
+    {
         return Err("Session changed or is still running".into());
     }
     let file = data["sessionFile"].as_str().ok_or("Missing session file")?;
     let messages = name_request(inner, json!({"type": "get_fork_messages"})).await?;
-    let target = messages["data"]["messages"].as_array().and_then(|m| m.last())
-        .and_then(|m| m["entryId"].as_str()).ok_or("No question to edit")?;
+    let target = messages["data"]["messages"]
+        .as_array()
+        .and_then(|m| m.last())
+        .and_then(|m| m["entryId"].as_str())
+        .ok_or("No question to edit")?;
     let original = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let revised = rewind_log(&original, target)?;
     replace_session_log(file, &revised)?;
-    let loaded = name_request(inner, json!({"type": "switch_session", "sessionPath": file})).await;
+    let loaded = name_request(
+        inner,
+        json!({"type": "switch_session", "sessionPath": file}),
+    )
+    .await;
     match loaded {
-        Ok(response) if response["data"]["cancelled"] != true =>
-            Ok(json!({"success": true, "command": "rewind_prompt"})),
+        Ok(response) if response["data"]["cancelled"] != true => {
+            Ok(json!({"success": true, "command": "rewind_prompt"}))
+        }
         result => {
-            replace_session_log(file, &original).map_err(|e| format!("Cannot restore session: {e}"))?;
-            let _ = name_request(inner, json!({"type": "switch_session", "sessionPath": file})).await;
-            Err(result.err().unwrap_or_else(|| "Session reload cancelled".into()))
+            replace_session_log(file, &original)
+                .map_err(|e| format!("Cannot restore session: {e}"))?;
+            let _ = name_request(
+                inner,
+                json!({"type": "switch_session", "sessionPath": file}),
+            )
+            .await;
+            Err(result
+                .err()
+                .unwrap_or_else(|| "Session reload cancelled".into()))
         }
     }
 }
@@ -520,14 +633,22 @@ fn replace_session_log(file: &str, content: &str) -> Result<(), String> {
         std::fs::write(&temporary, content)?;
         std::fs::rename(&temporary, file)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
     result.map_err(|e| e.to_string())
 }
 
 fn rewind_log(raw: &str, target: &str) -> Result<String, String> {
-    let entries: Vec<Value> = raw.lines().filter(|line| !line.trim().is_empty())
-        .map(serde_json::from_str).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-    let entry = entries.iter().find(|entry| entry["id"] == target)
+    let entries: Vec<Value> = raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let entry = entries
+        .iter()
+        .find(|entry| entry["id"] == target)
         .ok_or("Question no longer exists in the session")?;
     if entry["type"] != "message" || entry["message"]["role"] != "user" {
         return Err("Edit target is not a user question".into());
@@ -536,8 +657,13 @@ fn rewind_log(raw: &str, target: &str) -> Result<String, String> {
     let mut output = String::new();
     for item in &entries {
         if item["id"].as_str().is_some_and(|id| removed.contains(id))
-            || item["parentId"].as_str().is_some_and(|id| removed.contains(id)) {
-            if let Some(id) = item["id"].as_str() { removed.insert(id.to_owned()); }
+            || item["parentId"]
+                .as_str()
+                .is_some_and(|id| removed.contains(id))
+        {
+            if let Some(id) = item["id"].as_str() {
+                removed.insert(id.to_owned());
+            }
             continue;
         }
         output.push_str(&item.to_string());
@@ -557,22 +683,37 @@ fn rewind_log(raw: &str, target: &str) -> Result<String, String> {
 /// not the desktop process's. Return a real absolute path for open_path (and
 /// for remote clients, whose browser runs on yet another machine).
 fn resolve_export_path(response: &mut Value, project: &str) -> Result<(), String> {
-    if response["success"] != true { return Ok(()); }
-    let Some(path) = response["data"]["path"].as_str() else { return Ok(()); };
+    if response["success"] != true {
+        return Ok(());
+    }
+    let Some(path) = response["data"]["path"].as_str() else {
+        return Ok(());
+    };
     let absolute = dunce::canonicalize(Path::new(project).join(path))
         .map_err(|e| format!("Cannot locate exported HTML {path}: {e}"))?;
     response["data"]["path"] = json!(absolute.to_string_lossy());
     Ok(())
 }
-pub async fn notify(state: &RpcState, command: Value, runtime_id: Option<&str>) -> Result<(), String> {
+pub async fn notify(
+    state: &RpcState,
+    command: Value,
+    runtime_id: Option<&str>,
+) -> Result<(), String> {
     let process = state.process(runtime_id).await?;
     process_notify(&process, command).await
 }
 pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
-    match state.process(runtime_id).await { Ok(process) => process_running(&process).await, Err(_) => false }
+    match state.process(runtime_id).await {
+        Ok(process) => process_running(&process).await,
+        Err(_) => false,
+    }
 }
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
-    let process = state.processes.lock().await.remove(runtime_id.unwrap_or("default"));
+    let process = state
+        .processes
+        .lock()
+        .await
+        .remove(runtime_id.unwrap_or("default"));
     if let Some(process) = process {
         process_kill(&process, "rpc_kill").await?;
         state.last_activity.lock().await.remove(&process.runtime_id);
@@ -582,29 +723,47 @@ pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), Stri
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
-    for process in processes.values() { process_kill(process, "kill_all (app exit)").await?; }
+    for process in processes.values() {
+        process_kill(process, "kill_all (app exit)").await?;
+    }
     Ok(())
 }
 pub async fn list(state: &RpcState) -> Vec<Value> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     let mut result = Vec::new();
     for process in processes {
-        if !process_running(&process).await { continue; }
+        if !process_running(&process).await {
+            continue;
+        }
         let mut probe = json!({"type": "get_state"});
-        if let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await {
+        if let Ok(response) =
+            process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await
+        {
             result.push(json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]}));
         }
     }
     result
 }
-pub(crate) async fn set_session_name(state: &RpcState, path: &std::path::Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
+pub(crate) async fn set_session_name(
+    state: &RpcState,
+    path: &std::path::Path,
+    title: String,
+    only_if_empty: bool,
+) -> Result<Option<String>, String> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     for process in processes {
-        if !process_running(&process).await { continue; }
+        if !process_running(&process).await {
+            continue;
+        }
         let mut probe = json!({"type": "get_state"});
         // Time-bounded probe: skip hung runtimes instead of failing the rename.
-        let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await else { continue };
-        let active = response["data"]["sessionFile"].as_str().map(normalize_session_file);
+        let Ok(response) = process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await
+        else {
+            continue;
+        };
+        let active = response["data"]["sessionFile"]
+            .as_str()
+            .map(normalize_session_file);
         if active.as_deref() == Some(path) {
             return process_set_session_name(&process, path, title, only_if_empty).await;
         }
@@ -632,8 +791,16 @@ mod spawn_args_tests {
         assert_eq!(
             args,
             vec![
-                "--mode", "rpc", "--session", "C:\\tmp\\s.jsonl", "--provider", "home",
-                "--model", "agnes-3.0-flash", "--thinking", "medium",
+                "--mode",
+                "rpc",
+                "--session",
+                "C:\\tmp\\s.jsonl",
+                "--provider",
+                "home",
+                "--model",
+                "agnes-3.0-flash",
+                "--thinking",
+                "medium",
             ]
         );
     }
@@ -656,7 +823,9 @@ mod session_path_tests {
         let missing = dir.join("not-yet-written.jsonl");
         // New session logs do not exist until the first assistant reply; the
         // live process must still match by canonical parent plus file name.
-        let expected = dunce::canonicalize(&dir).unwrap().join("not-yet-written.jsonl");
+        let expected = dunce::canonicalize(&dir)
+            .unwrap()
+            .join("not-yet-written.jsonl");
         assert_eq!(normalize_session_file(missing.to_str().unwrap()), expected);
 
         std::fs::write(&missing, "{}").unwrap();
@@ -683,7 +852,10 @@ mod export_tests {
 
         let mut relative = json!({ "success": true, "data": { "path": "session.html" } });
         resolve_export_path(&mut relative, project.to_str().unwrap()).unwrap();
-        let expected = dunce::canonicalize(&file).unwrap().to_string_lossy().to_string();
+        let expected = dunce::canonicalize(&file)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert_eq!(relative["data"]["path"], expected);
 
         let mut absolute = json!({ "success": true, "data": { "path": expected } });
@@ -720,7 +892,10 @@ mod edit_tests {
             json!({"type":"message","id":"sibling","parentId":"before","message":{"role":"user"}}),
         ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
         let result = rewind_log(&raw, "question").unwrap();
-        let entries: Vec<Value> = result.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let entries: Vec<Value> = result
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[2]["id"], "sibling");
         assert_eq!(entries[3]["parentId"], "before");

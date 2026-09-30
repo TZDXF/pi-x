@@ -6,7 +6,11 @@ use serde_json::Value;
 use std::process::Stdio;
 use tauri::AppHandle;
 
-use crate::{commands, errors::{pix_error, pix_error_detail}, pi_locate, trust};
+use crate::{
+    commands,
+    errors::{pix_error, pix_error_detail},
+    pi_locate, trust,
+};
 
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -23,9 +27,15 @@ pub struct InstalledPackage {
 }
 
 fn read_packages_file(path: &std::path::Path, scope: &str, out: &mut Vec<InstalledPackage>) {
-    let Ok(raw) = std::fs::read_to_string(path) else { return };
-    let Ok(doc) = serde_json::from_str::<Value>(&raw) else { return };
-    let Some(list) = doc.get("packages").and_then(|v| v.as_array()) else { return };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(list) = doc.get("packages").and_then(|v| v.as_array()) else {
+        return;
+    };
     for entry in list {
         match entry {
             Value::String(s) => out.push(InstalledPackage {
@@ -56,7 +66,11 @@ fn read_packages_file(path: &std::path::Path, scope: &str, out: &mut Vec<Install
 #[tauri::command]
 pub fn package_list(project: Option<String>) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    read_packages_file(&trust::agent_dir().join("settings.json"), "global", &mut out);
+    read_packages_file(
+        &trust::agent_dir().join("settings.json"),
+        "global",
+        &mut out,
+    );
     if let Some(p) = project.filter(|s| !s.trim().is_empty()) {
         read_packages_file(
             &std::path::Path::new(&p).join(".pi").join("settings.json"),
@@ -67,7 +81,11 @@ pub fn package_list(project: Option<String>) -> Vec<InstalledPackage> {
     out
 }
 
-pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) -> Result<String, String> {
+pub(crate) async fn run_pi(
+    app: &AppHandle,
+    args: &[String],
+    cwd: Option<&str>,
+) -> Result<String, String> {
     use pi_locate::Launcher;
     use tokio::process::Command;
 
@@ -76,7 +94,10 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
     let cfg = commands::app_config_get(app.clone())?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
-        return Err(pix_error("piNotFound", "未找到 pi，请先在设置中配置 pi 路径"));
+        return Err(pix_error(
+            "piNotFound",
+            "未找到 pi，请先在设置中配置 pi 路径",
+        ));
     }
 
     let mut cmd = match info.launcher {
@@ -87,7 +108,10 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
         }
         Some(Launcher::Binary { path }) => Command::new(path),
         None => {
-            let path = info.path.clone().ok_or_else(|| pix_error("piLaunchUnknown", "无法确定 pi 启动方式"))?;
+            let path = info
+                .path
+                .clone()
+                .ok_or_else(|| pix_error("piLaunchUnknown", "无法确定 pi 启动方式"))?;
             let mut c = Command::new("cmd");
             c.arg("/C").arg(path);
             c
@@ -115,7 +139,11 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
         Ok(text)
     } else {
         Err(if text.is_empty() {
-            pix_error_detail("piExitCode", format!("pi 退出码: {}", output.status), output.status)
+            pix_error_detail(
+                "piExitCode",
+                format!("pi 退出码: {}", output.status),
+                output.status,
+            )
         } else {
             text
         })
@@ -124,11 +152,17 @@ pub(crate) async fn run_pi(app: &AppHandle, args: &[String], cwd: Option<&str>) 
 
 // A missing project must never make `pi install -l` use the app process's cwd.
 fn local_project_dir(project: Option<&str>) -> Result<&str, String> {
-    let dir = project.map(str::trim).filter(|s| !s.is_empty())
+    let dir = project
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| pix_error("projectDirRequired", "请选择要安装的项目文件夹"))?;
     let path = std::path::Path::new(dir);
     if !path.is_absolute() || !path.is_dir() {
-        return Err(pix_error_detail("projectDirInvalid", format!("项目文件夹不存在或不是完整路径: {dir}"), dir));
+        return Err(pix_error_detail(
+            "projectDirInvalid",
+            format!("项目文件夹不存在或不是完整路径: {dir}"),
+            dir,
+        ));
     }
     Ok(dir)
 }
@@ -146,7 +180,11 @@ pub async fn package_install(
     if local {
         args.push("-l".into());
     }
-    let cwd = if local { Some(local_project_dir(project.as_deref())?) } else { None };
+    let cwd = if local {
+        Some(local_project_dir(project.as_deref())?)
+    } else {
+        None
+    };
     run_pi(&app, &args, cwd).await
 }
 
@@ -163,7 +201,11 @@ pub async fn package_remove(
     if local {
         args.push("-l".into());
     }
-    let cwd = if local { Some(local_project_dir(project.as_deref())?) } else { None };
+    let cwd = if local {
+        Some(local_project_dir(project.as_deref())?)
+    } else {
+        None
+    };
     run_pi(&app, &args, cwd).await
 }
 

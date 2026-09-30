@@ -264,26 +264,38 @@ mod tests {
 
 /// Resolve the installed SDK next to the selected CLI; never install a second Pi.
 pub fn sdk_launcher(custom: Option<&str>) -> Result<(String, PathBuf), String> {
-    let candidates: Vec<PathBuf> = if let Some(path) = custom.filter(|s| !s.trim().is_empty() && Path::new(s.trim()).is_file()) {
+    let candidates: Vec<PathBuf> = if let Some(path) =
+        custom.filter(|s| !s.trim().is_empty() && Path::new(s.trim()).is_file())
+    {
         vec![PathBuf::from(path.trim())]
     } else {
-        scan_dirs().into_iter().flat_map(|dir| candidate_names().iter().map(move |name| dir.join(name))).collect()
+        scan_dirs()
+            .into_iter()
+            .flat_map(|dir| candidate_names().iter().map(move |name| dir.join(name)))
+            .collect()
     };
     for path in candidates {
-        if !path.is_file() { continue; }
+        if !path.is_file() {
+            continue;
+        }
         let launcher = build_launcher(&path.to_string_lossy());
         let (node, script) = match launcher {
             Some(Launcher::Node { node, script }) => (node, PathBuf::from(script)),
             _ => {
                 let real = dunce::canonicalize(&path).map_err(|e| e.to_string())?;
                 if real.extension().and_then(|v| v.to_str()) != Some("js") {
-                    return Err(pix_error("piSdkMissing", "所选 Pi 未提供 Node.js SDK，请选择 npm 版 Pi。"));
+                    return Err(pix_error(
+                        "piSdkMissing",
+                        "所选 Pi 未提供 Node.js SDK，请选择 npm 版 Pi。",
+                    ));
                 }
                 ("node".into(), real)
             }
         };
         for parent in script.ancestors().skip(1).take(4) {
-            if parent.join("core/settings-manager.js").is_file() && parent.join("config.js").is_file() {
+            if parent.join("core/settings-manager.js").is_file()
+                && parent.join("config.js").is_file()
+            {
                 return Ok((node, parent.to_path_buf()));
             }
         }

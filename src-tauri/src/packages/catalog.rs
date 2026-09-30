@@ -62,7 +62,8 @@ fn catalog_regexes() -> &'static CatalogRegexes {
         date: regex::Regex::new(r#"data-package-date="([^"]*)""#).unwrap(),
         types: regex::Regex::new(r#"data-package-types="([^"]*)""#).unwrap(),
         desc: regex::Regex::new(r#"(?s)<p class="packages-desc">(.*?)</p>"#).unwrap(),
-        author: regex::Regex::new(r#"(?s)<div class="packages-meta">\s*<span>(.*?)</span>"#).unwrap(),
+        author: regex::Regex::new(r#"(?s)<div class="packages-meta">\s*<span>(.*?)</span>"#)
+            .unwrap(),
         npm: regex::Regex::new(r#"href="(https://www\.npmjs\.com/package/[^"]+)""#).unwrap(),
         install: regex::Regex::new(r"pi install ([^\s<]+)").unwrap(),
     })
@@ -82,11 +83,17 @@ fn parse_catalog(html: &str) -> Vec<CatalogPackage> {
         let tag_end = card.find('>').unwrap_or(0);
         let tag = &card[..tag_end];
 
-        let Some(name) = attr_re(&re.name, tag) else { continue };
+        let Some(name) = attr_re(&re.name, tag) else {
+            continue;
+        };
         let description = re
             .desc
             .captures(card)
-            .map(|c| strip_tags(&unescape_html(c.get(1).unwrap().as_str())).trim().to_string())
+            .map(|c| {
+                strip_tags(&unescape_html(c.get(1).unwrap().as_str()))
+                    .trim()
+                    .to_string()
+            })
             .unwrap_or_default();
         let author = re
             .author
@@ -110,7 +117,10 @@ fn parse_catalog(html: &str) -> Vec<CatalogPackage> {
             .captures(card)
             .map(|c| unescape_html(c.get(1).unwrap().as_str()))
             .unwrap_or_else(|| format!("npm:{name}"));
-        let npm_url = re.npm.captures(card).map(|c| c.get(1).unwrap().as_str().to_string());
+        let npm_url = re
+            .npm
+            .captures(card)
+            .map(|c| c.get(1).unwrap().as_str().to_string());
 
         out.push(CatalogPackage {
             detail_url: format!("https://pi.dev/packages/{name}"),
@@ -173,7 +183,13 @@ pub async fn package_catalog(
         .call()
         .map_err(|e| pix_error_detail("marketFetchFailed", format!("获取插件市场失败: {e}"), e))?
         .into_string()
-        .map_err(|e| pix_error_detail("marketResponseReadFailed", format!("读取插件市场响应失败: {e}"), e))
+        .map_err(|e| {
+            pix_error_detail(
+                "marketResponseReadFailed",
+                format!("读取插件市场响应失败: {e}"),
+                e,
+            )
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -193,7 +209,9 @@ mod tests {
         assert!(url.contains("sort=recent"));
         assert!(url.contains("type=skill"));
         assert!(url.contains("page=2"));
-        assert!(catalog_request("", "downloads", "", 0).url().contains("page=1"));
+        assert!(catalog_request("", "downloads", "", 0)
+            .url()
+            .contains("page=1"));
     }
 
     #[test]
@@ -216,15 +234,25 @@ mod tests {
         assert_eq!(p.updated_ms, 1788380245174);
         assert_eq!(p.types, vec!["extension", "skill"]);
         assert_eq!(p.source, "npm:pi-mcp-adapter");
-        assert_eq!(p.npm_url.as_deref(), Some("https://www.npmjs.com/package/pi-mcp-adapter"));
+        assert_eq!(
+            p.npm_url.as_deref(),
+            Some("https://www.npmjs.com/package/pi-mcp-adapter")
+        );
     }
 
     #[test]
     fn parses_live_catalog_fixture() {
         let html = include_str!("../../tests/fixtures/packages.html");
         let pkgs = parse_catalog(html);
-        assert!(pkgs.len() >= 50, "expected >= 50 packages, got {}", pkgs.len());
-        let mcp = pkgs.iter().find(|p| p.name == "pi-mcp-adapter").expect("pi-mcp-adapter");
+        assert!(
+            pkgs.len() >= 50,
+            "expected >= 50 packages, got {}",
+            pkgs.len()
+        );
+        let mcp = pkgs
+            .iter()
+            .find(|p| p.name == "pi-mcp-adapter")
+            .expect("pi-mcp-adapter");
         assert_eq!(mcp.source, "npm:pi-mcp-adapter");
         assert!(mcp.downloads_month > 0);
         assert!(!mcp.author.is_empty());

@@ -1,4 +1,8 @@
-use crate::{commands, errors::{pix_error, pix_error_with}, rpc};
+use crate::{
+    commands,
+    errors::{pix_error, pix_error_with},
+    rpc,
+};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
@@ -156,7 +160,13 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
         Some(
             tokio::net::TcpListener::bind(("0.0.0.0", port))
                 .await
-                .map_err(|e| pix_error_with("portListenFailed", format!("无法监听端口 {port}: {e}"), serde_json::json!({"port": port.to_string(), "detail": e.to_string()})))?,
+                .map_err(|e| {
+                    pix_error_with(
+                        "portListenFailed",
+                        format!("无法监听端口 {port}: {e}"),
+                        serde_json::json!({"port": port.to_string(), "detail": e.to_string()}),
+                    )
+                })?,
         )
     } else {
         None
@@ -194,7 +204,10 @@ pub async fn remote_set(app: AppHandle, enabled: bool, port: u16) -> Result<Valu
             // secret embedded in the path (returned only through authorized
             // invoke calls); it is scoped to these routes and cannot be used
             // against /api/invoke.
-            .route("/api/preview/{*rest}", any(crate::preview_proxy::remote_handle))
+            .route(
+                "/api/preview/{*rest}",
+                any(crate::preview_proxy::remote_handle),
+            )
             .fallback(asset)
             .with_state(web);
         *state.server.lock().unwrap() = Some(Server {
@@ -224,12 +237,18 @@ pub async fn remote_password_set(
     let state = app.state::<RemoteState>();
     let _operation = state.operation.lock().await;
     if state.server.lock().unwrap().is_some() {
-        return Err(pix_error("disableLanBeforePasswordChange", "请先关闭局域网访问，再修改密码"));
+        return Err(pix_error(
+            "disableLanBeforePasswordChange",
+            "请先关闭局域网访问，再修改密码",
+        ));
     }
     let password_hash = match password {
         Some(password) => {
             if password.chars().count() < 8 || password.len() > 128 {
-                return Err(pix_error("passwordLengthInvalid", "密码至少 8 个字符，且不超过 128 字节"));
+                return Err(pix_error(
+                    "passwordLengthInvalid",
+                    "密码至少 8 个字符，且不超过 128 字节",
+                ));
             }
             Some(
                 tokio::task::spawn_blocking(move || {
@@ -262,10 +281,13 @@ fn bearer(headers: &HeaderMap) -> &str {
 }
 
 async fn auth_status(State(web): State<WebState>, headers: HeaderMap) -> impl IntoResponse {
-    ([("cache-control", "no-store")], Json(json!({
-        "passwordEnabled": web.password_hash.is_some(),
-        "authenticated": authorized(&web, bearer(&headers)),
-    })))
+    (
+        [("cache-control", "no-store")],
+        Json(json!({
+            "passwordEnabled": web.password_hash.is_some(),
+            "authenticated": authorized(&web, bearer(&headers)),
+        })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -280,8 +302,13 @@ fn login_allowed(attempts: &mut HashMap<IpAddr, LoginAttempt>, ip: IpAddr, now: 
     if !attempts.contains_key(&ip) && attempts.len() >= 256 {
         return false;
     }
-    let entry = attempts.entry(ip).or_insert(LoginAttempt { count: 0, since: now });
-    if entry.count >= 5 { return false; }
+    let entry = attempts.entry(ip).or_insert(LoginAttempt {
+        count: 0,
+        since: now,
+    });
+    if entry.count >= 5 {
+        return false;
+    }
     entry.count += 1;
     true
 }
@@ -320,7 +347,11 @@ async fn password_login(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     web.login_attempts.lock().unwrap().remove(&addr.ip());
-    ([("cache-control", "no-store")], Json(json!({"token": web.token}))).into_response()
+    (
+        [("cache-control", "no-store")],
+        Json(json!({"token": web.token})),
+    )
+        .into_response()
 }
 
 fn authorized(state: &WebState, token: &str) -> bool {
@@ -375,8 +406,10 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             commands::app_config_save(app.clone(), cfg)?;
             Ok(Value::Null)
         }
-        "projectless_dir_resolve" => Ok(serde_json::to_value(commands::projectless_dir_resolve(app.clone())?)
-            .map_err(|e| e.to_string())?),
+        "projectless_dir_resolve" => Ok(serde_json::to_value(commands::projectless_dir_resolve(
+            app.clone(),
+        )?)
+        .map_err(|e| e.to_string())?),
         "pi_detect" => Ok(serde_json::to_value(
             commands::pi_detect(commands::app_config_get(app.clone())?.pi_path).await,
         )
@@ -409,7 +442,10 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(Value::Null)
         }
         "pix_log" => {
-            crate::logs::write(a["runtimeId"].as_str().unwrap_or("ui"), a["message"].as_str().unwrap_or(""));
+            crate::logs::write(
+                a["runtimeId"].as_str().unwrap_or("ui"),
+                a["message"].as_str().unwrap_or(""),
+            );
             Ok(Value::Null)
         }
         "rpc_request" => rpc::request(&state, a["command"].clone(), a["runtimeId"].as_str()).await,
@@ -417,21 +453,46 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         // saved session directly or the active runtime, then return its HTML.
         "session_export_html" => {
             let (path, temporary) = if let Some(file) = a["file"].as_str() {
-                (commands::session_export_file(file.to_owned(), None).await?, true)
+                (
+                    commands::session_export_file(file.to_owned(), None).await?,
+                    true,
+                )
             } else {
-                let response = rpc::request(&state, json!({"type": "export_html"}), a["runtimeId"].as_str()).await?;
+                let response = rpc::request(
+                    &state,
+                    json!({"type": "export_html"}),
+                    a["runtimeId"].as_str(),
+                )
+                .await?;
                 if response["success"] != true {
-                    return Err(response["error"].as_str().unwrap_or("Export failed").to_owned());
+                    return Err(response["error"]
+                        .as_str()
+                        .unwrap_or("Export failed")
+                        .to_owned());
                 }
-                (response["data"]["path"].as_str().ok_or("Export returned no path")?.to_owned(), false)
+                (
+                    response["data"]["path"]
+                        .as_str()
+                        .ok_or("Export returned no path")?
+                        .to_owned(),
+                    false,
+                )
             };
-            let html = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read exported HTML: {e}"));
-            if temporary { let _ = std::fs::remove_file(&path); }
+            let html = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Cannot read exported HTML: {e}"));
+            if temporary {
+                let _ = std::fs::remove_file(&path);
+            }
             let download_name = if temporary {
                 let file = a["file"].as_str().ok_or("Missing session file")?;
-                let stem = std::path::Path::new(file).file_stem().and_then(|s| s.to_str()).ok_or("Invalid session name")?;
+                let stem = std::path::Path::new(file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or("Invalid session name")?;
                 format!("pi-session-{stem}.html")
-            } else { path };
+            } else {
+                path
+            };
             Ok(json!({"path": download_name, "html": html?}))
         }
         "rpc_notify" => {
@@ -439,71 +500,183 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(Value::Null)
         }
         "session_generate_title" => {
-            let title = crate::title_generation::session_generate_title(app.clone(), text("file")?, text("message")?).await?;
+            let title = crate::title_generation::session_generate_title(
+                app.clone(),
+                text("file")?,
+                text("message")?,
+            )
+            .await?;
             Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
         }
         "session_update" => {
-            crate::sessions::session_update(app.clone(), text("file")?, a["title"].as_str().map(String::from), a["archived"].as_bool().ok_or_else(|| pix_error("missingArchived", "缺少 archived 参数"))?).await?;
+            crate::sessions::session_update(
+                app.clone(),
+                text("file")?,
+                a["title"].as_str().map(String::from),
+                a["archived"]
+                    .as_bool()
+                    .ok_or_else(|| pix_error("missingArchived", "缺少 archived 参数"))?,
+            )
+            .await?;
             Ok(Value::Null)
         }
         "session_delete" => {
             crate::sessions::session_delete(text("file")?).await?;
             Ok(Value::Null)
         }
-        "session_duplicate" => Ok(Value::String(crate::sessions::session_duplicate(text("file")?).await?)),
-        "session_last_error" => Ok(serde_json::to_value(crate::sessions::session_last_error(text("file")?).await?).map_err(|e| e.to_string())?),
-        "session_history" => Ok(Value::Array(crate::sessions::session_history(text("file")?).await?)),
-        "workspace_git_info" => Ok(serde_json::to_value(crate::workspace_git::workspace_git_info(text("project")?).await?).map_err(|e| e.to_string())?),
-        "workspace_git_create" => Ok(Value::String(crate::workspace_git::workspace_git_create(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
-        "workspace_git_prepare" => Ok(Value::String(crate::workspace_git::workspace_git_prepare(text("project")?, text("branch")?, a["worktree"].as_bool().ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?).await?)),
+        "session_duplicate" => Ok(Value::String(
+            crate::sessions::session_duplicate(text("file")?).await?,
+        )),
+        "session_last_error" => Ok(serde_json::to_value(
+            crate::sessions::session_last_error(text("file")?).await?,
+        )
+        .map_err(|e| e.to_string())?),
+        "session_history" => Ok(Value::Array(
+            crate::sessions::session_history(text("file")?).await?,
+        )),
+        "workspace_git_info" => Ok(serde_json::to_value(
+            crate::workspace_git::workspace_git_info(text("project")?).await?,
+        )
+        .map_err(|e| e.to_string())?),
+        "workspace_git_create" => Ok(Value::String(
+            crate::workspace_git::workspace_git_create(
+                text("project")?,
+                text("branch")?,
+                a["worktree"]
+                    .as_bool()
+                    .ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?,
+            )
+            .await?,
+        )),
+        "workspace_git_prepare" => Ok(Value::String(
+            crate::workspace_git::workspace_git_prepare(
+                text("project")?,
+                text("branch")?,
+                a["worktree"]
+                    .as_bool()
+                    .ok_or_else(|| pix_error("missingWorktree", "缺少 worktree 参数"))?,
+            )
+            .await?,
+        )),
         "session_revert_changes" => {
-            let files: Vec<crate::session_revert::RevertFile> = serde_json::from_value(a["files"].clone())
-                .map_err(|e| pix_error_with("missingFiles", format!("缺少 files 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
-            Ok(serde_json::to_value(crate::session_revert::session_revert_changes(text("project")?, files).await?).map_err(|e| e.to_string())?)
+            let files: Vec<crate::session_revert::RevertFile> =
+                serde_json::from_value(a["files"].clone()).map_err(|e| {
+                    pix_error_with(
+                        "missingFiles",
+                        format!("缺少 files 参数: {e}"),
+                        serde_json::json!({ "detail": e.to_string() }),
+                    )
+                })?;
+            Ok(serde_json::to_value(
+                crate::session_revert::session_revert_changes(text("project")?, files).await?,
+            )
+            .map_err(|e| e.to_string())?)
         }
         "session_file_rewind_preview" => {
-            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> = serde_json::from_value(a["artifacts"].clone())
-                .map_err(|e| pix_error_with("missingArtifacts", format!("缺少 artifacts 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
-            Ok(serde_json::to_value(crate::session_file_rewind::session_file_rewind_preview(text("project")?, artifacts).await?).map_err(|e| e.to_string())?)
+            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> =
+                serde_json::from_value(a["artifacts"].clone()).map_err(|e| {
+                    pix_error_with(
+                        "missingArtifacts",
+                        format!("缺少 artifacts 参数: {e}"),
+                        serde_json::json!({ "detail": e.to_string() }),
+                    )
+                })?;
+            Ok(serde_json::to_value(
+                crate::session_file_rewind::session_file_rewind_preview(
+                    text("project")?,
+                    artifacts,
+                )
+                .await?,
+            )
+            .map_err(|e| e.to_string())?)
         }
         "session_file_rewind_apply" => {
-            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> = serde_json::from_value(a["artifacts"].clone())
-                .map_err(|e| pix_error_with("missingArtifacts", format!("缺少 artifacts 参数: {e}"), serde_json::json!({ "detail": e.to_string() })))?;
-            Ok(serde_json::to_value(crate::session_file_rewind::session_file_rewind_apply(text("project")?, artifacts).await?).map_err(|e| e.to_string())?)
+            let artifacts: Vec<crate::session_file_rewind::FileRewindArtifact> =
+                serde_json::from_value(a["artifacts"].clone()).map_err(|e| {
+                    pix_error_with(
+                        "missingArtifacts",
+                        format!("缺少 artifacts 参数: {e}"),
+                        serde_json::json!({ "detail": e.to_string() }),
+                    )
+                })?;
+            Ok(serde_json::to_value(
+                crate::session_file_rewind::session_file_rewind_apply(text("project")?, artifacts)
+                    .await?,
+            )
+            .map_err(|e| e.to_string())?)
         }
         "session_file_rewind_state_get" => Ok(serde_json::to_value(
             crate::session_file_rewind::session_file_rewind_state_get(text("file")?).await?,
-        ).map_err(|e| e.to_string())?),
+        )
+        .map_err(|e| e.to_string())?),
         "session_file_rewind_state_mark" => {
-            let ids = a["toolCallIds"].as_array().map(|list| {
-                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
-            }).unwrap_or_default();
+            let ids = a["toolCallIds"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             Ok(serde_json::to_value(
-                crate::session_file_rewind::session_file_rewind_state_mark(text("file")?, ids).await?,
-            ).map_err(|e| e.to_string())?)
+                crate::session_file_rewind::session_file_rewind_state_mark(text("file")?, ids)
+                    .await?,
+            )
+            .map_err(|e| e.to_string())?)
         }
         "session_checkpoint_create" => Ok(serde_json::to_value(
-            crate::session_checkpoint::session_checkpoint_create(text("project")?, text("checkpointId")?).await?,
-        ).map_err(|e| e.to_string())?),
+            crate::session_checkpoint::session_checkpoint_create(
+                text("project")?,
+                text("checkpointId")?,
+            )
+            .await?,
+        )
+        .map_err(|e| e.to_string())?),
         "session_checkpoint_diff" => Ok(serde_json::to_value(
-            crate::session_checkpoint::session_checkpoint_diff(text("project")?, text("from")?, text("to")?).await?,
-        ).map_err(|e| e.to_string())?),
+            crate::session_checkpoint::session_checkpoint_diff(
+                text("project")?,
+                text("from")?,
+                text("to")?,
+            )
+            .await?,
+        )
+        .map_err(|e| e.to_string())?),
         "session_checkpoint_restore" => {
             let paths = a["paths"].as_array().map(|list| {
-                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
             });
             let tool_files = a["toolTouchedFiles"].as_array().map(|list| {
-                list.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
             });
             Ok(serde_json::to_value(
-                crate::session_checkpoint::session_checkpoint_restore(text("project")?, text("from")?, text("to")?, paths, tool_files).await?,
-            ).map_err(|e| e.to_string())?)
+                crate::session_checkpoint::session_checkpoint_restore(
+                    text("project")?,
+                    text("from")?,
+                    text("to")?,
+                    paths,
+                    tool_files,
+                )
+                .await?,
+            )
+            .map_err(|e| e.to_string())?)
         }
         "session_checkpoint_manifest_get" => Ok(serde_json::to_value(
             crate::session_checkpoint::session_checkpoint_manifest_get(text("file")?).await?,
-        ).map_err(|e| e.to_string())?),
+        )
+        .map_err(|e| e.to_string())?),
         "session_checkpoint_manifest_set" => {
-            crate::session_checkpoint::session_checkpoint_manifest_set(text("file")?, a["manifest"].clone()).await?;
+            crate::session_checkpoint::session_checkpoint_manifest_set(
+                text("file")?,
+                a["manifest"].clone(),
+            )
+            .await?;
             Ok(Value::Null)
         }
         "session_checkpoint_manifest_delete" => {
@@ -511,8 +684,14 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             Ok(Value::Null)
         }
         "session_checkpoint_content" => Ok(serde_json::to_value(
-            crate::session_checkpoint::session_checkpoint_content(text("project")?, text("oid")?, text("path")?).await?,
-        ).map_err(|e| e.to_string())?),
+            crate::session_checkpoint::session_checkpoint_content(
+                text("project")?,
+                text("oid")?,
+                text("path")?,
+            )
+            .await?,
+        )
+        .map_err(|e| e.to_string())?),
         "session_list" => {
             Ok(serde_json::to_value(commands::session_list(text("project")?).await?).unwrap())
         }
@@ -521,10 +700,12 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         }
         "list_project_directory" => Ok(serde_json::to_value(
             commands::list_project_directory(text("project")?, text("path")?).await?,
-        ).map_err(|e| e.to_string())?),
+        )
+        .map_err(|e| e.to_string())?),
         "read_file_preview" => Ok(serde_json::to_value(
             commands::read_file_preview(text("project")?, text("path")?).await?,
-        ).map_err(|e| e.to_string())?),
+        )
+        .map_err(|e| e.to_string())?),
         "search_files" => Ok(serde_json::to_value(
             commands::search_files(text("project")?, text("query")?).await?,
         )
@@ -566,8 +747,12 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 .await?,
         )),
         "detect_editors" => Ok(serde_json::to_value(crate::editor::detect_editors()).unwrap()),
-        "editor_icons" => Ok(serde_json::to_value(crate::editor_icon::editor_icons().await?).unwrap()),
-        "preview_proxy_info" => Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) })),
+        "editor_icons" => {
+            Ok(serde_json::to_value(crate::editor_icon::editor_icons().await?).unwrap())
+        }
+        "preview_proxy_info" => {
+            Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) }))
+        }
         _ => Err(pix_error("desktopOnlyAction", "此操作仅可在桌面端执行")),
     }
 }
@@ -631,7 +816,7 @@ pub fn emit(app: &AppHandle, name: &str, payload: Value) {
 fn is_virtual_interface(name: &str) -> bool {
     let n = name.to_lowercase();
     const VIRTUAL: [&str; 20] = [
-        "vethernet",  // Hyper-V / WSL (Windows)
+        "vethernet", // Hyper-V / WSL (Windows)
         "hyper-v",
         "wsl",
         "vmware",
@@ -639,14 +824,14 @@ fn is_virtual_interface(name: &str) -> bool {
         "virtualbox",
         "vboxnet",
         "docker",
-        "veth",       // Linux containers
-        "virbr",      // libvirt
-        "tap-",       // TAP-Windows / Linux TAP
+        "veth",  // Linux containers
+        "virbr", // libvirt
+        "tap-",  // TAP-Windows / Linux TAP
         "openvpn",
         "wireguard",
         "tailscale",
         "zerotier",
-        "utun",       // macOS VPN tunnels
+        "utun", // macOS VPN tunnels
         "teredo",
         "isatap",
         "loopback",

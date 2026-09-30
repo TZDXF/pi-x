@@ -1,6 +1,10 @@
 //! Editor opening adapted from RepoMeow. No shell interpolation: file paths are
 //! always individual arguments, including paths containing spaces or metacharacters.
-use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub(crate) const EDITORS: &[(&str, &str, &str)] = &[
     ("vscode", "code", "Code.exe"),
@@ -28,7 +32,9 @@ pub(crate) fn editor_binary(kind: &str) -> Option<PathBuf> {
                 candidates.push(dir.join(format!("{cli}.exe")));
                 // VS Code family installs CLI .cmd shims in bin. Launch the
                 // native executable next to bin instead of routing through cmd.
-                if let Some(parent) = dir.parent() { candidates.push(parent.join(binary)); }
+                if let Some(parent) = dir.parent() {
+                    candidates.push(parent.join(binary));
+                }
             } else {
                 candidates.push(dir.join(cli));
             }
@@ -37,9 +43,14 @@ pub(crate) fn editor_binary(kind: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let folder = match kind {
-            "vscode" => "Microsoft VS Code", "cursor" => "cursor",
-            "windsurf" => "Windsurf", "trae" => "Trae", "vscodium" => "VSCodium",
-            "zed" => "Zed", "sublime" => "Sublime Text", _ => "",
+            "vscode" => "Microsoft VS Code",
+            "cursor" => "cursor",
+            "windsurf" => "Windsurf",
+            "trae" => "Trae",
+            "vscodium" => "VSCodium",
+            "zed" => "Zed",
+            "sublime" => "Sublime Text",
+            _ => "",
         };
         if !folder.is_empty() {
             for variable in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
@@ -51,33 +62,55 @@ pub(crate) fn editor_binary(kind: &str) -> Option<PathBuf> {
             }
         }
     }
-    candidates.into_iter().find(|p| p.is_absolute() && p.is_file())
+    candidates
+        .into_iter()
+        .find(|p| p.is_absolute() && p.is_file())
 }
 
 #[tauri::command]
 pub fn detect_editors() -> HashMap<String, bool> {
-    EDITORS.iter().map(|(id, _, _)| (id.to_string(), editor_binary(id).is_some())).collect()
+    EDITORS
+        .iter()
+        .map(|(id, _, _)| (id.to_string(), editor_binary(id).is_some()))
+        .collect()
 }
 
 fn resolve_file(path: &str, project: &str) -> Result<PathBuf, String> {
-    if path.trim().is_empty() { return Err("File path is empty".into()); }
+    if path.trim().is_empty() {
+        return Err("File path is empty".into());
+    }
     let path = Path::new(path);
-    let target = if path.is_absolute() { path.to_path_buf() } else {
+    let target = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
         let base = Path::new(project);
-        if !base.is_absolute() { return Err("Project path must be absolute".into()); }
+        if !base.is_absolute() {
+            return Err("Project path must be absolute".into());
+        }
         base.join(path)
     };
     let target = dunce::canonicalize(target).map_err(|e| format!("Cannot open file: {e}"))?;
-    if !target.is_file() { return Err("The target is not a file".into()); }
+    if !target.is_file() {
+        return Err("The target is not a file".into());
+    }
     Ok(target)
 }
 
 #[tauri::command]
-pub fn open_in_editor(app: tauri::AppHandle, path: String, project: String, kind: String, executable: Option<String>) -> Result<(), String> {
+pub fn open_in_editor(
+    app: tauri::AppHandle,
+    path: String,
+    project: String,
+    kind: String,
+    executable: Option<String>,
+) -> Result<(), String> {
     let target = resolve_file(&path, &project)?;
     if kind == "system" {
         use tauri_plugin_opener::OpenerExt;
-        return app.opener().open_path(target.to_string_lossy(), None::<&str>).map_err(|e| e.to_string());
+        return app
+            .opener()
+            .open_path(target.to_string_lossy(), None::<&str>)
+            .map_err(|e| e.to_string());
     }
     let binary = if kind == "custom" {
         let candidate = PathBuf::from(executable.unwrap_or_default());
@@ -85,7 +118,10 @@ pub fn open_in_editor(app: tauri::AppHandle, path: String, project: String, kind
             return Err("Choose an existing absolute editor executable path in Settings".into());
         }
         #[cfg(windows)]
-        if !candidate.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")) {
+        if !candidate
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        {
             return Err("The editor must be an .exe file, not a shell command or script".into());
         }
         candidate
@@ -94,14 +130,20 @@ pub fn open_in_editor(app: tauri::AppHandle, path: String, project: String, kind
     };
     let mut command = Command::new(binary);
     command.arg(&target);
-    if let Some(parent) = target.parent() { command.current_dir(parent); }
+    if let Some(parent) = target.parent() {
+        command.current_dir(parent);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let mut child = command.spawn().map_err(|e| format!("Cannot launch editor: {e}"))?;
-    std::thread::spawn(move || { let _ = child.wait(); });
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Cannot launch editor: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
@@ -116,7 +158,10 @@ mod tests {
         std::fs::write(&file, "test").unwrap();
         let base = dir.to_str().unwrap();
         let expected = dunce::canonicalize(&file).unwrap();
-        assert_eq!(resolve_file(file.file_name().unwrap().to_str().unwrap(), base).unwrap(), expected);
+        assert_eq!(
+            resolve_file(file.file_name().unwrap().to_str().unwrap(), base).unwrap(),
+            expected
+        );
         assert_eq!(resolve_file(file.to_str().unwrap(), "").unwrap(), expected);
         assert!(resolve_file("missing.ts", base).is_err());
         assert!(resolve_file(base, base).is_err());

@@ -55,7 +55,12 @@ pub fn term_create(
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
 
     let pair = native_pty_system()
-        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| pix_error_detail("terminalOpenFailed", format!("打开终端失败: {e}"), e))?;
 
     let shell = default_shell();
@@ -70,7 +75,10 @@ pub fn term_create(
         cmd.env("TERM", "xterm-256color");
     }
 
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| pix_error_detail("shellSpawnFailed", format!("启动 shell 失败: {e}"), e))?;
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| pix_error_detail("shellSpawnFailed", format!("启动 shell 失败: {e}"), e))?;
     let killer = child.clone_killer();
     let writer = pair.master.take_writer().map_err(|e| format!("{e}"))?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("{e}"))?;
@@ -91,7 +99,8 @@ pub fn term_create(
                     }
                 }
             }
-        }).await;
+        })
+        .await;
     });
 
     // Notify the webview when the shell exits.
@@ -104,11 +113,14 @@ pub fn term_create(
         crate::remote::emit(&app, "term://exit", json!({ "id": id, "code": code }));
     });
 
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(id, TerminalSession { writer, master: pair.master, killer });
+    state.sessions.lock().unwrap().insert(
+        id,
+        TerminalSession {
+            writer,
+            master: pair.master,
+            killer,
+        },
+    );
 
     Ok(id)
 }
@@ -116,18 +128,35 @@ pub fn term_create(
 #[tauri::command]
 pub fn term_write(state: State<'_, TerminalState>, id: u32, data: String) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
-    let session = sessions.get_mut(&id).ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
-    session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    let session = sessions
+        .get_mut(&id)
+        .ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
+    session
+        .writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
     session.writer.flush().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn term_resize(state: State<'_, TerminalState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+pub fn term_resize(
+    state: State<'_, TerminalState>,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
-    let session = sessions.get(&id).ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
+    let session = sessions
+        .get(&id)
+        .ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
     session
         .master
-        .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())
 }
 

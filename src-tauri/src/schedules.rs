@@ -1,12 +1,16 @@
 //! Desktop-owned schedules. Claims are persisted before execution (at most once).
-use crate::{commands, data_dir, errors::{pix_error, pix_error_detail}, pi_locate, rpc, trust};
+use crate::{
+    commands, data_dir,
+    errors::{pix_error, pix_error_detail},
+    pi_locate, rpc, trust,
+};
 use chrono::{Local, TimeZone};
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-  str::FromStr,
-  time::{Duration, Instant},
+    str::FromStr,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Listener, Manager, State};
 use tokio::sync::Mutex;
@@ -49,7 +53,10 @@ fn notify_schedules_changed(app: &AppHandle) {
 fn next_run(expression: &str, after: i64) -> Result<i64, String> {
     // UI accepts exactly five fields; explicitly prepend seconds for cron-rs.
     if expression.split_whitespace().count() != 5 {
-        return Err(pix_error("cronFieldCount", "请使用五段 cron 表达式：分钟 小时 日 月 星期（SUN-SAT）"));
+        return Err(pix_error(
+            "cronFieldCount",
+            "请使用五段 cron 表达式：分钟 小时 日 月 星期（SUN-SAT）",
+        ));
     }
     let schedule = Schedule::from_str(&format!("0 {expression} *"))
         .map_err(|e| pix_error_detail("cronInvalid", format!("无效的 cron 表达式: {e}"), e))?;
@@ -165,12 +172,19 @@ pub async fn schedule_delete(state: State<'_, ScheduleState>, id: String) -> Res
     Ok(())
 }
 #[tauri::command]
-pub async fn schedule_run(app: AppHandle, state: State<'_, ScheduleState>, id: String) -> Result<(), String> {
+pub async fn schedule_run(
+    app: AppHandle,
+    state: State<'_, ScheduleState>,
+    id: String,
+) -> Result<(), String> {
     // Claim before execution, same as the scheduler loop; manual runs keep next_run untouched.
     let task = {
         let mut guard = state.0.lock().await;
         let mut tasks = guard.clone();
-        let Some(task) = tasks.iter_mut().find(|t| t.input.id.as_deref() == Some(&id)) else {
+        let Some(task) = tasks
+            .iter_mut()
+            .find(|t| t.input.id.as_deref() == Some(&id))
+        else {
             return Err(pix_error("taskNotFound", "任务不存在，可能已被删除"));
         };
         if task.status == "running" {
@@ -319,24 +333,39 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             .as_array()
             .is_some_and(|a| a.contains(&json!(input.thinking)))
         {
-            return Err(pix_error("thinkingNotSupported", "所选模型不支持该思考等级"));
+            return Err(pix_error(
+                "thinkingNotSupported",
+                "所选模型不支持该思考等级",
+            ));
         }
         let initial = checked_request(&state, &id, json!({"type":"get_state"})).await?;
         if initial["model"]["provider"] != input.provider
             || initial["model"]["id"] != input.model
             || initial["thinkingLevel"] != input.thinking
         {
-            return Err(pix_error("modelApplyFailed", "pi 未应用所选的模型或思考等级"));
+            return Err(pix_error(
+                "modelApplyFailed",
+                "pi 未应用所选的模型或思考等级",
+            ));
         }
-        let file = initial["sessionFile"].as_str()
-            .ok_or_else(|| pix_error("piSessionNotCreated", "pi 未创建会话"))?.to_owned();
-        checked_request(&state, &id, json!({"type":"set_session_name", "name":input.title})).await?;
+        let file = initial["sessionFile"]
+            .as_str()
+            .ok_or_else(|| pix_error("piSessionNotCreated", "pi 未创建会话"))?
+            .to_owned();
+        checked_request(
+            &state,
+            &id,
+            json!({"type":"set_session_name", "name":input.title}),
+        )
+        .await?;
         // Publish the identity before prompting so opening it attaches to this worker.
         {
             let schedules = app.state::<ScheduleState>();
             let mut guard = schedules.0.lock().await;
             let mut updated = guard.clone();
-            let current = updated.iter_mut().find(|t| t.input.id == input.id)
+            let current = updated
+                .iter_mut()
+                .find(|t| t.input.id == input.id)
                 .ok_or_else(|| pix_error("taskNotFound", "任务不存在，可能已被删除"))?;
             current.session_file = Some(file.clone());
             persist(&updated)?;
@@ -344,11 +373,15 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         }
         notify_schedules_changed(app);
         published = true;
-        crate::remote::emit(app, "pi://event", json!({
-            "type": "scheduled_session_created", "runtimeId": id,
-            "project": input.project, "sessionFile": file, "state": initial,
-            "prompt": input.prompt,
-        }));
+        crate::remote::emit(
+            app,
+            "pi://event",
+            json!({
+                "type": "scheduled_session_created", "runtimeId": id,
+                "project": input.project, "sessionFile": file, "state": initial,
+                "prompt": input.prompt,
+            }),
+        );
         let prompt = checked_request(
             &state,
             &id,
@@ -379,12 +412,19 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     } else if let Err(error) = &outcome {
         // Never abort a follow-up the user sent after the scheduled turn settled.
         if !settled {
-            if checked_request(&state, &id, json!({"type":"abort"})).await.is_err() {
+            if checked_request(&state, &id, json!({"type":"abort"}))
+                .await
+                .is_err()
+            {
                 let _ = rpc::kill(&state, Some(&id)).await;
             }
-            crate::remote::emit(app, "pi://event", json!({
-                "type": "scheduled_session_failed", "runtimeId": id, "error": error,
-            }));
+            crate::remote::emit(
+                app,
+                "pi://event",
+                json!({
+                    "type": "scheduled_session_failed", "runtimeId": id, "error": error,
+                }),
+            );
         }
     }
     if published && settled && outcome.is_ok() {
@@ -396,7 +436,9 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(SCHEDULE_RUNTIME_TTL).await;
             let state = cleanup_app.state::<rpc::RpcState>();
-            if !rpc::running(&state, Some(&cleanup_id)).await { return; }
+            if !rpc::running(&state, Some(&cleanup_id)).await {
+                return;
+            }
             let last = state.last_activity.lock().await.get(&cleanup_id).copied();
             if last.is_none_or(|t| t <= completed_at) {
                 let _ = rpc::kill(&state, Some(&cleanup_id)).await;
@@ -611,8 +653,11 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let wait = wait_for_completion(async { Ok(Value::Null) }, &mut rx);
         tokio::pin!(wait);
-        tx.send(json!({"type":"extension_ui_request", "method":"confirm"})).unwrap();
-        assert!(tokio::time::timeout(Duration::from_millis(10), &mut wait).await.is_err());
+        tx.send(json!({"type":"extension_ui_request", "method":"confirm"}))
+            .unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut wait)
+            .await
+            .is_err());
         tx.send(json!({"type":"agent_settled"})).unwrap();
         assert!(wait.await.is_ok());
     }

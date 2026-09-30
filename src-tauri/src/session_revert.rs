@@ -50,17 +50,30 @@ pub async fn session_revert_changes(
 
 fn revert_file(root: &Path, file: &RevertFile) -> RevertFileResult {
     let is_delete = matches!(file.ops.first(), Some(RevertOp::Delete { .. }));
-    let result = resolve_path(root, &file.path, is_delete).and_then(|path| apply_ops(&path, &file.ops));
+    let result =
+        resolve_path(root, &file.path, is_delete).and_then(|path| apply_ops(&path, &file.ops));
     match result {
-        Ok(()) => RevertFileResult { path: file.path.clone(), ok: true, error: None },
-        Err(error) => RevertFileResult { path: file.path.clone(), ok: false, error: Some(error) },
+        Ok(()) => RevertFileResult {
+            path: file.path.clone(),
+            ok: true,
+            error: None,
+        },
+        Err(error) => RevertFileResult {
+            path: file.path.clone(),
+            ok: false,
+            error: Some(error),
+        },
     }
 }
 
 /// 路径解析：Delete 操作的目标文件可能已不存在（幂等回滚），跳过 canonicalize。
 fn resolve_path(root: &Path, raw: &str, skip_canonicalize: bool) -> Result<PathBuf, String> {
     let candidate = Path::new(raw);
-    let path = if candidate.is_absolute() { candidate.to_path_buf() } else { root.join(candidate) };
+    let path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
     let path = if skip_canonicalize {
         dunce::canonicalize(&path).unwrap_or(path)
     } else {
@@ -68,28 +81,52 @@ fn resolve_path(root: &Path, raw: &str, skip_canonicalize: bool) -> Result<PathB
             .map_err(|_| pix_error_detail("revertPathInvalid", "无效的文件路径: {detail}", raw))?
     };
     if !path.starts_with(root) {
-        return Err(pix_error_detail("revertPathInvalid", "无效的文件路径: {detail}", raw));
+        return Err(pix_error_detail(
+            "revertPathInvalid",
+            "无效的文件路径: {detail}",
+            raw,
+        ));
     }
     Ok(path)
 }
 
 fn apply_ops(path: &Path, ops: &[RevertOp]) -> Result<(), String> {
     if ops.is_empty() {
-        return Err(pix_error("revertNotRevertible", "该文件没有可自动撤销的修改记录"));
+        return Err(pix_error(
+            "revertNotRevertible",
+            "该文件没有可自动撤销的修改记录",
+        ));
     }
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         // 已撤销过的新建文件再次撤销视为成功（幂等）。
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && matches!(ops[0], RevertOp::Delete { .. }) => return Ok(()),
-        Err(e) => return Err(pix_error_detail("revertReadFailed", "读取文件失败: {detail}", e)),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && matches!(ops[0], RevertOp::Delete { .. }) =>
+        {
+            return Ok(())
+        }
+        Err(e) => {
+            return Err(pix_error_detail(
+                "revertReadFailed",
+                "读取文件失败: {detail}",
+                e,
+            ))
+        }
     };
     let mut content = String::from_utf8(bytes).map_err(|_| {
-        pix_error_detail("revertNotUtf8", "文件不是 UTF-8 文本，无法自动撤销: {detail}", path.display())
+        pix_error_detail(
+            "revertNotUtf8",
+            "文件不是 UTF-8 文本，无法自动撤销: {detail}",
+            path.display(),
+        )
     })?;
     // 先在内存中逆序回放，全部成功后才落盘，保证单文件的原子性。
     for op in ops.iter().rev() {
         match op {
-            RevertOp::Replace { before, after } => content = revert_replace(&content, before, after)?,
+            RevertOp::Replace { before, after } => {
+                content = revert_replace(&content, before, after)?
+            }
             RevertOp::Restore { before, after } => {
                 if content != *before {
                     return Err(pix_error_detail(
@@ -127,7 +164,10 @@ fn revert_replace(content: &str, before: &str, after: &str) -> Result<String, St
     if let Some(index) = content.find(after) {
         // after 必须恰好出现一次，否则改错位置
         if content[index + after.len()..].contains(after) {
-            return Err(pix_error("revertContentChanged", "文件内容已变化，无法自动撤销"));
+            return Err(pix_error(
+                "revertContentChanged",
+                "文件内容已变化，无法自动撤销",
+            ));
         }
         let mut updated = String::with_capacity(content.len() + before.len() - after.len());
         updated.push_str(&content[..index]);
@@ -147,7 +187,10 @@ fn revert_replace(content: &str, before: &str, after: &str) -> Result<String, St
         updated.push_str(&content[end..]);
         return Ok(updated);
     }
-    Err(pix_error("revertContentChanged", "文件内容已变化，无法自动撤销"))
+    Err(pix_error(
+        "revertContentChanged",
+        "文件内容已变化，无法自动撤销",
+    ))
 }
 
 /// 忽略内容与模式中的 \r 定位 needle，返回原始字节区间及区间是否使用 CRLF 行尾。
@@ -208,11 +251,15 @@ mod tests {
     }
 
     fn replace(before: &str, after: &str) -> RevertOp {
-        RevertOp::Replace { before: before.into(), after: after.into() }
+        RevertOp::Replace {
+            before: before.into(),
+            after: after.into(),
+        }
     }
 
     fn error_code(error: &str) -> String {
-        let payload: serde_json::Value = serde_json::from_str(error.trim_start_matches("PIXERR:")).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(error.trim_start_matches("PIXERR:")).unwrap();
         payload["code"].as_str().unwrap().into()
     }
 
@@ -225,17 +272,32 @@ mod tests {
         let edited = "hello\nb\nworld\nend\n";
         std::fs::write(&path, edited).unwrap();
         apply_ops(&path, &ops).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "start\nb\nc\nend\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "start\nb\nc\nend\n"
+        );
     }
 
     #[test]
     fn reverts_created_file_and_stays_idempotent() {
         let root = temp_dir();
         let path = write(&root, "new.txt", "created\ncontent\n");
-        apply_ops(&path, &[RevertOp::Delete { content: "created\ncontent\n".into() }]).unwrap();
+        apply_ops(
+            &path,
+            &[RevertOp::Delete {
+                content: "created\ncontent\n".into(),
+            }],
+        )
+        .unwrap();
         assert!(!path.exists());
         // 再撤销一次：文件已不存在，视为成功。
-        apply_ops(&path, &[RevertOp::Delete { content: "created\ncontent\n".into() }]).unwrap();
+        apply_ops(
+            &path,
+            &[RevertOp::Delete {
+                content: "created\ncontent\n".into(),
+            }],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -244,15 +306,23 @@ mod tests {
         let path = write(&root, "a.txt", "user changed this\n");
         let error = apply_ops(&path, &[replace("original\n", "recorded\n")]).unwrap_err();
         assert_eq!(error_code(&error), "revertContentChanged");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "user changed this\n");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "user changed this\n"
+        );
     }
 
     #[test]
     fn refuses_delete_when_file_changed_after_write() {
         let root = temp_dir();
         let path = write(&root, "new.txt", "changed by user\n");
-        let error =
-            apply_ops(&path, &[RevertOp::Delete { content: "created\n".into() }]).unwrap_err();
+        let error = apply_ops(
+            &path,
+            &[RevertOp::Delete {
+                content: "created\n".into(),
+            }],
+        )
+        .unwrap_err();
         assert_eq!(error_code(&error), "revertContentChanged");
         assert!(path.exists());
     }

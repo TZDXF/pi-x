@@ -4,7 +4,10 @@ use std::path::Path;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{errors::{pix_error, pix_error_detail, pix_error_with}, file_preview, fs_search, pi_locate, rpc, sessions, trust};
+use crate::{
+    errors::{pix_error, pix_error_detail, pix_error_with},
+    file_preview, fs_search, pi_locate, rpc, sessions, trust,
+};
 
 /// A provider/model pair selected in the app configuration.
 #[derive(Clone, Serialize, Deserialize)]
@@ -27,26 +30,50 @@ pub enum UpdateChannel {
 pub struct AppConfig {
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
-    #[serde(rename = "lastProject", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "lastProject",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_project: Option<String>,
     /// 应用自身更新通道，见 `app_update` 模块。
-    #[serde(rename = "updateChannel", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "updateChannel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub update_channel: Option<UpdateChannel>,
     /// Default model for auxiliary features such as title generation.
     /// Independent of pi's own default model in `settings.json`.
-    #[serde(rename = "defaultModel", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "defaultModel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default_model: Option<ModelRef>,
     /// Custom title model; ignored while `title_follow_main` is set.
-    #[serde(rename = "titleModel", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "titleModel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub title_model: Option<ModelRef>,
     /// Title generation follows the default model instead of `title_model`.
     #[serde(rename = "titleFollowMain", default, skip_serializing_if = "is_false")]
     pub title_follow_main: bool,
     /// 无项目会话的工作目录；缺省为 `~/.pix/workspace`。
-    #[serde(rename = "projectlessDir", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "projectlessDir",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub projectless_dir: Option<String>,
     /// PiX 内置的 pi extension 开关；缺省为启用。
-    #[serde(rename = "builtinFileChanges", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "builtinFileChanges",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub builtin_file_changes: Option<bool>,
 }
 
@@ -92,10 +119,14 @@ fn list_global_prompts(dir: &Path) -> Result<Vec<GlobalPromptFile>, String> {
 
 fn write_config(path: &std::path::Path, config: &AppConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| pix_error_detail("configDirCreateFailed", "无法创建配置目录: {detail}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            pix_error_detail("configDirCreateFailed", "无法创建配置目录: {detail}", e)
+        })?;
     }
-    let body = serde_json::to_string_pretty(config).map_err(|e| pix_error_detail("configSerializeFailed", "配置序列化失败: {detail}", e))?;
-    std::fs::write(path, body).map_err(|e| pix_error_detail("configWriteFailed", "无法写入配置文件: {detail}", e))
+    let body = serde_json::to_string_pretty(config)
+        .map_err(|e| pix_error_detail("configSerializeFailed", "配置序列化失败: {detail}", e))?;
+    std::fs::write(path, body)
+        .map_err(|e| pix_error_detail("configWriteFailed", "无法写入配置文件: {detail}", e))
 }
 
 #[tauri::command]
@@ -104,8 +135,10 @@ pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let raw = std::fs::read_to_string(path).map_err(|e| pix_error_detail("configReadFailed", "无法读取配置文件: {detail}", e))?;
-    serde_json::from_str(&raw).map_err(|e| pix_error_detail("configParseFailed", "配置文件解析失败: {detail}", e))
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| pix_error_detail("configReadFailed", "无法读取配置文件: {detail}", e))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| pix_error_detail("configParseFailed", "配置文件解析失败: {detail}", e))
 }
 
 #[tauri::command]
@@ -137,7 +170,8 @@ pub fn projectless_dir_resolve(app: AppHandle) -> Result<ProjectlessDirInfo, Str
     // 规范化后再返回：会话列表按 cwd 精确匹配，短路径/符号链接会造成两份记录。
     let resolved = dunce::canonicalize(&dir).unwrap_or(dir);
     let default_dir = crate::data_dir::default_projectless_dir();
-    let is_default = resolved == dunce::canonicalize(&default_dir).unwrap_or_else(|_| default_dir.clone());
+    let is_default =
+        resolved == dunce::canonicalize(&default_dir).unwrap_or_else(|_| default_dir.clone());
     Ok(ProjectlessDirInfo {
         dir: resolved.to_string_lossy().into_owned(),
         default_dir: default_dir.to_string_lossy().into_owned(),
@@ -189,7 +223,11 @@ pub async fn trust_status(project: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn trust_save(project: String, trusted: bool, trust_parent: bool) -> Result<Value, String> {
+pub async fn trust_save(
+    project: String,
+    trusted: bool,
+    trust_parent: bool,
+) -> Result<Value, String> {
     trust::save(&project, trusted, trust_parent).await
 }
 
@@ -204,13 +242,19 @@ pub struct WorkspaceContext {
 /// Render the selected roots as metadata; no file contents are loaded here.
 fn same_directory(left: &Path, right: &Path) -> bool {
     if cfg!(windows) {
-        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
-    } else { left == right }
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn workspace_manifest(project: &str, workspace: &WorkspaceContext) -> Result<String, String> {
-    if workspace.name.trim().is_empty() || workspace.name.chars().count() > 120
-        || workspace.roots.is_empty() || workspace.roots.len() > 32 {
+    if workspace.name.trim().is_empty()
+        || workspace.name.chars().count() > 120
+        || workspace.roots.is_empty()
+        || workspace.roots.len() > 32
+    {
         return Err(pix_error("workspaceInvalid", "工作区目录列表无效"));
     }
     let cwd = dunce::canonicalize(project).map_err(|e| e.to_string())?;
@@ -218,11 +262,16 @@ fn workspace_manifest(project: &str, workspace: &WorkspaceContext) -> Result<Str
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     for root in &workspace.roots {
         let canonical = dunce::canonicalize(root).map_err(|e| e.to_string())?;
-        if !canonical.is_dir() { return Err(format!("Not a workspace directory: {root}")); }
-        if !roots.iter().any(|root| same_directory(root, &canonical)) { roots.push(canonical); }
+        if !canonical.is_dir() {
+            return Err(format!("Not a workspace directory: {root}"));
+        }
+        if !roots.iter().any(|root| same_directory(root, &canonical)) {
+            roots.push(canonical);
+        }
     }
     if !roots.iter().any(|root| same_directory(root, &primary))
-        || !roots.iter().any(|root| same_directory(root, &cwd)) {
+        || !roots.iter().any(|root| same_directory(root, &cwd))
+    {
         return Err("Current and primary directories must belong to the workspace".into());
     }
     let manifest = json!({
@@ -235,28 +284,46 @@ fn workspace_manifest(project: &str, workspace: &WorkspaceContext) -> Result<Str
     Ok(context)
 }
 
-fn discovered_append_file(project: &str, agent_dir: &Path, trusted: bool) -> Option<std::path::PathBuf> {
+fn discovered_append_file(
+    project: &str,
+    agent_dir: &Path,
+    trusted: bool,
+) -> Option<std::path::PathBuf> {
     let project_file = Path::new(project).join(".pi").join("APPEND_SYSTEM.md");
-    if trusted && project_file.is_file() { return Some(project_file); }
+    if trusted && project_file.is_file() {
+        return Some(project_file);
+    }
     let global = agent_dir.join("APPEND_SYSTEM.md");
     global.is_file().then_some(global)
 }
 
 /// Explicit --append-system-prompt suppresses Pi's normal APPEND_SYSTEM.md
 /// discovery; include the same trusted project/global source before our manifest.
-async fn workspace_args(project: &str, workspace: Option<WorkspaceContext>) -> Result<Vec<String>, String> {
-    let Some(workspace) = workspace else { return Ok(Vec::new()); };
+async fn workspace_args(
+    project: &str,
+    workspace: Option<WorkspaceContext>,
+) -> Result<Vec<String>, String> {
+    let Some(workspace) = workspace else {
+        return Ok(Vec::new());
+    };
     let context = workspace_manifest(project, &workspace)?;
     let project_append = Path::new(project).join(".pi").join("APPEND_SYSTEM.md");
     let trusted = if project_append.is_file() {
         trust::status(project).await.ok().is_some_and(|status| {
-            status["decision"].as_bool().unwrap_or(status["policy"] == "always")
+            status["decision"]
+                .as_bool()
+                .unwrap_or(status["policy"] == "always")
         })
-    } else { false };
+    } else {
+        false
+    };
     let append_file = discovered_append_file(project, &trust::agent_dir(), trusted);
     let mut args = Vec::new();
     if let Some(path) = append_file {
-        args.extend(["--append-system-prompt".into(), path.to_string_lossy().into_owned()]);
+        args.extend([
+            "--append-system-prompt".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
     }
     args.extend(["--append-system-prompt".into(), context]);
     Ok(args)
@@ -293,7 +360,16 @@ pub async fn rpc_spawn(
             "未找到 pi。请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
         ));
     }
-    rpc::spawn(app, &state, &info, &project, session_file, extra_args, runtime_id).await
+    rpc::spawn(
+        app,
+        &state,
+        &info,
+        &project,
+        session_file,
+        extra_args,
+        runtime_id,
+    )
+    .await
 }
 
 /// List recent stored sessions for a project (newest first).
@@ -304,18 +380,27 @@ pub async fn session_list(project: String) -> Result<Vec<sessions::SessionMeta>,
 
 /// Search project files for @file mention completion.
 #[tauri::command]
-pub async fn search_files(project: String, query: String) -> Result<Vec<fs_search::FileHit>, String> {
+pub async fn search_files(
+    project: String,
+    query: String,
+) -> Result<Vec<fs_search::FileHit>, String> {
     fs_search::search(project, query).await
 }
 
 #[tauri::command]
-pub async fn list_project_directory(project: String, path: String) -> Result<Vec<fs_search::ProjectEntry>, String> {
+pub async fn list_project_directory(
+    project: String,
+    path: String,
+) -> Result<Vec<fs_search::ProjectEntry>, String> {
     fs_search::list_directory(project, path).await
 }
 
 /// Read a project file for the in-app preview (text / image / binary).
 #[tauri::command]
-pub async fn read_file_preview(project: String, path: String) -> Result<file_preview::FilePreview, String> {
+pub async fn read_file_preview(
+    project: String,
+    path: String,
+) -> Result<file_preview::FilePreview, String> {
     file_preview::read_file_preview(project, path).await
 }
 
@@ -323,7 +408,10 @@ pub async fn read_file_preview(project: String, path: String) -> Result<file_pre
 /// When no output path is supplied (remote browser download), use a temporary
 /// HTML file which the remote handler removes after reading it.
 #[tauri::command]
-pub async fn session_export_file(file: String, output_path: Option<String>) -> Result<String, String> {
+pub async fn session_export_file(
+    file: String,
+    output_path: Option<String>,
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let source = sessions::validate_session_path(&file)?;
         let target = match output_path {
@@ -334,15 +422,23 @@ pub async fn session_export_file(file: String, output_path: Option<String>) -> R
                 }
                 path
             }
-            None => std::env::temp_dir().join(format!("pix-session-export-{}.html", uuid::Uuid::new_v4())),
+            None => std::env::temp_dir()
+                .join(format!("pix-session-export-{}.html", uuid::Uuid::new_v4())),
         };
         let result = crate::pi_data::call(json!({
             "op": "session_export_html", "file": source, "outputPath": target
         }))?;
-        let exported = result.as_str().ok_or_else(|| pix_error("exportPathMissing", "Pi 未返回导出路径"))?;
-        dunce::canonicalize(exported).map(|p| p.to_string_lossy().to_string())
-            .map_err(|e| pix_error_detail("exportPathUnreachable", "无法定位导出的 HTML: {detail}", e))
-    }).await.map_err(|e| e.to_string())?
+        let exported = result
+            .as_str()
+            .ok_or_else(|| pix_error("exportPathMissing", "Pi 未返回导出路径"))?;
+        dunce::canonicalize(exported)
+            .map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| {
+                pix_error_detail("exportPathUnreachable", "无法定位导出的 HTML: {detail}", e)
+            })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Open a file or directory with the system default handler.
@@ -354,22 +450,36 @@ pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn rpc_request(state: State<'_, rpc::RpcState>, command: Value, runtime_id: Option<String>) -> Result<Value, String> {
+pub async fn rpc_request(
+    state: State<'_, rpc::RpcState>,
+    command: Value,
+    runtime_id: Option<String>,
+) -> Result<Value, String> {
     rpc::request(&state, command, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_notify(state: State<'_, rpc::RpcState>, command: Value, runtime_id: Option<String>) -> Result<(), String> {
+pub async fn rpc_notify(
+    state: State<'_, rpc::RpcState>,
+    command: Value,
+    runtime_id: Option<String>,
+) -> Result<(), String> {
     rpc::notify(&state, command, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_kill(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<(), String> {
+pub async fn rpc_kill(
+    state: State<'_, rpc::RpcState>,
+    runtime_id: Option<String>,
+) -> Result<(), String> {
     rpc::kill(&state, runtime_id.as_deref()).await
 }
 
 #[tauri::command]
-pub async fn rpc_running(state: State<'_, rpc::RpcState>, runtime_id: Option<String>) -> Result<bool, String> {
+pub async fn rpc_running(
+    state: State<'_, rpc::RpcState>,
+    runtime_id: Option<String>,
+) -> Result<bool, String> {
     Ok(rpc::running(&state, runtime_id.as_deref()).await)
 }
 
@@ -379,7 +489,6 @@ pub async fn rpc_running(state: State<'_, rpc::RpcState>, runtime_id: Option<Str
 pub fn pix_log(message: String, runtime_id: Option<String>) {
     crate::logs::write(&runtime_id.unwrap_or_else(|| "ui".into()), &message);
 }
-
 
 // ---- pi models.json (custom provider / model management) ----
 
@@ -398,7 +507,13 @@ pub fn models_config_get() -> Result<Value, String> {
         return Ok(serde_json::json!({ "providers": {} }));
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut v: Value = serde_json::from_str(&raw).map_err(|e| pix_error_detail("modelsJsonParseFailed", format!("models.json 解析失败: {e}"), e))?;
+    let mut v: Value = serde_json::from_str(&raw).map_err(|e| {
+        pix_error_detail(
+            "modelsJsonParseFailed",
+            format!("models.json 解析失败: {e}"),
+            e,
+        )
+    })?;
     if v.get("providers").is_none() {
         v["providers"] = serde_json::json!({});
     }
@@ -412,10 +527,19 @@ pub fn models_config_get() -> Result<Value, String> {
 pub fn models_config_save(config: Value) -> Result<(), String> {
     let path = models_config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| pix_error_detail("modelsDirCreateFailed", "无法创建 models 目录: {detail}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            pix_error_detail("modelsDirCreateFailed", "无法创建 models 目录: {detail}", e)
+        })?;
     }
-    let body = serde_json::to_string_pretty(&config).map_err(|e| pix_error_detail("modelsSerializeFailed", "models.json 序列化失败: {detail}", e))?;
-    std::fs::write(&path, format!("{body}\n")).map_err(|e| pix_error_detail("modelsWriteFailed", "无法写入 models.json: {detail}", e))
+    let body = serde_json::to_string_pretty(&config).map_err(|e| {
+        pix_error_detail(
+            "modelsSerializeFailed",
+            "models.json 序列化失败: {detail}",
+            e,
+        )
+    })?;
+    std::fs::write(&path, format!("{body}\n"))
+        .map_err(|e| pix_error_detail("modelsWriteFailed", "无法写入 models.json: {detail}", e))
 }
 /// One model discovered from a provider's `/models` endpoint.
 #[derive(Serialize)]
@@ -444,7 +568,10 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
         .trim()
         .trim_end_matches('/');
     if base.is_empty() {
-        return Err(pix_error("providerBaseUrlMissing", "该供应商未配置 Base URL，无法获取模型列表"));
+        return Err(pix_error(
+            "providerBaseUrlMissing",
+            "该供应商未配置 Base URL，无法获取模型列表",
+        ));
     }
     let api = provider
         .get("api")
@@ -498,12 +625,27 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
                     json!({"status": code.to_string(), "detail": detail}),
                 )
             }
-            other => pix_error_detail("fetchModelsFailed", format!("获取模型列表失败: {other}"), other),
+            other => pix_error_detail(
+                "fetchModelsFailed",
+                format!("获取模型列表失败: {other}"),
+                other,
+            ),
         })?
         .into_string()
-        .map_err(|e| pix_error_detail("modelsResponseReadFailed", format!("读取模型列表响应失败: {e}"), e))?;
-    let v: Value =
-        serde_json::from_str(&body).map_err(|e| pix_error_detail("modelsResponseParseFailed", format!("解析模型列表响应失败: {e}"), e))?;
+        .map_err(|e| {
+            pix_error_detail(
+                "modelsResponseReadFailed",
+                format!("读取模型列表响应失败: {e}"),
+                e,
+            )
+        })?;
+    let v: Value = serde_json::from_str(&body).map_err(|e| {
+        pix_error_detail(
+            "modelsResponseParseFailed",
+            format!("解析模型列表响应失败: {e}"),
+            e,
+        )
+    })?;
 
     let mut out: Vec<FetchedModel> = Vec::new();
     if let Some(data) = v.get("data").and_then(Value::as_array) {
@@ -515,7 +657,10 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
                     .and_then(Value::as_str)
                     .or_else(|| m.get("displayName").and_then(Value::as_str))
                     .map(String::from);
-                out.push(FetchedModel { id: id.into(), name });
+                out.push(FetchedModel {
+                    id: id.into(),
+                    name,
+                });
             }
         }
     } else if let Some(models) = v.get("models").and_then(Value::as_array) {
@@ -527,7 +672,10 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
                     .get("displayName")
                     .and_then(Value::as_str)
                     .map(String::from);
-                out.push(FetchedModel { id: id.into(), name: disp });
+                out.push(FetchedModel {
+                    id: id.into(),
+                    name: disp,
+                });
             }
         }
     }
@@ -538,12 +686,16 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
 #[tauri::command]
 pub async fn pi_settings_get() -> Result<Value, String> {
     tokio::task::spawn_blocking(|| crate::pi_data::call(serde_json::json!({"op": "settings_get"})))
-        .await.map_err(|e| pix_error_detail("settingsReadFailed", "读取 Pi 设置失败: {detail}", e))?
+        .await
+        .map_err(|e| pix_error_detail("settingsReadFailed", "读取 Pi 设置失败: {detail}", e))?
 }
 #[tauri::command]
 pub async fn pi_settings_save(settings: Value) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || crate::pi_data::call(serde_json::json!({"op": "settings_save", "settings": settings})))
-        .await.map_err(|e| pix_error_detail("settingsWriteFailed", "保存 Pi 设置失败: {detail}", e))??;
+    tokio::task::spawn_blocking(move || {
+        crate::pi_data::call(serde_json::json!({"op": "settings_save", "settings": settings}))
+    })
+    .await
+    .map_err(|e| pix_error_detail("settingsWriteFailed", "保存 Pi 设置失败: {detail}", e))??;
     Ok(())
 }
 
@@ -560,7 +712,10 @@ mod tests {
 
     #[test]
     fn app_config_does_not_keep_pi_owned_fields() {
-        let config = AppConfig { pi_path: Some("pi".into()), ..Default::default() };
+        let config = AppConfig {
+            pi_path: Some("pi".into()),
+            ..Default::default()
+        };
         let value = serde_json::to_value(config).unwrap();
         assert_eq!(value["piPath"], "pi");
         assert!(value.get("managedSkills").is_none());
@@ -581,13 +736,19 @@ mod tests {
 
     #[test]
     fn app_config_round_trips_projectless_dir_and_stays_compatible() {
-        let config = AppConfig { projectless_dir: Some("D:/pix/scratch".into()), ..Default::default() };
+        let config = AppConfig {
+            projectless_dir: Some("D:/pix/scratch".into()),
+            ..Default::default()
+        };
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(value["projectlessDir"], "D:/pix/scratch");
         let parsed: AppConfig = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.projectless_dir.as_deref(), Some("D:/pix/scratch"));
         // 未配置时不写入该字段；旧配置缺少它也应正常加载（用默认目录）。
-        assert!(serde_json::to_value(AppConfig::default()).unwrap().get("projectlessDir").is_none());
+        assert!(serde_json::to_value(AppConfig::default())
+            .unwrap()
+            .get("projectlessDir")
+            .is_none());
         let legacy: AppConfig = serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
         assert_eq!(legacy.projectless_dir, None);
     }
@@ -597,7 +758,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let missing = list_global_prompts(&root).unwrap();
         assert_eq!(missing.len(), GLOBAL_PROMPT_FILES.len());
-        assert!(missing.iter().all(|file| !file.exists && file.content.is_empty()));
+        assert!(missing
+            .iter()
+            .all(|file| !file.exists && file.content.is_empty()));
         assert_eq!(missing[0].file_name, "AGENTS.md");
         assert_eq!(missing[1].file_name, "SYSTEM.md");
         assert_eq!(missing[2].file_name, "APPEND_SYSTEM.md");
@@ -646,21 +809,31 @@ mod workspace_tests {
         let group = WorkspaceContext {
             name: "Backend + Frontend".into(),
             primary: primary.to_string_lossy().into_owned(),
-            roots: vec![primary.to_string_lossy().into_owned(), other.to_string_lossy().into_owned()],
+            roots: vec![
+                primary.to_string_lossy().into_owned(),
+                other.to_string_lossy().into_owned(),
+            ],
         };
         let manifest = workspace_manifest(&group.primary, &group).unwrap();
         assert!(manifest.contains("Backend + Frontend"));
-        assert!(manifest.contains(&serde_json::to_string(&other.to_string_lossy().to_string()).unwrap()));
+        assert!(manifest
+            .contains(&serde_json::to_string(&other.to_string_lossy().to_string()).unwrap()));
         assert!(workspace_manifest(&base.to_string_lossy(), &group).is_err());
         let agent_dir = base.join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
         let global_append = agent_dir.join("APPEND_SYSTEM.md");
         std::fs::write(&global_append, "global").unwrap();
-        assert_eq!(discovered_append_file(&group.primary, &agent_dir, false), Some(global_append.clone()));
+        assert_eq!(
+            discovered_append_file(&group.primary, &agent_dir, false),
+            Some(global_append.clone())
+        );
         std::fs::create_dir_all(primary.join(".pi")).unwrap();
         let project_append = primary.join(".pi").join("APPEND_SYSTEM.md");
         std::fs::write(&project_append, "project").unwrap();
-        assert_eq!(discovered_append_file(&group.primary, &agent_dir, true), Some(project_append));
+        assert_eq!(
+            discovered_append_file(&group.primary, &agent_dir, true),
+            Some(project_append)
+        );
         std::fs::remove_dir_all(base).unwrap();
     }
 }

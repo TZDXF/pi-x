@@ -11,7 +11,11 @@ pub fn pix_error(code: &str, fallback: impl Into<String>) -> String {
 }
 
 /// 单个 `{detail}` 占位符的变体，覆盖「操作失败: 原因」类消息。
-pub fn pix_error_detail(code: &str, fallback: impl Into<String>, detail: impl std::fmt::Display) -> String {
+pub fn pix_error_detail(
+    code: &str,
+    fallback: impl Into<String>,
+    detail: impl std::fmt::Display,
+) -> String {
     pix_error_with(code, fallback, json!({ "detail": detail.to_string() }))
 }
 
@@ -32,8 +36,7 @@ mod tests {
     fn pix_error_encodes_code_and_fallback() {
         let encoded = pix_error("piNotFound", "未找到 pi");
         assert!(encoded.starts_with(CODED_ERROR_PREFIX));
-        let payload: Value =
-            serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
+        let payload: Value = serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
         assert_eq!(payload["code"], "piNotFound");
         assert_eq!(payload["fallback"], "未找到 pi");
         assert!(payload.get("params").is_none());
@@ -42,16 +45,18 @@ mod tests {
     #[test]
     fn pix_error_detail_carries_detail_param() {
         let encoded = pix_error_detail("startPiFailed", "启动 pi 失败: boom", "boom");
-        let payload: Value =
-            serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
+        let payload: Value = serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
         assert_eq!(payload["params"]["detail"], "boom");
     }
 
     #[test]
     fn pix_error_with_keeps_named_params() {
-        let encoded = pix_error_with("portListenFailed", "无法监听端口 {port}: {detail}", json!({"port": 8080, "detail": "denied"}));
-        let payload: Value =
-            serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
+        let encoded = pix_error_with(
+            "portListenFailed",
+            "无法监听端口 {port}: {detail}",
+            json!({"port": 8080, "detail": "denied"}),
+        );
+        let payload: Value = serde_json::from_str(&encoded[CODED_ERROR_PREFIX.len()..]).unwrap();
         assert_eq!(payload["params"]["port"], 8080);
         assert_eq!(payload["params"]["detail"], "denied");
     }

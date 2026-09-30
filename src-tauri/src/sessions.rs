@@ -10,12 +10,12 @@ use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
+use tauri::{AppHandle, Manager};
 
 const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
@@ -88,7 +88,10 @@ fn first_user_preview(path: &Path) -> Option<String> {
             _ => None,
         };
         if let Some(t) = text {
-            let t: String = t.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
+            let t: String = t
+                .chars()
+                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+                .collect();
             let t = t.trim().to_string();
             if !t.is_empty() {
                 return Some(t.chars().take(120).collect());
@@ -99,7 +102,9 @@ fn first_user_preview(path: &Path) -> Option<String> {
 }
 
 fn normalize(p: &Path) -> Option<String> {
-    canonicalize(p).ok().map(|s| s.to_string_lossy().to_string())
+    canonicalize(p)
+        .ok()
+        .map(|s| s.to_string_lossy().to_string())
 }
 
 /// Reject paths outside the pi sessions directory (or non-session files).
@@ -116,12 +121,15 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
-            return Err(pix_error("projectDirMissing", "Project directory does not exist"));
+            return Err(pix_error(
+                "projectDirMissing",
+                "Project directory does not exist",
+            ));
         }
         return Err(format!("invalid project path: {project}: {error}"));
     }
-    let project_norm = normalize(Path::new(&project))
-        .ok_or_else(|| format!("invalid project path: {project}"))?;
+    let project_norm =
+        normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
         let sessions_root = agent_dir().join("sessions");
@@ -132,7 +140,9 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
             Err(_) => return Ok(Vec::new()), // no sessions yet
         };
         for dir in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+            let Ok(files) = std::fs::read_dir(dir.path()) else {
+                continue;
+            };
             for f in files.flatten() {
                 let p = f.path();
                 if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -152,7 +162,9 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
             }
             // Skip unreadable/partial/corrupt files instead of failing the
             // whole listing (one bad file must not empty the sidebar).
-            let Ok(meta) = read_session_meta(&path, mtime) else { continue };
+            let Ok(meta) = read_session_meta(&path, mtime) else {
+                continue;
+            };
             let cwd_norm = normalize(Path::new(&meta.cwd)).unwrap_or_else(|| meta.cwd.clone());
             if cwd_norm != project_norm {
                 continue;
@@ -225,14 +237,23 @@ fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
 const META_CACHE_CAP: usize = 4096;
 fn cached_meta(path: &Path, mtime: u64) -> Option<SessionMeta> {
     let cache = meta_cache().lock().ok()?;
-    cache.get(path).filter(|c| c.mtime == mtime).map(|c| c.meta.clone())
+    cache
+        .get(path)
+        .filter(|c| c.mtime == mtime)
+        .map(|c| c.meta.clone())
 }
 fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
     if let Ok(mut cache) = meta_cache().lock() {
         if cache.len() >= META_CACHE_CAP {
             cache.clear();
         }
-        cache.insert(path.to_path_buf(), CachedMeta { mtime, meta: meta.clone() });
+        cache.insert(
+            path.to_path_buf(),
+            CachedMeta {
+                mtime,
+                meta: meta.clone(),
+            },
+        );
     }
 }
 fn invalidate_meta_cache(path: &Path) {
@@ -252,7 +273,9 @@ pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
             Err(_) => return Ok(Vec::new()), // no sessions yet
         };
         for dir in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+            let Ok(files) = std::fs::read_dir(dir.path()) else {
+                continue;
+            };
             for f in files.flatten() {
                 let p = f.path();
                 if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -292,7 +315,6 @@ pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
     .map_err(|e| format!("session scan failed: {e}"))?
 }
 
-
 /// Read the last Pi session_info entry, including renames made in the terminal.
 pub(crate) fn read_session_name(path: &Path) -> Result<Option<String>, String> {
     use std::io::{BufRead, BufReader};
@@ -306,15 +328,30 @@ pub(crate) fn read_session_name(path: &Path) -> Result<Option<String>, String> {
         let line = line.map_err(|e| e.to_string())?;
         if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
             if entry["type"] == "session_info" {
-                name = entry["name"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+                name = entry["name"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
             }
         }
     }
     Ok(name)
 }
 
-pub(crate) async fn set_session_name(app: &AppHandle, path: &Path, title: String, only_if_empty: bool) -> Result<Option<String>, String> {
-    crate::rpc::set_session_name(&app.state::<crate::rpc::RpcState>(), path, title, only_if_empty).await
+pub(crate) async fn set_session_name(
+    app: &AppHandle,
+    path: &Path,
+    title: String,
+    only_if_empty: bool,
+) -> Result<Option<String>, String> {
+    crate::rpc::set_session_name(
+        &app.state::<crate::rpc::RpcState>(),
+        path,
+        title,
+        only_if_empty,
+    )
+    .await
 }
 
 // Only PiX-only archive/generation bookkeeping lives in the sidecar.
@@ -363,7 +400,9 @@ fn last_session_error(path: &Path) -> Result<Option<SessionLastError>, String> {
         if v.get("type").and_then(|t| t.as_str()) != Some("message") {
             continue;
         }
-        let Some(msg) = v.get("message") else { continue };
+        let Some(msg) = v.get("message") else {
+            continue;
+        };
         if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
             continue;
         }
@@ -380,7 +419,10 @@ fn last_session_error(path: &Path) -> Result<Option<SessionLastError>, String> {
             continue;
         }
         let timestamp = msg.get("timestamp").and_then(|t| t.as_u64());
-        return Ok(Some(SessionLastError { timestamp, error_message }));
+        return Ok(Some(SessionLastError {
+            timestamp,
+            error_message,
+        }));
     }
     Ok(None)
 }
@@ -412,15 +454,24 @@ pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, Str
 }
 
 fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| pix_error_detail("sessionFileReadFailed", format!("无法读取会话文件: {e}"), e))?;
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        pix_error_detail("sessionFileReadFailed", format!("无法读取会话文件: {e}"), e)
+    })?;
     // First pass: index every entry's parent so the current branch can be
     // reconstructed by walking parentIds from the last entry.
     let mut parents: HashMap<String, Option<String>> = HashMap::new();
     let mut leaf: Option<String> = None;
     for line in text.lines() {
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else { continue };
-        let parent = entry.get("parentId").and_then(|v| v.as_str()).map(str::to_string);
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let parent = entry
+            .get("parentId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         parents.insert(id.to_string(), parent);
         leaf = Some(id.to_string());
     }
@@ -435,14 +486,20 @@ fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
     // Second pass: keep current-branch entries in file order, as messages.
     let mut messages = Vec::new();
     for line in text.lines() {
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else { continue };
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
         if !branch.contains(id) {
             continue;
         }
         match entry.get("type").and_then(|v| v.as_str()) {
             Some("message") => {
-                let Some(message) = entry.get("message") else { continue };
+                let Some(message) = entry.get("message") else {
+                    continue;
+                };
                 if message.get("role").and_then(|v| v.as_str()) == Some("system") {
                     continue;
                 }
@@ -463,21 +520,27 @@ fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
                 if let Some(tokens) = entry.get("tokensBefore").and_then(|v| v.as_u64()) {
                     msg["tokensBefore"] = tokens.into();
                 }
-                if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str())
+                if let Some(ts) = entry
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 {
                     msg["timestamp"] = ts.timestamp_millis().into();
                 }
                 messages.push(msg);
             }
-            Some("custom") if entry.get("customType").and_then(|v| v.as_str()) == Some("pix-file-change") => {
+            Some("custom")
+                if entry.get("customType").and_then(|v| v.as_str()) == Some("pix-file-change") =>
+            {
                 let mut message = serde_json::json!({
                     "role": "custom",
                     "customType": "pix-file-change",
                     "data": entry.get("data").cloned().unwrap_or(Value::Null),
                     "_entryId": id,
                 });
-                if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_str())
+                if let Some(ts) = entry
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 {
                     message["timestamp"] = ts.timestamp_millis().into();
@@ -499,9 +562,16 @@ pub async fn session_mtime(file: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub async fn session_update(app: AppHandle, file: String, title: Option<String>, archived: bool) -> Result<u64, String> {
+pub async fn session_update(
+    app: AppHandle,
+    file: String,
+    title: Option<String>,
+    archived: bool,
+) -> Result<u64, String> {
     let path = validate_session_path(&file)?;
-    if std::fs::symlink_metadata(path.with_extension("pix.json")).is_ok_and(|m| m.file_type().is_symlink()) {
+    if std::fs::symlink_metadata(path.with_extension("pix.json"))
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
         return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
     }
     if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
@@ -551,7 +621,9 @@ pub async fn session_duplicate(file: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let source = validate_session_path(&file)?;
         let content = std::fs::read_to_string(&source).map_err(|e| e.to_string())?;
-        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let timestamp = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
         let id = uuid::Uuid::new_v4().to_string();
         let content = duplicate_content(&content, &timestamp, &id)?;
         let name = format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-"));
@@ -583,13 +655,13 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
     list_archived().await
 }
 
-
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
     #[tokio::test]
     async fn missing_project_has_specific_error_code() {
-        let path = std::env::temp_dir().join(format!("pix-missing-project-{}", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("pix-missing-project-{}", uuid::Uuid::new_v4()));
         let error = match list(path.to_string_lossy().into_owned()).await {
             Ok(_) => panic!("missing directory unexpectedly loaded"),
             Err(error) => error,
@@ -599,7 +671,8 @@ mod presentation_tests {
 
     #[test]
     fn last_session_error_finds_latest_failure() {
-        let file = std::env::temp_dir().join(format!("pix-last-error-{}.jsonl", uuid::Uuid::new_v4()));
+        let file =
+            std::env::temp_dir().join(format!("pix-last-error-{}.jsonl", uuid::Uuid::new_v4()));
         let content = concat!(
             "{\"type\":\"session\",\"id\":\"s\"}\n",
             "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"error\",\"timestamp\":1000,\"errorMessage\":\"first\"}}\n",
@@ -629,7 +702,10 @@ mod presentation_tests {
         assert_eq!(header["id"], "new-id");
         assert_eq!(header["timestamp"], "2026-09-26T01:02:03.456Z");
         assert_eq!(header["cwd"], "/tmp");
-        assert_eq!(lines.next().unwrap(), "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi old-id\"}}");
+        assert_eq!(
+            lines.next().unwrap(),
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi old-id\"}}"
+        );
         assert!(lines.next().is_none());
         assert!(copy.ends_with('\n'));
         assert!(duplicate_content("{\"type\":\"message\"}\n", "t", "i").is_err());
@@ -647,7 +723,11 @@ mod presentation_tests {
     #[test]
     fn meta_cache_serves_same_mtime_and_invalidates_on_write() {
         let file = std::env::temp_dir().join(format!("pix-cache-{}.jsonl", uuid::Uuid::new_v4()));
-        std::fs::write(&file, "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"cache-test\"}\n").unwrap();
+        std::fs::write(
+            &file,
+            "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"cache-test\"}\n",
+        )
+        .unwrap();
         let mtime = mtime_ms(&file);
         let fresh = read_session_meta(&file, mtime).unwrap();
         assert_eq!(fresh.id, "cache-test");
@@ -676,7 +756,17 @@ mod presentation_tests {
         std::fs::write(&file, content).unwrap();
         let messages = read_session_history(&file).unwrap();
         let roles: Vec<&str> = messages.iter().filter_map(|m| m["role"].as_str()).collect();
-        assert_eq!(roles, ["user", "assistant", "compactionSummary", "user", "assistant", "custom"]);
+        assert_eq!(
+            roles,
+            [
+                "user",
+                "assistant",
+                "compactionSummary",
+                "user",
+                "assistant",
+                "custom"
+            ]
+        );
         assert_eq!(messages[0]["content"], "first");
         assert_eq!(messages[2]["summary"], "collapsed");
         assert_eq!(messages[2]["tokensBefore"], 222767);
