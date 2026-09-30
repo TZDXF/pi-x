@@ -501,10 +501,13 @@ export const packageResources = (source: string, scope: "global" | "project", pr
   invoke<PackageResource[]>("package_resources", { source, scope, project: project ?? null })
 
 /** Enable or disable one resource of an installed package (writes +path / -path filters). */
-/** Read a package resource file's text content for preview. */
-export const packageReadResource = (
-  source: string, scope: "global" | "project", resourceType: PackageResource["resourceType"], path: string, project?: string,
-) => invoke<string>("package_read_resource", { source, scope, resourceType, path, project: project ?? null })
+/** List every file inside an installed package (relative posix paths). */
+export const packageListFiles = (source: string, scope: "global" | "project", project?: string) =>
+  invoke<string[]>("package_list_files", { source, scope, project: project ?? null })
+
+/** Read one file inside an installed package for preview. */
+export const packageReadFile = (source: string, scope: "global" | "project", path: string, project?: string) =>
+  invoke<string>("package_read_file", { source, scope, path, project: project ?? null })
 
 /** Translate content using the configured translation model. */
 export const packageTranslate = (content: string, targetLang: string) =>

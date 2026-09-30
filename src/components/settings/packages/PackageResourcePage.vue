@@ -1,36 +1,31 @@
 <script setup lang="ts">
-/** Standalone package resource page: left file list, right content preview.
- *  Extensions are managed from the installed list (not shown here). */
+/** Standalone package file browser: left file list, right content preview.
+ *  Lists every file in the package (like the project file preview). */
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { navigate } from "@/lib/router"
 import { Spinner } from "@/components/ui/spinner"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { packageResources, packageReadResource, packageTranslate, packageNameOf } from "@/api/piClient"
-import type { PackageResource } from "@/api/piClient"
+import { packageListFiles, packageReadFile, packageTranslate, packageNameOf } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import { selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
-import { Languages, ArrowLeft } from "@lucide/vue"
+import { Languages, ArrowLeft, FileText } from "@lucide/vue"
 
 const { t, locale } = useI18n()
 const ui = useUiStore()
 
-const resources = ref<PackageResource[]>([])
+const files = ref<string[]>([])
 const loading = ref(false)
-const selected = ref<PackageResource | null>(null)
+const selected = ref("")
 const content = ref("")
 const contentLoading = ref(false)
 const translating = ref(false)
 const translated = ref("")
+const filter = ref("")
 
-/** Only non-extension resources are manageable here. */
-const visible = computed(() => resources.value.filter(r => r.resourceType !== "extensions"))
-
-const GROUPS: PackageResource["resourceType"][] = ["skills", "prompts", "themes"]
-
-const grouped = computed(() =>
-  GROUPS.map(type => ({ type, items: visible.value.filter(r => r.resourceType === type) })).filter(g => g.items.length),
+const visible = computed(() =>
+  filter.value.trim() ? files.value.filter(f => f.toLowerCase().includes(filter.value.trim().toLowerCase())) : files.value,
 )
 
 const targetLang = computed(() => (locale.value === "zh-CN" ? "Simplified Chinese" : "English"))
@@ -38,34 +33,42 @@ const targetLang = computed(() => (locale.value === "zh-CN" ? "Simplified Chines
 watch(
   () => selectedResourcePackage.value,
   async pkg => {
-    resources.value = []
-    selected.value = null
+    files.value = []
+    selected.value = ""
     content.value = ""
     translated.value = ""
     if (!pkg) return
     loading.value = true
     try {
-      resources.value = await packageResources(pkg.source, pkg.scope, pkg.scope === "project" ? selectedResourceProject.value : undefined)
+      files.value = await packageListFiles(
+        pkg.source,
+        pkg.scope,
+        pkg.scope === "project" ? selectedResourceProject.value : undefined,
+      )
     } catch (e) {
       ui.pushToast(String(e), "error")
     } finally {
       loading.value = false
     }
-    // Auto-select the first resource.
-    if (visible.value.length) select(visible.value[0]!)
+    if (files.value.length) select(files.value[0]!)
   },
   { immediate: true },
 )
 
-async function select(r: PackageResource) {
-  selected.value = r
+async function select(path: string) {
+  selected.value = path
   content.value = ""
   translated.value = ""
   const pkg = selectedResourcePackage.value
   if (!pkg) return
   contentLoading.value = true
   try {
-    content.value = await packageReadResource(pkg.source, pkg.scope, r.resourceType, r.path, pkg.scope === "project" ? selectedResourceProject.value : undefined)
+    content.value = await packageReadFile(
+      pkg.source,
+      pkg.scope,
+      path,
+      pkg.scope === "project" ? selectedResourceProject.value : undefined,
+    )
   } catch (e) {
     ui.pushToast(String(e), "error")
   } finally {
@@ -107,36 +110,44 @@ const pkgName = computed(() => (selectedResourcePackage.value ? packageNameOf(se
       <Spinner class="size-4" />
     </div>
 
-    <div v-else-if="!visible.length" class="text-muted-foreground flex flex-1 items-center justify-center text-sm">
+    <div v-else-if="!files.length" class="text-muted-foreground flex flex-1 items-center justify-center text-sm">
       {{ t("packages.resourcesEmpty") }}
     </div>
 
     <div v-else class="flex min-h-0 flex-1 gap-3">
-      <!-- Left: file list -->
-      <ScrollArea class="w-56 shrink-0 rounded-md border" viewport-class="max-h-[calc(100dvh-220px)]">
-        <div class="flex flex-col gap-1 p-1.5">
-          <template v-for="g in grouped" :key="g.type">
-            <div class="text-muted-foreground px-1.5 pt-2 text-[10px] font-medium uppercase tracking-wide">
-              {{ t(`packages.types.${g.type.replace(/s$/, "")}`) }}
-            </div>
-            <button
-              v-for="r in g.items"
-              :key="`${r.resourceType}:${r.path}`"
-              class="truncate rounded px-1.5 py-1 text-left font-mono text-xs hover:bg-muted"
-              :class="selected === r ? 'bg-muted font-medium' : 'text-foreground/80'"
-              :title="r.path"
-              @click="select(r)"
-            >
-              {{ r.path }}
-            </button>
-          </template>
+      <!-- Left: full file list with filter -->
+      <div class="flex w-64 shrink-0 flex-col rounded-md border">
+        <div class="border-b p-1.5">
+          <input
+            v-model="filter"
+            :placeholder="t('packages.filterFiles')"
+            class="h-7 w-full rounded border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+          />
         </div>
-      </ScrollArea>
+        <ScrollArea viewport-class="max-h-[calc(100dvh-250px)]">
+          <div class="flex flex-col gap-0.5 p-1.5">
+            <button
+              v-for="f in visible"
+              :key="f"
+              class="flex items-center gap-1.5 truncate rounded px-1.5 py-1 text-left font-mono text-xs hover:bg-muted"
+              :class="selected === f ? 'bg-muted font-medium' : 'text-foreground/80'"
+              :title="f"
+              @click="select(f)"
+            >
+              <FileText :size="12" class="text-muted-foreground shrink-0" />
+              <span class="truncate">{{ f }}</span>
+            </button>
+            <p v-if="!visible.length" class="text-muted-foreground py-3 text-center text-xs">
+              {{ t("packages.noMatchingFiles") }}
+            </p>
+          </div>
+        </ScrollArea>
+      </div>
 
       <!-- Right: content preview -->
       <div class="flex min-w-0 flex-1 flex-col rounded-md border">
         <div class="flex shrink-0 items-center justify-between border-b px-3 py-1.5">
-          <span class="truncate font-mono text-xs text-muted-foreground">{{ selected?.path }}</span>
+          <span class="truncate font-mono text-xs text-muted-foreground">{{ selected }}</span>
           <Button variant="ghost" size="sm" :disabled="translating || contentLoading || !content.trim()" @click="translate">
             <Spinner v-if="translating" class="size-3" />
             <Languages v-else :size="14" />

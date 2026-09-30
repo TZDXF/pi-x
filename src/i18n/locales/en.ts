@@ -950,6 +950,8 @@ export default {
     backToPackages: "Back to packages",
     translate: "Translate",
     loadingResource: "Loading file…",
+    filterFiles: "Filter files by path…",
+    noMatchingFiles: "No matching files",
     extEnabledToast: "Enabled {name}",
     extDisabledToast: "Disabled {name} (all resources)",
     resourcesTitle: "Manage resources of {name}",
@@ -968,9 +970,9 @@ export default {
   // transport layer; keys mirror the error codes at the Rust call sites.
   // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
-    invalidResourceType: "Invalid resource type",
     invalidResourcePath: "Invalid resource path",
     resourceReadFailed: "Failed to read resource file",
+    resourceBinary: "Binary file; text preview is not supported",
     noTranslationModel: "No translation model configured; set one in model config",
     translationTimeout: "Translation timed out (2 min)",
     translationFailed: "Translation model returned an error",

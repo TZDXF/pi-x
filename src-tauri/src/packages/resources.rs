@@ -562,18 +562,37 @@ mod tests {
     }
 }
 
-/// Read one package resource file's text content for preview.
+/// List every file inside an installed package root (relative, posix paths),
+/// mirroring the walk used for resource discovery (ignores node_modules,
+/// .git, .pi, dist and dotfiles).
 #[tauri::command]
-pub fn package_read_resource(
+pub fn package_list_files(
     source: String,
     scope: String,
-    resource_type: String,
+    project: Option<String>,
+) -> Result<Vec<String>, String> {
+    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
+        pix_error(
+            "pluginInstallDirNotFound",
+            "未找到插件安装目录（尚未安装或来源不支持）",
+        )
+    })?;
+    let mut files = Vec::new();
+    walk_files(&root, &root, &mut files);
+    files.sort();
+    Ok(files)
+}
+
+/// Read one file inside an installed package for preview. `path` is relative
+/// to the package root with forward slashes. Text files are capped at 512 KB
+/// on a UTF-8 boundary; binary content is rejected with `resourceBinary`.
+#[tauri::command]
+pub fn package_read_file(
+    source: String,
+    scope: String,
     path: String,
     project: Option<String>,
 ) -> Result<String, String> {
-    if !RESOURCE_TYPES.contains(&resource_type.as_str()) {
-        return Err(pix_error("invalidResourceType", "无效的资源类型"));
-    }
     // Reject path traversal: the relative path must stay inside the package root.
     if path.contains("..") || path.starts_with('/') || path.starts_with('\\') || path.contains(':') {
         return Err(pix_error("invalidResourcePath", "无效的资源路径"));
@@ -585,15 +604,31 @@ pub fn package_read_resource(
         )
     })?;
     let file = root.join(&path);
-    let canonical = dunce::canonicalize(&file)
-        .map_err(|e| pix_error_detail("resourceReadFailed", format!("读取资源文件失败: {e}"), e))?;
+    let canonical = dunce::canonicalize(&file).map_err(|e| {
+        pix_error_detail(
+            "resourceReadFailed",
+            format!("读取资源文件失败: {} ({e})", file.display()),
+            format!("{}: {e}", file.display()),
+        )
+    })?;
     let canonical_root = dunce::canonicalize(&root)
         .map_err(|e| pix_error_detail("pluginInstallDirNotFound", format!("解析插件目录失败: {e}"), e))?;
     if !canonical.starts_with(&canonical_root) {
         return Err(pix_error("invalidResourcePath", "资源路径越界"));
     }
-    std::fs::read_to_string(&canonical)
-        .map_err(|e| pix_error_detail("resourceReadFailed", format!("读取资源文件失败: {e}"), e))
+    let bytes = std::fs::read(&canonical).map_err(|e| {
+        pix_error_detail(
+            "resourceReadFailed",
+            format!("读取资源文件失败: {} ({e})", file.display()),
+            format!("{}: {e}", file.display()),
+        )
+    })?;
+    // Binary sniff (git style): NUL in the first 8 KB, or invalid UTF-8 overall.
+    let sniff_end = bytes.len().min(8_000);
+    if bytes[..sniff_end].contains(&0) {
+        return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
+    }
+    String::from_utf8(bytes).map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
 }
 
 /// Translate a package resource file's content using the configured

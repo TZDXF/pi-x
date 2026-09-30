@@ -7,7 +7,7 @@ mod runner;
 
 pub use catalog::package_catalog;
 pub(crate) use resources::package_skill_paths;
-pub use resources::{package_read_resource, package_resources, package_set_resource, package_translate};
+pub use resources::{package_list_files, package_read_file, package_resources, package_set_resource, package_translate};
 pub(crate) use runner::run_pi;
 pub use runner::{package_install, package_list, package_remove, package_update};
 
@@ -17,8 +17,8 @@ pub use runner::{package_install, package_list, package_remove, package_update};
 pub use catalog::{__cmd__package_catalog, __tauri_command_name_package_catalog};
 #[doc(hidden)]
 pub use resources::{
-    __cmd__package_read_resource, __cmd__package_resources, __cmd__package_set_resource, __cmd__package_translate,
-    __tauri_command_name_package_read_resource, __tauri_command_name_package_resources, __tauri_command_name_package_translate,
+    __cmd__package_list_files, __cmd__package_read_file, __cmd__package_resources, __cmd__package_set_resource, __cmd__package_translate,
+    __tauri_command_name_package_list_files, __tauri_command_name_package_read_file, __tauri_command_name_package_resources, __tauri_command_name_package_translate,
     __tauri_command_name_package_set_resource,
 };
 #[doc(hidden)]

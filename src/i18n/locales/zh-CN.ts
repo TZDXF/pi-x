@@ -920,6 +920,8 @@ export default {
     backToPackages: "返回插件",
     translate: "翻译",
     loadingResource: "正在加载文件…",
+    filterFiles: "按路径过滤文件…",
+    noMatchingFiles: "没有匹配的文件",
     extEnabledToast: "已启用 {name}",
     extDisabledToast: "已关闭 {name}（含全部资源）",
     resourcesTitle: "管理 {name} 的资源",
@@ -937,9 +939,9 @@ export default {
   // 后端（src-tauri）与 transport 层编码错误的当前语言文案；键与 Rust 调用点的错误码一致，
   // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
-    invalidResourceType: "无效的资源类型",
     invalidResourcePath: "无效的资源路径",
     resourceReadFailed: "读取资源文件失败",
+    resourceBinary: "二进制文件，不支持文本预览",
     noTranslationModel: "未配置翻译模型，请在模型配置中选择",
     translationTimeout: "翻译超时（2 分钟）",
     translationFailed: "翻译模型返回错误",
