@@ -71,6 +71,7 @@ async function harness(storage = new Map(), options = {}) {
     },
     rpcRequest: async command => {
       calls.push(command)
+      if (command.type === "set_follow_up_mode") state.followUpMode = command.mode
       if (command.type === "set_model" || command.type === "set_thinking_level") mtime++
       if (command.type === "set_model") state.model = { provider: command.provider, id: command.modelId }
       if (command.type === "set_thinking_level") state.thinkingLevel = command.level
@@ -95,7 +96,7 @@ async function harness(storage = new Map(), options = {}) {
   setActivePinia(createPinia())
   vi.resetModules()
   const { createSessionStore } = await import("@/stores/session")
-  return { store: createSessionStore("default")(), calls, state, storage }
+  return { store: createSessionStore("default")(), calls, state, storage, piState: controls.state }
 }
 
 test("Pi defaults are displayed offline but never overwrite a restored session", async () => {
@@ -259,4 +260,35 @@ test("legacy <builtin:name> command paths are normalized on read", async () => {
     ["builtin:mcp", true],
     ["builtin:llama.cpp", true],
   ])
+})
+
+test("a configured follow-up delivery mode is pushed into the running session", async () => {
+  const { store, calls, state, piState } = await harness()
+  state.followUpMode = "one-at-a-time"
+  piState.getPiSettings = async () => ({ skills: [], followUpMode: "all" })
+  await store.init("project")
+  await tick()
+  const applied = calls.find(c => c.type === "set_follow_up_mode")
+  expect(applied?.mode).toBe("all")
+  expect(store.followUpMode).toBe("all")
+})
+
+test("setFollowUpMode updates the live mode and skips pi's default when unset", async () => {
+  const { store, calls, state, piState } = await harness()
+  state.followUpMode = "one-at-a-time"
+  await store.init("project")
+  await tick()
+  expect(store.followUpMode).toBe("one-at-a-time")
+  expect(calls.some(c => c.type === "set_follow_up_mode")).toBe(false)
+
+  await store.setFollowUpMode("all")
+  expect(calls.filter(c => c.type === "set_follow_up_mode").length).toBe(1)
+  expect(calls.find(c => c.type === "set_follow_up_mode").mode).toBe("all")
+  expect(store.followUpMode).toBe("all")
+
+  // Matching the live mode again must not resend the command on re-init.
+  piState.getPiSettings = async () => ({ skills: [], followUpMode: "all" })
+  await store.init("project")
+  await tick()
+  expect(calls.filter(c => c.type === "set_follow_up_mode").length).toBe(1)
 })

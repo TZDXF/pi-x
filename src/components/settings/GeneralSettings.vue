@@ -17,6 +17,7 @@ import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib
 import { Button } from "@/components/ui/button"
 import WorkspaceSettings from "@/components/settings/WorkspaceSettings.vue"
 import RetrySettings from "@/components/settings/RetrySettings.vue"
+import QueueModeSettings from "@/components/settings/QueueModeSettings.vue"
 
 const { t } = useI18n()
 
@@ -80,6 +81,7 @@ function applyLocale(v: Locale) {
     </Select>
   </SettingRow>
   <RetrySettings v-if="isDesktop" />
+  <QueueModeSettings v-if="isDesktop" />
   <SettingRow>
     <div class="min-w-0">
       <SettingHeading>{{ t("settings.shortcutsTitle") }}</SettingHeading>

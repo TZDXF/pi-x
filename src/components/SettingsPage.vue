@@ -125,6 +125,7 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "mcp", labelKey: "mcpConfig.statusTitle" },
   { tab: "mcp", labelKey: "mcpConfig.editorTitle" },
   { tab: "general", labelKey: "retrySettings.maxRetries" },
+  { tab: "general", labelKey: "queueMode.title" },
   { tab: "archives", labelKey: "sessionArchive.restore" },
   { tab: "archives", labelKey: "sessionArchive.delete" },
   { tab: "about", labelKey: "appUpdate.title" },
@@ -142,6 +143,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.runningBehaviorDesc",
     "settings.language",
     "retrySettings",
+    "queueMode",
   ],
   shortcuts: [
     "shortcuts.actions.newSession",

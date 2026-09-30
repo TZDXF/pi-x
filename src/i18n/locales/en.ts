@@ -353,6 +353,13 @@ export default {
     unsupported: "The installed Pi version does not support retry settings. Please upgrade Pi first.",
     hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
   },
+  queueMode: {
+    title: "Follow-up delivery",
+    desc: "How queued follow-up messages are delivered while the agent runs: one per completion, or all at once when it finishes. Applies globally; running sessions switch immediately.",
+    oneAtATime: "One per completion",
+    all: "All at once",
+    saved: "Saved; running sessions are now in sync",
+  },
   sessionArchive: {
     nav: "Archives",
     title: "Archived sessions",
@@ -632,6 +639,7 @@ export default {
       newSession: "Failed to start a new session",
       modelSwitch: "Failed to switch model",
       thinkingSwitch: "Failed to switch thinking level",
+      followUpMode: "Failed to switch the follow-up delivery mode",
       compaction: "Compaction failed",
     },
   },

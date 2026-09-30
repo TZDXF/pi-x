@@ -47,13 +47,17 @@ export type PromptDisposition = "handled" | "queued" | "started"
 /** steer / follow_up responses only report "handled" or "queued". */
 export type QueueDisposition = Exclude<PromptDisposition, "started">
 
+/** How queued follow-up (or steering) messages are delivered; a pi settings.json
+ *  key (`followUpMode`) and the payload of `set_follow_up_mode`. */
+export type QueueDeliveryMode = "one-at-a-time" | "all"
+
 export interface SessionState {
   model: Model | null
   thinkingLevel: ThinkingLevel
   isStreaming: boolean
   isCompacting: boolean
-  steeringMode: "one-at-a-time" | "all"
-  followUpMode: "one-at-a-time" | "all"
+  steeringMode: QueueDeliveryMode
+  followUpMode: QueueDeliveryMode
   sessionFile: string | null
   sessionId: string
   sessionName?: string

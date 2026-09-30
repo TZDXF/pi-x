@@ -22,7 +22,15 @@ import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
 import { builtinExtensionPath, isBuiltinExtensionPath } from "@/lib/extensionNames"
-import type { CommandInfo, Model, SessionState, SessionStats, ThinkingLevel, Usage } from "@/api/protocol"
+import type {
+  CommandInfo,
+  Model,
+  QueueDeliveryMode,
+  SessionState,
+  SessionStats,
+  ThinkingLevel,
+  Usage,
+} from "@/api/protocol"
 import { blocksFromMessage, createEventHandler, errorBlockText } from "./session/events"
 import { createPromptQueue } from "./session/promptQueue"
 import { createTurnCheckpoints } from "./session/checkpoints"
@@ -117,6 +125,8 @@ export const createSessionStore = (runtimeId = "default") =>
     const steering = ref<string[]>([])
     const followUp = ref<string[]>([])
     const state = ref<SessionState | null>(null)
+    /** Live follow-up delivery mode, mirrored from pi's get_state. */
+    const followUpMode = ref<QueueDeliveryMode | null>(null)
     /** File path of the active pi session (null until persisted). */
     const sessionFile = ref<string | null>(null)
     /** On-disk mtime at the last time our own view of the file was synced;
@@ -684,7 +694,26 @@ export const createSessionStore = (runtimeId = "default") =>
       if (res.success && res.data) {
         state.value = res.data
         sessionFile.value = res.data.sessionFile ?? null
+        followUpMode.value = res.data.followUpMode ?? null
       }
+    }
+
+    /** Switch how queued follow-up messages are delivered in the running pi. */
+    async function setFollowUpMode(mode: QueueDeliveryMode) {
+      const res = await rpcRequest({ type: "set_follow_up_mode", mode })
+      if (!res.success) throw new Error(res.error || i18n.global.t("chat.errors.followUpMode"))
+      followUpMode.value = mode
+    }
+
+    /** Push the user's configured followUpMode (pi global settings.json) into a
+     *  session pi already started; unset means pi's default applies. */
+    function applyConfiguredFollowUpMode() {
+      void getPiSettings()
+        .then(settings => {
+          if (settings.followUpMode && settings.followUpMode !== followUpMode.value)
+            return setFollowUpMode(settings.followUpMode)
+        })
+        .catch(e => console.warn("[pi] follow-up mode:", e))
     }
 
     /** Materialize only one page, yielding during large tool-heavy histories. */
@@ -988,6 +1017,7 @@ export const createSessionStore = (runtimeId = "default") =>
       ++offlineLoadVersion
       cwd.value = project
       await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
+      applyConfiguredFollowUpMode()
       await refreshThinkingLevels()
       if (fresh) await applyRememberedSelection()
       else {
@@ -1100,6 +1130,8 @@ export const createSessionStore = (runtimeId = "default") =>
       dispositionNotice,
       steering,
       followUp,
+      followUpMode,
+      setFollowUpMode,
       state,
       stats,
       lastUsage,

@@ -55,10 +55,12 @@ export interface PiSettings {
   skills: string[]
   /** pi 全局 settings.json 的 `retry` 段。 */
   retry: { maxRetries: number }
+  /** pi 全局 settings.json 的 `followUpMode`：排队跟进消息的投递节奏。 */
+  followUpMode?: import("./protocol").QueueDeliveryMode
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
-  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills">> & {
+  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills" | "followUpMode">> & {
     retry?: { maxRetries: number }
   },
 ) => invoke<void>("pi_settings_save", { settings })

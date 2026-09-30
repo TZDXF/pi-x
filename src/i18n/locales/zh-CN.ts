@@ -340,6 +340,13 @@ export default {
     unsupported: "当前安装的 Pi 版本不支持重试设置，请先升级 Pi。",
     hint: "仅超载、限流、5xx 等临时错误会重试；额度不足、上下文超限等不会重试。",
   },
+  queueMode: {
+    title: "跟进消息投递",
+    desc: "会话运行中排队的跟进消息如何投递：每轮结束投递一条，或结束后一次性全部投递。全局生效，运行中的会话立即切换。",
+    oneAtATime: "逐条投递（每轮一条）",
+    all: "全部投递（结束后一次投递）",
+    saved: "已保存，运行中的会话已同步",
+  },
   sessionArchive: {
     nav: "归档",
     title: "归档会话",
@@ -614,6 +621,7 @@ export default {
       newSession: "新建会话失败",
       modelSwitch: "切换模型失败",
       thinkingSwitch: "切换思考等级失败",
+      followUpMode: "切换跟进消息投递模式失败",
       compaction: "上下文压缩失败",
     },
   },
