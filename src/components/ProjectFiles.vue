@@ -5,22 +5,34 @@ import { ChevronRight, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { invoke } from "@/api/transport"
-import { baseName } from "@/lib/paths"
+import { baseName, normalizeSlashes } from "@/lib/paths"
+import { fileDirectoryEntries, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
-interface Entry {
-  name: string
-  path: string
-  is_dir: boolean
-}
-const props = defineProps<{ project: string }>()
+const props = withDefaults(
+  defineProps<{
+    project: string
+    /** Omit for lazy project directory loading; provide for a static resource list. */
+    files?: string[]
+    filter?: string
+    preview?: boolean
+    showHeader?: boolean
+  }>(),
+  { filter: "", preview: true, showHeader: true },
+)
 const { t } = useI18n()
 const children = ref<Record<string, Entry[]>>({})
 const expanded = ref(new Set<string>())
 const loading = ref(new Set<string>())
 const errors = ref<Record<string, string>>({})
-const selected = ref<string | null>(null)
+const selected = defineModel<string | null>("selectedPath", { default: null })
+const directories = computed(() =>
+  props.files === undefined ? children.value : fileDirectoryEntries(props.files, props.filter),
+)
+const visibleExpanded = computed(() =>
+  props.files !== undefined && props.filter.trim() ? new Set(Object.keys(directories.value)) : expanded.value,
+)
 let generation = 0
 
 async function load(path: string) {
@@ -52,10 +64,13 @@ function reset() {
   loading.value = new Set()
   errors.value = {}
   selected.value = null
-  void load("")
+  if (props.files !== undefined) {
+    expanded.value = new Set(Object.keys(directories.value))
+    selected.value = props.files[0] ? normalizeSlashes(props.files[0]) : null
+  } else void load("")
 }
 onMounted(reset)
-watch(() => props.project, reset)
+watch(() => [props.project, props.files] as const, reset)
 function toggle(entry: Entry) {
   if (!entry.is_dir) {
     selected.value = entry.path
@@ -65,16 +80,16 @@ function toggle(entry: Entry) {
   if (next.has(entry.path)) next.delete(entry.path)
   else {
     next.add(entry.path)
-    if (!(entry.path in children.value)) void load(entry.path)
+    if (props.files === undefined && !(entry.path in children.value)) void load(entry.path)
   }
   expanded.value = next
 }
 const rows = computed(() => {
   const result: { entry: Entry; depth: number }[] = []
   function append(path: string, depth: number) {
-    for (const entry of children.value[path] ?? []) {
+    for (const entry of directories.value[path] ?? []) {
       result.push({ entry, depth })
-      if (entry.is_dir && expanded.value.has(entry.path)) append(entry.path, depth + 1)
+      if (entry.is_dir && visibleExpanded.value.has(entry.path)) append(entry.path, depth + 1)
     }
   }
   append("", 0)
@@ -83,8 +98,8 @@ const rows = computed(() => {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col">
-    <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
+  <div data-project-files class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div v-if="showHeader" class="flex h-10 shrink-0 items-center justify-between border-b px-3">
       <span class="truncate text-xs text-muted-foreground" :title="project">{{ baseName(project) }}</span>
       <Button
         variant="ghost"
@@ -97,9 +112,9 @@ const rows = computed(() => {
     </div>
     <div
       class="grid min-h-0 flex-1 overflow-hidden"
-      :class="selected ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'"
+      :class="preview && selected ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'"
     >
-      <ProjectFilePreview v-if="selected" :project="project" :path="selected" @close="selected = null" />
+      <ProjectFilePreview v-if="preview && selected" :project="project" :path="selected" @close="selected = null" />
       <ScrollArea class="min-h-0 min-w-0" viewport-class="py-1">
         <p v-if="errors['']" class="px-3 py-2 text-xs text-destructive" role="alert">{{ errors[""] }}</p>
         <p v-else-if="loading.has('')" class="px-3 py-2 text-xs text-muted-foreground">{{ t("completion.loading") }}</p>
@@ -111,22 +126,29 @@ const rows = computed(() => {
             :class="{ 'bg-accent': entry.path === selected }"
             :style="{ paddingLeft: `${8 + depth * 16}px` }"
             :title="entry.path"
+            :aria-expanded="entry.is_dir ? visibleExpanded.has(entry.path) : undefined"
+            :aria-current="!entry.is_dir && entry.path === selected ? 'true' : undefined"
             @click="toggle(entry)"
           >
             <ChevronRight
               v-if="entry.is_dir"
               class="size-3.5 shrink-0"
-              :class="{ 'rotate-90': expanded.has(entry.path) }"
+              :class="{ 'rotate-90': visibleExpanded.has(entry.path) }"
             />
             <span v-else class="w-3.5 shrink-0" />
-            <FileTypeIcon :name="entry.name" :dir="entry.is_dir" :open="expanded.has(entry.path)" class="size-3.5" />
+            <FileTypeIcon
+              :name="entry.name"
+              :dir="entry.is_dir"
+              :open="visibleExpanded.has(entry.path)"
+              class="size-3.5"
+            />
             <span class="truncate">{{ entry.name }}</span>
           </button>
           <p v-if="errors[entry.path]" class="px-3 py-1 text-xs text-destructive" role="alert">
             {{ errors[entry.path] }}
           </p>
           <p
-            v-else-if="entry.is_dir && expanded.has(entry.path) && loading.has(entry.path)"
+            v-else-if="entry.is_dir && visibleExpanded.has(entry.path) && loading.has(entry.path)"
             class="px-3 py-1 text-xs text-muted-foreground"
           >
             {{ t("completion.loading") }}

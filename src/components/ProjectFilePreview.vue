@@ -10,6 +10,7 @@ import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
 import { isMarkdownExt } from "@/lib/fileKind"
 import { baseName } from "@/lib/paths"
+import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
@@ -17,14 +18,16 @@ import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 
-interface FilePreview {
-  kind: "text" | "image" | "binary"
-  text: string | null
-  truncated: boolean
-  mime: string | null
-  data: string | null
-}
-const props = defineProps<{ project: string; path: string }>()
+const props = withDefaults(
+  defineProps<{
+    project: string
+    path: string
+    /** Custom resource reader; project-only editor and annotation actions are hidden. */
+    readFile?: (path: string) => Promise<FilePreview>
+    closable?: boolean
+  }>(),
+  { closable: true },
+)
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 
@@ -68,7 +71,9 @@ async function load() {
   zoomed.value = false
   imageBroken.value = false
   try {
-    const result = await invoke<FilePreview>("read_file_preview", { project: props.project, path: props.path })
+    const result = props.readFile
+      ? await props.readFile(props.path)
+      : await invoke<FilePreview>("read_file_preview", { project: props.project, path: props.path })
     if (current !== seq) return
     preview.value = result
     if (result.kind === "text" && result.text) {
@@ -81,7 +86,7 @@ async function load() {
     if (current === seq) loading.value = false
   }
 }
-watch(() => [props.project, props.path] as const, load, { immediate: true })
+watch(() => [props.project, props.path, props.readFile] as const, load, { immediate: true })
 
 const opening = ref(false)
 async function openInEditor() {
@@ -157,19 +162,23 @@ function confirmComment() {
 }
 // 文件或项目切换后，旧的批注面板与高亮不再对应新内容。
 watch(
-  () => [props.project, props.path] as const,
+  () => [props.project, props.path, props.readFile] as const,
   () => {
     closeComment()
     annotated.value = []
   },
 )
-onBeforeUnmount(closeComment)
+onBeforeUnmount(() => {
+  ++seq
+  closeComment()
+})
 </script>
 
 <template>
   <section class="flex min-h-0 min-w-0 flex-1 flex-col border-r" :aria-label="t('projectFiles.preview')">
     <div class="flex h-10 shrink-0 items-center gap-0.5 border-b px-1.5">
       <Button
+        v-if="closable"
         variant="ghost"
         size="icon-xs"
         :title="t('projectFiles.closePreview')"
@@ -210,7 +219,7 @@ onBeforeUnmount(closeComment)
         ><WrapText
       /></Button>
       <Button
-        v-if="showCode"
+        v-if="showCode && !readFile"
         variant="ghost"
         size="icon-xs"
         :aria-pressed="commentOpen"
@@ -222,7 +231,7 @@ onBeforeUnmount(closeComment)
         ><MessageSquarePlus
       /></Button>
       <Button
-        v-if="isDesktop"
+        v-if="isDesktop && !readFile"
         variant="ghost"
         size="icon-xs"
         :disabled="opening"
@@ -231,6 +240,7 @@ onBeforeUnmount(closeComment)
         @click="openInEditor"
         ><ExternalLink
       /></Button>
+      <slot name="toolbar" :text="text" :loading="loading" />
     </div>
     <div v-if="commentOpen" class="shrink-0 space-y-2 border-b bg-muted/40 px-3 py-2">
       <p class="text-xs text-muted-foreground">
@@ -301,14 +311,17 @@ onBeforeUnmount(closeComment)
         </div>
         <div
           v-else-if="showRenderedMarkdown"
+          data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
           <Markdown :content="text" :link-options="markdownLinkOptions" class="text-sm" />
+          <slot name="after-content" />
         </div>
         <!-- 代码视图：原生滚动而非 ScrollArea，横竖双向滚动直接交给 overflow -->
         <div
           v-else
           ref="codeRoot"
+          data-file-preview-scroll
           class="scrollbar-custom min-h-0 min-w-0 flex-1 overflow-auto"
           :class="wrap ? '' : 'px-3'"
         >
@@ -339,6 +352,7 @@ onBeforeUnmount(closeComment)
               >
             </div>
           </div>
+          <slot name="after-content" />
         </div>
       </template>
     </div>

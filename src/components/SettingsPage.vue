@@ -383,11 +383,7 @@ function locateSetting(entry = searchResults.value[selectedIndex.value]) {
             <h1 class="text-lg font-semibold">{{ t(active.title) }}</h1>
             <p v-if="active.desc" class="mt-1.5 text-xs text-muted-foreground">{{ t(active.desc) }}</p>
           </header>
-          <component
-            :is="active.component"
-            :class="{ 'min-h-0 flex-1': active.id === 'package-resources' }"
-            v-bind="active.needsProject ? { project: props.project } : {}"
-          />
+          <component :is="active.component" v-bind="active.needsProject ? { project: props.project } : {}" />
         </div>
       </component>
     </ResizablePanel>

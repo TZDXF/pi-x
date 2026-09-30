@@ -53,7 +53,7 @@ test("shows only Markdown in a collapsible directory tree and renders original a
     await route.fulfill({ json: { data } })
   })
   await page.goto(harness.url)
-  const tree = page.getByRole("tree")
+  const tree = page.locator("[data-package-resource-files]")
   await expect(page.getByRole("heading", { name: "Package overview" })).toBeVisible()
   await expect(page.locator("strong", { hasText: "Important" })).toBeVisible()
   await expect(page.locator("li", { hasText: "First item" })).toBeVisible()
@@ -65,6 +65,15 @@ test("shows only Markdown in a collapsible directory tree and renders original a
   await expect(tree.getByText("Usage.MD", { exact: true })).toBeVisible()
   await expect(tree.getByText("Reference.markdown", { exact: true })).toBeVisible()
 
+  await expect(tree).toHaveAttribute("data-project-files", "")
+  const preview = page.locator("[data-package-resource-preview]")
+  await expect(preview.getByRole("button", { name: "Close preview", exact: true })).toHaveCount(0)
+  await expect(preview.getByRole("button", { name: "Open file with default application", exact: true })).toHaveCount(0)
+  await preview.getByRole("button", { name: "View source", exact: true }).click()
+  await expect(preview.locator('[data-line="1"] code')).toContainText("# Package overview")
+  await expect(preview.getByRole("button", { name: "Annotate", exact: true })).toHaveCount(0)
+  await preview.getByRole("button", { name: "Rendered view", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Package overview" })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath("package-resources-preview.png") })
   await tree.getByRole("button", { name: "guides", exact: true }).click()
   await expect(tree.getByText("Usage.MD", { exact: true })).not.toBeVisible()
@@ -97,7 +106,7 @@ test("shows the resource empty state when the package has no Markdown files", as
   })
   await page.goto(harness.url)
   await expect(page.getByText("No manageable resources found (package not installed yet or has none).")).toBeVisible()
-  await expect(page.getByRole("tree")).toHaveCount(0)
+  await expect(page.locator("[data-package-resource-files]")).toHaveCount(0)
   expect(reads).toEqual([])
 })
 
@@ -125,7 +134,7 @@ test("ignores a stale file read after another Markdown document is selected", as
     await route.fulfill({ json: { data: content[args.path] ?? null } })
   })
   await page.goto(harness.url)
-  await page.getByRole("tree").getByText("Usage.MD", { exact: true }).click()
+  await page.locator("[data-package-resource-files]").getByText("Usage.MD", { exact: true }).click()
   await expect(page.getByRole("heading", { name: "Usage guide" })).toBeVisible()
   const staleResponse = page.waitForResponse(response => response.request().postDataJSON()?.args?.path === "README.md")
   releaseRead()
@@ -163,7 +172,7 @@ test("keeps the settings resource browser within the window with independently s
   await page.goto(`${harness.url}?settings#/settings/package-resources`)
   await expect(page.getByRole("heading", { name: "Section 0", exact: true })).toBeVisible()
   const filesViewport = page.locator('[data-package-resource-files] [data-slot="scroll-area-viewport"]')
-  const previewViewport = page.locator('[data-package-resource-preview] [data-slot="scroll-area-viewport"]')
+  const previewViewport = page.locator("[data-package-resource-preview] [data-file-preview-scroll]")
 
   async function expectBoundedLayout() {
     await expect
@@ -216,5 +225,44 @@ test("keeps the settings resource browser within the window with independently s
   await expect(toolbar).toBeVisible()
   await expect(page.getByPlaceholder("Filter files by path…")).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath("package-resources-scroll.png") })
+
+  // Ordinary settings tabs retain their outer scrolling container after leaving the resource browser.
+  await page.evaluate(() => {
+    window.location.hash = "/settings/shortcuts"
+  })
+  const settingsViewport = page.locator('.settings-scroll[data-slot="scroll-area"] [data-slot="scroll-area-viewport"]')
+  await expect(settingsViewport).toBeVisible()
+  await expect.poll(() => settingsViewport.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
   expect(errors).toEqual([])
+})
+
+test("ignores a translation completed after switching to another resource", async ({ page }) => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  await page.route("**/api/invoke", async route => {
+    const { command, args } = route.request().postDataJSON()
+    if (command === "package_translate") {
+      await gate
+      await route.fulfill({ json: { data: "# Stale translation" } })
+      return
+    }
+    await route.fulfill({ json: { data: command === "package_list_files" ? files : content[args.path] } })
+  })
+  await page.goto(harness.url)
+  await expect(page.getByRole("heading", { name: "Package overview" })).toBeVisible()
+  const requested = page.waitForRequest(request => request.postDataJSON()?.command === "package_translate")
+  await page.getByRole("button", { name: "Translate", exact: true }).click()
+  await requested
+  await page.locator("[data-package-resource-files]").getByRole("button", { name: "Usage.MD", exact: true }).click()
+  await expect(page.getByRole("heading", { name: "Usage guide" })).toBeVisible()
+  const response = page.waitForResponse(result => result.request().postDataJSON()?.command === "package_translate")
+  release()
+  await (await response).finished()
+  await page.evaluate(
+    () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  )
+  await expect(page.getByRole("heading", { name: "Stale translation" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Translate", exact: true })).toBeEnabled()
 })
