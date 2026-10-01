@@ -683,6 +683,7 @@ export default {
     attachImage: "Attach image",
     modelChanged: "Model changed from {from} to {to}",
     selectModel: "Select model",
+    thinkingLevel: "Thinking level",
     thinkingLevels: {
       off: "Off",
       minimal: "Minimal",

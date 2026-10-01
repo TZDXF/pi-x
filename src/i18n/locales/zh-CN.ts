@@ -665,6 +665,7 @@ export default {
     attachImage: "插入图片",
     modelChanged: "模型变化：从 {from} 切换到 {to}",
     selectModel: "选择模型",
+    thinkingLevel: "思考强度",
     thinkingLevels: {
       off: "关闭",
       minimal: "极简",

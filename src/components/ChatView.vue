@@ -18,7 +18,7 @@ import { Message, MessageAction, MessageActions, MessageContent } from "@/compon
 import { Loader } from "@/components/ai-elements/loader"
 import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/components/ai-elements/queue"
 import { PromptInput, PromptInputSubmit } from "@/components/ai-elements/prompt-input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
 import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
 import { rpcRequest as requestForRuntime } from "@/api/piClient"
 import { PromptInputHeader } from "@/components/ai-elements/prompt-input"
@@ -36,7 +36,6 @@ import {
   ContextIcon,
   ContextTrigger,
 } from "@/components/ai-elements/context"
-import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
@@ -328,7 +327,7 @@ const { contextUsage, cacheRateText, contextBreakdown, refreshContextBreakdown }
   rpcRequest,
 )
 
-const { modelKey, thinkingLabel, onThinkingChange } = useConversationModel(session, {
+const { modelKey, onThinkingChange } = useConversationModel(session, {
   connected: () => props.connected,
   onError: (e: unknown) => ui.pushToast(String(e), "error"),
 })
@@ -1014,31 +1013,14 @@ onBeforeUnmount(() => {
                 <Paperclip class="size-4.5" />
               </Button>
 
-              <ConversationModelSelect
-                trigger-class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35 overflow-hidden [&>[data-slot=select-value]]:min-w-0 [&>[data-slot=select-value]]:overflow-hidden"
+              <ModelThinkingSelect
                 v-model="modelKey"
+                :thinking-level="session.thinkingLevel"
+                :available-thinking="session.availableThinking"
                 :models="session.models"
                 :disabled="!connected && session.models.length === 0"
-                :show-provider="false"
-                open-above
+                @update:thinking-level="onThinkingChange"
               />
-
-              <Select
-                :model-value="session.thinkingLevel"
-                :disabled="!connected && session.models.length === 0"
-                @update:model-value="onThinkingChange"
-              >
-                <SelectTrigger
-                  class="h-8 w-auto min-w-0 max-w-47.5 border-0 text-xs shadow-none max-[900px]:max-w-35 overflow-hidden [&>[data-slot=select-value]]:min-w-0 [&>[data-slot=select-value]]:overflow-hidden"
-                >
-                  <SelectValue>{{ thinkingLabel(session.thinkingLevel) }}</SelectValue>
-                </SelectTrigger>
-                <SelectContent position="popper" side="top" align="start" :side-offset="0" :side-flip="false">
-                  <SelectItem v-for="lv in session.availableThinking" :key="lv" :value="lv" class="text-xs">
-                    {{ thinkingLabel(lv) }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
             </div>
             <div class="ml-auto flex max-w-full items-center justify-end gap-1">
               <div
