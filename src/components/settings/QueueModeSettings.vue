@@ -5,7 +5,7 @@ import { onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getPiSettings, savePiSettings } from "@/api/piClient"
 import type { QueueDeliveryMode } from "@/api/protocol"
-import { useSessionStore, useUiStore } from "@/stores/conversations"
+import { allConversations, useUiStore } from "@/stores/conversations"
 import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
@@ -19,7 +19,6 @@ const DEFAULT_MODE: QueueDeliveryMode = "one-at-a-time"
 
 const { t } = useI18n()
 const ui = useUiStore()
-const session = useSessionStore()
 const loading = ref(true)
 const saving = ref(false)
 const error = ref("")
@@ -46,9 +45,26 @@ async function commit(selected: AcceptableValue) {
   saving.value = true
   try {
     await savePiSettings({ followUpMode: next })
-    // 已在运行的会话立即切换；新会话由 pi 读取全局设置自动生效。
-    if (session.started) await session.setFollowUpMode(next)
-    ui.pushToast(t("queueMode.saved"), "info")
+    // 已在运行的会话逐个切换；新会话由 pi 读取全局设置自动生效。
+    // 失败的会话重新打开时会经 applyConfiguredFollowUpMode 补上新模式。
+    const running = allConversations().filter(conversation => conversation.started)
+    let failures = 0
+    let firstError = ""
+    for (const conversation of running) {
+      try {
+        await conversation.setFollowUpMode(next)
+      } catch (e) {
+        if (!firstError) firstError = String(e)
+        failures++
+      }
+    }
+    if (running.length > 0 && failures === running.length) {
+      mode.value = previous
+      ui.pushToast(firstError, "error")
+    } else {
+      if (failures > 0) ui.pushToast(t("queueMode.partialSync", failures), "warning")
+      ui.pushToast(t("queueMode.saved"), "info")
+    }
   } catch (e) {
     mode.value = previous
     ui.pushToast(String(e), "error")

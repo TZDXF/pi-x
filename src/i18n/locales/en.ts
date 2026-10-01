@@ -426,6 +426,8 @@ export default {
     oneAtATime: "One per completion",
     all: "All at once",
     saved: "Saved; running sessions are now in sync",
+    partialSync:
+      "Saved; {n} session failed to switch and will pick up the new mode when reopened | Saved; {n} sessions failed to switch and will pick up the new mode when reopened",
   },
   sessionArchive: {
     nav: "Archives",

@@ -414,6 +414,7 @@ export default {
     oneAtATime: "逐条投递（每轮一条）",
     all: "全部投递（结束后一次投递）",
     saved: "已保存，运行中的会话已同步",
+    partialSync: "已保存；{n} 个会话切换失败，重新打开时会自动应用新设置",
   },
   sessionArchive: {
     nav: "归档",
