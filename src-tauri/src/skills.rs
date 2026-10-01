@@ -611,19 +611,8 @@ pub async fn skills_read_file(path: String, rel_path: String) -> Result<String, 
     tokio::task::spawn_blocking(move || {
         ensure_discovered_skill_root(&path)?;
         let (_, canonical) = skill_read_target(&path, &rel_path)?;
-        let bytes = std::fs::read(&canonical).map_err(|e| {
-            pix_error_detail(
-                "resourceReadFailed",
-                format!("读取技能文件失败: {} ({e})", canonical.display()),
-                format!("{}: {e}", canonical.display()),
-            )
-        })?;
-        // Binary sniff (git style): NUL in the first 8 KB, or invalid UTF-8 overall.
-        let sniff_end = bytes.len().min(8_000);
-        if bytes[..sniff_end].contains(&0) {
-            return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
-        }
-        String::from_utf8(bytes).map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
+        let bytes = crate::packages::read_preview_bytes(&canonical, canonical.display())?;
+        crate::packages::decode_preview_text(bytes)
     })
     .await
     .map_err(|e| e.to_string())?

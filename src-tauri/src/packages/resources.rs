@@ -481,6 +481,19 @@ mod tests {
     }
 
     #[test]
+    fn preview_text_is_trimmed_to_utf8_boundary() {
+        assert_eq!(decode_preview_text(b"hello".to_vec()).unwrap(), "hello");
+        // A multi-byte character cut by the read cap is trimmed, not rejected.
+        let mut cut = "abc中".as_bytes().to_vec();
+        cut.pop();
+        assert_eq!(decode_preview_text(cut).unwrap(), "abc");
+        // A genuinely invalid sequence stays binary content.
+        assert!(decode_preview_text(vec![0x61, 0xFF, 0x62]).is_err());
+        assert!(decode_preview_text(b"ok\0binary".to_vec()).is_err());
+        assert_eq!(PREVIEW_MAX_BYTES, 512 * 1024);
+    }
+
+    #[test]
     fn resource_enabled_semantics() {
         // absent key -> all enabled
         assert!(resource_enabled("a.ts", None));
@@ -616,19 +629,58 @@ pub fn package_read_file(
     if !canonical.starts_with(&canonical_root) {
         return Err(pix_error("invalidResourcePath", "资源路径越界"));
     }
-    let bytes = std::fs::read(&canonical).map_err(|e| {
+    let bytes = read_preview_bytes(&canonical, file.display())?;
+    decode_preview_text(bytes)
+}
+
+/// Cap text previews at 512 KB so huge files don't flood the IPC bridge.
+pub(crate) const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
+
+/// Read at most [`PREVIEW_MAX_BYTES`] + 3 bytes (one maximal UTF-8 character
+/// of slack) so oversized files stop at the cap instead of loading whole.
+pub(crate) fn read_preview_bytes(path: &std::path::Path, display: std::path::Display) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    let mut handle = std::fs::File::open(path).map_err(|e| {
         pix_error_detail(
             "resourceReadFailed",
-            format!("读取资源文件失败: {} ({e})", file.display()),
-            format!("{}: {e}", file.display()),
+            format!("读取资源文件失败: {display} ({e})"),
+            format!("{display}: {e}"),
         )
     })?;
-    // Binary sniff (git style): NUL in the first 8 KB, or invalid UTF-8 overall.
+    let mut bytes = Vec::new();
+    handle
+        .by_ref()
+        .take(PREVIEW_MAX_BYTES + 3)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            pix_error_detail(
+                "resourceReadFailed",
+                format!("读取资源文件失败: {display} ({e})"),
+                format!("{display}: {e}"),
+            )
+        })?;
+    Ok(bytes)
+}
+
+/// Decode preview bytes: binary sniff (git style, NUL in the first 8 KB),
+/// then UTF-8 validation. A multi-byte character cut at the read cap is
+/// trimmed instead of failing; any other invalid sequence is binary content.
+pub(crate) fn decode_preview_text(bytes: Vec<u8>) -> Result<String, String> {
+    // Binary sniff (git style): NUL in the first 8 KB.
     let sniff_end = bytes.len().min(8_000);
     if bytes[..sniff_end].contains(&0) {
         return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
     }
-    String::from_utf8(bytes).map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(e) if e.utf8_error().error_len().is_none() && e.utf8_error().valid_up_to() > 0 => {
+            let valid_up_to = e.utf8_error().valid_up_to();
+            let bytes = e.into_bytes();
+            Ok(String::from_utf8_lossy(&bytes[..valid_up_to]).into_owned())
+        }
+        Err(_) => Err(pix_error("resourceBinary", "二进制文件，不支持文本预览")),
+    }
 }
 
 /// Translate a package resource file's content using the configured
