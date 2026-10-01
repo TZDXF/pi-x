@@ -97,6 +97,9 @@ function closeSidebarTab(id: number) {
   if (activeTabId.value === id)
     activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
 }
+function reorderSidebarTab(tabs: SidebarTabItem[]) {
+  sidebarTabs.value = tabs
+}
 function openReviewAt(path: string) {
   reviewFocus.value = path
   const existing = sidebarTabs.value.find(tab => tab.type === "review")
@@ -1132,6 +1135,7 @@ onBeforeUnmount(() => {
         @update:active-id="activeTabId = $event"
         @add-tab="addSidebarTab"
         @close-tab="closeSidebarTab"
+        @reorder-tabs="reorderSidebarTab"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

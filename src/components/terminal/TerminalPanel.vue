@@ -9,6 +9,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { Button } from "@/components/ui/button"
 import { Plus, SquareTerminal, X } from "@lucide/vue"
+import { VueDraggable } from "vue-draggable-plus"
 
 interface TermTab {
   id: number
@@ -305,12 +306,17 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
     <template v-else>
       <!-- tab bar -->
       <div class="bg-background/95 flex h-9 shrink-0 items-center gap-1 border-b px-2">
-        <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <VueDraggable
+          tag="div"
+          class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          v-model="tabs"
+          :animation="150"
+        >
           <button
             v-for="tab in tabs"
             :key="tab.id"
             type="button"
-            class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs"
+            class="group flex h-7 shrink-0 cursor-grab select-none items-center gap-1.5 rounded-md px-2.5 text-xs"
             :class="
               tab.id === activeId
                 ? 'bg-accent text-accent-foreground font-medium'
@@ -338,17 +344,17 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
               @click.stop="closeTab(tab.id)"
             />
           </button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            class="text-muted-foreground"
-            :title="t('terminal.new')"
-            @click="openTerminal"
-          >
-            <Plus />
-          </Button>
-        </div>
+        </VueDraggable>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          class="shrink-0 text-muted-foreground"
+          :title="t('terminal.new')"
+          @click="openTerminal"
+        >
+          <Plus />
+        </Button>
         <Button
           v-if="!embedded"
           type="button"

@@ -6,6 +6,7 @@ import { FileCode, FolderTree, Globe, Plus, SquareTerminal, X } from "@lucide/vu
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { isDesktop } from "@/api/transport"
+import { VueDraggable } from "vue-draggable-plus"
 import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   "update:activeId": [id: number | null]
   "add-tab": [type: SidebarTabType]
   "close-tab": [id: number]
+  "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
 }>()
 
@@ -198,14 +200,20 @@ onBeforeUnmount(() => {
       role="tablist"
       :aria-label="t('sidebarTabs.title')"
     >
-      <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+      <VueDraggable
+        tag="div"
+        class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+        :model-value="tabs"
+        :animation="150"
+        @update:model-value="(next: SidebarTabItem[]) => emit('reorder-tabs', next)"
+      >
         <button
           v-for="tab in tabs"
           :key="tab.id"
           type="button"
           role="tab"
           :aria-selected="tab.id === activeId"
-          class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs"
+          class="group flex h-7 shrink-0 cursor-grab select-none items-center gap-1.5 rounded-md px-2 text-xs"
           :class="
             tab.id === activeId
               ? 'bg-accent text-accent-foreground font-medium'
@@ -222,54 +230,54 @@ onBeforeUnmount(() => {
             @click.stop="closeTab(tab.id)"
           />
         </button>
-        <Popover v-model:open="addOpen">
-          <PopoverTrigger as-child>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              class="shrink-0 text-muted-foreground"
-              :title="t('sidebarTabs.add')"
-              :aria-label="t('sidebarTabs.add')"
-            >
-              <Plus />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="end" class="w-44 p-1.5">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              class="w-full justify-start gap-2"
-              @click="addTab('review')"
-            >
-              <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('files')">
-              <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
-            </Button>
-            <Button
-              v-if="isDesktop"
-              type="button"
-              variant="ghost"
-              size="sm"
-              class="w-full justify-start gap-2"
-              @click="addTab('terminal')"
-            >
-              <SquareTerminal class="size-4 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              class="w-full justify-start gap-2"
-              @click="addTab('browser')"
-            >
-              <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
-            </Button>
-          </PopoverContent>
-        </Popover>
-      </div>
+      </VueDraggable>
+      <Popover v-model:open="addOpen">
+        <PopoverTrigger as-child>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            class="shrink-0 text-muted-foreground"
+            :title="t('sidebarTabs.add')"
+            :aria-label="t('sidebarTabs.add')"
+          >
+            <Plus />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" class="w-44 p-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="w-full justify-start gap-2"
+            @click="addTab('review')"
+          >
+            <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('files')">
+            <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
+          </Button>
+          <Button
+            v-if="isDesktop"
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="w-full justify-start gap-2"
+            @click="addTab('terminal')"
+          >
+            <SquareTerminal class="size-4 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="w-full justify-start gap-2"
+            @click="addTab('browser')"
+          >
+            <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
+          </Button>
+        </PopoverContent>
+      </Popover>
     </div>
     <template v-for="tab in tabs" :key="tab.id">
       <ReviewPanel
