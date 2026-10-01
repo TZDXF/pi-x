@@ -38,8 +38,9 @@ export function usePackages(project: () => string | undefined) {
   // ---- installed ----
   const installed = ref<InstalledPackage[]>([])
   const installedLoading = ref(false)
-  /** source -> extension enabled (all extension files enabled). */
-  const extensionStates = ref<Map<string, boolean>>(new Map())
+  /** `${scope}:${source}` -> cascade toggle state for the installed row.
+   *  Scope is part of the key: the same package can be installed in both. */
+  const extensionStates = ref<Map<string, ExtensionState>>(new Map())
 
   // ---- built-in plugins ----
   const appConfig = ref<AppConfig | null>(null)
@@ -187,9 +188,12 @@ export function usePackages(project: () => string | undefined) {
           try {
             const res = await packageResources(p.source, p.scope, project)
             const ext = res.filter(r => r.resourceType === "extensions")
-            return [p.source, ext.length > 0 && ext.every(r => r.enabled)] as const
+            return [
+              extensionKey(p),
+              { hasExtension: ext.length > 0, enabled: ext.length > 0 && ext.every(r => r.enabled) },
+            ] as const
           } catch {
-            return [p.source, false] as const
+            return [extensionKey(p), { hasExtension: false, enabled: false }] as const
           }
         }),
       )
@@ -307,7 +311,7 @@ export function usePackages(project: () => string | undefined) {
   /** Enable or disable a package's extension together with all of its
    *  skills, prompts and themes (cascading toggle on the installed row). */
   async function toggleExtension(pkg: InstalledPackage, enabled: boolean) {
-    const key = `ext:${pkg.source}`
+    const key = `ext:${extensionKey(pkg)}`
     if (busy.value) return
     busy.value = key
     try {
@@ -385,3 +389,15 @@ export function usePackages(project: () => string | undefined) {
 }
 
 export type PackagesContext = ReturnType<typeof usePackages>
+
+export interface ExtensionState {
+  /** Whether the package ships any extension file; rows without one hide the
+   *  cascade toggle instead of showing a switch that snaps back to off. */
+  hasExtension: boolean
+  enabled: boolean
+}
+
+/** Map key for a package's row state; scopes are distinct installs. */
+export function extensionKey(pkg: Pick<InstalledPackage, "scope" | "source">): string {
+  return `${pkg.scope}:${pkg.source}`
+}

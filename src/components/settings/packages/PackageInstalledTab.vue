@@ -16,7 +16,7 @@ import { Trash2, ArrowUpCircle, Plus, FileBox } from "@lucide/vue"
 import { Switch } from "@/components/ui/switch"
 import { navigate } from "@/lib/router"
 import { packageSettingsTab, selectedResourcePackage, selectedResourceProject } from "./selectedResourcePackage"
-import type { PackagesContext } from "./usePackages"
+import { extensionKey, type PackagesContext } from "./usePackages"
 
 const props = defineProps<{ ctx: PackagesContext }>()
 
@@ -79,7 +79,8 @@ function openResources(p: InstalledPackage) {
     </div>
     <div class="flex shrink-0 gap-2">
       <Switch
-        :model-value="extensionStates.get(p.source) ?? false"
+        v-if="extensionStates.get(extensionKey(p))?.hasExtension"
+        :model-value="extensionStates.get(extensionKey(p))?.enabled ?? false"
         :disabled="busy !== null"
         @update:model-value="v => toggleExtension(p, v)"
       />
@@ -117,7 +118,8 @@ function openResources(p: InstalledPackage) {
       </div>
       <div class="flex shrink-0 gap-2">
         <Switch
-          :model-value="extensionStates.get(p.source) ?? false"
+          v-if="extensionStates.get(extensionKey(p))?.hasExtension"
+          :model-value="extensionStates.get(extensionKey(p))?.enabled ?? false"
           :disabled="busy !== null"
           @update:model-value="v => toggleExtension(p, v)"
         />
