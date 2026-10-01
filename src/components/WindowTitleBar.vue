@@ -2,13 +2,23 @@
 import { computed, onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { ChevronLeft, ChevronRight, Code, Folder, PanelLeft, PanelRight, Settings, SquareTerminal } from "@lucide/vue"
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Code,
+  Folder,
+  PanelLeft,
+  PanelRight,
+  Settings,
+  SquareTerminal,
+} from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -21,6 +31,7 @@ import {
   EDITOR_OPTIONS,
   openProjectInEditor,
   openWithPreference,
+  setOpenWith,
   type EditorIconMap,
   type EditorKind,
 } from "@/lib/openWith"
@@ -61,6 +72,10 @@ onMounted(async () => {
   } catch {
     /* keep the full list */
   }
+  // 图标提取较慢（后端有缓存），后台拉取
+  void detectIcons().then(map => {
+    editorIcons.value = map
+  })
 })
 
 onUnmounted(() => {
@@ -88,7 +103,7 @@ function close() {
   void appWindow?.close()
 }
 
-// ---- 从标题栏在外部打开当前会话的项目 ----
+// ---- 标题栏打开方式：左键按默认方式打开，右侧下拉切换默认并与设置页同步 ----
 const ui = useUiStore()
 const editorAvailability = ref<Record<string, boolean>>({})
 const editorsDetected = ref(false)
@@ -96,11 +111,23 @@ const editorIcons = ref<EditorIconMap>({})
 const openingProject = ref(false)
 
 const openInEditorVisible = computed(() => isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject)
-// 与设置页一致：检测成功后隐藏未检测到的 IDE；配置过自定义 IDE 时追加该项
-const editorMenuItems = computed<{ id: EditorKind; label: string }[]>(() => {
-  const items: { id: EditorKind; label: string }[] = EDITOR_OPTIONS.filter(
-    option => !editorsDetected.value || editorAvailability.value[option.id] !== false,
-  ).map(option => ({ id: option.id, label: option.label }))
+
+const editorLabelOf = (kind: EditorKind) =>
+  kind === "system" || kind === "custom"
+    ? t(`openWith.${kind}`)
+    : (EDITOR_OPTIONS.find(option => option.id === kind)?.label ?? kind)
+
+const defaultKind = computed(() => openWithPreference.value.kind)
+const defaultLabel = computed(() => editorLabelOf(defaultKind.value))
+const defaultIcon = computed(() => editorIcons.value[defaultKind.value] ?? null)
+
+// 与设置页一致：检测成功后隐藏未检测到的 IDE；始终保留系统默认与自定义项
+const openWithMenuItems = computed<{ id: EditorKind; label: string }[]>(() => {
+  const items: { id: EditorKind; label: string }[] = [{ id: "system", label: t("openWith.system") }]
+  for (const option of EDITOR_OPTIONS) {
+    if (!editorsDetected.value || editorAvailability.value[option.id] !== false)
+      items.push({ id: option.id, label: option.label })
+  }
   if (openWithPreference.value.kind === "custom" || openWithPreference.value.executable)
     items.push({ id: "custom", label: t("openWith.custom") })
   return items
@@ -119,17 +146,15 @@ async function runProjectAction(action: (project: string) => Promise<void>) {
   }
 }
 
-const openInEditor = (kind: EditorKind) => runProjectAction(project => openProjectInEditor(project, kind))
-const openInExplorer = () => runProjectAction(project => openPath(project))
-const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))
-
-// 图标提取较慢，首次展开菜单时才拉取（后端有缓存）
-function onEditorMenuOpen(open: boolean) {
-  if (!open) return
-  void detectIcons().then(map => {
-    editorIcons.value = map
-  })
+const openWithKind = (kind: EditorKind, project: string) =>
+  kind === "system" ? openPath(project) : openProjectInEditor(project, kind)
+const openWithDefault = () => runProjectAction(project => openWithKind(defaultKind.value, project))
+// 下拉选择即设为默认，设置页的“默认打开方式”随之变更
+const chooseOpenWith = (kind: EditorKind) => {
+  setOpenWith(kind)
+  return runProjectAction(project => openWithKind(kind, project))
 }
+const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))
 </script>
 
 <template>
@@ -178,43 +203,6 @@ function onEditorMenuOpen(open: boolean) {
       >
         <Settings :size="16" />
       </button>
-      <DropdownMenu v-if="openInEditorVisible" @update:open="onEditorMenuOpen">
-        <DropdownMenuTrigger as-child>
-          <button
-            type="button"
-            class="titlebar-control"
-            :disabled="openingProject"
-            :title="t('openWith.openExternal')"
-            :aria-label="t('openWith.openExternal')"
-          >
-            <Code :size="16" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" class="min-w-56">
-          <DropdownMenuItem :disabled="openingProject" @click="openInExplorer">
-            <Folder :size="16" class="shrink-0" />
-            <span class="min-w-0 truncate">{{ t("openWith.openInExplorer") }}</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem :disabled="openingProject" @click="openInTerminal">
-            <SquareTerminal :size="16" class="shrink-0" />
-            <span class="min-w-0 truncate">{{ t("openWith.openInTerminal") }}</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuLabel>{{ t("openWith.openProjectTitle") }}</DropdownMenuLabel>
-          <DropdownMenuItem
-            v-for="option in editorMenuItems"
-            :key="option.id"
-            :disabled="openingProject"
-            @click="openInEditor(option.id)"
-          >
-            <img v-if="editorIcons[option.id]" :src="editorIcons[option.id]!" class="size-4 shrink-0" alt="" />
-            <span class="min-w-0 truncate">{{ option.label }}</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem v-if="editorMenuItems.length === 0" disabled>
-            {{ t("openWith.noEditorFound") }}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
       <Badge
         v-if="isDevelopment"
         variant="destructive"
@@ -224,6 +212,50 @@ function onEditorMenuOpen(open: boolean) {
       </Badge>
     </div>
     <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
+    <div v-if="openInEditorVisible" class="flex h-full items-center">
+      <button
+        type="button"
+        class="titlebar-control titlebar-open-main"
+        :disabled="openingProject"
+        :title="`${t('openWith.openProjectDefault')} · ${defaultLabel}`"
+        :aria-label="t('openWith.openProjectDefault')"
+        @click="openWithDefault"
+      >
+        <img v-if="defaultIcon" :src="defaultIcon" class="size-4 shrink-0" alt="" />
+        <Code v-else :size="16" />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <button
+            type="button"
+            class="titlebar-control titlebar-open-trigger"
+            :disabled="openingProject"
+            :title="t('openWith.openExternal')"
+            :aria-label="t('openWith.openExternal')"
+          >
+            <ChevronDown :size="14" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" class="min-w-56">
+          <DropdownMenuItem
+            v-for="option in openWithMenuItems"
+            :key="option.id"
+            :disabled="openingProject"
+            @click="chooseOpenWith(option.id)"
+          >
+            <img v-if="editorIcons[option.id]" :src="editorIcons[option.id]!" class="size-4 shrink-0" alt="" />
+            <Folder v-else-if="option.id === 'system'" :size="16" class="shrink-0" />
+            <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+            <Check v-if="option.id === defaultKind" class="ml-auto size-3.5 shrink-0" />
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem :disabled="openingProject" @click="openInTerminal">
+            <SquareTerminal :size="16" class="shrink-0" />
+            <span class="min-w-0 truncate">{{ t("openWith.openInTerminal") }}</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
     <button
       v-if="showRightSidebar"
       type="button"
@@ -303,6 +335,13 @@ function onEditorMenuOpen(open: boolean) {
 }
 .titlebar-control[aria-current="page"] {
   color: var(--foreground);
+}
+.titlebar-open-main {
+  width: auto;
+  padding: 0 11px;
+}
+.titlebar-open-trigger {
+  width: 26px;
 }
 .titlebar-close:hover {
   background: #e81123;

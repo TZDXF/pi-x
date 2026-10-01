@@ -14,6 +14,7 @@ function harness(props: {
   openInEditorProject?: string
   isDesktop?: boolean
   availability?: Record<string, boolean>
+  defaultKind?: string
   customExecutable?: string
   failOpen?: boolean
 }) {
@@ -24,6 +25,7 @@ function harness(props: {
   const launched: { project: string; kind: string }[] = []
   const toasts: { message: string; kind: string }[] = []
   const mounted: (() => void | Promise<void>)[] = []
+  const preference = { value: { kind: props.defaultKind ?? "vscode", executable: props.customExecutable ?? "" } }
   const context = vm.createContext({
     computed: (fn: () => unknown) => ({
       get value() {
@@ -53,14 +55,17 @@ function harness(props: {
     },
     detectIcons: async () => ({}),
     EDITOR_OPTIONS: EDITORS,
-    openWithPreference: { value: { kind: "vscode", executable: props.customExecutable ?? "" } },
+    openWithPreference: preference,
+    setOpenWith: (kind: string) => {
+      preference.value.kind = kind
+    },
     openProjectInEditor: async (project: string, kind: string) => {
       if (props.failOpen) throw new Error("boom")
       launched.push({ project, kind })
     },
     openPath: async (path: string) => {
       if (props.failOpen) throw new Error("boom")
-      launched.push({ project: path, kind: "explorer" })
+      launched.push({ project: path, kind: "system" })
     },
     openTerminalInDir: async (dir: string) => {
       if (props.failOpen) throw new Error("boom")
@@ -84,12 +89,11 @@ function harness(props: {
         `
 globalThis.api = {
   get openInEditorVisible() { return openInEditorVisible.value },
-  get editorMenuItems() { return editorMenuItems.value },
-  get editorsDetected() { return editorsDetected.value },
-  get editorAvailability() { return editorAvailability.value },
-  get openingProject() { return openingProject.value },
-  openInEditor,
-  openInExplorer,
+  get defaultKind() { return defaultKind.value },
+  get defaultLabel() { return defaultLabel.value },
+  get openWithMenuItems() { return openWithMenuItems.value },
+  openWithDefault,
+  chooseOpenWith,
   openInTerminal,
 };`,
       { target: ts.ScriptTarget.ES2022 },
@@ -97,10 +101,16 @@ globalThis.api = {
     context,
   )
   return {
-    api: (context as { api: Record<string, { value?: unknown }> | Record<string, unknown> }).api,
+    api: context.api as Record<string, unknown> & {
+      openInEditorVisible: boolean
+      defaultKind: string
+      defaultLabel: string
+      openWithMenuItems: { id: string; label: string }[]
+    },
     launched,
     toasts,
     mounted,
+    preference,
   }
 }
 
@@ -108,7 +118,7 @@ async function mount(h: ReturnType<typeof harness>) {
   for (const fn of h.mounted) await fn()
 }
 
-test("the IDE entry is visible only with a project in an active desktop session", async () => {
+test("the entry is visible only with a project in an active desktop session", async () => {
   const shown = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
   await mount(shown)
   expect(shown.api.openInEditorVisible).toBe(true)
@@ -126,15 +136,17 @@ test("the IDE entry is visible only with a project in an active desktop session"
   expect(remote.api.openInEditorVisible).toBe(false)
 })
 
-test("detected availability filters the menu and custom IDE is appended only when configured", async () => {
+test("the menu lists the system default first, hides undetected IDEs and appends custom", async () => {
   const detected = harness({
     showOpenInEditor: true,
     openInEditorProject: "C:/code/pi-x",
     availability: { vscode: true, cursor: false, zed: false },
   })
   await mount(detected)
-  expect(detected.api.editorsDetected).toBe(true)
-  expect(detected.api.editorMenuItems).toEqual([{ id: "vscode", label: "Visual Studio Code" }])
+  expect(detected.api.openWithMenuItems).toEqual([
+    { id: "system", label: "openWith.system" },
+    { id: "vscode", label: "Visual Studio Code" },
+  ])
 
   const withCustom = harness({
     showOpenInEditor: true,
@@ -143,57 +155,62 @@ test("detected availability filters the menu and custom IDE is appended only whe
     customExecutable: "C:/editors/ide.exe",
   })
   await mount(withCustom)
-  expect(withCustom.api.editorMenuItems).toEqual([{ id: "custom", label: "openWith.custom" }])
-
-  const undetected = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
-  await mount(undetected)
-  expect(undetected.api.editorsDetected).toBe(false)
-  expect(undetected.api.editorMenuItems).toHaveLength(EDITORS.length)
-
-  // 检测成功但全部未安装且未配置自定义 IDE：菜单为空，由模板渲染提示项
-  const none = harness({
-    showOpenInEditor: true,
-    openInEditorProject: "C:/code/pi-x",
-    availability: { vscode: false, cursor: false, zed: false },
-  })
-  await mount(none)
-  expect(none.api.editorMenuItems).toEqual([])
-})
-
-test("choosing an entry opens the session project with that editor and reports failures", async () => {
-  const h = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x", availability: { vscode: true } })
-  await mount(h)
-  await (h.api.openInEditor as (kind: string) => Promise<void>)("vscode")
-  expect(h.launched).toEqual([{ project: "C:/code/pi-x", kind: "vscode" }])
-
-  const failing = harness({
-    showOpenInEditor: true,
-    openInEditorProject: "C:/code/pi-x",
-    failOpen: true,
-  })
-  await mount(failing)
-  await (failing.api.openInEditor as (kind: string) => Promise<void>)("vscode")
-  expect(failing.launched).toEqual([])
-  expect(failing.toasts).toEqual([{ message: "openWith.openProjectFailed", kind: "error" }])
-})
-
-test("explorer and terminal entries open the session project in the same way", async () => {
-  const h = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
-  await mount(h)
-  await (h.api.openInExplorer as () => Promise<void>)()
-  await (h.api.openInTerminal as () => Promise<void>)()
-  expect(h.launched).toEqual([
-    { project: "C:/code/pi-x", kind: "explorer" },
-    { project: "C:/code/pi-x", kind: "terminal" },
+  expect(withCustom.api.openWithMenuItems).toEqual([
+    { id: "system", label: "openWith.system" },
+    { id: "custom", label: "openWith.custom" },
   ])
 
+  // 检测失败（如远程模式）时保留完整列表
+  const undetected = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
+  await mount(undetected)
+  expect(undetected.api.openWithMenuItems).toHaveLength(EDITORS.length + 1)
+})
+
+test("the main button opens with the default method and system falls back to the opener", async () => {
+  const h = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x", defaultKind: "vscode" })
+  await mount(h)
+  expect(h.api.defaultLabel).toBe("Visual Studio Code")
+  await (h.api.openWithDefault as () => Promise<void>)()
+  expect(h.launched).toEqual([{ project: "C:/code/pi-x", kind: "vscode" }])
+
+  const system = harness({
+    showOpenInEditor: true,
+    openInEditorProject: "C:/code/pi-x",
+    defaultKind: "system",
+  })
+  await mount(system)
+  expect(system.api.defaultLabel).toBe("openWith.system")
+  await (system.api.openWithDefault as () => Promise<void>)()
+  expect(system.launched).toEqual([{ project: "C:/code/pi-x", kind: "system" }])
+})
+
+test("choosing from the dropdown switches the default and opens with the chosen method", async () => {
+  const h = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x", defaultKind: "vscode" })
+  await mount(h)
+  await (h.api.chooseOpenWith as (kind: string) => Promise<void>)("cursor")
+  expect(h.preference.value.kind).toBe("cursor")
+  expect(h.launched).toEqual([{ project: "C:/code/pi-x", kind: "cursor" }])
+
+  const toSystem = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
+  await mount(toSystem)
+  await (toSystem.api.chooseOpenWith as (kind: string) => Promise<void>)("system")
+  expect(toSystem.preference.value.kind).toBe("system")
+  expect(toSystem.launched).toEqual([{ project: "C:/code/pi-x", kind: "system" }])
+})
+
+test("terminal entry opens the session project and failures surface as toasts", async () => {
+  const h = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x" })
+  await mount(h)
+  await (h.api.openInTerminal as () => Promise<void>)()
+  expect(h.launched).toEqual([{ project: "C:/code/pi-x", kind: "terminal" }])
+
   const failing = harness({
     showOpenInEditor: true,
     openInEditorProject: "C:/code/pi-x",
     failOpen: true,
   })
   await mount(failing)
-  await (failing.api.openInTerminal as () => Promise<void>)()
+  await (failing.api.chooseOpenWith as (kind: string) => Promise<void>)("zed")
   expect(failing.launched).toEqual([])
   expect(failing.toasts).toEqual([{ message: "openWith.openProjectFailed", kind: "error" }])
 })
