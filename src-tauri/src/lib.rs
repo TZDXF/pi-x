@@ -29,6 +29,7 @@ mod session_watch;
 mod sessions;
 mod skills;
 mod terminal;
+mod terminal_open;
 mod title_generation;
 mod trust;
 mod workspace_git;
@@ -142,7 +143,9 @@ pub fn run() {
             commands::session_export_file,
             commands::open_path,
             editor::open_in_editor,
+            editor::open_project_in_editor,
             editor::detect_editors,
+            terminal_open::open_terminal_in_dir,
             editor_icon::editor_icons,
             commands::models_config_get,
             commands::models_config_save,

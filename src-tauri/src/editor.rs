@@ -96,6 +96,42 @@ fn resolve_file(path: &str, project: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+fn editor_command(kind: &str, executable: Option<&str>) -> Result<Command, String> {
+    let binary = if kind == "custom" {
+        let candidate = PathBuf::from(executable.unwrap_or_default());
+        if !candidate.is_absolute() || !candidate.is_file() {
+            return Err("Choose an existing absolute editor executable path in Settings".into());
+        }
+        #[cfg(windows)]
+        if !candidate
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        {
+            return Err("The editor must be an .exe file, not a shell command or script".into());
+        }
+        candidate
+    } else {
+        editor_binary(kind).ok_or_else(|| "Editor not found. Install its command-line launcher or configure a custom executable in Settings".to_string())?
+    };
+    let mut command = Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    Ok(command)
+}
+
+pub(crate) fn spawn_detached(mut command: Command) -> Result<(), String> {
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Cannot launch editor: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_in_editor(
     app: tauri::AppHandle,
@@ -112,39 +148,38 @@ pub fn open_in_editor(
             .open_path(target.to_string_lossy(), None::<&str>)
             .map_err(|e| e.to_string());
     }
-    let binary = if kind == "custom" {
-        let candidate = PathBuf::from(executable.unwrap_or_default());
-        if !candidate.is_absolute() || !candidate.is_file() {
-            return Err("Choose an existing absolute editor executable path in Settings".into());
-        }
-        #[cfg(windows)]
-        if !candidate
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
-        {
-            return Err("The editor must be an .exe file, not a shell command or script".into());
-        }
-        candidate
-    } else {
-        editor_binary(&kind).ok_or_else(|| "Editor not found. Install its command-line launcher or configure a custom executable in Settings".to_string())?
-    };
-    let mut command = Command::new(binary);
+    let mut command = editor_command(&kind, executable.as_deref())?;
     command.arg(&target);
     if let Some(parent) = target.parent() {
         command.current_dir(parent);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    spawn_detached(command)
+}
+
+pub(crate) fn resolve_dir(project: &str) -> Result<PathBuf, String> {
+    let path = Path::new(project);
+    if !path.is_absolute() {
+        return Err("Project path must be absolute".into());
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Cannot launch editor: {e}"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    let target = dunce::canonicalize(path).map_err(|e| format!("Cannot open project: {e}"))?;
+    if !target.is_dir() {
+        return Err("The target is not a directory".into());
+    }
+    Ok(target)
+}
+
+/// Opens a project folder in the editor, e.g. from the title bar dropdown.
+#[tauri::command]
+pub fn open_project_in_editor(
+    project: String,
+    kind: String,
+    executable: Option<String>,
+) -> Result<(), String> {
+    let target = resolve_dir(&project)?;
+    let mut command = editor_command(&kind, executable.as_deref())?;
+    command.arg(&target);
+    command.current_dir(&target);
+    spawn_detached(command)
 }
 
 #[cfg(test)]
@@ -169,6 +204,18 @@ mod tests {
         assert!(resolve_file("a.ts", "relative").is_err());
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(dir).unwrap();
+    }
+    #[test]
+    fn resolves_project_directories_only() {
+        let dir = std::env::temp_dir().join(format!("pix-editor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let expected = dunce::canonicalize(&dir).unwrap();
+        assert_eq!(resolve_dir(dir.to_str().unwrap()).unwrap(), expected);
+        assert!(resolve_dir("relative").is_err());
+        assert!(resolve_dir("").is_err());
+        let missing = dir.to_str().unwrap().to_string();
+        std::fs::remove_dir(dir).unwrap();
+        assert!(resolve_dir(&missing).is_err());
     }
     #[test]
     fn unknown_editors_are_not_commands() {

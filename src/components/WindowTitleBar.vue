@@ -1,13 +1,38 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue"
+import { computed, onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { ChevronLeft, ChevronRight, PanelLeft, PanelRight, Settings } from "@lucide/vue"
+import { ChevronLeft, ChevronRight, Code, Folder, PanelLeft, PanelRight, Settings, SquareTerminal } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { isDesktop } from "@/api/transport"
+import { openPath, openTerminalInDir } from "@/api/piClient"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
+import {
+  detectEditors,
+  detectIcons,
+  EDITOR_OPTIONS,
+  openProjectInEditor,
+  openWithPreference,
+  type EditorIconMap,
+  type EditorKind,
+} from "@/lib/openWith"
+import { useUiStore } from "@/stores/conversations"
 
-const props = defineProps<{ sidebarOpen?: boolean; rightSidebarOpen?: boolean; showRightSidebar?: boolean }>()
+const props = defineProps<{
+  sidebarOpen?: boolean
+  rightSidebarOpen?: boolean
+  showRightSidebar?: boolean
+  showOpenInEditor?: boolean
+  openInEditorProject?: string
+}>()
 const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: [] }>()
 
 const { t } = useI18n()
@@ -29,6 +54,13 @@ onMounted(async () => {
   if (!appWindow) return
   unlistenResized = await appWindow.onResized(refreshWindowState)
   await refreshWindowState()
+  // 标题栏 IDE 列表：检测失败（如远程模式）时保持全列表展示
+  try {
+    editorAvailability.value = await detectEditors()
+    editorsDetected.value = true
+  } catch {
+    /* keep the full list */
+  }
 })
 
 onUnmounted(() => {
@@ -54,6 +86,49 @@ function toggleMaximize() {
 
 function close() {
   void appWindow?.close()
+}
+
+// ---- 从标题栏在外部打开当前会话的项目 ----
+const ui = useUiStore()
+const editorAvailability = ref<Record<string, boolean>>({})
+const editorsDetected = ref(false)
+const editorIcons = ref<EditorIconMap>({})
+const openingProject = ref(false)
+
+const openInEditorVisible = computed(() => isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject)
+// 与设置页一致：检测成功后隐藏未检测到的 IDE；配置过自定义 IDE 时追加该项
+const editorMenuItems = computed<{ id: EditorKind; label: string }[]>(() => {
+  const items: { id: EditorKind; label: string }[] = EDITOR_OPTIONS.filter(
+    option => !editorsDetected.value || editorAvailability.value[option.id] !== false,
+  ).map(option => ({ id: option.id, label: option.label }))
+  if (openWithPreference.value.kind === "custom" || openWithPreference.value.executable)
+    items.push({ id: "custom", label: t("openWith.custom") })
+  return items
+})
+
+async function runProjectAction(action: (project: string) => Promise<void>) {
+  const project = props.openInEditorProject
+  if (!project || openingProject.value) return
+  openingProject.value = true
+  try {
+    await action(project)
+  } catch (cause) {
+    ui.pushToast(t("openWith.openProjectFailed", { error: String(cause) }), "error")
+  } finally {
+    openingProject.value = false
+  }
+}
+
+const openInEditor = (kind: EditorKind) => runProjectAction(project => openProjectInEditor(project, kind))
+const openInExplorer = () => runProjectAction(project => openPath(project))
+const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))
+
+// 图标提取较慢，首次展开菜单时才拉取（后端有缓存）
+function onEditorMenuOpen(open: boolean) {
+  if (!open) return
+  void detectIcons().then(map => {
+    editorIcons.value = map
+  })
 }
 </script>
 
@@ -103,6 +178,43 @@ function close() {
       >
         <Settings :size="16" />
       </button>
+      <DropdownMenu v-if="openInEditorVisible" @update:open="onEditorMenuOpen">
+        <DropdownMenuTrigger as-child>
+          <button
+            type="button"
+            class="titlebar-control"
+            :disabled="openingProject"
+            :title="t('openWith.openExternal')"
+            :aria-label="t('openWith.openExternal')"
+          >
+            <Code :size="16" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" class="min-w-56">
+          <DropdownMenuItem :disabled="openingProject" @click="openInExplorer">
+            <Folder :size="16" class="shrink-0" />
+            <span class="min-w-0 truncate">{{ t("openWith.openInExplorer") }}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem :disabled="openingProject" @click="openInTerminal">
+            <SquareTerminal :size="16" class="shrink-0" />
+            <span class="min-w-0 truncate">{{ t("openWith.openInTerminal") }}</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>{{ t("openWith.openProjectTitle") }}</DropdownMenuLabel>
+          <DropdownMenuItem
+            v-for="option in editorMenuItems"
+            :key="option.id"
+            :disabled="openingProject"
+            @click="openInEditor(option.id)"
+          >
+            <img v-if="editorIcons[option.id]" :src="editorIcons[option.id]!" class="size-4 shrink-0" alt="" />
+            <span class="min-w-0 truncate">{{ option.label }}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem v-if="editorMenuItems.length === 0" disabled>
+            {{ t("openWith.noEditorFound") }}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Badge
         v-if="isDevelopment"
         variant="destructive"

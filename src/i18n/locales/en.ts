@@ -78,6 +78,12 @@ export default {
     save: "Save",
     open: "Open file with default application",
     failed: "Failed to open file: {error}",
+    openExternal: "Open externally",
+    openInExplorer: "Open in File Explorer",
+    openInTerminal: "Open in Terminal",
+    openProjectTitle: "Open project in IDE",
+    openProjectFailed: "Failed to open project: {error}",
+    noEditorFound: "No IDE detected. Configure one in Settings",
   },
   sidebarTabs: {
     title: "Right panel",

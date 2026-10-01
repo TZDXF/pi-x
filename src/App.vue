@@ -1012,6 +1012,8 @@ onUnmounted(() => {
       :sidebar-open="sidebarOpen"
       :right-sidebar-open="rightSidebarOpen"
       :show-right-sidebar="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules'"
+      :show-open-in-editor="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules'"
+      :open-in-editor-project="session.cwd || project"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
     />

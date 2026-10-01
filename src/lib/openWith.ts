@@ -64,3 +64,9 @@ export async function openFileInEditor(path: string, project: string) {
   const { kind, executable } = preference.value
   await invoke<void>("open_in_editor", { path, project, kind, executable: kind === "custom" ? executable : null })
 }
+
+/** 用指定 IDE 打开项目目录（kind 由标题栏下拉等调用方显式给定，而非默认偏好） */
+export async function openProjectInEditor(project: string, kind: EditorKind, executable = preference.value.executable) {
+  if (!isDesktop) throw new Error("Opening a local editor is available only in the desktop app")
+  await invoke<void>("open_project_in_editor", { project, kind, executable: kind === "custom" ? executable : null })
+}

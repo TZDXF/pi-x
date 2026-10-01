@@ -76,6 +76,12 @@ export default {
     save: "保存",
     open: "使用默认方式打开文件",
     failed: "打开文件失败：{error}",
+    openExternal: "在外部打开",
+    openInExplorer: "在资源管理器中打开",
+    openInTerminal: "在终端中打开",
+    openProjectTitle: "在 IDE 中打开项目",
+    openProjectFailed: "打开项目失败：{error}",
+    noEditorFound: "未检测到可用 IDE，可在设置中配置",
   },
   sidebarTabs: {
     title: "右侧面板",

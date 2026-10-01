@@ -251,6 +251,8 @@ export const searchFiles = (project: string, query: string) => invoke<FileHit[]>
 
 export const openPath = (path: string) => invoke<void>("open_path", { path })
 
+export const openTerminalInDir = (dir: string) => invoke<void>("open_terminal_in_dir", { dir })
+
 async function chooseExportPath(sessionFile?: string | null, directoryTitle?: string): Promise<string | null> {
   const directory = await chooseDirectory({ directory: true, title: directoryTitle })
   if (typeof directory !== "string") return null
