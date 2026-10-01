@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { estimateMcpContextUsage, parseMcpToolName, sanitizeMcpServerName } from "@/lib/mcpUsage"
+import { estimateMcpContextUsage, estimateMcpLoadUsage, parseMcpToolName, sanitizeMcpServerName } from "@/lib/mcpUsage"
 
 describe("sanitizeMcpServerName", () => {
   test("keeps identifier characters, dashes and underscores", () => {
@@ -102,5 +102,67 @@ describe("estimateMcpContextUsage", () => {
   test("returns an empty object for sessions without MCP activity", () => {
     expect(estimateMcpContextUsage([])).toEqual({})
     expect(estimateMcpContextUsage([{ role: "user", content: "hi" }])).toEqual({})
+  })
+})
+
+describe("estimateMcpLoadUsage", () => {
+  test("estimates each tool's definition cost and the server total", () => {
+    const defs = [
+      { name: "list", description: "List files", inputSchema: { type: "object", properties: {} } },
+      { name: "run", description: "Run a command", inputSchema: { type: "object" } },
+    ]
+    const load = estimateMcpLoadUsage("srv", defs)
+    expect(load).not.toBeNull()
+    expect(load!.server).toBe("srv")
+    expect(load!.toolCount).toBe(2)
+    // Per tool: full `mcp__srv__<name>` + description + parameters JSON, at
+    // 4 chars/token. Parameters mirror pi's toParameters: a schema without
+    // `properties` gains an empty one before it is serialized.
+    const expected = defs.map(def => {
+      const parameters = { ...def.inputSchema, properties: def.inputSchema.properties ?? {} }
+      const chars = `mcp__srv__${def.name}`.length + def.description!.length + JSON.stringify(parameters).length
+      return Math.ceil(chars / 4)
+    })
+    expect(load!.tokens).toBe(expected[0] + expected[1])
+    expect(load!.tools.map(tool => tool.tool)).toEqual(["list", "run"])
+    expect(load!.tools.map(tool => tool.tokens)).toEqual(expected)
+  })
+
+  test("sorts tools by descending cost", () => {
+    const defs = [
+      { name: "small", description: "S", inputSchema: { type: "object" } },
+      {
+        name: "large",
+        description: "A much longer description that costs many more tokens",
+        inputSchema: { type: "object" },
+      },
+    ]
+    const load = estimateMcpLoadUsage("srv", defs)
+    expect(load!.tools.map(tool => tool.tool)).toEqual(["large", "small"])
+  })
+
+  test("mirrors pi's description fallback and schema normalization", () => {
+    const load = estimateMcpLoadUsage("my srv", [{ name: "tool" }])
+    expect(load!.tools).toHaveLength(1)
+    // No description → pi's fixed fallback text; schema-less input becomes
+    // {"type":"object","properties":{}}; server name is sanitized.
+    const chars =
+      "mcp__my_srv__tool".length +
+      "MCP tool tool from server my srv".length +
+      JSON.stringify({ type: "object", properties: {} }).length
+    expect(load!.tokens).toBe(Math.ceil(chars / 4))
+  })
+
+  test("keeps schema fields like required in the estimate", () => {
+    const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] }
+    const withSchema = estimateMcpLoadUsage("srv", [{ name: "t", description: "d", inputSchema: schema }])
+    const bare = estimateMcpLoadUsage("srv", [
+      { name: "t", description: "d", inputSchema: { type: "object", properties: {} } },
+    ])
+    expect(withSchema!.tokens).toBeGreaterThan(bare!.tokens)
+  })
+
+  test("returns null without tool definitions", () => {
+    expect(estimateMcpLoadUsage("srv", [])).toBeNull()
   })
 })

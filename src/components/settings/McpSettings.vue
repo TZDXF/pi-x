@@ -4,8 +4,10 @@
  *  persist immediately (unknown def fields preserved). Connection status
  *  (state, tools, error) comes from `pi mcp list --json`, fetched
  *  automatically on mount and refreshed after every config change — there is
- *  no manual per-server check. Token usage is estimated from the active
- *  session's projected context (`get_messages`). If the file fails to parse,
+ *  no manual per-server check. Session token usage is estimated from the
+ *  active session's projected context (`get_messages`); the "cost if loaded"
+ *  estimate comes from each server's tool definitions (MCP `tools/list`,
+ *  fetched by mcp_status for connected servers). If the file fails to parse,
  *  a raw JSON fallback with an explicit save button is the repair path. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
@@ -25,7 +27,13 @@ import {
 import { formatCodedError } from "@/lib/backendError"
 import { compactNumber } from "@/lib/format"
 import { normalizeSlashes } from "@/lib/paths"
-import { estimateMcpContextUsage, sanitizeMcpServerName, type McpServerUsage } from "@/lib/mcpUsage"
+import {
+  estimateMcpContextUsage,
+  estimateMcpLoadUsage,
+  sanitizeMcpServerName,
+  type McpServerLoad,
+  type McpServerUsage,
+} from "@/lib/mcpUsage"
 import {
   mcpConfigTemplate,
   mcpEntryTransport,
@@ -79,6 +87,17 @@ const toolsDialog = ref<{ name: string } | null>(null)
 /** Estimated context usage per MCP server in the active session. */
 const mcpUsage = ref<Record<string, McpServerUsage> | null>(null)
 
+/** Estimated "cost if loaded" per server, from the tool definitions fetched
+ *  over MCP `tools/list`; keyed "scope:name" like the status map. */
+const loadCosts = computed<Record<string, McpServerLoad>>(() => {
+  const map: Record<string, McpServerLoad> = {}
+  for (const server of status.value?.servers ?? []) {
+    if (!server.toolDefs?.length) continue
+    const usage = estimateMcpLoadUsage(server.name, server.toolDefs)
+    if (usage) map[`${server.scope}:${server.name}`] = usage
+  }
+  return map
+})
 const active = computed(() => drafts.value[activeScope.value])
 const dirty = computed(() => !!active.value && active.value.content !== active.value.savedContent)
 const hasProject = computed(() => !!props.project)
@@ -114,6 +133,14 @@ function usageFor(name: string): McpServerUsage | undefined {
   return mcpUsage.value?.[sanitizeMcpServerName(name)]
 }
 
+function loadUsageFor(name: string): McpServerLoad | undefined {
+  return loadCosts.value[`${activeScope.value}:${name}`]
+}
+
+function toolLoadFor(serverName: string, tool: string): number | undefined {
+  return loadUsageFor(serverName)?.tools.find(entry => entry.tool === tool)?.tokens
+}
+
 /** Tool calls are attributed by sanitized name; codemode-exposed servers run
  *  through the codemode tool and never surface as mcp__… calls. */
 function toolUsageFor(serverName: string, tool: string): { calls: number; tokens: number } | undefined {
@@ -125,6 +152,16 @@ function toolUsageText(serverName: string, tool: string): string {
   const usage = toolUsageFor(serverName, tool)
   if (!usage?.calls) return t("mcpConfig.toolUnused")
   return `${t("mcpConfig.toolCalls", { count: usage.calls })} · ~${compactNumber(usage.tokens)} tokens`
+}
+
+/** Right-hand text of one tool row: the load-cost estimate plus the session
+ *  usage (calls and their context cost). */
+function toolRowText(serverName: string, tool: string): string {
+  const parts: string[] = []
+  const load = toolLoadFor(serverName, tool)
+  if (load != null) parts.push(`~${compactNumber(load)} tokens`)
+  parts.push(toolUsageText(serverName, tool))
+  return parts.join(" · ")
 }
 
 /** Tools shown inline before the "+N" overflow into the tools dialog. */
@@ -495,6 +532,14 @@ onMounted(load)
             <p class="mt-1 break-all font-mono text-xs text-muted-foreground">
               {{ endpointSummary(entry.def) }}
             </p>
+            <p
+              v-if="loadUsageFor(entry.name)"
+              class="mt-1 text-xs text-muted-foreground"
+              :title="t('mcpConfig.loadHint')"
+            >
+              {{ t("mcpConfig.loadLabel") }}: ~{{ compactNumber(loadUsageFor(entry.name)!.tokens) }} tokens ·
+              {{ t("mcpConfig.toolsCount", { count: loadUsageFor(entry.name)!.toolCount }) }}
+            </p>
             <p v-if="(usageFor(entry.name)?.calls ?? 0) > 0" class="mt-1 text-xs text-muted-foreground">
               {{ t("mcpConfig.usageLabel") }}: ~{{ compactNumber(usageFor(entry.name)!.tokens) }} tokens ·
               {{ t("mcpConfig.toolCalls", { count: usageFor(entry.name)!.calls }) }}
@@ -569,7 +614,7 @@ onMounted(load)
           class="flex items-center justify-between gap-3 rounded px-2 py-1 hover:bg-muted/50"
         >
           <span class="break-all font-mono text-xs">{{ tool }}</span>
-          <span class="shrink-0 text-xs text-muted-foreground">{{ toolUsageText(toolsDialog!.name, tool) }}</span>
+          <span class="shrink-0 text-xs text-muted-foreground">{{ toolRowText(toolsDialog!.name, tool) }}</span>
         </li>
       </ul>
     </DialogContent>

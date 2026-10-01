@@ -311,7 +311,10 @@ export default {
     toolsCount: "{count} tools",
     toolsTitle: 'Tools of "{name}"',
     toolsDialogDesc:
-      "All tools exposed by this server, with call counts and estimated context usage in the current session.",
+      'All tools exposed by this server; "~N tokens" estimates the context cost of the tool definitions when loaded, the other part shows usage in the current session.',
+    loadLabel: "Load cost (estimated)",
+    loadHint:
+      "Estimated at ~4 characters/token from tool names, descriptions and parameter schemas; actual context cost varies with exposure (deferred tools cost nothing until first invoked).",
     toolCalls: "{count} calls",
     toolUnused: "Not called in this session",
     usageLabel: "Session context usage (estimated)",
@@ -1313,5 +1316,10 @@ export default {
     mcpCheckNoInitialize: "The server response contains no initialize result",
     mcpCheckNotJsonRpc: "The server response is not a valid JSON-RPC message",
     mcpCheckNotInitialize: "The server response is not an initialize result",
+    mcpCheckRpc: "{detail}",
+    mcpToolsSpawnFailed: "Failed to start the server process: {detail}",
+    mcpToolsFailed: "Failed to fetch tool definitions: {detail}",
+    mcpToolsTimeout: "Fetching tool definitions timed out (30s)",
+    mcpToolsNoResponse: "The server response contains no tools/list result",
   },
 }

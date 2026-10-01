@@ -7,7 +7,12 @@
  * pi registers MCP tools as `mcp__<server>__<tool>` with characters outside
  * [A-Za-z0-9_-] replaced by "_", so server attribution compares the
  * sanitized server name (see createMcpToolName in pi's mcp extension).
+ *
+ * estimateMcpLoadUsage is the other direction: the static cost of a server's
+ * tool definitions if it were loaded, computed from its `tools/list` result.
  */
+
+import type { McpToolDef } from "@/api/piClient"
 
 export interface McpToolUsage {
   tool: string
@@ -21,6 +26,21 @@ export interface McpServerUsage {
   calls: number
   tokens: number
   tools: McpToolUsage[]
+}
+
+/** Token cost of one tool's model-facing definition. */
+export interface McpToolLoad {
+  tool: string
+  tokens: number
+}
+
+/** Estimated context cost of a server's tool definitions if it were loaded. */
+export interface McpServerLoad {
+  server: string
+  toolCount: number
+  tokens: number
+  /** Per-tool estimates, most expensive first. */
+  tools: McpToolLoad[]
 }
 
 const CHARS_PER_TOKEN = 4
@@ -57,6 +77,59 @@ function contentChars(content: unknown): number {
 }
 
 /**
+ * Parameters as pi declares a tool to the model: MCP servers may omit
+ * `type`, and providers reject object schemas without `properties` (pi's
+ * toParameters in the MCP extension).
+ */
+function declaredParameters(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  const base = schema ?? {}
+  return {
+    ...base,
+    type: base.type ?? "object",
+    ...(base.properties === undefined ? { properties: {} } : {}),
+  }
+}
+
+/** Model-facing description of one tool, mirroring pi's fallback chain
+ *  (trimmed description, else the fixed "MCP tool … from server …" text). */
+function declaredDescription(def: McpToolDef, server: string): string {
+  return def.description?.trim() || `MCP tool ${def.name} from server ${server}`
+}
+
+/**
+ * Estimate the context cost of loading `server`'s tool definitions — what the
+ * provider receives per tool when the server's tools are declared directly:
+ * the full `mcp__<server>__<tool>` name, the description and the parameter
+ * schema, at the same chars-per-token heuristic as the session estimate.
+ * Actual cost varies with exposure: codemode compresses the declarations into
+ * a budgeted description, deferred tools cost nothing until first invoked.
+ * Returns null when the server exposes no tool definitions.
+ */
+export function estimateMcpLoadUsage(server: string, defs: McpToolDef[]): McpServerLoad | null {
+  if (!defs.length) return null
+  const prefix = `mcp__${sanitizeMcpServerName(server)}__`
+  const tools = defs
+    .map(def => {
+      const name = `${prefix}${def.name}`
+      const chars =
+        name.length +
+        declaredDescription(def, server).length +
+        JSON.stringify(declaredParameters(def.inputSchema)).length
+      return { tool: def.name, tokens: toTokens(chars) }
+    })
+    .sort((a, b) => b.tokens - a.tokens || a.tool.localeCompare(b.tool))
+  return {
+    server,
+    toolCount: defs.length,
+    tokens: tools.reduce((sum, tool) => sum + tool.tokens, 0),
+    tools,
+  }
+}
+function toTokens(chars: number): number {
+  return Math.ceil(chars / CHARS_PER_TOKEN)
+}
+
+/**
  * Attribute context characters to MCP servers across the projected messages:
  * assistant toolCall blocks contribute name + arguments, toolResult messages
  * contribute their output (matched by callId). Returns an empty object when
@@ -65,7 +138,6 @@ function contentChars(content: unknown): number {
  * `mcp__…` tool runs.
  */
 export function estimateMcpContextUsage(messages: any[]): Record<string, McpServerUsage> {
-  const toTokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN)
   const servers = new Map<string, MutableUsage>()
   const tools = new Map<string, MutableUsage>()
   /** toolCallId → "server\0tool", from the assistant call blocks. */

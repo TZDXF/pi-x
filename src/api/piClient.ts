@@ -657,6 +657,14 @@ export const getMcpConfig = (scope: McpScope, project?: string) =>
 export const saveMcpConfig = (scope: McpScope, content: string, project?: string) =>
   invoke<void>("mcp_config_save", { scope, content, project: project ?? null })
 
+/** Model-facing fields of one MCP tool from the server's `tools/list`; the
+ *  raw material for the "cost if loaded" token estimate. */
+export interface McpToolDef {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
 /** One server report from `pi mcp list --json`. */
 export interface McpServerStatus {
   name: string
@@ -669,6 +677,9 @@ export interface McpServerStatus {
   tools: string[]
   /** Connection error, e.g. the tail of a stdio server's stderr. */
   error?: string | null
+  /** Tool definitions fetched over MCP `tools/list` (enabled connected
+   *  servers only); null when the fetch failed or did not run. */
+  toolDefs?: McpToolDef[] | null
   [key: string]: unknown
 }
 

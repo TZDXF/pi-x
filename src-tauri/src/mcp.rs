@@ -9,9 +9,11 @@
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::Command;
+use tokio::io::BufReader;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::pi_locate::{is_windows_script, Launcher};
@@ -251,13 +253,17 @@ pub async fn mcp_status(app: tauri::AppHandle, project: Option<String>) -> Resul
         ));
     }
     let (code, report) = mcp_list_json(&info, project.as_deref()).await?;
+    // Tool definitions for the load-cost estimate, fetched concurrently from
+    // the enabled connected servers (see collect_tool_defs).
+    let tool_defs = collect_tool_defs(&report, project.as_deref()).await;
     let servers: Vec<Value> = report
         .servers
         .iter()
         .map(|s| {
+            let scope = if s.scope.is_empty() { "global" } else { &s.scope };
             json!({
                 "name": s.name,
-                "scope": if s.scope.is_empty() { "global" } else { &s.scope },
+                "scope": scope,
                 "source": s.source,
                 "enabled": s.enabled,
                 "exposure": if s.exposure.is_empty() { "codemode" } else { &s.exposure },
@@ -265,6 +271,7 @@ pub async fn mcp_status(app: tauri::AppHandle, project: Option<String>) -> Resul
                 "state": if s.state.is_empty() { "unknown" } else { &s.state },
                 "tools": s.tools,
                 "error": s.error,
+                "toolDefs": tool_defs.get(&format!("{scope}:{}", s.name)),
             })
         })
         .collect();
@@ -480,22 +487,28 @@ fn initialize_request() -> String {
     .to_string()
 }
 
-/// Match a parsed JSON-RPC response: Some(Ok(())) = initialize result,
-/// Some(Err(text)) = JSON-RPC error, None = not a response to id 1.
-fn classify_response(value: &Value) -> Option<Result<(), String>> {
+/// Match a parsed JSON-RPC response to `id`: Some(Ok(result)) = success
+/// result, Some(Err(text)) = JSON-RPC error, None = a different message.
+fn response_result<'a>(value: &'a Value, id: i64) -> Option<Result<&'a Value, String>> {
     let object = value.as_object()?;
-    if object.get("id").and_then(|v| v.as_i64()) != Some(1) {
+    if object.get("id").and_then(|v| v.as_i64()) != Some(id) {
         return None;
     }
-    if object.contains_key("result") {
-        return Some(Ok(()));
+    if let Some(result) = object.get("result") {
+        return Some(Ok(result));
     }
     let error = object.get("error");
     let message = error
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
-        .unwrap_or("initialize error");
+        .unwrap_or("request error");
     Some(Err(message.to_string()))
+}
+
+/// Match a parsed JSON-RPC response: Some(Ok(())) = initialize result,
+/// Some(Err(text)) = JSON-RPC error, None = not a response to id 1.
+fn classify_response(value: &Value) -> Option<Result<(), String>> {
+    response_result(value, 1).map(|result| result.map(|_| ()))
 }
 
 /// How the initialize handshake failed. Error strings are built only after
@@ -508,6 +521,18 @@ enum HandshakeFailure {
     Timeout,
     /// The server answered with a JSON-RPC error.
     Rpc(String),
+}
+
+impl std::fmt::Display for HandshakeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HandshakeFailure::Write(e) => write!(f, "{e}"),
+            HandshakeFailure::Read(e) => write!(f, "{e}"),
+            HandshakeFailure::Exited => write!(f, "服务器进程在返回结果前退出"),
+            HandshakeFailure::Timeout => write!(f, "等待响应超时"),
+            HandshakeFailure::Rpc(message) => write!(f, "{message}"),
+        }
+    }
 }
 
 impl HandshakeFailure {
@@ -540,94 +565,52 @@ impl HandshakeFailure {
     }
 }
 
-async fn check_stdio(def: &Value) -> Result<u128, String> {
-    let (mut cmd, wrapped) = spawn_command(def)?;
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| pix_error_detail("mcpCheckSpawnFailed", "无法启动服务器进程: {detail}", e))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| pix_error("mcpCheckWriteFailed", "无法写入服务器标准输入"))?;
-    let mut stdout = tokio::io::BufReader::new(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| pix_error("mcpCheckReadFailed", "无法读取服务器标准输出"))?,
-    );
-    // Drain stderr in the background so a chatty server cannot block on a full
-    // pipe; the tail is collected once the handshake is over and attached to
-    // failure reports (a server that exits early usually explains why there).
-    let stderr_task = child.stderr.take().map(|mut stderr| {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 512];
-            loop {
-                match stderr.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        if buf.len() > STDERR_TAIL {
-                            let drop = buf.len() - STDERR_TAIL;
-                            buf.drain(..drop);
-                        }
+/// Background stderr drain so a chatty server cannot block on a full pipe;
+/// the tail (last STDERR_TAIL bytes) is collected after the exchange ends and
+/// attached to failure reports (a server that exits early usually explains
+/// why there).
+fn drain_stderr(child: &mut Child) -> Option<tokio::task::JoinHandle<String>> {
+    let mut stderr = child.stderr.take()?;
+    Some(tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 512];
+        loop {
+            match stderr.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > STDERR_TAIL {
+                        let drop = buf.len() - STDERR_TAIL;
+                        buf.drain(..drop);
                     }
                 }
             }
-            String::from_utf8_lossy(&buf).to_string()
-        })
-    });
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    }))
+}
 
-    use tokio::io::AsyncWriteExt;
-    let request = initialize_request();
-    // Latency only covers the initialize handshake round trip, not the
-    // process startup time (intentional).
-    let handshake = async {
-        if let Err(e) = stdin.write_all(request.as_bytes()).await {
-            return Err(HandshakeFailure::Write(e));
-        }
-        if let Err(e) = stdin.write_all(b"\n").await {
-            return Err(HandshakeFailure::Write(e));
-        }
-        if let Err(e) = stdin.flush().await {
-            return Err(HandshakeFailure::Write(e));
-        }
-        let started = std::time::Instant::now();
-        let read = async {
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match tokio::io::AsyncBufReadExt::read_line(&mut stdout, &mut line).await {
-                    Ok(0) => return Err(HandshakeFailure::Exited),
-                    Ok(_) => {}
-                    Err(e) => return Err(HandshakeFailure::Read(e)),
-                }
-                if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
-                    if let Some(classified) = classify_response(&value) {
-                        return match classified {
-                            Ok(()) => Ok(started.elapsed().as_millis()),
-                            Err(message) => Err(HandshakeFailure::Rpc(message)),
-                        };
-                    }
-                }
-            }
-        };
-        match tokio::time::timeout(CHECK_TIMEOUT, read).await {
-            Ok(result) => result,
-            Err(_) => Err(HandshakeFailure::Timeout),
-        }
+/// Tail of the drained stderr, formatted as an error detail suffix (empty
+/// when the server printed nothing).
+async fn stderr_tail_detail(stderr_task: Option<tokio::task::JoinHandle<String>>) -> String {
+    let Some(task) = stderr_task else {
+        return String::new();
     };
-    let outcome = handshake.await;
-    // cmd.exe wrappers (npx & friends) fork the real server, so kill the
-    // whole tree the same way pi-mcp does.
-    #[cfg(not(windows))]
-    let _ = wrapped;
-    #[cfg(windows)]
-    let pid = child.id();
+    // The child is gone, so the stderr pipe closes and the drain task
+    // finishes promptly; the timeout only guards a stuck pipe.
+    match tokio::time::timeout(Duration::from_secs(2), task).await {
+        Ok(Ok(text)) if !text.trim().is_empty() => format!(": {}", text.trim()),
+        _ => String::new(),
+    }
+}
+
+/// Kill a stdio server process. cmd.exe wrappers (npx & friends) fork the
+/// real server, so kill the whole process tree the same way pi-mcp does.
+async fn kill_stdio_child(child: &mut Child, wrapped: bool) {
     #[cfg(windows)]
     if wrapped {
-        if let Some(pid) = pid {
+        if let Some(pid) = child.id() {
             let mut killer = Command::new("taskkill");
             killer
                 .args(["/pid", &pid.to_string(), "/T", "/F"])
@@ -638,25 +621,83 @@ async fn check_stdio(def: &Value) -> Result<u128, String> {
             let _ = killer.status().await;
         }
     }
+    #[cfg(not(windows))]
+    let _ = wrapped;
     let _ = child.kill().await;
+}
+
+/// Write one JSON-RPC message as a newline-terminated line.
+async fn write_line(stdin: &mut ChildStdin, line: &str) -> Result<(), HandshakeFailure> {
+    use tokio::io::AsyncWriteExt;
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(HandshakeFailure::Write)?;
+    stdin
+        .write_all(b"\n")
+        .await
+        .map_err(HandshakeFailure::Write)?;
+    stdin.flush().await.map_err(HandshakeFailure::Write)
+}
+
+/// Read JSON-RPC lines until the response to `id` arrives: Ok(result payload)
+/// on success, the JSON-RPC error message on error, HandshakeFailure when the
+/// process dies or the pipe breaks first.
+async fn read_rpc_response(
+    stdout: &mut BufReader<ChildStdout>,
+    id: i64,
+) -> Result<Value, HandshakeFailure> {
+    use tokio::io::AsyncBufReadExt;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match stdout.read_line(&mut line).await {
+            Ok(0) => return Err(HandshakeFailure::Exited),
+            Ok(_) => {}
+            Err(e) => return Err(HandshakeFailure::Read(e)),
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
+            if let Some(result) = response_result(&value, id) {
+                return result.map(|result| result.clone()).map_err(HandshakeFailure::Rpc);
+            }
+        }
+    }
+}
+
+async fn check_stdio(def: &Value) -> Result<u128, String> {
+    let (mut cmd, wrapped) = spawn_command(def)?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| pix_error_detail("mcpCheckSpawnFailed", "无法启动服务器进程: {detail}", e))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| pix_error("mcpCheckWriteFailed", "无法写入服务器标准输入"))?;
+    let mut stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| pix_error("mcpCheckReadFailed", "无法读取服务器标准输出"))?,
+    );
+    let stderr_task = drain_stderr(&mut child);
+
+    // Latency only covers the initialize handshake round trip, not the
+    // process startup time (intentional).
+    let started = std::time::Instant::now();
+    let handshake = async {
+        write_line(&mut stdin, &initialize_request()).await?;
+        let read = read_rpc_response(&mut stdout, 1);
+        match tokio::time::timeout(CHECK_TIMEOUT, read).await {
+            Ok(result) => result.map(|_| started.elapsed().as_millis()),
+            Err(_) => Err(HandshakeFailure::Timeout),
+        }
+    };
+    let outcome = handshake.await;
+    kill_stdio_child(&mut child, wrapped).await;
     match outcome {
         Ok(latency) => Ok(latency),
         Err(failure) => {
-            // The child is gone, so the stderr pipe closes and the drain task
-            // finishes promptly; the timeout only guards a stuck pipe.
-            let tail = match stderr_task {
-                Some(task) => match tokio::time::timeout(Duration::from_secs(2), task).await {
-                    Ok(Ok(text)) => text.trim().to_string(),
-                    _ => String::new(),
-                },
-                None => String::new(),
-            };
-            let detail = if tail.is_empty() {
-                String::new()
-            } else {
-                format!(": {tail}")
-            };
-            Err(failure.into_error(detail))
+            Err(failure.into_error(stderr_tail_detail(stderr_task).await))
         }
     }
 }
@@ -727,6 +768,310 @@ async fn check_http(def: &Value) -> Result<u128, String> {
         Some(Err(message)) => Err(message),
         None => Err(pix_error("mcpCheckNotInitialize", "服务器响应不是 initialize 结果")),
     }
+}
+
+/// JSON-RPC `notifications/initialized`, sent after the initialize result.
+fn initialized_notification() -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    })
+    .to_string()
+}
+
+/// JSON-RPC `tools/list` request; ids are assigned by the caller for matching.
+fn tools_list_request(id: i64, cursor: Option<&str>) -> String {
+    let mut params = serde_json::Map::new();
+    if let Some(cursor) = cursor {
+        params.insert("cursor".to_string(), json!(cursor));
+    }
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/list",
+        "params": params
+    })
+    .to_string()
+}
+
+// ---- per-server tool definitions (load-cost estimate) ----
+// The model-facing cost of a loaded MCP server is dominated by its tool
+// definitions (name, description, input schema), which `pi mcp list --json`
+// does not expose. After the `pi mcp list` report, the settings backend
+// connects once more to every enabled connected server and runs `tools/list`
+// itself; the frontend turns the definitions into a token estimate.
+
+/// Cap on the whole stdio tools/list exchange.
+const TOOLS_TIMEOUT: Duration = Duration::from_secs(30);
+/// Cap on `tools/list` pagination rounds.
+const TOOLS_MAX_PAGES: usize = 10;
+
+/// Model-facing fields of one `tools/list` entry: name, description (falling
+/// back to the title, like pi's tool definitions) and the input schema. The
+/// estimate only needs these; annotations and output schema stay out.
+fn parse_tool_defs(result: &Value) -> Vec<Value> {
+    let Some(tools) = result.get("tools").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    tools
+        .iter()
+        .filter_map(|tool| {
+            let name = tool.get("name").and_then(|v| v.as_str())?;
+            let mut entry = serde_json::Map::new();
+            entry.insert("name".to_string(), Value::String(name.to_string()));
+            let description = tool
+                .get("description")
+                .and_then(|v| v.as_str())
+                .filter(|d| !d.trim().is_empty())
+                .or_else(|| {
+                    tool.get("title")
+                        .and_then(|v| v.as_str())
+                        .filter(|d| !d.trim().is_empty())
+                });
+            if let Some(description) = description {
+                entry.insert("description".to_string(), Value::String(description.to_string()));
+            }
+            if let Some(schema) = tool.get("inputSchema").filter(|s| s.is_object()) {
+                entry.insert("inputSchema".to_string(), schema.clone());
+            }
+            Some(Value::Object(entry))
+        })
+        .collect()
+}
+
+/// Extract the JSON-RPC response with `id` from an HTTP body that is either
+/// plain JSON or an SSE stream of `data:` lines. None = no matching response.
+fn extract_rpc_body(body: &str, content_type: &str, id: i64) -> Option<Result<Value, String>> {
+    if content_type.contains("text/event-stream") {
+        for line in body.lines() {
+            let data = line.strip_prefix("data:").map(str::trim).unwrap_or("");
+            if let Ok(value) = serde_json::from_str::<Value>(data) {
+                if let Some(result) = response_result(&value, id) {
+                    return Some(result.cloned());
+                }
+            }
+        }
+        None
+    } else {
+        let value: Value = serde_json::from_str(body.trim()).ok()?;
+        response_result(&value, id).map(|result| result.cloned())
+    }
+}
+
+/// POST one JSON-RPC message to a Streamable HTTP endpoint; returns the
+/// lowercase content type, the `Mcp-Session-Id` response header and the body.
+async fn post_rpc(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &[(String, String)],
+    body: &str,
+) -> Result<(String, Option<String>, String), String> {
+    let mut request = client
+        .post(url)
+        .header("Accept", "application/json, text/event-stream")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_owned());
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let response = request.send().await.map_err(|e| {
+        pix_error_detail("mcpCheckConnectFailed", "无法连接到服务器: {detail}", e)
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(pix_error_detail(
+            "mcpCheckHttp",
+            "服务器返回 HTTP {detail}",
+            status.as_u16(),
+        ));
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let text = response
+        .text()
+        .await
+        .map_err(|e| pix_error_detail("mcpCheckBodyFailed", "读取服务器响应失败: {detail}", e))?;
+    Ok((content_type, session, text))
+}
+
+/// stdio tools/list: connect, initialize, then page through `tools/list`.
+async fn fetch_stdio_tools(def: &Value) -> Result<Vec<Value>, String> {
+    let (mut cmd, wrapped) = spawn_command(def)?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| pix_error_detail("mcpToolsSpawnFailed", "无法启动服务器进程: {detail}", e))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| pix_error("mcpCheckWriteFailed", "无法写入服务器标准输入"))?;
+    let mut stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| pix_error("mcpCheckReadFailed", "无法读取服务器标准输出"))?,
+    );
+    let stderr_task = drain_stderr(&mut child);
+
+    let exchange = async {
+        write_line(&mut stdin, &initialize_request()).await?;
+        read_rpc_response(&mut stdout, 1).await?;
+        // The notification is fire-and-forget; servers answer only the requests.
+        let _ = write_line(&mut stdin, &initialized_notification()).await;
+        let mut tools: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for id in 2..(2 + TOOLS_MAX_PAGES as i64) {
+            write_line(&mut stdin, &tools_list_request(id, cursor.as_deref())).await?;
+            let result = read_rpc_response(&mut stdout, id).await?;
+            tools.extend(parse_tool_defs(&result));
+            cursor = result
+                .get("nextCursor")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok::<Vec<Value>, HandshakeFailure>(tools)
+    };
+    let outcome = tokio::time::timeout(TOOLS_TIMEOUT, exchange).await;
+    kill_stdio_child(&mut child, wrapped).await;
+    let detail = stderr_tail_detail(stderr_task).await;
+    match outcome {
+        Ok(Ok(tools)) => Ok(tools),
+        Ok(Err(failure)) => Err(pix_error_detail(
+            "mcpToolsFailed",
+            "获取工具定义失败: {detail}",
+            format!("{failure}{detail}"),
+        )),
+        Err(_) => Err(pix_error_detail(
+            "mcpToolsTimeout",
+            "获取工具定义超时（30 秒）{detail}",
+            detail,
+        )),
+    }
+}
+
+/// Streamable HTTP tools/list: initialize (capturing the session id), send
+/// the initialized notification, then page through `tools/list`.
+async fn fetch_http_tools(def: &Value) -> Result<Vec<Value>, String> {
+    let url = def_str(def, "url")
+        .filter(|u| !u.trim().is_empty())
+        .ok_or_else(|| pix_error("mcpServerInvalid", "该服务器缺少 command（stdio）或 url（HTTP）"))?;
+    let client = check_http_client()?;
+    let headers = def_string_record(def, "headers");
+
+    let (content_type, session, body) = post_rpc(&client, &url, &headers, &initialize_request()).await?;
+    let initialize = extract_rpc_body(&body, &content_type, 1)
+        .ok_or_else(|| pix_error("mcpCheckNoInitialize", "服务器响应流中没有 initialize 结果"))?
+        .map_err(|message| pix_error_detail("mcpCheckRpc", "{detail}", message))?;
+    if initialize.is_null() {
+        return Err(pix_error("mcpCheckNotInitialize", "服务器响应不是 initialize 结果"));
+    }
+    let headers = match &session {
+        Some(session) => {
+            let mut with_session = headers;
+            with_session.push(("Mcp-Session-Id".to_string(), session.clone()));
+            with_session
+        }
+        None => headers,
+    };
+    // Notifications usually answer 202 with an empty body; the result is ignored.
+    let _ = post_rpc(&client, &url, &headers, &initialized_notification()).await;
+
+    let mut tools: Vec<Value> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for id in 2..(2 + TOOLS_MAX_PAGES as i64) {
+        let request = tools_list_request(id, cursor.as_deref());
+        let (content_type, _, body) = post_rpc(&client, &url, &headers, &request).await?;
+        let result = extract_rpc_body(&body, &content_type, id)
+            .ok_or_else(|| pix_error("mcpToolsNoResponse", "服务器响应中没有 tools/list 结果"))?
+            .map_err(|message| pix_error_detail("mcpCheckRpc", "{detail}", message))?;
+        tools.extend(parse_tool_defs(&result));
+        cursor = result
+            .get("nextCursor")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    Ok(tools)
+}
+
+/// Tool definitions of one server definition; the transport dispatch mirrors
+/// the connection check (url present → Streamable HTTP, else stdio).
+async fn fetch_tool_defs(def: &Value) -> Result<Vec<Value>, String> {
+    if def.get("url").is_some() {
+        fetch_http_tools(def).await
+    } else {
+        fetch_stdio_tools(def).await
+    }
+}
+
+/// Parsed mcp.json documents per scope, for looking up server definitions.
+fn read_scope_docs(project: Option<&str>) -> HashMap<String, Value> {
+    let mut docs = HashMap::new();
+    for scope in ["global", "project"] {
+        let Ok(path) = config_path(scope, project) else {
+            continue;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(doc) = validate_config_text(raw.trim_start_matches('\u{feff}')) {
+            docs.insert(scope.to_string(), doc);
+        }
+    }
+    docs
+}
+
+/// Fetch tool definitions concurrently for every enabled, connected,
+/// non-hidden server in the report. Failures simply omit the entry — the
+/// estimate is decorative and must not fail the status call.
+async fn collect_tool_defs(
+    report: &McpListOutput,
+    project: Option<&str>,
+) -> HashMap<String, Vec<Value>> {
+    let docs = read_scope_docs(project);
+    let mut tasks = Vec::new();
+    for server in &report.servers {
+        let scope = if server.scope.is_empty() { "global" } else { &server.scope };
+        if !server.enabled || server.state != "connected" || server.exposure == "hidden" {
+            continue;
+        }
+        let Some(def) = docs
+            .get(scope)
+            .and_then(|doc| doc.get("mcpServers"))
+            .and_then(|servers| servers.get(&server.name))
+            .filter(|def| def.is_object())
+            .cloned()
+        else {
+            continue;
+        };
+        let key = format!("{scope}:{}", server.name);
+        tasks.push(tokio::spawn(async move {
+            match fetch_tool_defs(&def).await {
+                Ok(tools) => Some((key, tools)),
+                Err(_) => None,
+            }
+        }));
+    }
+    let mut defs = HashMap::new();
+    for task in tasks {
+        if let Ok(Some((key, tools))) = task.await {
+            defs.insert(key, tools);
+        }
+    }
+    defs
 }
 
 /// Connection check for one server in a mcp.json scope. Returns ok, latency
@@ -843,6 +1188,80 @@ mod tests {
     }
 
     #[test]
+    fn response_result_matches_requested_id() {
+        let ok: Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}"#).unwrap();
+        assert_eq!(response_result(&ok, 3).unwrap().unwrap()["tools"], serde_json::json!([]));
+        let error: Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"error":{"message":"nope"}}"#).unwrap();
+        assert_eq!(response_result(&ok, 2), None);
+        assert_eq!(response_result(&error, 3), Some(Err("nope".into())));
+    }
+
+    #[test]
+    fn parse_tool_defs_keeps_model_facing_fields() {
+        let result: Value = serde_json::from_str(
+            r#"{"tools":[
+                {"name":"read","description":"Read a file","inputSchema":{"type":"object","properties":{}}},
+                {"name":"titled","title":"Titled tool","inputSchema":"not-an-object"},
+                {"name":"bare"},
+                {"description":"no name"}
+            ]}"#,
+        )
+        .unwrap();
+        let tools = parse_tool_defs(&result);
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0]["name"], "read");
+        assert_eq!(tools[0]["description"], "Read a file");
+        assert_eq!(tools[0]["inputSchema"]["type"], "object");
+        // Title falls in when the description is missing; a non-object schema
+        // and tools without a name are dropped.
+        assert_eq!(tools[1]["description"], "Titled tool");
+        assert!(tools[1].get("inputSchema").is_none());
+        assert!(tools[2].get("description").is_none());
+    }
+
+    #[test]
+    fn parse_tool_defs_ignores_whitespace_descriptions() {
+        let result: Value = serde_json::from_str(
+            r#"{"tools":[{"name":"a","description":"   "},{"name":"b","title":"T"}]}"#,
+        )
+        .unwrap();
+        let tools = parse_tool_defs(&result);
+        assert!(tools[0].get("description").is_none());
+        assert_eq!(tools[1]["description"], "T");
+    }
+
+    #[test]
+    fn extract_rpc_body_reads_json_and_sse() {
+        let json_body = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"a"}]}}"#;
+        let extracted = extract_rpc_body(json_body, "application/json", 2).unwrap().unwrap();
+        assert_eq!(extracted["tools"][0]["name"], "a");
+        let sse_body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}\n\n";
+        let extracted = extract_rpc_body(sse_body, "text/event-stream", 2).unwrap().unwrap();
+        assert!(extracted["tools"].is_array());
+        // Non-matching ids and JSON-RPC errors surface distinctly.
+        assert!(extract_rpc_body(json_body, "application/json", 9).is_none());
+        let error_body = r#"{"jsonrpc":"2.0","id":2,"error":{"message":"boom"}}"#;
+        assert_eq!(
+            extract_rpc_body(error_body, "application/json", 2).unwrap(),
+            Err("boom".into())
+        );
+        // Notifications (202, empty body) yield no result.
+        assert!(extract_rpc_body("", "application/json", 2).is_none());
+    }
+
+    #[test]
+    fn tools_list_request_carries_cursor() {
+        let first: Value = serde_json::from_str(&tools_list_request(2, None)).unwrap();
+        assert_eq!(first["method"], "tools/list");
+        assert!(first["params"].as_object().unwrap().is_empty());
+        let paged: Value =
+            serde_json::from_str(&tools_list_request(3, Some("cur"))).unwrap();
+        assert_eq!(paged["params"]["cursor"], "cur");
+    }
+
+    #[test]
     fn spawn_command_builds_stdio_definition() {
         let def: Value = serde_json::from_str(
             r#"{"command":"npx","args":["-y","pkg"],"env":{"KEY":"v"},"cwd":"."}"#,
@@ -893,5 +1312,73 @@ mod tests {
             resolve_windows_command("definitely-not-a-real-pix-cmd"),
             "definitely-not-a-real-pix-cmd"
         );
+    }
+}
+
+/// A mock stdio MCP server that answers initialize and tools/list with two
+/// pages, exercising the whole fetch round trip. Needs `node` on PATH —
+/// always true in a development environment — and skips otherwise.
+#[cfg(test)]
+mod fetch_stdio_tests {
+    use super::*;
+
+    const MOCK_SERVER: &str = r#"
+import { createInterface } from "node:readline";
+const page1 = { tools: [
+  { name: "alpha", description: "Alpha tool", inputSchema: { type: "object", properties: { a: { type: "string" } } } },
+  { name: "beta", title: "Beta titled", inputSchema: { type: "object" } },
+], nextCursor: "page2" };
+const page2 = { tools: [
+  { name: "gamma", inputSchema: "not-an-object" },
+  { description: "no name" },
+] };
+const rl = createInterface({ input: process.stdin });
+for await (const line of rl) {
+  let msg;
+  try { msg = JSON.parse(line); } catch { continue; }
+  if (msg.method === "initialize") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2024-11-05" } }) + "\n");
+  } else if (msg.method === "tools/list") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: msg.params?.cursor === "page2" ? page2 : page1 }) + "\n");
+  }
+}
+"#;
+
+    #[tokio::test]
+    async fn fetch_stdio_tools_round_trip() {
+        let Some(node) = which_node() else {
+            return; // no node on PATH: nothing to run the mock server with
+        };
+        let mock = std::env::temp_dir().join(format!("pix-mock-mcp-{}.mjs", std::process::id()));
+        std::fs::write(&mock, MOCK_SERVER).unwrap();
+        let def = serde_json::json!({ "command": node, "args": [mock.to_string_lossy()] });
+        let result = fetch_stdio_tools(&def).await;
+        let _ = std::fs::remove_file(&mock);
+        let tools = result.expect("fetch should succeed");
+        // The nameless page-2 tool is dropped; the schema-less one is kept.
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0]["name"], "alpha");
+        assert_eq!(tools[0]["description"], "Alpha tool");
+        assert_eq!(tools[0]["inputSchema"]["properties"]["a"]["type"], "string");
+        assert_eq!(tools[1]["name"], "beta");
+        // Title fallback applied, like pi's tool definitions.
+        assert_eq!(tools[1]["description"], "Beta titled");
+        assert!(tools[2].get("inputSchema").is_none(), "non-object schema is dropped");
+    }
+
+    /// Locate `node` via PATH, like the frontend toolchain always provides.
+    fn which_node() -> Option<String> {
+        let ext = if cfg!(windows) { ".cmd" } else { "" };
+        for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
+            let candidate = dir.join(format!("node{ext}"));
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+            let bare = dir.join("node");
+            if bare.is_file() {
+                return Some(bare.to_string_lossy().into_owned());
+            }
+        }
+        None
     }
 }

@@ -301,7 +301,11 @@ export default {
     exposure: "暴露方式",
     toolsCount: "{count} 个工具",
     toolsTitle: "「{name}」的工具",
-    toolsDialogDesc: "该服务器暴露的全部工具，以及当前会话中的调用次数与上下文占用估算。",
+    toolsDialogDesc:
+      "该服务器暴露的全部工具；「~N tokens」为加载时工具定义的上下文占用估算，另一项为当前会话中的调用情况。",
+    loadLabel: "加载占用（估算）",
+    loadHint:
+      "按工具名、描述与参数 schema 以约 4 字符/token 估算注册到模型上下文的占用；实际占用随暴露方式变化（deferred 暴露在首次调用前不占用上下文）。",
     toolCalls: "{count} 次调用",
     toolUnused: "本会话未调用",
     usageLabel: "本会话上下文占用（估算）",
@@ -1274,5 +1278,10 @@ export default {
     mcpCheckNoInitialize: "服务器响应流中没有 initialize 结果",
     mcpCheckNotJsonRpc: "服务器响应不是合法的 JSON-RPC 消息",
     mcpCheckNotInitialize: "服务器响应不是 initialize 结果",
+    mcpCheckRpc: "{detail}",
+    mcpToolsSpawnFailed: "无法启动服务器进程: {detail}",
+    mcpToolsFailed: "获取工具定义失败: {detail}",
+    mcpToolsTimeout: "获取工具定义超时（30 秒）",
+    mcpToolsNoResponse: "服务器响应中没有 tools/list 结果",
   },
 }
