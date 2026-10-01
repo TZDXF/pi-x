@@ -136,6 +136,8 @@ function applyAccessModeChange() {
       if (proxyBase.value) {
         activeSrc.value = toProxyUrl(proxyBase.value, currentUrl.value)
         iframeKey.value++
+      } else {
+        loading.value = false
       }
     })
   } else {
@@ -200,7 +202,11 @@ async function doInitProxy() {
   try {
     const info = await previewProxyInfo()
     proxyBase.value = resolveProxyBase(info.base)
+    proxyError.value = false
   } catch {
+    // Drop the cached promise so switching back to proxy mode retries
+    // instead of replaying the failed init forever.
+    initPromise = null
     proxyError.value = true
   }
 }
