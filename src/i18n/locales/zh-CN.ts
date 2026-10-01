@@ -698,6 +698,7 @@ export default {
     toggle: "终端",
     new: "新建终端",
     closeTab: "关闭终端",
+    rename: "重命名终端",
     hide: "收起终端",
     exited: "进程已退出（退出码 {code}），点击 + 新建终端",
     empty: "暂无终端",

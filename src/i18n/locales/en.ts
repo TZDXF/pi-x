@@ -716,6 +716,7 @@ export default {
     toggle: "Terminal",
     new: "New terminal",
     closeTab: "Close terminal",
+    rename: "Rename terminal",
     hide: "Hide terminal",
     exited: "Process exited (code {code}). Click + to open a new terminal.",
     empty: "No terminal yet",

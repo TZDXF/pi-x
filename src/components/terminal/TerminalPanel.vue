@@ -12,6 +12,8 @@ import { Plus, SquareTerminal, X } from "@lucide/vue"
 interface TermTab {
   id: number
   title: string
+  /** Empty renames fall back to this generated label. */
+  baseTitle: string
   exited: boolean
   exitCode?: number
 }
@@ -23,6 +25,38 @@ const { t } = useI18n()
 const tabs = ref<TermTab[]>([])
 const activeId = ref<number | null>(null)
 const panelHeight = ref(320)
+
+// ---- tab rename ----
+const renamingId = ref<number | null>(null)
+const renameDraft = ref("")
+let renameInput: HTMLInputElement | null = null
+let renameCancelled = false
+
+function startRename(tab: TermTab) {
+  if (renamingId.value === tab.id) return
+  renameCancelled = false
+  renamingId.value = tab.id
+  renameDraft.value = tab.title
+  nextTick(() => {
+    renameInput?.focus()
+    renameInput?.select()
+  })
+}
+
+function commitRename() {
+  const tab = tabs.value.find(tab => tab.id === renamingId.value)
+  if (tab && !renameCancelled) tab.title = renameDraft.value.trim() || tab.baseTitle
+  renamingId.value = null
+}
+
+function cancelRename() {
+  renameCancelled = true
+  renamingId.value = null
+}
+
+function setRenameInput(el: unknown) {
+  renameInput = (el as HTMLInputElement) ?? null
+}
 
 const tabEls = new Map<number, HTMLElement>()
 interface TermInstance {
@@ -122,7 +156,7 @@ async function openTerminal() {
     channel.onmessage = encoded => {
       instances.get(id)?.term.write(b64ToBytes(encoded))
     }
-    tabs.value.push({ id, title: `#${tabs.value.length + 1}`, exited: false })
+    tabs.value.push({ id, title: `#${tabs.value.length + 1}`, baseTitle: `#${tabs.value.length + 1}`, exited: false })
     activeId.value = id
     await nextTick()
     mountTerminal(id)
@@ -132,6 +166,7 @@ async function openTerminal() {
 }
 
 async function closeTab(id: number) {
+  if (renamingId.value === id) renamingId.value = null
   const inst = instances.get(id)
   if (inst) {
     inst.dispose()
@@ -254,7 +289,11 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
     />
 
     <!-- empty state -->
-    <div v-if="!tabs.length" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-zinc-950 p-4">
+    <div
+      v-if="!tabs.length"
+      class="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-4"
+      :style="{ backgroundColor: terminalTheme.colors.background }"
+    >
       <SquareTerminal class="size-8 text-zinc-600" />
       <p class="text-xs text-zinc-500">{{ t("terminal.empty") }}</p>
       <Button type="button" variant="ghost" size="sm" class="text-zinc-300" @click="openTerminal">
