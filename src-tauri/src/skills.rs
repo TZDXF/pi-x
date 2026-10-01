@@ -444,8 +444,6 @@ fn add_explicit_locations(
 }
 
 fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
-    let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
-    let agent_dir = crate::trust::agent_dir();
     let hosted_root = skills_root();
     let hosted_paths: HashSet<PathBuf> = scan_root(&hosted_root)
         .unwrap_or_default()
@@ -456,6 +454,42 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     // Only global skills are auto-discovered; project-scoped sources (project
     // .pi/.agents directories, project packages, project settings paths) are
     // intentionally excluded.
+    let mut out = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for (root, path, kind, source_kind, source_name) in discovered_locations()? {
+        let canonical = canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !seen_paths.insert(canonical.clone()) {
+            continue;
+        }
+        let Ok(entry) = hosted_entry(&root, &path, kind) else {
+            continue;
+        };
+        if entry.description.trim().is_empty() {
+            continue;
+        }
+        out.push(DiscoveredSkill {
+            hosted: hosted_paths.contains(&canonical),
+            name: entry.name,
+            description: entry.description,
+            path: entry.path,
+            source_kind: source_kind.to_string(),
+            source_name,
+        });
+    }
+    out.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.path.cmp(&b.path))
+    });
+    Ok(out)
+}
+
+/// Candidate skill locations shared by discovery listing and the preview root
+/// check in [`ensure_discovered_skill_root`].
+fn discovered_locations() -> Result<Vec<SkillLocation>, String> {
+    let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
+    let agent_dir = crate::trust::agent_dir();
     let mut locations: Vec<SkillLocation> = Vec::new();
     add_root_locations(&mut locations, &agent_dir.join("skills"), "globalPi");
     add_root_locations(
@@ -491,35 +525,45 @@ fn skills_discovered() -> Result<Vec<DiscoveredSkill>, String> {
     for raw in pi_skill_paths()? {
         add_explicit_locations(&mut locations, &raw, &agent_dir, &home, "settingsGlobal");
     }
-    let mut out = Vec::new();
-    let mut seen_paths = HashSet::new();
-    for (root, path, kind, source_kind, source_name) in locations {
-        let canonical = canonicalize(&path).unwrap_or_else(|_| path.clone());
-        if !seen_paths.insert(canonical.clone()) {
-            continue;
-        }
-        let Ok(entry) = hosted_entry(&root, &path, kind) else {
-            continue;
+    Ok(locations)
+}
+
+/// Whether a preview root is one of the discovered skill roots: a directory
+/// skill itself, or the parent directory of a single-file skill.
+fn skill_root_allowed(root: &Path, locations: &[PathBuf]) -> bool {
+    let Ok(canonical_root) = canonicalize(root) else {
+        return false;
+    };
+    locations.iter().any(|loc| {
+        let loc = if loc.is_file() {
+            match loc.parent() {
+                Some(parent) => parent.to_path_buf(),
+                None => return false,
+            }
+        } else {
+            loc.clone()
         };
-        if entry.description.trim().is_empty() {
-            continue;
-        }
-        out.push(DiscoveredSkill {
-            hosted: hosted_paths.contains(&canonical),
-            name: entry.name,
-            description: entry.description,
-            path: entry.path,
-            source_kind: source_kind.to_string(),
-            source_name,
-        });
+        canonicalize(&loc)
+            .map(|c| c == canonical_root)
+            .unwrap_or(false)
+    })
+}
+
+/// Restrict skill preview to skills actually found by discovery. Without this
+/// the list/read commands would accept any absolute path and become an
+/// arbitrary-file-read primitive.
+fn ensure_discovered_skill_root(path: &str) -> Result<(), String> {
+    let root = skill_preview_root(path);
+    let locations = discovered_locations()?;
+    let allowed: Vec<PathBuf> = locations.into_iter().map(|(_, p, ..)| p).collect();
+    if skill_root_allowed(&root, &allowed) {
+        Ok(())
+    } else {
+        Err(pix_error(
+            "invalidResourcePath",
+            "技能路径不在已发现的技能列表中",
+        ))
     }
-    out.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then(a.path.cmp(&b.path))
-    });
-    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +591,7 @@ pub async fn skills_list_files(path: String) -> Result<Vec<String>, String> {
         if !root.exists() {
             return Err(pix_error("skillNotFound", "技能路径不存在"));
         }
+        ensure_discovered_skill_root(&path)?;
         if root.is_file() {
             return Ok(vec![dir_name(&root)]);
         }
@@ -564,6 +609,7 @@ pub async fn skills_list_files(path: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn skills_read_file(path: String, rel_path: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
+        ensure_discovered_skill_root(&path)?;
         let (_, canonical) = skill_read_target(&path, &rel_path)?;
         let bytes = std::fs::read(&canonical).map_err(|e| {
             pix_error_detail(
@@ -577,8 +623,7 @@ pub async fn skills_read_file(path: String, rel_path: String) -> Result<String, 
         if bytes[..sniff_end].contains(&0) {
             return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
         }
-        String::from_utf8(bytes)
-            .map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
+        String::from_utf8(bytes).map_err(|_| pix_error("resourceBinary", "二进制文件，不支持文本预览"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -793,6 +838,26 @@ mod tests {
             );
         }
         assert!(skill_read_target(root.join("missing").to_str().unwrap(), "SKILL.md").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skill_root_allowed_matches_discovered_locations() {
+        let root = temp_root("root-allowed");
+        let skill = root.join("my-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        let file_skill = root.join("single.md");
+        std::fs::write(&file_skill, SKILL_MD).unwrap();
+
+        // A directory skill's own path is allowed...
+        assert!(skill_root_allowed(&skill, &[skill.clone()]));
+        // ...and so is the parent dir of a single-file skill.
+        assert!(skill_root_allowed(&root, &[file_skill.clone()]));
+        // Unrelated or nonexistent roots are rejected.
+        let other = temp_root("root-other");
+        assert!(!skill_root_allowed(&skill, &[other]));
+        assert!(!skill_root_allowed(&root.join("missing"), &[skill]));
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }
