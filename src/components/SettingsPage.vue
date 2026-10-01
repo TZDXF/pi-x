@@ -101,6 +101,7 @@ interface SettingsSearchEntry {
 
 const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "general", labelKey: "settings.theme" },
+  { tab: "general", labelKey: "settings.terminalTheme" },
   { tab: "general", labelKey: "chat.runningBehavior" },
   { tab: "general", labelKey: "settings.language" },
   { tab: "shortcuts", labelKey: "settings.shortcutsTitle" },
@@ -140,6 +141,8 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "openWith",
     "projectless",
     "settings.theme",
+    "settings.terminalTheme",
+    "settings.terminalThemeDesc",
     "settings.runningBehaviorDesc",
     "settings.language",
     "retrySettings",
@@ -210,7 +213,7 @@ interface SettingsSearchResult {
 }
 
 /** Rows merged into General can be desktop-only even though the page itself is not. */
-const desktopOnlySearchEntries = new Set(["retrySettings.maxRetries"])
+const desktopOnlySearchEntries = new Set(["retrySettings.maxRetries", "settings.terminalTheme"])
 
 const searchEntries = computed<readonly SettingsSearchEntry[]>(() =>
   visibleTabs.value.flatMap(def => [
@@ -233,7 +236,7 @@ const searchResults = computed<readonly SettingsSearchResult[]>(() => {
         key: entry.labelKey,
         details: isMenuTitle
           ? SETTINGS_SEARCH_DETAIL_KEYS[entry.tab]
-              .filter(key => isDesktop || key !== "retrySettings")
+              .filter(key => isDesktop || !desktopOnlySearchEntries.has(key))
               .map(key => settingsSearchText(tm(key)))
               .join(" ")
           : "",

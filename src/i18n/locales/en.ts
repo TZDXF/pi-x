@@ -794,6 +794,22 @@ export default {
     themeDark: "Dark",
     themeSystem: "System",
 
+    terminalTheme: "Terminal color scheme",
+    terminalThemeDesc: "Adjust the terminal panel color scheme; customize core colors beyond the presets.",
+    terminalColorsTitle: "Terminal colors",
+    terminalColorsDesc: "Changing any color switches to a custom scheme.",
+    terminalColorBackground: "Background",
+    terminalColorForeground: "Text",
+    terminalColorCursor: "Cursor",
+    terminalColorSelection: "Selection",
+    terminalPresetDefault: "Default (dark)",
+    terminalPresetDracula: "Dracula",
+    terminalPresetSolarizedDark: "Solarized Dark",
+    terminalPresetNord: "Nord",
+    terminalPresetGithubLight: "GitHub Light",
+    terminalPresetCustom: "Custom",
+    terminalThemeReset: "Reset to default",
+
     remote: "LAN access",
     remoteDesc: "Connect on the same network with a QR code or password.",
     remoteWarning:

@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import WorkspaceSettings from "@/components/settings/WorkspaceSettings.vue"
 import RetrySettings from "@/components/settings/RetrySettings.vue"
 import QueueModeSettings from "@/components/settings/QueueModeSettings.vue"
+import TerminalThemeSettings from "@/components/settings/TerminalThemeSettings.vue"
 
 const { t } = useI18n()
 
@@ -65,6 +66,7 @@ function applyLocale(v: Locale) {
       </SelectContent>
     </Select>
   </SettingRow>
+  <TerminalThemeSettings v-if="isDesktop" />
   <SettingRow>
     <div class="min-w-0">
       <SettingHeading>{{ t("settings.language") }}</SettingHeading>

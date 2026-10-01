@@ -2,6 +2,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core"
 import { listen } from "@/api/transport"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
+import { terminalTheme } from "@/lib/terminalTheme"
 import { useI18n } from "vue-i18n"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
@@ -90,12 +91,7 @@ function mountTerminal(id: number) {
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true,
-    theme: {
-      background: "#09090b",
-      foreground: "#e4e4e7",
-      cursor: "#e4e4e7",
-      selectionBackground: "#3f3f46",
-    },
+    theme: { ...terminalTheme.value.colors },
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -207,6 +203,11 @@ function onPanelDblClick() {
   panelHeight.value = panelHeight.value > 320 ? 320 : Math.round(window.innerHeight * 0.6)
 }
 
+// Theme changes apply live to every mounted terminal and the container backdrop.
+watch(terminalTheme, t => {
+  for (const [, inst] of instances) inst.term.options.theme = { ...t.colors }
+})
+
 // ---- divider drag resize ----
 let dragStart: { y: number; height: number } | null = null
 function onDividerDown(e: MouseEvent) {
@@ -316,9 +317,21 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
                 : 'text-muted-foreground hover:bg-accent/50'
             "
             @click="switchTab(tab.id)"
+            @dblclick="startRename(tab)"
           >
             <SquareTerminal class="size-3.5" :class="tab.exited ? 'text-muted-foreground/50' : ''" />
-            <span :class="{ 'line-through opacity-60': tab.exited }">{{ tab.title }}</span>
+            <input
+              v-if="renamingId === tab.id"
+              :ref="setRenameInput"
+              v-model="renameDraft"
+              class="border-border bg-background text-foreground h-4 w-20 rounded-sm border px-1 text-xs outline-none"
+              :aria-label="t('terminal.rename')"
+              @click.stop
+              @blur="commitRename"
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc.prevent="cancelRename"
+            />
+            <span v-else :class="{ 'line-through opacity-60': tab.exited }">{{ tab.title }}</span>
             <X
               class="size-3 opacity-0 transition-opacity group-hover:opacity-100"
               :title="t('terminal.closeTab')"
@@ -350,7 +363,7 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
       </div>
 
       <!-- terminal containers (kept mounted, hidden per tab) -->
-      <div class="bg-zinc-950 min-h-0 flex-1 p-1">
+      <div class="min-h-0 flex-1 p-1" :style="{ backgroundColor: terminalTheme.colors.background }">
         <div
           v-for="tab in tabs"
           :key="tab.id"
