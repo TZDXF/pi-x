@@ -31,7 +31,7 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 
 ## 测试要求
 
-前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。E2E 使用 `e2e/*.spec.ts` 与 Playwright，不包含在 `test:web` 中；首次运行先执行 `pnpm run test:e2e:install`。E2E 通过本地 Vite harness 与确定性 mock 验证浏览器行为，禁止访问外部服务。
+前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。非必要不新增或扩展 E2E 测试，优先通过单元测试覆盖变更；仅在关键用户流程或浏览器交互无法由单元测试充分验证时编写 E2E。E2E 使用 `e2e/*.spec.ts` 与 Playwright，不包含在 `test:web` 中；首次运行先执行 `pnpm run test:e2e:install`。E2E 通过本地 Vite harness 与确定性 mock 验证浏览器行为，禁止访问外部服务。
 
 提交前运行 `pnpm run check`、`pnpm run test:web`、`pnpm run test:e2e` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
 
@@ -43,4 +43,4 @@ PR 应说明变更原因、影响范围、验证命令与结果，并关联相�
 
 ## 安全与协作
 
-不要提交 API key、`~/.pi/agent/auth.json` 或个人配置。修改进程调用时使用独立参数，避免拼接 shell 命令；保留项目信任校验。协作时使用中文，勿覆盖工作区已有的无关修改。
+不要提交 API key、个人配置。修改进程调用时使用独立参数，避免拼接 shell 命令；保留项目信任校验。协作时使用中文，勿覆盖工作区已有的无关修改。
