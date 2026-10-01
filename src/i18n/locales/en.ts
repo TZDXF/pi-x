@@ -113,7 +113,7 @@ export default {
     inspectHint: "Click an element or drag an area, then leave a comment for the agent",
     emptyHint: "Enter an address to start previewing",
     loading: "Loading…",
-    proxyUnavailable: "Preview proxy is unavailable. Please restart the app and try again.",
+    proxyUnavailable: "Preview proxy is unavailable. Switch to direct mode to keep browsing.",
     addAnnotation: "Add annotation",
     textTool: "Text annotation",
     commentPlaceholder: "Describe the issue for the agent…",
@@ -149,7 +149,8 @@ export default {
     accessModeAuto: "Auto",
     accessModeDirect: "Direct",
     accessModeProxy: "Proxy",
-    browseHintDirect: "Inspect and console are unavailable in direct mode; free-hand annotations still work",
+    browseHintDirect:
+      "Inspect and console are unavailable in direct fallback; free-hand annotations still work — switch back to proxy to restore them",
   },
   projectless: {
     name: "No-project Tasks",

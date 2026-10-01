@@ -22,33 +22,11 @@ export function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
 
-/** How the browser panel reaches the target page. */
+/** How the browser panel reaches the target page. The preview proxy is the
+ *  default everywhere (it injects the bridge that powers inspect, console and
+ *  page annotations); "direct" is a manual fallback for pages the proxy
+ *  cannot serve, and runs without the bridge. */
 export type AccessMode = "direct" | "proxy"
-
-const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
-
-/** True when the hostname is a literal IP address (IPv4 or IPv6). */
-export function isIpHostname(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "")
-  if (host.includes(":")) return true
-  const match = IPV4.exec(host)
-  if (!match) return false
-  return match.slice(1).every(octet => {
-    const value = Number(octet)
-    return value <= 255 && String(value) === octet
-  })
-}
-
-/**
- * Picks the default access mode. Desktop always loads pages directly in the
- * iframe; in web access an IP host means the viewing device likely cannot
- * reach dev servers running on the host machine, so the preview proxy is
- * used, while a named host goes direct.
- */
-export function resolveAccessMode(isDesktop: boolean, hostname: string): AccessMode {
-  if (isDesktop) return "direct"
-  return isIpHostname(hostname) ? "proxy" : "direct"
-}
 
 /** FNV-1a 64-bit hash — mirrors the Rust implementation in preview_proxy.rs. */
 function fnv1a(s: string): string {

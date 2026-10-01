@@ -49,20 +49,21 @@ import {
   nextAnnotationId,
   type PageAnnotation,
 } from "@/lib/previewAnnotations"
-import { normalizeInputUrl, resolveProxyBase, toProxyUrl, resolveAccessMode, type AccessMode } from "@/lib/previewUrl"
+import { normalizeInputUrl, resolveProxyBase, toProxyUrl, type AccessMode } from "@/lib/previewUrl"
 import { drawAnnotation, type DrawAnnotation, type DrawTool, type Point } from "@/lib/canvasAnnotations"
 
 type Mode = "none" | "draw" | "inspect"
 type CanvasTool = DrawTool | "eraser"
-type AccessPref = "auto" | "direct" | "proxy"
+type AccessPref = "auto" | "direct"
 
-/** localStorage key for the manual access-mode override (web access only). */
+/** localStorage key for the manual access-mode override. */
 const ACCESS_PREF_KEY = "pix.browser.accessMode"
 
 function loadAccessPref(): AccessPref {
   try {
     const stored = localStorage.getItem(ACCESS_PREF_KEY)
-    return stored === "direct" || stored === "proxy" || stored === "auto" ? stored : "auto"
+    // Legacy "proxy" collapsed into "auto" — the proxy is the auto default.
+    return stored === "direct" ? "direct" : "auto"
   } catch {
     /* Storage may be unavailable in restricted browsers. */
     return "auto"
@@ -82,16 +83,16 @@ const { t } = useI18n()
 
 // ---- preview proxy / navigation -------------------------------------------
 
-// ---- access mode: direct iframe vs preview proxy -----------------------------
-// Desktop always loads the target URL straight in the iframe (no proxy). In
-// web access the default is auto-detected from the address the app itself is
-// opened with — an IP host goes through the preview proxy, a named host goes
-// direct — and the toolbar toggle can override the detection.
+// ---- access mode: preview proxy vs direct iframe -----------------------------
+// The preview proxy is the default on every platform: it injects the bridge
+// that enables element inspect, console capture and page annotations, and it
+// also lets remote devices reach dev servers on this machine. Direct iframe
+// loading is a manual fallback (toolbar toggle) for pages the proxy cannot
+// serve; it runs without the bridge, so those features degrade there.
 
-const accessPref = ref<AccessPref>(isDesktop ? "auto" : loadAccessPref())
-const autoAccessMode: AccessMode = resolveAccessMode(isDesktop, window.location.hostname)
+const accessPref = ref<AccessPref>(loadAccessPref())
 const effectiveAccessMode = computed<AccessMode>(() =>
-  accessPref.value === "auto" ? autoAccessMode : accessPref.value,
+  accessPref.value === "direct" ? "direct" : "proxy",
 )
 /** True when the iframe loads target URLs without the preview proxy. */
 const directMode = computed(() => effectiveAccessMode.value === "direct")
@@ -108,7 +109,7 @@ const accessModeLabel = computed(() => {
 const accessModeTitle = computed(() => `${t("browser.accessMode")}: ${accessModeLabel.value}`)
 
 function cycleAccessMode() {
-  const order: AccessPref[] = ["auto", "direct", "proxy"]
+  const order: AccessPref[] = ["auto", "direct"]
   const next = order[(order.indexOf(accessPref.value) + 1) % order.length]
   accessPref.value = next
   try {
@@ -801,9 +802,8 @@ onBeforeUnmount(() => {
           @keydown.enter="navigate"
         />
       </div>
-      <!-- Access mode toggle: web access only (desktop is always direct). -->
+      <!-- Access mode toggle: proxy by default, direct as the manual fallback. -->
       <button
-        v-if="!isDesktop"
         type="button"
         class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         :title="accessModeTitle"

@@ -111,7 +111,7 @@ export default {
     inspectHint: "点击元素或拖拽框选，附上评论反馈给 AI",
     emptyHint: "输入网址以开始预览",
     loading: "加载中…",
-    proxyUnavailable: "预览代理不可用，请重启应用后重试。",
+    proxyUnavailable: "预览代理不可用，可切换为直连模式继续浏览。",
     addAnnotation: "添加标注",
     textTool: "文字标注",
     commentPlaceholder: "输入给 AI 的说明…",
@@ -147,7 +147,7 @@ export default {
     accessModeAuto: "自动",
     accessModeDirect: "直连",
     accessModeProxy: "代理",
-    browseHintDirect: "直连模式不支持元素检查与控制台，画笔标注仍可使用",
+    browseHintDirect: "直连回退不支持元素检查与控制台，画笔标注仍可使用；切回代理即可恢复",
   },
   projectless: {
     name: "无项目任务",

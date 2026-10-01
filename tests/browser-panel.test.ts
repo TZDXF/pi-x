@@ -66,3 +66,16 @@ test("direct access mode bypasses the proxy and degrades bridge features", () =>
   expect(panel).toMatch(/directHistory\.value\[directIndex\.value\]/)
   expect(panel).toMatch(/iframeKey\.value\+\+/)
 })
+
+test("proxy access is the default and direct is a manual fallback", () => {
+  const panel = read("../src/components/browser/BrowserPanel.vue")
+  // auto 即代理:仅在手动选择 direct 时才直连,检查/控制台等 bridge 功能默认可用。
+  expect(panel).toMatch(/accessPref\.value === "direct" \? "direct" : "proxy"/)
+  // 历史存储值 "proxy" 已并入 auto(代理就是默认)。
+  expect(panel).toMatch(/stored === "direct" \? "direct" : "auto"/)
+  // 访问方式切换按钮在桌面端同样可用(直连是所有端共用的回退)。
+  expect(panel).toMatch(/@click="cycleAccessMode"/)
+  expect(panel).not.toMatch(/v-if="!isDesktop"/)
+  // 基于主机名的自动探测已被移除。
+  expect(panel).not.toMatch(/resolveAccessMode/)
+})
