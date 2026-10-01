@@ -4,8 +4,9 @@
  *  persist immediately (unknown def fields preserved). Connection status
  *  (state, tools, error) comes from `pi mcp list --json`, fetched
  *  automatically on mount and refreshed after every config change — there is
- *  no manual per-server check. If the file fails to parse, a raw JSON
- *  fallback with an explicit save button is the repair path. */
+ *  no manual per-server check. Token usage is estimated from the active
+ *  session's projected context (`get_messages`). If the file fails to parse,
+ *  a raw JSON fallback with an explicit save button is the repair path. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Pencil, Plus, RefreshCw, Trash2 } from "@lucide/vue"
@@ -13,6 +14,7 @@ import { ask } from "@tauri-apps/plugin-dialog"
 import {
   getMcpConfig,
   getMcpStatus,
+  rpcRequest,
   saveMcpConfig,
   trustStatus,
   type McpScope,
@@ -21,6 +23,9 @@ import {
   type TrustStatus,
 } from "@/api/piClient"
 import { formatCodedError } from "@/lib/backendError"
+import { compactNumber } from "@/lib/format"
+import { normalizeSlashes } from "@/lib/paths"
+import { estimateMcpContextUsage, sanitizeMcpServerName, type McpServerUsage } from "@/lib/mcpUsage"
 import {
   mcpConfigTemplate,
   mcpEntryTransport,
@@ -33,10 +38,11 @@ import {
   type McpJsonError,
   type McpJsonValidation,
 } from "@/lib/mcpConfig"
-import { useUiStore } from "@/stores/conversations"
+import { useSessionStore, useUiStore } from "@/stores/conversations"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import McpServerEditor, { type McpServerSubmit } from "./mcp/McpServerEditor.vue"
 
 interface McpDraft {
@@ -68,6 +74,10 @@ const statusLoaded = ref(false)
 const dialogOpen = ref(false)
 /** null = create; otherwise edit this server. */
 const editingServer = ref<{ name: string; def: Record<string, unknown> } | null>(null)
+/** Server whose full tool list the dialog shows. */
+const toolsDialog = ref<{ name: string } | null>(null)
+/** Estimated context usage per MCP server in the active session. */
+const mcpUsage = ref<Record<string, McpServerUsage> | null>(null)
 
 const active = computed(() => drafts.value[activeScope.value])
 const dirty = computed(() => !!active.value && active.value.content !== active.value.savedContent)
@@ -98,6 +108,34 @@ const statusByKey = computed(() => {
 
 function statusFor(name: string): McpServerStatus | undefined {
   return statusByKey.value.get(`${activeScope.value}:${name}`)
+}
+
+function usageFor(name: string): McpServerUsage | undefined {
+  return mcpUsage.value?.[sanitizeMcpServerName(name)]
+}
+
+/** Tool calls are attributed by sanitized name; codemode-exposed servers run
+ *  through the codemode tool and never surface as mcp__… calls. */
+function toolUsageFor(serverName: string, tool: string): { calls: number; tokens: number } | undefined {
+  const usage = usageFor(serverName)
+  return usage?.tools.find(entry => entry.tool === tool)
+}
+
+function toolUsageText(serverName: string, tool: string): string {
+  const usage = toolUsageFor(serverName, tool)
+  if (!usage?.calls) return t("mcpConfig.toolUnused")
+  return `${t("mcpConfig.toolCalls", { count: usage.calls })} · ~${compactNumber(usage.tokens)} tokens`
+}
+
+/** Tools shown inline before the "+N" overflow into the tools dialog. */
+const INLINE_TOOL_LIMIT = 6
+
+function inlineTools(server: McpServerStatus): string[] {
+  return server.tools.slice(0, INLINE_TOOL_LIMIT)
+}
+
+function overflowToolCount(server: McpServerStatus): number {
+  return Math.max(0, server.tools.length - INLINE_TOOL_LIMIT)
 }
 
 function fmt(e: unknown): string {
@@ -151,6 +189,22 @@ async function load() {
   }
   // Connection check runs on open, not on demand; errors surface inline.
   void refreshStatus()
+  void loadUsage()
+}
+
+/** Estimated MCP context usage of the active conversation. Best effort: it
+ *  needs a started session matching this settings' project (when one is set)
+ *  and is simply absent otherwise. */
+async function loadUsage() {
+  const session = useSessionStore()
+  if (!session.started) return
+  if (props.project && session.cwd && normalizeSlashes(session.cwd) !== normalizeSlashes(props.project)) return
+  try {
+    const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" }, session.runtimeId)
+    if (res.success) mcpUsage.value = estimateMcpContextUsage(res.data?.messages ?? [])
+  } catch {
+    // Usage stats are decorative; a missing projection only hides them.
+  }
 }
 
 function onEdit(value: string | number) {
@@ -221,6 +275,10 @@ function openCreate() {
 function openEdit(name: string, def: Record<string, unknown>) {
   editingServer.value = { name, def }
   dialogOpen.value = true
+}
+
+function openTools(name: string) {
+  toolsDialog.value = { name }
 }
 
 async function onServerSubmit(payload: McpServerSubmit) {
@@ -437,15 +495,31 @@ onMounted(load)
             <p class="mt-1 break-all font-mono text-xs text-muted-foreground">
               {{ endpointSummary(entry.def) }}
             </p>
-            <div v-if="statusFor(entry.name)?.tools.length" class="mt-2 flex flex-wrap gap-1">
+            <p v-if="(usageFor(entry.name)?.calls ?? 0) > 0" class="mt-1 text-xs text-muted-foreground">
+              {{ t("mcpConfig.usageLabel") }}: ~{{ compactNumber(usageFor(entry.name)!.tokens) }} tokens ·
+              {{ t("mcpConfig.toolCalls", { count: usageFor(entry.name)!.calls }) }}
+            </p>
+            <div
+              v-if="statusFor(entry.name)?.tools.length"
+              class="mt-2 flex items-center gap-1 overflow-hidden whitespace-nowrap"
+            >
               <Badge
-                v-for="tool in statusFor(entry.name)!.tools"
+                v-for="tool in inlineTools(statusFor(entry.name)!)"
                 :key="tool"
                 variant="secondary"
-                class="font-mono text-xs font-normal"
+                class="shrink-0 font-mono text-xs font-normal"
               >
                 {{ tool }}
               </Badge>
+              <button
+                v-if="overflowToolCount(statusFor(entry.name)!)"
+                type="button"
+                class="shrink-0 rounded px-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                :aria-label="t('mcpConfig.toolsTitle', { name: entry.name })"
+                @click="openTools(entry.name)"
+              >
+                +{{ overflowToolCount(statusFor(entry.name)!) }}
+              </button>
             </div>
             <pre
               v-if="statusFor(entry.name)?.error"
@@ -480,4 +554,24 @@ onMounted(load)
   </div>
 
   <McpServerEditor v-model:open="dialogOpen" :server="editingServer" :saving="saving" @submit="onServerSubmit" />
+
+  <!-- Full tool list of one server; per-tool usage comes from the active session. -->
+  <Dialog :open="!!toolsDialog" @update:open="value => !value && (toolsDialog = null)">
+    <DialogContent class="sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>{{ t("mcpConfig.toolsTitle", { name: toolsDialog?.name ?? "" }) }}</DialogTitle>
+        <DialogDescription>{{ t("mcpConfig.toolsDialogDesc") }}</DialogDescription>
+      </DialogHeader>
+      <ul class="max-h-80 space-y-0.5 overflow-auto">
+        <li
+          v-for="tool in statusFor(toolsDialog?.name ?? '')?.tools ?? []"
+          :key="tool"
+          class="flex items-center justify-between gap-3 rounded px-2 py-1 hover:bg-muted/50"
+        >
+          <span class="break-all font-mono text-xs">{{ tool }}</span>
+          <span class="shrink-0 text-xs text-muted-foreground">{{ toolUsageText(toolsDialog!.name, tool) }}</span>
+        </li>
+      </ul>
+    </DialogContent>
+  </Dialog>
 </template>

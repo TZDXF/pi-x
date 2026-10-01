@@ -300,6 +300,11 @@ export default {
     errorAt: "（第 {line} 行第 {column} 列）",
     exposure: "暴露方式",
     toolsCount: "{count} 个工具",
+    toolsTitle: "「{name}」的工具",
+    toolsDialogDesc: "该服务器暴露的全部工具，以及当前会话中的调用次数与上下文占用估算。",
+    toolCalls: "{count} 次调用",
+    toolUnused: "本会话未调用",
+    usageLabel: "本会话上下文占用（估算）",
     stateUnknown: "未知（{state}）",
     state: {
       connected: "已连接",

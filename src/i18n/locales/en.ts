@@ -309,6 +309,12 @@ export default {
     errorAt: "(line {line}, column {column})",
     exposure: "Exposure",
     toolsCount: "{count} tools",
+    toolsTitle: 'Tools of "{name}"',
+    toolsDialogDesc:
+      "All tools exposed by this server, with call counts and estimated context usage in the current session.",
+    toolCalls: "{count} calls",
+    toolUnused: "Not called in this session",
+    usageLabel: "Session context usage (estimated)",
     stateUnknown: "Unknown ({state})",
     state: {
       connected: "Connected",
