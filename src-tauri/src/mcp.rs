@@ -389,25 +389,28 @@ fn windows_quote_arg(arg: &str) -> String {
                 backslashes += 1;
                 out.push('\\');
             }
-                '"' => {
-                    for _ in 0..backslashes {
-                        out.push('\\');
-                    }
-                    backslashes = 0;
-                    out.push('"');
+            '"' => {
+                // Backslashes preceding a quote are doubled and the quote is
+                // escaped, or CommandLineToArgvW swallows it (a"b -> ab) or
+                // splits the argument (a\"b -> two args).
+                for _ in 0..backslashes {
+                    out.push('\\');
                 }
-                _ => {
-                    backslashes = 0;
-                    out.push(ch);
-                }
+                backslashes = 0;
+                out.push_str("\\\"");
+            }
+            _ => {
+                backslashes = 0;
+                out.push(ch);
             }
         }
-        for _ in 0..backslashes {
-            out.push('\\');
-        }
-        out.push('"');
-        out
     }
+    for _ in 0..backslashes {
+        out.push('\\');
+    }
+    out.push('"');
+    out
+}
 
 /// Build the spawn command for a stdio server definition (command + args +
 /// env + cwd). The child inherits this process's environment so PATH-based
@@ -1300,6 +1303,19 @@ mod tests {
             windows_cmd_line(r"C:\tools\x.cmd", &["a b", "c"]),
             r#""C:\tools\x.cmd" "a b" c"#
         );
+    }
+
+    // Embedded quotes must be escaped per the Windows argument rules:
+    // backslashes before a quote are doubled and the quote becomes \".
+    // A bare quote is swallowed by CommandLineToArgvW (a"b parses as ab)
+    // and an unescaped backslash-quote pair splits into two arguments.
+    #[cfg(windows)]
+    #[test]
+    fn windows_quote_arg_escapes_embedded_quotes() {
+        assert_eq!(windows_quote_arg("a\"b"), r#""a\"b""#);
+        assert_eq!(windows_quote_arg("a\\\"b"), r#""a\\\"b""#);
+        assert_eq!(windows_quote_arg("x y\\"), r#""x y\\""#);
+        assert_eq!(windows_quote_arg("plain"), "plain");
     }
 
     #[cfg(windows)]
