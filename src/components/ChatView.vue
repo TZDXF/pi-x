@@ -49,7 +49,7 @@ import ComposerRichEditor from "@/components/ComposerRichEditor.vue"
 import ComposerText from "@/components/ComposerText.vue"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { baseName } from "@/lib/paths"
-import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { buildPromptWithCodeComments } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { useSessionFork } from "@/composables/useSessionFork"
@@ -693,13 +693,20 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
                       <ComposerText v-else :text="entry.text" />
-                      <div v-if="entry.images?.length" class="mt-1.5 flex flex-wrap gap-1.5">
-                        <img
+                      <!-- sent attachments keep the composer's chip look: a small
+                           thumbnail, click to zoom, instead of large inline images -->
+                      <div v-if="entry.images?.length" class="mt-1.5 flex flex-wrap gap-2">
+                        <button
                           v-for="(im, i) in entry.images"
                           :key="i"
-                          :src="im.url"
-                          class="max-h-40 max-w-xs rounded-md border object-contain"
-                        />
+                          type="button"
+                          class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+                          :title="t('chat.previewImage')"
+                          :aria-label="t('chat.previewImage')"
+                          @click="previewImage = im.url"
+                        >
+                          <img :src="im.url" class="size-full object-cover" alt="" loading="lazy" />
+                        </button>
                       </div>
                     </div>
                     <div v-else class="min-w-0 space-y-3">
@@ -922,7 +929,7 @@ onBeforeUnmount(() => {
                 class="border-border bg-muted relative size-16 overflow-hidden rounded-md border"
               >
                 <img
-                  v-if="isImageUrl(f.url)"
+                  v-if="isImageAttachment(f)"
                   :src="f.url"
                   class="size-full cursor-zoom-in object-cover"
                   alt="attachment"
