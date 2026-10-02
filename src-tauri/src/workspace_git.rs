@@ -1,5 +1,6 @@
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tauri::AppHandle;
 use tokio::process::Command;
 
 use crate::errors::{pix_error, pix_error_detail};
@@ -91,32 +92,54 @@ pub async fn workspace_git_info(project: String) -> Result<GitInfo, String> {
         worktrees: parse_worktrees(&list),
     })
 }
+/// 读取设置中的 worktree 创建目录；未配置或为空白时视为未设置。
+fn worktree_dir_setting(app: &AppHandle) -> Option<String> {
+    crate::commands::app_config_get(app.clone())
+        .ok()?
+        .worktree_dir
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[tauri::command]
 pub async fn workspace_git_create(
+    app: AppHandle,
     project: String,
     branch: String,
     worktree: bool,
 ) -> Result<String, String> {
-    create_from(project, branch, worktree, "HEAD").await
+    let dir = worktree_dir_setting(&app);
+    create_from(project, branch, worktree, "HEAD", dir.as_deref()).await
 }
 
 /// Prepare a draft only when its first message is submitted. The selected branch
 /// is a base, never the branch to check out in the new worktree (it may be in use).
 #[tauri::command]
 pub async fn workspace_git_prepare(
+    app: AppHandle,
     project: String,
     branch: String,
     worktree: bool,
 ) -> Result<String, String> {
+    let dir = worktree_dir_setting(&app);
+    prepare_from(project, &branch, worktree, dir.as_deref()).await
+}
+
+async fn prepare_from(
+    project: String,
+    branch: &str,
+    worktree: bool,
+    dir: Option<&str>,
+) -> Result<String, String> {
     if branch.is_empty() || branch.starts_with('-') || branch.starts_with('@') {
         return Err(pix_error("branchNameInvalid", "请输入有效的分支名"));
     }
-    git(&project, &["check-ref-format", "--branch", &branch]).await?;
+    git(&project, &["check-ref-format", "--branch", branch]).await?;
     let reference = format!("refs/heads/{branch}^{{commit}}");
     let commit = git(&project, &["rev-parse", "--verify", &reference]).await?;
     if worktree {
         let name = format!("pix/{}", uuid::Uuid::new_v4().simple());
-        create_from(project, name, true, &commit).await
+        create_from(project, name, true, &commit, dir).await
     } else {
         // Local mode means the main checkout, even when the draft was opened
         // from a linked worktree. Git refuses unsafe switches; never force them.
@@ -126,9 +149,31 @@ pub async fn workspace_git_prepare(
             .next()
             .ok_or_else(|| pix_error("worktreeParentUnknown", "无法确定工作树父目录"))?
             .path;
-        git(&main, &["switch", &branch]).await?;
+        git(&main, &["switch", branch]).await?;
         Ok(main)
     }
+}
+
+/// worktree 的父目录：配置了 `worktreeDir` 时以它为准（`~` 展开为主目录，
+/// 相对路径按项目根解析），否则用仓库同级目录下的 `.pix-worktrees`。
+fn worktree_parent_in(configured: Option<&str>, root: &Path, home: &Path) -> PathBuf {
+    let Some(value) = configured.map(str::trim).filter(|value| !value.is_empty()) else {
+        return root.parent().unwrap_or(root).join(".pix-worktrees");
+    };
+    let expanded = crate::data_dir::expand_home(value, home);
+    if expanded.has_root() {
+        expanded
+    } else {
+        root.join(expanded)
+    }
+}
+
+fn worktree_parent(configured: Option<&str>, root: &Path) -> PathBuf {
+    worktree_parent_in(
+        configured,
+        root,
+        &dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+    )
 }
 
 async fn create_from(
@@ -136,6 +181,7 @@ async fn create_from(
     branch: String,
     worktree: bool,
     base: &str,
+    worktree_dir: Option<&str>,
 ) -> Result<String, String> {
     let branch = branch.trim();
     if branch.is_empty() || branch.starts_with('-') || branch.starts_with('@') {
@@ -144,9 +190,7 @@ async fn create_from(
     git(&project, &["check-ref-format", "--branch", branch]).await?;
     let root = git(&project, &["rev-parse", "--show-toplevel"]).await?;
     if worktree {
-        let parent = Path::new(&root)
-            .parent()
-            .ok_or_else(|| pix_error("worktreeParentUnknown", "无法确定工作树父目录"))?;
+        let parent = worktree_parent(worktree_dir, Path::new(&root));
         let repo_name = Path::new(&root)
             .file_name()
             .unwrap_or_default()
@@ -163,10 +207,8 @@ async fn create_from(
             .take(48)
             .collect();
         let suffix = uuid::Uuid::new_v4().simple().to_string();
-        let path = parent
-            .join(".pix-worktrees")
-            .join(format!("{repo_name}-{slug}-{}", &suffix[..8]));
-        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+        let path = parent.join(format!("{repo_name}-{slug}-{}", &suffix[..8]));
+        std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
         let target = path.to_string_lossy().to_string();
         git(&project, &["worktree", "add", "-b", branch, &target, base]).await?;
         Ok(target)
@@ -179,6 +221,13 @@ async fn create_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 测试入口：不读取真实配置文件，worktree 落在默认位置。
+    async fn create(project: String, branch: &str, worktree: bool) -> Result<String, String> {
+        create_from(project, branch.to_string(), worktree, "HEAD", None).await
+    }
+    async fn prepare(project: String, branch: &str, worktree: bool) -> Result<String, String> {
+        prepare_from(project, branch, worktree, None).await
+    }
     struct Repo(std::path::PathBuf);
     impl Drop for Repo {
         fn drop(&mut self) {
@@ -233,23 +282,21 @@ mod tests {
         assert_eq!(info.branch, "main");
         assert!(info.branches.is_empty());
         assert!(info.unborn_branch);
-        assert!(workspace_git_prepare(path.to_string(), "main".into(), true)
-            .await
-            .is_err());
+        assert!(prepare(path.to_string(), "main", true).await.is_err());
     }
     #[tokio::test]
     async fn creates_branch_and_isolated_worktree() {
         let repo = repo().await;
         let project = repo.0.join("repo").to_string_lossy().to_string();
         std::fs::write(repo.0.join("repo/untracked.txt"), "keep").unwrap();
-        workspace_git_create(project.clone(), "feature/local".into(), false)
+        create(project.clone(), "feature/local", false)
             .await
             .unwrap();
         assert_eq!(
             workspace_git_info(project.clone()).await.unwrap().branch,
             "feature/local"
         );
-        let tree = workspace_git_create(project.clone(), "feature/isolated".into(), true)
+        let tree = create(project.clone(), "feature/isolated", true)
             .await
             .unwrap();
         let info = workspace_git_info(tree.clone()).await.unwrap();
@@ -268,7 +315,7 @@ mod tests {
             "feature/local"
         );
         assert!(Path::new(&project).join("untracked.txt").exists());
-        assert!(workspace_git_create(project, "feature/local".into(), false)
+        assert!(create(project, "feature/local", false)
             .await
             .is_err());
     }
@@ -298,7 +345,7 @@ mod tests {
         let base = git(&project, &["rev-parse", "HEAD"]).await.unwrap();
         git(&project, &["switch", "main"]).await.unwrap();
         std::fs::write(repo.0.join("repo/untracked.txt"), "keep").unwrap();
-        let tree = workspace_git_prepare(project.clone(), "feature/base".into(), true)
+        let tree = prepare(project.clone(), "feature/base", true)
             .await
             .unwrap();
         assert_eq!(git(&tree, &["rev-parse", "HEAD"]).await.unwrap(), base);
@@ -314,7 +361,7 @@ mod tests {
         assert!(!Path::new(&tree).join("untracked.txt").exists());
         assert!(Path::new(&project).join("untracked.txt").exists());
         // The current branch can also be a base even though it is checked out.
-        let other = workspace_git_prepare(project.clone(), "main".into(), true)
+        let other = prepare(project.clone(), "main", true)
             .await
             .unwrap();
         assert_ne!(tree, other);
@@ -325,7 +372,7 @@ mod tests {
         let repo = repo().await;
         let project = repo.0.join("repo").to_string_lossy().to_string();
         git(&project, &["branch", "feature/local"]).await.unwrap();
-        workspace_git_prepare(project.clone(), "feature/local".into(), false)
+        prepare(project.clone(), "feature/local", false)
             .await
             .unwrap();
         assert_eq!(
@@ -333,7 +380,7 @@ mod tests {
             "feature/local"
         );
         for branch in ["missing", "--help", "@{-1}", "main~1"] {
-            assert!(workspace_git_prepare(project.clone(), branch.into(), true)
+            assert!(prepare(project.clone(), branch, true)
                 .await
                 .is_err());
         }
@@ -344,11 +391,74 @@ mod tests {
         let repo = repo().await;
         let project = repo.0.join("repo").to_string_lossy().to_string();
         for name in ["", "--help", "../escape", "a b", "@{-1}"] {
-            assert!(workspace_git_create(project.clone(), name.into(), true)
+            assert!(create(project.clone(), name, true)
                 .await
                 .is_err());
         }
         assert_eq!(workspace_git_info(project).await.unwrap().branch, "main");
         assert!(!repo.0.join(".pix-worktrees").exists());
+    }
+    #[test]
+    fn worktree_parent_resolves_configured_relative_and_tilde_paths() {
+        let home = Path::new("/home/test");
+        let root = Path::new("/code/repo");
+        // 未配置或空白时使用仓库同级目录下的 .pix-worktrees。
+        assert_eq!(
+            worktree_parent_in(None, root, home),
+            PathBuf::from("/code/.pix-worktrees")
+        );
+        assert_eq!(
+            worktree_parent_in(Some("  "), root, home),
+            PathBuf::from("/code/.pix-worktrees")
+        );
+        // 绝对路径原样使用，~ 展开为主目录。
+        assert_eq!(
+            worktree_parent_in(Some("/data/trees"), root, home),
+            PathBuf::from("/data/trees")
+        );
+        assert_eq!(
+            worktree_parent_in(Some("~/trees"), root, home),
+            PathBuf::from("/home/test/trees")
+        );
+        // 相对路径以项目根为准。
+        assert_eq!(
+            worktree_parent_in(Some("trees"), root, home),
+            PathBuf::from("/code/repo/trees")
+        );
+        assert_eq!(
+            worktree_parent_in(Some("../trees"), root, home),
+            PathBuf::from("/code/repo/../trees")
+        );
+    }
+    #[tokio::test]
+    async fn creates_worktree_in_configured_directory() {
+        let repo = repo().await;
+        let project = repo.0.join("repo").to_string_lossy().to_string();
+        // 相对路径以项目根解析。
+        let relative = create_from(
+            project.clone(),
+            "feature/relative".into(),
+            true,
+            "HEAD",
+            Some("trees"),
+        )
+        .await
+        .unwrap();
+        assert!(Path::new(&relative).starts_with(repo.0.join("repo/trees")));
+        // 绝对路径原样使用。
+        let absolute_dir = repo.0.join("elsewhere");
+        let absolute = create_from(
+            project.clone(),
+            "feature/absolute".into(),
+            true,
+            "HEAD",
+            Some(absolute_dir.to_str().unwrap()),
+        )
+        .await
+        .unwrap();
+        assert!(Path::new(&absolute).starts_with(&absolute_dir));
+        let info = workspace_git_info(absolute.clone()).await.unwrap();
+        assert_eq!(info.branch, "feature/absolute");
+        assert!(info.worktree);
     }
 }

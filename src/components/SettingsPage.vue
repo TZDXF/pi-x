@@ -139,6 +139,8 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   general: [
     "settings.workspace",
     "openWith",
+    "workspace.worktreeDirLabel",
+    "workspace.worktreeDirDesc",
     "projectless",
     "settings.theme",
     "settings.terminalTheme",

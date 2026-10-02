@@ -487,6 +487,12 @@ export default {
     create: "Create and switch",
     worktreeHint:
       "Create a separate worktree and new branch from HEAD, then switch to it. Uncommitted changes are not copied.",
+    worktreeDirLabel: "Worktree directory",
+    worktreeDirDesc:
+      "Where new worktrees are created for new sessions. Supports absolute paths and paths relative to the project root; leave empty to use .pix-worktrees next to the repository.",
+    worktreeDirPlaceholder: "Default: .pix-worktrees next to the repository",
+    worktreeDirChoose: "Choose directory…",
+    worktreeDirReset: "Clear",
     branchHint: "Create and switch to a new branch from HEAD, preserving working changes.",
     emptyTitle: "What do you want to build in {project}?",
   },

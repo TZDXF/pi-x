@@ -43,6 +43,8 @@ export interface AppConfig {
   translationModel?: ModelRef
   /** 无项目会话的工作目录；缺省为 `~/.pix/workspace`。 */
   projectlessDir?: string
+  /** 新会话创建 worktree 的父目录；支持绝对路径与相对项目的相对路径，缺省为仓库同级 `.pix-worktrees`。 */
+  worktreeDir?: string
   /** PiX 内置文件变更插件；缺省为启用。 */
   builtinFileChanges?: boolean
 }

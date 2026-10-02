@@ -31,8 +31,15 @@ pub fn resolve_projectless_dir(configured: Option<&str>) -> PathBuf {
 fn projectless_dir_in(configured: Option<&str>, home: &Path) -> PathBuf {
     match configured.map(str::trim).filter(|value| !value.is_empty()) {
         None => root_in(home).join("workspace"),
-        Some("~") => home.to_path_buf(),
-        Some(value) => match value
+        Some(value) => expand_home(value, home),
+    }
+}
+
+/// 展开 `~`、`~/`、`~\` 前缀为主目录；其余值（含 `~other`）原样返回。
+pub fn expand_home(value: &str, home: &Path) -> PathBuf {
+    match value {
+        "~" => home.to_path_buf(),
+        _ => match value
             .strip_prefix("~/")
             .or_else(|| value.strip_prefix("~\\"))
         {

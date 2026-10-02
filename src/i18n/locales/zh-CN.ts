@@ -473,6 +473,12 @@ export default {
     creating: "正在创建…",
     create: "创建并切换",
     worktreeHint: "从当前 HEAD 创建独立工作树和新分支，成功后切换至该目录。未提交的修改不会复制。",
+    worktreeDirLabel: "Worktree 创建目录",
+    worktreeDirDesc:
+      "新建会话创建 Worktree 时使用的位置。支持绝对路径和相对路径，相对路径以项目根目录为准；留空使用仓库同级目录下的 .pix-worktrees。",
+    worktreeDirPlaceholder: "默认：仓库同级目录下的 .pix-worktrees",
+    worktreeDirChoose: "选择目录…",
+    worktreeDirReset: "清除",
     branchHint: "从当前 HEAD 创建并切换到新分支，保留工作区修改。",
     emptyTitle: "想在 {project} 里构建什么？",
   },

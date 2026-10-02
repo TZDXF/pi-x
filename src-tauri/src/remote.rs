@@ -400,6 +400,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             cfg.last_project = a["config"]["lastProject"].as_str().map(str::to_owned);
             // 远程端只能改工作区偏好和内置插件开关，其余应用配置（如 piPath）保持主机现状。
             cfg.projectless_dir = a["config"]["projectlessDir"].as_str().map(str::to_owned);
+            cfg.worktree_dir = a["config"]["worktreeDir"].as_str().map(str::to_owned);
             if let Some(enabled) = a["config"]["builtinFileChanges"].as_bool() {
                 cfg.builtin_file_changes = Some(enabled);
             }
@@ -540,6 +541,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         .map_err(|e| e.to_string())?),
         "workspace_git_create" => Ok(Value::String(
             crate::workspace_git::workspace_git_create(
+                app.clone(),
                 text("project")?,
                 text("branch")?,
                 a["worktree"]
@@ -550,6 +552,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         )),
         "workspace_git_prepare" => Ok(Value::String(
             crate::workspace_git::workspace_git_prepare(
+                app.clone(),
                 text("project")?,
                 text("branch")?,
                 a["worktree"]

@@ -75,6 +75,14 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub projectless_dir: Option<String>,
+    /// 新会话创建 worktree 的父目录；支持绝对路径与相对项目的相对路径。
+    /// 缺省为仓库同级目录下的 `.pix-worktrees`。
+    #[serde(
+        rename = "worktreeDir",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub worktree_dir: Option<String>,
     /// PiX 内置的 pi extension 开关；缺省为启用。
     #[serde(
         rename = "builtinFileChanges",
@@ -745,19 +753,27 @@ mod tests {
     fn app_config_round_trips_projectless_dir_and_stays_compatible() {
         let config = AppConfig {
             projectless_dir: Some("D:/pix/scratch".into()),
+            worktree_dir: Some("../trees".into()),
             ..Default::default()
         };
         let value = serde_json::to_value(&config).unwrap();
         assert_eq!(value["projectlessDir"], "D:/pix/scratch");
+        assert_eq!(value["worktreeDir"], "../trees");
         let parsed: AppConfig = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.projectless_dir.as_deref(), Some("D:/pix/scratch"));
+        assert_eq!(parsed.worktree_dir.as_deref(), Some("../trees"));
         // 未配置时不写入该字段；旧配置缺少它也应正常加载（用默认目录）。
         assert!(serde_json::to_value(AppConfig::default())
             .unwrap()
             .get("projectlessDir")
             .is_none());
+        assert!(serde_json::to_value(AppConfig::default())
+            .unwrap()
+            .get("worktreeDir")
+            .is_none());
         let legacy: AppConfig = serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
         assert_eq!(legacy.projectless_dir, None);
+        assert_eq!(legacy.worktree_dir, None);
     }
     #[test]
     fn global_prompt_list_includes_missing_files_and_reads_existing_content() {
