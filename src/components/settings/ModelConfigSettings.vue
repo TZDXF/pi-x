@@ -1,18 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
+import { groupModelsByProvider } from "@/lib/modelSelection"
+import ModelSelectOptions from "@/components/ModelSelectOptions.vue"
 import { getConfig, saveConfig, getModelsConfig } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 
 const { t } = useI18n()
@@ -37,15 +31,7 @@ const models = computed(() => {
   }
   return saved.length ? [...available, ...saved] : available
 })
-const modelGroups = computed(() => {
-  const grouped = new Map<string, typeof models.value>()
-  for (const model of models.value) {
-    const list = grouped.get(model.provider) ?? []
-    list.push(model)
-    grouped.set(model.provider, list)
-  }
-  return [...grouped.entries()].map(([provider, models]) => ({ provider, models }))
-})
+const modelGroups = computed(() => groupModelsByProvider(models.value))
 function splitKey(key: string): [string, string] | null {
   const separator = key.indexOf("/")
   if (separator < 1 || separator === key.length - 1) return null
@@ -166,17 +152,7 @@ async function save() {
           <SelectContent>
             <SelectItem value="off" class="text-xs">{{ t("titleGeneration.off") }}</SelectItem>
             <SelectItem value="default" class="text-xs">{{ t("titleGeneration.useDefaultModel") }}</SelectItem>
-            <SelectGroup v-for="group in modelGroups" :key="group.provider">
-              <SelectLabel>{{ group.provider }}</SelectLabel>
-              <SelectItem
-                v-for="model in group.models"
-                :key="model.provider + '/' + model.id"
-                :value="model.provider + '/' + model.id"
-                class="text-xs"
-              >
-                {{ model.name || model.id }}
-              </SelectItem>
-            </SelectGroup>
+            <ModelSelectOptions :groups="modelGroups" />
           </SelectContent>
         </Select>
         <p class="text-muted-foreground text-xs">{{ t("titleGeneration.credentials") }}</p>
@@ -198,17 +174,7 @@ async function save() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="default" class="text-xs">{{ t("titleGeneration.useDefaultModel") }}</SelectItem>
-            <SelectGroup v-for="group in modelGroups" :key="group.provider">
-              <SelectLabel>{{ group.provider }}</SelectLabel>
-              <SelectItem
-                v-for="model in group.models"
-                :key="model.provider + '/' + model.id"
-                :value="model.provider + '/' + model.id"
-                class="text-xs"
-              >
-                {{ model.name || model.id }}
-              </SelectItem>
-            </SelectGroup>
+            <ModelSelectOptions :groups="modelGroups" />
           </SelectContent>
         </Select>
         <p v-if="!models.length" class="text-muted-foreground text-xs">{{ t("titleGeneration.noModels") }}</p>

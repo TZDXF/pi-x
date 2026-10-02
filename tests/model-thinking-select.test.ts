@@ -2,6 +2,7 @@ import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
+import { groupModelsByProvider } from "@/lib/modelSelection"
 
 const MODELS = [
   { provider: "anthropic", id: "claude", name: "Claude" },
@@ -20,6 +21,7 @@ function harness(props: {
     .replace(/^import[\s\S]*?from\s+["'][^"']+["']\n/gm, "")
   const emitted: Record<string, unknown[]> = {}
   const context = vm.createContext({
+    groupModelsByProvider,
     computed: fn => ({
       get value() {
         return fn()

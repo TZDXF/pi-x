@@ -2,6 +2,7 @@ import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
+import { groupModelsByProvider } from "@/lib/modelSelection"
 
 function harness(custom = {}, saved = {}) {
   const source = readFileSync(new URL("../src/components/settings/ModelConfigSettings.vue", import.meta.url), "utf8")
@@ -12,6 +13,7 @@ function harness(custom = {}, saved = {}) {
     configSaves = 0,
     loadFailure = false
   const context = vm.createContext({
+    groupModelsByProvider,
     ref: value => ({ value }),
     computed: definition => ({
       get value() {
@@ -39,7 +41,7 @@ function harness(custom = {}, saved = {}) {
   vm.runInContext(
     ts.transpile(
       source +
-        "\nglobalThis.api = { models, effectiveDefaultKey, defaultKey, titleChoice, translationChoice, canSave, save, load, loadError };",
+        "\nglobalThis.api = { models, modelGroups, effectiveDefaultKey, defaultKey, titleChoice, translationChoice, canSave, save, load, loadError };",
       { target: ts.ScriptTarget.ES2022 },
     ),
     context,
@@ -196,4 +198,18 @@ test("load errors can be retried without saving incomplete settings", async () =
   await h.api.load()
   expect(h.api.loadError.value).toBe("")
   expect(h.api.canSave.value).toBe(false)
+})
+
+test("configuration groups share provider ordering, including saved models and IDs containing slashes", async () => {
+  const h = harness(
+    { z: { models: [{ id: "first", name: "First" }, { id: "nested/model" }] }, a: { models: [{ id: "last" }] } },
+    {
+      defaultModel: { provider: "saved", modelId: "nested/model" },
+    },
+  )
+  await h.mount()
+  expect(h.api.modelGroups.value.map(group => group.provider)).toEqual(["z", "a", "saved"])
+  expect(h.api.modelGroups.value[0].models.map(model => model.id)).toEqual(["first", "nested/model"])
+  await h.api.save()
+  expect(h.config().defaultModel).toEqual({ provider: "saved", modelId: "nested/model" })
 })

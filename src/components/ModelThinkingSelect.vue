@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
+import { groupModelsByProvider } from "@/lib/modelSelection"
 import { ChevronDownIcon } from "@lucide/vue"
 import {
   DropdownMenu,
@@ -32,15 +33,7 @@ const emit = defineEmits<{
 const { t, te } = useI18n()
 
 const selectedModel = computed(() => props.models.find(model => `${model.provider}/${model.id}` === props.modelValue))
-const groups = computed(() => {
-  const grouped = new Map<string, typeof props.models>()
-  for (const model of props.models) {
-    const list = grouped.get(model.provider) ?? []
-    list.push(model)
-    grouped.set(model.provider, list)
-  }
-  return [...grouped.entries()].map(([provider, models]) => ({ provider, models }))
-})
+const groups = computed(() => groupModelsByProvider(props.models))
 
 /** Slider stops; fall back to the current level so the control stays usable. */
 const levels = computed(() => (props.availableThinking.length ? props.availableThinking : [props.thinkingLevel]))
@@ -74,7 +67,7 @@ function onSliderChange(value: unknown) {
         :disabled="disabled"
         :title="
           selectedModel
-            ? `${selectedModel.name || selectedModel.id} · ${levelLabel(thinkingLevel)}`
+            ? `${selectedModel.name || selectedModel.id} 路 ${levelLabel(thinkingLevel)}`
             : t('chat.selectModel')
         "
         class="flex h-8 min-w-0 max-w-60 max-[900px]:max-w-45 items-center gap-1 rounded-lg px-2 text-xs whitespace-nowrap text-foreground outline-none select-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
@@ -82,7 +75,7 @@ function onSliderChange(value: unknown) {
         <span class="min-w-0 truncate">{{
           selectedModel ? selectedModel.name || selectedModel.id : t("chat.selectModel")
         }}</span>
-        <span v-if="selectedModel" class="text-muted-foreground" aria-hidden>·</span>
+        <span v-if="selectedModel" class="text-muted-foreground" aria-hidden>路</span>
         <span class="min-w-0 truncate text-muted-foreground">{{ levelLabel(thinkingLevel) }}</span>
         <ChevronDownIcon class="size-3.5 shrink-0 text-muted-foreground" />
       </button>
@@ -92,7 +85,7 @@ function onSliderChange(value: unknown) {
         <DropdownMenuSubTrigger class="max-w-56">
           <span class="min-w-0 truncate">{{
             selectedModel
-              ? `${selectedModel.name || selectedModel.id} · ${levelLabel(thinkingLevel)}`
+              ? `${selectedModel.name || selectedModel.id} 路 ${levelLabel(thinkingLevel)}`
               : t("chat.selectModel")
           }}</span>
         </DropdownMenuSubTrigger>
