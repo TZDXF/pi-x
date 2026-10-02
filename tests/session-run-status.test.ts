@@ -303,44 +303,46 @@ test("retry banner clears as soon as the retried request streams content", async
   expect(store.retryInfo?.attempt).toBe(2)
 })
 
+const readSidebarPart = name =>
+  readFileSync(new URL(`../src/components/workspace/sidebar/${name}`, import.meta.url), "utf8")
+
 test("sidebar shows session statuses on the left with animated running and semantic result colors", () => {
-  const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
+  const row = readSidebarPart("SidebarSavedSessionRow.vue")
+  const status = readSidebarPart("SidebarSessionStatus.vue")
   const light = readFileSync(new URL("../src/styles/theme/light.css", import.meta.url), "utf8")
   const dark = readFileSync(new URL("../src/styles/theme/dark.css", import.meta.url), "utf8")
-  const row = sidebar.match(/<ContextMenu\s+v-for="s in rows\(path\)"[\s\S]*?<\/ContextMenuTrigger>/)?.[0]
-  expect(row, "session row is present").toBeTruthy()
   expect(
-    row.indexOf('class="session-status') < row.indexOf('variant="session-link"'),
+    row.indexOf("<SidebarSessionStatus") < row.indexOf('variant="session-link"'),
     "status precedes the title",
   ).toBeTruthy()
-  expect(row).toMatch(/class="session-status absolute left-\[7px\] top-1\/2/)
-  expect(row).not.toMatch(/session-status group-hover\/session:invisible/)
-  expect(sidebar).toMatch(/animation: session-status-spin 1s linear infinite/)
-  expect(sidebar).toMatch(/@keyframes session-status-spin/)
-  expect(sidebar).toMatch(/\.session-status-completed \{\s*color: var\(--success\)/)
-  expect(sidebar).toMatch(/\.session-status-error \{\s*color: var\(--destructive\)/)
+  expect(status).toMatch(/class="session-status absolute left-\[7px\] top-1\/2/)
+  expect(status).not.toMatch(/session-status group-hover\/session:invisible/)
+  expect(status).toMatch(/animation: session-status-spin 1s linear infinite/)
+  expect(status).toMatch(/@keyframes session-status-spin/)
+  expect(status).toMatch(/\.session-status-completed \{\s*color: var\(--success\)/)
+  expect(status).toMatch(/\.session-status-error \{\s*color: var\(--destructive\)/)
   for (const theme of [light, dark]) expect(theme).toMatch(/--success: #[0-9a-f]{6}/)
 })
 
 test("session rows expose their actions through a right-click context menu", () => {
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
-  expect(sidebar).not.toMatch(/class="session-actions/)
-  for (const section of ["rows\\(path\\)", "rows\\(taskPath\\)"]) {
-    const row = sidebar.match(new RegExp(`<ContextMenu\\s+v-for="s in ${section}"[\\s\\S]*?<\\/ContextMenu>`))?.[0]
-    expect(row, `context menu wraps ${section} rows`).toBeTruthy()
-    expect(row).toMatch(/<ContextMenuTrigger as-child :disabled="disabled">/)
-    for (const action of ["rename(s)", "duplicateSession(s)", "copySessionLink(s)", "sessionAction', s.file, 'export'"])
-      expect(row.includes(action), `menu keeps ${action}`).toBeTruthy()
-    // 归档是行内快捷按钮，hover 时显示，不进右键菜单。
-    expect(row).toMatch(/class="session-archive hover-action /)
-    expect(row.includes('@click="archive(s)"'), "row keeps the hover archive button").toBeTruthy()
-    expect(row).not.toMatch(/<ContextMenuItem @select="archive\(s\)"/)
-  }
+  const list = readSidebarPart("SidebarSessionList.vue")
+  const row = readSidebarPart("SidebarSavedSessionRow.vue")
+  expect(sidebar.match(/<SidebarSessionList/g)).toHaveLength(2)
+  expect(list).toMatch(/<SidebarSavedSessionRow\s+v-for="row in rows"/)
+  expect(row).not.toMatch(/class="session-actions/)
+  expect(row).toMatch(/<ContextMenuTrigger as-child :disabled="disabled">/)
+  for (const action of ["emit('rename', s)", "emit('duplicate', s)", "emit('copyLink', s)", "emit('export', s.file)"])
+    expect(row.includes(action), `menu keeps ${action}`).toBeTruthy()
+  // 归档是行内快捷按钮，hover 时显示，不进右键菜单。
+  expect(row).toMatch(/class="session-archive hover-action /)
+  expect(row.includes("@click=\"emit('archive', s)\""), "row keeps the hover archive button").toBeTruthy()
+  expect(row).not.toMatch(/<ContextMenuItem @select="emit\('archive'/)
 })
 
 test("project heading exposes its actions through a right-click context menu", () => {
-  const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
-  const heading = sidebar.match(
+  const group = readSidebarPart("SidebarProjectGroup.vue")
+  const heading = group.match(
     /<ContextMenu>\s*<ContextMenuTrigger as-child :disabled="disabled">\s*<div\s+class="project-heading[\s\S]*?<\/ContextMenu>/,
   )?.[0]
   expect(heading, "project heading is wrapped in a context menu").toBeTruthy()
@@ -358,18 +360,18 @@ test("project heading exposes its actions through a right-click context menu", (
 
 test("queued prompts show a left-hand clock without a count and hover for the live countdown", () => {
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
-  const pending = sidebar.match(/<div\s+v-for="pending in pendingRows\(path\)"[\s\S]*?<\/div>/)?.[0]
-  const saved = sidebar.match(/<ContextMenu\s+v-for="s in rows\(path\)"[\s\S]*?<\/ContextMenuTrigger>/)?.[0]
-  expect(pending && saved).toBeTruthy()
-  expect(pending).toMatch(/session-queue-status absolute left-\[7px\]/)
-  expect(saved).toMatch(/session-queue-status absolute top-1\/2/)
-  expect(saved).toMatch(/sessionRunStatus\(s.file\) \? 'left-\[23px\]' : 'left-\[7px\]'/)
-  expect(saved).toMatch(/'pl-11': !!\(sessionRunStatus\(s.file\)/)
+  const pending = readSidebarPart("SidebarPendingSessionRow.vue")
+  const saved = readSidebarPart("SidebarSavedSessionRow.vue")
+  const status = readSidebarPart("SidebarSessionStatus.vue")
+  const countdown = readSidebarPart("useSidebarSessionStatus.ts")
+  expect(status).toMatch(/session-queue-status absolute top-1\/2/)
+  expect(status).toMatch(/status \? 'left-\[23px\]' : 'left-\[7px\]'/)
+  expect(saved).toMatch(/'pl-11': !!\(status && queue\?\.length\)/)
   for (const row of [pending, saved]) {
-    expect(row.indexOf("session-queue-status") < row.indexOf('variant="session-link"')).toBeTruthy()
+    expect(row.indexOf("<SidebarSessionStatus") < row.indexOf('variant="session-link"')).toBeTruthy()
     expect(row).not.toMatch(/\{\{ (?:pending|findConversation\(s.file\)\?)\.promptQueue.length \}\}/)
-    expect(row).toMatch(/:title="queueTitle\(/)
   }
-  expect(sidebar).toMatch(/sendCountdown\(nextSendAt, queueNow.value\)/)
+  expect(status).toMatch(/:title="queueTitle"/)
+  expect(countdown).toMatch(/sendCountdown\(nextSendAt, now\)/)
   expect(sidebar).toMatch(/queueNow = useCountdownNow\(/)
 })

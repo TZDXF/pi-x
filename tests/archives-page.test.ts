@@ -68,14 +68,15 @@ test("archived session list, restore and delete work through remote dispatch", (
 })
 
 test("archiving hides the row immediately without disabling the rest of the sidebar", () => {
-  const sidebar = read("../src/components/WorkspaceSidebar.vue")
+  const actions = read("../src/components/workspace/sidebar/useSidebarSessionActions.ts")
+  const ordering = read("../src/components/workspace/sidebar/useSidebarSessionOrdering.ts")
 
   // 点击归档立即隐藏该行（乐观更新），失败时清掉标记撤回。
-  expect(sidebar).toMatch(/async function archive\(s: SessionMeta\)/)
-  expect(sidebar).toMatch(/archiving\.value\[s\.file\] = true/)
-  expect(sidebar).toMatch(/finally \{\s*delete archiving\.value\[s\.file\]/)
-  expect(sidebar).toMatch(/!archiving\.value\[s\.file\] &&/)
+  expect(actions).toMatch(/async function archive\(session: SessionMeta\)/)
+  expect(actions).toMatch(/archiving\.value\[session\.file\] = true/)
+  expect(actions).toMatch(/finally \{\s*delete archiving\.value\[session\.file\]/)
+  expect(ordering).toMatch(/!archiving\[session\.file\] &&/)
   // 归档不再占用共享的 saving 标志，因此不会连带禁用整个列表。
-  const archive = sidebar.slice(sidebar.indexOf("async function archive("))
-  expect(archive.slice(0, archive.indexOf("\n}"))).not.toMatch(/saving\.value/)
+  const archive = actions.slice(actions.indexOf("async function archive("))
+  expect(archive.slice(0, archive.indexOf("\n  }"))).not.toMatch(/saving\.value/)
 })
