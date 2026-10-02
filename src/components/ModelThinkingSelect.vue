@@ -87,9 +87,9 @@ function onSliderChange(value: unknown) {
         <ChevronDownIcon class="size-3.5 shrink-0 text-muted-foreground" />
       </button>
     </DropdownMenuTrigger>
-    <DropdownMenuContent side="top" align="start" :side-offset="0" class="min-w-72">
+    <DropdownMenuContent side="top" align="start" :side-offset="0" class="min-w-56">
       <DropdownMenuSub>
-        <DropdownMenuSubTrigger class="max-w-72">
+        <DropdownMenuSubTrigger class="max-w-56">
           <span class="min-w-0 truncate">{{
             selectedModel
               ? `${selectedModel.name || selectedModel.id} · ${levelLabel(thinkingLevel)}`

@@ -27,6 +27,24 @@ function markLeft(i: number, count: number) {
   return `calc(${fraction * 100}% + ${8 * (1 - 2 * fraction)}px)`
 }
 
+/** Stop i's shade: one hue (primary), fading in from 30% up to full strength. */
+function markShade(i: number, count: number) {
+  const pct = count > 1 ? Math.round(30 + (70 * i) / (count - 1)) : 100
+  return `color-mix(in oklab, var(--primary) ${pct}%, var(--background))`
+}
+
+/** Stepped fill: gradient from the first stop's shade to the current one. */
+const rangeStyle = computed(() =>
+  props.marks.length > 1
+    ? {
+        background: `linear-gradient(to right, ${markShade(0, props.marks.length)}, ${markShade(
+          Math.min(currentIndex.value, props.marks.length - 1),
+          props.marks.length,
+        )})`,
+      }
+    : undefined,
+)
+
 function onMarkClick(i: number) {
   emits('update:modelValue', [i])
 }
@@ -40,9 +58,9 @@ function onMarkClick(i: number) {
   >
     <SliderTrack
       data-slot="slider-track"
-      class="bg-muted relative mx-2 h-2.5 grow overflow-hidden rounded-full"
+      class="bg-muted relative mx-2 h-3.5 grow overflow-hidden rounded-full"
     >
-      <SliderRange data-slot="slider-range" class="bg-primary absolute h-full" />
+      <SliderRange data-slot="slider-range" class="bg-primary absolute h-full" :style="rangeStyle" />
     </SliderTrack>
     <template v-if="marks.length > 1">
       <button
@@ -52,9 +70,12 @@ function onMarkClick(i: number) {
         tabindex="-1"
         :title="mark"
         :aria-label="mark"
-        :class="i <= currentIndex ? 'bg-primary' : 'bg-muted-foreground/40'"
-        :style="{ left: markLeft(i, marks.length) }"
-        class="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background shadow-sm transition-[width,height] hover:size-4"
+        :class="i <= currentIndex ? '' : 'bg-muted-foreground/40'"
+        :style="{
+          left: markLeft(i, marks.length),
+          backgroundColor: i <= currentIndex ? markShade(i, marks.length) : undefined,
+        }"
+        class="absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background shadow-sm transition-[width,height,background-color] hover:size-4.5"
         @pointerdown.stop
         @click="onMarkClick(i)"
       />
