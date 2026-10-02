@@ -262,6 +262,12 @@ fn icon_file_from_info_plist(bytes: &[u8]) -> Option<String> {
 // 图标解码(按文件扩展名分发,纯解析逻辑与平台无关,便于跨平台单测)
 // ---------------------------------------------------------------------------
 
+/// 供 toast AUMID 注册使用(Windows 不会从 exe 内嵌资源读取图标):提取 exe 主图标写成 PNG
+pub(crate) fn export_icon_png(exe: &Path, dest: &Path) -> Option<()> {
+    let (w, h, rgba) = extract_from_pe(exe)?;
+    write_png(dest, w, h, &rgba).ok()
+}
+
 /// 提取图标源为 RGBA 像素(w, h, rgba)
 fn extract_rgba(source: &Path) -> Option<(u32, u32, Vec<u8>)> {
     if source

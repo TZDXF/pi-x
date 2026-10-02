@@ -9,7 +9,7 @@
  */
 import { readonly, ref } from "vue"
 import { i18n } from "@/i18n"
-import { isDesktop } from "@/api/transport"
+import { invoke, isDesktop } from "@/api/transport"
 import { pixLog } from "@/api/piClient"
 
 export type TurnCompleteNotification = "never" | "unfocused" | "always"
@@ -152,8 +152,12 @@ async function deliver(title: string, body: string) {
   if (soundSetting.value === "default") playNotificationSound()
   try {
     if (isDesktop) {
-      const plugin = await import("@tauri-apps/plugin-notification")
-      plugin.sendNotification({ title, body })
+      // Desktop delivery goes through the backend command: the notification
+      // plugin skips the Windows AUMID for dev builds and never handles click
+      // activation, so the toast showed as PowerShell and clicking it did
+      // nothing. The command registers the app identity and focuses the main
+      // window on click.
+      await invoke("send_notification", { title, body })
     } else {
       new Notification(title, { body })
     }

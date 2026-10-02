@@ -10,6 +10,7 @@ mod file_preview;
 mod fs_search;
 mod logs;
 mod mcp;
+mod notifications;
 mod packages;
 mod pi_data;
 mod pi_locate;
@@ -91,6 +92,7 @@ pub fn run() {
             remote::remote_status,
             remote::remote_set,
             remote::remote_password_set,
+            notifications::send_notification,
             commands::pi_detect,
             pi_update::pi_update_check,
             pi_update::pi_update_execute,

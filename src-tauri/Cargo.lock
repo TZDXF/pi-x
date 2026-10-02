@@ -3240,11 +3240,13 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-updater",
+ "tauri-winrt-notification",
  "tokio",
  "tokio-tungstenite",
  "ureq",
  "url",
  "uuid",
+ "winreg 0.55.0",
 ]
 
 [[package]]
