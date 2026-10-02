@@ -17,7 +17,7 @@ test("environment and branch menus only record draft choices", () => {
   expect(source).toMatch(/:disabled="blocked \|\| \(selection\?\.worktree && unbornBranch\(branch\)\)"/)
   expect(source).toMatch(/workspace\.noCommitsYet/)
   expect(source).toMatch(/workspace\.baseBranch/)
-  expect(source).not.toMatch(/prepareWorkspaceGit|<Dialog/)
+  expect(source).not.toMatch(/prepareWorkspaceGit/)
   const functions = source.slice(source.indexOf("function selectMode("), source.indexOf("watch(() => props.project"))
   const context = {
     info: { value: { branches: ["main", "feature/base"] } },
@@ -53,11 +53,15 @@ test("projectless drafts show a default project and hide Git menus", () => {
 test("branch menu offers create-and-checkout only in local mode", () => {
   const menu = source.split('<Popover v-if="!isProjectless" v-model:open="branchOpen"')[1].split("</Popover>")[0]
   expect(menu).toMatch(/<div v-if="!selection\?\.worktree"/)
-  expect(menu).toMatch(/workspace\.branchHint/)
-  expect(menu).toMatch(/v-model="newBranch"/)
-  expect(menu).toMatch(/@keydown\.enter="createBranch"/)
-  expect(menu).toMatch(/:disabled="blocked \|\| creating \|\| !newBranch\.trim\(\)"/)
-  expect(menu).toMatch(/workspace\.create/)
+  expect(menu).toMatch(/@click="openCreateDialog"/)
+  expect(menu).toMatch(/workspace\.createBranch/)
+  expect(menu).not.toMatch(/newBranch|createBranch\(/)
+  const dialog = source.split('<Dialog v-model:open="createOpen"')[1].split("</Dialog>")[0]
+  expect(dialog).toMatch(/workspace\.branchHint/)
+  expect(dialog).toMatch(/v-model="newBranch"/)
+  expect(dialog).toMatch(/@keydown\.enter="createBranch"/)
+  expect(dialog).toMatch(/:disabled="blocked \|\| creating \|\| !newBranch\.trim\(\)"/)
+  expect(dialog).toMatch(/workspace\.create/)
 })
 
 function branchHarness(overrides = {}) {
@@ -66,7 +70,17 @@ function branchHarness(overrides = {}) {
     __out: null,
     props: { project: "C:/repo" },
     ref: value => ({ value }),
-    watch: () => {},
+    // 最小响应式：赋值即触发回调，模拟组件内 open 变化时的重置逻辑。
+    watch: (source, cb) => {
+      let current = source.value
+      Object.defineProperty(source, "value", {
+        get: () => current,
+        set: next => {
+          current = next
+          cb(next)
+        },
+      })
+    },
     loading: { value: false },
     info: { value: null },
     selection: { value: { project: "C:/repo", worktree: false, branch: "main" } },
@@ -75,6 +89,7 @@ function branchHarness(overrides = {}) {
     modeOpen: { value: false },
     projectOpen: { value: false },
     branchOpen: { value: true },
+    createOpen: { value: true },
     workspaceGitInfo: async () => ({
       branch: "feature/new",
       branches: ["main", "feature/new"],
@@ -92,7 +107,7 @@ function branchHarness(overrides = {}) {
   })
   const code =
     source.slice(source.indexOf("let request = 0"), source.indexOf("watch(() => props.project")) +
-    "\n__out = { newBranch, createError, creating, createBranch }"
+    "\n__out = { newBranch, createError, creating, createBranch, createOpen, branchOpen, openCreateDialog }"
   vm.runInNewContext(ts.transpile(code), context)
   return { context: { ...context, ...context.__out }, calls }
 }
@@ -104,23 +119,35 @@ test("creating a branch checks it out and refreshes the draft selection", async 
   expect(calls).toEqual([["C:/repo", "feature/new", false]])
   expect(context.selection.value).toEqual({ project: "C:/repo", worktree: false, branch: "feature/new" })
   expect(context.newBranch.value).toBe("")
-  expect(context.branchOpen.value).toBe(false)
+  expect(context.createOpen.value).toBe(false)
   expect(context.workspace.gitBusy).toBe(false)
   expect(context.creating.value).toBe(false)
 })
 
-test("branch creation failure keeps the menu open and surfaces the error", async () => {
+test("opening the dialog closes the branch menu and resets the draft name", () => {
+  const { context } = branchHarness()
+  context.newBranch.value = "feature/stale"
+  context.createError.value = "stale error"
+  context.openCreateDialog()
+  expect(context.branchOpen.value).toBe(false)
+  expect(context.createOpen.value).toBe(true)
+  expect(context.newBranch.value).toBe("")
+  expect(context.createError.value).toBe("")
+})
+
+test("branch creation failure keeps the dialog open and surfaces the error", async () => {
   const { context, calls } = branchHarness({
     createWorkspaceGit: async () => {
       calls.push("throw")
       throw new Error("branch already exists")
     },
   })
+  context.createOpen.value = true
   context.newBranch.value = "feature/new"
   await context.createBranch()
   expect(calls).toEqual(["throw"])
   expect(context.createError.value).toBe("Error: branch already exists")
-  expect(context.branchOpen.value).toBe(true)
+  expect(context.createOpen.value).toBe(true)
   expect(context.selection.value.branch).toBe("main")
   expect(context.workspace.gitBusy).toBe(false)
 })

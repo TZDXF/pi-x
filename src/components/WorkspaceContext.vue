@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Folder, GitBranch, Laptop, Layers, MessagesSquare, Plus, LoaderCircle } from "@lucide/vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -99,16 +100,22 @@ function selectBranch(branch: string) {
   if (selection.value) selection.value = { ...selection.value, branch }
   branchOpen.value = false
 }
-// 分支下拉内直接创建并检出新分支；工作树模式下选中的只是基准分支，因此仅本地模式提供。
+// 分支下拉内通过按钮弹出对话框创建并检出新分支；工作树模式下选中的只是基准分支，因此仅本地模式提供。
 const newBranch = ref("")
 const createError = ref("")
 const creating = ref(false)
-watch(branchOpen, open => {
+const createOpen = ref(false)
+watch(createOpen, open => {
   if (open) {
     newBranch.value = ""
     createError.value = ""
   }
 })
+function openCreateDialog() {
+  if (blocked.value) return
+  branchOpen.value = false
+  createOpen.value = true
+}
 async function createBranch() {
   const branch = newBranch.value.trim()
   if (blocked.value || creating.value || !branch) return
@@ -120,7 +127,7 @@ async function createBranch() {
     newBranch.value = ""
     // 创建后新分支即当前分支，重新拉取使下拉与草稿选择保持一致。
     await refresh()
-    branchOpen.value = false
+    createOpen.value = false
   } catch (e) {
     createError.value = tBackendError(e)
   } finally {
@@ -263,31 +270,42 @@ watch(() => props.project, refresh, { immediate: true })
           >
         </ScrollArea>
         <div v-if="!selection?.worktree" class="mt-1 border-t border-border pt-1.5">
-          <p class="px-2 pb-1.5 text-xs text-muted-foreground">{{ t("workspace.branchHint") }}</p>
-          <div class="flex gap-1.5 px-2">
-            <Input
-              v-model="newBranch"
-              :placeholder="t('workspace.branchName')"
-              :disabled="blocked || creating"
-              class="h-7 text-xs"
-              @keydown.enter="createBranch"
-            />
-            <Button
-              variant="context-menu-item"
-              size="content"
-              class="context-menu-item shrink-0"
-              :disabled="blocked || creating || !newBranch.trim()"
-              @click="createBranch"
-              ><LoaderCircle v-if="creating" :size="14" class="size-auto shrink-0 animate-spin" /><Plus
-                v-else
-                :size="14"
-                class="size-auto shrink-0"
-              />{{ creating ? t("workspace.creating") : t("workspace.create") }}</Button
-            >
-          </div>
-          <p v-if="createError" class="px-2 pt-1.5 text-xs text-destructive">{{ createError }}</p>
+          <Button
+            variant="context-menu-item"
+            size="content"
+            class="context-menu-item"
+            :disabled="blocked"
+            @click="openCreateDialog"
+            ><Plus :size="14" class="size-auto shrink-0" />{{ t("workspace.createBranch") }}</Button
+          >
         </div>
       </PopoverContent>
     </Popover>
+    <Dialog v-model:open="createOpen">
+      <DialogContent class="sm:max-w-sm">
+        <DialogHeader><DialogTitle>{{ t("workspace.createBranch") }}</DialogTitle></DialogHeader>
+        <form class="space-y-4" @submit.prevent="createBranch">
+          <p class="text-sm text-muted-foreground">{{ t("workspace.branchHint") }}</p>
+          <Input
+            v-model="newBranch"
+            autofocus
+            :placeholder="t('workspace.branchName')"
+            :disabled="blocked || creating"
+            @keydown.enter="createBranch"
+          />
+          <p v-if="createError" role="alert" class="text-sm text-destructive">{{ createError }}</p>
+          <div class="flex justify-end gap-2">
+            <Button type="button" variant="outline" :disabled="creating" @click="createOpen = false">{{
+              t("common.cancel")
+            }}</Button>
+            <Button type="submit" :disabled="blocked || creating || !newBranch.trim()"
+              ><LoaderCircle v-if="creating" :size="15" class="animate-spin" />{{
+                creating ? t("workspace.creating") : t("workspace.create")
+              }}</Button
+            >
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
