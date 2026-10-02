@@ -1,3 +1,4 @@
+import { composerSources, turnSources } from "./fixtures/chatSources"
 import { readFileSync } from "node:fs"
 import { afterEach, test, expect, vi } from "vitest"
 import { parse, compileScript } from "vue/compiler-sfc"
@@ -7,6 +8,10 @@ import * as vueRuntime from "vue"
 import appSource from "@/App.vue?raw"
 import * as paths from "@/lib/paths"
 import * as backendError from "@/lib/backendError"
+import { createConversationLoader } from "@/lib/conversationLoader"
+import { createWorkspaceRuntime } from "@/lib/workspaceRuntime"
+import { createWorkspaceStartup } from "@/lib/workspaceStartup"
+import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
 
 async function loadVueSetup(source, require) {
   const { descriptor } = parse(source, { filename: "App.vue" })
@@ -93,7 +98,7 @@ async function harness(group = null) {
       useMediaQuery: () => ref(false),
       useWindowSize: () => ({ width: ref(1200), height: ref(800) }),
     },
-    "@/composables/usePanelKeyboardResize": { usePanelKeyboardResize: () => () => {} },
+    "@/composables/useWorkspaceSidebarLayout": { useWorkspaceSidebarLayout },
     "@/api/transport": { isDesktop: false },
     "@/api/piClient": {
       detectPi: async () => ({ found: true }),
@@ -144,6 +149,9 @@ async function harness(group = null) {
       sessionRoute: (id, project = "") => `/session/${encodeURIComponent(id)}/${encodeURIComponent(project)}`,
     },
     "@/stores/sessionRunStatus": { acknowledgeSessionRunStatus: () => {}, sessionRunStatus: () => undefined },
+    "@/lib/conversationLoader": { createConversationLoader },
+    "@/lib/workspaceRuntime": { createWorkspaceRuntime },
+    "@/lib/workspaceStartup": { createWorkspaceStartup },
     "@/lib/paths": paths,
     "@/lib/backendError": backendError,
     "@/i18n": { tBackendError: value => value },
@@ -200,7 +208,7 @@ test("opening a saved conversation starts pi on demand", async () => {
 })
 
 test("only fresh process startup applies remembered selection", () => {
-  const source = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
+  const source = readFileSync(new URL("../src/lib/workspaceStartup.ts", import.meta.url), "utf8")
   expect(source).toMatch(
     /await spawnWorkspacePi\(owner.cwd \|\| project.value, undefined, owner.runtimeId\)\s+await owner.init\(owner.cwd \|\| project.value, true\)/,
   )
@@ -247,19 +255,19 @@ test("cross-project drafts stay visible during checks while sending remains bloc
   expect(context.actions.selectingProject.value).toBe(false)
   expect(context.actions.connecting.value).toBe(false)
   expect(calls).toEqual([])
-  const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const view = composerSources() + turnSources()
   expect(view.split("(!connecting || selectingProject)").length - 1).toBe(1)
-  expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| workspace.gitBusy\)/)
-  expect(view).toMatch(/:disabled="editBusy \|\| workspace.gitBusy \|\| connecting"/)
+  expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| gitBusy\)/)
+  expect(view).toMatch(/:disabled="editBusy \|\| gitBusy \|\| connecting"/)
 })
 
 test("project selection keeps the editor enabled without bypassing other edit guards", () => {
-  const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const view = composerSources() + turnSources()
   const editor = view.split("<ComposerRichEditor")[1].split("/>")[0]
   const expression = editor.match(/:disabled="([^"]+)"/)[1]
   const state = {
     editBusy: false,
-    workspace: { gitBusy: false },
+    gitBusy: false,
     connecting: true,
     selectingProject: true,
     completion: null,
@@ -268,7 +276,7 @@ test("project selection keeps the editor enabled without bypassing other edit gu
   expect(disabled(state)).toBe(false)
   expect(disabled({ ...state, selectingProject: false })).toBe(true)
   expect(disabled({ ...state, editBusy: true })).toBe(true)
-  expect(disabled({ ...state, workspace: { gitBusy: true } })).toBe(true)
+  expect(disabled({ ...state, gitBusy: true })).toBe(true)
 })
 
 test("disabled accessory buttons do not dim the entire composer", () => {

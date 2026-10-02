@@ -4,7 +4,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { useMediaQuery, useWindowSize } from "@vueuse/core"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
-import { usePanelKeyboardResize, type ResizablePanelApi } from "@/composables/usePanelKeyboardResize"
+import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
 import {
   detectPi,
   prepareWorkspaceGit,
@@ -26,7 +26,7 @@ import {
   trustSave,
   trustStatus,
 } from "@/api/piClient"
-import type { AppConfig, RunningSession, TrustStatus, WorkspaceContext, WorkspaceSelection } from "@/api/piClient"
+import type { AppConfig, TrustStatus } from "@/api/piClient"
 import {
   useSessionStore,
   sessionFor,
@@ -49,6 +49,9 @@ import {
   closePane,
   type PaneLeaf,
 } from "@/stores/splitView"
+import { createWorkspaceStartup } from "@/lib/workspaceStartup"
+import { createWorkspaceRuntime, type WorkspacePhase } from "@/lib/workspaceRuntime"
+import { createConversationLoader } from "@/lib/conversationLoader"
 import { createUuid } from "@/lib/uuid"
 import { focusComposer } from "@/lib/composer"
 import { useWorkspaceStore, registerSessionMtimeSync, type ProjectGroup } from "@/stores/workspace"
@@ -66,14 +69,13 @@ import SplitChatLayout from "@/components/SplitChatLayout.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
-import { normalizeProjectPath, normalizeSlashes, samePath } from "@/lib/paths"
-import { encodeCodedError } from "@/lib/backendError"
+import { normalizeProjectPath } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
 const route = useRoute()
 
-type Phase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
+type Phase = WorkspacePhase
 
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
@@ -87,58 +89,18 @@ const sidebarOpen = ref(true)
 const projectDialogOpen = ref(false)
 const editingProjectPath = ref<string | null>(null)
 
-// ---- 工作区侧栏宽度（reka Splitter，像素单位并持久化）----
-const SIDEBAR_WIDTH_STORAGE_KEY = "pix.sidebar-width"
-const SIDEBAR_MIN_WIDTH = 220
-const SIDEBAR_DEFAULT_WIDTH = 272 // 与侧栏旧默认宽度 w-68 对齐
 const { width: windowWidth } = useWindowSize()
 const isNarrowViewport = useMediaQuery("(max-width: 640px)")
-const sidebarVisible = computed(() => sidebarOpen.value && route.value.name !== "settings")
-/** 窄屏下侧栏以覆盖层悬浮，面板需让出全部宽度。 */
-const sidebarCollapsed = computed(() => !sidebarVisible.value || isNarrowViewport.value)
-const sidebarMaxWidth = computed(() => Math.min(480, Math.max(280, windowWidth.value - 360)))
-const preferredSidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
-try {
-  const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
-  if (Number.isFinite(saved) && saved > 0) preferredSidebarWidth.value = saved
-} catch {
-  /* Storage may be unavailable in restricted browsers. */
-}
-/** reka 只在首次布局读取 default-size；初始折叠态直接体现到默认尺寸，避免布局就绪前调用命令式 API。 */
-const defaultSidebarWidth = sidebarCollapsed.value
-  ? 0
-  : Math.min(SIDEBAR_DEFAULT_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, preferredSidebarWidth.value))
-const sidebarPanel = ref<ResizablePanelApi | null>(null)
-
-function clampSidebarWidth(width: number) {
-  return Math.min(sidebarMaxWidth.value, Math.max(SIDEBAR_MIN_WIDTH, width))
-}
-
-function onSidebarResize(width: number) {
-  if (width <= 0 || isNarrowViewport.value) return
-  preferredSidebarWidth.value = Math.round(width)
-  try {
-    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(preferredSidebarWidth.value))
-  } catch {
-    /* Optional preference. */
-  }
-}
-
-watch(
-  sidebarCollapsed,
-  collapsed => {
-    const panel = sidebarPanel.value
-    if (!panel) return
-    if (collapsed) panel.collapse()
-    else panel.resize(clampSidebarWidth(preferredSidebarWidth.value))
-  },
-  { flush: "post" },
-)
-
-const resizeSidebarWithKeyboard = usePanelKeyboardResize(sidebarPanel, () => ({
-  min: SIDEBAR_MIN_WIDTH,
-  max: sidebarMaxWidth.value,
-}))
+const {
+  SIDEBAR_MIN_WIDTH,
+  sidebarVisible,
+  sidebarMaxWidth,
+  preferredSidebarWidth,
+  defaultSidebarWidth,
+  sidebarPanel,
+  onSidebarResize,
+  resizeSidebarWithKeyboard,
+} = useWorkspaceSidebarLayout(sidebarOpen, route, windowWidth, isNarrowViewport)
 
 function closeProjectDialog() {
   projectDialogOpen.value = false
@@ -176,29 +138,61 @@ watch(
   file => acknowledgeSessionRunStatus(file),
   { immediate: true },
 )
-const runtimeWorkspaces = new Map<string, string>()
-function contextFor(dir: string): WorkspaceContext | undefined {
-  const group = workspace.projectGroups[workspace.projectRoot(dir)]
-  if (!group) return undefined
-  // A linked checkout must belong to the runtime's declared roots too.
-  const roots = group.folders.some(path => samePath(path, dir)) ? [...group.folders] : [...group.folders, dir]
-  return { name: group.name, primary: group.primary, roots }
-}
-function contextSignature(dir: string) {
-  return JSON.stringify(contextFor(dir) ?? null)
-}
-async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
-  // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
-  if (!dir) throw new Error(encodeCodedError("projectDirMissing", "项目目录不存在"))
-  const context = contextFor(dir)
-  await spawnPi(dir, file, runtimeId, context)
-  runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
-}
+const startup = createWorkspaceStartup({
+  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig },
+  conversations: { sessionFor, uiFor, activeRuntimeId },
+  workspace,
+  phase,
+  config,
+  project,
+  connecting,
+  selectingProject,
+  lastError,
+  pushToast: (message, type) => ui.pushToast(message, type),
+  translate: t,
+  translateError: tBackendError,
+  rebuildConversation: owner => runtimeLifecycle.rebuildConversation(owner),
+})
+const {
+  start,
+  startSession,
+  spawnWorkspacePi,
+  workspaceTrust,
+  requestWorkspaceTrust,
+  decideWorkspaceTrust,
+  finishWorkspaceTrust,
+} = startup
 
 // event listener lifecycle: always unlisten on unmount, otherwise HMR
 // remounts stack duplicate listeners and events get handled N times
-let unlisteners: Array<() => void> = []
 let disposed = false
+
+const runtimeLifecycle = createWorkspaceRuntime({
+  api: {
+    listRunningSessions,
+    killPi,
+    onPiEvent,
+    onPiExit,
+    onPiStderr,
+    onReconnected,
+    onSessionsChanged,
+    pixLog,
+    sessionMtime,
+  },
+  conversations: { sessionFor, uiFor, findConversation, activateSession, activeRuntimeId },
+  workspace,
+  phase,
+  config,
+  project,
+  connecting,
+  navigating,
+  lastError,
+  isDisposed: () => disposed,
+  spawnWorkspacePi,
+  translateError: tBackendError,
+  registerSessionMtimeSync,
+})
+const { reattachRunningSessions, rebuildConversation } = runtimeLifecycle
 
 onMounted(async () => {
   try {
@@ -211,69 +205,7 @@ onMounted(async () => {
   void setTrayLabels(t("tray.show"), t("tray.quit")).catch(() => {})
 
   try {
-    const handlers = await Promise.all([
-      onPiEvent(ev => {
-        const id = ev.runtimeId ?? "default"
-        if (ev.type === "extension_ui_request") {
-          uiFor(id).handleRequest(ev as any)
-          return
-        }
-        const owner = sessionFor(id)
-        if (ev.type === "scheduled_session_created") {
-          owner.cwd = ev.project
-          owner.sessionFile = ev.sessionFile
-          owner.state = ev.state
-          owner.started = true
-          // Metadata requests do not replace live entries accumulated below.
-          void owner.init(ev.project).catch(console.warn)
-        }
-        owner.handleEvent(ev)
-        if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd)
-          void workspace.refresh(owner.cwd).catch(console.warn)
-      }),
-      onSessionsChanged(files => handleExternalSessionChanges(files)),
-      onPiExit(runtimeId => {
-        pixLog(`pi exit: runtimeId=${runtimeId ?? "<transport>"}`, runtimeId ?? null)
-        // An unscoped exit is a transport disconnect; it is not an agent exit.
-        if (!runtimeId) {
-          if (phase.value === "chat") phase.value = "down"
-          return
-        }
-        const owner = sessionFor(runtimeId)
-        owner.markInterrupted()
-        owner.started = false
-        owner.isStreaming = false
-        owner.isCompacting = false
-        owner.partialBlocks = null
-        if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
-      }),
-      onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(tBackendError(line))),
-      onReconnected(() => {
-        if (disposed) return
-        // Events during the disconnect gap are lost; restore from the backend.
-        if (phase.value === "down") {
-          void reattachRunningSessions()
-            .then(restored => {
-              if (restored) return
-              phase.value = "pick"
-              refreshVisibleHistories()
-            })
-            .catch(e => {
-              lastError.value = String(e)
-            })
-          return
-        }
-        refreshVisibleHistories()
-      }),
-    ])
-    if (disposed) {
-      handlers.forEach(off => off())
-      return
-    }
-    unlisteners = handlers
-
-    // Metadata writes (rename/archive) by this app must not look external.
-    registerSessionMtimeSync((file, mtime) => findConversation(file)?.syncSessionMtime(mtime))
+    await runtimeLifecycle.listen()
 
     // Reattach after UI reload / remote connection without spawning duplicates.
     const restored = await reattachRunningSessions()
@@ -385,100 +317,6 @@ watch([connecting, navigating], () => {
   void drainNavigation()
 })
 
-/** Reattach to runtimes already alive on the backend (UI reload, remote
- *  reconnect) without spawning duplicates. Returns the restored runtime. */
-async function reattachRunningSessions(): Promise<RunningSession | null> {
-  const running = await listRunningSessions()
-  for (const runtime of running) {
-    const owner = sessionFor(runtime.runtimeId)
-    owner.started = true
-    await owner.init(runtime.project)
-    await owner.loadHistory()
-    owner.isStreaming = runtime.state.isStreaming ?? false
-    if (owner.isStreaming) owner.markRunning()
-  }
-  // Never auto-activate a project the user explicitly removed, even when its
-  // conversations keep running in the background.
-  const restorable = running.filter(runtime => !workspace.isRemovedProject(runtime.project))
-  const restored = restorable.find(runtime => runtime.project === config.value.lastProject) ?? restorable[0]
-  if (restored) {
-    activateSession(restored.runtimeId)
-    project.value = restored.project
-    phase.value = "chat"
-  }
-  return restored ?? null
-}
-
-// ---- external session changes (e.g. the session continued in a terminal) ----
-
-let sessionsListTimer: ReturnType<typeof setTimeout> | null = null
-function refreshVisibleHistories() {
-  // Refresh the sidebar lists so previews/titles/timestamps follow the disk.
-  if (sessionsListTimer) clearTimeout(sessionsListTimer)
-  sessionsListTimer = setTimeout(() => {
-    sessionsListTimer = null
-    const projects = new Set<string>(Object.keys(workspace.histories))
-    if (project.value) projects.add(project.value)
-    for (const p of projects) void workspace.refresh(p).catch(console.warn)
-  }, 600)
-}
-function handleExternalSessionChanges(files: string[]) {
-  for (const file of files) scheduleExternalReload(file)
-  refreshVisibleHistories()
-}
-
-const pendingReloads = new Set<string>()
-function scheduleExternalReload(file: string) {
-  if (pendingReloads.has(file)) return
-  // Let in-flight own writes settle and their mtimes sync first.
-  pendingReloads.add(file)
-  setTimeout(() => {
-    pendingReloads.delete(file)
-    void reloadExternalConversation(file)
-  }, 800)
-}
-
-/** Restart a conversation's worker so it picks up history appended elsewhere;
- *  `get_messages` reads worker memory, so a reload alone is not enough. */
-async function rebuildConversation(owner: ReturnType<typeof sessionFor>) {
-  const file = owner.sessionFile
-  const dir = owner.cwd
-  if (!file || !dir) return
-  pixLog(`rebuild: kill+respawn file=${file} streaming=${owner.isStreaming}`, owner.runtimeId)
-  const active = owner.runtimeId === activeRuntimeId.value
-  // The scoped pi-exit handler keeps phase "chat" while connecting.
-  if (active) connecting.value = true
-  try {
-    await killPi(owner.runtimeId)
-    await spawnWorkspacePi(dir, file, owner.runtimeId)
-    owner.started = true
-    owner.clear()
-    owner.sessionFile = file
-    await Promise.all([owner.init(dir), owner.loadHistory()])
-  } catch (e) {
-    await killPi(owner.runtimeId).catch(() => {})
-    owner.started = false
-    lastError.value = String(e)
-    uiFor(owner.runtimeId).pushToast(String(e), "error")
-  } finally {
-    if (active) connecting.value = false
-  }
-}
-
-async function reloadExternalConversation(file: string) {
-  if (disposed || connecting.value || navigating.value) return
-  const owner = findConversation(file)
-  if (!owner?.started || !owner.sessionFile || owner.isStreaming || owner.isResending) return
-  const disk = await sessionMtime(file).catch(() => null)
-  // Equal mtime means the write was our own (already synced at agent_end).
-  if (disk == null || disk === owner.syncedSessionMtime || owner.isStreaming || owner.isResending) return
-  pixLog(
-    `watcher: external change detected, rebuilding file=${file} streaming=${owner.isStreaming} synced=${owner.syncedSessionMtime} disk=${disk}`,
-    owner.runtimeId,
-  )
-  await rebuildConversation(owner)
-}
-
 async function selectProject(dir: string) {
   dir = normalizeProjectPath(dir)
   // 空目录（如无项目目录尚未解析完成）不能创建会话，否则 spawn 必然失败。
@@ -528,122 +366,6 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
   } else {
     pendingResume.value = null
     phase.value = "pick"
-  }
-}
-
-// Keep the composer mounted while asking about resources in the new checkout.
-const workspaceTrust = ref<TrustStatus | null>(null)
-let resolveWorkspaceTrust: ((allowed: boolean) => void) | undefined
-function finishWorkspaceTrust(allowed: boolean) {
-  workspaceTrust.value = null
-  resolveWorkspaceTrust?.(allowed)
-  resolveWorkspaceTrust = undefined
-}
-async function decideWorkspaceTrust(trusted: boolean, trustParent: boolean) {
-  try {
-    if (workspaceTrust.value) await trustSave(workspaceTrust.value.projectPath, trusted, trustParent)
-    finishWorkspaceTrust(trusted)
-  } catch (e) {
-    ui.pushToast(String(e), "error")
-    finishWorkspaceTrust(false)
-  }
-}
-// Cache successful creation before later initialization/trust steps. Retrying a
-// failed first send must reuse its checkout, not create another one.
-const preparedWorkspaces = new Map<string, { key: string; path: string }>()
-/** 单屏入口：始终启动当前激活会话。 */
-async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
-  return startSession(activeRuntimeId.value, selection)
-}
-
-/** 指定会话的启动流程；分屏时各窗格携带各自 runtimeId 调用，行为与激活会话一致。 */
-async function startSession(runtimeId: string, selection?: WorkspaceSelection | null): Promise<boolean> {
-  if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
-  if (selection?.worktree && !selection.branch) {
-    ui.pushToast(t("workspace.selectBaseBranch"), "error")
-    return false
-  }
-  if (!selection || !selection.branch) return startRuntime(runtimeId)
-  const owner = sessionFor(runtimeId)
-  if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime(runtimeId)
-  workspace.gitBusy = true
-  connecting.value = true
-  try {
-    const key = JSON.stringify(selection)
-    const cached = preparedWorkspaces.get(owner.runtimeId)
-    let path = cached?.key === key ? cached.path : undefined
-    if (!path || !selection.worktree) {
-      const info = await workspaceGitInfo(selection.project)
-      // An unchanged local selection doesn't switch away from an existing checkout.
-      path =
-        !selection.worktree && info.branch === selection.branch
-          ? selection.project
-          : await prepareWorkspaceGit(selection)
-      path = normalizeProjectPath(path)
-      preparedWorkspaces.set(owner.runtimeId, { key, path })
-    }
-    // The user explicitly picked this folder, so lift any earlier removal marker.
-    workspace.unremoveProject(path)
-    await workspace.rememberWorkspace(path)
-    const status = await trustStatus(path)
-    if (status.needsDecision) {
-      const allowed = await new Promise<boolean>(resolve => {
-        resolveWorkspaceTrust = resolve
-        workspaceTrust.value = status
-      })
-      if (!allowed) return false
-    }
-    // Completion may already have started an empty worker in the original cwd.
-    // Reuse the conversation identity (and composer), but never that old worker.
-    if (owner.started) await killPi(owner.runtimeId)
-    owner.started = false
-    owner.clear()
-    owner.cwd = path
-    project.value = path
-    config.value.lastProject = path
-    await saveConfig({ ...config.value })
-    return await startRuntime(runtimeId)
-  } catch (e) {
-    lastError.value = String(e)
-    uiFor(owner.runtimeId).pushToast(tBackendError(String(e)), "error")
-    return false
-  } finally {
-    connecting.value = false
-    workspace.gitBusy = false
-  }
-}
-
-async function startRuntime(runtimeId: string): Promise<boolean> {
-  // Completion can request a runtime while the draft remains editable.
-  if (selectingProject.value || phase.value !== "chat") return false
-  const owner = sessionFor(runtimeId)
-  if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value))
-    return true
-  if (owner.started && owner.isStreaming) {
-    return true
-  }
-  if (owner.started && owner.sessionFile) {
-    await rebuildConversation(owner)
-    return owner.started
-  }
-  if (owner.started) {
-    await killPi(owner.runtimeId)
-    owner.started = false
-  }
-  connecting.value = true
-  try {
-    await spawnWorkspacePi(owner.cwd || project.value, undefined, owner.runtimeId)
-    await owner.init(owner.cwd || project.value, true)
-    owner.started = true
-    return true
-  } catch (e) {
-    await killPi(owner.runtimeId).catch(() => {})
-    owner.started = false
-    lastError.value = String(e)
-    uiFor(owner.runtimeId).pushToast(String(e), "error")
-    return false
-  } finally {
-    connecting.value = false
   }
 }
 
@@ -714,21 +436,21 @@ async function selectQueuedConversation(runtimeId: string) {
   phase.value = "chat"
 }
 
-/** Resume a stored session: switch in-process when possible, else restart. */
+const conversationLoader = createConversationLoader({
+  listRunning: listRunningSessions,
+  sessionFor,
+  spawn: spawnWorkspacePi,
+  kill: killPi,
+  mtime: sessionMtime,
+  rebuild: rebuildConversation,
+})
+
+/** Activate a saved conversation, reusing or spawning its independent worker. */
 async function resumeSession(file: string, targetProject?: string) {
   if (workspace.gitBusy || navigating.value || connecting.value) return
-  // Clicking the already-active session is a no-op: it is still attached in
-  // memory, and appends made elsewhere are picked up by the session-file
-  // watcher (scheduleExternalReload), so no reconnect or history reload.
-  const activeOwner = findConversation(file)
-  if (activeOwner?.started && activeOwner.runtimeId === activeRuntimeId.value) {
-    project.value = activeOwner.cwd
-    return
-  }
   phase.value = "chat"
   connecting.value = true
   let owner = findConversation(file)
-  let attaching = false
   try {
     const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
     const changingProject = dir !== project.value
@@ -738,8 +460,6 @@ async function resumeSession(file: string, targetProject?: string) {
     activateSession(owner.runtimeId)
     project.value = dir
     if (changingProject) {
-      // A removed project can still be opened by its route, but it must not
-      // become the auto-restored project on the next launch.
       if (!workspace.isRemovedProject(dir)) {
         config.value.lastProject = dir
         await saveConfig({ ...config.value })
@@ -752,51 +472,10 @@ async function resumeSession(file: string, targetProject?: string) {
         return
       }
     }
-    // The scheduler and other PiX windows may have created the worker since
-    // this UI last synchronized. Attach by persisted identity, never spawn twice.
-    if (!owner?.started) {
-      const running = await listRunningSessions()
-      const runtime = running.find(
-        item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file),
-      )
-      if (runtime) {
-        const placeholder = owner
-        owner = sessionFor(runtime.runtimeId)
-        attaching = true
-        if (placeholder && placeholder !== owner) placeholder.sessionFile = null
-        if (!owner.started) {
-          owner.sessionFile = file
-          await owner.init(runtime.project)
-          await owner.loadHistory()
-          owner.isStreaming = runtime.state.isStreaming
-          owner.started = true
-          if (owner.isStreaming) owner.markRunning()
-        }
-      }
-    }
-    if (owner.started) {
-      activateSession(owner.runtimeId)
-      project.value = owner.cwd
-      // The session may have been continued externally since we last saw it;
-      // rebuild the worker when the file changed on disk.
-      if (!owner.isStreaming && owner.sessionFile) {
-        const disk = await sessionMtime(owner.sessionFile).catch(() => null)
-        if (disk != null && disk !== owner.syncedSessionMtime) await rebuildConversation(owner)
-      }
-      return
-    }
-    // A dormant conversation gets its own worker; other workers are untouched.
-    owner.clear()
-    owner.sessionFile = file
-    await spawnWorkspacePi(dir, file, owner.runtimeId)
-    // History does not depend on model/command metadata being ready.
-    await Promise.all([owner.init(dir), owner.loadHistory()])
-    owner.started = true
+    owner = await conversationLoader.load(owner, file, dir)
+    activateSession(owner.runtimeId)
+    project.value = owner.cwd
   } catch (e) {
-    if (owner && !attaching) {
-      await killPi(owner.runtimeId).catch(() => {})
-      owner.started = false
-    }
     lastError.value = String(e)
     ui.pushToast(String(e), "error")
     phase.value = "down"
@@ -813,64 +492,30 @@ watch(activeRuntimeId, id => {
   else if (splitView.tree) suspend()
 })
 
-/** Load a sidebar session for a split pane without touching the active
- * conversation or project. Reuses the trust dialog, running-session attach
- * and dormant-spawn paths of resumeSession. */
+/** Load a saved conversation without changing the active pane or project.
+ * Uses the same worker loader and disk reconciliation as ordinary navigation. */
 async function ensureSessionForSplit(file: string, targetProject?: string): Promise<string | null> {
-  const attached = findConversation(file)
-  if (attached?.started) return attached.runtimeId
   if (workspace.gitBusy || navigating.value || connecting.value) return null
   connecting.value = true
   let owner = findConversation(file)
-  let attaching = false
   try {
     const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
     if (!owner) {
-      // 分屏装载不得抢占激活会话，绕过 createConversation 的激活副作用。
       pruneDormantConversations()
       owner = sessionFor(createUuid())
       owner.cwd = dir
     }
     owner.sessionFile = file
-    const status = await trustStatus(dir)
-    if (status.needsDecision) {
-      const allowed = await new Promise<boolean>(resolve => {
-        resolveWorkspaceTrust = resolve
-        workspaceTrust.value = status
-      })
-      if (!allowed) return null
-    }
     if (!owner.started) {
-      // The scheduler and other PiX windows may already run this session.
-      const running = await listRunningSessions()
-      const runtime = running.find(
-        item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file),
-      )
-      if (runtime) {
-        const placeholder = owner
-        owner = sessionFor(runtime.runtimeId)
-        attaching = true
-        if (placeholder && placeholder !== owner) placeholder.sessionFile = null
-        if (!owner.started) {
-          owner.sessionFile = file
-          await owner.init(runtime.project)
-          await owner.loadHistory()
-          owner.isStreaming = runtime.state.isStreaming
-          owner.started = true
-          if (owner.isStreaming) owner.markRunning()
-        }
+      const status = await trustStatus(dir)
+      if (status.needsDecision) {
+        const allowed = await requestWorkspaceTrust(status)
+        if (!allowed) return null
       }
     }
-    if (!owner.started) {
-      owner.clear()
-      owner.sessionFile = file
-      await spawnWorkspacePi(dir, file, owner.runtimeId)
-      await Promise.all([owner.init(dir), owner.loadHistory()])
-      owner.started = true
-    }
+    owner = await conversationLoader.load(owner, file, dir)
     return owner.runtimeId
   } catch (e) {
-    if (owner && !attaching) await killPi(owner.runtimeId).catch(() => {})
     ui.pushToast(String(e), "error")
     return null
   } finally {
@@ -1013,8 +658,8 @@ async function removeProject(path: string) {
 
 onUnmounted(() => {
   disposed = true
-  unlisteners.forEach(off => off())
-  unlisteners = []
+  finishWorkspaceTrust(false)
+  runtimeLifecycle.dispose()
 })
 </script>
 
@@ -1032,7 +677,7 @@ onUnmounted(() => {
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
     <ResizablePanelGroup direction="horizontal" class="flex-1 min-h-0 min-w-0">
       <ResizablePanel
-        ref="sidebarPanel"
+        :ref="panel => (sidebarPanel = panel as typeof sidebarPanel)"
         class="min-h-0"
         size-unit="px"
         :default-size="defaultSidebarWidth"

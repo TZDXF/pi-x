@@ -1,10 +1,10 @@
+import { composerSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 
 const source = readFileSync(new URL("../src/components/WorkspaceContext.vue", import.meta.url), "utf8")
-const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 
 test("environment and branch menus only record draft choices", () => {
   const menu = source.split('<Popover v-if="!isProjectless" v-model:open="modeOpen"')[1].split("</Popover>")[0]
@@ -221,7 +221,11 @@ function harness(overrides = {}) {
     tBackendError: String,
     ...overrides,
   })
-  const code = app.slice(app.indexOf("const workspaceTrust ="), app.indexOf("async function startRuntime(runtimeId"))
+  const startup = readFileSync(new URL("../src/lib/workspaceStartup.ts", import.meta.url), "utf8")
+  const code = startup.slice(
+    startup.indexOf("const workspaceTrust ="),
+    startup.indexOf("async function startRuntime(runtimeId"),
+  )
   vm.runInContext(
     ts.transpile(code) + "\nglobalThis.api = {start, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
     context,
@@ -302,10 +306,10 @@ test("local mode does not create a worktree and only prepares a changed branch",
 })
 
 test("chat awaits preparation and throws on failure so input and attachments are retained", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
-  expect(submit).toMatch(/await props\.ensureStarted\(session\.entries\.length \? null : workspaceSelection\.value\)/)
-  expect(submit.indexOf("await props.ensureStarted") < submit.indexOf("await session.send")).toBeTruthy()
+  expect(submit).toMatch(/await deps\.ensureStarted\(session\.entries\.length \? null : deps\.workspaceSelection\(\)\)/)
+  expect(submit.indexOf("await deps.ensureStarted") < submit.indexOf("await session.send")).toBeTruthy()
   expect(submit).toMatch(/bridge\.value\?\.setTextInput\(text\)\s*throw new Error/)
   expect(chat).toMatch(/v-model="workspaceSelection"/)
 })
