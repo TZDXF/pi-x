@@ -132,8 +132,10 @@ const IGNORED_ENTRY_TYPES = new Set([
   "usage",
   "custom_message",
 ])
-/** Custom entries with their own render path or known-internal state. */
-const IGNORED_CUSTOM_TYPES = new Set(["pi.virtual-model-state", "pix-file-change"])
+/** Custom entries with their own render path or known-internal state.
+ *  `codemode-store` is pi's builtin codemode extension persisting script
+ *  `store()` writes; the values are only meaningful to later scripts. */
+const IGNORED_CUSTOM_TYPES = new Set(["pi.virtual-model-state", "pix-file-change", "codemode-store"])
 
 /**
  * Map one raw session entry delivered by RPC `entry_appended` to a UI entry;

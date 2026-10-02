@@ -96,6 +96,8 @@ test("uiEntryFromAppendedEntry keeps extension entries low-key and internal ones
   expect(uiEntryFromAppendedEntry({ type: "usage", kind: "cache_warm" }, 3, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pi.virtual-model-state" }, 4, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pix-file-change", data: {} }, 5, 0)).toBeNull()
+  // codemode's store() writes are internal script state, not conversation
+  expect(uiEntryFromAppendedEntry({ type: "custom", customType: "codemode-store", data: { set: { pid: 1 }, delete: [] } }, 12, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "message", message: { role: "user", content: "hi" } }, 6, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "compaction", summary: "s" }, 7, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom" }, 8, 0)).toBeNull()
