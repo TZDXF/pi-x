@@ -319,7 +319,12 @@ export function createEventHandler(ctx: EventContext) {
         const usage = ev.usage
         if (usage && usage.totalTokens) lastUsage.value = usage
         const delta = ev.assistantMessageEvent as AssistantMessageEvent | undefined
-        if (!delta || !partialBlocks.value) break
+        if (!delta) break
+        // Streaming content proves the retried request has recovered; keep the
+        // banner only while nothing is coming back (pi may not report
+        // auto_retry_end until the first message ends, if at all).
+        retryInfo.value = null
+        if (!partialBlocks.value) break
         applyDelta(partialBlocks.value, delta)
         break
       }

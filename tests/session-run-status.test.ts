@@ -283,6 +283,26 @@ test("retry status is structured and clears as soon as the retried response succ
   expect(store.retryInfo).toBe(null)
 })
 
+test("retry banner clears as soon as the retried request streams content", async () => {
+  const { session } = await harness()
+  const store = session("retry", "retry.jsonl")
+  const errorMessage = 'home API error (503): {"type":"http_error","message":"无法为本次流式请求构建本地执行计划"}'
+  store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 10, errorMessage })
+  expect(store.retryInfo?.attempt).toBe(1)
+  // The retried request connected and the model is streaming again (thinking
+  // deltas count too); the banner must not outlive the recovered request.
+  store.handleEvent({ type: "message_start", message: { role: "assistant", content: [] } })
+  store.handleEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "徽标" } })
+  expect(store.retryInfo).toBe(null)
+  // A later failed attempt re-arms the banner on its own auto_retry_start.
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "error", errorMessage, content: [] },
+  })
+  store.handleEvent({ type: "auto_retry_start", attempt: 2, maxAttempts: 10, errorMessage })
+  expect(store.retryInfo?.attempt).toBe(2)
+})
+
 test("sidebar shows session statuses on the left with animated running and semantic result colors", () => {
   const sidebar = readFileSync(new URL("../src/components/WorkspaceSidebar.vue", import.meta.url), "utf8")
   const light = readFileSync(new URL("../src/styles/theme/light.css", import.meta.url), "utf8")
