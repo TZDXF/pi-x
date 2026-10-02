@@ -447,6 +447,15 @@ export default {
     count: "{count} archived session(s)",
     projectSessions: "{count} session(s)",
     noMatch: "No archived sessions match the search.",
+    filter: "Filter by project",
+    filterAll: "All projects",
+    projectActions: "Project actions",
+    deleteAll: "Delete all sessions",
+    deleteAllConfirm: "All {count} archived session(s) will be deleted permanently. This cannot be undone.",
+    deleteAllProjectConfirm:
+      "{count} archived session(s) in “{name}” will be deleted permanently. This cannot be undone.",
+    deletedAll: "Deleted {count} session(s)",
+    deleteAllFailed: "Failed to delete {count} session(s)",
   },
   workspace: {
     projectActions: "Project options",

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-/** Archived sessions panel (settings → archives): grouped by project, with search, restore and delete actions. */
-import { computed, onMounted, ref } from "vue"
+/** Archived sessions panel (settings → archives): grouped by project, with search, project filter and delete actions. */
+import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, ArchiveRestore, Folder, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
+import { Archive, ArchiveRestore, Folder, MoreHorizontal, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { formatDateTime } from "@/lib/format"
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -27,6 +29,8 @@ const busy = ref<string | null>(null) // file currently being restored/deleted
 const pendingDelete = ref<SessionMeta | null>(null) // session awaiting delete confirmation
 const error = ref("")
 const query = ref("")
+const filterProject = ref("all") // "all" 或具体项目 cwd（Select 不允许空字符串值）
+const pendingClear = ref<{ cwd: string | null; count: number } | null>(null) // awaiting bulk delete confirmation; cwd null = all projects
 
 const projectName = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
@@ -38,6 +42,16 @@ function matches(s: SessionMeta, q: string) {
   return haystack.includes(q)
 }
 
+/** Distinct projects present in the archive, for the filter dropdown. */
+const projects = computed(() => {
+  const seen = new Map<string, string>()
+  for (const s of sessions.value) if (!seen.has(s.cwd)) seen.set(s.cwd, projectName(s.cwd))
+  return [...seen.entries()].map(([cwd, name]) => ({ cwd, name })).sort((a, b) => a.name.localeCompare(b.name))
+})
+watch(projects, list => {
+  if (filterProject.value !== "all" && !list.some(p => p.cwd === filterProject.value)) filterProject.value = "all"
+})
+
 interface ArchiveGroup {
   cwd: string
   name: string
@@ -45,8 +59,10 @@ interface ArchiveGroup {
 }
 const groups = computed<ArchiveGroup[]>(() => {
   const q = query.value.trim().toLowerCase()
+  const fp = filterProject.value
   const byProject = new Map<string, SessionMeta[]>()
   for (const s of sessions.value) {
+    if (fp !== "all" && s.cwd !== fp) continue
     if (q && !matches(s, q)) continue
     const rows = byProject.get(s.cwd) ?? []
     rows.push(s)
@@ -64,6 +80,7 @@ const groups = computed<ArchiveGroup[]>(() => {
       return mb - ma
     })
 })
+const visibleCount = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0))
 
 async function load() {
   loading.value = true
@@ -113,6 +130,44 @@ async function remove(s: SessionMeta) {
   }
 }
 
+/** Open the bulk delete confirm dialog; cwd null means every project in the archive. */
+function askRemoveAll(cwd: string | null) {
+  if (busy.value) return
+  const rows = cwd ? sessions.value.filter(s => s.cwd === cwd) : sessions.value
+  if (!rows.length) return
+  pendingClear.value = { cwd, count: rows.length }
+}
+
+const clearConfirmText = computed(() => {
+  const p = pendingClear.value
+  if (!p) return ""
+  return p.cwd
+    ? t("sessionArchive.deleteAllProjectConfirm", { name: projectName(p.cwd), count: p.count })
+    : t("sessionArchive.deleteAllConfirm", { count: p.count })
+})
+
+/** Delete every matching archived session; keeps going on per-file failure and reports the tally. */
+async function removeAll() {
+  const target = pendingClear.value
+  if (!target || busy.value) return
+  pendingClear.value = null
+  busy.value = "__bulk__"
+  const rows = target.cwd ? sessions.value.filter(s => s.cwd === target.cwd) : [...sessions.value]
+  let failed = 0
+  for (const s of rows) {
+    try {
+      await deleteSession(s.file)
+      workspace.removeSession(s.file)
+      sessions.value = sessions.value.filter(row => row.file !== s.file)
+    } catch {
+      failed++
+    }
+  }
+  busy.value = null
+  if (failed) ui.pushToast(t("sessionArchive.deleteAllFailed", { count: failed }), "error")
+  else ui.pushToast(t("sessionArchive.deletedAll", { count: rows.length }), "info")
+}
+
 onMounted(load)
 </script>
 
@@ -140,14 +195,33 @@ onMounted(load)
           <X :size="13" />
         </button>
       </label>
+      <Select v-model="filterProject">
+        <SelectTrigger class="w-40 shrink-0 text-xs" :aria-label="t('sessionArchive.filter')">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{{ t("sessionArchive.filterAll") }}</SelectItem>
+          <SelectItem v-for="p in projects" :key="p.cwd" :value="p.cwd">{{ p.name }}</SelectItem>
+        </SelectContent>
+      </Select>
       <Button variant="outline" size="sm" class="h-8 shrink-0 gap-2 px-3 text-xs" :disabled="loading" @click="load">
         <RotateCw :size="14" :class="{ 'animate-spin': loading }" />
         {{ t("sessionArchive.refresh") }}
       </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        class="h-8 shrink-0 gap-2 px-3 text-xs text-destructive hover:text-destructive"
+        :disabled="!!busy || !sessions.length"
+        @click="askRemoveAll(null)"
+      >
+        <Trash2 :size="14" />
+        {{ t("sessionArchive.deleteAll") }}
+      </Button>
     </div>
 
     <p class="text-xs text-muted-foreground">
-      {{ t("sessionArchive.count", { count: sessions.length }) }}
+      {{ t("sessionArchive.count", { count: visibleCount }) }}
     </p>
 
     <p v-if="error" class="text-sm text-destructive">
@@ -174,6 +248,26 @@ onMounted(load)
         <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
           <Folder :size="15" class="shrink-0 text-muted-foreground" />
           <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="shrink-0 text-muted-foreground hover:text-foreground"
+                :disabled="!!busy"
+                :aria-label="t('sessionArchive.projectActions')"
+                :title="t('sessionArchive.projectActions')"
+              >
+                <MoreHorizontal :size="15" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem class="gap-2 text-destructive focus:text-destructive" @select="askRemoveAll(group.cwd)">
+                <Trash2 :size="14" />
+                {{ t("sessionArchive.deleteAll") }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
             {{ group.rows.length }}
           </span>
@@ -238,6 +332,29 @@ onMounted(load)
           </Button>
           <Button variant="destructive" :disabled="!!busy" @click="pendingDelete && remove(pendingDelete)">
             {{ t("sessionArchive.delete") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog
+      :open="!!pendingClear"
+      @update:open="
+        (v: boolean) => {
+          if (!v && !busy) pendingClear = null
+        }
+      "
+    >
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t("sessionArchive.deleteAll") }}</DialogTitle>
+          <DialogDescription>{{ clearConfirmText }}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" :disabled="!!busy" @click="pendingClear = null">
+            {{ t("common.cancel") }}
+          </Button>
+          <Button variant="destructive" :disabled="!!busy" @click="removeAll">
+            {{ t("sessionArchive.deleteAll") }}
           </Button>
         </DialogFooter>
       </DialogContent>

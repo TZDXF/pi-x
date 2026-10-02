@@ -31,6 +31,34 @@ test("the archived session panel keeps search, restore and delete", () => {
   expect(page).not.toMatch(/<h1/)
 })
 
+test("the archived session panel filters by project after the search box", () => {
+  const page = read("../src/components/ArchivedSessionsPage.vue")
+
+  expect(page).toMatch(/<Select v-model="filterProject">/)
+  expect(page).toMatch(/<SelectItem value="all">/)
+  expect(page).toMatch(/v-for="p in projects" :key="p\.cwd" :value="p\.cwd"/)
+  // 过滤条件同时作用于分组列表与计数。
+  expect(page).toMatch(/if \(fp !== "all" && s\.cwd !== fp\) continue/)
+  expect(page).toMatch(/t\("sessionArchive\.count", \{ count: visibleCount \}\)/)
+  // 被过滤的项目被删除后筛选条件自动回到“全部”。
+  expect(page).toMatch(/filterProject\.value = "all"/)
+})
+
+test("bulk delete is exposed per project and for the whole page behind confirmation", () => {
+  const page = read("../src/components/ArchivedSessionsPage.vue")
+
+  // 每个项目名后的更多操作下拉。
+  expect(page).toMatch(/<MoreHorizontal :size="15" \/>/)
+  expect(page).toMatch(/@select="askRemoveAll\(group\.cwd\)"/)
+  // 页面右上角的删除所有会话。
+  expect(page).toMatch(/@click="askRemoveAll\(null\)"/)
+  // 删除前必须经过确认对话框，并逐个调用 session_delete。
+  expect(page).toMatch(/pendingClear\.value = \{ cwd, count: rows\.length \}/)
+  expect(page).toMatch(/async function removeAll\(\)/)
+  expect(page).toMatch(/await deleteSession\(s\.file\)/)
+  expect(page).toMatch(/workspace\.removeSession\(s\.file\)/)
+})
+
 test("archived session list, restore and delete work through remote dispatch", () => {
   const remote = read("../src-tauri/src/remote.rs")
 
