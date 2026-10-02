@@ -48,7 +48,7 @@ export function baseName(path: string): string {
  * Path shown in the UI: relative to `root` when the file lives inside the
  * project directory, the original path otherwise. Separator styles are
  * normalized to forward slashes; comparison folds letter case for Windows
- * drive-letter paths only, so POSIX directories that differ by case stay
+ * drive-letter and UNC paths, so POSIX directories that differ by case stay
  * distinct.
  */
 export function relativeDisplayPath(path: string, root: string): string {
