@@ -54,22 +54,28 @@ fn first_line(path: &Path) -> Option<String> {
 }
 
 /// Extract a short preview from the first user message in the session file.
+///
+/// Streams line by line with a total budget instead of slicing a fixed byte
+/// window: pi writes one huge system-preamble line before the first user
+/// message, which would otherwise swallow the whole window and leave the
+/// session without a preview (rendered as "untitled" in the sidebar).
+/// Oversized lines still get parsed but cost a capped amount of the budget,
+/// so the scan survives arbitrarily long preamble entries.
 fn first_user_preview(path: &Path) -> Option<String> {
-    use std::io::{Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    f.seek(SeekFrom::Start(0)).ok()?;
-    let mut buf = Vec::new();
-    {
-        let limit = PREVIEW_SCAN_BYTES;
-        let mut handle = f.take(limit);
-        handle.read_to_end(&mut buf).ok()?;
-    }
-    let text = String::from_utf8_lossy(&buf);
-    for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+    use std::io::{BufRead, BufReader};
+    const LINE_COST_CAP: usize = 4 * 1024;
+    let file = std::fs::File::open(path).ok()?;
+    let mut budget = PREVIEW_SCAN_BYTES;
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { break };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+            budget = budget.saturating_sub(line.len().min(LINE_COST_CAP) as u64);
+            if budget == 0 {
+                break;
+            }
             continue;
         }
         let msg = v.get("message")?;
@@ -729,6 +735,26 @@ mod presentation_tests {
         assert_eq!(read_session_name(&file).unwrap().as_deref(), Some("Last"));
         std::fs::write(&file, "{\"type\":\"session_info\",\"name\":\"\"}\n").unwrap();
         assert_eq!(read_session_name(&file).unwrap(), None);
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn preview_survives_oversized_system_preamble_line() {
+        // pi writes a huge system-preamble message before the first user
+        // message; a fixed byte window would swallow it and lose the preview.
+        let file = std::env::temp_dir().join(format!("pix-preview-{}.jsonl", uuid::Uuid::new_v4()));
+        let huge = "x".repeat(60 * 1024);
+        let content = format!(
+            concat!(
+                "{{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"p\"}}\n",
+                "{{\"type\":\"message\",\"message\":{{\"role\":\"system\",\"content\":\"{}\"}}}}\n",
+                "{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"调用 3 个智能体\"}}}}\n",
+            ),
+            huge
+        );
+        std::fs::write(&file, content).unwrap();
+        let meta = read_session_meta(&file, mtime_ms(&file)).unwrap();
+        assert_eq!(meta.preview.as_deref(), Some("调用 3 个智能体"));
         std::fs::remove_file(file).unwrap();
     }
     #[test]
