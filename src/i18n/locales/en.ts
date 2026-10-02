@@ -1118,6 +1118,11 @@ export default {
         description:
           "Captures the original file before a tool runs and the new content after write/edit, enabling accurate review and verified rewind.",
       },
+      delayedSend: {
+        name: "Delayed send",
+        description:
+          "Adds a delay control to the composer: scheduled messages are sent when the countdown ends and can be cancelled until then.",
+      },
     },
     details: "Details",
     perMonth: "mo",

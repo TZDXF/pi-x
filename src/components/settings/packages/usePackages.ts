@@ -48,6 +48,7 @@ export function usePackages(project: () => string | undefined) {
   const builtinBusy = ref<string | null>(null)
 
   const builtinFileChanges = computed(() => appConfig.value?.builtinFileChanges !== false)
+  const builtinDelayedSend = computed(() => appConfig.value?.builtinDelayedSend !== false)
 
   // ---- market filters ----
   const query = ref("")
@@ -89,18 +90,17 @@ export function usePackages(project: () => string | undefined) {
     }
   }
 
-  async function setBuiltinFileChanges(enabled: boolean) {
+  /** Persist one built-in plugin toggle; rolls back the optimistic update on failure. */
+  async function setBuiltinPlugin(key: "builtinFileChanges" | "builtinDelayedSend", nameKey: string, enabled: boolean) {
     if (builtinBusy.value) return
     const previous = appConfig.value
-    const next = { ...(appConfig.value ?? {}), builtinFileChanges: enabled }
+    const next = { ...(appConfig.value ?? {}), [key]: enabled }
     appConfig.value = next
-    builtinBusy.value = "fileChanges"
+    builtinBusy.value = key
     try {
       await saveConfig(next)
       ui.pushToast(
-        t(enabled ? "packages.builtinEnabledToast" : "packages.builtinDisabledToast", {
-          name: t("packages.builtin.fileChanges.name"),
-        }),
+        t(enabled ? "packages.builtinEnabledToast" : "packages.builtinDisabledToast", { name: t(nameKey) }),
         "info",
       )
     } catch (e) {
@@ -109,6 +109,14 @@ export function usePackages(project: () => string | undefined) {
     } finally {
       builtinBusy.value = null
     }
+  }
+
+  function setBuiltinFileChanges(enabled: boolean) {
+    return setBuiltinPlugin("builtinFileChanges", "packages.builtin.fileChanges.name", enabled)
+  }
+
+  function setBuiltinDelayedSend(enabled: boolean) {
+    return setBuiltinPlugin("builtinDelayedSend", "packages.builtin.delayedSend.name", enabled)
   }
 
   function clearSearchTimer() {
@@ -355,6 +363,7 @@ export function usePackages(project: () => string | undefined) {
     builtinLoading,
     builtinBusy,
     builtinFileChanges,
+    builtinDelayedSend,
     query,
     sortBy,
     typeFilter,
@@ -373,6 +382,7 @@ export function usePackages(project: () => string | undefined) {
     refreshInstalled,
     loadBuiltinPlugins,
     setBuiltinFileChanges,
+    setBuiltinDelayedSend,
     scopesOf,
     fmtDownloads,
     fmtUpdated,

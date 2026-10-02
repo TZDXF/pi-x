@@ -48,11 +48,27 @@ test("built-in file tracking defaults to enabled and persists toggles", async t 
   await api.setBuiltinFileChanges(false)
   expect(api.builtinFileChanges.value).toBe(false)
   expect(saved.at(-1).builtinFileChanges).toBe(false)
+  // 关闭一个内置插件不应碰另一个的开关。
+  expect(saved.at(-1).builtinDelayedSend).toBeUndefined()
+})
+
+test("built-in delayed send defaults to enabled and persists toggles", async t => {
+  const { api, saved } = harness(t, { config: {} })
+  await api.loadBuiltinPlugins()
+  expect(api.builtinDelayedSend.value).toBe(true)
+  await api.setBuiltinDelayedSend(false)
+  expect(api.builtinDelayedSend.value).toBe(false)
+  expect(saved.at(-1).builtinDelayedSend).toBe(false)
+  await api.setBuiltinDelayedSend(true)
+  expect(api.builtinDelayedSend.value).toBe(true)
+  expect(saved.at(-1).builtinDelayedSend).toBe(true)
 })
 
 test("failed built-in toggle rolls back the switch", async t => {
-  const { api } = harness(t, { config: { builtinFileChanges: true }, failSave: true })
+  const { api } = harness(t, { config: { builtinFileChanges: true, builtinDelayedSend: true }, failSave: true })
   await api.loadBuiltinPlugins()
   await api.setBuiltinFileChanges(false)
   expect(api.builtinFileChanges.value).toBe(true)
+  await api.setBuiltinDelayedSend(false)
+  expect(api.builtinDelayedSend.value).toBe(true)
 })

@@ -49,6 +49,16 @@ test("composer keeps its original send control when delayed send is active", () 
   expect(chat).toMatch(/session\.schedulePrompt\(text, delayMs!/)
 })
 
+test("delayed send is a built-in plugin whose switch gates the composer entry", () => {
+  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  // 入口按钮受插件开关控制，配置缺省启用。
+  expect(chat).toMatch(/delayedSendEnabled = ref\(true\)/)
+  expect(chat).toMatch(/config\.builtinDelayedSend === false/)
+  expect(chat).toMatch(/<Button[^>]*v-if="delayedSendEnabled"[^>]*:aria-pressed="delayedSend"/)
+  // 插件关闭后快捷键不得再打开延迟发送。
+  expect(chat).toMatch(/registerShortcutHandler\("editor\.toggleDelayedSend", \(\) => \{\s*if \(delayedSendEnabled\.value\)/)
+})
+
 test("hover wheel increments up and decrements down within each segment", () => {
   expect(stepSendDelayWheel(10, -120, 0, 525600)).toBe(11)
   expect(stepSendDelayWheel(10, 120, 0, 525600)).toBe(9)

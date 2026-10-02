@@ -404,6 +404,9 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             if let Some(enabled) = a["config"]["builtinFileChanges"].as_bool() {
                 cfg.builtin_file_changes = Some(enabled);
             }
+            if let Some(enabled) = a["config"]["builtinDelayedSend"].as_bool() {
+                cfg.builtin_delayed_send = Some(enabled);
+            }
             commands::app_config_save(app.clone(), cfg)?;
             Ok(Value::Null)
         }

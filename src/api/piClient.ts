@@ -47,6 +47,8 @@ export interface AppConfig {
   worktreeDir?: string
   /** PiX 内置文件变更插件；缺省为启用。 */
   builtinFileChanges?: boolean
+  /** PiX 内置延迟发送插件；缺省为启用。 */
+  builtinDelayedSend?: boolean
 }
 
 export interface PiSettings {

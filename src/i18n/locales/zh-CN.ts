@@ -1082,6 +1082,10 @@ export default {
         name: "文件变更追踪",
         description: "在工具执行前保存原文件内容，在 write/edit 完成后记录新内容，用于真实文件审查和可校验回滚。",
       },
+      delayedSend: {
+        name: "延迟发送",
+        description: "在输入框提供延迟发送按钮：设定倒计时后消息将在到期时发出，期间可随时取消。",
+      },
     },
     details: "详情",
     perMonth: "月",

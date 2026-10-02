@@ -90,6 +90,13 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub builtin_file_changes: Option<bool>,
+    /// PiX 内置的延迟发送插件开关；缺省为启用。
+    #[serde(
+        rename = "builtinDelayedSend",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub builtin_delayed_send: Option<bool>,
 }
 
 fn is_false(v: &bool) -> bool {

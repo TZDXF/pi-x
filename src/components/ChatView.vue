@@ -20,7 +20,7 @@ import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/componen
 import { PromptInput, PromptInputSubmit } from "@/components/ai-elements/prompt-input"
 import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
 import { activeRuntimeId, sessionFor, uiFor } from "@/stores/conversations"
-import { rpcRequest as requestForRuntime } from "@/api/piClient"
+import { getConfig, rpcRequest as requestForRuntime } from "@/api/piClient"
 import { PromptInputHeader } from "@/components/ai-elements/prompt-input"
 import ChatQueuePanel from "@/components/chat/ChatQueuePanel.vue"
 import ChatDialogs from "@/components/chat/ChatDialogs.vue"
@@ -358,6 +358,16 @@ const { modelKey, onThinkingChange } = useConversationModel(session, {
 })
 
 const delayedSend = ref(false)
+// 延迟发送是内置插件，关闭后隐藏入口；配置加载失败时按缺省启用处理。
+const delayedSendEnabled = ref(true)
+void getConfig()
+  .then(config => {
+    if (config.builtinDelayedSend === false) {
+      delayedSendEnabled.value = false
+      delayedSend.value = false
+    }
+  })
+  .catch(() => {})
 const showStopButton = computed(
   () => session.isStreaming && !delayedSend.value && !bridge.value?.textInput?.trim() && !attachments.value.length,
 )
@@ -491,7 +501,7 @@ const offShortcutHandlers = [
   registerShortcutHandler("chat.scrollBottom", () => scrollHistory(1)),
   registerShortcutHandler("editor.attachFile", () => bridge.value?.openFileDialog?.()),
   registerShortcutHandler("editor.toggleDelayedSend", () => {
-    delayedSend.value = !delayedSend.value
+    if (delayedSendEnabled.value) delayedSend.value = !delayedSend.value
   }),
   registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
   registerShortcutHandler("sidebar.files", () => addSidebarTab("files")),
@@ -1092,6 +1102,7 @@ onBeforeUnmount(() => {
                 </NumberFieldRoot>
               </div>
               <Button
+                v-if="delayedSendEnabled"
                 type="button"
                 variant="ghost"
                 size="icon"
