@@ -1,4 +1,4 @@
-import type { DiffFold, DiffLine, DiffSideRow } from "./reviewDiff"
+import type { DiffLine, DiffSideRow } from "./reviewDiff"
 
 export type DiffPaneSide = "left" | "right"
 
@@ -34,39 +34,6 @@ export interface DiffDividerShape {
   y1: number
   y2: number
   cls: string
-}
-
-/** 把较长的连续上下文压缩为两端上下文与一个可展开占位行。 */
-export function foldContextLines(
-  lines: DiffLine[],
-  expanded: ReadonlySet<string>,
-  options: { minRunLength?: number; edgeLength?: number } = {},
-): (DiffLine | DiffFold)[] {
-  const { minRunLength = 12, edgeLength = 3 } = options
-  const out: (DiffLine | DiffFold)[] = []
-  let i = 0
-  while (i < lines.length) {
-    if (lines[i].kind !== "ctx") {
-      out.push(lines[i])
-      i++
-      continue
-    }
-    let j = i
-    while (j < lines.length && lines[j].kind === "ctx") {
-      j++
-    }
-    const length = j - i
-    const key = `${i}:${length}`
-    if (length > minRunLength && !expanded.has(key)) {
-      out.push(...lines.slice(i, i + edgeLength))
-      out.push({ kind: "fold", count: length - edgeLength * 2, key })
-      out.push(...lines.slice(j - edgeLength, j))
-    } else {
-      out.push(...lines.slice(i, j))
-    }
-    i = j
-  }
-  return out
 }
 
 /** 并排视图本侧没有内容时不插占位，保持 IntelliJ 默认的连续行布局。 */
