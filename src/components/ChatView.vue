@@ -895,9 +895,6 @@ onBeforeUnmount(() => {
           @select-project="emit('selectProject', $event)"
           @open-project="emit('openProject')"
         />
-        <p v-if="workspace.gitBusy" role="status" class="px-2 py-1 text-xs text-muted-foreground">
-          {{ t("workspace.preparing") }}
-        </p>
         <ChatQueuePanel
           v-if="session.promptQueue.length"
           :session="session"

@@ -478,7 +478,6 @@ export default {
     createBranch: "Create branch",
     selectBaseBranch: "Select a valid base branch",
     baseBranch: "Base branch",
-    preparing: "Preparing workspace…",
     currentBranch: "Current branch",
     branchName: "New branch name",
     noGit: "Git unavailable",

@@ -465,7 +465,6 @@ export default {
     createBranch: "创建分支",
     selectBaseBranch: "请选择有效的基准分支",
     baseBranch: "基准分支",
-    preparing: "正在准备工作区…",
     currentBranch: "当前分支",
     branchName: "新分支名称",
     noGit: "Git 不可用",
