@@ -1,6 +1,11 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
+import { markRaw, ref } from "vue"
+import { vi } from "vitest"
+import { useBrowserBridge } from "@/composables/browser/useBrowserBridge"
+import { bridgeAddMarker } from "@/lib/previewBridge"
+import { mountBrowserComposable } from "./browserTestHarness"
 
 // The bridge is executed against a stub DOM so the inspect wiring is
 // exercised end to end: enabling the mode must actually register the
@@ -170,21 +175,36 @@ test("messages without the page target are ignored", () => {
   expect(env.listeners["document:mousedown"]).toBe(undefined)
 })
 
-test("panel posts plain JSON payloads so structured clone accepts them", () => {
-  const panel = readFileSync(new URL("../src/components/browser/BrowserPanel.vue", import.meta.url), "utf8")
-  const postToPage = panel.match(/function postToPage\(message: BridgeOutbound\) \{([\s\S]*?)\n\}/)
-  expect(postToPage).toBeTruthy()
-  expect(postToPage[1]).toMatch(/JSON\.parse\(JSON\.stringify\(message\)\)/)
-  expect(postToPage[1]).not.toMatch(/postMessage\(message\b/)
-
-  // The failure mode: payloads built from deep-ref values are reactive
-  // proxies, and postMessage's structured clone rejects proxies outright.
-  const raw = {
-    rect: { x: 1, y: 2, width: 3, height: 4 },
-    pin: { selector: "#save", text: "Save", rect: { x: 1, y: 2, width: 3, height: 4 } },
+test("panel bridge posts plain JSON payloads so structured clone accepts them", () => {
+  const postMessage = vi.fn()
+  vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+  const mounted = mountBrowserComposable(() =>
+    useBrowserBridge({
+      iframeRef: ref(markRaw({ contentWindow: { postMessage } }) as unknown as HTMLIFrameElement),
+      directMode: ref(false),
+      proxyBase: ref("http://127.0.0.1:9000/p/secret"),
+      sandboxAttr: ref("allow-scripts allow-same-origin"),
+      onNavigated() {},
+      onConsole() {},
+      onSelected() {},
+      onLoad() {},
+    }),
+  )
+  try {
+    const annotation = ref({
+      id: "pin-1",
+      kind: "pin" as const,
+      number: 1,
+      rect: { x: 1, y: 2, width: 3, height: 4 },
+      pin: { selector: "#save", text: "Save", rect: { x: 1, y: 2, width: 3, height: 4 } },
+    })
+    expect(() => structuredClone(annotation.value)).toThrow(/could not be cloned/)
+    mounted.result.postToPage(bridgeAddMarker(annotation.value))
+    const [payload, origin] = postMessage.mock.calls[0]
+    expect(origin).toBe("http://127.0.0.1:9000")
+    expect(structuredClone(payload).annotation).toEqual(JSON.parse(JSON.stringify(annotation.value)))
+  } finally {
+    mounted.unmount()
+    vi.unstubAllGlobals()
   }
-  const proxied = new Proxy(raw, {})
-  expect(() => structuredClone(proxied)).toThrow(/could not be cloned/)
-  const flattened = JSON.parse(JSON.stringify(proxied))
-  expect(flattened).toEqual(JSON.parse(JSON.stringify(raw)))
 })
