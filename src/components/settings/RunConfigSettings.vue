@@ -8,6 +8,7 @@ import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib/runningBehavior"
+import { processDetail, setProcessDetail, type ProcessDetail } from "@/lib/processDetail"
 import RetrySettings from "@/components/settings/RetrySettings.vue"
 import QueueModeSettings from "@/components/settings/QueueModeSettings.vue"
 
@@ -30,6 +31,24 @@ const { t } = useI18n()
       <SelectContent>
         <SelectItem value="queue">{{ t("chat.addToQueue") }}</SelectItem>
         <SelectItem value="steer">{{ t("chat.steer") }}</SelectItem>
+      </SelectContent>
+    </Select>
+  </SettingRow>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading id="process-detail-label">{{ t("settings.processDetail") }}</SettingHeading>
+      <SettingDescription>{{ t("settings.processDetailDesc") }}</SettingDescription>
+    </div>
+    <Select
+      :model-value="processDetail"
+      @update:model-value="(v: AcceptableValue) => setProcessDetail(v as ProcessDetail)"
+    >
+      <SelectTrigger class="h-8 w-36 text-xs" aria-labelledby="process-detail-label">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="detailed">{{ t("settings.processDetailDetailed") }}</SelectItem>
+        <SelectItem value="concise">{{ t("settings.processDetailConcise") }}</SelectItem>
       </SelectContent>
     </Select>
   </SettingRow>

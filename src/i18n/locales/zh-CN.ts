@@ -791,6 +791,10 @@ export default {
     runConfigTitle: "配置",
     runConfigDesc: "运行方式、自动重试与跟进消息等会话运行行为。",
 
+    processDetail: "过程展示详细程度",
+    processDetailDesc: "助手运行过程的展示粒度：详细模式显示思考内容；简洁模式隐藏全部思考，只展示工具调用与回答。",
+    processDetailDetailed: "详细",
+    processDetailConcise: "简洁",
     theme: "外观主题",
     runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
     themeLight: "亮色",

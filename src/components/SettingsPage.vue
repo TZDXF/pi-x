@@ -104,6 +104,7 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "appearance", labelKey: "settings.theme" },
   { tab: "appearance", labelKey: "settings.terminalTheme" },
   { tab: "run-config", labelKey: "chat.runningBehavior" },
+  { tab: "run-config", labelKey: "settings.processDetail" },
   { tab: "run-config", labelKey: "retrySettings.maxRetries" },
   { tab: "run-config", labelKey: "queueMode.title" },
   { tab: "shortcuts", labelKey: "settings.shortcutsTitle" },
@@ -146,7 +147,13 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.language",
   ],
   appearance: ["settings.theme", "settings.terminalTheme", "settings.terminalThemeDesc"],
-  "run-config": ["settings.runningBehaviorDesc", "retrySettings", "queueMode"],
+  "run-config": [
+    "settings.runningBehaviorDesc",
+    "settings.processDetail",
+    "settings.processDetailDesc",
+    "retrySettings",
+    "queueMode",
+  ],
   shortcuts: [
     "shortcuts.actions.newSession",
     "shortcuts.actions.focusComposer",

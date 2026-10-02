@@ -9,6 +9,7 @@ import { ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { computed, onUnmounted, ref, watch } from "vue"
 import { changeForCall } from "@/lib/sessionChanges"
+import { processDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
@@ -206,8 +207,9 @@ const { t } = useI18n()
         class="text-sm"
       />
 
-      <!-- thinking: collapsed by default; the trigger streams the latest reasoning line -->
-      <Thinking v-else-if="block.type === 'thinking'" :is-streaming="block.streaming">
+      <!-- thinking: collapsed by default; the trigger streams the latest reasoning line.
+           Concise mode hides thinking entirely: only tool calls and answers are shown. -->
+      <Thinking v-else-if="block.type === 'thinking' && processDetail === 'detailed'" :is-streaming="block.streaming">
         <ThinkingTrigger :streaming-text="block.text" />
         <ThinkingContent :content="block.text" />
       </Thinking>

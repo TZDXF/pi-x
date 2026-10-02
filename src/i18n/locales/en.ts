@@ -813,6 +813,11 @@ export default {
     runConfigDesc: "Run behavior, automatic retries, and queued message delivery.",
 
     theme: "Appearance",
+    processDetail: "Process detail level",
+    processDetailDesc:
+      "How much of the assistant's run is shown: detailed includes thinking content; concise hides all thinking and shows only tool calls and answers.",
+    processDetailDetailed: "Detailed",
+    processDetailConcise: "Concise",
     runningBehaviorDesc:
       "How a message sent while generating is handled: queued to wait, or steers the current run immediately.",
     themeLight: "Light",
