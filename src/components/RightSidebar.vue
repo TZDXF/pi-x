@@ -215,7 +215,7 @@ onBeforeUnmount(() => {
           <div :aria-label="t('sidebarTabs.title')">
             <VueDraggable
               tag="div"
-              class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+              class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-clip"
               :model-value="tabs"
               :animation="150"
               filter=".sidebar-tab-close"
