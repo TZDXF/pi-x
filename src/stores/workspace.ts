@@ -400,6 +400,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const draft = pending.get(file)
     if (draft && !draft.title) draft.title = title
   }
+  /** Like generatedTitle, but overwrites an existing title: editing the first
+   *  question replaces the wording the old title was generated from. */
+  function regeneratedTitle(file: string, title: string) {
+    for (const rows of Object.values(histories.value)) {
+      const row = rows.find(s => s.file === file)
+      if (row) row.title = title
+    }
+    const draft = pending.get(file)
+    if (draft) draft.title = title
+  }
   /** Lets the app shell record the mtime of metadata writes (rename/archive)
    *  so the session watcher can tell its own writes from external ones. */
   async function update(row: SessionMeta, title: string | null, archived: boolean) {
@@ -461,5 +471,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeSession,
     preview,
     generatedTitle,
+    regeneratedTitle,
   }
 })

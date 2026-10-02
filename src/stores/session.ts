@@ -1,26 +1,19 @@
-import { ALL_THINKING_LEVELS, supportedThinkingLevels, clampThinkingLevel } from "@/lib/thinkingLevels"
+import { clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
-import { computed, ref, shallowRef } from "vue"
+import { computed, ref } from "vue"
 import { i18n, tBackendError } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import {
   generateSessionTitle,
-  getModelsConfig,
   getPiSettings,
   pixLog,
   rpcRequest as requestForRuntime,
-  sessionHistory,
-  sessionLastError,
   sessionMtime,
-  type SessionLastError,
 } from "@/api/piClient"
-import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { sessionChanges } from "@/lib/sessionChanges"
 import { fileChangeArtifactFromEntry, mergeArtifactChanges, type FileChangeArtifact } from "@/lib/fileChangeArtifacts"
 import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
-import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
-import { contentText } from "@/lib/content"
 import { builtinExtensionPath, isBuiltinExtensionPath } from "@/lib/extensionNames"
 import type {
   CommandInfo,
@@ -31,7 +24,9 @@ import type {
   ThinkingLevel,
   Usage,
 } from "@/api/protocol"
-import { blocksFromMessage, createEventHandler, errorBlockText } from "./session/events"
+import { createEventHandler } from "./session/events"
+import { createModelSelection } from "./session/modelSelection"
+import { createSessionHistory } from "./session/history"
 import { createPromptQueue } from "./session/promptQueue"
 import { createTurnCheckpoints } from "./session/checkpoints"
 import type { Block, Entry, QueuedPrompt, RetryInfo, SessionFlow, ToolRun, UserEntry } from "./session/types"
@@ -51,51 +46,6 @@ export type {
   ToolRun,
   UserEntry,
 } from "./session/types"
-
-// ---- thinking levels (mirror pi-ai/models.js for offline use) ----
-
-/** pi's DEFAULT_THINKING_LEVEL (core/defaults.js). */
-const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
-
-const SELECTION_KEY = "pix.conversationSelection"
-interface RememberedSelection {
-  model?: Model
-  thinking?: ThinkingLevel
-  levels?: ThinkingLevel[]
-}
-// Cache display metadata only, never provider headers or credentials from RPC models.
-function selectionModel(model: Model): Model {
-  return {
-    id: model.id,
-    provider: model.provider,
-    name: model.name || model.id,
-    reasoning: model.reasoning === true,
-    api: "",
-    baseUrl: "",
-    input: [],
-    contextWindow: 0,
-    maxTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  }
-}
-function readSelection(): RememberedSelection {
-  try {
-    const value = JSON.parse(localStorage.getItem(SELECTION_KEY) || "{}")
-    if (!value || typeof value !== "object") return {}
-    return {
-      model:
-        typeof value.model?.provider === "string" && typeof value.model?.id === "string"
-          ? selectionModel(value.model)
-          : undefined,
-      thinking: ALL_THINKING_LEVELS.includes(value.thinking) ? value.thinking : undefined,
-      levels: Array.isArray(value.levels)
-        ? value.levels.filter((v: ThinkingLevel) => ALL_THINKING_LEVELS.includes(v))
-        : undefined,
-    }
-  } catch {
-    return {}
-  }
-}
 
 let entrySeq = 0
 const nextId = () => ++entrySeq
@@ -155,63 +105,23 @@ export const createSessionStore = (runtimeId = "default") =>
     const lastUsage = ref<Usage | null>(null)
     const commands = ref<CommandInfo[]>([])
     const models = ref<Model[]>([])
-    /** Explicit pre-start model choice, consumed once by init. */
-    const remembered = ref<RememberedSelection>(readSelection())
-    const desiredModelKey = ref<string | null>(null)
-    let pendingModelChange: { from: string; to: string } | null = null
-    const piDefaultModelKey = ref<string | null>(null)
-    const offlineDefaultModelKey = computed(() =>
-      remembered.value.model
-        ? `${remembered.value.model.provider}/${remembered.value.model.id}`
-        : piDefaultModelKey.value,
-    )
-    const offlineDefaultThinking = ref<ThinkingLevel | null>(null)
-    const rpcThinkingLevels = ref<ThinkingLevel[]>(["off"])
-    /** Per-model thinking levels derived from models.json while pi is down. */
-    const offlineThinkingLevels = ref<Record<string, ThinkingLevel[]>>({})
-    /** Explicit pre-start thinking choice, consumed once by init. */
-    const desiredThinkingLevel = ref<ThinkingLevel | null>(null)
     const cwd = ref("")
-
-    if (remembered.value.model) models.value = [remembered.value.model]
-    let offlineLoadVersion = 0
-
-    function remember(model?: Model, thinking?: ThinkingLevel, levels?: ThinkingLevel[]) {
-      remembered.value = {
-        ...remembered.value,
-        ...(model ? { model: selectionModel(model) } : {}),
-        ...(thinking ? { thinking } : {}),
-        ...(levels ? { levels } : {}),
-      }
-      try {
-        localStorage.setItem(SELECTION_KEY, JSON.stringify(remembered.value))
-      } catch {
-        /* Optional UI preference. */
-      }
-    }
-
-    // Raw history snapshot outside Vue's deep reactive graph; emptied once fully materialized.
-    const historyMessages = shallowRef<any[]>([])
-    /** Stop reason of the session's final turn, appended after history loads. */
-    const pendingHistoryError = shallowRef<SessionLastError | null>(null)
-    let historyVersion = 0
-    const historyCursor = ref(0)
-    const historyLoading = ref(false)
-    const olderHistoryLoading = ref(false)
-    const hasOlderHistory = computed(() => historyCursor.value > 0)
-    const yieldHistory = () => new Promise<void>(resolve => setTimeout(resolve, 0))
-
-    function invalidateHistory() {
-      historyVersion++
-      fileChangeArtifacts.value = []
-      revertedFileChangeCalls.value = new Set()
-      historyMessages.value = []
-      pendingHistoryError.value = null
-      historyCursor.value = 0
-      historyLoading.value = false
-      olderHistoryLoading.value = false
-    }
-
+    let pendingModelChange: { from: string; to: string } | null = null
+    const {
+      remembered,
+      desiredModelKey,
+      offlineDefaultModelKey,
+      desiredThinkingLevel,
+      rpcThinkingLevels,
+      currentModel,
+      availableThinking,
+      thinkingLevel,
+      remember,
+      setDesiredModel,
+      setDesiredThinkingLevel,
+      loadOfflineModels,
+      invalidateOfflineModels,
+    } = createModelSelection(state, models)
     async function refreshFileRewindState(file: string | null) {
       if (!file) return
       try {
@@ -246,36 +156,46 @@ export const createSessionStore = (runtimeId = "default") =>
 
     // streaming assembly
 
-    const currentModel = computed(() => state.value?.model ?? null)
-    /** RPC levels once pi runs; config-derived levels (of the desired model) before. */
-    const availableThinking = computed<ThinkingLevel[]>(() => {
-      if (state.value) return rpcThinkingLevels.value
-      const key = desiredModelKey.value ?? offlineDefaultModelKey.value
-      const saved = remembered.value.model
-      if (saved && key === `${saved.provider}/${saved.id}` && remembered.value.levels?.length)
-        return remembered.value.levels
-      return (key && offlineThinkingLevels.value[key]) || ["off"]
-    })
-    const thinkingLevel = computed<ThinkingLevel>(() => {
-      if (state.value)
-        return clampThinkingLevel(
-          state.value.thinkingLevel ?? remembered.value.thinking ?? DEFAULT_THINKING_LEVEL,
-          availableThinking.value,
-        )
-      return clampThinkingLevel(
-        desiredThinkingLevel.value ??
-          remembered.value.thinking ??
-          offlineDefaultThinking.value ??
-          DEFAULT_THINKING_LEVEL,
-        availableThinking.value,
-      )
-    })
     const pendingCount = computed(() => promptQueue.value.length + steering.value.length + followUp.value.length)
 
     /** Reserved entry id for the in-flight assistant turn. Assigned at the
      *  first assistant message_start and reused when the entry is committed, so
      *  the UI can key the streaming turn stably across completion. */
     const streamingTurnId = ref<number | null>(null)
+
+    let conversationVersion = 0
+    const {
+      historyMessages,
+      historyCursor,
+      historyLoading,
+      olderHistoryLoading,
+      hasOlderHistory,
+      invalidateHistory,
+      loadOlderHistory,
+      loadMessages,
+      loadHistory,
+      timelineTurns,
+      revealTimelineTurn,
+    } = createSessionHistory({
+      entries,
+      runs,
+      partialBlocks,
+      streamingTurnId,
+      sessionFile,
+      isStreaming,
+      rpcRequest,
+      nextId,
+      syncSessionFile,
+      refreshFileRewindState,
+      mergeFileChangeArtifact,
+      resetArtifacts: () => {
+        fileChangeArtifacts.value = []
+        revertedFileChangeCalls.value = new Set()
+      },
+      invalidateConversation: () => {
+        ++conversationVersion
+      },
+    })
 
     // Run-flow flags shared with the event handler and the queue scheduler
     // (session/events.ts, session/promptQueue.ts).
@@ -331,7 +251,6 @@ export const createSessionStore = (runtimeId = "default") =>
     })
 
     // ---- actions ----
-    let conversationVersion = 0
 
     /** Surface a response `data.disposition` (rpc-commands.md) as a diagnostic
      *  log plus a notice whenever the message did NOT simply start a run: an
@@ -443,6 +362,9 @@ export const createSessionStore = (runtimeId = "default") =>
       setSessionRunStatus(sessionFile.value, "running")
       const version = conversationVersion
       const firstMessage = !entries.value.some(entry => entry.kind === "user") && !state.value?.messageCount
+      // Editing the first question replaces the session's identity: its title
+      // must be regenerated from the new wording.
+      const editingFirstQuestion = !!replacement && !entries.value.some(entry => entry.kind === "user")
       // Capture identity now: completion must never name a subsequently selected session.
       const titleFile = sessionFile.value
       const titleProject = cwd.value
@@ -494,7 +416,7 @@ export const createSessionStore = (runtimeId = "default") =>
           void refreshState()
           void refreshStats()
         })
-      if (firstMessage && titleFile && titleSessionId) {
+      if ((firstMessage || editingFirstQuestion) && titleFile && titleSessionId) {
         const workspace = useWorkspaceStore()
         workspace.preview({
           file: titleFile,
@@ -505,9 +427,12 @@ export const createSessionStore = (runtimeId = "default") =>
           preview: promptText.replace(/\s+/g, " ").slice(0, 120),
         })
         // Independent IPC call: do not await it or switch the active model.
-        void generateSessionTitle(titleFile, promptText)
+        void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
           .then(async title => {
-            if (title) workspace.generatedTitle(titleFile, title)
+            if (title) {
+              if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, title)
+              else workspace.generatedTitle(titleFile, title)
+            }
             await workspace.refresh(titleProject)
           })
           .catch(error => console.warn("[pi] title generation failed; keeping preview:", error))
@@ -664,13 +589,6 @@ export const createSessionStore = (runtimeId = "default") =>
       }
     }
 
-    /** Record a model choice made while pi is not running; applied on init. */
-    function setDesiredModel(key: string | null) {
-      desiredModelKey.value = key
-      const model = models.value.find(m => `${m.provider}/${m.id}` === key)
-      if (model) remember(model, undefined, supportedThinkingLevels(model))
-    }
-
     async function setThinkingLevel(level: ThinkingLevel) {
       const result = await rpcRequest({ type: "set_thinking_level", level })
       if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
@@ -680,12 +598,6 @@ export const createSessionStore = (runtimeId = "default") =>
       await refreshState()
       await refreshThinkingLevels()
       remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? level, rpcThinkingLevels.value)
-    }
-
-    /** Record a thinking level picked while pi is not running; applied on init. */
-    function setDesiredThinkingLevel(level: ThinkingLevel) {
-      desiredThinkingLevel.value = level
-      remember(undefined, level)
     }
 
     // ---- queries ----
@@ -714,193 +626,6 @@ export const createSessionStore = (runtimeId = "default") =>
             return setFollowUpMode(settings.followUpMode)
         })
         .catch(e => console.warn("[pi] follow-up mode:", e))
-    }
-
-    /** Materialize only one page, yielding during large tool-heavy histories. */
-    async function loadOlderHistory() {
-      if (olderHistoryLoading.value || !historyCursor.value) return
-      const version = historyVersion
-      const source = historyMessages.value
-      const end = historyCursor.value
-      olderHistoryLoading.value = true
-      try {
-        await yieldHistory()
-        let start = end
-        let count = 0
-        while (start > 0 && count < 30) {
-          const msg = source[--start]
-          if (msg.role === "user" || msg.role === "assistant") count++
-          if ((end - start) % 100 === 0) {
-            await yieldHistory()
-            if (version !== historyVersion) return
-          }
-        }
-        // A long tool run (or repeated empty provider failures) may exceed a
-        // page by itself. Include its question so the first page is navigable
-        // without relying on the timeline to fetch older history.
-        while (start > 0 && source[start].role !== "user") {
-          start--
-          if ((end - start) % 100 === 0) {
-            await yieldHistory()
-            if (version !== historyVersion) return
-          }
-        }
-        const page: Entry[] = []
-        const pageRuns: Record<string, ToolRun> = {}
-        for (let i = start; i < end; i++) {
-          if (version !== historyVersion) return
-          const msg = source[i]
-          if (msg.role === "custom") {
-            mergeFileChangeArtifact(msg)
-            continue
-          }
-          if (msg.role === "user") {
-            const text = contentText(msg.content)
-            const images = Array.isArray(msg.content)
-              ? msg.content
-                  .filter((c: any) => c.type === "image" && c.data && c.mimeType)
-                  .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
-              : []
-            if (text.trim() || images.length)
-              page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
-          } else if (msg.role === "assistant") {
-            // Failed responses persist with empty content and are dropped here;
-            // loadHistory surfaces the final turn's failure separately at the end.
-            const blocks = blocksFromMessage(msg)
-            if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks, timestamp: msg.timestamp })
-          } else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
-            page.push({
-              kind: "compaction",
-              id: nextId(),
-              summary: msg.summary,
-              tokensBefore: typeof msg.tokensBefore === "number" ? msg.tokensBefore : undefined,
-              tokensAfter: typeof msg.estimatedTokensAfter === "number" ? msg.estimatedTokensAfter : undefined,
-              timestamp: typeof msg.timestamp === "number" ? msg.timestamp : undefined,
-            })
-          else if (msg.role === "toolResult") {
-            const callId = String(msg.toolCallId ?? msg.id ?? "")
-            if (callId)
-              pageRuns[callId] = {
-                id: callId,
-                name: "tool",
-                argsText: "",
-                outputText: contentText(msg.content),
-                state: msg.isError ? "output-error" : "output-available",
-              }
-          }
-          if ((i - start + 1) % 20 === 0) await yieldHistory()
-        }
-        if (version !== historyVersion) return
-        // Keep newer/live results authoritative when prepending an older page.
-        runs.value = { ...pageRuns, ...runs.value }
-        entries.value = [...page, ...entries.value]
-        historyCursor.value = start
-        if (!start) historyMessages.value = []
-      } finally {
-        if (version === historyVersion) olderHistoryLoading.value = false
-      }
-    }
-
-    /** Append the file-recorded stop reason after the loaded conversation. */
-    function placePendingHistoryError() {
-      const pending = pendingHistoryError.value
-      if (!pending) return
-      pendingHistoryError.value = null
-      entries.value = [
-        ...entries.value,
-        {
-          kind: "assistant",
-          id: nextId(),
-          blocks: [{ type: "text", text: errorBlockText(pending.errorMessage) }],
-          timestamp: typeof pending.timestamp === "number" ? pending.timestamp : undefined,
-        },
-      ]
-    }
-
-    /**
-     * Supplement history with the last provider error from the session file.
-     * pi removes retried failures from the RPC message projection, so a session
-     * whose run was interrupted would otherwise show no trace of the failure.
-     */
-    async function fetchLastSessionError(version: number) {
-      const file = sessionFile.value
-      // A running turn may still recover from its latest failure; the settle
-      // path reports a final failure live. Supplement only idle sessions.
-      if (!file || isStreaming.value) return
-      let last: SessionLastError | null
-      try {
-        last = await sessionLastError(file)
-      } catch {
-        return
-      } // file unreadable (e.g. browser preview); history still works
-      if (version !== historyVersion || !last?.errorMessage) return
-      // Only a failure at the end of the current transcript counts as the stop
-      // reason. A later message means the retry recovered and the turn continued
-      // (or the user prompted again), so the failure is historical.
-      const ts = last.timestamp
-      if (
-        typeof ts === "number" &&
-        historyMessages.value.some(m => typeof m?.timestamp === "number" && m.timestamp > ts)
-      )
-        return
-      pendingHistoryError.value = last
-    }
-
-    async function loadMessages(msgs: any[]) {
-      ++conversationVersion
-      invalidateHistory()
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
-      historyMessages.value = msgs
-      historyCursor.value = msgs.length
-      await loadOlderHistory()
-    }
-
-    /** Fetch asynchronously; stale responses must never replace another session. */
-    async function loadHistory() {
-      invalidateHistory()
-      const version = historyVersion
-      historyLoading.value = true
-      try {
-        // Read the raw session file when available: pi's get_messages returns
-        // the projected post-compaction context, which would hide earlier turns.
-        let msgs: any[] | null = null
-        const file = sessionFile.value
-        if (file) {
-          try {
-            const raw = await sessionHistory(file)
-            if (Array.isArray(raw)) msgs = raw
-          } catch {
-            /* fall back to the RPC projection below */
-          }
-        }
-        if (version !== historyVersion) return
-        if (!msgs) {
-          const res = await rpcRequest<{ messages: any[] }>({ type: "get_messages" })
-          if (version !== historyVersion) return
-          if (!res.success) throw new Error(res.error || "Failed to load history")
-          msgs = res.data?.messages ?? []
-        }
-        void refreshFileRewindState(file)
-        // History markers only know tokensBefore; estimate the after size.
-        annotateCompactionEstimates(msgs)
-        entries.value = []
-        runs.value = {}
-        partialBlocks.value = null
-        streamingTurnId.value = null
-        historyMessages.value = msgs
-        historyCursor.value = msgs.length
-        // Fetch before paging: loadOlderHistory releases historyMessages once the
-        // oldest page is reached, and the final-turn check needs the full list.
-        await fetchLastSessionError(version)
-        await loadOlderHistory()
-        placePendingHistoryError()
-        void syncSessionFile()
-      } finally {
-        if (version === historyVersion) historyLoading.value = false
-      }
     }
 
     async function refreshStats() {
@@ -948,50 +673,6 @@ export const createSessionStore = (runtimeId = "default") =>
       if (res.success && res.data) rpcThinkingLevels.value = res.data.levels ?? ["off"]
     }
 
-    /** Fill the model picker from ~/.pi/agent/models.json while pi is down. */
-    async function loadOfflineModels() {
-      const version = ++offlineLoadVersion
-      try {
-        const [config, settings] = await Promise.all([getModelsConfig(), getPiSettings()])
-        const offline: Model[] = []
-        const levels: Record<string, ThinkingLevel[]> = {}
-        for (const [provider, entry] of Object.entries(config.providers ?? {})) {
-          for (const m of entry.models ?? []) {
-            offline.push({
-              id: m.id,
-              name: m.name ?? m.id,
-              api: m.api ?? entry.api ?? "",
-              provider,
-              baseUrl: entry.baseUrl ?? "",
-              reasoning: m.reasoning ?? false,
-              thinkingLevelMap: m.thinkingLevelMap as Record<string, string | null> | undefined,
-              input: m.input ?? ["text"],
-              contextWindow: m.contextWindow ?? 0,
-              maxTokens: m.maxTokens ?? 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            })
-            levels[`${provider}/${m.id}`] = supportedThinkingLevels(m)
-          }
-        }
-        if (version !== offlineLoadVersion || state.value) return
-        const saved = remembered.value.model
-        if (saved && !offline.some(m => m.provider === saved.provider && m.id === saved.id)) offline.unshift(saved)
-        models.value = offline
-        offlineThinkingLevels.value = levels
-        piDefaultModelKey.value =
-          settings.defaultProvider && settings.defaultModel
-            ? `${settings.defaultProvider}/${settings.defaultModel}`
-            : offline[0]
-              ? `${offline[0].provider}/${offline[0].id}`
-              : null
-        const key = desiredModelKey.value ?? offlineDefaultModelKey.value
-        offlineDefaultThinking.value =
-          (key && settings.modelThinkingLevels?.[key]) || settings.defaultThinkingLevel || null
-      } catch (e) {
-        console.warn("[pi] failed to load offline models:", e)
-      }
-    }
-
     async function applyRememberedSelection() {
       // Snapshot both choices: setModel may update Pi's effective thinking level.
       const savedModel = remembered.value.model
@@ -1014,7 +695,7 @@ export const createSessionStore = (runtimeId = "default") =>
     }
 
     async function init(project: string, fresh = false) {
-      ++offlineLoadVersion
+      invalidateOfflineModels()
       cwd.value = project
       await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
       applyConfiguredFollowUpMode()
@@ -1048,7 +729,7 @@ export const createSessionStore = (runtimeId = "default") =>
       sessionFile.value = null
       syncedSessionMtime.value = null
       ++mtimeSyncSeq
-      ++offlineLoadVersion
+      invalidateOfflineModels()
       ++conversationVersion
       invalidateHistory()
       entries.value = []
@@ -1062,31 +743,6 @@ export const createSessionStore = (runtimeId = "default") =>
       lastUsage.value = null
       ++commandRequestVersion
       commands.value = []
-    }
-
-    /** Timeline turns across the whole session, including turns whose history
-     * pages are not materialized yet (they carry a synthetic negative id). */
-    const timelineTurns = computed<TimelineTurn[]>(() =>
-      buildTimelineTurns(historyMessages.value, historyCursor.value, entries.value),
-    )
-
-    /** Load older history until the turn materializes; returns its user entry id. */
-    async function revealTimelineTurn(turnId: number): Promise<number | null> {
-      const turns = timelineTurns.value
-      const index = turns.findIndex(t => t.id === turnId)
-      if (index < 0) return null
-      if (turns[index].entryId != null) return turns[index].entryId
-      const fromEnd = turns.length - 1 - index
-      while (historyCursor.value > 0) {
-        const cursorBefore = historyCursor.value
-        await loadOlderHistory()
-        if (historyCursor.value === cursorBefore) break
-      }
-      const loaded = timelineTurns.value
-      const resolved =
-        loaded[loaded.length - 1 - fromEnd] ??
-        [...loaded].reverse().find(t => t.entryId != null && t.question === turns[index].question)
-      return resolved?.entryId ?? null
     }
 
     return {
