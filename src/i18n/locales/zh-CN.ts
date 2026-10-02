@@ -629,8 +629,6 @@ export default {
     newSession: "新会话",
     compacting: "正在压缩…",
     compacted: "上下文已压缩",
-    contextEdited: "上下文已编辑（该消息不再发送给模型）",
-    contextReplaced: "上下文已替换",
     customEntry: "扩展条目：{type}",
     fork: "分支",
     exporting: "导出中…",
@@ -791,12 +789,12 @@ export default {
     runConfigTitle: "配置",
     runConfigDesc: "运行方式、自动重试与跟进消息等会话运行行为。",
 
+    theme: "外观主题",
+    runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
     processDetail: "过程展示详细程度",
     processDetailDesc: "助手运行过程的展示粒度：详细模式显示思考内容；简洁模式隐藏全部思考，只展示工具调用与回答。",
     processDetailDetailed: "详细",
     processDetailConcise: "简洁",
-    theme: "外观主题",
-    runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
     themeLight: "亮色",
     themeDark: "暗色",
     themeSystem: "跟随系统",
@@ -1043,6 +1041,23 @@ export default {
     thinkingSeconds: "思考中 · {seconds} 秒",
     thoughtFew: "思考了片刻",
     thoughtSeconds: "思考了 {seconds} 秒",
+  },
+
+  /** npm:pi-subagents 插件适配的文案。 */
+  piSubagents: {
+    runs: "多智能体 · {count} 个运行",
+    steps: "{count} 个步骤",
+    expand: "展开多智能体状态",
+    collapse: "收起多智能体状态",
+    workflowTool: "子智能体工作流",
+    state: {
+      running: "运行中",
+      queued: "排队中",
+      completed: "已完成",
+      failed: "失败",
+      error: "失败",
+      canceled: "已取消",
+    },
   },
 
   status: {

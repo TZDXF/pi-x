@@ -647,8 +647,6 @@ export default {
     newSession: "New session",
     compacting: "Compacting…",
     compacted: "Context compacted",
-    contextEdited: "Context edited (this message is no longer sent to the model)",
-    contextReplaced: "Context replaced",
     customEntry: "Extension entry: {type}",
     fork: "Fork",
     exporting: "Exporting…",
@@ -813,13 +811,13 @@ export default {
     runConfigDesc: "Run behavior, automatic retries, and queued message delivery.",
 
     theme: "Appearance",
+    runningBehaviorDesc:
+      "How a message sent while generating is handled: queued to wait, or steers the current run immediately.",
     processDetail: "Process detail level",
     processDetailDesc:
       "How much of the assistant's run is shown: detailed includes thinking content; concise hides all thinking and shows only tool calls and answers.",
     processDetailDetailed: "Detailed",
     processDetailConcise: "Concise",
-    runningBehaviorDesc:
-      "How a message sent while generating is handled: queued to wait, or steers the current run immediately.",
     themeLight: "Light",
     themeDark: "Dark",
     themeSystem: "System",
@@ -1078,6 +1076,23 @@ export default {
     thinkingSeconds: "Thinking · {seconds}s",
     thoughtFew: "Thought for a few seconds",
     thoughtSeconds: "Thought for {seconds}s",
+  },
+
+  /** Copy for the npm:pi-subagents extension adaptation. */
+  piSubagents: {
+    runs: "Subagents · {count} runs",
+    steps: "{count} steps",
+    expand: "Expand subagent status",
+    collapse: "Collapse subagent status",
+    workflowTool: "Subagent workflow",
+    state: {
+      running: "running",
+      queued: "queued",
+      completed: "completed",
+      failed: "failed",
+      error: "failed",
+      canceled: "canceled",
+    },
   },
 
   status: {

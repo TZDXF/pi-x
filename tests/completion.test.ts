@@ -1,3 +1,4 @@
+import { composerSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import * as completion from "@/lib/completion"
@@ -17,7 +18,7 @@ const {
 
 test("built-in slash commands exclude export while keeping new and compact", () => {
   expect([...desktopCommands]).toEqual(["new", "compact"])
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
   expect(submit).not.toMatch(/exportSessionHtml|type: ["']export_html["']|commandName === ["']export["']/)
   expect(submit).toMatch(/completion\.unsupported/)
@@ -68,7 +69,7 @@ test("AI Elements command list forwards slot and editor intercepts keys before s
     "utf8",
   )
   expect(list).toMatch(/<slot\s*\/>/)
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   expect(chat).toMatch(/@keydown.capture="completion\?\.onKeydown\(\$event\)"/)
   expect(chat).not.toMatch(/cmdOpen|fileOpen/)
 })

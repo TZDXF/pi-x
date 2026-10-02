@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ScrollArea } from "@/components/ui/scroll-area"
+import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
+import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
@@ -7,11 +8,12 @@ import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
 import { ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
-import { computed, onUnmounted, ref, watch } from "vue"
 import { changeForCall } from "@/lib/sessionChanges"
+import { isSubagentTool } from "@/lib/subagents"
 import { processDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
+import SubagentToolGroup from "@/components/chat/SubagentToolGroup.vue"
 
 const props = withDefaults(
   defineProps<{
@@ -82,6 +84,27 @@ function isRead(block: ToolCallBlock): boolean {
   return READ_TOOLS.has(toolBase(block))
 }
 
+// pi-subagents is a plugin, not a pi core tool: all its knowledge lives in
+// lib/subagents; here we only wire the group presentation.
+function isSubagent(block: ToolCallBlock): boolean {
+  return isSubagentTool(block.name)
+}
+
+/** Consecutive subagent calls render as one queue-style group. */
+function subagentGroupAt(index: number): ToolCallBlock[] | null {
+  const block = props.blocks[index]
+  if (block?.type !== "toolCall" || !isSubagent(block)) return null
+  const previous = props.blocks[index - 1]
+  if (previous?.type === "toolCall" && isSubagent(previous)) return null
+  const group = [block]
+  for (let i = index + 1; i < props.blocks.length; i++) {
+    const next = props.blocks[i]
+    if (next.type !== "toolCall" || !isSubagent(next)) break
+    group.push(next)
+  }
+  return group
+}
+
 /** File path, tolerating still-streaming (unterminated) JSON arguments. */
 function pathOf(block: ToolCallBlock): string {
   const args = parsedArgs(block)
@@ -106,34 +129,7 @@ function isRunning(block: ToolCallBlock): boolean {
 // ---- elapsed time ----
 // pi's bash tool has NO default timeout (the model may set one explicitly), so
 // a runaway command (e.g. `find /`) can run forever — surface the duration.
-const now = ref(Date.now())
-let clock: ReturnType<typeof setInterval> | undefined
-const anyRunning = computed(() => props.blocks.some(b => b.type === "toolCall" && isRunning(b)))
-watch(
-  anyRunning,
-  running => {
-    if (running && clock === undefined)
-      clock = setInterval(() => {
-        now.value = Date.now()
-      }, 1000)
-    if (!running && clock !== undefined) {
-      clearInterval(clock)
-      clock = undefined
-    }
-  },
-  { immediate: true },
-)
-onUnmounted(() => {
-  if (clock !== undefined) clearInterval(clock)
-})
-
-function formatElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
+const now = useToolRunClock(() => props.blocks.some(b => b.type === "toolCall" && isRunning(b)))
 
 function elapsedMs(block: ToolCallBlock): number | null {
   const run = runFor(block)
@@ -146,7 +142,7 @@ function elapsedText(block: ToolCallBlock): string {
   const ms = elapsedMs(block)
   // Sub-second commands do not need a visible timer; this also avoids a
   // transient badge for commands that complete almost immediately.
-  return ms == null || ms < 1_000 ? "" : formatElapsed(ms)
+  return ms == null || ms < 1_000 ? "" : formatToolElapsed(ms)
 }
 
 /** Long-running tools stand out: amber past 30s, destructive past 2 minutes. */
@@ -284,6 +280,15 @@ const { t } = useI18n()
         </button>
       </div>
 
+      <!-- subagent calls (npm:pi-subagents): consecutive runs render as one queue-style group -->
+      <SubagentToolGroup
+        v-else-if="block.type === 'toolCall' && subagentGroupAt(i)"
+        :blocks="subagentGroupAt(i)!"
+        :runs="props.runs"
+      />
+      <!-- consumed by the group rendered at the run's first call -->
+      <template v-else-if="block.type === 'toolCall' && isSubagent(block)" />
+
       <!-- other tools: generic collapsible input/output; read shows the file path -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
@@ -305,22 +310,7 @@ const { t } = useI18n()
           {{ elapsedText(block) }}
         </div>
         <ToolContent>
-          <div class="space-y-2 p-3 text-xs">
-            <div v-if="block.argsText">
-              <div class="text-muted-foreground mb-1 font-medium">{{ t("blocks.input") }}</div>
-              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-40">
-                <pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{ block.argsText }}</pre>
-              </ScrollArea>
-            </div>
-            <div v-if="runFor(block)?.outputText">
-              <div class="text-muted-foreground mb-1 font-medium">{{ t("blocks.output") }}</div>
-              <ScrollArea class="bg-muted rounded-md" viewport-class="max-h-60">
-                <pre class="p-2 font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">{{
-                  runFor(block)!.outputText
-                }}</pre>
-              </ScrollArea>
-            </div>
-          </div>
+          <ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />
         </ToolContent>
       </Tool>
     </template>

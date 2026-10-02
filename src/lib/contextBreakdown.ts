@@ -1,3 +1,5 @@
+import { CHARS_PER_TOKEN, textAndImageChars } from "@/lib/tokenEstimates"
+
 /**
  * Estimate how the context window is divided between the system prompt,
  * tool definitions, and message history.
@@ -25,21 +27,7 @@ export interface ContextBreakdownPart {
   percent: number
 }
 
-const CHARS_PER_TOKEN = 4
-// Mirrors pi's ESTIMATED_IMAGE_CHARS for image blocks.
-const ESTIMATED_IMAGE_CHARS = 4800
 const TOOLS_SECTION = "tools"
-
-function textAndImageChars(content: unknown): number {
-  if (typeof content === "string") return content.length
-  if (!Array.isArray(content)) return 0
-  let chars = 0
-  for (const block of content) {
-    if (block?.type === "text" && typeof block.text === "string") chars += block.text.length
-    else if (block?.type === "image") chars += ESTIMATED_IMAGE_CHARS
-  }
-  return chars
-}
 
 function assistantChars(content: unknown): number {
   if (!Array.isArray(content)) return 0
@@ -76,8 +64,9 @@ const toTokens = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN)
 
 /**
  * History-loaded compaction markers only record `tokensBefore`. Estimate the
- * post-compaction size (summary plus everything kept after it, up to the next
- * compaction) so markers can show both sides. Mutates the messages in place.
+ * post-compaction size from the summary and messages retained between
+ * firstKeptEntryId and the marker. Without entry IDs, fall back to messages
+ * after the marker up to the next compaction. Mutates the messages in place.
  */
 export function annotateCompactionEstimates(messages: any[]): void {
   const indexByEntryId = new Map<string, number>()

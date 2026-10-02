@@ -1,3 +1,4 @@
+import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { responseTurns } from "@/lib/responseTurns"
@@ -49,17 +50,17 @@ test("empty history and pending questions are preserved", () => {
 })
 
 test("chat uses an initially closed process disclosure and original index for branching", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = turnSources()
   const blocks = readFileSync(new URL("../src/components/AssistantBlocks.vue", import.meta.url), "utf8")
   expect(chat).toMatch(/entry.complete && entry.process.length && blocksText\(entry.summary\).trim\(\)/)
   expect(chat).toMatch(/<details[\s\S]*?class="response-process(?:\s[^"]*)?"/)
   expect(chat).not.toMatch(/response-process[^>]*\bopen\b/)
-  expect(chat).toMatch(/forkFromAnswer\(entry.lastIndex\)/)
+  expect(chat).toMatch(/emit\('fork', entry.lastIndex\)/)
   expect(blocks).not.toMatch(/<Agent|ai-elements\/agent/)
 })
 
 test("streaming and completed answers share one render path so markdown never remounts", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = turnSources()
   const blocks = readFileSync(new URL("../src/components/AssistantBlocks.vue", import.meta.url), "utf8")
   // The streaming-turn id is reserved in the store's event-ingestion submodule.
   const session = readFileSync(new URL("../src/stores/session/events.ts", import.meta.url), "utf8")
@@ -74,7 +75,7 @@ test("streaming and completed answers share one render path so markdown never re
   expect(blocks).toMatch(/:key="props.keyOffset \+ i"/)
   expect(chat).toMatch(/:key-offset="hasSummary\(entry\) \? entry.blocks.length - entry.summary.length : 0"/)
   // The collapsed process renders lazily, not on completion.
-  expect(chat).toMatch(/@toggle="onProcessToggle\(entry.id, \$event\)"/)
+  expect(chat).toMatch(/@toggle="onProcessToggle"/)
 })
 
 test("turn statistics use recorded elapsed time and unique tool call IDs", () => {

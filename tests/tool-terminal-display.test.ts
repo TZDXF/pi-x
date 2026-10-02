@@ -27,7 +27,7 @@ test("tool runs surface elapsed time, highlighted for long-running commands", ()
   expect(bashHeader[0]).toMatch(/<template #meta>/)
   expect(bashHeader[0]).toMatch(/w-12 text-right text-xs tabular-nums/)
   expect(bashHeader[0]).not.toMatch(/flex items-center justify-end gap-1 px-3 pb-1\.5/)
-  expect(blocks).toMatch(/ms == null \|\| ms < 1_000 \? "" : formatElapsed\(ms\)/)
+  expect(blocks).toMatch(/ms == null \|\| ms < 1_000 \? "" : formatToolElapsed\(ms\)/)
   // tool-run lifecycle lives in the store's event-ingestion submodule.
   const store = readFileSync(new URL("../src/stores/session/events.ts", import.meta.url), "utf8")
   expect(store).toMatch(/tool_execution_start[\s\S]*?startedAt: Date\.now\(\)/)

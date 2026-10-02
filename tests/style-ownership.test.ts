@@ -45,7 +45,7 @@ test("composer and message surfaces declare styles on their own components", () 
   expect(read("src/components/ai-elements/prompt-input/PromptInput.vue")).toMatch(
     /<InputGroup :class="cn\('overflow-hidden', props.groupClass\)"/,
   )
-  expect(read("src/components/ChatView.vue")).toMatch(/:group-class="\[/)
+  expect(read("src/components/chat/ChatComposer.vue")).toMatch(/:group-class="\[/)
   expect(read("src/components/ai-elements/message/MessageContent.vue")).toMatch(/group-\[\.is-assistant\]:w-full/)
   for (const name of ["ChatView", "WorkspaceSidebar", "SettingsPage"]) {
     const styles =

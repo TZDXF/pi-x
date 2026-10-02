@@ -1,3 +1,5 @@
+import { CHARS_PER_TOKEN, textAndImageChars } from "@/lib/tokenEstimates"
+
 /**
  * Estimate how much of the model context MCP tool calls occupy, per server,
  * from the projected session messages (`get_messages`). Uses the same
@@ -43,10 +45,6 @@ export interface McpServerLoad {
   tools: McpToolLoad[]
 }
 
-const CHARS_PER_TOKEN = 4
-// Mirrors pi's ESTIMATED_IMAGE_CHARS for image blocks.
-const ESTIMATED_IMAGE_CHARS = 4800
-
 export function sanitizeMcpServerName(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, "_")
 }
@@ -63,17 +61,6 @@ export function parseMcpToolName(name: string): { server: string; tool: string }
 interface MutableUsage {
   calls: number
   chars: number
-}
-
-function contentChars(content: unknown): number {
-  if (typeof content === "string") return content.length
-  if (!Array.isArray(content)) return 0
-  let chars = 0
-  for (const block of content) {
-    if (block?.type === "text" && typeof block.text === "string") chars += block.text.length
-    else if (block?.type === "image") chars += ESTIMATED_IMAGE_CHARS
-  }
-  return chars
 }
 
 /**
@@ -165,7 +152,7 @@ export function estimateMcpContextUsage(messages: any[]): Record<string, McpServ
     } else if (message?.role === "toolResult") {
       const toolKey = owners.get(String(message.toolCallId ?? message.id ?? ""))
       if (!toolKey) continue
-      const chars = contentChars(message.content)
+      const chars = textAndImageChars(message.content)
       const serverKey = toolKey.slice(0, toolKey.indexOf("\0"))
       const server = servers.get(serverKey)
       const tool = tools.get(toolKey)

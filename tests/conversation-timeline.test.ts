@@ -1,3 +1,4 @@
+import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
@@ -56,7 +57,7 @@ test("handles empty/image questions, unanswered turns, and bounded excerpts", ()
   expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
 test("rendered entries have anchors and navigation stops automatic following", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = turnSources()
   expect(chat).toMatch(/:data-message-id="entry.id"/)
   const conversation = readFileSync(
     new URL("../src/components/ai-elements/conversation/Conversation.vue", import.meta.url),

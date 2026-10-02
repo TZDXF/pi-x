@@ -56,7 +56,7 @@ test("rich editor wires workspace session titles into chip rendering", () => {
 })
 
 test("rendered user messages reuse the composer chip styling", () => {
-  const view = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const view = readFileSync(new URL("../src/components/chat/ChatUserPrompt.vue", import.meta.url), "utf8")
   const display = readFileSync(new URL("../src/components/ComposerText.vue", import.meta.url), "utf8")
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
   expect(view).toMatch(/<ComposerText v-else :text="entry\.text" \/>/)

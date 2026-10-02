@@ -1,3 +1,4 @@
+import { composerSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
@@ -45,8 +46,8 @@ test("navigation stays serialized and the latest pending selection wins", async 
 })
 
 test("history prefetches near the top, suppresses duplicates and preserves the reading position", async () => {
-  const chat = source("../src/components/ChatView.vue")
-  const code = chat.slice(chat.indexOf("let restoringHistory ="), chat.indexOf("const completion ="))
+  const chat = source("../src/composables/useChatTurnList.ts")
+  const code = chat.slice(chat.indexOf("let restoringHistory ="), chat.indexOf("function lastAssistantTurn"))
   const viewport = { scrollTop: 601, scrollHeight: 2000, isConnected: true }
   let finish
   let requests = 0
@@ -61,7 +62,7 @@ test("history prefetches near the top, suppresses duplicates and preserves the r
         })
       },
     },
-    props: {},
+    deps: { connecting: () => false },
     conversation: { value: { stopScroll() {} } },
     nextTick: async () => {},
     ui: { pushToast() {} },
@@ -81,7 +82,7 @@ test("history prefetches near the top, suppresses duplicates and preserves the r
 })
 
 test("conversation mounts immediately with instant initial positioning; loading stays silent", () => {
-  const chat = source("../src/components/ChatView.vue")
+  const chat = source("../src/components/chat/ChatTurnList.vue")
   expect(chat).toMatch(/<Conversation[^>]*ref="conversation"[^>]+initial="instant"/)
   expect(chat).toMatch(
     /v-if="session.entries.length === 0 && !session.historyLoading && \(!connecting \|\| selectingProject\)"/,
@@ -120,7 +121,7 @@ test("streaming navigation switches without aborting the running generation", as
 })
 
 test("streaming composer shows send for text or attachments and stop only when empty", () => {
-  const chat = source("../src/components/ChatView.vue")
+  const chat = composerSources()
   const declaration = chat.slice(chat.indexOf("const showStopButton"), chat.indexOf("const sendDelayMinutes")).trimEnd()
   expect(declaration).toBeTruthy()
   const session = { isStreaming: true }
@@ -167,7 +168,7 @@ test("streaming composer shows send for text or attachments and stop only when e
 })
 
 test("streaming input reaches command dispatch; the submit button doubles as stop while streaming", () => {
-  const chat = source("../src/components/ChatView.vue")
+  const chat = composerSources()
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
   expect(submit).not.toMatch(/if \(session.isStreaming\)\s*\{\s*await abort\(\)\s*return/)
   expect(chat).toMatch(/<PromptInputSubmit[\s\S]*?:status="showStopButton \? 'streaming' : undefined"/)
@@ -178,7 +179,7 @@ test("streaming input reaches command dispatch; the submit button doubles as sto
   expect(submit).toMatch(
     /else if \(commandName === "compact"\) await session\.send\(text, undefined, undefined, runningBehavior\.value\)/,
   )
-  expect(submit).toMatch(/if \(commandName === "new"\) emit\("newSession"\)/)
+  expect(submit).toMatch(/if \(commandName === "new"\) deps\.newSession\(\)/)
   const sidebar = source("../src/components/WorkspaceSidebar.vue")
   expect(sidebar).not.toMatch(/const navigationDisabled = .*session.isStreaming/)
 })

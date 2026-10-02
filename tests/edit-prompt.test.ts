@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import { createPinia, setActivePinia } from "pinia"
+import { createConversationLoader } from "@/lib/conversationLoader"
 
 const controls = vi.hoisted(() => {
   const state = {}
@@ -51,6 +52,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0))
 
 async function harness(overrides = {}) {
   const calls = []
+  const titles = []
   const state = {
     sessionId: "current",
     sessionFile: "current.jsonl",
@@ -64,6 +66,10 @@ async function harness(overrides = {}) {
     sessionLastError: async () => null,
     sessionMtime: async () => 1,
     pixLog() {},
+    generateSessionTitle: async (file, message, overwrite) => {
+      titles.push({ file, message, overwrite })
+      return null
+    },
     rpcRequest: async command => {
       calls.push(command)
       if (overrides[command.type]) return overrides[command.type](command)
@@ -75,6 +81,7 @@ async function harness(overrides = {}) {
     projectName: () => "project",
     preview() {},
     generatedTitle() {},
+    regeneratedTitle() {},
     refresh: async () => {},
   }
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
@@ -85,7 +92,7 @@ async function harness(overrides = {}) {
   store.state = state
   store.sessionFile = state.sessionFile
   store.entries = [{ kind: "user", id: 1, text: "original" }]
-  return { store, calls, state }
+  return { store, calls, titles, state }
 }
 
 test("running prompt: waits for abort, then resends in the same session with images", async () => {
@@ -217,20 +224,47 @@ test("late rejection of the interrupted prompt cannot fail the replacement run",
   expect(h.store.entries.at(-1).text).toBe("revised")
 })
 
-test("edit UI allows a running answer and preserves the draft when stopping fails", () => {
+test("edit UI allows a running answer and preserves the draft when stopping fails", async () => {
   const edit = source("../src/composables/usePromptEdit.ts")
   expect(edit).not.toMatch(/session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
   expect(edit).toMatch(/await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
-  const app = source("../src/App.vue")
-  const reload = app.slice(
-    app.indexOf("async function reloadExternalConversation"),
-    app.indexOf("async function selectProject"),
+  // Reconciliation moved out of App; keep both resend guards covered at the
+  // actual boundary, including a resend starting during the mtime request.
+  const loader = source("../src/lib/conversationLoader.ts")
+  const reconcile = loader.slice(loader.indexOf("async function reconcile("), loader.indexOf("async function load("))
+  expect((reconcile.match(/owner\.isResending/g) ?? []).length).toBe(2)
+  const owner = {
+    started: true,
+    sessionFile: "current.jsonl",
+    isStreaming: false,
+    isResending: true,
+    syncedSessionMtime: 1,
+  }
+  let resolveMtime
+  const mtime = vi.fn(
+    () =>
+      new Promise(resolve => {
+        resolveMtime = resolve
+      }),
   )
-  expect((reload.match(/owner\.isResending/g) ?? []).length).toBe(2)
+  const rebuild = vi.fn(async () => {})
+  const coordinator = createConversationLoader({ mtime, rebuild })
+  await coordinator.reconcile(owner)
+  expect(mtime).not.toHaveBeenCalled()
+  owner.isResending = false
+  const pending = coordinator.reconcile(owner)
+  owner.isResending = true
+  resolveMtime(2)
+  await pending
+  expect(rebuild).not.toHaveBeenCalled()
+  owner.isResending = false
+  mtime.mockResolvedValue(2)
+  await coordinator.reconcile(owner)
+  expect(rebuild).toHaveBeenCalledWith(owner)
 })
 
 test("only the latest question offers inline editing, and stale edits cannot be resent", () => {
-  const chat = source("../src/components/ChatView.vue")
+  const chat = source("../src/components/chat/ChatUserPrompt.vue")
   const edit = source("../src/composables/usePromptEdit.ts")
   expect(edit).toMatch(/const lastUserPromptId = computed\(\(\) => \{[\s\S]*session\.entries\[i\]\?\.kind === "user"/)
   expect(chat).toMatch(
@@ -289,4 +323,11 @@ test("history prepended while rewinding does not shift the replacement target", 
   await h.store.resendPrompt("replacement")
   expect(Array.from(h.store.entries, entry => entry.text)).toEqual(["earlier question", "replacement"])
   expect(h.store.entries[1].id).toBe(1)
+})
+
+test("editing the first question regenerates the session title with overwrite", async () => {
+  const h = await harness()
+  await h.store.resendPrompt("replacement")
+  await tick()
+  expect(h.titles).toEqual([{ file: "current.jsonl", message: "replacement", overwrite: true }])
 })

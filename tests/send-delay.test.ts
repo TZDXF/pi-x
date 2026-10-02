@@ -1,6 +1,6 @@
+import { composerSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { readFileSync } from "node:fs"
 
 test("delayed send accepts minutes:seconds with a 365-day limit", () => {
   expect(parseSendDelay("10:00")).toBe(600_000)
@@ -26,7 +26,7 @@ test("delayed send rejects malformed, empty, overdue, and excessive durations", 
 })
 
 test("composer keeps its original send control when delayed send is active", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   expect(chat).toMatch(/<Button[^>]*type="button"[^>]*:aria-pressed="delayedSend"[^>]*>\s*<Clock3/)
   const controls = chat.slice(chat.indexOf("ml-auto flex"))
   expect(controls).toMatch(
@@ -50,7 +50,7 @@ test("composer keeps its original send control when delayed send is active", () 
 })
 
 test("delayed send is a built-in plugin whose switch gates the composer entry", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   // 入口按钮受插件开关控制，配置缺省启用。
   expect(chat).toMatch(/delayedSendEnabled = ref\(true\)/)
   expect(chat).toMatch(/config\.builtinDelayedSend === false/)
@@ -70,7 +70,7 @@ test("hover wheel increments up and decrements down within each segment", () => 
 })
 
 test("delayed send schedules backend slash commands; only desktop commands are rejected", () => {
-  const chat = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  const chat = composerSources()
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
   expect(submit).not.toMatch(/delayedSend\.value && text\.startsWith\("\/"\)/)
   const desktop = submit.slice(submit.indexOf("desktopCommands.some(name => name === commandName)) {"))
