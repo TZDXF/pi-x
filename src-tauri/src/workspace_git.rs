@@ -155,10 +155,10 @@ async fn prepare_from(
 }
 
 /// worktree 的父目录：配置了 `worktreeDir` 时以它为准（`~` 展开为主目录，
-/// 相对路径按项目根解析），否则用仓库同级目录下的 `.pix-worktrees`。
+/// 相对路径按项目根解析），否则用项目根目录下的 `.pix-worktrees`。
 fn worktree_parent_in(configured: Option<&str>, root: &Path, home: &Path) -> PathBuf {
     let Some(value) = configured.map(str::trim).filter(|value| !value.is_empty()) else {
-        return root.parent().unwrap_or(root).join(".pix-worktrees");
+        return root.join(".pix-worktrees");
     };
     let expanded = crate::data_dir::expand_home(value, home);
     if expanded.has_root() {
@@ -402,14 +402,14 @@ mod tests {
     fn worktree_parent_resolves_configured_relative_and_tilde_paths() {
         let home = Path::new("/home/test");
         let root = Path::new("/code/repo");
-        // 未配置或空白时使用仓库同级目录下的 .pix-worktrees。
+        // 未配置或空白时使用项目根目录下的 .pix-worktrees。
         assert_eq!(
             worktree_parent_in(None, root, home),
-            PathBuf::from("/code/.pix-worktrees")
+            PathBuf::from("/code/repo/.pix-worktrees")
         );
         assert_eq!(
             worktree_parent_in(Some("  "), root, home),
-            PathBuf::from("/code/.pix-worktrees")
+            PathBuf::from("/code/repo/.pix-worktrees")
         );
         // 绝对路径原样使用，~ 展开为主目录。
         assert_eq!(

@@ -76,7 +76,7 @@ pub struct AppConfig {
     )]
     pub projectless_dir: Option<String>,
     /// 新会话创建 worktree 的父目录；支持绝对路径与相对项目的相对路径。
-    /// 缺省为仓库同级目录下的 `.pix-worktrees`。
+    /// 缺省为项目根目录下的 `.pix-worktrees`。
     #[serde(
         rename = "worktreeDir",
         default,
