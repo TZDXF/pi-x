@@ -68,6 +68,14 @@ const normalized = normalizeSlashes
 export function findConversation(file: string) {
   return [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(file))
 }
+/** Resolve a history-route id (runtime id map key or session file) to an
+ *  in-memory conversation without creating a store as a side effect. */
+export function peekConversation(id: string): Session | undefined {
+  return (
+    sessions.get(id) ??
+    [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(id))
+  )
+}
 export function isSessionRunning(file: string) {
   return !!findConversation(file)?.isStreaming
 }

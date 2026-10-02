@@ -35,6 +35,7 @@ import {
   activateSession,
   createConversation,
   findConversation,
+  peekConversation,
   pruneDormantConversations,
 } from "@/stores/conversations"
 import {
@@ -345,7 +346,18 @@ async function followConversationRoute(next: ReturnType<typeof useRoute>["value"
   if (next.name === "session" && next.params.conversation) {
     const id = next.params.conversation
     const targetProject = next.params.project || project.value
-    if (findConversation(id)) return selectQueuedConversation(id)
+    // History entries carry a runtime id for live conversations and a session
+    // file for saved ones. Resolve both to the in-memory store first: passing
+    // a runtime id to resumeSession (or a file path to selectQueuedConversation)
+    // would open a wrong, fresh conversation instead of replaying history.
+    const owner = peekConversation(id)
+    if (owner) {
+      // Dormant stores with a saved file must go through resume so the worker
+      // reattaches or respawns; live ones (and file-less pending ones) activate
+      // directly, mirroring the sidebar's pending-conversation click.
+      if (!owner.started && owner.sessionFile) return resumeSession(owner.sessionFile, targetProject)
+      return selectQueuedConversation(owner.runtimeId)
+    }
     return resumeSession(id, targetProject)
   }
   if (next.name === "project" && next.params.project) return newProjectSession(next.params.project)
