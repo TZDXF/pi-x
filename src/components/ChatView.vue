@@ -220,6 +220,28 @@ function commentFile(path: string) {
 const attachments = computed(() => bridge.value?.files ?? [])
 const previewImage = ref<string | null>(null)
 
+// waiting-for-reply status: elapsed seconds tick while the reply has no content yet
+const waitingSeconds = ref(0)
+let waitingClock: ReturnType<typeof setInterval> | undefined
+watch(
+  () => session.isStreaming && !session.partialBlocks,
+  waiting => {
+    if (waiting && waitingClock === undefined) {
+      waitingSeconds.value = 0
+      const since = Date.now()
+      waitingClock = setInterval(() => {
+        waitingSeconds.value = Math.floor((Date.now() - since) / 1000)
+      }, 1000)
+    } else if (!waiting && waitingClock !== undefined) {
+      clearInterval(waitingClock)
+      waitingClock = undefined
+    }
+  },
+)
+onBeforeUnmount(() => {
+  if (waitingClock !== undefined) clearInterval(waitingClock)
+})
+
 // ---- fork (restart from a previous prompt) ----
 const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest)
 
@@ -800,13 +822,17 @@ onBeforeUnmount(() => {
             </template>
           </VirtualMessage>
 
-          <!-- waiting indicator before any content arrives -->
+          <!-- waiting indicator before any content arrives: icon on the left,
+               loading status (with elapsed seconds) on the right -->
           <div
             v-if="session.isStreaming && !session.partialBlocks"
             class="text-muted-foreground flex items-center gap-2 text-sm"
+            role="status"
           >
-            <Loader />
-            <span>{{ t("chat.thinking") }}</span>
+            <Loader :size="14" />
+            <span class="tabular-nums">{{
+              waitingSeconds > 0 ? t("chat.thinkingSeconds", { seconds: waitingSeconds }) : t("chat.thinking")
+            }}</span>
           </div>
 
           <!-- Keep retry errors next to the conversation, not in the header. -->

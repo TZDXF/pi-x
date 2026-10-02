@@ -672,6 +672,7 @@ export default {
     durationUnknown: "Elapsed time unknown",
     toolCallCount: "Tool calls: {count}",
     thinking: "thinking…",
+    thinkingSeconds: "thinking · {seconds}s",
     retrying: "Request failed, retrying",
     retryAttempt: "Attempt {attempt} of {maxAttempts}",
     retryUnknownError: "Unknown error",
