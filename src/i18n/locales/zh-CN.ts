@@ -773,7 +773,15 @@ export default {
     groups: {
       general: "基础设置",
       capabilities: "能力",
+      other: "其他",
     },
+
+    appearance: "外观",
+    appearanceTitle: "外观",
+    appearanceDesc: "界面主题与终端配色。",
+    runConfigNav: "配置",
+    runConfigTitle: "配置",
+    runConfigDesc: "运行方式、自动重试与跟进消息等会话运行行为。",
 
     theme: "外观主题",
     runningBehaviorDesc: "生成中发送新消息时的处理方式：加入队列等待，或立即调整当前方向。",
@@ -863,8 +871,8 @@ export default {
     toastSaved: "已保存，重启会话后生效",
     providers: "供应商",
     models: "模型",
-    providersModels: "供应商与模型",
-    providersModelsTitle: "供应商与模型",
+    providersModels: "模型管理",
+    providersModelsTitle: "模型管理",
     providersModelsDesc: "添加和管理自定义供应商及模型。",
     modelsFileHint: "保存在 Pi 的 models.json；下次打开模型选择器时生效。",
     providerEmpty: "尚未配置自定义供应商，点击下方按钮添加。",

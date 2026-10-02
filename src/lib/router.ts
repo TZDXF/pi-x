@@ -33,6 +33,8 @@ export interface Route {
 
 export const SETTINGS_TABS = [
   "general",
+  "appearance",
+  "run-config",
   "archives",
   "notifications",
   "remote",

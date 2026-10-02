@@ -29,6 +29,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./GeneralSettings.vue")),
   },
   {
+    id: "appearance",
+    nav: "settings.appearance",
+    title: "settings.appearanceTitle",
+    desc: "settings.appearanceDesc",
+    component: defineAsyncComponent(() => import("./AppearanceSettings.vue")),
+  },
+  {
     id: "shortcuts",
     nav: "settings.shortcutsNav",
     title: "settings.shortcutsTitle",
@@ -58,6 +65,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     desc: "settings.providersModelsDesc",
     desktopOnly: true,
     component: defineAsyncComponent(() => import("./ModelsSettings.vue")),
+  },
+  {
+    id: "run-config",
+    nav: "settings.runConfigNav",
+    title: "settings.runConfigTitle",
+    desc: "settings.runConfigDesc",
+    component: defineAsyncComponent(() => import("./RunConfigSettings.vue")),
   },
   {
     id: "model-config",
@@ -120,7 +134,7 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
   },
 ]
 
-export type SettingsGroupId = "general" | "capabilities"
+export type SettingsGroupId = "general" | "capabilities" | "other"
 
 export interface SettingsGroupDef {
   id: SettingsGroupId
@@ -135,12 +149,17 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "general",
     labelKey: "settings.groups.general",
-    tabIds: ["general", "shortcuts", "notifications", "remote", "archives", "about"],
+    tabIds: ["general", "appearance", "models", "shortcuts", "notifications", "remote"],
   },
   {
     id: "capabilities",
     labelKey: "settings.groups.capabilities",
-    tabIds: ["models", "model-config", "packages", "agent-config", "skills", "mcp"],
+    tabIds: ["run-config", "agent-config", "packages", "skills", "mcp"],
+  },
+  {
+    id: "other",
+    labelKey: "settings.groups.other",
+    tabIds: ["model-config", "archives", "about"],
   },
 ]
 

@@ -793,7 +793,15 @@ export default {
     groups: {
       general: "General",
       capabilities: "Capabilities",
+      other: "Other",
     },
+
+    appearance: "Appearance",
+    appearanceTitle: "Appearance",
+    appearanceDesc: "Interface theme and terminal color scheme.",
+    runConfigNav: "Configuration",
+    runConfigTitle: "Configuration",
+    runConfigDesc: "Run behavior, automatic retries, and queued message delivery.",
 
     theme: "Appearance",
     runningBehaviorDesc:
@@ -887,8 +895,8 @@ export default {
     toastSaved: "Saved. Takes effect after restarting the session.",
     providers: "Providers",
     models: "Models",
-    providersModels: "Providers & Models",
-    providersModelsTitle: "Providers & Models",
+    providersModels: "Models",
+    providersModelsTitle: "Models",
     providersModelsDesc: "Add and manage custom providers and models.",
     modelsFileHint: "Saved to Pi’s models.json; changes apply when the model picker next opens.",
     providerEmpty: "No custom providers yet. Use the button below to add one.",

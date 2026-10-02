@@ -110,10 +110,11 @@ test("load failures support retry", async () => {
   expect(h.api.attempts.value).toBe(3)
 })
 
-test("settings embeds retry controls in the general page", () => {
+test("settings embeds retry controls in the run-config page", () => {
   const tabs = readFileSync(new URL("../src/components/settings/tabs.ts", import.meta.url), "utf8")
-  const general = readFileSync(new URL("../src/components/settings/GeneralSettings.vue", import.meta.url), "utf8")
-  expect(general).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  const runConfig = readFileSync(new URL("../src/components/settings/RunConfigSettings.vue", import.meta.url), "utf8")
+  expect(runConfig).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  expect(tabs).toMatch(/"run-config"/)
   expect(tabs).not.toMatch(/id: "retry",/)
   const router = readFileSync(new URL("../src/lib/router.ts", import.meta.url), "utf8")
   expect(router).not.toMatch(/"retry",/)

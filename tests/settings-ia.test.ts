@@ -7,6 +7,8 @@ test("settings menus use the grouped information architecture", () => {
   const router = read("../src/lib/router.ts")
   const tabs = read("../src/components/settings/tabs.ts")
   const general = read("../src/components/settings/GeneralSettings.vue")
+  const appearance = read("../src/components/settings/AppearanceSettings.vue")
+  const runConfig = read("../src/components/settings/RunConfigSettings.vue")
   const workspace = read("../src/components/settings/WorkspaceSettings.vue")
   const page = read("../src/components/SettingsPage.vue")
 
@@ -16,13 +18,17 @@ test("settings menus use the grouped information architecture", () => {
   expect(tabs).not.toMatch(/id: "workspace",/)
   expect(tabs).not.toMatch(/id: "retry",/)
   expect(tabs).toMatch(
-    /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/,
+    /"general",[\s\S]*?tabIds: \["general", "appearance", "models", "shortcuts", "notifications", "remote"\]/,
   )
   expect(tabs).toMatch(
-    /"capabilities",[\s\S]*?tabIds: \["models", "model-config", "packages", "agent-config", "skills", "mcp"\]/,
+    /"capabilities",[\s\S]*?tabIds: \["run-config", "agent-config", "packages", "skills", "mcp"\]/,
   )
+  expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "archives", "about"\]/)
   expect(general).toMatch(/<WorkspaceSettings \/>/)
-  expect(general).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  expect(general).not.toMatch(/RetrySettings/)
+  expect(appearance).toMatch(/TerminalThemeSettings/)
+  expect(runConfig).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  expect(runConfig).toMatch(/QueueModeSettings/)
   expect(workspace).toMatch(/OpenWithSettings/)
   expect(workspace).toMatch(/ProjectlessSettings/)
   expect(page).toMatch(/v-for="group in visibleGroups"/)

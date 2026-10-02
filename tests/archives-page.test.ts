@@ -14,9 +14,7 @@ test("archived sessions live in a settings tab and the sidebar entry is gone", (
   expect(router).toMatch(/segments\[0\] === "archives"[\s\S]*?tab: "archives"/)
   expect(router).not.toMatch(/name: "archives"/)
   expect(tabs).toMatch(/id: "archives"[\s\S]*?import\("@\/components\/ArchivedSessionsPage\.vue"\)/)
-  expect(tabs).toMatch(
-    /"general",[\s\S]*?tabIds: \["general", "shortcuts", "notifications", "remote", "archives", "about"\]/,
-  )
+  expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "archives", "about"\]/)
   expect(app).toMatch(/registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
   expect(sidebar).not.toMatch(/emit\('archives'\)/)
   expect(sidebar).not.toMatch(/archives: \[\]/)

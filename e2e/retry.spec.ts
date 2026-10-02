@@ -114,8 +114,8 @@ test("retry settings updates, validation, and clearing", async ({ page }) => {
     }
   })
 
-  await page.goto(`${harness.url}#/settings/general`)
-  await expect(page.getByRole("heading", { name: "常规", level: 1 })).toBeVisible()
+  await page.goto(`${harness.url}#/settings/run-config`)
+  await expect(page.getByRole("heading", { name: "配置", level: 1 })).toBeVisible()
   await expect(page.getByRole("button", { name: "自动重试", exact: true })).toHaveCount(0)
 
   const attempts = page.getByRole("spinbutton", { name: "重试次数" })
