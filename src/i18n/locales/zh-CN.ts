@@ -851,6 +851,7 @@ export default {
     shortcutCommands: "命令",
     aboutTitle: "关于 PiX",
     aboutBody: "Pi coding agent 桌面客户端，支持对话、工具调用和会话分支。",
+    githubRepo: "在 GitHub 上查看仓库",
     save: "保存更改",
     saving: "保存中…",
     toastSaved: "已保存，重启会话后生效",

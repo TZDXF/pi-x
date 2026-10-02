@@ -12,6 +12,7 @@ import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
+import { GithubIcon } from "@/components/ai-elements/open-in-chat/providers/icons"
 import { Badge } from "@/components/ui/badge"
 import { isDesktop, listen } from "@/api/transport"
 import {
@@ -36,6 +37,8 @@ import type { AcceptableValue } from "reka-ui"
 
 const { t } = useI18n()
 const isDevelopment = import.meta.env.DEV
+
+const GITHUB_URL = "https://github.com/TZDXF/pi-x"
 
 // ---- PiX 应用自身更新 ----
 
@@ -240,6 +243,16 @@ onUnmounted(() => {
         >
           {{ t("app.development") }}
         </Badge>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="text-muted-foreground"
+          :aria-label="t('settings.githubRepo')"
+          :title="t('settings.githubRepo')"
+          @click="openUrl(GITHUB_URL)"
+        >
+          <GithubIcon class="size-4" />
+        </Button>
       </SettingHeading>
       <SettingDescription>{{ t("settings.aboutBody") }}</SettingDescription>
     </div>

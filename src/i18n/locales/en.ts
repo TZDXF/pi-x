@@ -875,6 +875,7 @@ export default {
     shortcutCommands: "commands",
     aboutTitle: "About PiX",
     aboutBody: "A desktop client for the Pi coding agent, with chat, tools, and session forking.",
+    githubRepo: "View the repository on GitHub",
     save: "Save changes",
     saving: "Saving…",
     toastSaved: "Saved. Takes effect after restarting the session.",
