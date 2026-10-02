@@ -690,7 +690,10 @@ onBeforeUnmount(() => {
                 {{ t("chat.modelChanged", entry.modelChange) }}
               </div>
               <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
-                <div class="flex min-w-0 flex-col" :class="{ 'items-end': entry.kind === 'user' }">
+                <div
+                  class="flex min-w-0 flex-col"
+                  :class="entry.kind === 'user' ? 'items-end' : 'flex-1'"
+                >
                   <MessageContent>
                     <div v-if="entry.kind === 'user'" class="text-sm">
                       <div v-if="editedPrompt?.id === entry.id" class="w-[min(36rem,75vw)] space-y-2">
