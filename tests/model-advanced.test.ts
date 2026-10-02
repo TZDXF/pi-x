@@ -1,5 +1,10 @@
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
+import vm from "node:vm"
+import ts from "typescript"
+import * as vue from "vue"
+import * as modelLimits from "@/lib/modelLimits"
+import * as thinkingLevels from "@/lib/thinkingLevels"
 // modelAdvanced.ts imports the structured-field validators from @/lib/modelLimits,
 // so it is loaded through the alias instead of a transpiled data: URL.
 const { modelAdvancedJson, parseModelAdvanced } = await import("@/lib/modelAdvanced")
@@ -94,4 +99,79 @@ test("thinking level toggles and mappings keep the map minimal", async () => {
       thinkingLevelMap: levels.toggleThinkingLevel({ xhigh: null }, "xhigh"),
     }),
   ]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"])
+})
+
+test("shared textareas preserve fallback draft/change events and advanced JSON validation", async () => {
+  const source = readFileSync(new URL("../src/components/settings/ModelAdvancedSettings.vue", import.meta.url), "utf8")
+  expect(source.match(/<Textarea\b/g)).toHaveLength(2)
+  expect(source).not.toMatch(/<textarea\b/)
+  expect(source).toMatch(/:model-value="fallbackModels"/)
+  expect(source).toMatch(/@input="onFallbackInput"/)
+  expect(source).toMatch(/@change="setFallbackModels"/)
+  expect(source).toMatch(/@focus="focused = 'fallbackModels'"/)
+  expect(source).toMatch(/@blur="focused = ''"/)
+  expect(source).toMatch(/<Textarea\s+v-model="model"/)
+  const script = source
+    .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]
+    .replace(/^import[\s\S]*?from\s+["'][^"']+["']\n/gm, "")
+  const model = vue.ref('{"futureOption":"keep"}')
+  const emitted: boolean[] = []
+  const context = vm.createContext({
+    ...vue,
+    ...modelLimits,
+    ...thinkingLevels,
+    parseModelAdvanced,
+    defineModel: () => model,
+    defineProps: () => ({ api: "anthropic-messages" }),
+    defineEmits: () => (_event: string, value: boolean) => emitted.push(value),
+    useI18n: () => ({ t: key => key }),
+    useId: () => "advanced-test",
+  })
+  const scope = vue.effectScope()
+  try {
+    scope.run(() =>
+      vm.runInContext(
+        ts.transpile(
+          script +
+            "\nglobalThis.api = { onFallbackInput, setFallbackModels, focused, fallbackModels, fallbackError, parsed };",
+          { target: ts.ScriptTarget.ES2022 },
+        ),
+        context,
+      ),
+    )
+    const api = context.api
+    expect(emitted.at(-1)).toBe(false)
+    api.focused.value = "fallbackModels"
+    api.onFallbackInput({ target: { value: "{" } })
+    expect(api.fallbackModels.value).toBe("{")
+    expect(JSON.parse(model.value)).toEqual({ futureOption: "keep" })
+    api.setFallbackModels()
+    await vue.nextTick()
+    expect(api.fallbackError.value).not.toBeNull()
+    expect(emitted.at(-1)).toBe(true)
+    const fallback = {
+      provider: "anthropic",
+      model: "claude",
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    }
+    api.onFallbackInput({ target: { value: JSON.stringify([fallback]) } })
+    api.setFallbackModels()
+    await vue.nextTick()
+    expect(emitted.at(-1)).toBe(false)
+    expect(JSON.parse(model.value)).toEqual({
+      futureOption: "keep",
+      compat: { allowedFallbackModels: [fallback] },
+    })
+    model.value = "{"
+    await vue.nextTick()
+    expect(api.parsed.value.error).not.toBe("")
+    expect(emitted.at(-1)).toBe(true)
+    model.value = "{}"
+    api.focused.value = ""
+    await vue.nextTick()
+    expect(emitted.at(-1)).toBe(false)
+    expect(api.fallbackModels.value).toBe("[]")
+  } finally {
+    scope.stop()
+  }
 })

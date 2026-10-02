@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue"
-import { Eye, Languages, Trash2 } from "@lucide/vue"
+import { computed, onMounted, ref } from "vue"
+import { Eye, Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { ask } from "@tauri-apps/plugin-dialog"
 import {
@@ -8,100 +8,36 @@ import {
   listDiscoveredSkills,
   listHostedSkills,
   openHostedSkillsDirectory,
-  packageTranslate,
   setHostedSkillsEnabled,
   skillListFiles,
   skillReadFile,
 } from "@/api/piClient"
 import type { DiscoveredSkill, HostedSkill } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
-import { isMarkdownExt } from "@/lib/fileKind"
 import { normalizeSlashes } from "@/lib/paths"
-import type { FilePreview } from "@/lib/projectFiles"
-import { markdownLinkOptions } from "@/lib/linkOptions"
 import { Button } from "@/components/ui/button"
-import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
-import ProjectFiles from "@/components/ProjectFiles.vue"
-import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
-import { Markdown } from "vue-stream-markdown"
+import ResourceMarkdownBrowser from "@/components/ResourceMarkdownBrowser.vue"
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const ui = useUiStore()
 const skills = ref<HostedSkill[]>([])
 const discovered = ref<DiscoveredSkill[]>([])
 const loading = ref(true)
 const error = ref("")
 
-// ---- 单技能文件预览（参考 PackageResourcePage：文件列表 + 预览 + 翻译）----
 const previewing = ref<string | null>(null)
-const files = ref<string[]>([])
-const filesLoading = ref(false)
-const selected = ref<string | null>(null)
-const filter = ref("")
-const translating = ref(false)
-const translated = ref("")
-let filesRequest = 0
-let translationRequest = 0
-
-const hasMatches = computed(() =>
-  files.value.some(path => path.toLowerCase().includes(normalizeSlashes(filter.value.trim()).toLowerCase())),
-)
-const targetLang = computed(() => (locale.value === "zh-CN" ? "Simplified Chinese" : "English"))
-
-// Capture the skill identity so an in-flight read never changes its data source.
-const readSkillFile = computed(() => {
-  const skillPath = previewing.value
-  if (!skillPath) return undefined
-  return async (relPath: string): Promise<FilePreview> => ({
-    kind: "text",
-    text: await skillReadFile(skillPath, relPath),
-    truncated: false,
-    mime: null,
-    data: null,
-  })
+const listPreviewFiles = computed(() => {
+  const path = previewing.value
+  return path ? () => skillListFiles(path) : undefined
 })
-
-watch([previewing, selected], () => {
-  ++translationRequest
-  translating.value = false
-  translated.value = ""
-})
-
-watch(previewing, async path => {
-  const request = ++filesRequest
-  files.value = []
-  selected.value = null
-  filter.value = ""
-  if (!path) return
-  filesLoading.value = true
-  try {
-    const allFiles = await skillListFiles(path)
-    if (request === filesRequest) files.value = allFiles.filter(isMarkdownExt).map(normalizeSlashes)
-  } catch (e) {
-    if (request === filesRequest) ui.pushToast(String(e), "error")
-  } finally {
-    if (request === filesRequest) filesLoading.value = false
-  }
+const readPreviewFile = computed(() => {
+  const path = previewing.value
+  return path ? (relPath: string) => skillReadFile(path, relPath) : undefined
 })
 
 function togglePreview(skill: { path: string }) {
   previewing.value = previewing.value === skill.path ? null : skill.path
-}
-
-async function translate(content: string) {
-  if (!content.trim() || translating.value) return
-  const request = ++translationRequest
-  translating.value = true
-  translated.value = ""
-  try {
-    const text = await packageTranslate(content, targetLang.value)
-    if (request === translationRequest) translated.value = text
-  } catch (e) {
-    if (request === translationRequest) ui.pushToast(String(e), "error")
-  } finally {
-    if (request === translationRequest) translating.value = false
-  }
 }
 
 async function load() {
@@ -229,62 +165,14 @@ onMounted(load)
               ><Trash2 :size="15"
             /></Button>
           </div>
-          <div v-if="previewing === skill.path" class="flex h-96 min-h-0 gap-3 overflow-hidden rounded-lg border p-1">
-            <div class="flex min-h-0 w-60 shrink-0 flex-col overflow-hidden rounded border">
-              <div class="shrink-0 border-b p-1.5">
-                <input
-                  v-model="filter"
-                  :placeholder="t('packages.filterFiles')"
-                  class="h-7 w-full rounded border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-                />
-              </div>
-              <ProjectFiles
-                v-show="hasMatches"
-                v-model:selected-path="selected"
-                project=""
-                :files="files"
-                :filter="filter"
-                :preview="false"
-                :show-header="false"
-              />
-              <p v-if="!hasMatches" class="text-muted-foreground py-3 text-center text-xs">
-                {{ files.length ? t("packages.noMatchingFiles") : t("skillsConfig.noPreviewFiles") }}
-              </p>
-            </div>
-            <ProjectFilePreview
-              v-if="selected"
-              class="overflow-hidden rounded border"
-              project=""
-              :path="selected"
-              :read-file="readSkillFile"
-              :closable="false"
-            >
-              <template #toolbar="{ text, loading: contentLoading }">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  :disabled="translating || contentLoading || !text.trim()"
-                  @click="translate(text)"
-                >
-                  <Spinner v-if="translating" class="size-3" />
-                  <Languages v-else :size="14" />
-                  {{ t("packages.translate") }}
-                </Button>
-              </template>
-              <template #after-content>
-                <template v-if="translated">
-                  <div class="my-3 border-t" />
-                  <Markdown
-                    :content="translated"
-                    mode="static"
-                    :enable-animate="false"
-                    :link-options="markdownLinkOptions"
-                    class="text-sm"
-                  />
-                </template>
-              </template>
-            </ProjectFilePreview>
-          </div>
+          <ResourceMarkdownBrowser
+            v-if="previewing === skill.path"
+            :list-files="listPreviewFiles"
+            :read-file="readPreviewFile"
+            :empty-text="t('skillsConfig.noPreviewFiles')"
+            list-class="w-60"
+            class="h-96 rounded-lg border p-1"
+          />
         </div>
       </div>
     </section>
@@ -318,62 +206,14 @@ onMounted(load)
             ><Eye :size="15"
           /></Button>
         </div>
-        <div v-if="previewing === skill.path" class="flex h-96 min-h-0 gap-3 overflow-hidden rounded-lg border p-1">
-          <div class="flex min-h-0 w-60 shrink-0 flex-col overflow-hidden rounded border">
-            <div class="shrink-0 border-b p-1.5">
-              <input
-                v-model="filter"
-                :placeholder="t('packages.filterFiles')"
-                class="h-7 w-full rounded border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-              />
-            </div>
-            <ProjectFiles
-              v-show="hasMatches"
-              v-model:selected-path="selected"
-              project=""
-              :files="files"
-              :filter="filter"
-              :preview="false"
-              :show-header="false"
-            />
-            <p v-if="!hasMatches" class="text-muted-foreground py-3 text-center text-xs">
-              {{ files.length ? t("packages.noMatchingFiles") : t("skillsConfig.noPreviewFiles") }}
-            </p>
-          </div>
-          <ProjectFilePreview
-            v-if="selected"
-            class="overflow-hidden rounded border"
-            project=""
-            :path="selected"
-            :read-file="readSkillFile"
-            :closable="false"
-          >
-            <template #toolbar="{ text, loading: contentLoading }">
-              <Button
-                variant="ghost"
-                size="sm"
-                :disabled="translating || contentLoading || !text.trim()"
-                @click="translate(text)"
-              >
-                <Spinner v-if="translating" class="size-3" />
-                <Languages v-else :size="14" />
-                {{ t("packages.translate") }}
-              </Button>
-            </template>
-            <template #after-content>
-              <template v-if="translated">
-                <div class="my-3 border-t" />
-                <Markdown
-                  :content="translated"
-                  mode="static"
-                  :enable-animate="false"
-                  :link-options="markdownLinkOptions"
-                  class="text-sm"
-                />
-              </template>
-            </template>
-          </ProjectFilePreview>
-        </div>
+        <ResourceMarkdownBrowser
+          v-if="previewing === skill.path"
+          :list-files="listPreviewFiles"
+          :read-file="readPreviewFile"
+          :empty-text="t('skillsConfig.noPreviewFiles')"
+          list-class="w-60"
+          class="h-96 rounded-lg border p-1"
+        />
       </div>
     </section>
   </div>

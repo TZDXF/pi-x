@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "vue-i18n"
 import {
   ALL_THINKING_LEVELS,
@@ -293,13 +294,13 @@ function closeMapping() {
           <span class="font-medium">{{ t("settings.modelFallbackModels") }}</span>
           <p class="text-muted-foreground leading-relaxed">{{ t("settings.modelFallbackModelsHint") }}</p>
         </div>
-        <textarea
+        <Textarea
           :id="id + '-fallback-models'"
-          :value="fallbackModels"
+          :model-value="fallbackModels"
           rows="4"
           spellcheck="false"
           :aria-invalid="!!fallbackError"
-          class="bg-background border-border w-full rounded-md border p-2 font-mono text-xs"
+          class="bg-background border-border field-sizing-fixed w-full rounded-md border p-2 font-mono text-xs md:text-xs"
           @input="onFallbackInput"
           @change="setFallbackModels"
           @focus="focused = 'fallbackModels'"
@@ -357,12 +358,12 @@ function closeMapping() {
       <label class="block space-y-1">
         <span>{{ t("settings.modelAdvancedJson") }}</span>
         <span class="text-muted-foreground block leading-relaxed">{{ t("settings.modelAdvancedJsonHint") }}</span>
-        <textarea
+        <Textarea
           v-model="model"
           rows="9"
           spellcheck="false"
           :aria-invalid="!!parsed.error"
-          class="bg-background border-border w-full rounded-md border p-2 font-mono text-xs"
+          class="bg-background border-border field-sizing-fixed w-full rounded-md border p-2 font-mono text-xs md:text-xs"
         />
       </label>
       <p v-if="parsed.error" role="alert" class="text-destructive break-all">
