@@ -258,9 +258,11 @@ fn decide(current: &str, channel: UpdateChannel, releases: &[GhRelease]) -> Deci
 async fn fetch_releases() -> Result<Vec<GhRelease>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         ureq::get(RELEASES_API)
-            .set("User-Agent", "pi-x desktop")
-            .set("Accept", "application/vnd.github+json")
-            .timeout(std::time::Duration::from_secs(20))
+            .header("User-Agent", "pi-x desktop")
+            .header("Accept", "application/vnd.github+json")
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(20)))
+            .build()
             .call()
             .map_err(|e| {
                 pix_error_detail(
@@ -269,7 +271,8 @@ async fn fetch_releases() -> Result<Vec<GhRelease>, String> {
                     e,
                 )
             })?
-            .into_string()
+            .body_mut()
+            .read_to_string()
             .map_err(|e| {
                 pix_error_detail(
                     "appUpdateReleasesReadFailed",

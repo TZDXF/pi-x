@@ -611,49 +611,46 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
 
     let url = format!("{base}/models");
     let mut req = ureq::get(&url)
-        .set("User-Agent", "pi-x desktop")
-        .timeout(std::time::Duration::from_secs(20));
+        .header("User-Agent", "pi-x desktop")
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .build();
     if api == "anthropic-messages" {
         if !key.is_empty() {
-            req = req.set("x-api-key", &key);
+            req = req.header("x-api-key", &key);
         }
-        req = req.set("anthropic-version", "2023-06-01");
+        req = req.header("anthropic-version", "2023-06-01");
         req = req.query("limit", "1000");
     } else if api == "google-generative-ai" {
         if !key.is_empty() {
             req = req.query("key", &key);
         }
     } else if !key.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {key}"));
+        req = req.header("Authorization", &format!("Bearer {key}"));
     }
     // Provider-level custom headers (models.json `headers`) apply to every style.
     if let Some(headers) = provider.get("headers").and_then(Value::as_object) {
         for (k, v) in headers {
             if let Some(v) = v.as_str() {
-                req = req.set(k, v);
+                req = req.header(k, v);
             }
         }
     }
 
-    let body = req
+    // ureq 3 默认把 4xx/5xx 直接变成错误并丢弃响应体；这里需要读出
+    // 错误响应的详情，因此关闭该行为并手动检查状态码。
+    let mut resp = req
+        .config()
+        .http_status_as_error(false)
+        .build()
         .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(code, resp) => {
-                let detail = resp.into_string().unwrap_or_default();
-                let detail: String = detail.chars().take(300).collect();
-                pix_error_with(
-                    "fetchModelsHttpFailed",
-                    format!("获取模型列表失败 (HTTP {code}): {detail}"),
-                    json!({"status": code.to_string(), "detail": detail}),
-                )
-            }
-            other => pix_error_detail(
-                "fetchModelsFailed",
-                format!("获取模型列表失败: {other}"),
-                other,
-            ),
-        })?
-        .into_string()
+        .map_err(|e| {
+            pix_error_detail("fetchModelsFailed", format!("获取模型列表失败: {e}"), e)
+        })?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .body_mut()
+        .read_to_string()
         .map_err(|e| {
             pix_error_detail(
                 "modelsResponseReadFailed",
@@ -661,6 +658,14 @@ fn models_fetch_blocking(provider: &Value) -> Result<Vec<FetchedModel>, String> 
                 e,
             )
         })?;
+    if !(200..300).contains(&status) {
+        let detail: String = body.chars().take(300).collect();
+        return Err(pix_error_with(
+            "fetchModelsHttpFailed",
+            format!("获取模型列表失败 (HTTP {status}): {detail}"),
+            json!({"status": status.to_string(), "detail": detail}),
+        ));
+    }
     let v: Value = serde_json::from_str(&body).map_err(|e| {
         pix_error_detail(
             "modelsResponseParseFailed",

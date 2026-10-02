@@ -91,9 +91,18 @@ struct RewindPlan {
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    // sha2 0.11 的 finalize() 返回值不再实现 LowerHex，手动转十六进制
+    let digest = {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher.finalize()
+    };
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 fn hash_optional(content: Option<&str>) -> String {

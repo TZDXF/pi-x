@@ -155,14 +155,32 @@ fn parse_catalog_page(html: &str) -> CatalogPage {
     }
 }
 
-fn catalog_request(query: &str, sort: &str, package_type: &str, page: u32) -> ureq::Request {
-    ureq::get(CATALOG_URL)
-        .query("name", query.trim())
-        .query("sort", sort)
-        .query("type", package_type)
-        .query("page", &page.max(1).to_string())
-        .set("User-Agent", "pi-x desktop")
-        .timeout(std::time::Duration::from_secs(30))
+/// 归一化后的市场查询参数（name 去 trim、page 下限为 1）；
+/// 值的百分号编码由 ureq 的 `query()` 负责。
+fn catalog_params(query: &str, sort: &str, package_type: &str, page: u32) -> Vec<(String, String)> {
+    vec![
+        ("name".into(), query.trim().into()),
+        ("sort".into(), sort.into()),
+        ("type".into(), package_type.into()),
+        ("page".into(), page.max(1).to_string()),
+    ]
+}
+
+fn catalog_request(
+    query: &str,
+    sort: &str,
+    package_type: &str,
+    page: u32,
+) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+    let mut req = ureq::get(CATALOG_URL)
+        .header("User-Agent", "pi-x desktop")
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .build();
+    for (key, value) in catalog_params(query, sort, package_type, page) {
+        req = req.query(key, value);
+    }
+    req
 }
 
 /// Search the official catalog server-side; the website only returns one page.
@@ -182,7 +200,8 @@ pub async fn package_catalog(
         )
         .call()
         .map_err(|e| pix_error_detail("marketFetchFailed", format!("获取插件市场失败: {e}"), e))?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .map_err(|e| {
             pix_error_detail(
                 "marketResponseReadFailed",
@@ -201,17 +220,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_search_parameters_are_encoded() {
-        let request = catalog_request(" init & 中文 ", "recent", "skill", 2);
-        let url = request.url();
-        assert!(url.starts_with("https://pi.dev/packages?"));
-        assert!(url.contains("name=init+%26+%E4%B8%AD%E6%96%87"));
-        assert!(url.contains("sort=recent"));
-        assert!(url.contains("type=skill"));
-        assert!(url.contains("page=2"));
-        assert!(catalog_request("", "downloads", "", 0)
-            .url()
-            .contains("page=1"));
+    fn catalog_search_parameters_are_normalized() {
+        let params = catalog_params(" init & 中文 ", "recent", "skill", 2);
+        assert_eq!(
+            params,
+            vec![
+                ("name".to_string(), "init & 中文".to_string()),
+                ("sort".to_string(), "recent".to_string()),
+                ("type".to_string(), "skill".to_string()),
+                ("page".to_string(), "2".to_string()),
+            ]
+        );
+        // page 0 收敛为 1；空参数原样传给 ureq，由其 `query()` 做编码
+        assert_eq!(
+            catalog_params("", "downloads", "", 0)[3],
+            ("page".to_string(), "1".to_string())
+        );
     }
 
     #[test]

@@ -80,6 +80,8 @@ pub async fn session_generate_title(
     app: AppHandle,
     file: String,
     message: String,
+    // Editing the first question must replace the existing session name.
+    overwrite: Option<bool>,
 ) -> Result<Option<String>, String> {
     let config = commands::app_config_get(app.clone())?;
     // Follow the app's auxiliary default model when configured to do so.
@@ -153,7 +155,7 @@ pub async fn session_generate_title(
         return Err("Title generation failed; check the selected model and pi credentials".into());
     }
     let title = extract_title(&output.stdout)?;
-    sessions::set_session_name(&app, &path, title, true).await
+    sessions::set_session_name(&app, &path, title, !overwrite.unwrap_or(false)).await
 }
 
 #[cfg(test)]

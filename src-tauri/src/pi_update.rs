@@ -59,12 +59,15 @@ async fn fetch_release_notes(version: &str) -> Option<(Option<String>, Option<St
     let url = format!("{RELEASE_TAGS_URL}/{tag}");
     let release = tauri::async_runtime::spawn_blocking(move || -> Option<ReleaseResponse> {
         let body = ureq::get(&url)
-            .set("User-Agent", "pi-x desktop")
-            .set("Accept", "application/vnd.github+json")
-            .timeout(std::time::Duration::from_secs(15))
+            .header("User-Agent", "pi-x desktop")
+            .header("Accept", "application/vnd.github+json")
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .build()
             .call()
             .ok()?
-            .into_string()
+            .body_mut()
+            .read_to_string()
             .ok()?;
         serde_json::from_str::<ReleaseResponse>(&body).ok()
     })
@@ -92,13 +95,16 @@ pub async fn pi_update_check(app: AppHandle) -> Result<PiUpdateStatus, String> {
 
     let latest = tauri::async_runtime::spawn_blocking(|| {
         ureq::get(LATEST_URL)
-            .set("User-Agent", "pi-x desktop")
-            .timeout(std::time::Duration::from_secs(15))
+            .header("User-Agent", "pi-x desktop")
+            .config()
+            .timeout_global(Some(std::time::Duration::from_secs(15)))
+            .build()
             .call()
             .map_err(|e| {
                 pix_error_detail("updateCheckFailed", format!("检查 Pi 更新失败: {e}"), e)
             })?
-            .into_string()
+            .body_mut()
+            .read_to_string()
             .map_err(|e| {
                 pix_error_detail(
                     "updateInfoReadFailed",

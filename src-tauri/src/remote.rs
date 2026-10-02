@@ -4,7 +4,7 @@ use crate::{
     rpc,
 };
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier},
     Argon2,
 };
 use axum::{
@@ -252,9 +252,9 @@ pub async fn remote_password_set(
             }
             Some(
                 tokio::task::spawn_blocking(move || {
-                    let salt = SaltString::generate(&mut OsRng);
+                    // argon2 0.6 的 hash_password 内部自动生成随机盐
                     Argon2::default()
-                        .hash_password(password.as_bytes(), &salt)
+                        .hash_password(password.as_bytes())
                         .map(|hash| hash.to_string())
                         .map_err(|e| e.to_string())
                 })
@@ -508,6 +508,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 app.clone(),
                 text("file")?,
                 text("message")?,
+                None,
             )
             .await?;
             Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
@@ -893,9 +894,8 @@ mod tests {
     }
     #[test]
     fn password_hash_verifies_only_the_original_password() {
-        let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
-            .hash_password(b"test-password", &salt)
+            .hash_password(b"test-password")
             .unwrap()
             .to_string();
         let parsed = PasswordHash::new(&hash).unwrap();
