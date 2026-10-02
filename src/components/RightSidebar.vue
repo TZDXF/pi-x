@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
 import { FileCode, FolderTree, Globe, Plus, SquareTerminal, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs"
+import SidebarTabTrigger from "@/components/SidebarTabTrigger.vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { isDesktop } from "@/api/transport"
 import { VueDraggable } from "vue-draggable-plus"
@@ -56,8 +58,16 @@ function addTab(type: SidebarTabType) {
   addOpen.value = false
   emit("add-tab", type)
 }
-function closeTab(id: number) {
+async function closeTab(id: number, event: MouseEvent) {
+  const restoreFocus = document.activeElement === event.currentTarget
   emit("close-tab", id)
+  if (restoreFocus) {
+    await nextTick()
+    const target =
+      sidebar.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ??
+      sidebar.value?.querySelector<HTMLElement>("[data-sidebar-add]")
+    target?.focus()
+  }
 }
 
 interface TerminalPanelExposed {
@@ -69,11 +79,9 @@ function setTerminalPanel(id: number, el: unknown) {
   if (el) terminalPanels.set(id, el as TerminalPanelExposed)
   else terminalPanels.delete(id)
 }
-function clickTab(tab: SidebarTabItem) {
-  const wasActive = tab.id === props.activeId
-  emit("update:activeId", tab.id)
+function reactivateTab(tab: SidebarTabItem) {
   // 已激活的终端 tab 再点一次时，若面板里没有 shell 则直接新建，避免停留在空状态。
-  if (wasActive && tab.type === "terminal") {
+  if (tab.type === "terminal") {
     const panel = terminalPanels.get(tab.id)
     if (panel && !panel.hasTerminals()) void panel.openTerminal()
   }
@@ -170,159 +178,176 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside
-    ref="sidebar"
-    class="changes-sidebar relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]"
-    :style="{ width: `${width}px` }"
-    :aria-label="t('sidebarTabs.title')"
-    @keydown.esc="$emit('close')"
+  <Tabs
+    as-child
+    class="gap-0"
+    :model-value="activeId ?? ''"
+    activation-mode="automatic"
+    @update:model-value="value => emit('update:activeId', Number(value))"
   >
-    <div
-      class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]"
-      :class="{ 'is-dragging': dragging }"
-      role="separator"
-      tabindex="0"
-      aria-orientation="vertical"
-      :aria-label="t('changes.resize')"
-      :title="t('changes.resize')"
-      :aria-valuenow="Math.round(width)"
-      :aria-valuemin="Math.round(bounds.min)"
-      :aria-valuemax="Math.round(bounds.max)"
-      @pointerdown="startResize"
-      @pointermove="resize"
-      @pointerup="stopResize"
-      @pointercancel="stopResize"
-      @lostpointercapture="stopResize"
-      @keydown="resizeWithKeyboard"
-    />
-    <div
-      class="flex items-center gap-1 shrink-0 border-b px-2 py-1.5 min-h-12"
-      role="tablist"
+    <aside
+      ref="sidebar"
+      class="changes-sidebar gap-0 relative shrink-0 flex flex-col w-[clamp(300px,_36%,_640px)] min-h-0 border-l border-border bg-background max-[900px]:absolute max-[900px]:[inset:0_0_0_auto] max-[900px]:w-[min(100%,_480px)] max-[900px]:z-[30] max-[900px]:shadow-[-8px_0_24px_#0002]"
+      :style="{ width: `${width}px` }"
       :aria-label="t('sidebarTabs.title')"
+      @keydown.esc="$emit('close')"
     >
-      <VueDraggable
-        tag="div"
-        class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
-        :model-value="tabs"
-        :animation="150"
-        @update:model-value="(next: SidebarTabItem[]) => emit('reorder-tabs', next)"
+      <div
+        class="changes-resize-handle absolute [inset:0_auto_0_0] w-[7px] z-[2] cursor-col-resize [touch-action:none] focus-visible:[outline:2px_solid_var(--ring)] focus-visible:[outline-offset:-2px]"
+        :class="{ 'is-dragging': dragging }"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        :aria-label="t('changes.resize')"
+        :title="t('changes.resize')"
+        :aria-valuenow="Math.round(width)"
+        :aria-valuemin="Math.round(bounds.min)"
+        :aria-valuemax="Math.round(bounds.max)"
+        @pointerdown="startResize"
+        @pointermove="resize"
+        @pointerup="stopResize"
+        @pointercancel="stopResize"
+        @lostpointercapture="stopResize"
+        @keydown="resizeWithKeyboard"
+      />
+      <div class="flex items-center gap-1 shrink-0 border-b px-2 py-1.5 min-h-12">
+        <TabsList as-child :loop="true" class="h-auto min-w-0 flex-1 justify-start bg-transparent p-0">
+          <div :aria-label="t('sidebarTabs.title')">
+            <VueDraggable
+              tag="div"
+              class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+              :model-value="tabs"
+              :animation="150"
+              filter=".sidebar-tab-close"
+              :prevent-on-filter="false"
+              @update:model-value="(next: SidebarTabItem[]) => emit('reorder-tabs', next)"
+            >
+              <div v-for="tab in tabs" :key="tab.id" class="group flex shrink-0 items-center">
+                <SidebarTabTrigger
+                  :value="tab.id"
+                  :active="tab.id === activeId"
+                  class="h-7 flex-none cursor-grab select-none rounded-r-none px-2 text-xs data-active:bg-accent data-active:text-accent-foreground"
+                  @reactivate="reactivateTab(tab)"
+                >
+                  <component :is="iconFor(tab.type)" class="size-3.5 shrink-0" aria-hidden="true" />
+                  <span class="truncate">{{ titleFor(tab) }}</span>
+                </SidebarTabTrigger>
+                <button
+                  type="button"
+                  class="sidebar-tab-close flex h-7 items-center rounded-r-md px-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
+                  :class="{ 'bg-accent': tab.id === activeId }"
+                  :title="t('sidebarTabs.closeTab')"
+                  :aria-label="`${t('sidebarTabs.closeTab')}: ${titleFor(tab)}`"
+                  @click.stop="closeTab(tab.id, $event)"
+                >
+                  <X class="size-3 shrink-0" aria-hidden="true" />
+                </button>
+              </div>
+            </VueDraggable>
+          </div>
+        </TabsList>
+        <Popover v-model:open="addOpen">
+          <PopoverTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              class="shrink-0 text-muted-foreground"
+              data-sidebar-add
+              :title="t('sidebarTabs.add')"
+              :aria-label="t('sidebarTabs.add')"
+            >
+              <Plus />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" class="w-44 p-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('review')"
+            >
+              <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('files')">
+              <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
+            </Button>
+            <Button
+              v-if="isDesktop"
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('terminal')"
+            >
+              <SquareTerminal class="size-4 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="w-full justify-start gap-2"
+              @click="addTab('browser')"
+            >
+              <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
+            </Button>
+          </PopoverContent>
+        </Popover>
+      </div>
+      <TabsContent
+        v-for="tab in tabs"
+        :key="tab.id"
+        :value="tab.id"
+        force-mount
+        :hidden="tab.id !== activeId"
+        v-show="tab.id === activeId"
+        class="flex min-h-0 flex-col"
       >
-        <button
-          v-for="tab in tabs"
-          :key="tab.id"
+        <ReviewPanel
+          v-if="tab.type === 'review'"
+          :changes="changes"
+          :project="project"
+          :focus="tab.id === activeId ? focus : null"
+          :checkpoints="checkpoints"
+        />
+        <ProjectFiles v-else-if="tab.type === 'files'" :project="project" />
+        <TerminalPanel
+          v-else-if="tab.type === 'terminal' && isDesktop"
+          :ref="el => setTerminalPanel(tab.id, el)"
+          :project="project"
+          :visible="open && tab.id === activeId"
+          embedded
+        />
+        <BrowserPanel
+          v-else-if="tab.type === 'browser'"
+          :visible="open && tab.id === activeId"
+          @send-to-chat="$emit('send-to-chat', $event)"
+        />
+      </TabsContent>
+      <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
+        <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('review')">
+          <FileCode class="size-6 shrink-0" />{{ t("sidebarTabs.newReview") }}
+        </Button>
+        <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('files')">
+          <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
+        </Button>
+        <Button
+          v-if="isDesktop"
           type="button"
-          role="tab"
-          :aria-selected="tab.id === activeId"
-          class="group flex h-7 shrink-0 cursor-grab select-none items-center gap-1.5 rounded-md px-2 text-xs"
-          :class="
-            tab.id === activeId
-              ? 'bg-accent text-accent-foreground font-medium'
-              : 'text-muted-foreground hover:bg-accent/50'
-          "
-          @click="clickTab(tab)"
+          variant="outline"
+          size="lg"
+          class="h-auto flex-col gap-2 py-4"
+          @click="addTab('terminal')"
         >
-          <component :is="iconFor(tab.type)" class="size-3.5 shrink-0" />
-          <span class="truncate">{{ titleFor(tab) }}</span>
-          <X
-            class="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-            :title="t('sidebarTabs.closeTab')"
-            :aria-label="t('sidebarTabs.closeTab')"
-            @click.stop="closeTab(tab.id)"
-          />
-        </button>
-      </VueDraggable>
-      <Popover v-model:open="addOpen">
-        <PopoverTrigger as-child>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            class="shrink-0 text-muted-foreground"
-            :title="t('sidebarTabs.add')"
-            :aria-label="t('sidebarTabs.add')"
-          >
-            <Plus />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" class="w-44 p-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="w-full justify-start gap-2"
-            @click="addTab('review')"
-          >
-            <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" class="w-full justify-start gap-2" @click="addTab('files')">
-            <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
-          </Button>
-          <Button
-            v-if="isDesktop"
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="w-full justify-start gap-2"
-            @click="addTab('terminal')"
-          >
-            <SquareTerminal class="size-4 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="w-full justify-start gap-2"
-            @click="addTab('browser')"
-          >
-            <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
-          </Button>
-        </PopoverContent>
-      </Popover>
-    </div>
-    <template v-for="tab in tabs" :key="tab.id">
-      <ReviewPanel
-        v-if="tab.type === 'review'"
-        v-show="tab.id === activeId"
-        :changes="changes"
-        :project="project"
-        :focus="tab.id === activeId ? focus : null"
-        :checkpoints="checkpoints" />
-      <ProjectFiles v-else-if="tab.type === 'files'" v-show="tab.id === activeId" :project="project" />
-      <TerminalPanel
-        v-else-if="tab.type === 'terminal' && isDesktop"
-        v-show="tab.id === activeId"
-        :ref="el => setTerminalPanel(tab.id, el)"
-        :project="project"
-        :visible="open && tab.id === activeId"
-        embedded />
-      <BrowserPanel
-        v-else-if="tab.type === 'browser'"
-        v-show="tab.id === activeId"
-        :visible="open && tab.id === activeId"
-        @send-to-chat="$emit('send-to-chat', $event)"
-    /></template>
-    <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
-      <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('review')">
-        <FileCode class="size-6 shrink-0" />{{ t("sidebarTabs.newReview") }}
-      </Button>
-      <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('files')">
-        <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
-      </Button>
-      <Button
-        v-if="isDesktop"
-        type="button"
-        variant="outline"
-        size="lg"
-        class="h-auto flex-col gap-2 py-4"
-        @click="addTab('terminal')"
-      >
-        <SquareTerminal class="size-6 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
-      </Button>
-      <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('browser')">
-        <Globe class="size-6 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
-      </Button>
-    </div>
-  </aside>
+          <SquareTerminal class="size-6 shrink-0" />{{ t("sidebarTabs.newTerminal") }}
+        </Button>
+        <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('browser')">
+          <Globe class="size-6 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
+        </Button>
+      </div>
+    </aside>
+  </Tabs>
 </template>
 
 <style scoped>
