@@ -814,25 +814,25 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             .await?,
         )
         .map_err(|e| e.to_string())?),
-        "package_resources" => Ok(serde_json::to_value(crate::packages::resources::package_resources(
+        "package_resources" => Ok(serde_json::to_value(crate::packages::package_resources(
             text("source")?,
             text("scope")?,
             a["project"].as_str().map(str::to_owned),
         )?)
         .map_err(|e| e.to_string())?),
-        "package_list_files" => Ok(json!(crate::packages::resources::package_list_files(
+        "package_list_files" => Ok(json!(crate::packages::package_list_files(
             text("source")?,
             text("scope")?,
             a["project"].as_str().map(str::to_owned),
         )?)),
-        "package_read_file" => Ok(json!(crate::packages::resources::package_read_file(
+        "package_read_file" => Ok(json!(crate::packages::package_read_file(
             text("source")?,
             text("scope")?,
             text("path")?,
             a["project"].as_str().map(str::to_owned),
         )?)),
         "package_set_resource" => {
-            crate::packages::resources::package_set_resource(
+            crate::packages::package_set_resource(
                 text("source")?,
                 text("scope")?,
                 a["project"].as_str().map(str::to_owned),
@@ -844,7 +844,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
             )?;
             Ok(Value::Null)
         }
-        "package_translate" => Ok(json!(crate::packages::resources::package_translate(
+        "package_translate" => Ok(json!(crate::packages::package_translate(
             app.clone(),
             text("content")?,
             text("targetLang")?,
@@ -915,7 +915,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "term_write" => {
             crate::terminal::term_write(
                 app.state::<crate::terminal::TerminalState>(),
-                term_id(a)?,
+                term_id(&a)?,
                 text("data")?,
             )?;
             Ok(Value::Null)
@@ -923,11 +923,11 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "term_resize" => {
             let cols = u16::try_from(a["cols"].as_u64().unwrap_or(80)).unwrap_or(80);
             let rows = u16::try_from(a["rows"].as_u64().unwrap_or(24)).unwrap_or(24);
-            crate::terminal::term_resize(app.state::<crate::terminal::TerminalState>(), term_id(a)?, cols, rows)?;
+            crate::terminal::term_resize(app.state::<crate::terminal::TerminalState>(), term_id(&a)?, cols, rows)?;
             Ok(Value::Null)
         }
         "term_kill" => {
-            crate::terminal::term_kill(app.state::<crate::terminal::TerminalState>(), term_id(a)?)?;
+            crate::terminal::term_kill(app.state::<crate::terminal::TerminalState>(), term_id(&a)?)?;
             Ok(Value::Null)
         }
         "app_version_get" => Ok(json!(commands::app_version_get(app.clone()))),
