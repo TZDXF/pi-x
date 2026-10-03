@@ -136,3 +136,23 @@ test("compaction markers pass through and split assistant turns", () => {
   expect(result[3]).toBe(result.find(e => e.id === 3))
   expect(result[4].lastIndex).toBe(4)
 })
+
+test("context edits from retried failed attempts never split the live turn", () => {
+  // pi appends a context_edit after every 503-retried attempt; history replay
+  // never sees these markers, so live grouping must survive them too.
+  const edit = id => ({ kind: "context_edit", id, targetId: "x", replaced: false })
+  const entries = [
+    user(1),
+    assistant(2, thinking, tool),
+    edit(3),
+    assistant(4, thinking, { ...tool, callId: "tool-2" }),
+    edit(5),
+    assistant(6, text("done")),
+  ]
+  const result = responseTurns(entries, false)
+  expect(result.length).toBe(2)
+  const turn = result[1]
+  expect(turn.lastIndex).toBe(5)
+  expect(turn.toolCallCount).toBe(2)
+  expect(plain(turn.summary)).toEqual([text("done")])
+})

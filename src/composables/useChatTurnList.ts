@@ -31,8 +31,9 @@ export function useChatTurnList(deps: {
   const { session, ui, conversation } = deps
   const renderedEntries = computed(() => {
     const streaming = session.isStreaming || !!session.partialBlocks
-    // Context-edit markers stay in the session data but are not shown in the UI.
-    const turns = responseTurns(session.entries, streaming).filter(entry => entry.kind !== "context_edit")
+    // Context-edit markers stay in the session data but never surface here:
+    // responseTurns already skips them so they cannot split a turn.
+    const turns = responseTurns(session.entries, streaming)
     const partial = session.partialBlocks
     if (partial?.length) {
       const last = turns[turns.length - 1]

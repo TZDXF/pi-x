@@ -129,7 +129,7 @@ test("entry_appended materializes context_edit in the conversation without touch
   expect(store.entries[1]).toMatchObject({ kind: "custom", customType: "pi.bug-report" })
 })
 
-test("responseTurns passes markers through and keeps grouping predictable", async () => {
+test("responseTurns hides context-edit markers and keeps grouping predictable", async () => {
   const { responseTurns } = await import("@/lib/responseTurns")
   const entries = [
     { kind: "user", id: 1, text: "q1", timestamp: 100 },
@@ -139,10 +139,12 @@ test("responseTurns passes markers through and keeps grouping predictable", asyn
     { kind: "assistant", id: 5, blocks: [{ type: "text", text: "a2" }], timestamp: 300 },
   ] as any
   const turns = responseTurns(entries, false)
-  expect(turns.map(entry => entry.kind)).toEqual(["user", "assistant", "context_edit", "custom", "assistant"])
-  // the marker splits assistant turns but keeps the question as duration anchor
+  // context_edit renders nowhere in the chat (pi writes one per retried
+  // failed attempt), so it is skipped entirely; a custom marker still renders
+  // in place and starts a fresh turn after it.
+  expect(turns.map(entry => entry.kind)).toEqual(["user", "assistant", "custom", "assistant"])
   const first = turns[1] as any
-  const second = turns[4] as any
+  const second = turns[3] as any
   expect(first.blocks).toHaveLength(1)
   expect(second.blocks).toHaveLength(1)
   expect(second.durationMs).toBe(200)

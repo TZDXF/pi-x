@@ -33,8 +33,14 @@ export function responseTurns(
       questionTime = undefined
       continue
     }
-    if (entry.kind === "context_edit" || entry.kind === "custom") {
-      // Light markers (context edits, extension entries) render in place and
+    if (entry.kind === "context_edit") {
+      // pi writes a context_edit after every retried failed attempt; the
+      // marker renders nowhere in the chat (unlike compaction/custom), so it
+      // must not split the assistant turn into separate bubbles either.
+      continue
+    }
+    if (entry.kind === "custom") {
+      // Light markers (extension entries) render in place and
       // must not be swallowed by the assistant-turn grouping. They change no
       // conversation content, so the question stays the duration anchor; the
       // next assistant message simply starts a fresh turn after the marker.

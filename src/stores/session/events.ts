@@ -344,14 +344,18 @@ export function createEventHandler(ctx: EventContext) {
           if (msg.stopReason === "aborted") flow.turnAborted = true
           // authoritative replace
           const blocks = blocksFromMessage(msg)
-          entries.value.push({
-            kind: "assistant",
-            id: streamingTurnId.value ?? nextId(),
-            blocks,
-            live: true,
-            startedAt: flow.agentStartedAt,
-            completedAt: Date.now(),
-          })
+          // Failed attempts persist with empty content and history replay drops
+          // them; pushing an empty live entry would only split the turn into
+          // extra bubbles (final failures are surfaced at agent_settled).
+          if (blocks.length)
+            entries.value.push({
+              kind: "assistant",
+              id: streamingTurnId.value ?? nextId(),
+              blocks,
+              live: true,
+              startedAt: flow.agentStartedAt,
+              completedAt: Date.now(),
+            })
           if (msg.usage) lastUsage.value = msg.usage
         }
         // user / toolResult messages are rendered from local state + tool runs

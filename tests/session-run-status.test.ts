@@ -260,6 +260,38 @@ test("finally-failed run surfaces the provider error in the conversation", async
   expect(note.blocks[0].text).not.toMatch(/http_error/)
 })
 
+test("retried empty attempts leave no bubble; the recovered turn stays whole", async () => {
+  const { session } = await harness()
+  const store = session("retry", "retry.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "t1", name: "bash" }] },
+  })
+  // Two 503 attempts, each followed by pi's context_edit omission marker.
+  for (const target of ["a", "b"]) {
+    store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
+    store.handleEvent({ type: "entry_appended", entry: { type: "context_edit", targetId: target, replacement: null } })
+    store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "503" })
+    store.handleEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "..." } })
+  }
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+  })
+  store.handleEvent({ type: "agent_end" })
+  store.handleEvent({ type: "agent_settled" })
+  // Only the real assistant messages are conversation entries; the failed
+  // attempts match history replay, which drops empty messages.
+  const kinds = store.entries.map(e => e.kind)
+  expect(kinds.filter(k => k === "assistant")).toHaveLength(2)
+  expect(store.entries.some(e => e.blocks?.length === 0)).toBe(false)
+  // The invisible markers must not have split the turn: one question, one turn.
+  const { responseTurns } = await import("@/lib/responseTurns")
+  const turns = responseTurns(store.entries, false)
+  expect(turns.filter(e => e.kind === "assistant")).toHaveLength(1)
+})
+
 test("settled request clears retry loading even without retry_end", async () => {
   const { statuses, session } = await harness()
   const store = session("retry", "retry.jsonl")
