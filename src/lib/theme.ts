@@ -2,6 +2,7 @@ import { readonly, ref } from "vue"
 
 export type ThemePreference = "light" | "dark" | "system"
 const STORAGE_KEY = "pix.theme"
+const DEFAULT_THEME: ThemePreference = "system"
 const isTheme = (value: unknown): value is ThemePreference =>
   value === "light" || value === "dark" || value === "system"
 
@@ -12,18 +13,21 @@ function initialTheme(): ThemePreference {
   } catch {
     /* Storage is optional. */
   }
-  return "dark"
+  return DEFAULT_THEME
 }
 
 const preference = ref<ThemePreference>(initialTheme())
 export const theme = readonly(preference)
-const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
 
+/**
+ * 首屏主题完全由 CSS 决定：系统偏好走 `prefers-color-scheme`，`light` / `dark` 类
+ * 只用于显式选择（`light` 同时负责抵消系统暗色）。因此这里不需要在脚本之前
+ * 预先设置类名，index.html 里也无需内联脚本。
+ */
 function applyTheme() {
-  document.documentElement.classList.toggle(
-    "dark",
-    preference.value === "system" ? systemTheme.matches : preference.value === "dark",
-  )
+  const { classList } = document.documentElement
+  classList.toggle("dark", preference.value === "dark")
+  classList.toggle("light", preference.value === "light")
 }
 
 export function setTheme(value: ThemePreference) {
@@ -42,13 +46,11 @@ function syncTheme(event: StorageEvent) {
   preference.value = initialTheme()
   applyTheme()
 }
-systemTheme.addEventListener("change", applyTheme)
 window.addEventListener("storage", syncTheme)
 applyTheme()
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    systemTheme.removeEventListener("change", applyTheme)
     window.removeEventListener("storage", syncTheme)
   })
 }

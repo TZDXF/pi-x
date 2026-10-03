@@ -43,7 +43,7 @@ test.beforeAll(async () => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script src="/theme-init.js"></script>
+    <script>localStorage.setItem("pix.theme", "dark")</script>
     <script>localStorage.setItem("pix.runningBehavior", "steer")</script>
     <title>PiX completion E2E</title>
   </head>

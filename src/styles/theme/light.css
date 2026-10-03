@@ -1,4 +1,7 @@
-:root {
+/* 浅色 token 同时作为无偏好时的回退值；`:root.light` 用于显式浅色，
+   它比 dark.css 里 `@media` 下的 `:root` 选择器更具体，因此系统暗色也能被覆盖。 */
+:root,
+:root.light {
   color-scheme: light;
   --background: #f3f2f0;
   --foreground: #252f3d;

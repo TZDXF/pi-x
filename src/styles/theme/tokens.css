@@ -1,4 +1,15 @@
-@custom-variant dark (&:is(.dark *));
+/* 暗色变体有两条来源：系统偏好（媒体查询）与显式选择（`.dark` 类）。
+   显式浅色（`.light`）需要抵消系统暗色，因此媒体查询一路排除 `.light` 子树。 */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:not(.light *) {
+      @slot;
+    }
+  }
+  &:is(.dark *) {
+    @slot;
+  }
+}
 
 @theme inline {
   --font-sans: "Geist Variable", "Geist", "Segoe UI", "Microsoft YaHei", sans-serif;

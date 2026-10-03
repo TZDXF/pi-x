@@ -274,7 +274,16 @@ onBeforeUnmount(() => {
   border-radius: 2px;
 }
 /* :global must wrap the whole selector; a bare ":global(.dark) .descendant"
-   prefix compiles to just ".dark" in scoped styles. */
+   prefix compiles to just ".dark" in scoped styles.
+   暗色有系统偏好与显式选择两条来源（见 styles/theme/dark.css），这里两条都要覆盖。 */
+@media (prefers-color-scheme: dark) {
+  :global(html:not(.light) .pix-wordmark) {
+    --pi-color: #9ae5c6;
+  }
+  :global(html:not(.light) .pix-wordmark:focus-visible) {
+    outline-color: #9ae5c6;
+  }
+}
 :global(.dark .pix-wordmark) {
   --pi-color: #9ae5c6;
 }

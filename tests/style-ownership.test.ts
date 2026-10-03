@@ -20,12 +20,14 @@ test("global stylesheet is an import-only entry point with separate theme blocks
 test("light and dark palettes expose matching tokens and native color schemes", () => {
   const light = read("src/styles/theme/light.css")
   const dark = read("src/styles/theme/dark.css")
-  const tokens = css => [...css.matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1]).sort()
+  // The dark palette declares its tokens once per theme source (system media
+  // query and explicit class), so compare the token *sets*.
+  const tokens = css => new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1]))
   expect(tokens(light)).toEqual(tokens(dark))
   expect(light).toMatch(/color-scheme:\s*light/)
   expect(dark).toMatch(/color-scheme:\s*dark/)
   for (const token of ["--composer-shadow", "--sidebar-shadow", "--selection-background"]) {
-    expect(tokens(light).includes(token)).toBeTruthy()
+    expect(tokens(light).has(token)).toBeTruthy()
   }
 })
 
