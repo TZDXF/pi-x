@@ -20,7 +20,7 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
 - `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
-- `pnpm run test:web` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别运行 Vitest 单元测试、启动 Vitest watch、运行 Playwright E2E，以及运行 Rust 单元测试。
+- `pnpm run test:web` / `pnpm run test:web:all` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别按增量（仅相对 HEAD 变动的测试）、全量、watch 模式运行 Vitest 单元测试，以及运行 Playwright E2E 与 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
 
 ## 代码风格与命名
@@ -33,7 +33,7 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 
 前端测试使用 Vitest 与 `expect`，文件命名为 `tests/<feature>.test.ts`；不要新增 `node:test` 依赖。修复缺陷时补充回归用例。AI/provider 请求测试通过 `@copilotkit/aimock/vitest` 与 `tests/fixtures/ai/` 做本机确定性模拟，禁止访问真实模型服务。非必要不新增或扩展 E2E 测试，优先通过单元测试覆盖变更；仅在关键用户流程或浏览器交互无法由单元测试充分验证时编写 E2E。E2E 使用 `e2e/*.spec.ts` 与 Playwright，不包含在 `test:web` 中；首次运行先执行 `pnpm run test:e2e:install`。E2E 通过本地 Vite harness 与确定性 mock 验证浏览器行为，禁止访问外部服务。
 
-提交前运行 `pnpm run check`、`pnpm run test:web`、`pnpm run test:e2e` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
+日常迭代运行 `pnpm run test:web`（默认只跑相对 HEAD 变动及其关联的测试；工作区未提交改动多时会退化为接近全量）。提交前运行 `pnpm run check`、`pnpm run test:web:all`、`pnpm run test:e2e` 和 `pnpm test`。当前未配置覆盖率门槛；重点覆盖协议、状态转换及边界条件。
 
 ## 提交与 Pull Request
 
