@@ -659,6 +659,10 @@ export default {
       toolDefinitions: "Tool definitions",
       messageHistory: "Message history",
     },
+    contextMcp: {
+      title: "MCP tool calls",
+      calls: "calls",
+    },
     emptyTitle: "What do you want to build today?",
     emptyDesc:
       "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",

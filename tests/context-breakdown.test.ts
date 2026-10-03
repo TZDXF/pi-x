@@ -1,5 +1,11 @@
 import { test, expect } from "vitest"
-import { estimateContextBreakdown, contextBreakdownParts, annotateCompactionEstimates } from "@/lib/contextBreakdown"
+import {
+  estimateContextBreakdown,
+  contextBreakdownParts,
+  annotateCompactionEstimates,
+  mcpContextRows,
+} from "@/lib/contextBreakdown"
+import { estimateMcpContextUsage } from "@/lib/mcpUsage"
 
 const system = (sections, toolsAdded, extra = {}) => ({
   role: "system",
@@ -148,4 +154,44 @@ test("annotateCompactionEstimates uses firstKeptEntryId so later turns do not in
   annotateCompactionEstimates(messages)
   // summary (400) + kept m2 (3600) -> 4000 / 4 = 1000; the later m3 is excluded.
   expect(messages[2].estimatedTokensAfter).toBe(1000)
+})
+
+test("mcpContextRows sort by tokens and scale with the usage-backed total", () => {
+  const usage = {
+    "server-b": { server: "server-b", calls: 1, tokens: 100, tools: [{ tool: "t2", calls: 1, tokens: 100 }] },
+    "server-a": { server: "server-a", calls: 3, tokens: 200, tools: [{ tool: "t1", calls: 3, tokens: 200 }] },
+  }
+  const est = { systemPrompt: 0, toolDefinitions: 0, messageHistory: 300, total: 300 }
+  const rows = mcpContextRows(usage, est)
+  expect(rows.map(row => row.server)).toEqual(["server-a", "server-b"])
+  expect(rows[0].percent).toBeCloseTo(200 / 300)
+  // Without an actual total the raw estimates pass through.
+  expect(rows[0].tokens).toBe(200)
+  const scaled = mcpContextRows(usage, est, 900)
+  // Scale factor 3 applies to servers and their tools alike.
+  expect(scaled[0].tokens).toBe(600)
+  expect(scaled[0].tools[0].tokens).toBe(600)
+})
+
+test("mcpContextRows yield nothing without a context estimate", () => {
+  const usage = { server: { server: "server", calls: 1, tokens: 100, tools: [] } }
+  expect(mcpContextRows(usage, { systemPrompt: 0, toolDefinitions: 0, messageHistory: 0, total: 0 }, 100)).toEqual([])
+})
+
+test("MCP attribution from projected messages stays within the history share", () => {
+  const messages = [
+    user("u".repeat(4000)),
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", name: "mcp__github__search", arguments: { q: "p".repeat(200) }, callId: "c1" }],
+    },
+    { role: "toolResult", toolCallId: "c1", content: "o".repeat(2400) },
+    assistant("a".repeat(4000)),
+  ]
+  const est = estimateContextBreakdown(messages)
+  const rows = mcpContextRows(estimateMcpContextUsage(messages), est)
+  expect(rows.length).toBe(1)
+  expect(rows[0].server).toBe("github")
+  expect(rows[0].calls).toBe(1)
+  expect(rows[0].percent).toBeLessThanOrEqual(contextBreakdownParts(est).find(p => p.key === "messageHistory").percent)
 })

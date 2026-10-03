@@ -171,10 +171,8 @@ function copyText(text: string) {
 }
 
 // ---- context usage and session-wide weighted cache hit rate ----
-const { contextUsage, cacheRateText, contextBreakdown, refreshContextBreakdown } = useChatContextBreakdown(
-  session,
-  rpcRequest,
-)
+const { contextUsage, cacheRateText, contextBreakdown, contextMcpRows, refreshContextBreakdown } =
+  useChatContextBreakdown(session, rpcRequest)
 
 const { modelKey, onThinkingChange } = useConversationModel(session, {
   connected: () => props.connected,
@@ -380,7 +378,7 @@ onBeforeUnmount(() => {
             <ContextContent>
               <ContextContentHeader />
               <ContextContentBody class="space-y-2">
-                <ContextBreakdown v-if="contextBreakdown?.length" :parts="contextBreakdown" />
+                <ContextBreakdown v-if="contextBreakdown?.length" :parts="contextBreakdown" :servers="contextMcpRows" />
                 <div class="flex items-center justify-between gap-3 text-xs">
                   <span class="text-muted-foreground">{{ t("chat.averageCacheRate") }}</span>
                   <span class="font-mono">{{ cacheRateText }}</span>

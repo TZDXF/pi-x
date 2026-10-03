@@ -1,4 +1,5 @@
 import { CHARS_PER_TOKEN, textAndImageChars } from "@/lib/tokenEstimates"
+import type { McpServerUsage } from "@/lib/mcpUsage"
 
 /**
  * Estimate how the context window is divided between the system prompt,
@@ -136,6 +137,40 @@ export function estimateContextBreakdown(messages: any[]): ContextBreakdownEstim
   const toolDefinitions = toTokens(toolChars)
   const messageHistory = toTokens(historyChars)
   return { systemPrompt, toolDefinitions, messageHistory, total: systemPrompt + toolDefinitions + messageHistory }
+}
+
+/** One MCP server's share of the projected context, for the breakdown panel. */
+export interface McpContextRow {
+  server: string
+  calls: number
+  tokens: number
+  /** Share of the whole context, 0..1. */
+  percent: number
+  tools: McpServerUsage["tools"]
+}
+
+/**
+ * MCP server attribution over the projected messages, scaled the same way as
+ * contextBreakdownParts: MCP call arguments and tool results are part of the
+ * message history, so the rows are a subset of it and their tokens scale with
+ * the same usage-backed factor.
+ */
+export function mcpContextRows(
+  usage: Record<string, McpServerUsage>,
+  estimate: ContextBreakdownEstimate,
+  actualTotal?: number | null,
+): McpContextRow[] {
+  if (estimate.total <= 0) return []
+  const scale = actualTotal && actualTotal > 0 ? actualTotal / estimate.total : 1
+  return Object.values(usage)
+    .map(server => ({
+      server: server.server,
+      calls: server.calls,
+      tokens: Math.round(server.tokens * scale),
+      percent: server.tokens / estimate.total,
+      tools: server.tools.map(tool => ({ ...tool, tokens: Math.round(tool.tokens * scale) })),
+    }))
+    .sort((a, b) => b.tokens - a.tokens || a.server.localeCompare(b.server))
 }
 
 /**

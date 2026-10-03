@@ -641,6 +641,10 @@ export default {
       toolDefinitions: "工具定义",
       messageHistory: "消息历史",
     },
+    contextMcp: {
+      title: "MCP 工具调用",
+      calls: "次",
+    },
     emptyTitle: "今天想构建什么？",
     emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",
