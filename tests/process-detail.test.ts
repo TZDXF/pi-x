@@ -82,3 +82,10 @@ test("concise mode hides thinking blocks in AssistantBlocks; detailed keeps them
   expect(settings).toMatch(/<SelectItem value="detailed">/)
   expect(settings).toMatch(/<SelectItem value="concise">/)
 })
+
+test("concise mode shows a thinking status indicator only while thinking streams", () => {
+  const blocks = source("../src/components/AssistantBlocks.vue")
+  // Streaming thinking still surfaces a shimmer status so the run does not look idle;
+  // completed thinking renders nothing in concise mode.
+  expect(blocks).toMatch(/block\.type === 'thinking' && block\.streaming/)
+})

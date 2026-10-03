@@ -3,10 +3,11 @@ import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
+import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
-import { ChevronRight, SquareTerminal } from "@lucide/vue"
+import { BrainIcon, ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall } from "@/lib/sessionChanges"
 import { isSubagentTool } from "@/lib/subagents"
@@ -209,6 +210,17 @@ const { t } = useI18n()
         <ThinkingTrigger :streaming-text="block.text" />
         <ThinkingContent :content="block.text" />
       </Thinking>
+
+      <!-- concise mode: thinking content stays hidden, but while it streams a status
+           shimmer marks the run as active; it disappears once thinking completes. -->
+      <div
+        v-else-if="block.type === 'thinking' && block.streaming"
+        class="not-prose inline-flex items-center gap-2 self-start text-sm text-muted-foreground"
+        role="status"
+      >
+        <BrainIcon class="size-4 shrink-0" />
+        <Shimmer :duration="1" class="font-medium">{{ t("blocks.thinking") }}</Shimmer>
+      </div>
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">
