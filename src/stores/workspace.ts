@@ -2,9 +2,12 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
-import { listSessions, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
+import { listSessions, pixLog, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
 import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
 import { invoke } from "@/api/transport"
+
+/** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
+const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
  *  the resulting mtime; lets the session watcher tell its own writes from
@@ -354,10 +357,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
     persistSessionOrder()
   }
-  async function rememberWorkspace(path: string) {
+  async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
     try {
-      registerWorktrees(await workspaceGitInfo(path))
+      registerWorktrees(knownInfo ?? (await workspaceGitInfo(path)))
     } catch {
       // Non-Git and unavailable directories remain ordinary projects.
     }
@@ -376,7 +379,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
     const version = (versions[path] = (versions[path] || 0) + 1)
+    const start = nowMs()
     const rows = await listSessions(path)
+    pixLog(`[perf] listSessions ${path} ${Math.round(nowMs() - start)}ms rows=${rows.length}`)
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
       const previews = [...pending.values()].filter(row => samePath(row.cwd, path))

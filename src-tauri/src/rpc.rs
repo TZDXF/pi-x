@@ -77,6 +77,7 @@ pub async fn process_spawn(
     project: &str,
     session_file: Option<String>,
     extra_args: Vec<String>,
+    workspace_manifest: Option<String>,
 ) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
     state.generation.fetch_add(1, Ordering::Relaxed);
@@ -117,6 +118,12 @@ pub async fn process_spawn(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    // Consumed by the pix-workspace extension to render the <pix_workspace>
+    // prompt section; plain sessions leave the variable unset.
+    if let Some(manifest) = &workspace_manifest {
+        cmd.env("PIX_WORKSPACE", manifest);
+    }
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -175,6 +182,9 @@ pub async fn process_spawn(
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut buf: Vec<u8> = Vec::new();
             let mut chunk = [0u8; 8192];
+            // PiX-side measure of pi's cold start: first stdout line after spawn.
+            let spawned_at = std::time::Instant::now();
+            let mut first_output = true;
             loop {
                 match reader.read(&mut chunk).await {
                     Ok(0) | Err(_) => break,
@@ -188,6 +198,13 @@ pub async fn process_spawn(
                     }
                     if line.is_empty() {
                         continue;
+                    }
+                    if first_output {
+                        first_output = false;
+                        crate::logs::write(
+                            &runtime_id,
+                            &format!("[perf] pi first output after {}ms", spawned_at.elapsed().as_millis()),
+                        );
                     }
                     let Ok(value) = serde_json::from_slice::<Value>(&line) else {
                         continue;
@@ -513,9 +530,13 @@ pub async fn spawn(
     project: &str,
     session_file: Option<String>,
     mut extra_args: Vec<String>,
+    workspace_manifest: Option<String>,
     runtime_id: Option<String>,
 ) -> Result<(), String> {
     extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
+    if workspace_manifest.is_some() {
+        extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
+    }
     let id = runtime_id.unwrap_or_else(|| "default".into());
     let mut pool = state.processes.lock().await;
     if let Some(existing) = pool.get(&id) {
@@ -555,7 +576,16 @@ pub async fn spawn(
         project: project.into(),
         ..Default::default()
     });
-    process_spawn(app, &process, pi, project, session_file, extra_args).await?;
+    process_spawn(
+        app,
+        &process,
+        pi,
+        project,
+        session_file,
+        extra_args,
+        workspace_manifest,
+    )
+    .await?;
     pool.insert(id.clone(), process);
     state.last_activity.lock().await.insert(id, Instant::now());
     Ok(())

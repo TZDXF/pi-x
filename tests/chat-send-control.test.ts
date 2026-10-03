@@ -238,3 +238,48 @@ test("disabling built-in delayed send resets its controls without affecting anot
     on.scope.stop()
   }
 })
+
+test("first message in a fresh conversation is echoed while the worker starts", async () => {
+  let release
+  const gate = new Promise(r => {
+    release = r
+  })
+  const h = harness()
+  h.ensureStarted.mockReturnValue(gate)
+  try {
+    const sending = h.controls.onSubmit({ text: "hello", files: [{ url: image }] })
+    await new Promise(r => setImmediate(r))
+    expect(h.ui.pendingUserMessage).toEqual({ text: "hello", images: [{ url: image }] })
+    expect(h.session.send).not.toHaveBeenCalled()
+    release(true)
+    await sending
+    expect(h.ui.pendingUserMessage).toBeNull()
+    expect(h.session.send).toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("startup failure removes the echo and restores the composer text", async () => {
+  const h = harness()
+  h.ensureStarted.mockResolvedValue(false)
+  try {
+    await expect(h.controls.onSubmit({ text: "draft" })).rejects.toThrow("completion.startFailed")
+    expect(h.ui.pendingUserMessage).toBeNull()
+    expect(h.bridge.value.setTextInput).toHaveBeenCalledWith("draft")
+    expect(h.session.send).not.toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("desktop commands do not echo into the conversation area", async () => {
+  const h = harness()
+  try {
+    await h.controls.onSubmit({ text: "/new" })
+    expect(h.ui.pendingUserMessage).toBeUndefined()
+    expect(h.newSession).toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})

@@ -1,16 +1,26 @@
 import { ref, type Ref } from "vue"
-import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceSelection } from "@/api/piClient"
+import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceGitInfo, WorkspaceSelection } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { encodeCodedError } from "@/lib/backendError"
+
+/** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
+const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
 
 type Api = typeof import("@/api/piClient")
 type Conversations = typeof import("@/stores/conversations")
 interface StartupContext {
   api: Pick<
     Api,
-    "prepareWorkspaceGit" | "workspaceGitInfo" | "killPi" | "spawnPi" | "trustStatus" | "trustSave" | "saveConfig"
+    | "prepareWorkspaceGit"
+    | "workspaceGitInfo"
+    | "killPi"
+    | "spawnPi"
+    | "trustStatus"
+    | "trustSave"
+    | "saveConfig"
+    | "pixLog"
   >
   conversations: Pick<Conversations, "sessionFor" | "uiFor" | "activeRuntimeId">
   workspace: ReturnType<typeof import("@/stores/workspace").useWorkspaceStore>
@@ -41,7 +51,8 @@ export function createWorkspaceStartup(context: StartupContext) {
     translateError: tBackendError,
   } = context
   const ui = { pushToast: context.pushToast }
-  const { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig } = context.api
+  const { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog } =
+    context.api
   const { sessionFor, uiFor, activeRuntimeId } = context.conversations
   const runtimeWorkspaces = new Map<string, string>()
   function contextFor(dir: string): WorkspaceContext | undefined {
@@ -97,6 +108,8 @@ export function createWorkspaceStartup(context: StartupContext) {
 
   /** 指定会话的启动流程；分屏时各窗格携带各自 runtimeId 调用，行为与激活会话一致。 */
   async function startSession(runtimeId: string, selection?: WorkspaceSelection | null): Promise<boolean> {
+    const sessionStart = nowMs()
+    pixLog(`[perf] startSession begin selection=${selection?.branch ?? "-"}`, runtimeId)
     if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
     if (selection?.worktree && !selection.branch) {
       ui.pushToast(t("workspace.selectBaseBranch"), "error")
@@ -108,9 +121,11 @@ export function createWorkspaceStartup(context: StartupContext) {
     workspace.gitBusy = true
     connecting.value = true
     try {
+      const prepStart = nowMs()
       const key = JSON.stringify(selection)
       const cached = preparedWorkspaces.get(owner.runtimeId)
       let path = cached?.key === key ? cached.path : undefined
+      let knownInfo: WorkspaceGitInfo | undefined
       if (!path || !selection.worktree) {
         const info = await workspaceGitInfo(selection.project)
         // An unchanged local selection doesn't switch away from an existing checkout.
@@ -120,10 +135,14 @@ export function createWorkspaceStartup(context: StartupContext) {
             : await prepareWorkspaceGit(selection)
         path = normalizeProjectPath(path)
         preparedWorkspaces.set(owner.runtimeId, { key, path })
+        // 本地模式查的是同一目录，直接复用；worktree 模式要重新查一次，
+        // 新 worktree 才会出现在 worktrees 列表里。
+        if (samePath(path, selection.project)) knownInfo = info
       }
+      pixLog(`[perf] startSession workspace prep ${Math.round(nowMs() - prepStart)}ms path=${path}`, runtimeId)
       // The user explicitly picked this folder, so lift any earlier removal marker.
       workspace.unremoveProject(path)
-      await workspace.rememberWorkspace(path)
+      await workspace.rememberWorkspace(path, knownInfo)
       const status = await trustStatus(path)
       if (status.needsDecision) {
         const allowed = await requestWorkspaceTrust(status)
@@ -146,10 +165,12 @@ export function createWorkspaceStartup(context: StartupContext) {
     } finally {
       connecting.value = false
       workspace.gitBusy = false
+      pixLog(`[perf] startSession total ${Math.round(nowMs() - sessionStart)}ms`, runtimeId)
     }
   }
 
   async function startRuntime(runtimeId: string): Promise<boolean> {
+    const runtimeStart = nowMs()
     // Completion can request a runtime while the draft remains editable.
     if (selectingProject.value || phase.value !== "chat") return false
     const owner = sessionFor(runtimeId)
@@ -165,6 +186,8 @@ export function createWorkspaceStartup(context: StartupContext) {
       } catch (error) {
         uiFor(owner.runtimeId).pushToast(String(error), "error")
         return false
+      } finally {
+        pixLog(`[perf] startRuntime rebuild ${Math.round(nowMs() - runtimeStart)}ms`, runtimeId)
       }
     }
     if (owner.started) {
@@ -173,7 +196,9 @@ export function createWorkspaceStartup(context: StartupContext) {
     }
     connecting.value = true
     try {
+      const spawnStart = nowMs()
       await spawnWorkspacePi(owner.cwd || project.value, undefined, owner.runtimeId)
+      pixLog(`[perf] spawnWorkspacePi ${Math.round(nowMs() - spawnStart)}ms`, runtimeId)
       await owner.init(owner.cwd || project.value, true)
       owner.started = true
       return true
@@ -185,6 +210,7 @@ export function createWorkspaceStartup(context: StartupContext) {
       return false
     } finally {
       connecting.value = false
+      pixLog(`[perf] startRuntime total ${Math.round(nowMs() - runtimeStart)}ms`, runtimeId)
     }
   }
 

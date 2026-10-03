@@ -24,6 +24,7 @@ vi.mock("@/api/piClient", () => ({
     }),
   updateSession: (...args) => mocks.updateSession(...args),
   workspaceGitInfo: (...args) => mocks.workspaceGitInfo(...args),
+  pixLog: () => {},
 }))
 
 vi.mock("@/api/transport", () => ({

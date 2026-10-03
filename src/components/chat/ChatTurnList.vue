@@ -13,6 +13,7 @@ import { Message, MessageContent } from "@/components/ai-elements/message"
 import { Loader } from "@/components/ai-elements/loader"
 import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/components/ai-elements/queue"
 import PiXLogo from "@/components/PiXLogo.vue"
+import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
@@ -351,6 +352,40 @@ onBeforeUnmount(() => {
           </Message>
         </template>
       </VirtualMessage>
+
+      <!-- 冷启动回显：worker 尚未就绪时先把首条消息画出来，避免对话区空白 -->
+      <template v-if="ui.pendingUserMessage">
+        <Message from="user">
+          <div class="relative flex min-w-0 flex-col items-end">
+            <MessageContent>
+              <div class="text-sm">
+                <ComposerText :text="ui.pendingUserMessage.text" />
+                <div v-if="ui.pendingUserMessage.images.length" class="mt-1.5 flex flex-wrap gap-2">
+                  <button
+                    v-for="(im, i) in ui.pendingUserMessage.images"
+                    :key="i"
+                    type="button"
+                    class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+                    :title="t('chat.previewImage')"
+                    :aria-label="t('chat.previewImage')"
+                    @click="emit('previewImage', im.url)"
+                  >
+                    <img :src="im.url" class="size-full object-cover" alt="" />
+                  </button>
+                </div>
+              </div>
+            </MessageContent>
+          </div>
+        </Message>
+        <div
+          v-if="connecting && !selectingProject"
+          class="text-muted-foreground mt-2 flex items-center gap-2 text-sm"
+          role="status"
+        >
+          <Loader :size="14" />
+          <span>{{ t("chat.startingSession") }}</span>
+        </div>
+      </template>
 
       <!-- waiting indicator before any content arrives: icon on the left,
                loading status (with elapsed seconds) on the right -->

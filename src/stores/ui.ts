@@ -24,6 +24,9 @@ export const createUiStore = (runtimeId = "default") =>
     const toasts = ref<Toast[]>([])
     /** Text pushed into the composer by extensions (set_editor_text). */
     const pendingEditorText = ref<string | null>(null)
+    /** 首条消息发送时 worker 尚未启动（冷启动需数秒）；先在对话区回显这条
+     *  消息，等 send() 真正入列后清除，避免启动期间对话区一片空白。 */
+    const pendingUserMessage = ref<{ text: string; images: { url: string }[] } | null>(null)
     /** Tail of pi's stderr output, for diagnostics. */
     const stderrLines = ref<string[]>([])
     function pushStderr(line: string) {
@@ -95,6 +98,7 @@ export const createUiStore = (runtimeId = "default") =>
       widget.value = null
       statusEntries.value = {}
       stderrLines.value = []
+      pendingUserMessage.value = null
     }
 
     return {
@@ -103,6 +107,7 @@ export const createUiStore = (runtimeId = "default") =>
       statusEntries,
       toasts,
       pendingEditorText,
+      pendingUserMessage,
       stderrLines,
       pushStderr,
       activeDialog,

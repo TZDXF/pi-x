@@ -142,7 +142,7 @@ watch(
   { immediate: true },
 )
 const startup = createWorkspaceStartup({
-  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig },
+  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog },
   conversations: { sessionFor, uiFor, activeRuntimeId },
   workspace,
   phase,

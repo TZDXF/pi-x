@@ -698,6 +698,7 @@ export default {
     toolCallCount: "Tool calls: {count}",
     thinking: "thinking…",
     thinkingSeconds: "thinking · {seconds}s",
+    startingSession: "Starting session…",
     retrying: "Request failed, retrying",
     retryAttempt: "Attempt {attempt} of {maxAttempts}",
     retryUnknownError: "Unknown error",

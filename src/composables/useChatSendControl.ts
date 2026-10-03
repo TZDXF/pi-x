@@ -103,11 +103,21 @@ export function useChatSendControl(deps: {
       ui.pushToast(t("chat.invalidSendDelay"), "error")
       throw new Error(t("chat.invalidSendDelay"))
     }
+    const commandName = /^\/([^\s/]+)/.exec(text)?.[1]
+    const desktopCommand = !!commandName && desktopCommands.some(name => name === commandName)
+    // 新会话首条消息要先把 worker 冷启动（秒级）；先把消息回显到对话区，
+    // 避免启动期间一片空白。桌面命令（/new、/compact）不走 send，不回显。
+    const staged = !delayedSend.value && !desktopCommand && session.entries.length === 0
+    if (staged)
+      ui.pendingUserMessage = {
+        text,
+        images: images.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
+      }
     if (!(await deps.ensureStarted(session.entries.length ? null : deps.workspaceSelection()))) {
+      ui.pendingUserMessage = null
       bridge.value?.setTextInput(text)
       throw new Error(t("completion.startFailed"))
     }
-    const commandName = /^\/([^\s/]+)/.exec(text)?.[1]
     if (commandName) {
       await session.refreshCommands()
       if (!session.commands.some(c => c.name === commandName) && desktopCommands.some(name => name === commandName)) {
@@ -149,15 +159,20 @@ export function useChatSendControl(deps: {
       comments.length || selections.length
         ? serializeComposerPromptContexts(expandedText, { comments, selections })
         : expandedText
-    if (delayedSend.value) {
-      session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
-      delayedSend.value = false
-      if (comments.length) codeComments.clear()
-      if (selections.length) conversationSelections.clear()
-    } else {
-      if (comments.length) codeComments.clear()
-      if (selections.length) conversationSelections.clear()
-      await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
+    try {
+      if (delayedSend.value) {
+        session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
+        delayedSend.value = false
+        if (comments.length) codeComments.clear()
+        if (selections.length) conversationSelections.clear()
+      } else {
+        if (comments.length) codeComments.clear()
+        if (selections.length) conversationSelections.clear()
+        await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
+      }
+    } finally {
+      // send() 已同步把用户消息入列（或启动失败已恢复输入），回显完成使命。
+      ui.pendingUserMessage = null
     }
   }
 

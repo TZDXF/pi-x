@@ -210,7 +210,7 @@ test("opening a saved conversation starts pi on demand", async () => {
 test("only fresh process startup applies remembered selection", () => {
   const source = readFileSync(new URL("../src/lib/workspaceStartup.ts", import.meta.url), "utf8")
   expect(source).toMatch(
-    /await spawnWorkspacePi\(owner.cwd \|\| project.value, undefined, owner.runtimeId\)\s+await owner.init\(owner.cwd \|\| project.value, true\)/,
+    /await spawnWorkspacePi\(owner\.cwd \|\| project\.value, undefined, owner\.runtimeId\)\s+pixLog\([^\n]*\)\s+await owner\.init\(owner\.cwd \|\| project\.value, true\)/,
   )
   expect((source.match(/\.init\(owner\.cwd \|\| project\.value, true\)/g) || []).length).toBe(1)
 })

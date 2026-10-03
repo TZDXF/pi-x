@@ -208,6 +208,7 @@ function harness(overrides = {}) {
       return "C:/tree"
     },
     normalizeProjectPath: value => value,
+    samePath: (a, b) => a === b,
     trustStatus: async () => ({ needsDecision: false }),
     trustSave: async () => {},
     killPi: async () => events.push("kill"),
@@ -219,6 +220,9 @@ function harness(overrides = {}) {
     uiFor: () => ({ pushToast: message => events.push(`error:${message}`) }),
     ui: { pushToast: () => {} },
     tBackendError: String,
+    // startSession 切片引用的模块级计时工具与 perf 日志（切片外定义，这里桩掉）。
+    nowMs: () => Date.now(),
+    pixLog: () => {},
     ...overrides,
   })
   const startup = readFileSync(new URL("../src/lib/workspaceStartup.ts", import.meta.url), "utf8")

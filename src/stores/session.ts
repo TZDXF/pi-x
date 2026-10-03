@@ -50,9 +50,25 @@ export type {
 let entrySeq = 0
 const nextId = () => ++entrySeq
 
+/** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
+const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+
 export const createSessionStore = (runtimeId = "default") =>
   defineStore(`session:${runtimeId}`, () => {
-    const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
+    const rpcRequest = <T = unknown>(command: Record<string, unknown>) => {
+      const type = typeof command.type === "string" ? command.type : "unknown"
+      const start = nowMs()
+      return requestForRuntime<T>(command, runtimeId).then(
+        res => {
+          pixLog(`[perf] rpc ${type} ${Math.round(nowMs() - start)}ms`, runtimeId)
+          return res
+        },
+        error => {
+          pixLog(`[perf] rpc ${type} failed after ${Math.round(nowMs() - start)}ms`, runtimeId)
+          throw error
+        },
+      )
+    }
     const started = ref(false)
 
     // ---- state ----
@@ -430,6 +446,7 @@ export const createSessionStore = (runtimeId = "default") =>
           preview: promptText.replace(/\s+/g, " ").slice(0, 120),
         })
         // Independent IPC call: do not await it or switch the active model.
+        const titleStart = nowMs()
         void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
           .then(async title => {
             if (title) {
@@ -439,6 +456,7 @@ export const createSessionStore = (runtimeId = "default") =>
             await workspace.refresh(titleProject)
           })
           .catch(error => console.warn("[pi] title generation failed; keeping preview:", error))
+          .finally(() => pixLog(`[perf] generateSessionTitle ${Math.round(nowMs() - titleStart)}ms`, runtimeId))
       }
     }
 
@@ -659,7 +677,11 @@ export const createSessionStore = (runtimeId = "default") =>
       await syncSessionFile()
       await refreshState()
       await refreshThinkingLevels()
-      remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? result.data.level, rpcThinkingLevels.value)
+      remember(
+        state.value?.model ?? undefined,
+        state.value?.thinkingLevel ?? result.data.level,
+        rpcThinkingLevels.value,
+      )
       return true
     }
 
@@ -739,6 +761,7 @@ export const createSessionStore = (runtimeId = "default") =>
     }
 
     async function applyRememberedSelection() {
+      const start = nowMs()
       // Snapshot both choices: setModel may update Pi's effective thinking level.
       const savedModel = remembered.value.model
       const modelKey = desiredModelKey.value ?? (savedModel ? `${savedModel.provider}/${savedModel.id}` : null)
@@ -757,9 +780,12 @@ export const createSessionStore = (runtimeId = "default") =>
         if (supported !== state.value?.thinkingLevel) await setThinkingLevel(supported)
       }
       if (state.value?.model) remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
+      pixLog(`[perf] applyRememberedSelection ${Math.round(nowMs() - start)}ms model=${modelKey ?? "-"}`, runtimeId)
     }
 
     async function init(project: string, fresh = false) {
+      const start = nowMs()
+      pixLog(`[perf] init begin project=${project} fresh=${fresh}`, runtimeId)
       invalidateOfflineModels()
       cwd.value = project
       await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
@@ -771,6 +797,7 @@ export const createSessionStore = (runtimeId = "default") =>
         desiredModelKey.value = null
         desiredThinkingLevel.value = null
       }
+      pixLog(`[perf] init end ${Math.round(nowMs() - start)}ms`, runtimeId)
     }
 
     function clear() {
