@@ -20,14 +20,12 @@ test("settings menus use the grouped information architecture", () => {
   expect(tabs).toMatch(
     /"general",[\s\S]*?tabIds: \["general", "appearance", "models", "shortcuts", "notifications", "remote"\]/,
   )
-  expect(tabs).toMatch(
-    /"capabilities",[\s\S]*?tabIds: \["run-config", "agent-config", "packages", "skills", "mcp"\]/,
-  )
+  expect(tabs).toMatch(/"capabilities",[\s\S]*?tabIds: \["run-config", "agent-config", "packages", "skills", "mcp"\]/)
   expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "archives", "about"\]/)
   expect(general).toMatch(/<WorkspaceSettings \/>/)
   expect(general).not.toMatch(/RetrySettings/)
   expect(appearance).toMatch(/TerminalThemeSettings/)
-  expect(runConfig).toMatch(/<RetrySettings v-if="isDesktop" \/>/)
+  expect(runConfig).toMatch(/<RetrySettings \/>/)
   expect(runConfig).toMatch(/QueueModeSettings/)
   expect(workspace).toMatch(/OpenWithSettings/)
   expect(workspace).toMatch(/ProjectlessSettings/)

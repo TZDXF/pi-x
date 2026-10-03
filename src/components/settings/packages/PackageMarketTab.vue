@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /** Marketplace tab: search, filter and install packages from the pi.dev catalog. */
 import { useI18n } from "vue-i18n"
-import { openUrl } from "@tauri-apps/plugin-opener"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Download, ExternalLink } from "@lucide/vue"
+import { openExternal } from "@/lib/hostBridge"
 import type { PackagesContext } from "./usePackages"
 
 const props = defineProps<{ ctx: PackagesContext }>()
@@ -95,7 +95,7 @@ const {
         <Button variant="outline" size="sm" :disabled="busy !== null" @click="chooseProjectForInstall(p.source)">
           {{ t("packages.installProject") }}
         </Button>
-        <Button variant="ghost" size="sm" @click="openUrl(p.detailUrl)">
+        <Button variant="ghost" size="sm" @click="openExternal(p.detailUrl)">
           <ExternalLink :size="14" />
           {{ t("packages.details") }}
         </Button>

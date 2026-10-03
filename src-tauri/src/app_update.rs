@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::commands::UpdateChannel;
@@ -394,35 +394,41 @@ async fn install(app: AppHandle, channel: UpdateChannel) -> Result<(), String> {
     update
         .download_and_install(
             move |chunk, total| {
-                let _ = app_for_chunk.emit(
+                crate::remote::emit(
+                    &app_for_chunk,
                     PROGRESS_EVENT,
-                    UpdateProgress {
+                    serde_json::to_value(UpdateProgress {
                         stage: "download",
                         chunk_length: Some(chunk as u64),
                         content_length: total,
-                    },
+                    })
+                    .unwrap_or_default(),
                 );
             },
             || {
-                let _ = app_for_finish.emit(
+                crate::remote::emit(
+                    &app_for_finish,
                     PROGRESS_EVENT,
-                    UpdateProgress {
+                    serde_json::to_value(UpdateProgress {
                         stage: "install",
                         chunk_length: None,
                         content_length: None,
-                    },
+                    })
+                    .unwrap_or_default(),
                 );
             },
         )
         .await
         .map_err(|e| pix_error_detail("appUpdateInstallFailed", "安装更新失败: {detail}", e))?;
-    let _ = app.emit(
+    crate::remote::emit(
+        &app,
         PROGRESS_EVENT,
-        UpdateProgress {
+        serde_json::to_value(UpdateProgress {
             stage: "installed",
             chunk_length: None,
             content_length: None,
-        },
+        })
+        .unwrap_or_default(),
     );
     Ok(())
 }

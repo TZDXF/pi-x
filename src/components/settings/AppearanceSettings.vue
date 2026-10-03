@@ -2,7 +2,6 @@
 /** 外观设置页：界面主题与终端配色。 */
 import { useI18n } from "vue-i18n"
 import type { AcceptableValue } from "reka-ui"
-import { isDesktop } from "@/api/transport"
 import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -28,5 +27,5 @@ const { t } = useI18n()
       </SelectContent>
     </Select>
   </SettingRow>
-  <TerminalThemeSettings v-if="isDesktop" />
+  <TerminalThemeSettings />
 </template>

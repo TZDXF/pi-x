@@ -2,7 +2,6 @@
 /** 配置设置页：运行方式、自动重试与跟进消息投递等会话运行行为。 */
 import { useI18n } from "vue-i18n"
 import type { AcceptableValue } from "reka-ui"
-import { isDesktop } from "@/api/transport"
 import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
@@ -52,6 +51,6 @@ const { t } = useI18n()
       </SelectContent>
     </Select>
   </SettingRow>
-  <RetrySettings v-if="isDesktop" />
-  <QueueModeSettings v-if="isDesktop" />
+  <RetrySettings />
+  <QueueModeSettings />
 </template>

@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from "vue"
 import { Eye, Trash2 } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
-import { ask } from "@tauri-apps/plugin-dialog"
 import {
   deleteHostedSkill,
   listDiscoveredSkills,
@@ -13,6 +12,8 @@ import {
   skillReadFile,
 } from "@/api/piClient"
 import type { DiscoveredSkill, HostedSkill } from "@/api/piClient"
+import { confirmDialog } from "@/lib/hostBridge"
+import { isDesktop } from "@/api/transport"
 import { useUiStore } from "@/stores/conversations"
 import { normalizeSlashes } from "@/lib/paths"
 import { Button } from "@/components/ui/button"
@@ -76,7 +77,7 @@ async function toggle(skill: HostedSkill, checked: boolean) {
 }
 
 async function remove(skill: HostedSkill) {
-  const confirmed = await ask(t("skillsConfig.deleteConfirm", { name: skill.name }), {
+  const confirmed = await confirmDialog(t("skillsConfig.deleteConfirm", { name: skill.name }), {
     title: t("skillsConfig.title"),
     okLabel: t("skillsConfig.delete"),
     cancelLabel: t("common.cancel"),
@@ -118,7 +119,10 @@ onMounted(load)
       <h3 class="text-sm font-medium">{{ t("skillsConfig.hosted") }}</h3>
       <div>
         <div class="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" @click="openDirectory">{{ t("skillsConfig.openDirectory") }}</Button>
+          <!-- 打开的是主机本地的技能目录，远程浏览器无法使用 -->
+          <Button v-if="isDesktop" variant="outline" size="sm" @click="openDirectory">{{
+            t("skillsConfig.openDirectory")
+          }}</Button>
           <Button variant="outline" size="sm" @click="load">{{ t("skillsConfig.refresh") }}</Button>
         </div>
         <p v-if="!skills.length" class="mt-3 text-sm text-muted-foreground">{{ t("skillsConfig.empty") }}</p>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Channel, invoke } from "@tauri-apps/api/core"
+import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@/api/transport"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { terminalTheme } from "@/lib/terminalTheme"
@@ -81,7 +81,24 @@ function setTabEl(id: number, el: unknown) {
   else tabEls.delete(id)
 }
 
-const outputChannels = new Map<number, Channel<string>>()
+// Output arrives via the backend's `term://output` broadcast (works for both
+// the desktop webview and remote browsers). Chunks emitted before the xterm
+// instance mounts are buffered per terminal id and flushed on mount.
+const pendingOutput = new Map<number, string[]>()
+function writeOutput(id: number, encoded: string) {
+  const inst = instances.get(id)
+  if (inst) inst.term.write(b64ToBytes(encoded))
+  else {
+    const list = pendingOutput.get(id) ?? []
+    list.push(encoded)
+    pendingOutput.set(id, list)
+  }
+}
+let unlistenOutput: (() => void) | null = null
+void listen<{ id: number; data: string }>("term://output", e => writeOutput(e.payload.id, e.payload.data)).then(fn => {
+  unlistenOutput = fn
+})
+
 function mountTerminal(id: number) {
   const el = tabEls.get(id)
   if (!el || instances.has(id)) return
@@ -130,6 +147,8 @@ function mountTerminal(id: number) {
       term.dispose()
     },
   })
+  for (const encoded of pendingOutput.get(id) ?? []) term.write(b64ToBytes(encoded))
+  pendingOutput.delete(id)
 
   try {
     fit.fit()
@@ -141,18 +160,11 @@ function mountTerminal(id: number) {
 
 async function openTerminal() {
   try {
-    const channel = new Channel<string>()
-    const idPromise = invoke<number>("term_create", {
+    const id = await invoke<number>("term_create", {
       cwd: props.project,
       cols: 80,
       rows: 24,
-      onOutput: channel,
     })
-    const id = await idPromise
-    outputChannels.set(id, channel)
-    channel.onmessage = encoded => {
-      instances.get(id)?.term.write(b64ToBytes(encoded))
-    }
     tabs.value.push({ id, title: `#${tabs.value.length + 1}`, baseTitle: `#${tabs.value.length + 1}`, exited: false })
     activeId.value = id
     await nextTick()
@@ -169,7 +181,7 @@ async function closeTab(id: number) {
     inst.dispose()
     instances.delete(id)
   }
-  outputChannels.delete(id)
+  pendingOutput.delete(id)
   tabEls.delete(id)
   tabs.value = tabs.value.filter(tab => tab.id !== id)
   if (activeId.value === id) {
@@ -269,6 +281,7 @@ onBeforeUnmount(() => {
   instances.clear()
   for (const tab of tabs.value) void invoke("term_kill", { id: tab.id }).catch(() => {})
   unlistenExit?.()
+  unlistenOutput?.()
   window.removeEventListener("mousemove", onDividerMove)
   window.removeEventListener("mouseup", onDividerUp)
 })

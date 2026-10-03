@@ -30,7 +30,6 @@ import { useSessionDrop, type SessionDragPayload } from "@/composables/useSessio
 import type { SplitDropZone } from "@/lib/splitDropZone"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
 import { copyWithToast } from "@/lib/clipboard"
-import { isDesktop } from "@/api/transport"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { PanelRight, X } from "@lucide/vue"
@@ -227,9 +226,7 @@ const offShortcutHandlers = [
   }),
   registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
   registerShortcutHandler("sidebar.files", () => addSidebarTab("files")),
-  registerShortcutHandler("sidebar.terminal", () => {
-    if (isDesktop) addSidebarTab("terminal")
-  }),
+  registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
   registerShortcutHandler("sidebar.closeTab", () => {
     if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)

@@ -218,15 +218,10 @@ interface SettingsSearchResult {
   order: number
 }
 
-/** Rows merged into General can be desktop-only even though the page itself is not. */
-const desktopOnlySearchEntries = new Set(["retrySettings.maxRetries", "settings.terminalTheme"])
-
 const searchEntries = computed<readonly SettingsSearchEntry[]>(() =>
   visibleTabs.value.flatMap(def => [
     { tab: def.id, labelKey: def.nav },
-    ...SETTINGS_SEARCH_ENTRIES.filter(
-      entry => entry.tab === def.id && (isDesktop || !desktopOnlySearchEntries.has(entry.labelKey)),
-    ),
+    ...SETTINGS_SEARCH_ENTRIES.filter(entry => entry.tab === def.id),
   ]),
 )
 
@@ -241,10 +236,7 @@ const searchResults = computed<readonly SettingsSearchResult[]>(() => {
         category: `${t(settingsGroupForTab(entry.tab).labelKey)} ${t(tab.nav)}`,
         key: entry.labelKey,
         details: isMenuTitle
-          ? SETTINGS_SEARCH_DETAIL_KEYS[entry.tab]
-              .filter(key => isDesktop || !desktopOnlySearchEntries.has(key))
-              .map(key => settingsSearchText(tm(key)))
-              .join(" ")
+          ? SETTINGS_SEARCH_DETAIL_KEYS[entry.tab].map(key => settingsSearchText(tm(key))).join(" ")
           : "",
       })
       return hit ? { ...entry, ...hit, order } : null

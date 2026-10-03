@@ -58,7 +58,8 @@ function harness(initial = {}, component = "SkillSettings") {
       if (failWrite) throw Error("write failure")
       deletedPaths.push(path)
     },
-    ask: async () => askResult,
+    confirmDialog: async () => askResult,
+    isDesktop: true,
     getConfig: async () => {
       if (failRead) throw Error("read failure")
       return config

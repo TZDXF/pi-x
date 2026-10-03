@@ -1,8 +1,10 @@
 //! Built-in interactive terminal backed by a real PTY (ConPTY on Windows).
 //!
-//! Each terminal gets an id; output is streamed to the frontend through a
-//! per-terminal Tauri `Channel` (base64-encoded so multi-byte UTF-8 split
-//! across reads survives). Input and resize travel through regular commands.
+//! Each terminal gets an id; output is streamed to the frontend through the
+//! `term://output` event (base64-encoded so multi-byte UTF-8 split across
+//! reads survives). Emitting via `remote::emit` reaches both the desktop
+//! webview and remote browser clients over their respective channels. Input
+//! and resize travel through regular commands.
 
 use base64::Engine;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -50,7 +52,6 @@ pub fn term_create(
     cwd: String,
     cols: u16,
     rows: u16,
-    on_output: tauri::ipc::Channel<String>,
 ) -> Result<u32, String> {
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -83,19 +84,19 @@ pub fn term_create(
     let writer = pair.master.take_writer().map_err(|e| format!("{e}"))?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("{e}"))?;
 
-    // Stream PTY output to the webview. The PTY read is blocking, so it runs
+    // Stream PTY output to the frontend. The PTY read is blocking, so it runs
     // on a dedicated blocking thread instead of pinning an async worker.
+    let app_out = app.clone();
     tauri::async_runtime::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || {
+            let app = app_out;
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                        if on_output.send(encoded).is_err() {
-                            break;
-                        }
+                        crate::remote::emit(&app, "term://output", json!({ "id": id, "data": encoded }));
                     }
                 }
             }

@@ -826,6 +826,12 @@ mod tests {
     }
 }
 
+/// 应用当前版本号；远程浏览器拿不到 Tauri 的 getVersion，由命令统一提供。
+#[tauri::command]
+pub fn app_version_get(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 #[tauri::command]
 pub async fn rpc_sessions(state: State<'_, rpc::RpcState>) -> Result<Vec<Value>, String> {
     Ok(rpc::list(&state).await)

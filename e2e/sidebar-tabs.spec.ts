@@ -294,7 +294,8 @@ test("remote browser tabs keep visibility and send-to-chat without desktop gatin
   })
   await expect(panel.locator("[data-visible]")).toHaveText("false")
   await page.getByRole("button", { name: "Add tab", exact: true }).click()
-  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(0)
+  // Terminal no longer gates on desktop: the entry is offered to remote browsers too.
+  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(1)
   await page.getByRole("button", { name: "Browser", exact: true }).click()
   await active(page, "Browser 2")
 })

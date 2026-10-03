@@ -152,6 +152,7 @@ pub fn run() {
             commands::models_config_get,
             commands::models_config_save,
             commands::models_fetch,
+            commands::app_version_get,
             mcp::mcp_config_read,
             mcp::mcp_config_save,
             mcp::mcp_status,

@@ -28,6 +28,9 @@ export interface AppUpdateStatus {
 /** Rust 端下载/安装进度事件，stage: download | install | installed */
 export const APP_UPDATE_PROGRESS_EVENT = "pix://app-update"
 
+/** 应用自身版本号；远程浏览器无法使用 Tauri 的 getVersion，由后端命令统一提供。 */
+export const getAppVersion = () => invoke<string>("app_version_get")
+
 export const checkAppUpdate = (channel: UpdateChannel) => invoke<AppUpdateStatus>("app_update_check", { channel })
 export const installAppUpdate = (channel: UpdateChannel) => invoke<void>("app_update_install", { channel })
 export const restartApp = () => invoke<void>("app_update_restart")

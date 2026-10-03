@@ -357,6 +357,10 @@ async fn password_login(
 fn authorized(state: &WebState, token: &str) -> bool {
     valid_token(&state.token, token, *state.stop.borrow())
 }
+
+fn parse_model_ref(v: &Value) -> Option<commands::ModelRef> {
+    serde_json::from_value(v.clone()).ok()
+}
 #[derive(Deserialize)]
 struct Call {
     command: String,
@@ -398,9 +402,18 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "app_config_save" => {
             let mut cfg = commands::app_config_get(app.clone())?;
             cfg.last_project = a["config"]["lastProject"].as_str().map(str::to_owned);
-            // 远程端只能改工作区偏好和内置插件开关，其余应用配置（如 piPath）保持主机现状。
+            // 远程端不可改 piPath 等主机环境；其余应用配置与桌面端保持一致。
             cfg.projectless_dir = a["config"]["projectlessDir"].as_str().map(str::to_owned);
             cfg.worktree_dir = a["config"]["worktreeDir"].as_str().map(str::to_owned);
+            cfg.default_model = parse_model_ref(&a["config"]["defaultModel"]);
+            cfg.title_model = parse_model_ref(&a["config"]["titleModel"]);
+            cfg.title_follow_main = a["config"]["titleFollowMain"].as_bool().unwrap_or(false);
+            cfg.translation_model = parse_model_ref(&a["config"]["translationModel"]);
+            if let Ok(channel) =
+                serde_json::from_value::<commands::UpdateChannel>(a["config"]["updateChannel"].clone())
+            {
+                cfg.update_channel = Some(channel);
+            }
             if let Some(enabled) = a["config"]["builtinFileChanges"].as_bool() {
                 cfg.builtin_file_changes = Some(enabled);
             }
@@ -508,13 +521,13 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 app.clone(),
                 text("file")?,
                 text("message")?,
-                None,
+                a["overwrite"].as_bool(),
             )
             .await?;
             Ok(serde_json::to_value(title).map_err(|e| e.to_string())?)
         }
         "session_update" => {
-            crate::sessions::session_update(
+            let mtime = crate::sessions::session_update(
                 app.clone(),
                 text("file")?,
                 a["title"].as_str().map(String::from),
@@ -523,8 +536,11 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                     .ok_or_else(|| pix_error("missingArchived", "缺少 archived 参数"))?,
             )
             .await?;
-            Ok(Value::Null)
+            Ok(json!(mtime))
         }
+        "session_mtime" => Ok(json!(
+            crate::sessions::session_mtime(text("file")?).await?
+        )),
         "session_delete" => {
             crate::sessions::session_delete(text("file")?).await?;
             Ok(Value::Null)
@@ -760,8 +776,191 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         "preview_proxy_info" => {
             Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) }))
         }
+        "global_prompt_list" => Ok(serde_json::to_value(commands::global_prompt_list()?).map_err(|e| e.to_string())?),
+        "global_prompt_save" => {
+            commands::global_prompt_save(text("fileName")?, text("prompt")?)?;
+            Ok(Value::Null)
+        }
+        "models_config_get" => commands::models_config_get(),
+        "models_config_save" => {
+            commands::models_config_save(a["config"].clone())?;
+            Ok(Value::Null)
+        }
+        "models_fetch" => Ok(serde_json::to_value(commands::models_fetch(a["provider"].clone()).await?)
+            .map_err(|e| e.to_string())?),
+        "mcp_config_read" => Ok(serde_json::to_value(crate::mcp::mcp_config_read(
+            text("scope")?,
+            a["project"].as_str().map(str::to_owned),
+        )?)
+        .map_err(|e| e.to_string())?),
+        "mcp_config_save" => {
+            crate::mcp::mcp_config_save(
+                text("scope")?,
+                text("content")?,
+                a["project"].as_str().map(str::to_owned),
+            )?;
+            Ok(Value::Null)
+        }
+        "mcp_status" => Ok(serde_json::to_value(
+            crate::mcp::mcp_status(app.clone(), a["project"].as_str().map(str::to_owned)).await?,
+        )
+        .map_err(|e| e.to_string())?),
+        "mcp_check" => Ok(serde_json::to_value(
+            crate::mcp::mcp_check(
+                text("scope")?,
+                text("name")?,
+                a["project"].as_str().map(str::to_owned),
+            )
+            .await?,
+        )
+        .map_err(|e| e.to_string())?),
+        "package_resources" => Ok(serde_json::to_value(crate::packages::resources::package_resources(
+            text("source")?,
+            text("scope")?,
+            a["project"].as_str().map(str::to_owned),
+        )?)
+        .map_err(|e| e.to_string())?),
+        "package_list_files" => Ok(json!(crate::packages::resources::package_list_files(
+            text("source")?,
+            text("scope")?,
+            a["project"].as_str().map(str::to_owned),
+        )?)),
+        "package_read_file" => Ok(json!(crate::packages::resources::package_read_file(
+            text("source")?,
+            text("scope")?,
+            text("path")?,
+            a["project"].as_str().map(str::to_owned),
+        )?)),
+        "package_set_resource" => {
+            crate::packages::resources::package_set_resource(
+                text("source")?,
+                text("scope")?,
+                a["project"].as_str().map(str::to_owned),
+                text("resourceType")?,
+                text("path")?,
+                a["enabled"]
+                    .as_bool()
+                    .ok_or_else(|| pix_error("missingEnabled", "缺少 enabled 参数"))?,
+            )?;
+            Ok(Value::Null)
+        }
+        "package_translate" => Ok(json!(crate::packages::resources::package_translate(
+            app.clone(),
+            text("content")?,
+            text("targetLang")?,
+        )
+        .await?)),
+        "skills_hosted_list" => Ok(serde_json::to_value(crate::skills::skills_hosted_list().await?)
+            .map_err(|e| e.to_string())?),
+        "skills_hosted_delete" => {
+            crate::skills::skills_hosted_delete(text("path")?).await?;
+            Ok(Value::Null)
+        }
+        "skills_hosted_set_enabled" => {
+            let paths = a["paths"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            crate::skills::skills_hosted_set_enabled(paths).await?;
+            Ok(Value::Null)
+        }
+        "skills_discovered_list" => Ok(serde_json::to_value(crate::skills::skills_discovered_list().await?)
+            .map_err(|e| e.to_string())?),
+        "skills_list_files" => Ok(json!(crate::skills::skills_list_files(text("path")?).await?)),
+        "skills_read_file" => Ok(json!(crate::skills::skills_read_file(
+            text("path")?,
+            text("relPath")?
+        )
+        .await?)),
+        "schedule_list" => Ok(serde_json::to_value(
+            crate::schedules::schedule_list(app.state::<crate::schedules::ScheduleState>()).await?,
+        )
+        .map_err(|e| e.to_string())?),
+        "schedule_save" => {
+            let input: crate::schedules::TaskInput = serde_json::from_value(a["input"].clone())
+                .map_err(|e| pix_error_with("invalidTask", format!("任务参数无效: {e}"), json!({ "detail": e.to_string() })))?;
+            let task = crate::schedules::schedule_save(app.state::<crate::schedules::ScheduleState>(), input).await?;
+            Ok(serde_json::to_value(task).map_err(|e| e.to_string())?)
+        }
+        "schedule_delete" => {
+            crate::schedules::schedule_delete(app.state::<crate::schedules::ScheduleState>(), text("id")?).await?;
+            Ok(Value::Null)
+        }
+        "schedule_run" => {
+            crate::schedules::schedule_run(
+                app.clone(),
+                app.state::<crate::schedules::ScheduleState>(),
+                text("id")?,
+            )
+            .await?;
+            Ok(Value::Null)
+        }
+        "term_create" => {
+            let cols = u16::try_from(a["cols"].as_u64().unwrap_or(80)).unwrap_or(80);
+            let rows = u16::try_from(a["rows"].as_u64().unwrap_or(24)).unwrap_or(24);
+            let id = crate::terminal::term_create(
+                app.clone(),
+                app.state::<crate::terminal::TerminalState>(),
+                text("cwd")?,
+                cols,
+                rows,
+            )?;
+            Ok(json!(id))
+        }
+        "term_write" => {
+            crate::terminal::term_write(
+                app.state::<crate::terminal::TerminalState>(),
+                term_id(a)?,
+                text("data")?,
+            )?;
+            Ok(Value::Null)
+        }
+        "term_resize" => {
+            let cols = u16::try_from(a["cols"].as_u64().unwrap_or(80)).unwrap_or(80);
+            let rows = u16::try_from(a["rows"].as_u64().unwrap_or(24)).unwrap_or(24);
+            crate::terminal::term_resize(app.state::<crate::terminal::TerminalState>(), term_id(a)?, cols, rows)?;
+            Ok(Value::Null)
+        }
+        "term_kill" => {
+            crate::terminal::term_kill(app.state::<crate::terminal::TerminalState>(), term_id(a)?)?;
+            Ok(Value::Null)
+        }
+        "app_version_get" => Ok(json!(commands::app_version_get(app.clone()))),
+        "app_update_check" => {
+            let channel: commands::UpdateChannel = serde_json::from_value(a["channel"].clone())
+                .map_err(|e| format!("Invalid channel: {e}"))?;
+            let status = crate::app_update::app_update_check(app.clone(), channel).await?;
+            Ok(serde_json::to_value(status).map_err(|e| e.to_string())?)
+        }
+        "app_update_install" => {
+            let channel: commands::UpdateChannel = serde_json::from_value(a["channel"].clone())
+                .map_err(|e| format!("Invalid channel: {e}"))?;
+            crate::app_update::app_update_install(app.clone(), channel).await?;
+            Ok(Value::Null)
+        }
+        "app_update_restart" => {
+            crate::app_update::app_update_restart(app.clone())?;
+            Ok(Value::Null)
+        }
+        "pi_update_check" => {
+            let status = crate::pi_update::pi_update_check(app.clone()).await?;
+            Ok(serde_json::to_value(status).map_err(|e| e.to_string())?)
+        }
+        "pi_update_execute" => {
+            crate::pi_update::pi_update_execute(app.clone()).await?;
+            Ok(Value::Null)
+        }
         _ => Err(pix_error("desktopOnlyAction", "此操作仅可在桌面端执行")),
     }
+}
+
+fn term_id(a: &Value) -> Result<u32, String> {
+    u32::try_from(a["id"].as_u64().ok_or("Missing id")?).map_err(|e| e.to_string())
 }
 #[derive(Deserialize)]
 struct Auth {

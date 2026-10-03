@@ -47,7 +47,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "settings.notifications",
     title: "settings.notifications",
     desc: "settings.notificationsDesc",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./NotificationSettings.vue")),
   },
   {
@@ -63,7 +62,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "settings.providersModels",
     title: "settings.providersModelsTitle",
     desc: "settings.providersModelsDesc",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./ModelsSettings.vue")),
   },
   {
@@ -77,7 +75,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     id: "model-config",
     nav: "titleGeneration.page",
     title: "titleGeneration.page",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./ModelConfigSettings.vue")),
   },
   {
@@ -92,7 +89,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     id: "package-resources",
     nav: "packages.title",
     title: "packages.resourcesNav",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./packages/PackageResourcePage.vue")),
   },
   {
@@ -100,14 +96,12 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "agentConfig.title",
     title: "agentConfig.title",
     desc: "agentConfig.description",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./AgentSettings.vue")),
   },
   {
     id: "skills",
     nav: "skillsConfig.title",
     title: "skillsConfig.title",
-    desktopOnly: true,
     component: defineAsyncComponent(() => import("./SkillSettings.vue")),
   },
   {
@@ -115,7 +109,6 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     nav: "mcpConfig.title",
     title: "mcpConfig.title",
     desc: "mcpConfig.description",
-    desktopOnly: true,
     needsProject: true,
     component: defineAsyncComponent(() => import("./McpSettings.vue")),
   },

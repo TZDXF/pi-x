@@ -12,7 +12,6 @@
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Pencil, Plus, RefreshCw, Trash2 } from "@lucide/vue"
-import { ask } from "@tauri-apps/plugin-dialog"
 import {
   getMcpConfig,
   getMcpStatus,
@@ -25,6 +24,7 @@ import {
   type TrustStatus,
 } from "@/api/piClient"
 import { formatCodedError } from "@/lib/backendError"
+import { confirmDialog } from "@/lib/hostBridge"
 import { compactNumber } from "@/lib/format"
 import { normalizeSlashes } from "@/lib/paths"
 import {
@@ -265,7 +265,7 @@ async function commitContent(content: string): Promise<boolean> {
   }
   validationError.value = null
   if (projectUntrusted.value) {
-    const proceed = await ask(t("mcpConfig.untrustedSaveConfirm"), {
+    const proceed = await confirmDialog(t("mcpConfig.untrustedSaveConfirm"), {
       title: t("mcpConfig.title"),
       okLabel: t("mcpConfig.save"),
       cancelLabel: t("common.cancel"),
@@ -342,7 +342,7 @@ async function onServerSubmit(payload: McpServerSubmit) {
 
 async function deleteServer(name: string) {
   if (saving.value) return
-  const proceed = await ask(t("mcpConfig.deleteConfirm", { name }), {
+  const proceed = await confirmDialog(t("mcpConfig.deleteConfirm", { name }), {
     title: t("mcpConfig.title"),
     okLabel: t("mcpConfig.delete"),
     cancelLabel: t("common.cancel"),

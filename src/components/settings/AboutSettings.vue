@@ -2,24 +2,22 @@
 import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
-/** About page: desktop-only app self-update (stable/preview channels) and Pi self-update controls. */
+/** About page: app self-update (stable/preview channels) and Pi self-update controls. */
 import { onMounted, onUnmounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { getVersion } from "@tauri-apps/api/app"
-import { ask } from "@tauri-apps/plugin-dialog"
-import { openUrl } from "@tauri-apps/plugin-opener"
 import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { GithubIcon } from "@/components/ai-elements/open-in-chat/providers/icons"
 import { Badge } from "@/components/ui/badge"
-import { isDesktop, listen } from "@/api/transport"
+import { listen } from "@/api/transport"
 import {
   checkPiUpdate,
   detectPi,
   executePiUpdate,
   checkAppUpdate,
+  getAppVersion,
   installAppUpdate,
   restartApp,
   getConfig,
@@ -30,6 +28,7 @@ import {
   type UpdateChannel,
 } from "@/api/piClient"
 import { formatCodedError } from "@/lib/backendError"
+import { confirmDialog, openExternal } from "@/lib/hostBridge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -91,7 +90,7 @@ async function changeChannel(v: AcceptableValue) {
 
 async function updateApp() {
   if (!appStatus.value?.updateAvailable || appInstalling.value || appChecking.value) return
-  const confirmed = await ask(t("appUpdate.confirm", { version: appStatus.value.version }), {
+  const confirmed = await confirmDialog(t("appUpdate.confirm", { version: appStatus.value.version }), {
     title: t("appUpdate.title"),
     okLabel: t("appUpdate.install"),
     cancelLabel: t("common.cancel"),
@@ -168,7 +167,7 @@ async function update() {
   if (!status.value?.updateAvailable || updating.value || checking.value) return
   updating.value = true
   try {
-    const confirmed = await ask(t("piUpdate.confirm", { version: status.value.latestVersion }), {
+    const confirmed = await confirmDialog(t("piUpdate.confirm", { version: status.value.latestVersion }), {
       title: t("piUpdate.title"),
       okLabel: t("piUpdate.update"),
       cancelLabel: t("common.cancel"),
@@ -197,22 +196,21 @@ function onNotesClick(event: MouseEvent) {
   const href = anchor?.getAttribute("href")
   if (!href || !/^https?:\/\//.test(href)) return
   event.preventDefault()
-  void openUrl(href)
+  openExternal(href)
 }
 
 function openAppRelease() {
-  if (appStatus.value?.releaseUrl) void openUrl(appStatus.value.releaseUrl)
+  if (appStatus.value?.releaseUrl) openExternal(appStatus.value.releaseUrl)
 }
 
 function openRelease() {
-  if (status.value?.releaseUrl) void openUrl(status.value.releaseUrl)
+  if (status.value?.releaseUrl) openExternal(status.value.releaseUrl)
 }
 
 onMounted(() => {
-  if (!isDesktop) return
   void (async () => {
     try {
-      appVersion.value = await getVersion()
+      appVersion.value = await getAppVersion()
     } catch {
       /* 手动检查后可见 */
     }
@@ -249,7 +247,7 @@ onUnmounted(() => {
           class="text-muted-foreground"
           :aria-label="t('settings.githubRepo')"
           :title="t('settings.githubRepo')"
-          @click="openUrl(GITHUB_URL)"
+          @click="openExternal(GITHUB_URL)"
         >
           <GithubIcon class="size-4" />
         </Button>
@@ -257,7 +255,7 @@ onUnmounted(() => {
       <SettingDescription>{{ t("settings.aboutBody") }}</SettingDescription>
     </div>
   </SettingRow>
-  <SettingRow as="section" v-if="isDesktop" class="flex-wrap" aria-labelledby="app-update-title">
+  <SettingRow as="section" class="flex-wrap" aria-labelledby="app-update-title">
     <div class="min-w-0">
       <SettingHeading id="app-update-title">{{ t("appUpdate.title") }}</SettingHeading>
       <SettingDescription>{{ t("appUpdate.channelDesc") }}</SettingDescription>
@@ -341,7 +339,7 @@ onUnmounted(() => {
       </button>
     </div>
   </SettingRow>
-  <SettingRow as="section" v-if="isDesktop" class="flex-wrap" aria-labelledby="pi-update-title">
+  <SettingRow as="section" class="flex-wrap" aria-labelledby="pi-update-title">
     <div class="min-w-0">
       <SettingHeading id="pi-update-title">{{ t("piUpdate.title") }}</SettingHeading>
       <SettingDescription v-if="currentVersion" aria-live="polite">
@@ -407,5 +405,5 @@ onUnmounted(() => {
       </button>
     </div>
   </SettingRow>
-  <p v-if="isDesktop" class="text-muted-foreground mt-5 text-xs">{{ t("settings.dataDirectory") }}: ~/.pix</p>
+  <p class="text-muted-foreground mt-5 text-xs">{{ t("settings.dataDirectory") }}: ~/.pix</p>
 </template>

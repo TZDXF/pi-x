@@ -3,7 +3,6 @@ import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
 import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
-import { isDesktop } from "@/api/transport"
 import { parseCodedError } from "@/lib/backendError"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
@@ -167,7 +166,6 @@ watch(
       ><Plus :size="17" class="size-auto shrink-0" />{{ t("sidebar.newSession") }}</Button
     >
     <Button
-      v-if="isDesktop"
       size="content"
       variant="sidebar-action"
       class="sidebar-action"

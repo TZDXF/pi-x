@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs"
 import SidebarTabTrigger from "@/components/SidebarTabTrigger.vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { isDesktop } from "@/api/transport"
 import { VueDraggable } from "vue-draggable-plus"
 import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
@@ -274,7 +273,6 @@ onBeforeUnmount(() => {
               <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
             </Button>
             <Button
-              v-if="isDesktop"
               type="button"
               variant="ghost"
               size="sm"
@@ -313,7 +311,7 @@ onBeforeUnmount(() => {
         />
         <ProjectFiles v-else-if="tab.type === 'files'" :project="project" />
         <TerminalPanel
-          v-else-if="tab.type === 'terminal' && isDesktop"
+          v-else-if="tab.type === 'terminal'"
           :ref="el => setTerminalPanel(tab.id, el)"
           :project="project"
           :visible="open && tab.id === activeId"
@@ -333,7 +331,6 @@ onBeforeUnmount(() => {
           <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
         </Button>
         <Button
-          v-if="isDesktop"
           type="button"
           variant="outline"
           size="lg"
