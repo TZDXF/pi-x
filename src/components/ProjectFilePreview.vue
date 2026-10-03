@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ArrowLeft, Code, ExternalLink, Eye, FileX, ImageOff, MessageSquarePlus, WrapText } from "@lucide/vue"
+import { ArrowLeft, Code, ExternalLink, Eye, FileX, MessageSquarePlus, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { invoke } from "@/api/transport"
@@ -15,6 +15,7 @@ import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { Markdown } from "vue-stream-markdown"
+import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import "vue-stream-markdown/index.css"
 
@@ -40,8 +41,6 @@ let seq = 0
 const mdRendered = ref(true)
 const svgRendered = ref(true)
 const wrap = ref(true)
-const zoomed = ref(false)
-const imageBroken = ref(false)
 
 const isMarkdown = computed(() => isMarkdownExt(props.path))
 const isSvg = computed(() => baseName(props.path).toLowerCase().endsWith(".svg"))
@@ -68,8 +67,6 @@ async function load() {
   htmlLines.value = null
   mdRendered.value = true
   svgRendered.value = true
-  zoomed.value = false
-  imageBroken.value = false
   try {
     const result = props.readFile
       ? await props.readFile(props.path)
@@ -288,27 +285,8 @@ onBeforeUnmount(() => {
           <FileX class="size-6" />
           <p class="text-xs">{{ t("projectFiles.binary") }}</p>
         </div>
-        <div
-          v-else-if="imageSrc && !imageBroken"
-          class="flex min-h-0 flex-1 flex-col items-center justify-center p-2"
-          :class="zoomed ? 'overflow-auto' : 'overflow-hidden'"
-        >
-          <img
-            :src="imageSrc"
-            :alt="path"
-            class="font-mono text-xs"
-            :class="zoomed ? 'max-w-none' : 'max-h-full max-w-full object-contain'"
-            @error="imageBroken = true"
-            @click="zoomed = !zoomed"
-          />
-        </div>
-        <div
-          v-else-if="imageBroken"
-          class="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-muted-foreground"
-        >
-          <ImageOff class="size-6" />
-          <p class="text-xs">{{ t("projectFiles.imageBroken") }}</p>
-        </div>
+        <!-- 图片/查看器内部自管缩放平移与加载失败态 -->
+        <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
         <div
           v-else-if="showRenderedMarkdown"
           data-file-preview-scroll
