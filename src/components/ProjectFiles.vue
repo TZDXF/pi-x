@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ChevronRight, RefreshCw } from "@lucide/vue"
+import { ChevronDown, ChevronRight, Folder, Layers, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { invoke } from "@/api/transport"
-import { baseName } from "@/lib/paths"
+import { baseName, samePath } from "@/lib/paths"
 import { fileDirectoryEntries, initialFilePath, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
+import { useWorkspaceStore } from "@/stores/workspace"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 
@@ -24,6 +26,13 @@ const props = withDefaults(
   { filter: "", preview: true, showHeader: true },
 )
 const { t } = useI18n()
+const workspace = useWorkspaceStore()
+// 多目录项目：树根默认跟随会话目录，可在组内目录（含 worktree）之间切换。
+const roots = computed(() => (props.files === undefined ? workspace.projectFolders(props.project) : [props.project]))
+const activeRoot = ref(props.project)
+function rootLabel(root: string) {
+  return samePath(root, props.project) ? workspace.projectName(props.project) : baseName(root)
+}
 const children = ref<Record<string, Entry[]>>({})
 const expanded = ref(new Set<string>())
 const loading = ref(new Set<string>())
@@ -42,7 +51,7 @@ async function load(path: string) {
   loading.value = new Set([...loading.value, path])
   const current = generation
   try {
-    const entries = await invoke<Entry[]>("list_project_directory", { project: props.project, path })
+    const entries = await invoke<Entry[]>("list_project_directory", { project: activeRoot.value, path })
     if (current === generation) {
       children.value = { ...children.value, [path]: entries }
       const next = { ...errors.value }
@@ -71,7 +80,14 @@ function reset() {
   } else void load("")
 }
 onMounted(reset)
-watch(() => [props.project, props.files] as const, reset)
+watch(
+  () => [props.project, props.files] as const,
+  () => {
+    activeRoot.value = props.project
+    reset()
+  },
+)
+watch(activeRoot, reset)
 function toggle(entry: Entry) {
   if (!entry.is_dir) {
     selected.value = entry.path
@@ -101,7 +117,34 @@ const rows = computed(() => {
 <template>
   <div data-project-files class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div v-if="showHeader" class="flex h-10 shrink-0 items-center justify-between border-b px-3">
-      <span class="truncate text-xs text-muted-foreground" :title="project">{{ baseName(project) }}</span>
+      <DropdownMenu v-if="roots.length > 1">
+        <DropdownMenuTrigger as-child
+          ><Button
+            variant="ghost"
+            size="sm"
+            class="min-w-0 gap-1 px-1.5 text-xs text-muted-foreground"
+            :title="activeRoot"
+            :aria-label="t('projectFiles.switchFolder')"
+            ><Folder v-if="!workspace.isWorktree(activeRoot)" :size="13" class="shrink-0" /><Layers
+              v-else
+              :size="13"
+              class="shrink-0" /><span class="truncate">{{ baseName(activeRoot) }}</span
+            ><ChevronDown :size="13" class="shrink-0" opacity="0.6" /></Button
+        ></DropdownMenuTrigger>
+        <DropdownMenuContent align="start" class="w-auto">
+          <DropdownMenuItem v-for="root in roots" :key="root" :title="root" @select="activeRoot = root"
+            ><Layers v-if="workspace.isWorktree(root)" :size="14" class="size-auto shrink-0" /><Folder
+              v-else
+              :size="14"
+              class="size-auto shrink-0"
+            /><span class="truncate">{{ rootLabel(root) }}</span
+            ><span v-if="samePath(root, props.project)" class="ml-auto shrink-0 text-xs text-muted-foreground">{{
+              t("projectDialog.primary")
+            }}</span></DropdownMenuItem
+          >
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <span v-else class="truncate text-xs text-muted-foreground" :title="activeRoot">{{ baseName(activeRoot) }}</span>
       <Button
         variant="ghost"
         size="icon-xs"
@@ -115,7 +158,13 @@ const rows = computed(() => {
       class="grid min-h-0 flex-1 overflow-hidden"
       :class="preview && selected ? 'grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'grid-cols-1'"
     >
-      <ProjectFilePreview v-if="preview && selected" :project="project" :path="selected" @close="selected = null" />
+      <ProjectFilePreview
+        v-if="preview && selected"
+        :project="activeRoot"
+        :path="selected"
+        :comment-project="props.project"
+        @close="selected = null"
+      />
       <ScrollArea class="min-h-0 min-w-0" viewport-class="py-1">
         <p v-if="errors['']" class="px-3 py-2 text-xs text-destructive" role="alert">{{ errors[""] }}</p>
         <p v-else-if="loading.has('')" class="px-3 py-2 text-xs text-muted-foreground">{{ t("completion.loading") }}</p>

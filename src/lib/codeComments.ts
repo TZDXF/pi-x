@@ -52,6 +52,16 @@ function lineLabel(start: number, end: number) {
   return start === end ? String(start) : `${start}-${end}`
 }
 
+/**
+ * 批注路径写入 prompt 时的最终形态：跨目录批注（root 指向会话目录之外的目录）
+ * 用「目录前缀 + 相对路径」，对齐 @ 提及跨目录文件的路径约定；其余保持相对路径。
+ */
+export function commentFilePath(comment: { path: string; root?: string }): string {
+  if (!comment.root) return comment.path
+  const root = comment.root.replace(/\\/g, "/").replace(/\/+$/, "")
+  return `${root}/${comment.path}`
+}
+
 export function formatCodeComment(draft: CodeCommentDraft, index: number): string {
   const selected = draft.selectedText.trim().slice(0, MAX_SELECTED_TEXT_LENGTH)
   const fence = fenceFor(selected)

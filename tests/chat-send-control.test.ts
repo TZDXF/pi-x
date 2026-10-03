@@ -6,7 +6,7 @@ import { chatSource } from "./fixtures/chatSources"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
-import { buildPromptWithCodeComments } from "@/lib/codeComments"
+import { buildPromptWithCodeComments, commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 
 // Execute the production composable with real Vue reactivity and pure helpers,
@@ -21,6 +21,7 @@ function harness(config = Promise.resolve({})) {
     "@/lib/sendDelay": { parseSendDelay, stepSendDelayWheel },
     "@/lib/attachments": { dataUrlToImage, isImageUrl },
     "@/lib/completion": { withSessionReferences, desktopCommands },
+    "@/lib/codeComments": { commentFilePath },
     "@/lib/promptContexts": { serializeComposerPromptContexts },
     "@/lib/runningBehavior": { runningBehavior: ref("steer") },
     "@/stores/codeComments": { useCodeCommentsStore: () => comments },
@@ -151,6 +152,37 @@ test("delayed sending validates before startup and preserves extension commands 
     expect(h.session.send).not.toHaveBeenCalled()
     expect(h.comments.clear).toHaveBeenCalledOnce()
     expect(h.controls.delayedSend.value).toBe(false)
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("code comments anchored outside the session folder are addressed with their root path", async () => {
+  const h = harness()
+  try {
+    h.comments.comments.push(
+      {
+        id: "local",
+        path: "src/in-session.ts",
+        startLine: 1,
+        endLine: 2,
+        comment: "same folder",
+        selectedText: "a",
+      },
+      {
+        id: "cross",
+        path: "src/other.ts",
+        root: "C:\\code\\repo-b\\",
+        startLine: 3,
+        endLine: 4,
+        comment: "other folder",
+        selectedText: "b",
+      },
+    )
+    await h.controls.onSubmit({ text: "review please" })
+    const prompt = h.session.send.mock.calls[0][2]
+    expect(prompt).toContain("File: src/in-session.ts")
+    expect(prompt).toContain("File: C:/code/repo-b/src/other.ts")
   } finally {
     h.scope.stop()
   }

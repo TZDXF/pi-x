@@ -9,7 +9,7 @@ import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
 import { isMarkdownExt } from "@/lib/fileKind"
-import { baseName } from "@/lib/paths"
+import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
@@ -26,6 +26,9 @@ const props = withDefaults(
     /** Custom resource reader; project-only editor and annotation actions are hidden. */
     readFile?: (path: string) => Promise<FilePreview>
     closable?: boolean
+    /** Store key for pending code comments; defaults to project. When set and
+     *  different, comments carry `root` so the prompt can address the file. */
+    commentProject?: string
   }>(),
   { closable: true },
 )
@@ -107,9 +110,17 @@ const commentText = ref("")
 const commentRange = ref<CodeCommentRange | null>(null)
 const commentSelected = ref("")
 const canAnnotate = computed(() => showCode.value && !props.readFile)
+/** 批注归属的会话项目；跨目录浏览时 commentProject 是会话目录、project 是被浏览目录。 */
+const commentProject = computed(() => props.commentProject ?? props.project)
+/** 文件来自会话目录之外时记录其所属目录，发送时改写为带目录前缀的路径。 */
+const commentRoot = computed(() =>
+  props.commentProject && !samePath(props.commentProject, props.project) ? props.project : undefined,
+)
 /** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
 const pendingComments = computed(() =>
-  codeComments.project === props.project ? codeComments.comments.filter(c => c.path === props.path) : [],
+  codeComments.project === commentProject.value
+    ? codeComments.comments.filter(c => c.path === props.path && (c.root ?? props.project) === props.project)
+    : [],
 )
 /** 批注卡片按"范围末行"归组，插到对应代码行下方（同 ZCode 的 line annotation）。 */
 const commentsByEndLine = computed(() => {
@@ -198,8 +209,9 @@ function confirmComment() {
   const range = commentRange.value
   const body = commentText.value.trim()
   if (!range || !body) return
-  const ok = codeComments.add(props.project, {
+  const ok = codeComments.add(commentProject.value, {
     path: props.path,
+    root: commentRoot.value,
     startLine: range.start,
     endLine: range.end,
     selectedText: commentSelected.value,
@@ -309,7 +321,8 @@ onBeforeUnmount(() => {
         </div>
         <!-- 图片/查看器内部自管缩放平移与加载失败态 -->
         <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
-        <div v-else-if="showRenderedMarkdown"
+        <div
+          v-else-if="showRenderedMarkdown"
           data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >

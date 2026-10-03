@@ -27,6 +27,8 @@ defineProps<{
   ready: boolean
   collapsed: boolean
   error?: string
+  /** Every folder of a grouped project is unreadable — hide the session list. */
+  hidden?: boolean
   disabled: boolean
   navigationDisabled: boolean
 }>()
@@ -167,7 +169,7 @@ async function openProjectFolder(path: string) {
     >
       <AlertTriangle :size="14" class="shrink-0" />{{ t("sidebar.projectDirMissing") }}
     </p>
-    <slot v-if="!collapsed && error !== 'missing'" />
+    <slot v-if="!collapsed && !hidden" />
   </section>
 </template>
 

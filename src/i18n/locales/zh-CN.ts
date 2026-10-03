@@ -160,6 +160,7 @@ export default {
   },
   projectFiles: {
     refresh: "刷新项目文件",
+    switchFolder: "切换目录",
     empty: "此目录为空",
     preview: "文件预览",
     closePreview: "关闭预览",

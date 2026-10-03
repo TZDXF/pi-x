@@ -164,6 +164,7 @@ export default {
   },
   projectFiles: {
     refresh: "Refresh project files",
+    switchFolder: "Switch folder",
     empty: "This directory is empty",
     preview: "File preview",
     closePreview: "Close preview",

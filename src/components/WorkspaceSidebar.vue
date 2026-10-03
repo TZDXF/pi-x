@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
 import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
+import { normalizeProjectPath } from "@/lib/paths"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
@@ -115,11 +116,31 @@ async function duplicateSession(s: SessionMeta) {
   try {
     await duplicateSessionFile(s.file)
     ui.pushToast(t("workspace.duplicated"), "info")
-    await workspace.refresh(props.project)
+    // The copy lands in the source session's own cwd, which can be any folder
+    // of a grouped project — refreshing only the primary would miss it.
+    await refresh(normalizeProjectPath(s.cwd) || props.project)
   } catch (e) {
     ui.pushToast(String(e), "error")
   }
 }
+/** A grouped project's sidebar state aggregates every folder: the list hides
+ *  only when no folder can be read, and failure lines cover the whole group. */
+function groupState(path: string) {
+  const folders = workspace.projectFolders(path)
+  const states = folders.map(folder => errors.value[folder])
+  return {
+    // The heading warning stays tied to the primary: that is where new sessions start.
+    error: errors.value[path],
+    listError: states.some(state => state) && states.every(state => state === "failed") ? "failed" : "",
+    hidden: folders.length > 0 && folders.every(folder => errors.value[folder] === "missing"),
+    loading: folders.some(folder => loading.value[folder]),
+    hasHistory: folders.some(folder => !!workspace.histories[folder]),
+  }
+}
+async function refreshGroup(path: string) {
+  for (const folder of workspace.projectFolders(path)) await refresh(folder)
+}
+const projectStates = computed(() => Object.fromEntries(visibleProjects.value.map(path => [path, groupState(path)])))
 function onProjectDragStart(event: { item?: HTMLElement; originalEvent?: DragEvent }) {
   const path = event.item?.dataset.path
   const transfer = event.originalEvent?.dataTransfer
@@ -220,7 +241,8 @@ watch(
             :project="project"
             :ready="ready"
             :collapsed="!!collapsed[path]"
-            :error="errors[path]"
+            :error="projectStates[path]?.error"
+            :hidden="projectStates[path]?.hidden"
             :disabled="disabled"
             :navigation-disabled="navigationDisabled"
             @toggle="collapsed[path] = !collapsed[path]"
@@ -237,14 +259,14 @@ watch(
               :disabled="disabled"
               :navigation-disabled="navigationDisabled"
               :queue-now="queueNow"
-              :error="errors[path]"
-              :loading="loading[path]"
-              :has-history="!!workspace.histories[path]"
+              :error="projectStates[path]?.listError"
+              :loading="projectStates[path]?.loading"
+              :has-history="projectStates[path]?.hasHistory"
               :show-draft="path === workspace.projectRoot(project) && showDraft"
               :draft-worktree="workspace.isWorktree(project)"
               v-on="sessionActions"
               @reorder="workspace.reorderSessions(path, $event)"
-              @refresh="refresh(path)"
+              @refresh="refreshGroup(path)"
             />
           </SidebarProjectGroup>
         </VueDraggable>

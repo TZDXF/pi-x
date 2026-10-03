@@ -5,6 +5,7 @@ import {
   buildCodeCommentsBlock,
   buildPromptWithCodeComments,
   parsePromptCodeComments,
+  commentFilePath,
   MAX_SELECTED_TEXT_LENGTH,
 } from "@/lib/codeComments"
 
@@ -210,4 +211,12 @@ test("parsePromptCodeComments tolerates L-prefixed and padded line ranges", () =
   // 行范围非法（start > end）的条目被丢弃，块整体视为未解析。
   const invalid = raw.replace("Lines: L4 - L9", "Lines: 9-4")
   expect(parsePromptCodeComments(`\n\n# Code comments:\n\n${invalid}`).comments).toEqual([])
+})
+
+test("commentFilePath keeps in-session paths relative and prefixes cross-folder roots", () => {
+  expect(commentFilePath({ path: "src/a.ts" })).toBe("src/a.ts")
+  expect(commentFilePath({ path: "src/a.ts", root: undefined })).toBe("src/a.ts")
+  // Windows 反斜杠与尾部分隔符统一成正斜杠前缀，对齐 @ 提及的跨目录路径约定。
+  expect(commentFilePath({ path: "src/a.ts", root: "C:\\code\\repo-b\\" })).toBe("C:/code/repo-b/src/a.ts")
+  expect(commentFilePath({ path: "src/a.ts", root: "C:/code/repo-b" })).toBe("C:/code/repo-b/src/a.ts")
 })

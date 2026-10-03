@@ -4,6 +4,7 @@ import { getConfig, type WorkspaceSelection } from "@/api/piClient"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib/completion"
+import { commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 import { runningBehavior } from "@/lib/runningBehavior"
 import { useCodeCommentsStore } from "@/stores/codeComments"
@@ -141,7 +142,8 @@ export function useChatSendControl(deps: {
     const expandedText = extensionCommand ? text : withSessionReferences(text, deps.knownSessions())
     // 上下文只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
     // 序列化顺序：正文 → userselect 尾块 → Code comments 尾块。
-    const comments = [...pendingComments.value]
+    // 跨目录批注在这里改写为带目录前缀的路径，agent 才能按自身 cwd 之外的目录寻址。
+    const comments = pendingComments.value.map(comment => ({ ...comment, path: commentFilePath(comment) }))
     const selections = [...pendingSelections.value]
     const promptWithContexts =
       comments.length || selections.length

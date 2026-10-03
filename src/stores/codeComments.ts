@@ -5,6 +5,8 @@ import { ref } from "vue"
 export interface PendingCodeComment {
   id: string
   path: string
+  /** 文件相对路径所属目录；缺省表示会话目录本身（多目录项目跨目录批注时记录）。 */
+  root?: string
   startLine: number
   endLine: number
   selectedText: string
