@@ -920,6 +920,11 @@ export default {
     soundDefault: "Default",
     soundNone: "None",
     language: "Interface language",
+    developerMode: "Developer mode",
+    developerModeDesc:
+      "When enabled, DevTools can be opened in packaged builds and element-source is loaded at startup (takes effect after restart). Shortcuts: ",
+    developerModeDescKeys: "or",
+    openDevtools: "Open DevTools",
     shortcutsTitle: "Keyboard shortcuts",
     shortcutsNav: "Shortcuts",
     shortcutsDesc: "View and customize keyboard shortcuts.",

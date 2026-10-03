@@ -22,6 +22,7 @@ import {
   saveConfig,
   sessionMtime,
   setTrayLabels,
+  toggleDevtools,
   spawnPi,
   trustSave,
   trustStatus,
@@ -69,6 +70,8 @@ import SplitChatLayout from "@/components/SplitChatLayout.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
+import { developerModeEnabled } from "@/lib/developerMode"
+import { isDesktop } from "@/api/transport"
 import { normalizeProjectPath } from "@/lib/paths"
 import { tBackendError } from "@/i18n"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
@@ -578,7 +581,20 @@ async function newProjectSession(path: string) {
 
 // ---- global keyboard shortcuts: dispatcher + app-level actions ----
 
+/** 开发者模式下的 devtools 快捷键：F12 或 Ctrl+Shift+I。 */
+function isDevtoolsShortcut(event: KeyboardEvent) {
+  if (!isDesktop) return false
+  if (event.key === "F12") return true
+  return event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === "i"
+}
+
 function onGlobalKeydown(event: KeyboardEvent) {
+  // devtools 快捷键不受会话阶段限制，打包版本在开发者模式下同样可用。
+  if (developerModeEnabled.value && isDevtoolsShortcut(event)) {
+    event.preventDefault()
+    void toggleDevtools()
+    return
+  }
   if (phase.value !== "chat") return
   if (ui.activeDialog) return // extension dialogs handle their own keys
   dispatchShortcut(event)

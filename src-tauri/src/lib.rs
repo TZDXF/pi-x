@@ -180,6 +180,7 @@ pub fn run() {
             terminal::term_kill,
             preview_proxy::preview_proxy_info,
             desktop::set_tray_labels,
+            desktop::devtools_toggle,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

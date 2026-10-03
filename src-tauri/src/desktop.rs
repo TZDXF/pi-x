@@ -64,6 +64,22 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
+/// 开发者模式下由前端快捷键触发；release 构建依赖 tauri 的 `devtools` feature。
+/// 返回值表示调用后 devtools 是否处于打开状态。
+#[tauri::command]
+pub fn devtools_toggle(app: AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    if window.is_devtools_open() {
+        window.close_devtools();
+        Ok(false)
+    } else {
+        window.open_devtools();
+        Ok(true)
+    }
+}
+
 #[tauri::command]
 pub fn set_tray_labels(
     app: AppHandle,

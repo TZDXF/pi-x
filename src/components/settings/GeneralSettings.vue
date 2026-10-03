@@ -7,9 +7,12 @@ import KeyHint from "@/components/shared/KeyHint.vue"
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import type { AcceptableValue } from "reka-ui"
 import { LOCALES, setLocale, currentLocale, type Locale } from "@/i18n"
-import { setTrayLabels } from "@/api/piClient"
+import { setTrayLabels, toggleDevtools } from "@/api/piClient"
+import { isDesktop } from "@/api/transport"
+import { developerModeEnabled, setDeveloperMode } from "@/lib/developerMode"
 import { navigate } from "@/lib/router"
 import { Button } from "@/components/ui/button"
 import WorkspaceSettings from "@/components/settings/WorkspaceSettings.vue"
@@ -41,6 +44,25 @@ function applyLocale(v: Locale) {
         </SelectItem>
       </SelectContent>
     </Select>
+  </SettingRow>
+  <SettingRow>
+    <div class="min-w-0">
+      <SettingHeading id="developer-mode-label">{{ t("settings.developerMode") }}</SettingHeading>
+      <SettingDescription>
+        {{ t("settings.developerModeDesc") }} <KeyHint>F12</KeyHint> {{ t("settings.developerModeDescKeys") }}
+        <KeyHint>Ctrl + Shift + I</KeyHint>
+      </SettingDescription>
+    </div>
+    <div class="flex items-center gap-2">
+      <Button v-if="developerModeEnabled && isDesktop" variant="outline" size="sm" @click="void toggleDevtools()">
+        {{ t("settings.openDevtools") }}
+      </Button>
+      <Switch
+        :model-value="developerModeEnabled"
+        aria-labelledby="developer-mode-label"
+        @update:model-value="(v: boolean) => setDeveloperMode(v)"
+      />
+    </div>
   </SettingRow>
   <SettingRow>
     <div class="min-w-0">
