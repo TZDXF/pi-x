@@ -113,53 +113,52 @@ export function useChatSendControl(deps: {
         text,
         images: images.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
       }
-    if (!(await deps.ensureStarted(session.entries.length ? null : deps.workspaceSelection()))) {
-      ui.pendingUserMessage = null
-      bridge.value?.setTextInput(text)
-      throw new Error(t("completion.startFailed"))
-    }
-    if (commandName) {
-      await session.refreshCommands()
-      if (!session.commands.some(c => c.name === commandName) && desktopCommands.some(name => name === commandName)) {
-        if (delayedSend.value) {
-          const error = t("chat.delayedCommandUnsupported", {
-            commands: desktopCommands.map(name => `/${name}`).join(", "),
-          })
+    try {
+      if (!(await deps.ensureStarted(session.entries.length ? null : deps.workspaceSelection()))) {
+        bridge.value?.setTextInput(text)
+        throw new Error(t("completion.startFailed"))
+      }
+      if (commandName) {
+        await session.refreshCommands()
+        if (!session.commands.some(c => c.name === commandName) && desktopCommands.some(name => name === commandName)) {
+          if (delayedSend.value) {
+            const error = t("chat.delayedCommandUnsupported", {
+              commands: desktopCommands.map(name => `/${name}`).join(", "),
+            })
+            ui.pushToast(error, "error")
+            throw new Error(error)
+          }
+          const args = text.slice(commandName.length + 1).trim()
+          try {
+            if (images.length || (args && commandName !== "compact")) throw new Error(t("completion.invalidArguments"))
+            if (commandName === "new") deps.newSession()
+            // /compact queues behind an active run instead of aborting it; the
+            // store executes the command once the queue reaches it.
+            else if (commandName === "compact") await session.send(text, undefined, undefined, runningBehavior.value)
+          } catch (error) {
+            ui.pushToast(String(error), "error")
+            throw error
+          }
+          return
+        }
+        if (!session.commands.some(c => c.name === commandName)) {
+          const error = t("completion.unsupported", { name: commandName })
           ui.pushToast(error, "error")
           throw new Error(error)
         }
-        const args = text.slice(commandName.length + 1).trim()
-        try {
-          if (images.length || (args && commandName !== "compact")) throw new Error(t("completion.invalidArguments"))
-          if (commandName === "new") deps.newSession()
-          // /compact queues behind an active run instead of aborting it; the
-          // store executes the command once the queue reaches it.
-          else if (commandName === "compact") await session.send(text, undefined, undefined, runningBehavior.value)
-        } catch (error) {
-          ui.pushToast(String(error), "error")
-          throw error
-        }
-        return
       }
-      if (!session.commands.some(c => c.name === commandName)) {
-        const error = t("completion.unsupported", { name: commandName })
-        ui.pushToast(error, "error")
-        throw new Error(error)
-      }
-    }
-    const extensionCommand =
-      commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
-    const expandedText = extensionCommand ? text : withSessionReferences(text, deps.knownSessions())
-    // 上下文只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
-    // 序列化顺序：正文 → userselect 尾块 → Code comments 尾块。
-    // 跨目录批注在这里改写为带目录前缀的路径，agent 才能按自身 cwd 之外的目录寻址。
-    const comments = pendingComments.value.map(comment => ({ ...comment, path: commentFilePath(comment) }))
-    const selections = [...pendingSelections.value]
-    const promptWithContexts =
-      comments.length || selections.length
-        ? serializeComposerPromptContexts(expandedText, { comments, selections })
-        : expandedText
-    try {
+      const extensionCommand =
+        commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
+      const expandedText = extensionCommand ? text : withSessionReferences(text, deps.knownSessions())
+      // 上下文只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
+      // 序列化顺序：正文 → userselect 尾块 → Code comments 尾块。
+      // 跨目录批注在这里改写为带目录前缀的路径，agent 才能按自身 cwd 之外的目录寻址。
+      const comments = pendingComments.value.map(comment => ({ ...comment, path: commentFilePath(comment) }))
+      const selections = [...pendingSelections.value]
+      const promptWithContexts =
+        comments.length || selections.length
+          ? serializeComposerPromptContexts(expandedText, { comments, selections })
+          : expandedText
       if (delayedSend.value) {
         session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
         delayedSend.value = false
@@ -171,8 +170,8 @@ export function useChatSendControl(deps: {
         await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
       }
     } finally {
-      // send() 已同步把用户消息入列（或启动失败已恢复输入），回显完成使命。
-      ui.pendingUserMessage = null
+      // 无论启动、命令校验还是发送如何退出，都清理本次首条消息的预回显。
+      if (staged) ui.pendingUserMessage = null
     }
   }
 

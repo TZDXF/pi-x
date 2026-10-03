@@ -66,7 +66,20 @@ function harness(config = Promise.resolve({})) {
       newSession,
     })
   })
-  return { scope, controls, session, ui, workspace, bridge, flags, comments, selection, ensureStarted, newSession }
+  return {
+    scope,
+    controls,
+    session,
+    ui,
+    workspace,
+    bridge,
+    flags,
+    comments,
+    selections,
+    selection,
+    ensureStarted,
+    newSession,
+  }
 }
 const image = "data:image/png;base64,aGVsbG8="
 
@@ -254,7 +267,12 @@ test("first message in a fresh conversation is echoed while the worker starts", 
     release(true)
     await sending
     expect(h.ui.pendingUserMessage).toBeNull()
-    expect(h.session.send).toHaveBeenCalled()
+    expect(h.session.send).toHaveBeenCalledWith(
+      "hello",
+      [{ data: "aGVsbG8=", mimeType: "image/png" }],
+      "hello",
+      "steer",
+    )
   } finally {
     h.scope.stop()
   }
@@ -279,6 +297,72 @@ test("desktop commands do not echo into the conversation area", async () => {
     await h.controls.onSubmit({ text: "/new" })
     expect(h.ui.pendingUserMessage).toBeUndefined()
     expect(h.newSession).toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test.each([
+  { failure: "startup false", text: "draft", error: "completion.startFailed", restoreText: true },
+  { failure: "startup throw", text: "draft", error: "worker failed", restoreText: false },
+  { failure: "command refresh", text: "/known", error: "refresh failed", restoreText: false },
+  { failure: "unknown command", text: "/unknown", error: "completion.unsupported", restoreText: false },
+])(
+  "$failure clears the first-message echo without consuming pending contexts",
+  async ({ failure, text, error, restoreText }) => {
+    const h = harness()
+    try {
+      const file = { id: "pending", url: image }
+      h.bridge.value.files.push(file)
+      h.comments.comments.push({
+        id: "comment",
+        path: "src/a.ts",
+        startLine: 1,
+        endLine: 1,
+        comment: "keep",
+        selectedText: "x",
+      })
+      h.selections.items.push({ id: "selection", text: "keep selection" })
+      h.ensureStarted.mockImplementation(async () => {
+        expect(h.ui.pendingUserMessage).toEqual({ text, images: [{ url: image }] })
+        if (failure === "startup throw") throw new Error(error)
+        return failure !== "startup false"
+      })
+      if (failure === "command refresh") {
+        h.session.commands.push({ name: "known", source: "extension" })
+        h.session.refreshCommands.mockImplementation(async () => {
+          expect(h.ui.pendingUserMessage).toEqual({ text, images: [{ url: image }] })
+          throw new Error(error)
+        })
+      }
+      await expect(h.controls.onSubmit({ text: `  ${text}  `, files: [{ url: image }] })).rejects.toThrow(error)
+      expect(h.ui.pendingUserMessage).toBeNull()
+      expect(h.ensureStarted).toHaveBeenCalledWith(h.selection)
+      expect(h.session.refreshCommands).toHaveBeenCalledTimes(text.startsWith("/") ? 1 : 0)
+      expect(h.session.send).not.toHaveBeenCalled()
+      expect(h.session.schedulePrompt).not.toHaveBeenCalled()
+      expect(h.bridge.value.files).toEqual([file])
+      expect(h.comments.comments).toHaveLength(1)
+      expect(h.selections.items).toHaveLength(1)
+      expect(h.comments.clear).not.toHaveBeenCalled()
+      expect(h.selections.clear).not.toHaveBeenCalled()
+      if (restoreText) expect(h.bridge.value.setTextInput).toHaveBeenCalledWith(text)
+      else expect(h.bridge.value.setTextInput).not.toHaveBeenCalled()
+    } finally {
+      h.scope.stop()
+    }
+  },
+)
+
+test("send failure also clears the first-message echo", async () => {
+  const h = harness()
+  try {
+    h.session.send.mockImplementation(async () => {
+      expect(h.ui.pendingUserMessage).toEqual({ text: "draft", images: [] })
+      throw new Error("send failed")
+    })
+    await expect(h.controls.onSubmit({ text: "draft" })).rejects.toThrow("send failed")
+    expect(h.ui.pendingUserMessage).toBeNull()
   } finally {
     h.scope.stop()
   }
