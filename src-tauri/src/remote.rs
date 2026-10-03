@@ -382,6 +382,30 @@ async fn invoke(
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
     }
 }
+fn apply_remote_app_config(cfg: &mut commands::AppConfig, config: &Value) {
+    cfg.last_project = config["lastProject"].as_str().map(str::to_owned);
+    // 远程端不可改 piPath 等主机环境；其余应用配置与桌面端保持一致。
+    cfg.projectless_dir = config["projectlessDir"].as_str().map(str::to_owned);
+    cfg.worktree_dir = config["worktreeDir"].as_str().map(str::to_owned);
+    cfg.default_model = parse_model_ref(&config["defaultModel"]);
+    cfg.title_model = parse_model_ref(&config["titleModel"]);
+    cfg.title_follow_main = config["titleFollowMain"].as_bool().unwrap_or(false);
+    cfg.translation_model = parse_model_ref(&config["translationModel"]);
+    if let Ok(channel) =
+        serde_json::from_value::<commands::UpdateChannel>(config["updateChannel"].clone())
+    {
+        cfg.update_channel = Some(channel);
+    }
+    if let Some(enabled) = config["builtinFileChanges"].as_bool() {
+        cfg.builtin_file_changes = Some(enabled);
+    }
+    if let Some(enabled) = config["builtinDelayedSend"].as_bool() {
+        cfg.builtin_delayed_send = Some(enabled);
+    }
+    // 完整配置保存：字段省略时清除旧值，恢复默认启用，而不是保留旧开关。
+    cfg.workspace_groups = config["workspaceGroups"].as_bool();
+}
+
 async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String> {
     let text = |key: &str| {
         a.get(key)
@@ -401,25 +425,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
         }
         "app_config_save" => {
             let mut cfg = commands::app_config_get(app.clone())?;
-            cfg.last_project = a["config"]["lastProject"].as_str().map(str::to_owned);
-            // 远程端不可改 piPath 等主机环境；其余应用配置与桌面端保持一致。
-            cfg.projectless_dir = a["config"]["projectlessDir"].as_str().map(str::to_owned);
-            cfg.worktree_dir = a["config"]["worktreeDir"].as_str().map(str::to_owned);
-            cfg.default_model = parse_model_ref(&a["config"]["defaultModel"]);
-            cfg.title_model = parse_model_ref(&a["config"]["titleModel"]);
-            cfg.title_follow_main = a["config"]["titleFollowMain"].as_bool().unwrap_or(false);
-            cfg.translation_model = parse_model_ref(&a["config"]["translationModel"]);
-            if let Ok(channel) =
-                serde_json::from_value::<commands::UpdateChannel>(a["config"]["updateChannel"].clone())
-            {
-                cfg.update_channel = Some(channel);
-            }
-            if let Some(enabled) = a["config"]["builtinFileChanges"].as_bool() {
-                cfg.builtin_file_changes = Some(enabled);
-            }
-            if let Some(enabled) = a["config"]["builtinDelayedSend"].as_bool() {
-                cfg.builtin_delayed_send = Some(enabled);
-            }
+            apply_remote_app_config(&mut cfg, &a["config"]);
             commands::app_config_save(app.clone(), cfg)?;
             Ok(Value::Null)
         }
@@ -909,6 +915,7 @@ async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Value, String>
                 text("cwd")?,
                 cols,
                 rows,
+                a["owner"].as_str().map(str::to_owned),
             )?;
             Ok(json!(id))
         }
@@ -1063,6 +1070,69 @@ fn valid_token(expected: &str, supplied: &str, stopped: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_workspace_groups_round_trip(next: Option<bool>) {
+        for previous in [None, Some(false), Some(true)] {
+            let mut cfg = commands::AppConfig {
+                pi_path: Some("host-pi".to_owned()),
+                workspace_groups: previous,
+                ..Default::default()
+            };
+            let mut request = serde_json::to_value(&cfg).unwrap();
+            match next {
+                Some(enabled) => request["workspaceGroups"] = json!(enabled),
+                None => {
+                    request.as_object_mut().unwrap().remove("workspaceGroups");
+                }
+            }
+            apply_remote_app_config(&mut cfg, &request);
+
+            // 与 app_config_save/get 相同的 JSON 往返，不触碰主机配置文件。
+            let saved = serde_json::to_string_pretty(&cfg).unwrap();
+            let loaded: commands::AppConfig = serde_json::from_str(&saved).unwrap();
+            assert_eq!(loaded.workspace_groups, next);
+            assert_eq!(
+                loaded.workspace_groups.unwrap_or(true),
+                next.unwrap_or(true)
+            );
+            let response = serde_json::to_value(&loaded).unwrap();
+            assert_eq!(
+                response.get("workspaceGroups"),
+                next.map(|v| json!(v)).as_ref()
+            );
+            assert_eq!(loaded.pi_path.as_deref(), Some("host-pi"));
+        }
+    }
+
+    #[test]
+    fn remote_workspace_groups_false_round_trip() {
+        assert_workspace_groups_round_trip(Some(false));
+    }
+
+    #[test]
+    fn remote_workspace_groups_true_round_trip() {
+        assert_workspace_groups_round_trip(Some(true));
+    }
+
+    #[test]
+    fn remote_workspace_groups_omitted_restores_default_round_trip() {
+        assert_workspace_groups_round_trip(None);
+    }
+
+    #[test]
+    fn remote_app_config_preserves_host_pi_path() {
+        for request in [
+            json!({}),
+            json!({"piPath": "remote-pi", "workspaceGroups": false}),
+        ] {
+            let mut cfg = commands::AppConfig {
+                pi_path: Some("host-pi".to_owned()),
+                ..Default::default()
+            };
+            apply_remote_app_config(&mut cfg, &request);
+            assert_eq!(cfg.pi_path.as_deref(), Some("host-pi"));
+        }
+    }
     #[test]
     fn password_links_do_not_include_bearer_tokens() {
         assert_eq!(

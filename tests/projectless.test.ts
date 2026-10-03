@@ -137,7 +137,9 @@ test("入口、设置项与后端命令均已接线", () => {
   expect(read("../src-tauri/src/data_dir.rs")).toMatch(/join\("workspace"\)/)
   expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::projectless_dir_resolve/)
   expect(read("../src-tauri/src/remote.rs")).toMatch(/"projectless_dir_resolve" =>/)
-  expect(read("../src-tauri/src/remote.rs")).toMatch(/cfg\.projectless_dir = a\["config"\]\["projectlessDir"\]/)
+  const remote = read("../src-tauri/src/remote.rs")
+  expect(remote).toMatch(/apply_remote_app_config\(&mut cfg, &a\["config"\]\)/)
+  expect(remote).toMatch(/cfg\.projectless_dir = config\["projectlessDir"\]/)
   // 前端：欢迎页/侧栏入口、设置页，以及会话空状态使用项目显示名。
   expect(read("../src/App.vue")).toMatch(/@open-projectless="openProjectless"/)
   expect(read("../src/App.vue")).toMatch(/@projectless="openProjectlessFromSidebar"/)

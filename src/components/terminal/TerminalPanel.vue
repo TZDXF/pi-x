@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@/api/transport"
+import { invoke, listen } from "@/api/transport"
+import { createTerminalOutputRouter, type TerminalOutput } from "@/lib/terminalOutput"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { terminalTheme } from "@/lib/terminalTheme"
 import { useI18n } from "vue-i18n"
@@ -81,23 +81,22 @@ function setTabEl(id: number, el: unknown) {
   else tabEls.delete(id)
 }
 
-// Output arrives via the backend's `term://output` broadcast (works for both
-// the desktop webview and remote browsers). Chunks emitted before the xterm
-// instance mounts are buffered per terminal id and flushed on mount.
-const pendingOutput = new Map<number, string[]>()
-function writeOutput(id: number, encoded: string) {
+// Owner tokens are registered before term_create: only this panel's output is
+// buffered, including chunks emitted before the creation response or xterm mount.
+let disposed = false
+const outputRouter = createTerminalOutputRouter((id, encoded) => {
   const inst = instances.get(id)
-  if (inst) inst.term.write(b64ToBytes(encoded))
-  else {
-    const list = pendingOutput.get(id) ?? []
-    list.push(encoded)
-    pendingOutput.set(id, list)
-  }
-}
-let unlistenOutput: (() => void) | null = null
-void listen<{ id: number; data: string }>("term://output", e => writeOutput(e.payload.id, e.payload.data)).then(fn => {
-  unlistenOutput = fn
+  if (!inst) return false
+  inst.term.write(b64ToBytes(encoded))
+  return true
 })
+let unlistenOutput: (() => void) | null = null
+const outputListening = listen<TerminalOutput>("term://output", e => outputRouter.accept(e.payload)).then(fn => {
+  if (disposed) fn()
+  else unlistenOutput = fn
+})
+// A failed subscription is reported by openTerminal rather than left unhandled.
+void outputListening.catch(() => {})
 
 function mountTerminal(id: number) {
   const el = tabEls.get(id)
@@ -147,8 +146,7 @@ function mountTerminal(id: number) {
       term.dispose()
     },
   })
-  for (const encoded of pendingOutput.get(id) ?? []) term.write(b64ToBytes(encoded))
-  pendingOutput.delete(id)
+  outputRouter.flush(id)
 
   try {
     fit.fit()
@@ -159,17 +157,36 @@ function mountTerminal(id: number) {
 }
 
 async function openTerminal() {
+  if (disposed) return
+  const owner = outputRouter.begin()
   try {
+    // Subscribe before spawning so fast shell startup output cannot be lost.
+    await outputListening
+    if (disposed) {
+      outputRouter.cancel(owner)
+      return
+    }
     const id = await invoke<number>("term_create", {
       cwd: props.project,
       cols: 80,
       rows: 24,
+      owner,
     })
+    // The panel may have unmounted or switched projects while creation was pending.
+    if (!outputRouter.bind(owner, id)) {
+      void invoke("term_kill", { id }).catch(() => {})
+      return
+    }
     tabs.value.push({ id, title: `#${tabs.value.length + 1}`, baseTitle: `#${tabs.value.length + 1}`, exited: false })
     activeId.value = id
     await nextTick()
-    mountTerminal(id)
+    if (!disposed && tabs.value.some(tab => tab.id === id)) mountTerminal(id)
   } catch (e) {
+    const id = outputRouter.cancel(owner)
+    if (id !== null) {
+      if (tabs.value.some(tab => tab.id === id)) await closeTab(id)
+      else void invoke("term_kill", { id }).catch(() => {})
+    }
     console.error("term_create failed", e)
   }
 }
@@ -181,7 +198,7 @@ async function closeTab(id: number) {
     inst.dispose()
     instances.delete(id)
   }
-  pendingOutput.delete(id)
+  outputRouter.release(id)
   tabEls.delete(id)
   tabs.value = tabs.value.filter(tab => tab.id !== id)
   if (activeId.value === id) {
@@ -258,6 +275,11 @@ watch(
 watch(
   () => props.project,
   () => {
+    // Cancel in-flight ownership too; late creation responses kill their stale shells.
+    const tabIds = new Set(tabs.value.map(tab => tab.id))
+    for (const id of outputRouter.clear()) {
+      if (!tabIds.has(id)) void invoke("term_kill", { id }).catch(() => {})
+    }
     // Workspace changed: close stale shells so new ones spawn in the new cwd.
     void Promise.all([...tabs.value].map(tab => closeTab(tab.id))).then(() => {
       if (props.embedded && props.visible) void openTerminal()
@@ -272,14 +294,19 @@ void listen<{ id: number; code: number }>("term://exit", e => {
   tab.exited = true
   tab.exitCode = e.payload.code
   instances.get(tab.id)?.term.writeln(`\r\n\x1b[2m${t("terminal.exited", { code: e.payload.code })}\x1b[0m`)
-}).then(fn => {
-  unlistenExit = fn
 })
+  .then(fn => {
+    if (disposed) fn()
+    else unlistenExit = fn
+  })
+  .catch(() => {})
 
 onBeforeUnmount(() => {
+  disposed = true
+  const ids = new Set([...outputRouter.clear(), ...tabs.value.map(tab => tab.id)])
   for (const [, inst] of instances) inst.dispose()
   instances.clear()
-  for (const tab of tabs.value) void invoke("term_kill", { id: tab.id }).catch(() => {})
+  for (const id of ids) void invoke("term_kill", { id }).catch(() => {})
   unlistenExit?.()
   unlistenOutput?.()
   window.removeEventListener("mousemove", onDividerMove)

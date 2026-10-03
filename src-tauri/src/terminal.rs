@@ -52,6 +52,7 @@ pub fn term_create(
     cwd: String,
     cols: u16,
     rows: u16,
+    owner: Option<String>,
 ) -> Result<u32, String> {
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -96,7 +97,11 @@ pub fn term_create(
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                        crate::remote::emit(&app, "term://output", json!({ "id": id, "data": encoded }));
+                        crate::remote::emit(
+                            &app,
+                            "term://output",
+                            json!({ "id": id, "owner": owner, "data": encoded }),
+                        );
                     }
                 }
             }
