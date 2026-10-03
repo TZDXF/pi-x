@@ -59,7 +59,8 @@ test("rendered user messages reuse the composer chip styling", () => {
   const view = readFileSync(new URL("../src/components/chat/ChatUserPrompt.vue", import.meta.url), "utf8")
   const display = readFileSync(new URL("../src/components/ComposerText.vue", import.meta.url), "utf8")
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
-  expect(view).toMatch(/<ComposerText v-else :text="entry\.text" \/>/)
+  // 历史消息先解析掉 "# Code comments:" 尾块再交给 chip 渲染。
+  expect(view).toMatch(/<ComposerText v-else :text="parsedPrompt\.visibleContent" \/>/)
   expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value\)/)
   expect(display).toMatch(/composerChipClass/)
   expect(display).toMatch(/composerChipText\(part\)/)

@@ -1,6 +1,6 @@
 /**
- * 代码批注的纯逻辑：DOM 选区到行号的换算、批注的 markdown 格式化。
- * 格式对齐 ZCode 的 "# Code comments:" 约定（省略 PR 评审语义的 Side 字段），
+ * 代码批注的纯逻辑：DOM 选区到行号的换算、批注的 markdown 格式化与解析。
+ * 格式对齐 ZCode 的 "# Code comments:" 约定（含 PR 评审语义的 Side: R），
  * 批注随下一条消息发给 agent，本文件保持无依赖以便单元测试直接加载。
  */
 
@@ -58,6 +58,7 @@ export function formatCodeComment(draft: CodeCommentDraft, index: number): strin
   return [
     `## Comment ${index + 1}`,
     `File: ${draft.path}`,
+    "Side: R",
     `Lines: ${lineLabel(draft.startLine, draft.endLine)}`,
     "Selected text:",
     fence,
@@ -79,4 +80,55 @@ export function buildPromptWithCodeComments(text: string, drafts: readonly CodeC
   const block = buildCodeCommentsBlock(drafts)
   if (!block) return content.trim()
   return `${content}${content ? "\n\n" : ""}${block}`
+}
+
+/** 从持久化消息里解析回批注附件，供历史气泡剥离批注块后展示。 */
+export interface ParsedCodeComment extends CodeCommentDraft {
+  id: string
+}
+
+export interface ParsedPromptComments {
+  visibleContent: string
+  comments: ParsedCodeComment[]
+}
+
+function parseLineRange(value: string): CodeCommentRange | null {
+  const match = /^(\d+)(?:\s*-\s*L?(\d+))?$/.exec(value.trim().replace(/^L/i, ""))
+  if (!match) return null
+  const start = Number(match[1])
+  const end = Number(match[2] ?? match[1])
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) return null
+  return { start, end }
+}
+
+/**
+ * 解析 prompt 尾部的 "# Code comments:" 块：气泡只显示块之前的正文，
+ * 块内各条按 ZCode 的字段约定还原为批注附件。识别不到时原文原样返回。
+ * 注意不能用 multiline 的 `$` 定位块头，否则非贪婪匹配会在首条 Comment 后提前截断。
+ */
+export function parsePromptCodeComments(content: string): ParsedPromptComments {
+  const blockMatch = /(?:^|\n\n)# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(content)
+  if (!blockMatch || blockMatch.index < 0) return { visibleContent: content, comments: [] }
+  const rawItems = blockMatch[1]
+    .split(/\n(?=## Comment(?:\s+\d+)?\n)/)
+    .map(item => item.trim())
+    .filter(Boolean)
+  const comments: ParsedCodeComment[] = []
+  for (const rawItem of rawItems) {
+    const fileMatch = /^File:\s*(.+)$/m.exec(rawItem)
+    const linesMatch = /^Lines:\s*(.+)$/m.exec(rawItem)
+    const bodyMatch = /Selected text:\s*\n```(?:[^\n`]*)?\n([\s\S]*?)\n```\s*\nComment:\s*\n?([\s\S]*)$/m.exec(rawItem)
+    const range = linesMatch ? parseLineRange(linesMatch[1]) : null
+    if (!fileMatch?.[1].trim() || !range || !bodyMatch) continue
+    comments.push({
+      id: `parsed-code-comment-${comments.length + 1}-${range.start}-${range.end}`,
+      path: fileMatch[1].trim(),
+      startLine: range.start,
+      endLine: range.end,
+      selectedText: bodyMatch[1].trim(),
+      comment: bodyMatch[2].trim(),
+    })
+  }
+  if (!comments.length) return { visibleContent: content, comments: [] }
+  return { visibleContent: content.slice(0, blockMatch.index).trimEnd(), comments }
 }

@@ -4,6 +4,7 @@ import {
   formatCodeComment,
   buildCodeCommentsBlock,
   buildPromptWithCodeComments,
+  parsePromptCodeComments,
   MAX_SELECTED_TEXT_LENGTH,
 } from "@/lib/codeComments"
 
@@ -70,6 +71,7 @@ test("formatCodeComment renders file, lines and trimmed text", () => {
     [
       "## Comment 1",
       "File: src/a.ts",
+      "Side: R",
       "Lines: 10",
       "Selected text:",
       "```",
@@ -80,9 +82,18 @@ test("formatCodeComment renders file, lines and trimmed text", () => {
     ].join("\n"),
   )
   expect(formatCodeComment({ path: "src/a.ts", startLine: 2, endLine: 5, selectedText: "a\nb", comment: "x" }, 2)).toBe(
-    ["## Comment 3", "File: src/a.ts", "Lines: 2-5", "Selected text:", "```", "a\nb", "```", "Comment:", "x"].join(
-      "\n",
-    ),
+    [
+      "## Comment 3",
+      "File: src/a.ts",
+      "Side: R",
+      "Lines: 2-5",
+      "Selected text:",
+      "```",
+      "a\nb",
+      "```",
+      "Comment:",
+      "x",
+    ].join("\n"),
   )
 })
 
@@ -111,11 +122,31 @@ test("buildCodeCommentsBlock joins numbered comments under one header", () => {
     [
       "# Code comments:",
       "",
-      ["## Comment 1", "File: src/a.ts", "Lines: 1-2", "Selected text:", "```", "a", "```", "Comment:", "one"].join(
-        "\n",
-      ),
+      [
+        "## Comment 1",
+        "File: src/a.ts",
+        "Side: R",
+        "Lines: 1-2",
+        "Selected text:",
+        "```",
+        "a",
+        "```",
+        "Comment:",
+        "one",
+      ].join("\n"),
       "",
-      ["## Comment 2", "File: src/b.ts", "Lines: 3", "Selected text:", "```", "", "```", "Comment:", "two"].join("\n"),
+      [
+        "## Comment 2",
+        "File: src/b.ts",
+        "Side: R",
+        "Lines: 3",
+        "Selected text:",
+        "```",
+        "",
+        "```",
+        "Comment:",
+        "two",
+      ].join("\n"),
     ].join("\n"),
   )
 })
@@ -126,4 +157,57 @@ test("buildPromptWithCodeComments appends the block or trims plain text", () => 
   expect(buildPromptWithCodeComments("帮我看看", drafts)).toBe("帮我看看\n\n" + buildCodeCommentsBlock(drafts))
   // 空消息只发批注块本身。
   expect(buildPromptWithCodeComments("  ", drafts)).toBe(buildCodeCommentsBlock(drafts))
+})
+
+// ---- 持久化消息解析回附件（对齐 ZCode 的 parsePromptCodeComments） ----
+
+test("parsePromptCodeComments round-trips comments built by buildPromptWithCodeComments", () => {
+  const drafts = [
+    { path: "src/a.ts", startLine: 1, endLine: 2, selectedText: "a\nb", comment: "one" },
+    { path: "src/b.ts", startLine: 7, endLine: 7, selectedText: "c", comment: "two" },
+  ]
+  const prompt = buildPromptWithCodeComments("帮我看看", drafts)
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe("帮我看看")
+  expect(parsed.comments).toEqual([
+    {
+      id: "parsed-code-comment-1-1-2",
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 2,
+      selectedText: "a\nb",
+      comment: "one",
+    },
+    { id: "parsed-code-comment-2-7-7", path: "src/b.ts", startLine: 7, endLine: 7, selectedText: "c", comment: "two" },
+  ])
+})
+
+test("parsePromptCodeComments keeps text without a comments block intact", () => {
+  expect(parsePromptCodeComments("plain message")).toEqual({ visibleContent: "plain message", comments: [] })
+  expect(parsePromptCodeComments("")).toEqual({ visibleContent: "", comments: [] })
+  // 只有标题没有可解析条目时原样返回，避免吞掉用户正文。
+  expect(parsePromptCodeComments("hi\n\n# Code comments:\n\ngarbage")).toEqual({
+    visibleContent: "hi\n\n# Code comments:\n\ngarbage",
+    comments: [],
+  })
+})
+
+test("parsePromptCodeComments tolerates L-prefixed and padded line ranges", () => {
+  const raw = [
+    "## Comment 1",
+    "File: a.ts",
+    "Side: R",
+    "Lines: L4 - L9",
+    "Selected text:",
+    "```",
+    "x",
+    "```",
+    "Comment:",
+    "y",
+  ].join("\n")
+  const parsed = parsePromptCodeComments(`\n\n# Code comments:\n\n${raw}`)
+  expect(parsed.comments[0]).toMatchObject({ path: "a.ts", startLine: 4, endLine: 9 })
+  // 行范围非法（start > end）的条目被丢弃，块整体视为未解析。
+  const invalid = raw.replace("Lines: L4 - L9", "Lines: 9-4")
+  expect(parsePromptCodeComments(`\n\n# Code comments:\n\n${invalid}`).comments).toEqual([])
 })

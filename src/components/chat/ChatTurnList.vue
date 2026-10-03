@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch, onBeforeUnmount, type UnwrapRef } from "vue"
+import { computed, reactive, ref, watch, onBeforeUnmount, type UnwrapRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -17,7 +17,14 @@ import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
+import ConversationSelectionTooltip from "./ConversationSelectionTooltip.vue"
 import { useTurnChanges } from "@/composables/useTurnChanges"
+import {
+  CONVERSATION_SELECTION_MAX_COUNT,
+  CONVERSATION_SELECTION_MAX_TEXT_LENGTH,
+  type ConversationSelectionSource,
+} from "@/lib/conversationSelections"
+import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import { compactNumber } from "@/lib/format"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import type { useChatTurnList } from "@/composables/useChatTurnList"
@@ -68,6 +75,20 @@ defineExpose({
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
 })
+// ---- 对话划词引用（对齐 ZCode conversation selections）：选中文本暂存 composer，
+// ---- 随下一条消息以 "# userselect:" 尾块发出。引用按会话归属。 ----
+const selectionStore = useConversationSelectionsStore()
+const selectionScope = computed(() => session.sessionFile ?? props.project)
+const selectionRoot = computed<HTMLElement | null>(() => (conversation.value?.$el as HTMLElement | undefined) ?? null)
+function onSelectionAdd(draft: { text: string; source: ConversationSelectionSource }) {
+  const result = selectionStore.add(selectionScope.value, draft)
+  if (!result.ok) {
+    if (result.reason === "count")
+      ui.pushToast(t("chat.selectionLimitCount", { count: CONVERSATION_SELECTION_MAX_COUNT }), "error")
+    else if (result.reason === "total") ui.pushToast(t("chat.selectionLimitTotal"), "error")
+    else ui.pushToast(t("chat.selectionLimitSingle"), "error")
+  }
+}
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
 const waitingSeconds = ref(0)
 let waitingClock: ReturnType<typeof setInterval> | undefined
@@ -174,7 +195,11 @@ onBeforeUnmount(() => {
             {{ t("chat.modelChanged", entry.modelChange) }}
           </div>
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
-            <div class="flex min-w-0 flex-col" :class="entry.kind === 'user' ? 'items-end' : 'flex-1'">
+            <div
+              class="flex min-w-0 flex-col"
+              :class="entry.kind === 'user' ? 'items-end' : 'flex-1'"
+              :data-selection-source="entry.kind === 'user' ? 'user' : 'assistant'"
+            >
               <ChatUserPrompt
                 v-if="entry.kind === 'user'"
                 :entry="entry"
@@ -284,4 +309,10 @@ onBeforeUnmount(() => {
       <ConversationScrollButton />
     </template>
   </Conversation>
+  <!-- 划词菜单放会话容器外：fixed 定位不受滚动/变换影响 -->
+  <ConversationSelectionTooltip
+    :root="selectionRoot"
+    :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
+    @add="onSelectionAdd"
+  />
 </template>

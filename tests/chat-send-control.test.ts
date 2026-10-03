@@ -7,11 +7,13 @@ import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { buildPromptWithCodeComments } from "@/lib/codeComments"
+import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 
 // Execute the production composable with real Vue reactivity and pure helpers,
 // replacing only application boundaries (RPC/config, i18n, project comments).
 function harness(config = Promise.resolve({})) {
   const comments = reactive({ project: "repo", comments: [], clear: vi.fn() })
+  const selections = reactive({ scope: "repo", items: [], clear: vi.fn() })
   const imports = {
     vue: vueRuntime,
     "vue-i18n": { useI18n: () => ({ t: key => key }) },
@@ -19,9 +21,10 @@ function harness(config = Promise.resolve({})) {
     "@/lib/sendDelay": { parseSendDelay, stepSendDelayWheel },
     "@/lib/attachments": { dataUrlToImage, isImageUrl },
     "@/lib/completion": { withSessionReferences, desktopCommands },
-    "@/lib/codeComments": { buildPromptWithCodeComments },
+    "@/lib/promptContexts": { serializeComposerPromptContexts },
     "@/lib/runningBehavior": { runningBehavior: ref("steer") },
     "@/stores/codeComments": { useCodeCommentsStore: () => comments },
+    "@/stores/conversationSelections": { useConversationSelectionsStore: () => selections },
   }
   const code = ts.transpileModule(chatSource("composables/useChatSendControl.ts"), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },

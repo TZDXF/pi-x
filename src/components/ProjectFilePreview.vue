@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ArrowLeft, Code, ExternalLink, Eye, FileX, MessageSquarePlus, WrapText } from "@lucide/vue"
+import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { invoke } from "@/api/transport"
@@ -98,45 +98,100 @@ async function openInEditor() {
   }
 }
 
-// ---- 代码批注：选中行 → 填写批注 → 挂到 composer 随下一条消息发送 ----
+// ---- 代码批注（复刻 ZCode code-viewer）：行内草稿卡挂到选中行末行下方，
+// ---- 已提交批注以内联卡片展示并可删除，随 composer 待发送列表同步。 ----
 const codeComments = useCodeCommentsStore()
 const codeRoot = ref<HTMLElement | null>(null)
 const commentOpen = ref(false)
 const commentText = ref("")
 const commentRange = ref<CodeCommentRange | null>(null)
 const commentSelected = ref("")
-const annotated = ref<CodeCommentRange[]>([])
+const canAnnotate = computed(() => showCode.value && !props.readFile)
+/** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
+const pendingComments = computed(() =>
+  codeComments.project === props.project ? codeComments.comments.filter(c => c.path === props.path) : [],
+)
+/** 批注卡片按"范围末行"归组，插到对应代码行下方（同 ZCode 的 line annotation）。 */
+const commentsByEndLine = computed(() => {
+  const grouped = new Map<number, typeof pendingComments.value>()
+  for (const comment of pendingComments.value) {
+    const list = grouped.get(comment.endLine) ?? []
+    list.push(comment)
+    grouped.set(comment.endLine, list)
+  }
+  return grouped
+})
 const annotatedLines = computed(() => {
   const lines = new Set<number>()
-  for (const range of annotated.value) for (let line = range.start; line <= range.end; line++) lines.add(line)
+  for (const comment of pendingComments.value)
+    for (let line = comment.startLine; line <= comment.endLine; line++) lines.add(line)
+  if (commentRange.value)
+    for (let line = commentRange.value.start; line <= commentRange.value.end; line++) lines.add(line)
+  // 拖拽进行中只高亮，草稿卡等松手后再出现。
+  if (dragRange.value) for (let line = dragRange.value.start; line <= dragRange.value.end; line++) lines.add(line)
   return lines
 })
 
 function onSelectionChange() {
   const range = selectionLineRange(codeRoot.value, window.getSelection())
+  // 选区塌陷（如在草稿框内点击）不撤销已锚定的草稿，Esc/取消/提交才关闭。
+  if (!range) return
   commentRange.value = range
   // 引用文本按行取自文件内容，避免选区字符串混入行号栏等界面文本。
-  if (range)
-    commentSelected.value = codeLines.value
-      .slice(range.start - 1, range.end)
-      .join("\n")
-      .slice(0, MAX_SELECTED_TEXT_LENGTH)
+  commentSelected.value = codeLines.value
+    .slice(range.start - 1, range.end)
+    .join("\n")
+    .slice(0, MAX_SELECTED_TEXT_LENGTH)
 }
-function toggleComment() {
-  if (commentOpen.value) {
-    closeComment()
-    return
-  }
+function focusDraft() {
+  // 草稿卡在 v-for 里，用标记属性定位其 textarea（ref 在 v-for 中会退化成数组）。
+  void nextTick(() => codeRoot.value?.querySelector<HTMLTextAreaElement>("[data-annotate-draft]")?.focus())
+}
+// ---- gutter 拖拽多行批注（同 ZCode 的 gutter utility）：按住拖动只实时高亮范围，
+// ---- 松手才在范围末行下方打开草稿卡；单击（原地松开）即单行批注。 ----
+let dragAnchorLine: number | null = null
+const dragRange = ref<CodeCommentRange | null>(null)
+function beginGutterDrag(line: number) {
+  dragAnchorLine = line
+  dragRange.value = { start: line, end: line }
+  document.addEventListener("mousemove", onGutterDrag)
+  document.addEventListener("mouseup", endGutterDrag)
+}
+function onGutterDrag(event: MouseEvent) {
+  if (dragAnchorLine === null) return
+  // 拖动时取指针下的 [data-line] 行，把高亮范围实时扩展为 anchor→当前行。
+  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-line]") as HTMLElement | null
+  if (!row || !codeRoot.value?.contains(row)) return
+  const line = Number(row.dataset.line)
+  if (!Number.isFinite(line) || line < 1) return
+  dragRange.value = { start: Math.min(dragAnchorLine, line), end: Math.max(dragAnchorLine, line) }
+}
+function endGutterDrag() {
+  if (dragAnchorLine === null) return
+  dragAnchorLine = null
+  document.removeEventListener("mousemove", onGutterDrag)
+  document.removeEventListener("mouseup", endGutterDrag)
+  const range = dragRange.value
+  dragRange.value = null
+  if (!range) return
   commentOpen.value = true
-  // mousedown.prevent 保住了用户已有的选区，这里立即换算成行号。
-  onSelectionChange()
+  commentRange.value = range
+  commentSelected.value = codeLines.value
+    .slice(range.start - 1, range.end)
+    .join("\n")
+    .slice(0, MAX_SELECTED_TEXT_LENGTH)
   document.addEventListener("selectionchange", onSelectionChange)
+  focusDraft()
 }
 function closeComment() {
   commentOpen.value = false
   commentText.value = ""
   commentRange.value = null
   commentSelected.value = ""
+  dragAnchorLine = null
+  dragRange.value = null
+  document.removeEventListener("mousemove", onGutterDrag)
+  document.removeEventListener("mouseup", endGutterDrag)
   document.removeEventListener("selectionchange", onSelectionChange)
 }
 function confirmComment() {
@@ -154,16 +209,21 @@ function confirmComment() {
     alert("Code comments are full (max 20). Remove some comments before adding new ones.")
     return
   }
-  annotated.value = [...annotated.value, range]
   closeComment()
 }
-// 文件或项目切换后，旧的批注面板与高亮不再对应新内容。
+function removeComment(id: string) {
+  codeComments.remove(id)
+}
+function commentRangeLabel(start: number, end: number) {
+  return t(
+    start === end ? "projectFiles.annotateLine" : "projectFiles.annotateRange",
+    start === end ? { line: start } : { start, end },
+  )
+}
+// 文件或项目切换后，旧的批注草稿不再对应新内容；已确认批注按路径归属 store，切回时自动恢复。
 watch(
   () => [props.project, props.path, props.readFile] as const,
-  () => {
-    closeComment()
-    annotated.value = []
-  },
+  () => closeComment(),
 )
 onBeforeUnmount(() => {
   ++seq
@@ -216,18 +276,6 @@ onBeforeUnmount(() => {
         ><WrapText
       /></Button>
       <Button
-        v-if="showCode && !readFile"
-        variant="ghost"
-        size="icon-xs"
-        :aria-pressed="commentOpen"
-        :title="t('projectFiles.annotate')"
-        :aria-label="t('projectFiles.annotate')"
-        :class="{ 'bg-accent text-accent-foreground': commentOpen }"
-        @mousedown.prevent
-        @click="toggleComment"
-        ><MessageSquarePlus
-      /></Button>
-      <Button
         v-if="isDesktop && !readFile"
         variant="ghost"
         size="icon-xs"
@@ -239,33 +287,6 @@ onBeforeUnmount(() => {
       /></Button>
       <slot name="toolbar" :text="text" :loading="loading" />
     </div>
-    <div v-if="commentOpen" class="shrink-0 space-y-2 border-b bg-muted/40 px-3 py-2">
-      <p class="text-xs text-muted-foreground">
-        <template v-if="commentRange">{{
-          t(commentRange.start === commentRange.end ? "projectFiles.annotateLine" : "projectFiles.annotateRange", {
-            line: commentRange.start,
-            start: commentRange.start,
-            end: commentRange.end,
-          })
-        }}</template>
-        <template v-else>{{ t("projectFiles.annotateNoSelection") }}</template>
-        <span class="ml-1.5">{{ t("projectFiles.annotateHint") }}</span>
-      </p>
-      <Textarea
-        v-model="commentText"
-        :placeholder="t('projectFiles.annotatePlaceholder')"
-        class="min-h-16 resize-y text-xs"
-        @keydown.esc.stop="closeComment"
-        @keydown.ctrl.enter.prevent="confirmComment"
-        @keydown.meta.enter.prevent="confirmComment"
-      />
-      <div class="flex justify-end gap-2">
-        <Button variant="outline" size="sm" @click="closeComment">{{ t("projectFiles.annotateCancel") }}</Button>
-        <Button size="sm" :disabled="!commentRange || !commentText.trim()" @click="confirmComment">{{
-          t("projectFiles.annotateConfirm")
-        }}</Button>
-      </div>
-    </div>
     <p
       v-if="preview?.truncated"
       class="shrink-0 border-b bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400"
@@ -275,7 +296,8 @@ onBeforeUnmount(() => {
     <p v-if="error" role="alert" class="shrink-0 break-words border-b px-3 py-1.5 text-xs text-destructive">
       {{ error }}
     </p>
-    <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <!-- isolate：内容区的 z-index（如行号栏 z-10）限制在本子树内，避免压过右侧栏的拖拽手柄（z-2） -->
+    <div class="isolate flex min-h-0 flex-1 flex-col overflow-hidden">
       <p v-if="loading" class="p-3 text-xs text-muted-foreground">{{ t("completion.loading") }}</p>
       <template v-else-if="preview">
         <div
@@ -287,8 +309,7 @@ onBeforeUnmount(() => {
         </div>
         <!-- 图片/查看器内部自管缩放平移与加载失败态 -->
         <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
-        <div
-          v-else-if="showRenderedMarkdown"
+        <div v-else-if="showRenderedMarkdown"
           data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
@@ -310,31 +331,96 @@ onBeforeUnmount(() => {
           :class="wrap ? '' : 'px-3'"
         >
           <div class="w-full py-1 font-mono text-xs" :class="wrap ? '' : 'w-max min-w-full'">
-            <div
-              v-for="(line, index) in codeLines"
-              :key="index"
-              class="flex min-w-0"
-              :data-line="index + 1"
-              :class="annotatedLines.has(index + 1) ? 'bg-amber-500/15' : ''"
-            >
-              <span
-                class="sticky left-0 shrink-0 select-none bg-background py-px pr-2 pl-1 text-right text-muted-foreground/50 [flex:0_0_2.75rem]"
-                aria-hidden="true"
-                >{{ index + 1 }}</span
+            <template v-for="(line, index) in codeLines" :key="index">
+              <div
+                class="group flex min-w-0"
+                :data-line="index + 1"
+                :class="annotatedLines.has(index + 1) ? 'bg-amber-500/15' : ''"
               >
-              <code
-                v-if="htmlLines"
-                class="preview-code min-w-0 flex-1 py-px pr-3 [font:inherit] [tab-size:4]"
-                :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'"
-                v-html="htmlLines[index] ?? ''"
-              />
-              <code
-                v-else
-                class="min-w-0 flex-1 py-px pr-3 [font:inherit] [tab-size:4]"
-                :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'"
-                >{{ line || " " }}</code
+                <span
+                  class="sticky left-0 z-10 flex shrink-0 select-none items-start justify-end bg-background py-px pr-2 pl-1 text-right text-muted-foreground/50 [flex:0_0_2.75rem]"
+                >
+                  <!-- hover 行时行号淡出、原位显示批注按钮（同 ZCode 的 gutter utility） -->
+                  <span
+                    class="transition-opacity"
+                    :class="canAnnotate ? 'group-hover:opacity-0' : ''"
+                    aria-hidden="true"
+                    >{{ index + 1 }}</span
+                  >
+                  <button
+                    v-if="canAnnotate"
+                    type="button"
+                    class="absolute top-1/2 right-1.5 flex h-4.5 w-4.5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border bg-background text-muted-foreground opacity-0 shadow-xs transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                    :title="t('projectFiles.annotateAdd')"
+                    :aria-label="t('projectFiles.annotateAdd')"
+                    @mousedown.prevent="beginGutterDrag(index + 1)"
+                  >
+                    <Plus class="size-3" />
+                  </button>
+                </span>
+                <code
+                  v-if="htmlLines"
+                  class="preview-code min-w-0 flex-1 py-px pr-3 [font:inherit] [tab-size:4]"
+                  :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'"
+                  v-html="htmlLines[index] ?? ''"
+                />
+                <code
+                  v-else
+                  class="min-w-0 flex-1 py-px pr-3 [font:inherit] [tab-size:4]"
+                  :class="wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'"
+                  >{{ line || " " }}</code
+                >
+              </div>
+              <!-- 已确认批注卡片，挂在范围末行下方（同 ZCode 的 line annotation） -->
+              <div
+                v-for="comment in commentsByEndLine.get(index + 1) ?? []"
+                :key="comment.id"
+                :data-code-comment-id="comment.id"
+                class="my-1 ml-[2.75rem] rounded-lg border bg-background p-2.5 shadow-sm"
               >
-            </div>
+                <p class="mb-1 text-xs text-muted-foreground">
+                  {{ commentRangeLabel(comment.startLine, comment.endLine) }}
+                </p>
+                <p class="text-xs leading-relaxed break-words whitespace-pre-wrap">{{ comment.comment }}</p>
+                <div class="mt-1.5 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5 text-xs text-muted-foreground"
+                    :title="t('projectFiles.annotateRemove')"
+                    :aria-label="t('projectFiles.annotateRemove')"
+                    @click="removeComment(comment.id)"
+                    ><Trash2 class="size-3.5" />{{ t("projectFiles.annotateRemove") }}</Button
+                  >
+                </div>
+              </div>
+              <!-- 草稿卡片：锚定在选中范围的末行下方，Esc 取消、Ctrl/Cmd+Enter 提交 -->
+              <div
+                v-if="commentOpen && commentRange?.end === index + 1"
+                class="my-1 ml-[2.75rem] rounded-lg border bg-background p-2.5 shadow-sm"
+              >
+                <p class="mb-1.5 text-xs text-muted-foreground">
+                  {{ commentRangeLabel(commentRange.start, commentRange.end) }}
+                </p>
+                <Textarea
+                  v-model="commentText"
+                  data-annotate-draft
+                  :placeholder="t('projectFiles.annotatePlaceholder')"
+                  class="min-h-16 w-full resize-y text-xs"
+                  @keydown.esc.stop="closeComment"
+                  @keydown.ctrl.enter.prevent="confirmComment"
+                  @keydown.meta.enter.prevent="confirmComment"
+                />
+                <div class="mt-1.5 flex justify-end gap-2">
+                  <Button variant="outline" size="sm" class="h-6 text-xs" @click="closeComment">{{
+                    t("projectFiles.annotateCancel")
+                  }}</Button>
+                  <Button size="sm" class="h-6 text-xs" :disabled="!commentText.trim()" @click="confirmComment">{{
+                    t("projectFiles.annotateConfirm")
+                  }}</Button>
+                </div>
+              </div>
+            </template>
           </div>
           <slot name="after-content" />
         </div>

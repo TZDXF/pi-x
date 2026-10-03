@@ -4,9 +4,10 @@ import { getConfig, type WorkspaceSelection } from "@/api/piClient"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib/completion"
-import { buildPromptWithCodeComments } from "@/lib/codeComments"
+import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 import { runningBehavior } from "@/lib/runningBehavior"
 import { useCodeCommentsStore } from "@/stores/codeComments"
+import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import type { useWorkspaceStore } from "@/stores/workspace"
@@ -28,9 +29,15 @@ export function useChatSendControl(deps: {
 }) {
   const { session, ui, workspace, bridge } = deps
   const { t } = useI18n()
-  // ---- 代码批注（项目文件页添加，随下一条消息发出） ----
+  // ---- 代码批注（项目文件页添加）与对话划词引用（会话气泡划词添加），随下一条消息发出 ----
   const codeComments = useCodeCommentsStore()
   const pendingComments = computed(() => (codeComments.project === deps.project() ? codeComments.comments : []))
+  const conversationSelections = useConversationSelectionsStore()
+  // 引用按会话归属；会话尚未落盘时退回项目维度，与划词入口的 scope 计算一致。
+  const selectionScope = computed(() => session.sessionFile ?? deps.project())
+  const pendingSelections = computed(() =>
+    conversationSelections.scope === selectionScope.value ? conversationSelections.items : [],
+  )
   const attachments = computed(() => bridge.value?.files ?? [])
   // extensions can push text into the editor (set_editor_text))
   watch(
@@ -132,16 +139,23 @@ export function useChatSendControl(deps: {
     const extensionCommand =
       commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
     const expandedText = extensionCommand ? text : withSessionReferences(text, deps.knownSessions())
-    // 批注只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
+    // 上下文只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
+    // 序列化顺序：正文 → userselect 尾块 → Code comments 尾块。
     const comments = [...pendingComments.value]
-    const promptWithComments = comments.length ? buildPromptWithCodeComments(expandedText, comments) : expandedText
+    const selections = [...pendingSelections.value]
+    const promptWithContexts =
+      comments.length || selections.length
+        ? serializeComposerPromptContexts(expandedText, { comments, selections })
+        : expandedText
     if (delayedSend.value) {
-      session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithComments)
+      session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
       delayedSend.value = false
       if (comments.length) codeComments.clear()
+      if (selections.length) conversationSelections.clear()
     } else {
       if (comments.length) codeComments.clear()
-      await session.send(text, images.length ? images : undefined, promptWithComments, runningBehavior.value)
+      if (selections.length) conversationSelections.clear()
+      await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
     }
   }
 
@@ -153,7 +167,9 @@ export function useChatSendControl(deps: {
   return {
     attachments,
     pendingComments,
+    pendingSelections,
     codeComments,
+    conversationSelections,
     delayedSend,
     delayedSendEnabled,
     showStopButton,

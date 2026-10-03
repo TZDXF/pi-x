@@ -2,7 +2,7 @@
 import { ref, toRefs, type UnwrapRef, type ComponentPublicInstance } from "vue"
 import { useI18n } from "vue-i18n"
 import { NumberFieldInput, NumberFieldRoot } from "reka-ui"
-import { Clock3, MessageSquareQuote, Paperclip } from "@lucide/vue"
+import { Clock3, MessageSquareQuote, Paperclip, TextQuote } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { PromptInput, PromptInputHeader, PromptInputSubmit } from "@/components/ai-elements/prompt-input"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
@@ -39,13 +39,14 @@ const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 const {
   attachments,
   pendingComments,
+  pendingSelections,
   delayedSend,
   delayedSendEnabled,
   sendDelayMinutes,
   sendDelaySeconds,
   showStopButton,
 } = toRefs(props.controls)
-const { codeComments, onSendDelayWheel, onSubmit, abort } = props.controls
+const { codeComments, conversationSelections, onSendDelayWheel, onSubmit, abort } = props.controls
 function bindBridge(value: Element | ComponentPublicInstance | null) {
   bridge.value = value as InstanceType<typeof PromptInputBridge> | null
 }
@@ -118,6 +119,32 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
             >
               ×
             </Button>
+          </div>
+        </div>
+      </PromptInputHeader>
+      <PromptInputHeader v-if="pendingSelections.length">
+        <!-- 待发送的对话划词引用，随下一条消息一并发给 agent -->
+        <div class="flex flex-wrap gap-1.5 px-1">
+          <div
+            v-for="s in pendingSelections"
+            :key="s.id"
+            class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-1 pl-2 text-xs"
+          >
+            <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
+            <span class="shrink-0 text-muted-foreground">{{
+              s.source === "user" ? t("chat.selectionFromUser") : t("chat.selectionFromAssistant")
+            }}</span>
+            <span class="min-w-0 truncate" :title="s.text">{{ s.text }}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              class="size-4 shrink-0 rounded-full text-[10px] leading-none"
+              :title="t('chat.selectionRemove')"
+              :aria-label="t('chat.selectionRemove')"
+              @click="conversationSelections.remove(s.id)"
+              >×</Button
+            >
           </div>
         </div>
       </PromptInputHeader>

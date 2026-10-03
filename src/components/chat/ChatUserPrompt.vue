@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { toRefs, type ComponentPublicInstance } from "vue"
+import { computed, toRefs, type ComponentPublicInstance } from "vue"
 import { useI18n } from "vue-i18n"
-import { Copy, Pencil } from "@lucide/vue"
+import { Copy, MessageSquareQuote, Pencil, TextQuote } from "@lucide/vue"
 import { MessageContent, MessageActions, MessageAction } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import ComposerText from "@/components/ComposerText.vue"
 import { formatMessageTime } from "@/lib/format"
 import type { UserEntry } from "@/stores/session"
@@ -23,6 +24,9 @@ const { startEditPrompt, cancelEditedPrompt, resendEditedPrompt } = props.edit
 function bindEditTextarea(value: Element | ComponentPublicInstance | null) {
   emit("editTextarea", value as PromptEditTextarea | null)
 }
+// 持久化消息的正文带 "# userselect:" / "# Code comments:" 尾块；重载历史时解析回附件，
+// 气泡只显示用户原文（同 ZCode ConversationRowView 的 parseComposerPromptContexts）。
+const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text))
 </script>
 
 <template>
@@ -54,7 +58,32 @@ function bindEditTextarea(value: Element | ComponentPublicInstance | null) {
           >
         </div>
       </div>
-      <ComposerText v-else :text="entry.text" />
+      <ComposerText v-else :text="parsedPrompt.visibleContent" />
+      <!-- 历史消息里解析回的划词引用：只读展示，样式对齐 composer 的待发送 chips -->
+      <div v-if="parsedPrompt.selections.length" class="mt-1.5 flex flex-wrap gap-1.5">
+        <div
+          v-for="s in parsedPrompt.selections"
+          :key="s.id"
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
+        >
+          <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
+          <span class="min-w-0 truncate" :title="s.text">{{ s.text }}</span>
+        </div>
+      </div>
+      <!-- 历史消息里解析回的代码批注：只读展示，样式对齐 composer 的待发送 chips -->
+      <div v-if="parsedPrompt.comments.length" class="mt-1.5 flex flex-wrap gap-1.5">
+        <div
+          v-for="c in parsedPrompt.comments"
+          :key="c.id"
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
+        >
+          <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
+          <span class="shrink-0 font-mono"
+            >{{ c.path }}:{{ c.startLine }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span
+          >
+          <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
+        </div>
+      </div>
       <!-- sent attachments keep the composer's chip look: a small
            thumbnail, click to zoom, instead of large inline images -->
       <div v-if="entry.images?.length" class="mt-1.5 flex flex-wrap gap-2">
