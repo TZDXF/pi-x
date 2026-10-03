@@ -72,7 +72,7 @@ async function commit() {
   }
 }
 
-/** 写入全局设置并对运行中的会话逐个下发运行时命令；全部失败才回退开关。 */
+/** 全局保存成功后保持开关与磁盘一致；运行时同步失败仅提示，不回退已保存的值。 */
 async function commitToggle(
   kind: "retry" | "compaction",
   next: boolean,
@@ -83,29 +83,24 @@ async function commitToggle(
   if (next === previous) return
   toggle.value = next
   toggling.value = kind
+  let persisted = false
   try {
     if (kind === "retry") await savePiSettings({ retry: { enabled: next } })
     else await savePiSettings({ compaction: { enabled: next } })
+    persisted = true
     const running = allConversations().filter(conversation => conversation.started)
     let failures = 0
-    let firstError = ""
     for (const conversation of running) {
       try {
         await apply(conversation)
-      } catch (e) {
-        if (!firstError) firstError = String(e)
+      } catch {
         failures++
       }
     }
-    if (running.length > 0 && failures === running.length) {
-      toggle.value = previous
-      ui.pushToast(firstError, "error")
-    } else {
-      if (failures > 0) ui.pushToast(t("retrySettings.partialSync", failures), "warning")
-      ui.pushToast(t("retrySettings.runtimeSaved"), "info")
-    }
+    if (failures > 0) ui.pushToast(t("retrySettings.partialSync", { count: failures }), "warning")
+    else ui.pushToast(t("retrySettings.runtimeSaved"), "info")
   } catch (e) {
-    toggle.value = previous
+    if (!persisted) toggle.value = previous
     ui.pushToast(String(e), "error")
   } finally {
     toggling.value = null

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 
-function harness(retry = { maxRetries: 3 }) {
+function harness(retry = { maxRetries: 3 }, running = []) {
   const source = readFileSync(new URL("../src/components/settings/RetrySettings.vue", import.meta.url), "utf8")
     .match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
     .replace(/^import .*$/gm, "")
@@ -11,7 +11,9 @@ function harness(retry = { maxRetries: 3 }) {
     failRead = false,
     failWrite = false
   const patches = [],
+    settingPatches = [],
     toasts = []
+  const settings = { retry: retry === null ? null : { ...retry }, compaction: { enabled: true } }
   const context = vm.createContext({
     ref: value => ({ value }),
     onMounted: fn => {
@@ -19,25 +21,37 @@ function harness(retry = { maxRetries: 3 }) {
     },
     useI18n: () => ({ t: (key, params) => (params ? `${key} ${JSON.stringify(params)}` : key) }),
     useUiStore: () => ({ pushToast: (...args) => toasts.push(args) }),
+    allConversations: () => running,
     getPiSettings: async () => {
       if (failRead) throw new Error("read failure")
-      return { retry }
+      return settings
     },
     savePiSettings: async patch => {
       if (failWrite) throw new Error("write failure")
-      patches.push({ ...patch.retry })
+      settingPatches.push(JSON.parse(JSON.stringify(patch)))
+      if (patch.retry) {
+        patches.push({ ...patch.retry })
+        settings.retry = { ...settings.retry, ...patch.retry }
+      }
+      if (patch.compaction) settings.compaction = { ...settings.compaction, ...patch.compaction }
     },
   })
   vm.runInContext(
-    ts.transpile(source + "\nglobalThis.api = { attempts, draft, loading, error, saving, load, commit };", {
-      target: ts.ScriptTarget.ES2022,
-    }),
+    ts.transpile(
+      source +
+        "\nglobalThis.api = { attempts, draft, loading, error, saving, load, commit, autoRetry, autoCompaction, toggling, setAutoRetryEnabled, setAutoCompactionEnabled };",
+      {
+        target: ts.ScriptTarget.ES2022,
+      },
+    ),
     context,
   )
   return {
     api: context.api,
     mount: () => mount(),
     patches,
+    settingPatches,
+    settings,
     toasts,
     failRead: value => {
       failRead = value
@@ -119,3 +133,79 @@ test("settings embeds retry controls in the run-config page", () => {
   const router = readFileSync(new URL("../src/lib/router.ts", import.meta.url), "utf8")
   expect(router).not.toMatch(/"retry",/)
 })
+
+for (const kind of ["retry", "compaction"] as const) {
+  const toggle = (h: ReturnType<typeof harness>, next: boolean) =>
+    kind === "retry" ? h.api.setAutoRetryEnabled(next) : h.api.setAutoCompactionEnabled(next)
+  const value = (h: ReturnType<typeof harness>) =>
+    kind === "retry" ? h.api.autoRetry.value : h.api.autoCompaction.value
+
+  test(`${kind} save failure restores the switch without syncing runtimes`, async () => {
+    const calls: boolean[] = []
+    const apply = async (next: boolean) => {
+      calls.push(next)
+    }
+    const h = harness(undefined, [{ started: true, setAutoRetry: apply, setAutoCompaction: apply }])
+    await h.mount()
+    h.failWrite(true)
+    await toggle(h, false)
+    expect(value(h)).toBe(true)
+    expect(h.settings[kind].enabled ?? true).toBe(true)
+    expect(h.settingPatches).toEqual([])
+    expect(calls).toEqual([])
+    expect(h.api.toggling.value).toBeNull()
+    expect(h.toasts.at(-1)[1]).toBe("error")
+  })
+
+  test(`${kind} keeps the saved value when every runtime fails and can be changed back`, async () => {
+    const calls: boolean[] = []
+    const apply = async (next: boolean) => {
+      calls.push(next)
+      throw Error("RPC disconnected")
+    }
+    const h = harness(undefined, [{ started: true, setAutoRetry: apply, setAutoCompaction: apply }])
+    await h.mount()
+    await toggle(h, false)
+    expect(value(h)).toBe(false)
+    expect(h.settings[kind].enabled).toBe(false)
+    expect(h.settingPatches).toEqual([{ [kind]: { enabled: false } }])
+    expect(h.toasts).toEqual([['retrySettings.partialSync {"count":1}', "warning"]])
+    expect(h.api.toggling.value).toBeNull()
+    await h.api.load()
+    expect(value(h)).toBe(false)
+    await toggle(h, true)
+    expect(value(h)).toBe(true)
+    expect(h.settings[kind].enabled).toBe(true)
+    expect(calls).toEqual([false, true])
+  })
+
+  test(`${kind} warns on partial synchronization without claiming every runtime updated`, async () => {
+    const calls: boolean[] = []
+    const success = async (next: boolean) => {
+      calls.push(next)
+    }
+    const failure = async () => {
+      throw Error("runtime unavailable")
+    }
+    const h = harness(undefined, [
+      { started: true, setAutoRetry: success, setAutoCompaction: success },
+      { started: true, setAutoRetry: failure, setAutoCompaction: failure },
+      { started: false, setAutoRetry: success, setAutoCompaction: success },
+    ])
+    await h.mount()
+    await toggle(h, false)
+    expect(value(h)).toBe(false)
+    expect(h.settings[kind].enabled).toBe(false)
+    expect(calls).toEqual([false])
+    expect(h.toasts).toEqual([['retrySettings.partialSync {"count":1}', "warning"]])
+  })
+
+  test(`${kind} saves for new sessions even without a running conversation`, async () => {
+    const h = harness()
+    await h.mount()
+    await toggle(h, false)
+    expect(value(h)).toBe(false)
+    expect(h.settings[kind].enabled).toBe(false)
+    expect(h.toasts.at(-1)).toEqual(["retrySettings.runtimeSaved", "info"])
+  })
+}
