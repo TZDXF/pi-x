@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch, onBeforeUnmount, type UnwrapRef } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type UnwrapRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -17,13 +17,15 @@ import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
-import ConversationSelectionTooltip from "./ConversationSelectionTooltip.vue"
+import ConversationSelectionMenu from "./ConversationSelectionMenu.vue"
+import ConversationSelectionPopup, { type SelectionPopupState } from "./ConversationSelectionPopup.vue"
 import { useTurnChanges } from "@/composables/useTurnChanges"
 import {
   CONVERSATION_SELECTION_MAX_COUNT,
   CONVERSATION_SELECTION_MAX_TEXT_LENGTH,
   type ConversationSelectionSource,
 } from "@/lib/conversationSelections"
+import { boundaryRect, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
 import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import { compactNumber } from "@/lib/format"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
@@ -74,19 +76,132 @@ defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
+  locateSelection,
+  editSelection,
 })
 // ---- 对话划词引用（对齐 ZCode conversation selections）：选中文本暂存 composer，
-// ---- 随下一条消息以 "# userselect:" 尾块发出。引用按会话归属。 ----
+// ---- 随下一条消息以 "# userselect:" 尾块发出。引用按会话归属；
+// ---- 提交后在划词结束处渲染索引数字标记，支持定位与回显编辑。 ----
 const selectionStore = useConversationSelectionsStore()
 const selectionScope = computed(() => session.sessionFile ?? props.project)
 const selectionRoot = computed<HTMLElement | null>(() => (conversation.value?.$el as HTMLElement | undefined) ?? null)
-function onSelectionAdd(draft: { text: string; source: ConversationSelectionSource }) {
-  const result = selectionStore.add(selectionScope.value, draft)
+const pendingSelections = computed(() => (selectionStore.scope === selectionScope.value ? selectionStore.items : []))
+const selectionPopup = ref<(SelectionPopupState & { id?: string }) | null>(null)
+function pushSelectionToast(result: { ok: boolean; reason?: string; duplicate?: boolean }) {
   if (!result.ok) {
     if (result.reason === "count")
       ui.pushToast(t("chat.selectionLimitCount", { count: CONVERSATION_SELECTION_MAX_COUNT }), "error")
     else if (result.reason === "total") ui.pushToast(t("chat.selectionLimitTotal"), "error")
     else ui.pushToast(t("chat.selectionLimitSingle"), "error")
+  } else if (result.duplicate) ui.pushToast(t("chat.selectionDuplicate"))
+}
+// 点击"引用到输入框"立即入库：批注可选，稍后通过索引标记或摘要列表补充。
+function onSelectionQuote(payload: {
+  text: string
+  source: ConversationSelectionSource
+  messageId: number
+  startOffset: number
+  endOffset: number
+}) {
+  const result = selectionStore.add(selectionScope.value, { ...payload })
+  pushSelectionToast(result)
+  window.getSelection()?.removeAllRanges()
+}
+function onSelectionSave(comment: string) {
+  const id = selectionPopup.value?.id
+  if (id) selectionStore.update(id, comment)
+  selectionPopup.value = null
+  window.getSelection()?.removeAllRanges()
+}
+function onSelectionRemove() {
+  const id = selectionPopup.value?.id
+  if (id) selectionStore.remove(id)
+  selectionPopup.value = null
+  window.getSelection()?.removeAllRanges()
+}
+function onSelectionCancel() {
+  selectionPopup.value = null
+  window.getSelection()?.removeAllRanges()
+}
+// ---- 索引标记覆盖层：按引用在列表中的序号渲染到划词结束处（布局变化时重算） ----
+const anchorOverlays = ref<Map<number, { id: string; index: number; left: number; top: number }[]>>(new Map())
+async function recomputeAnchors() {
+  const root = selectionRoot.value
+  const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
+  if (root) {
+    pendingSelections.value.forEach((item, index) => {
+      const wrapper = root.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
+      if (!wrapper) return
+      const rect = boundaryRect(wrapper, item.endOffset)
+      const wrapperRect = wrapper.getBoundingClientRect()
+      if (!rect) return
+      const list = map.get(item.messageId) ?? []
+      list.push({
+        id: item.id,
+        index: index + 1,
+        left: rect.right - wrapperRect.left + 2,
+        // 徽标抬到划词末行上方，避免盖住正文文字。
+        top: rect.top - wrapperRect.top - 16,
+      })
+      map.set(item.messageId, list)
+    })
+  }
+  anchorOverlays.value = map
+}
+watch(
+  [() => props.renderedEntries, pendingSelections],
+  () => {
+    // 编辑态弹窗对应的引用被删除/清空时同步关闭。
+    const popup = selectionPopup.value
+    if (popup?.id && !pendingSelections.value.some(item => item.id === popup.id)) selectionPopup.value = null
+    void nextTick(recomputeAnchors)
+  },
+  { deep: true, immediate: true },
+)
+onMounted(() => {
+  window.addEventListener("resize", recomputeAnchors)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", recomputeAnchors)
+})
+// ---- 摘要列表动作：定位（滚动到索引标记）与编辑（回显划选后打开弹窗） ----
+function locateSelection(id: string) {
+  const item = pendingSelections.value.find(entry => entry.id === id)
+  if (!item) return
+  const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
+  if (badge) {
+    badge.scrollIntoView({ block: "center", behavior: "smooth" })
+    return
+  }
+  conversation.value?.scrollToMessage(item.messageId)
+  void nextTick(recomputeAnchors)
+}
+async function editSelection(id: string) {
+  const item = pendingSelections.value.find(entry => entry.id === id)
+  if (!item) return
+  locateSelection(id)
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+  const root = selectionRoot.value
+  const wrapper = root?.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
+  let anchor: { left: number; top: number; bottom: number } | null = null
+  const badge = root?.querySelector(`[data-selection-anchor="${id}"]`)
+  if (wrapper && restoreSelection(wrapper, item.startOffset, item.endOffset)) {
+    const selection = window.getSelection()
+    if (selection?.rangeCount) {
+      const endRect = selectionEndRect(selection.getRangeAt(0))
+      if (endRect) anchor = { left: endRect.right, top: endRect.top, bottom: endRect.bottom }
+    }
+  }
+  if (!anchor && badge) {
+    const badgeRect = badge.getBoundingClientRect()
+    anchor = { left: badgeRect.right, top: badgeRect.top, bottom: badgeRect.bottom }
+  }
+  if (!anchor) return
+  selectionPopup.value = {
+    id: item.id,
+    comment: item.comment ?? "",
+    anchor,
   }
 }
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
@@ -196,7 +311,7 @@ onBeforeUnmount(() => {
           </div>
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <div
-              class="flex min-w-0 flex-col"
+              class="relative flex min-w-0 flex-col"
               :class="entry.kind === 'user' ? 'items-end' : 'flex-1'"
               :data-selection-source="entry.kind === 'user' ? 'user' : 'assistant'"
             >
@@ -221,6 +336,17 @@ onBeforeUnmount(() => {
                 @fork="emit('fork', $event)"
                 @copy-text="emit('copyText', $event)"
               />
+              <!-- 划词引用的索引数字标记：绝对定位在划词结束处，点击直接编辑 -->
+              <sup
+                v-for="badge in anchorOverlays.get(entry.id) ?? []"
+                :key="badge.id"
+                :data-selection-anchor="badge.id"
+                class="selection-anchor-badge selection-anchor-overlay"
+                :title="t('chat.selectionEdit')"
+                :style="{ left: `${badge.left}px`, top: `${badge.top}px` }"
+                @click="editSelection(badge.id)"
+                >{{ badge.index }}</sup
+              >
             </div>
           </Message>
         </template>
@@ -309,10 +435,36 @@ onBeforeUnmount(() => {
       <ConversationScrollButton />
     </template>
   </Conversation>
-  <!-- 划词菜单放会话容器外：fixed 定位不受滚动/变换影响 -->
-  <ConversationSelectionTooltip
+  <!-- 划词菜单与批注弹窗放会话容器外：fixed 定位不受滚动/变换影响 -->
+  <ConversationSelectionMenu
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
-    @add="onSelectionAdd"
+    @quote="onSelectionQuote"
+  />
+  <ConversationSelectionPopup
+    :state="selectionPopup"
+    @save="onSelectionSave"
+    @remove="onSelectionRemove"
+    @cancel="onSelectionCancel"
   />
 </template>
+
+<style>
+/* 划词引用的索引数字标记基础样式（消息内为绝对定位覆盖层，摘要列表内为行内徽标） */
+.selection-anchor-badge {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  user-select: none;
+}
+/* 消息内覆盖层变体：定位在划词结束处，点击直接编辑 */
+.selection-anchor-overlay {
+  position: absolute;
+  cursor: pointer;
+}
+</style>

@@ -352,6 +352,8 @@ onBeforeUnmount(() => {
         @preview-image="previewImage = $event"
         @select-project="emit('selectProject', $event)"
         @open-project="emit('openProject')"
+        @locate-selection="conversation?.locateSelection($event)"
+        @edit-selection="conversation?.editSelection($event)"
       >
         <template #model>
           <ModelThinkingSelect

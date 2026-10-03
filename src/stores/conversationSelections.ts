@@ -5,7 +5,6 @@ import {
   appendConversationSelection,
   createConversationSelectionId,
   type ConversationSelectionSource,
-  type ConversationSelectionText,
   type PendingConversationSelection,
 } from "@/lib/conversationSelections"
 
@@ -21,7 +20,7 @@ export const useConversationSelectionsStore = defineStore("conversationSelection
   const scope = ref("")
   const items = ref<PendingConversationSelection[]>([])
 
-  function add(forScope: string, draft: ConversationSelectionText & { source: ConversationSelectionSource }) {
+  function add(forScope: string, draft: Omit<PendingConversationSelection, "id">) {
     if (scope.value !== forScope) {
       scope.value = forScope
       items.value = []
@@ -30,11 +29,17 @@ export const useConversationSelectionsStore = defineStore("conversationSelection
     if (result.ok && !result.duplicate) items.value.push({ ...draft, id: createConversationSelectionId() })
     return result
   }
+  function update(id: string, comment: string) {
+    const trimmed = comment.trim()
+    items.value = items.value.map(item =>
+      item.id === id ? { ...item, ...(trimmed ? { comment: trimmed } : { comment: undefined }) } : item,
+    )
+  }
   function remove(id: string) {
     items.value = items.value.filter(item => item.id !== id)
   }
   function clear() {
     items.value = []
   }
-  return { scope, items, add, remove, clear }
+  return { scope, items, add, update, remove, clear }
 })

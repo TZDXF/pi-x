@@ -35,6 +35,25 @@ test("buildPromptWithConversationSelections without selections only trims", () =
   expect(buildPromptWithConversationSelections("  你好  ", [])).toBe("你好")
 })
 
+// ---- 可选批注（comment）：带批注的引用随 wire 发出并在历史解析还原 ----
+
+test("buildPromptWithConversationSelections keeps a non-empty comment", () => {
+  expect(buildPromptWithConversationSelections("", [{ text: "选中文本", comment: "这里看不懂" }])).toBe(
+    ["# userselect:", "```userselect", JSON.stringify([{ text: "选中文本", comment: "这里看不懂" }]), "```"].join("\n"),
+  )
+  // 空白批注与无批注等价，不出现在 wire 里。
+  expect(buildPromptWithConversationSelections("", [{ text: "选中文本", comment: "   " }])).toBe(
+    ["# userselect:", "```userselect", JSON.stringify([{ text: "选中文本" }]), "```"].join("\n"),
+  )
+})
+
+test("parsePromptConversationSelections restores the comment", () => {
+  const prompt = buildPromptWithConversationSelections("看看", [{ text: "选中文本", comment: "这里看不懂" }])
+  const parsed = parsePromptConversationSelections(prompt)
+  expect(parsed.visibleContent).toBe("看看")
+  expect(parsed.selections[0]).toMatchObject({ text: "选中文本", comment: "这里看不懂" })
+})
+
 // ---- 持久化消息解析回引用 ----
 
 test("parsePromptConversationSelections round-trips the built block", () => {
@@ -71,6 +90,10 @@ test("appendConversationSelection dedupes identical text", () => {
   expect(first).toEqual({ ok: true, selections: [{ text: "同一段" }], duplicate: false })
   const second = appendConversationSelection(first.selections, { text: "同一段" })
   expect(second).toEqual({ ok: true, selections: [{ text: "同一段" }], duplicate: true })
+  // 同一段文字配不同批注视为两条引用。
+  const withComment = appendConversationSelection(first.selections, { text: "同一段", comment: "新的批注" })
+  expect(withComment.ok).toBe(true)
+  if (withComment.ok) expect(withComment.selections).toHaveLength(2)
 })
 
 test("appendConversationSelection rejects oversized text", () => {

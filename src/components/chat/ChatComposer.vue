@@ -2,10 +2,11 @@
 import { ref, toRefs, type UnwrapRef, type ComponentPublicInstance } from "vue"
 import { useI18n } from "vue-i18n"
 import { NumberFieldInput, NumberFieldRoot } from "reka-ui"
-import { Clock3, MessageSquareQuote, Paperclip, TextQuote } from "@lucide/vue"
+import { Clock3, MessageSquareQuote, Paperclip } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { PromptInput, PromptInputHeader, PromptInputSubmit } from "@/components/ai-elements/prompt-input"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
+import ConversationSelectionSummary from "@/components/chat/ConversationSelectionSummary.vue"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import ChatQueuePanel from "./ChatQueuePanel.vue"
 import ComposerCompletion from "@/components/ComposerCompletion.vue"
@@ -33,7 +34,13 @@ const props = defineProps<{
 }>()
 const bridge = defineModel<InstanceType<typeof PromptInputBridge> | null>("bridge", { required: true })
 const workspaceSelection = defineModel<WorkspaceSelection | null>("workspaceSelection", { required: true })
-const emit = defineEmits<{ previewImage: [url: string | null]; selectProject: [path: string]; openProject: [] }>()
+const emit = defineEmits<{
+  previewImage: [url: string | null]
+  selectProject: [path: string]
+  openProject: []
+  locateSelection: [id: string]
+  editSelection: [id: string]
+}>()
 const { t } = useI18n()
 const completion = ref<InstanceType<typeof ComposerCompletion> | null>(null)
 const {
@@ -123,29 +130,14 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
         </div>
       </PromptInputHeader>
       <PromptInputHeader v-if="pendingSelections.length">
-        <!-- 待发送的对话划词引用，随下一条消息一并发给 agent -->
-        <div class="flex flex-wrap gap-1.5 px-1">
-          <div
-            v-for="s in pendingSelections"
-            :key="s.id"
-            class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-1 pl-2 text-xs"
-          >
-            <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
-            <span class="shrink-0 text-muted-foreground">{{
-              s.source === "user" ? t("chat.selectionFromUser") : t("chat.selectionFromAssistant")
-            }}</span>
-            <span class="min-w-0 truncate" :title="s.text">{{ s.text }}</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              class="size-4 shrink-0 rounded-full text-[10px] leading-none"
-              :title="t('chat.selectionRemove')"
-              :aria-label="t('chat.selectionRemove')"
-              @click="conversationSelections.remove(s.id)"
-              >×</Button
-            >
-          </div>
+        <!-- 待发送的划词引用摘要：悬停展开列表，可定位/编辑/删除 -->
+        <div class="px-1">
+          <ConversationSelectionSummary
+            :items="pendingSelections"
+            @locate="emit('locateSelection', $event)"
+            @edit="emit('editSelection', $event)"
+            @remove="conversationSelections.remove($event)"
+          />
         </div>
       </PromptInputHeader>
       <PromptInputHeader v-if="pendingComments.length">

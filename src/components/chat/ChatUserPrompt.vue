@@ -68,6 +68,9 @@ const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text
         >
           <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
           <span class="min-w-0 truncate" :title="s.text">{{ s.text }}</span>
+          <span v-if="s.comment" class="min-w-0 truncate text-muted-foreground" :title="s.comment">{{
+            s.comment
+          }}</span>
         </div>
       </div>
       <!-- 历史消息里解析回的代码批注：只读展示，样式对齐 composer 的待发送 chips -->

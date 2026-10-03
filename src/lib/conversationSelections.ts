@@ -7,15 +7,20 @@
 
 export type ConversationSelectionSource = "user" | "assistant"
 
-/** wire/展示共用的最小引用：历史解析只恢复这些字段。 */
+/** wire/展示共用的最小引用：历史解析只恢复这些字段。comment 为可选批注。 */
 export interface ConversationSelectionText {
   text: string
   path?: string
+  comment?: string
 }
 
 export interface PendingConversationSelection extends ConversationSelectionText {
   id: string
   source: ConversationSelectionSource
+  /** 所属消息 id 与相对消息正文根节点的字符区间：仅用于页内定位/回显，不随 wire 发出。 */
+  messageId: number
+  startOffset: number
+  endOffset: number
 }
 
 export interface ParsedConversationSelection extends ConversationSelectionText {
@@ -36,7 +41,8 @@ export function createConversationSelectionId() {
 }
 
 function dedupeKey(selection: ConversationSelectionText) {
-  return [selection.path ?? "", selection.text].join("\0")
+  // 批注属于引用的一部分：同一段文字配不同批注视为两条引用。
+  return [selection.path ?? "", selection.text, selection.comment ?? ""].join("\0")
 }
 
 export type ConversationSelectionAppendResult =
@@ -62,7 +68,7 @@ export function appendConversationSelection(
 
 /**
  * 引用块追加到消息末尾；没有引用时原样返回（仅 trimEnd，同代码批注的约定）。
- * 只发送 {text}（及可选 {path}），不带 source 等内部身份字段。
+ * 只发送 {text}（及可选 {path}、{comment}），不带 source 等内部身份字段。
  */
 export function buildPromptWithConversationSelections(
   visibleContent: string,
@@ -70,9 +76,13 @@ export function buildPromptWithConversationSelections(
 ): string {
   const content = visibleContent.trimEnd()
   if (!selections.length) return content.trim()
-  const wire = selections.map(selection =>
-    selection.path?.trim() ? { path: selection.path, text: selection.text } : { text: selection.text },
-  )
+  const wire = selections.map(selection => {
+    const item: Record<string, string> = selection.path?.trim()
+      ? { path: selection.path, text: selection.text }
+      : { text: selection.text }
+    if (selection.comment?.trim()) item.comment = selection.comment
+    return item
+  })
   const block = ["# userselect:", "```userselect", JSON.stringify(wire), "```"].join("\n")
   return `${content}${content ? "\n\n" : ""}${block}`
 }
@@ -84,7 +94,8 @@ function isConversationSelectionText(value: unknown): value is ConversationSelec
   const candidate = value as Partial<ConversationSelectionText>
   if (typeof candidate.text !== "string") return false
   if ("path" in value && (typeof candidate.path !== "string" || !candidate.path.trim())) return false
-  return Object.keys(value).every(key => key === "text" || key === "path")
+  if ("comment" in value && typeof candidate.comment !== "string") return false
+  return Object.keys(value).every(key => key === "text" || key === "path" || key === "comment")
 }
 
 /**
@@ -112,6 +123,7 @@ export function parsePromptConversationSelections(content: string): {
       id: `parsed-conversation-selection-${selections.length + 1}`,
       text: value.text,
       ...(value.path?.trim() ? { path: value.path } : {}),
+      ...(value.comment?.trim() ? { comment: value.comment } : {}),
     })
   }
   if (!selections.length) return { visibleContent: content, selections: [] }
