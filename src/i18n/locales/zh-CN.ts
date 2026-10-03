@@ -901,6 +901,9 @@ export default {
     soundDefault: "默认",
     soundNone: "无",
     language: "界面语言",
+    projectGroup: "多目录项目组",
+    projectGroupDesc:
+      "开启后「添加项目」可将多个目录组成项目组，并向会话注入工作区清单；关闭后直接选择单个目录，且不再注入清单。",
     developerMode: "开发者模式",
     developerModeDesc: "开启后可在打包版本中打开开发者工具，并在启动时加载 element-source（重启后生效）。快捷键：",
     developerModeDescKeys: "或",

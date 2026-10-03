@@ -8,6 +8,8 @@ use crate::{commands, data_dir, errors::pix_error_detail};
 
 const FILE_CHANGES_SOURCE: &str = include_str!("../extensions/pix-file-changes.js");
 const FILE_CHANGES_NAME: &str = "pix-file-changes.js";
+const WORKSPACE_SOURCE: &str = include_str!("../extensions/pix-workspace.js");
+const WORKSPACE_NAME: &str = "pix-workspace.js";
 
 /// pi's prefix for a built-in extension name (`builtin:mcp`, `builtin:read`).
 const BUILTIN_PREFIX: &str = "builtin:";
@@ -74,6 +76,16 @@ pub fn rpc_args(app: &AppHandle) -> Result<Vec<String>, String> {
     ])
 }
 
+/// Extra `--extension` arguments for a workspace session. The manifest itself
+/// travels via the `PIX_WORKSPACE` environment variable set by the spawner.
+pub fn workspace_extension_args() -> Result<Vec<String>, String> {
+    let path = materialize(WORKSPACE_NAME, WORKSPACE_SOURCE)?;
+    Ok(vec![
+        "--extension".into(),
+        path.to_string_lossy().into_owned(),
+    ])
+}
+
 /// Extra `--extension` arguments for an isolated pi process that runs with
 /// `--no-extensions`. Since pi 0.99 that flag also disables the built-in
 /// extensions, including the one registering the llama.cpp provider, so a
@@ -97,6 +109,13 @@ mod tests {
         assert!(FILE_CHANGES_SOURCE.contains("pix-file-change"));
         assert!(FILE_CHANGES_SOURCE.contains("tool_call"));
         assert!(FILE_CHANGES_NAME.ends_with(".js"));
+    }
+
+    #[test]
+    fn workspace_extension_is_self_contained_and_named() {
+        assert!(WORKSPACE_SOURCE.contains("pix_workspace"));
+        assert!(WORKSPACE_SOURCE.contains("before_agent_start"));
+        assert!(WORKSPACE_NAME.ends_with(".js"));
     }
 
     #[test]

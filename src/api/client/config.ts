@@ -36,6 +36,8 @@ export interface AppConfig {
   builtinFileChanges?: boolean
   /** PiX 内置延迟发送插件；缺省为启用。 */
   builtinDelayedSend?: boolean
+  /** 多目录项目组；缺省为启用，关闭后「添加项目」直接选择单目录且会话不注入工作区清单。 */
+  workspaceGroups?: boolean
 }
 
 export interface PiSettings {

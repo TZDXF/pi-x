@@ -324,6 +324,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             &input.project,
             None,
             args,
+            None,
             Some(id.clone()),
         )
         .await?;

@@ -929,6 +929,9 @@ export default {
     soundDefault: "Default",
     soundNone: "None",
     language: "Interface language",
+    projectGroup: "Multi-directory project groups",
+    projectGroupDesc:
+      "When enabled, adding a project can group several directories and sessions receive a workspace manifest; when off, adding a project simply picks a single directory and no manifest is injected.",
     developerMode: "Developer mode",
     developerModeDesc:
       "When enabled, DevTools can be opened in packaged builds and element-source is loaded at startup (takes effect after restart). Shortcuts: ",

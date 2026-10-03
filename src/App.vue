@@ -9,6 +9,7 @@ import {
   detectPi,
   prepareWorkspaceGit,
   workspaceGitInfo,
+  chooseDirectoryPath,
   exportSessionFileHtml,
   listRunningSessions,
   getConfig,
@@ -374,6 +375,28 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
 
 async function switchProject() {
   if (workspace.gitBusy || navigating.value || connecting.value) return
+  // 项目组关闭时退化为直接选择目录：不弹项目组对话框。配置可能刚在设置页
+  // 改过，这里读最新值而不是启动时缓存的副本。
+  const groupsEnabled = await getConfig()
+    .then(cfg => cfg.workspaceGroups !== false)
+    .catch(() => true)
+  if (!groupsEnabled) {
+    navigating.value = true
+    try {
+      const path = await chooseDirectoryPath(t("welcome.openFolderTitle"))
+      if (!path) return
+      const dir = normalizeProjectPath(path)
+      // 显式添加的目录即使曾被移除也重新出现，与项目组的保存行为一致。
+      workspace.unremoveProject(dir)
+      await workspace.rememberWorkspace(dir)
+      await selectProject(dir)
+    } catch (e) {
+      ui.pushToast(String(e), "error")
+    } finally {
+      navigating.value = false
+    }
+    return
+  }
   editingProjectPath.value = null
   projectDialogOpen.value = true
 }
