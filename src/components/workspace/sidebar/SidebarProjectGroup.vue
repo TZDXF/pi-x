@@ -84,7 +84,7 @@ async function openProjectFolder(path: string) {
           <Button
             variant="quiet"
             size="row-action"
-            class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
+            class="hover-action opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
             :disabled="navigationDisabled || (!ready && path === project)"
             :title="t('sidebar.newSession')"
             :aria-label="`${t('sidebar.newSession')} · ${workspace.projectName(path)}`"
@@ -102,7 +102,7 @@ async function openProjectFolder(path: string) {
               ><Button
                 variant="quiet"
                 size="row-action"
-                class="project-more hover-action w-6 h-6.5 opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
+                class="project-more hover-action w-6 h-6.5 opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
                 :disabled="disabled"
                 :title="t('workspace.projectActions')"
                 :aria-label="`${t('workspace.projectActions')} · ${workspace.projectName(path)}`"
@@ -172,7 +172,7 @@ async function openProjectFolder(path: string) {
 </template>
 
 <style scoped>
-.project-heading:is(:hover, :has(:focus-visible)) > .hover-action {
+.project-heading:is(:hover, :has(:focus-visible)) > .hover-action:not(:disabled) {
   opacity: 1;
   pointer-events: auto;
 }

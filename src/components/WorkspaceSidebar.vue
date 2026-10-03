@@ -194,7 +194,7 @@ watch(
           <Button
             variant="quiet"
             size="toolbar"
-            class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
+            class="hover-action opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
             :disabled="navigationDisabled"
             :title="t('sidebar.openProject')"
             :aria-label="t('sidebar.openProject')"
@@ -262,7 +262,7 @@ watch(
           <Button
             variant="quiet"
             size="toolbar"
-            class="hover-action opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
+            class="hover-action opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
             :disabled="navigationDisabled"
             :title="t('projectless.name')"
             :aria-label="t('projectless.name')"
@@ -323,7 +323,7 @@ watch(
 </template>
 
 <style scoped>
-.sidebar-section-label:is(:hover, :has(:focus-visible)) > .hover-action {
+.sidebar-section-label:is(:hover, :has(:focus-visible)) > .hover-action:not(:disabled) {
   opacity: 1;
   pointer-events: auto;
 }

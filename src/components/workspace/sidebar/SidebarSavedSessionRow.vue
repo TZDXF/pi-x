@@ -78,7 +78,7 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
         <Button
           variant="quiet"
           size="row-action"
-          class="session-archive hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
+          class="session-archive hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
           :disabled="disabled"
           :title="s.archived ? t('workspace.restore') : t('workspace.archive')"
           :aria-label="s.archived ? t('workspace.restore') : t('workspace.archive')"
@@ -116,21 +116,21 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
   background: var(--sidebar-accent);
   color: var(--sidebar-accent-foreground);
 }
-.session-row:is(:hover, :has(:focus-visible)) .session-archive {
+.session-row:is(:hover, :has(:focus-visible)) .session-archive:not(:disabled) {
   opacity: 1;
   pointer-events: auto;
 }
-.session-row:has(.session-archive):is(:hover, :has(:focus-visible)) .session-link {
+.session-row:has(.session-archive:not(:disabled)):is(:hover, :has(:focus-visible)) .session-link {
   margin-right: 28px;
 }
 @media (hover: none) {
-  .session-row:has(.session-archive) .session-link {
+  .session-row:has(.session-archive:not(:disabled)) .session-link {
     margin-right: 28px;
     padding-right: 0;
   }
 }
 @media (pointer: coarse) {
-  .session-row:has(.session-archive) .session-link {
+  .session-row:has(.session-archive:not(:disabled)) .session-link {
     margin-right: 36px;
     padding-right: 0;
   }
