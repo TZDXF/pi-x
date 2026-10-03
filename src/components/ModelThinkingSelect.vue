@@ -67,7 +67,7 @@ function onSliderChange(value: unknown) {
         :disabled="disabled"
         :title="
           selectedModel
-            ? `${selectedModel.name || selectedModel.id} 路 ${levelLabel(thinkingLevel)}`
+            ? `${selectedModel.name || selectedModel.id} ${levelLabel(thinkingLevel)}`
             : t('chat.selectModel')
         "
         class="flex h-8 min-w-0 max-w-60 max-[900px]:max-w-45 items-center gap-1 rounded-lg px-2 text-xs whitespace-nowrap text-foreground outline-none select-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
@@ -75,7 +75,6 @@ function onSliderChange(value: unknown) {
         <span class="min-w-0 truncate">{{
           selectedModel ? selectedModel.name || selectedModel.id : t("chat.selectModel")
         }}</span>
-        <span v-if="selectedModel" class="text-muted-foreground" aria-hidden>路</span>
         <span class="min-w-0 truncate text-muted-foreground">{{ levelLabel(thinkingLevel) }}</span>
         <ChevronDownIcon class="size-3.5 shrink-0 text-muted-foreground" />
       </button>
@@ -85,7 +84,7 @@ function onSliderChange(value: unknown) {
         <DropdownMenuSubTrigger class="max-w-56">
           <span class="min-w-0 truncate">{{
             selectedModel
-              ? `${selectedModel.name || selectedModel.id} 路 ${levelLabel(thinkingLevel)}`
+              ? `${selectedModel.name || selectedModel.id} ${levelLabel(thinkingLevel)}`
               : t("chat.selectModel")
           }}</span>
         </DropdownMenuSubTrigger>
