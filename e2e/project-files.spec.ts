@@ -116,13 +116,10 @@ test.describe("project files", () => {
     const listX = requireX(await page.locator('[data-slot="scroll-area-viewport"]').first().boundingBox(), "file list")
     expect(previewX, `preview x ${previewX} should be left of list x ${listX}`).toBeLessThan(listX)
 
-    // 选中第 5–7 行（锚点落在行内 code 元素上），点批注按钮后面板应给出该范围。
-    await selectPreviewLines(page)
-    await page.getByRole("button", { name: "Annotate", exact: true }).click()
+    // 批注入口已迁到行号栏：从第 5 行的按钮拖到第 7 行，松手后出现范围草稿。
+    await dragPreviewLines(page)
     await expect(page.getByText("Lines 5-7")).toBeVisible()
     await page.getByPlaceholder("Write a comment…").fill("请检查这里的边界条件")
-    // 输入框获得焦点可能清除 DOM selection；重新套用同一段选区，模拟用户在预览中保持选中的流程。
-    await selectPreviewLines(page)
     const addComment = page.getByRole("button", { name: "Add comment", exact: true })
     await expect(addComment).toBeEnabled()
     await addComment.click()
@@ -153,27 +150,18 @@ test.describe("project files", () => {
   })
 })
 
-/** Select characters 0-2 on preview lines 5 and 7 using the highlighted text nodes. */
-async function selectPreviewLines(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const rows = [...document.querySelectorAll("[data-line]")]
-    const code = (row: Element): Element => row.querySelector("code") ?? row
-    const selectableText = (element: Element): Text => {
-      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (node instanceof Text && node.length >= 3) return node
-      }
-      throw new Error("selection anchor has no text node with at least three characters")
-    }
-    const range = document.createRange()
-    range.setStart(selectableText(code(rows[4])), 0)
-    range.setEnd(selectableText(code(rows[6])), 3)
-    const selection = window.getSelection()
-    if (!selection) throw new Error("window selection is unavailable")
-    selection.removeAllRanges()
-    selection.addRange(range)
-    document.dispatchEvent(new Event("selectionchange"))
-  })
+/** Drag the gutter annotation button on line 5 to the content of line 7. */
+async function dragPreviewLines(page: Page): Promise<void> {
+  const start = page.locator('[data-line="5"]').getByRole("button", { name: "Click or drag to comment" })
+  const end = page.locator('[data-line="7"] code')
+  await start.hover()
+  const startBox = await start.boundingBox()
+  const endBox = await end.boundingBox()
+  if (!startBox || !endBox) throw new Error("annotation drag targets are unavailable")
+  await page.mouse.move(startBox.x + startBox.width / 2, startBox.y + startBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(endBox.x + Math.min(10, endBox.width / 2), endBox.y + endBox.height / 2, { steps: 4 })
+  await page.mouse.up()
 }
 
 function requireX(box: ElementBox | null, label: string): number {

@@ -62,9 +62,21 @@ export function commentFilePath(comment: { path: string; root?: string }): strin
   return `${root}/${comment.path}`
 }
 
+const COMMENT_HEADING = /^## Comment(?:[ \t]+\d+)?[ \t]*\r?$/m
+const COMMENT_FENCE = /^`{3,}code-comment[ \t]*$/
+
 export function formatCodeComment(draft: CodeCommentDraft, index: number): string {
   const selected = draft.selectedText.trim().slice(0, MAX_SELECTED_TEXT_LENGTH)
   const fence = fenceFor(selected)
+  const comment = draft.comment.trim()
+  // 正文可以包含完整的伪条目，单靠字段 lookahead 无法消歧；仅在需要时加围栏。
+  // 保留标记本身也是合法正文，需再包一层，避免解析时误当成外层围栏。
+  const protectComment = COMMENT_HEADING.test(comment) || COMMENT_FENCE.test(comment.split(/\r?\n/)[0])
+  let commentBody = comment
+  if (protectComment) {
+    const commentFence = fenceFor(comment)
+    commentBody = [commentFence + "code-comment", comment, commentFence].join("\n")
+  }
   return [
     `## Comment ${index + 1}`,
     `File: ${draft.path}`,
@@ -75,7 +87,7 @@ export function formatCodeComment(draft: CodeCommentDraft, index: number): strin
     selected,
     fence,
     "Comment:",
-    draft.comment.trim(),
+    commentBody,
   ].join("\n")
 }
 
@@ -111,34 +123,83 @@ function parseLineRange(value: string): CodeCommentRange | null {
   return { start, end }
 }
 
+/** 只接受与开头同长度的闭合围栏，不让内层 Markdown 围栏提前结束引用。 */
+function readFencedText(lines: readonly string[], start: number): { text: string; nextLine: number } | null {
+  const opening = /^(`{3,})[^`]*$/.exec((lines[start] ?? "").trimEnd())
+  if (!opening) return null
+  for (let end = start + 1; end < lines.length; end++) {
+    if (lines[end].trimEnd() === opening[1]) {
+      return {
+        text: lines
+          .slice(start + 1, end)
+          .join("\n")
+          .trim(),
+        nextLine: end + 1,
+      }
+    }
+  }
+  return null
+}
+
 /**
- * 解析 prompt 尾部的 "# Code comments:" 块：气泡只显示块之前的正文，
- * 块内各条按 ZCode 的字段约定还原为批注附件。识别不到时原文原样返回。
- * 注意不能用 multiline 的 `$` 定位块头，否则非贪婪匹配会在首条 Comment 后提前截断。
+ * 解析 prompt 尾部的 "# Code comments:" 块：按字段顺序读取，选区围栏内不识别条目头。
+ * 普通批注只有「Comment 标题 + File 字段」才是下一条的边界；受保护批注完整读到闭合围栏。
+ * 任一条目不能解析就原样返回整个块，避免剥离时隐藏损坏条目或未知内容。
  */
 export function parsePromptCodeComments(content: string): ParsedPromptComments {
+  const unparsed = { visibleContent: content, comments: [] }
   const blockMatch = /(?:^|\n\n)# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(content)
-  if (!blockMatch || blockMatch.index < 0) return { visibleContent: content, comments: [] }
-  const rawItems = blockMatch[1]
-    .split(/\n(?=## Comment(?:\s+\d+)?\n)/)
-    .map(item => item.trim())
-    .filter(Boolean)
+  if (!blockMatch) return unparsed
+  // 保留正文行尾的 CR；只在读取结构字段时去掉它，避免改变 Windows 选区内容。
+  const lines = blockMatch[1].split("\n")
+  const lineAt = (index: number) => (lines[index] ?? "").replace(/\r$/, "")
   const comments: ParsedCodeComment[] = []
-  for (const rawItem of rawItems) {
-    const fileMatch = /^File:\s*(.+)$/m.exec(rawItem)
-    const linesMatch = /^Lines:\s*(.+)$/m.exec(rawItem)
-    const bodyMatch = /Selected text:\s*\n```(?:[^\n`]*)?\n([\s\S]*?)\n```\s*\nComment:\s*\n?([\s\S]*)$/m.exec(rawItem)
+  let cursor = 0
+  const skipBlankLines = () => {
+    while (cursor < lines.length && !lines[cursor].trim()) cursor++
+  }
+  const isItemStart = (line: number) => COMMENT_HEADING.test(lines[line] ?? "") && /^File:/.test(lines[line + 1] ?? "")
+
+  while (cursor < lines.length) {
+    skipBlankLines()
+    if (cursor === lines.length) break
+    // 兼容旧消息中首条不带 Comment 标题的写法。
+    if (COMMENT_HEADING.test(lines[cursor])) cursor++
+    const fileMatch = /^File:[ \t]*(.+)$/.exec(lineAt(cursor++))
+    if (/^Side:/.test(lines[cursor] ?? "")) cursor++
+    const linesMatch = /^Lines:[ \t]*(.+)$/.exec(lineAt(cursor++))
     const range = linesMatch ? parseLineRange(linesMatch[1]) : null
-    if (!fileMatch?.[1].trim() || !range || !bodyMatch) continue
+    if (!fileMatch?.[1].trim() || !range || !/^Selected text:[ \t]*$/.test(lineAt(cursor++))) return unparsed
+    const selected = readFencedText(lines, cursor)
+    if (!selected) return unparsed
+    cursor = selected.nextLine
+    skipBlankLines()
+    const commentMatch = /^Comment:[ \t]*(.*)$/.exec(lineAt(cursor++))
+    if (!commentMatch) return unparsed
+
+    let comment: string
+    if (!commentMatch[1] && COMMENT_FENCE.test(lineAt(cursor))) {
+      const body = readFencedText(lines, cursor)
+      if (!body) return unparsed
+      comment = body.text
+      cursor = body.nextLine
+      skipBlankLines()
+      // 围栏外的非结构文本不能被静默丢弃。
+      if (cursor < lines.length && !isItemStart(cursor)) return unparsed
+    } else {
+      const start = cursor
+      while (cursor < lines.length && !isItemStart(cursor)) cursor++
+      comment = [commentMatch[1], ...lines.slice(start, cursor)].join("\n").trim()
+    }
     comments.push({
       id: `parsed-code-comment-${comments.length + 1}-${range.start}-${range.end}`,
       path: fileMatch[1].trim(),
       startLine: range.start,
       endLine: range.end,
-      selectedText: bodyMatch[1].trim(),
-      comment: bodyMatch[2].trim(),
+      selectedText: selected.text,
+      comment,
     })
   }
-  if (!comments.length) return { visibleContent: content, comments: [] }
+  if (!comments.length) return unparsed
   return { visibleContent: content.slice(0, blockMatch.index).trimEnd(), comments }
 }

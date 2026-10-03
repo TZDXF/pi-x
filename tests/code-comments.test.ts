@@ -1,4 +1,5 @@
 import { test, expect } from "vitest"
+import { parseComposerPromptContexts, serializeComposerPromptContexts } from "@/lib/promptContexts"
 import {
   selectionLineRange,
   formatCodeComment,
@@ -208,7 +209,7 @@ test("parsePromptCodeComments tolerates L-prefixed and padded line ranges", () =
   ].join("\n")
   const parsed = parsePromptCodeComments(`\n\n# Code comments:\n\n${raw}`)
   expect(parsed.comments[0]).toMatchObject({ path: "a.ts", startLine: 4, endLine: 9 })
-  // 行范围非法（start > end）的条目被丢弃，块整体视为未解析。
+  // 行范围非法（start > end）时保留原文，块整体视为未解析。
   const invalid = raw.replace("Lines: L4 - L9", "Lines: 9-4")
   expect(parsePromptCodeComments(`\n\n# Code comments:\n\n${invalid}`).comments).toEqual([])
 })
@@ -219,4 +220,224 @@ test("commentFilePath keeps in-session paths relative and prefixes cross-folder 
   // Windows 反斜杠与尾部分隔符统一成正斜杠前缀，对齐 @ 提及的跨目录路径约定。
   expect(commentFilePath({ path: "src/a.ts", root: "C:\\code\\repo-b\\" })).toBe("C:/code/repo-b/src/a.ts")
   expect(commentFilePath({ path: "src/a.ts", root: "C:/code/repo-b" })).toBe("C:/code/repo-b/src/a.ts")
+})
+
+// ---- 围栏、结构边界与 composer 的回归契约 ----
+
+const roundTripDraft = {
+  path: "docs/example.md",
+  startLine: 4,
+  endLine: 9,
+  selectedText: "code",
+  comment: "说明",
+}
+
+function expectCommentDrafts(parsed, drafts) {
+  expect(parsed.comments.map(({ id: _id, ...draft }) => draft)).toEqual(drafts)
+}
+
+test.each([3, 4, 8])("code comments round-trip a %i-backtick selection fence", length => {
+  const innerFence = "`".repeat(length - 1)
+  const selectedText = length === 3 ? "plain code" : [innerFence + "ts", "const x = 1", innerFence].join("\n")
+  const draft = { ...roundTripDraft, selectedText }
+  const prompt = buildPromptWithCodeComments("正文", [draft])
+  expect(prompt).toContain(["Selected text:", "`".repeat(length), selectedText, "`".repeat(length)].join("\n"))
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [draft])
+})
+
+test.each([3, 4, 8])("parsePromptCodeComments accepts a %i-backtick fence with a language tag", length => {
+  const fence = "`".repeat(length)
+  const prompt = buildPromptWithCodeComments("正文", [roundTripDraft])
+    .replace("```\ncode\n```", [fence + "typescript", "code", fence].join("\n"))
+    .replace("Side: R\n", "")
+    .replace("Lines: 4-9", "Lines: L4 - L9")
+    .replace("Comment:\n说明", "Comment: 说明")
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [roundTripDraft])
+})
+
+test("selected text keeps shorter/longer fences and field-like lines inside its outer fence", () => {
+  const selectedText = [
+    "```ts",
+    "code",
+    "```",
+    "``````",
+    "Comment:",
+    "## Comment 99",
+    "File: fake.ts",
+    "Side: L",
+    "Lines: L1-L2",
+    "Selected text:",
+    "# Code comments:",
+    "tail",
+  ].join("\n")
+  const draft = { ...roundTripDraft, selectedText }
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments("正文", [draft, roundTripDraft]))
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [draft, roundTripDraft])
+})
+
+test("comments containing headings and even complete serialized entries round-trip as text", () => {
+  const fakeEntry = formatCodeComment({ ...roundTripDraft, path: "fake.ts", comment: "不是附件" }, 98)
+  const comment = [
+    "说明",
+    "## Comment",
+    "File: literal.ts",
+    "Lines: L1-L2",
+    "Selected text:",
+    "Comment:",
+    "```markdown",
+    fakeEntry,
+    "```",
+    "# Code comments:",
+    "结束",
+  ].join("\n")
+  const drafts = [{ ...roundTripDraft, comment }, roundTripDraft]
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments("正文", drafts))
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, drafts)
+})
+
+test("a literal protected-comment fence is not mistaken for the serialization wrapper", () => {
+  const comment = ["```code-comment", "literal", "```"].join("\n")
+  const draft = { ...roundTripDraft, comment }
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments("正文", [draft, roundTripDraft]))
+  expectCommentDrafts(parsed, [draft, roundTripDraft])
+})
+
+test("legacy plain comments keep heading-only lines and unrelated field labels", () => {
+  const comment = [
+    "说明",
+    "## Comment 42",
+    "不是新条目",
+    "## Comment",
+    "Lines: L1-L2",
+    "Comment:",
+    "File: literal.ts",
+  ].join("\n")
+  const raw = formatCodeComment(roundTripDraft, 0).replace("Comment:\n说明", "Comment:\n" + comment)
+  const parsed = parsePromptCodeComments(
+    "正文\n\n# Code comments:\n\n" + raw + "\n\n" + formatCodeComment(roundTripDraft, 1),
+  )
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [{ ...roundTripDraft, comment }, roundTripDraft])
+})
+
+test("mixed valid entries preserve order, ids, empty fields, and normalization", () => {
+  const drafts = [
+    roundTripDraft,
+    { ...roundTripDraft, selectedText: "", comment: "" },
+    { ...roundTripDraft, selectedText: "  ```md\nx\n```  ", comment: "  ## Comment 7\n文字  " },
+  ]
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments("正文", drafts))
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(
+    parsed,
+    drafts.map(draft => ({ ...draft, selectedText: draft.selectedText.trim(), comment: draft.comment.trim() })),
+  )
+  expect(parsed.comments.map(comment => comment.id)).toEqual([
+    "parsed-code-comment-1-4-9",
+    "parsed-code-comment-2-4-9",
+    "parsed-code-comment-3-4-9",
+  ])
+})
+
+test.each([0, 1, 2])("mixed entries retain the entire prompt when entry %i has an invalid range", index => {
+  const entries = [0, 1, 2].map(i => formatCodeComment(roundTripDraft, i))
+  entries[index] = entries[index].replace("Lines: 4-9", "Lines: 9-4")
+  const prompt = "正文\n\n# Code comments:\n\n" + entries.join("\n\n")
+  expect(parsePromptCodeComments(prompt)).toEqual({ visibleContent: prompt, comments: [] })
+})
+
+test.each(["```", "`````"])("mismatched closing fence %s does not hide a malformed entry", closingFence => {
+  const raw = formatCodeComment(roundTripDraft, 0).replace("```\ncode\n```", ["````", "code", closingFence].join("\n"))
+  const prompt = "正文\n\n# Code comments:\n\n" + formatCodeComment(roundTripDraft, 0) + "\n\n" + raw
+  expect(parsePromptCodeComments(prompt)).toEqual({ visibleContent: prompt, comments: [] })
+})
+
+test("unrecognized block preamble is not discarded alongside valid entries", () => {
+  const prompt = "正文\n\n# Code comments:\n\nunknown text\n\n" + formatCodeComment(roundTripDraft, 0)
+  expect(parsePromptCodeComments(prompt)).toEqual({ visibleContent: prompt, comments: [] })
+})
+
+test("composer round-trips selections and complex code comments in reverse serialization order", () => {
+  const comments = [
+    {
+      ...roundTripDraft,
+      selectedText: "```md\n## Comment 2\nFile: literal.md\n```",
+      comment: "建议\n## Comment 9\nFile: not-an-entry.ts",
+    },
+    roundTripDraft,
+  ]
+  const selections = [{ text: "引用\n## Comment 1\n```", comment: "引用批注" }]
+  const prompt = serializeComposerPromptContexts("正文", { comments, selections })
+  expect(prompt.indexOf("# userselect:")).toBeLessThan(prompt.indexOf("# Code comments:"))
+  const parsed = parseComposerPromptContexts(prompt)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, comments)
+  expect(parsed.selections).toEqual([{ id: "parsed-conversation-selection-1", ...selections[0] }])
+})
+
+test("composer retains both context blocks if mixed code comments cannot be parsed", () => {
+  const prompt = serializeComposerPromptContexts("正文", {
+    comments: [roundTripDraft, roundTripDraft],
+    selections: [{ text: "引用" }],
+  }).replace("Lines: 4-9", "Lines: 9-4")
+  expect(parseComposerPromptContexts(prompt)).toEqual({ visibleContent: prompt, comments: [], selections: [] })
+})
+
+test.each([3, 4, 8])("protected comments round-trip with a %i-backtick fence", length => {
+  const comment = ["## Comment 99", "File: literal.ts", "`".repeat(length - 1), "Comment:", "tail"].join("\n")
+  const draft = { ...roundTripDraft, comment }
+  const prompt = buildPromptWithCodeComments("正文", [draft, roundTripDraft])
+  expect(prompt).toContain("Comment:\n" + "`".repeat(length) + "code-comment\n")
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [draft, roundTripDraft])
+})
+
+test("selected text matches the exact outer fence rather than a shorter or longer closing line", () => {
+  const selectedText = ["```", "Comment:", "shorter", "`````", "Comment:", "longer", "end"].join("\n")
+  const raw = formatCodeComment(roundTripDraft, 0).replace("```\ncode\n```", ["````", selectedText, "````"].join("\n"))
+  const parsed = parsePromptCodeComments("正文\n\n# Code comments:\n\n" + raw)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [{ ...roundTripDraft, selectedText }])
+})
+
+test.each(["missing close", "trailing content"])(
+  "a protected comment with %s preserves the original prompt",
+  problem => {
+    const draft = { ...roundTripDraft, comment: "## Comment 9\n说明" }
+    let prompt = buildPromptWithCodeComments("正文", [roundTripDraft, draft])
+    prompt = problem === "missing close" ? prompt.slice(0, -3) : prompt + "\nunknown text"
+    expect(parsePromptCodeComments(prompt)).toEqual({ visibleContent: prompt, comments: [] })
+  },
+)
+
+test("legacy first entries without a heading, unnumbered headings, and single L-prefixed lines still parse", () => {
+  const raw = formatCodeComment({ ...roundTripDraft, endLine: 4 }, 0)
+    .replace("## Comment 1\n", "")
+    .replace("Side: R\n", "")
+    .replace("Lines: 4", "Lines: L4")
+  const second = formatCodeComment(roundTripDraft, 1).replace("## Comment 2", "## Comment")
+  const parsed = parsePromptCodeComments("正文\n\n# Code comments:\n\n" + raw + "\n\n" + second)
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, [{ ...roundTripDraft, endLine: 4 }, roundTripDraft])
+})
+
+test("serialized selections and comments preserve internal CRLF line endings", () => {
+  const drafts = [
+    {
+      ...roundTripDraft,
+      selectedText: "```md\r\n## Comment 1\r\n```",
+      comment: "建议\r\n## Comment 9\r\nFile: literal.ts",
+    },
+    { ...roundTripDraft, selectedText: "one\r\ntwo", comment: "one\r\ntwo" },
+  ]
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments("正文", drafts))
+  expect(parsed.visibleContent).toBe("正文")
+  expectCommentDrafts(parsed, drafts)
 })
