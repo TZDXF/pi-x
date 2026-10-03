@@ -44,15 +44,18 @@ export interface PiSettings {
   defaultThinkingLevel?: import("../protocol").ThinkingLevel
   modelThinkingLevels?: Record<string, import("../protocol").ThinkingLevel>
   skills: string[]
-  /** pi 全局 settings.json 的 `retry` 段。 */
-  retry: { maxRetries: number }
+  /** pi 全局 settings.json 的 `retry` 段；enabled 是旧版 pi 的缺省值。 */
+  retry: { maxRetries: number; enabled?: boolean }
+  /** pi 全局 settings.json 的 `compaction.enabled`；旧版 pi 缺省 true。 */
+  compaction?: { enabled: boolean }
   /** pi 全局 settings.json 的 `followUpMode`：排队跟进消息的投递节奏。 */
   followUpMode?: import("../protocol").QueueDeliveryMode
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
   settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills" | "followUpMode">> & {
-    retry?: { maxRetries: number }
+    retry?: { maxRetries?: number; enabled?: boolean }
+    compaction?: { enabled: boolean }
   },
 ) => invoke<void>("pi_settings_save", { settings })
 

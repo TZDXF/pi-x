@@ -33,6 +33,12 @@ export const SHORTCUT_ACTION_DEFS = {
   "chat.copyLastAnswer": { scope: "chat", labelKey: "shortcuts.actions.copyLastAnswer", default: "ctrl+shift+c" },
   "chat.scrollTop": { scope: "chat", labelKey: "shortcuts.actions.scrollTop", default: "ctrl+home" },
   "chat.scrollBottom": { scope: "chat", labelKey: "shortcuts.actions.scrollBottom", default: "ctrl+end" },
+  "chat.cycleModel": { scope: "chat", labelKey: "shortcuts.actions.cycleModel", default: "ctrl+alt+m" },
+  "chat.cycleThinkingLevel": {
+    scope: "chat",
+    labelKey: "shortcuts.actions.cycleThinkingLevel",
+    default: "ctrl+alt+t",
+  },
   "editor.attachFile": { scope: "editor", labelKey: "shortcuts.actions.attachFile", default: "ctrl+shift+a" },
   "editor.toggleDelayedSend": {
     scope: "editor",

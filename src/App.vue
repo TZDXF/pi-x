@@ -588,6 +588,23 @@ function focusComposerFromShortcut() {
   focusComposer()
 }
 
+/** cycle_model / cycle_thinking_level:返回 false 表示没有其他可选（pi data 为 null）。 */
+async function cycleModelShortcut() {
+  try {
+    if (!(await session.cycleModel())) ui.pushToast(t("chat.cycleNoOtherModel"), "info")
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
+}
+
+async function cycleThinkingLevelShortcut() {
+  try {
+    if (!(await session.cycleThinkingLevel())) ui.pushToast(t("chat.cycleThinkingUnsupported"), "info")
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
+}
+
 function switchSessionByOffset(offset: number) {
   if (
     (route.value.name !== "home" && route.value.name !== "session" && route.value.name !== "project") ||
@@ -617,6 +634,8 @@ const offShortcutHandlers = [
   registerShortcutHandler("app.archives", () => navigate("/settings/archives")),
   registerShortcutHandler("app.prevSession", () => switchSessionByOffset(-1)),
   registerShortcutHandler("app.nextSession", () => switchSessionByOffset(1)),
+  registerShortcutHandler("chat.cycleModel", cycleModelShortcut),
+  registerShortcutHandler("chat.cycleThinkingLevel", cycleThinkingLevelShortcut),
 ]
 
 onMounted(() => window.addEventListener("keydown", onGlobalKeydown))

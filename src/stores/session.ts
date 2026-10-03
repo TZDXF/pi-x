@@ -79,6 +79,9 @@ export const createSessionStore = (runtimeId = "default") =>
     const followUpMode = ref<QueueDeliveryMode | null>(null)
     /** File path of the active pi session (null until persisted). */
     const sessionFile = ref<string | null>(null)
+    /** Runtime auto-retry switch (set_auto_retry). pi reports no getter for it;
+     *  the client tracks it, seeded from settings.json `retry.enabled` on init. */
+    const autoRetry = ref<boolean | null>(null)
     /** On-disk mtime at the last time our own view of the file was synced;
      *  a watcher event reporting a different value means an external edit. */
     const syncedSessionMtime = ref<number | null>(null)
@@ -600,6 +603,66 @@ export const createSessionStore = (runtimeId = "default") =>
       remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? level, rpcThinkingLevels.value)
     }
 
+    /** set_auto_retry: the runtime auto-retry switch of the running pi. */
+    async function setAutoRetry(enabled: boolean) {
+      const result = await rpcRequest({ type: "set_auto_retry", enabled })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.autoRetrySwitch"))
+      autoRetry.value = enabled
+    }
+
+    /** set_auto_compaction: toggles automatic compaction of the running pi;
+     *  get_state reports the authoritative value, so re-read it. */
+    async function setAutoCompaction(enabled: boolean) {
+      const result = await rpcRequest({ type: "set_auto_compaction", enabled })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.autoCompactionSwitch"))
+      await refreshState()
+    }
+
+    /** abort_retry: cancel the pending retry delay and stop retrying; pi
+     *  reports the cancellation through auto_retry_end(success:false). */
+    async function abortRetry() {
+      const result = await rpcRequest({ type: "abort_retry" })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.abortRetry"))
+    }
+
+    /** cycle_model: switch to the next available model. Returns false when no
+     *  other model is configured (pi answers success with null data). */
+    async function cycleModel(): Promise<boolean> {
+      const previous =
+        pendingModelChange?.from ?? (state.value?.model && `${state.value.model.provider}/${state.value.model.id}`)
+      const result = await rpcRequest<{ model: Model | null }>({ type: "cycle_model" })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
+      if (!result.data?.model) return false
+      desiredModelKey.value = null
+      // Cycling appends a model_change entry like set_model does.
+      await syncSessionFile()
+      await refreshState()
+      await refreshThinkingLevels()
+      if (state.value?.model) {
+        const current = `${state.value.model.provider}/${state.value.model.id}`
+        if (started.value && previous)
+          pendingModelChange = previous === current ? null : { from: previous, to: current }
+        remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
+      }
+      return true
+    }
+
+    /** cycle_thinking_level: next thinking level of the current model. Returns
+     *  false when the model does not support thinking (pi answers success with
+     *  null data). */
+    async function cycleThinkingLevel(): Promise<boolean> {
+      const result = await rpcRequest<{ level: ThinkingLevel | null }>({ type: "cycle_thinking_level" })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
+      if (!result.data?.level) return false
+      desiredThinkingLevel.value = null
+      // Cycling appends a thinking-level entry like set_thinking_level does.
+      await syncSessionFile()
+      await refreshState()
+      await refreshThinkingLevels()
+      remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? result.data.level, rpcThinkingLevels.value)
+      return true
+    }
+
     // ---- queries ----
     async function refreshState() {
       const res = await rpcRequest<SessionState & { sessionFile?: string }>({ type: "get_state" })
@@ -617,15 +680,17 @@ export const createSessionStore = (runtimeId = "default") =>
       followUpMode.value = mode
     }
 
-    /** Push the user's configured followUpMode (pi global settings.json) into a
-     *  session pi already started; unset means pi's default applies. */
-    function applyConfiguredFollowUpMode() {
+    /** Push the user's configured followUpMode and retry switch (pi global
+     *  settings.json) into a session pi already started; unset means pi's
+     *  default applies. */
+    function applyConfiguredModes() {
       void getPiSettings()
         .then(settings => {
+          autoRetry.value = settings.retry?.enabled ?? true
           if (settings.followUpMode && settings.followUpMode !== followUpMode.value)
             return setFollowUpMode(settings.followUpMode)
         })
-        .catch(e => console.warn("[pi] follow-up mode:", e))
+        .catch(e => console.warn("[pi] configured modes:", e))
     }
 
     async function refreshStats() {
@@ -698,7 +763,7 @@ export const createSessionStore = (runtimeId = "default") =>
       invalidateOfflineModels()
       cwd.value = project
       await Promise.all([refreshState(), refreshCommands(), refreshModels(), refreshStats()])
-      applyConfiguredFollowUpMode()
+      applyConfiguredModes()
       await refreshThinkingLevels()
       if (fresh) await applyRememberedSelection()
       else {
@@ -725,6 +790,7 @@ export const createSessionStore = (runtimeId = "default") =>
       isCompacting.value = false
       retryInfo.value = null
       dispositionNotice.value = null
+      autoRetry.value = null
       userTurnCount = 0
       sessionFile.value = null
       syncedSessionMtime.value = null
@@ -822,6 +888,12 @@ export const createSessionStore = (runtimeId = "default") =>
       setDesiredModel,
       setThinkingLevel,
       setDesiredThinkingLevel,
+      autoRetry,
+      setAutoRetry,
+      setAutoCompaction,
+      abortRetry,
+      cycleModel,
+      cycleThinkingLevel,
       refreshState,
       refreshStats,
       refreshModels,

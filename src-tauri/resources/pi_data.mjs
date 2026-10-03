@@ -38,7 +38,7 @@ if (op.startsWith("trust_")) {
     const patch = request.settings;
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid settings");
     for (const key of Object.keys(patch)) {
-      if (!["defaultProvider", "defaultModel", "skills", "retry", "followUpMode"].includes(key))
+      if (!["defaultProvider", "defaultModel", "skills", "retry", "compaction", "followUpMode"].includes(key))
         throw new Error(`Unsupported setting: ${key}`);
     }
     if ("skills" in patch && (!Array.isArray(patch.skills) || !patch.skills.every(p => typeof p === "string"))) throw new Error("Invalid skill paths");
@@ -54,6 +54,7 @@ if (op.startsWith("trust_")) {
       settings.setSkillPaths(patch.skills);
     }
     if ("retry" in patch) applyRetrySettings(settings, patch.retry);
+    if ("compaction" in patch) applyCompactionSettings(settings, patch.compaction);
     await settings.flush();
     checkErrors(settings);
   }
@@ -61,7 +62,7 @@ if (op.startsWith("trust_")) {
   result = { defaultProvider: global.defaultProvider, defaultModel: global.defaultModel,
     defaultThinkingLevel: global.defaultThinkingLevel, modelThinkingLevels: global.modelThinkingLevels,
     skills: global.skills ?? [], retry: readRetrySettings(settings),
-    followUpMode: settings.getFollowUpMode() };
+    compaction: readCompactionSettings(settings), followUpMode: settings.getFollowUpMode() };
 } else if (op === "session_export_html") {
   const { exportFromFile } = await load("core/export-html/index.js");
   result = await exportFromFile(request.file, { outputPath: request.outputPath });
@@ -83,25 +84,53 @@ function checkErrors(settings) {
 }
 
 function readRetrySettings(settings) {
-  return { maxRetries: settings.getRetrySettings().maxRetries };
+  return {
+    maxRetries: settings.getRetrySettings().maxRetries,
+    enabled: typeof settings.getRetryEnabled === "function" ? settings.getRetryEnabled() : true,
+  };
+}
+
+function readCompactionSettings(settings) {
+  return { enabled: typeof settings.getCompactionEnabled === "function" ? settings.getCompactionEnabled() : true };
 }
 
 /**
  * Pi exposes no setter for the retry attempt count, so write it the way Pi's own
  * setters do — mutate the global settings object, mark the key as modified, then
- * save — which rewrites only that key inside the existing `retry` block.
+ * save — which rewrites only that key inside the existing `retry` block. The
+ * enable switch does have an official setter; use it when available.
  */
 function applyRetrySettings(settings, patch) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid retry settings");
   for (const key of Object.keys(patch)) {
-    if (key !== "maxRetries") throw new Error(`Unsupported retry setting: ${key}`);
+    if (key !== "maxRetries" && key !== "enabled") throw new Error(`Unsupported retry setting: ${key}`);
   }
-  if (!Number.isSafeInteger(patch.maxRetries) || patch.maxRetries < 0) throw new Error("Invalid retry maxRetries");
   if (!settings.globalSettings || typeof settings.markModified !== "function" || typeof settings.save !== "function") {
     throw new Error("Installed Pi does not support retry settings");
   }
-  if (!settings.globalSettings.retry) settings.globalSettings.retry = {};
-  settings.globalSettings.retry.maxRetries = patch.maxRetries;
-  settings.markModified("retry", "maxRetries");
+  if ("enabled" in patch) {
+    if (typeof patch.enabled !== "boolean") throw new Error("Invalid retry enabled");
+    if (typeof settings.setRetryEnabled !== "function") throw new Error("Installed Pi does not support retry settings");
+    settings.setRetryEnabled(patch.enabled);
+  }
+  if ("maxRetries" in patch) {
+    if (!Number.isSafeInteger(patch.maxRetries) || patch.maxRetries < 0) throw new Error("Invalid retry maxRetries");
+    if (!settings.globalSettings.retry) settings.globalSettings.retry = {};
+    settings.globalSettings.retry.maxRetries = patch.maxRetries;
+    settings.markModified("retry", "maxRetries");
+  }
   settings.save();
+}
+
+function applyCompactionSettings(settings, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid compaction settings");
+  for (const key of Object.keys(patch)) {
+    if (key !== "enabled") throw new Error(`Unsupported compaction setting: ${key}`);
+  }
+  if ("enabled" in patch) {
+    if (typeof patch.enabled !== "boolean") throw new Error("Invalid compaction enabled");
+    if (typeof settings.setCompactionEnabled !== "function")
+      throw new Error("Installed Pi does not support compaction settings");
+    settings.setCompactionEnabled(patch.enabled);
+  }
 }

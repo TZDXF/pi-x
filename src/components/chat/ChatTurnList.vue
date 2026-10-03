@@ -2,6 +2,7 @@
 import { reactive, ref, watch, onBeforeUnmount, type UnwrapRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { RefreshCw } from "@lucide/vue"
+import { Button } from "@/components/ui/button"
 import {
   Conversation,
   ConversationContent,
@@ -43,9 +44,17 @@ const emit = defineEmits<{
   openReview: [path: string]
   fork: [index: number]
 }>()
-const { session } = props
+const { session, ui } = props
 const changes = useTurnChanges(session, props.ui)
 const { t } = useI18n()
+/** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
+async function stopRetry() {
+  try {
+    await session.abortRetry()
+  } catch (e) {
+    ui.pushToast(String(e), "error")
+  }
+}
 // Kept outside VirtualMessage: virtualization may unmount an answer, but must
 // not forget that its process was already materialized.
 const openedProcesses = reactive(new Set<number>())
@@ -237,6 +246,9 @@ onBeforeUnmount(() => {
                 {{ session.retryInfo.errorMessage || t("chat.retryUnknownError") }}
               </p>
             </div>
+            <Button variant="outline" size="sm" class="h-7 shrink-0 text-xs" @click="stopRetry">
+              {{ t("chat.abortRetry") }}
+            </Button>
           </div>
         </MessageContent>
       </Message>

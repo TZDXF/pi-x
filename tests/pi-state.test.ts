@@ -75,6 +75,22 @@ async function harness(storage = new Map(), options = {}) {
       if (command.type === "set_model" || command.type === "set_thinking_level") mtime++
       if (command.type === "set_model") state.model = { provider: command.provider, id: command.modelId }
       if (command.type === "set_thinking_level") state.thinkingLevel = command.level
+      if (command.type === "set_auto_retry") state.autoRetry = command.enabled
+      if (command.type === "set_auto_compaction") state.autoCompactionEnabled = command.enabled
+      let cycledModel = false
+      let cycledLevel = false
+      if (command.type === "cycle_model" && state.nextCycleModel) {
+        state.model = state.nextCycleModel
+        state.nextCycleModel = null
+        cycledModel = true
+        mtime++
+      }
+      if (command.type === "cycle_thinking_level" && state.nextCycleLevel) {
+        state.thinkingLevel = state.nextCycleLevel
+        state.nextCycleLevel = null
+        cycledLevel = true
+        mtime++
+      }
       const data =
         command.type === "get_state"
           ? state
@@ -84,7 +100,11 @@ async function harness(storage = new Map(), options = {}) {
               ? { levels: ["off", "low", "high"] }
               : command.type === "get_commands"
                 ? { commands: [] }
-                : {}
+                : command.type === "cycle_model"
+                  ? { model: cycledModel ? state.model : null, thinkingLevel: state.thinkingLevel, isScoped: false }
+                  : command.type === "cycle_thinking_level"
+                    ? { level: cycledLevel ? state.thinkingLevel : null }
+                    : {}
       return { success: true, data }
     },
   })
@@ -291,4 +311,102 @@ test("setFollowUpMode updates the live mode and skips pi's default when unset", 
   await store.init("project")
   await tick()
   expect(calls.filter(c => c.type === "set_follow_up_mode").length).toBe(1)
+})
+
+test("auto-retry is seeded from settings on init and tracks the runtime switch", async () => {
+  const { store, calls, piState } = await harness()
+  await store.init("project")
+  await tick()
+  // Unset in settings.json means pi's default (enabled) applies.
+  expect(store.autoRetry).toBe(true)
+
+  piState.getPiSettings = async () => ({ skills: [], retry: { maxRetries: 3, enabled: false } })
+  await store.init("project")
+  await tick()
+  expect(store.autoRetry).toBe(false)
+
+  calls.length = 0
+  await store.setAutoRetry(true)
+  expect(calls.map(c => c.type)).toEqual(["set_auto_retry"])
+  expect(store.autoRetry).toBe(true)
+})
+
+test("set_auto_retry / set_auto_compaction failures surface and keep the recorded switch", async () => {
+  const { store, calls } = await harness()
+  await store.init("project")
+  calls.length = 0
+  controls.state.rpcRequest = async command => {
+    calls.push(command)
+    return { success: false, error: "not supported" }
+  }
+  await expect(store.setAutoRetry(false)).rejects.toThrow("not supported")
+  expect(store.autoRetry).toBe(true)
+  await expect(store.setAutoCompaction(false)).rejects.toThrow("not supported")
+  expect(calls.filter(c => c.type === "set_auto_compaction").length).toBe(1)
+})
+
+test("set_auto_compaction sends the command and re-reads the authoritative state", async () => {
+  const { store, calls } = await harness()
+  await store.init("project")
+  calls.length = 0
+  await store.setAutoCompaction(false)
+  expect(calls[0].type).toBe("set_auto_compaction")
+  expect(calls[0].enabled).toBe(false)
+  expect(calls[calls.length - 1].type).toBe("get_state")
+  expect(store.state.autoCompactionEnabled).toBe(false)
+})
+
+test("abort_retry sends the command and leaves the outcome to auto_retry_end events", async () => {
+  const { store, calls } = await harness()
+  await store.init("project")
+  calls.length = 0
+  await store.abortRetry()
+  expect(calls.map(c => c.type)).toEqual(["abort_retry"])
+})
+
+test("cycle_model advances to the next model and reports when none is left", async () => {
+  const { store, calls, state } = await harness(new Map(), { sessionFile: "session.jsonl" })
+  await store.init("project")
+  store.started = true
+  calls.length = 0
+  state.nextCycleModel = { provider: "next", id: "model-b", reasoning: true }
+  expect(await store.cycleModel()).toBe(true)
+  expect(store.currentModel).toEqual({ provider: "next", id: "model-b", reasoning: true })
+  // Cycling appends a model_change entry like set_model, so the file write is marked first.
+  expect(calls.slice(0, 3).map(c => c.type)).toEqual(["cycle_model", "session_mtime", "get_state"])
+  expect(calls[1].file).toBe("session.jsonl")
+
+  calls.length = 0
+  expect(await store.cycleModel()).toBe(false)
+  // No other model: pi answers success with null data and nothing else happens.
+  expect(calls.map(c => c.type)).toEqual(["cycle_model"])
+  expect(store.currentModel).toEqual({ provider: "next", id: "model-b", reasoning: true })
+})
+
+test("cycle_thinking_level advances within supported levels and reports unsupported models", async () => {
+  const { store, calls, state } = await harness(new Map(), { sessionFile: "session.jsonl" })
+  await store.init("project")
+  calls.length = 0
+  state.nextCycleLevel = "high"
+  expect(await store.cycleThinkingLevel()).toBe(true)
+  expect(store.thinkingLevel).toBe("high")
+  expect(calls.slice(0, 3).map(c => c.type)).toEqual(["cycle_thinking_level", "session_mtime", "get_state"])
+
+  calls.length = 0
+  expect(await store.cycleThinkingLevel()).toBe(false)
+  expect(store.thinkingLevel).toBe("high")
+})
+
+test("a cycled model is announced before the next question", async () => {
+  const { store, state } = await harness()
+  await store.init("project")
+  store.started = true
+  state.nextCycleModel = { provider: "next", id: "model-b", reasoning: true }
+  await store.cycleModel()
+  await store.send("question after cycling")
+  await tick()
+  expect(JSON.parse(JSON.stringify(store.entries[0].modelChange))).toEqual({
+    from: "restored/session-model",
+    to: "next/model-b",
+  })
 })

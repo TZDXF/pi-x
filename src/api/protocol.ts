@@ -61,6 +61,8 @@ export interface SessionState {
   sessionFile: string | null
   sessionId: string
   sessionName?: string
+  /** 自动压缩开关（get_state 回报，旧版 pi 缺省 undefined）。 */
+  autoCompactionEnabled?: boolean
   messageCount: number
   pendingMessageCount: number
 }
