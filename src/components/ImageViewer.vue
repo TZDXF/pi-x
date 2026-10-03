@@ -204,7 +204,8 @@ watch(
         :alt="alt"
         class="shrink-0 select-none object-contain"
         :class="[
-          scale === null ? 'max-h-full max-w-full' : '',
+          // 放大时须解除 Tailwind preflight 的 img max-width:100%，否则超出视口宽的图片无法放大
+          scale === null ? 'max-h-full max-w-full' : 'max-w-none',
           pannable ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : '',
         ]"
         :style="
