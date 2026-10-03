@@ -62,7 +62,7 @@ const style = computed(() => {
 </script>
 
 <template>
-  <div v-if="state && style" ref="card" class="fixed z-50 w-72" :style="style" @mousedown.prevent>
+  <div v-if="state && style" ref="card" class="fixed z-50 w-72" :style="style">
     <div class="flex items-center gap-1 rounded-lg border bg-background p-1 shadow-md">
       <Textarea
         v-model="comment"
@@ -74,6 +74,7 @@ const style = computed(() => {
         @keydown.ctrl.enter.prevent="save"
         @keydown.meta.enter.prevent="save"
       />
+      <!-- 仅动作按钮保留正文选区；输入框必须允许鼠标放置光标和拖选。 -->
       <Button
         type="button"
         variant="ghost"
@@ -81,6 +82,7 @@ const style = computed(() => {
         class="size-7 shrink-0 text-muted-foreground hover:text-destructive"
         :title="t('chat.selectionDelete')"
         :aria-label="t('chat.selectionDelete')"
+        @mousedown.prevent
         @click="emit('remove')"
         ><Trash2 class="size-4"
       /></Button>
@@ -91,6 +93,7 @@ const style = computed(() => {
         class="text-primary size-7 shrink-0"
         :title="t('chat.selectionSave')"
         :aria-label="t('chat.selectionSave')"
+        @mousedown.prevent
         @click="save"
         ><Check class="size-4"
       /></Button>
