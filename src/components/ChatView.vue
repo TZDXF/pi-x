@@ -287,7 +287,7 @@ onBeforeUnmount(() => {
         v-else-if="splitZone === 'top'"
         class="border-primary bg-primary/15 absolute inset-x-0 top-0 h-1/4 rounded-b-md border-t-4"
       />
-      <!-- 底部预览带挖去输入框文本区（凹槽），模型选择/按钮行仍显示可分屏高亮 -->
+      <!-- 底部预览带按输入框文本区挖出凹槽：只显示两侧与下方，模型选择/按钮行仍高亮 -->
       <template v-else-if="splitZone === 'bottom'">
         <div
           v-if="!bottomNotch"
@@ -295,15 +295,11 @@ onBeforeUnmount(() => {
         />
         <template v-else>
           <div
-            class="border-primary bg-primary/15 absolute inset-x-0 rounded-t-md"
-            :style="{ top: `${bottomNotch.bandTop}px`, height: `${bottomNotch.holeTop - bottomNotch.bandTop}px` }"
-          />
-          <div
-            class="border-primary bg-primary/15 border-b-4 absolute bottom-0 left-0"
+            class="border-primary bg-primary/15 rounded-tl-md border-b-4 absolute bottom-0 left-0"
             :style="{ top: `${bottomNotch.holeTop}px`, width: `${bottomNotch.holeLeft}px` }"
           />
           <div
-            class="border-primary bg-primary/15 border-b-4 absolute right-0 bottom-0"
+            class="border-primary bg-primary/15 rounded-tr-md border-b-4 absolute right-0 bottom-0"
             :style="{ top: `${bottomNotch.holeTop}px`, left: `${bottomNotch.holeRight}px` }"
           />
           <div
