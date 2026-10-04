@@ -201,7 +201,6 @@ export default {
     title: "会话代码变动",
     review: "审查",
     close: "关闭代码审查",
-    description: "仅统计成功的文件修改工具，按操作累计增删行（非 Git 净变动）。",
     empty: "当前会话暂无成功的文件修改。",
     unknown: "原内容未知 · 按全部新增统计，仅展示写入内容",
     realDiff: "Git 快照差异 · 真实文件行号",

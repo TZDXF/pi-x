@@ -177,7 +177,6 @@ watch(
 
 <template>
   <div data-review-panel class="flex min-h-0 flex-1 flex-col min-w-0">
-    <p class="border-b p-3 text-xs text-muted-foreground">{{ t("changes.description") }}</p>
     <div
       v-if="activeFile"
       class="changes-review-body grid [grid-template-columns:minmax(0,_1fr)_minmax(100px,_30%)] flex-1 min-h-0 min-w-0 overflow-hidden"

@@ -205,7 +205,6 @@ export default {
     title: "Session changes",
     review: "Review",
     close: "Close code review",
-    description: "Successful file tools only. Counts accumulate per operation, not a Git net diff.",
     empty: "No successful file changes in this session.",
     unknown: "Original content unknown · counted as additions, write preview only",
     realDiff: "Git snapshot diff · real file line numbers",
