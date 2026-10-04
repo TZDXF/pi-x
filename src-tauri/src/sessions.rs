@@ -17,6 +17,10 @@ use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 use tauri::{AppHandle, Manager};
 
+/// 会话文件手术（rewind/重命名），需经运行中 runtime 的 RPC 传输完成；
+/// 实现见 `edit.rs`，由 `crate::rpc` 池层调用。
+pub(crate) mod edit;
+
 const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
@@ -59,26 +63,28 @@ fn first_line(path: &Path) -> Option<String> {
 /// window: pi writes one huge system-preamble line before the first user
 /// message, which would otherwise swallow the whole window and leave the
 /// session without a preview (rendered as "untitled" in the sidebar).
-/// Oversized lines still get parsed but cost a capped amount of the budget,
-/// so the scan survives arbitrarily long preamble entries.
+/// Every line — including `message` entries — pays a capped amount of the
+/// budget, so the scan stays bounded even when a file opens with many giant
+/// preamble messages; entries missing their `message` field are skipped
+/// instead of silently aborting the whole preview.
 fn first_user_preview(path: &Path) -> Option<String> {
     use std::io::{BufRead, BufReader};
     const LINE_COST_CAP: usize = 4 * 1024;
     let file = std::fs::File::open(path).ok()?;
     let mut budget = PREVIEW_SCAN_BYTES;
     for line in BufReader::new(file).lines() {
+        if budget == 0 {
+            break;
+        }
         let Ok(line) = line else { break };
+        budget = budget.saturating_sub(line.len().min(LINE_COST_CAP) as u64);
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         if v.get("type").and_then(|t| t.as_str()) != Some("message") {
-            budget = budget.saturating_sub(line.len().min(LINE_COST_CAP) as u64);
-            if budget == 0 {
-                break;
-            }
             continue;
         }
-        let msg = v.get("message")?;
+        let Some(msg) = v.get("message") else { continue };
         if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
             continue;
         }
@@ -757,6 +763,46 @@ mod presentation_tests {
         assert_eq!(meta.preview.as_deref(), Some("调用 3 个智能体"));
         std::fs::remove_file(file).unwrap();
     }
+    #[test]
+    fn preview_scan_stays_bounded_with_giant_message_preamble() {
+        // Message lines must pay the budget too: a file padded with huge
+        // system/assistant messages before the first user message would
+        // otherwise grant the scan unlimited budget over the whole file.
+        let file =
+            std::env::temp_dir().join(format!("pix-preview-bound-{}.jsonl", uuid::Uuid::new_v4()));
+        let huge = "x".repeat(4 * 1024);
+        let mut content = String::from("{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"p\"}\n");
+        for _ in 0..32 {
+            content.push_str(&format!(
+                "{{\"type\":\"message\",\"message\":{{\"role\":\"system\",\"content\":\"{huge}\"}}}}\n"
+            ));
+        }
+        content.push_str(
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"after preamble\"}}\n",
+        );
+        std::fs::write(&file, content).unwrap();
+        // The 32 KB budget is exhausted by the preamble long before the user
+        // message, so the scan stops instead of reading to the end.
+        assert_eq!(first_user_preview(&file), None);
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn preview_skips_message_entries_without_a_message_field() {
+        // An entry with type "message" but no `message` field must not abort
+        // the scan (`?` on a missing key used to drop the whole preview).
+        let file =
+            std::env::temp_dir().join(format!("pix-preview-nomsg-{}.jsonl", uuid::Uuid::new_v4()));
+        let content = concat!(
+            "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"p\"}\n",
+            "{\"type\":\"message\"}\n",
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"still found\"}}\n",
+        );
+        std::fs::write(&file, content).unwrap();
+        assert_eq!(first_user_preview(&file).as_deref(), Some("still found"));
+        std::fs::remove_file(file).unwrap();
+    }
+
     #[test]
     fn meta_cache_serves_same_mtime_and_invalidates_on_write() {
         let file = std::env::temp_dir().join(format!("pix-cache-{}.jsonl", uuid::Uuid::new_v4()));

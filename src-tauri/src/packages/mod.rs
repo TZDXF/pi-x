@@ -2,12 +2,15 @@
 //! and drive `pi install / remove / update` for the user.
 
 mod catalog;
+mod glob;
 mod resources;
 mod runner;
+mod translate;
 
 pub use catalog::package_catalog;
-pub(crate) use resources::{decode_preview_text, package_skill_paths, read_preview_bytes, walk_files};
-pub use resources::{package_list_files, package_read_file, package_resources, package_set_resource, package_translate};
+pub(crate) use resources::{package_skill_paths, walk_files};
+pub use resources::{package_list_files, package_read_file, package_resources, package_set_resource};
+pub use translate::package_translate;
 pub(crate) use runner::run_pi;
 pub use runner::{package_install, package_list, package_remove, package_update};
 
@@ -17,10 +20,11 @@ pub use runner::{package_install, package_list, package_remove, package_update};
 pub use catalog::{__cmd__package_catalog, __tauri_command_name_package_catalog};
 #[doc(hidden)]
 pub use resources::{
-    __cmd__package_list_files, __cmd__package_read_file, __cmd__package_resources, __cmd__package_set_resource, __cmd__package_translate,
-    __tauri_command_name_package_list_files, __tauri_command_name_package_read_file, __tauri_command_name_package_resources, __tauri_command_name_package_translate,
-    __tauri_command_name_package_set_resource,
+    __cmd__package_list_files, __cmd__package_read_file, __cmd__package_resources, __cmd__package_set_resource,
+    __tauri_command_name_package_list_files, __tauri_command_name_package_read_file, __tauri_command_name_package_resources, __tauri_command_name_package_set_resource,
 };
+#[doc(hidden)]
+pub use translate::{__cmd__package_translate, __tauri_command_name_package_translate};
 #[doc(hidden)]
 pub use runner::{
     __cmd__package_install, __cmd__package_list, __cmd__package_remove, __cmd__package_update,

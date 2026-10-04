@@ -1,4 +1,4 @@
-//! Bridge to a `pi --mode rpc` child process.
+//! Bridge to `pi --mode rpc` child processes.
 //!
 //! Protocol notes (see pi docs/rpc.md):
 //! - stdin/stdout carry LF-delimited JSONL. Split records on `\n` ONLY
@@ -6,19 +6,25 @@
 //!   trailing `\r`, and decode UTF-8 across chunk boundaries.
 //! - Responses echo the numeric `id` we attached to the request; everything
 //!   else (agent events, extension UI requests) is forwarded to the frontend.
+//!
+//! Layout: this module owns the runtime pool ([`RpcState`]), the request path
+//! and the event naming; [`child`] owns the child-process wiring (spawn,
+//! stdio readers, kill). Session-file surgery driven by the live transport
+//! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
-use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
+mod child;
+
+use crate::pi_locate::PiInfo;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::AppHandle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
 fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
@@ -35,15 +41,6 @@ const EVENT: &str = "pi://event";
 const STDERR_EVENT: &str = "pi://stderr";
 const EXIT_EVENT: &str = "pi://exit";
 
-type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
-
-struct SessionInner {
-    child: Child,
-    stdin_tx: mpsc::Sender<String>,
-    pending: PendingMap,
-    next_id: Arc<AtomicU64>,
-}
-
 /// Bound for internal `get_state` probes (spawn duplicate checks, session
 /// listing). A hung pi process must never block these indefinitely.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -58,273 +55,34 @@ pub struct ProcessState {
     generation: Arc<AtomicU64>,
 }
 
-fn build_spawn_args(session_file: Option<&str>, extra_args: Vec<String>) -> Vec<String> {
-    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
-    if let Some(sf) = session_file {
-        args.push("--session".into());
-        args.push(sf.into());
-    }
-    args.extend(extra_args);
-    args
-}
-
-/// Spawn `pi --mode rpc` inside `project` and wire up the stdio bridge.
-/// `session_file` resumes a stored session (`--session <path>`).
-pub async fn process_spawn(
-    app: AppHandle,
-    state: &ProcessState,
-    pi: &PiInfo,
-    project: &str,
-    session_file: Option<String>,
-    extra_args: Vec<String>,
-    workspace_manifest: Option<String>,
-) -> Result<(), String> {
-    let mut guard = state.inner.lock().await;
-    state.generation.fetch_add(1, Ordering::Relaxed);
-    if let Some(mut old) = guard.take() {
-        let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
+impl ProcessState {
+    /// Snapshot the transport together with the generation: the pair
+    /// identifies the session the snapshot belongs to. A concurrent spawn
+    /// bumps the generation while holding the session lock, before replacing
+    /// `inner`, so the two must be read under one lock acquisition.
+    pub(crate) async fn transport_and_generation(&self) -> (Option<SessionTransport>, u64) {
+        let guard = self.inner.lock().await;
+        let generation = self.generation.load(Ordering::Relaxed);
+        (guard.as_ref().map(SessionTransport::snapshot), generation)
     }
 
-    let args = build_spawn_args(session_file.as_deref(), extra_args);
-
-    // Prefer the resolved launcher (node + cli.js); never route npm .cmd
-    // shims through cmd.exe — its shim trick can exit silently under pipes.
-    let mut cmd = match &pi.launcher {
-        Some(Launcher::Node { node, script }) => {
-            let mut c = Command::new(node);
-            c.arg(script).args(&args);
-            c
-        }
-        Some(Launcher::Binary { path }) => {
-            let mut c = Command::new(path);
-            c.args(&args);
-            c
-        }
-        None => {
-            let path = pi.path.clone().ok_or("pi path not resolved")?;
-            if cfg!(windows) && is_windows_script(&path) {
-                let mut c = Command::new("cmd");
-                c.arg("/C").arg(&path).args(&args);
-                c
-            } else {
-                let mut c = Command::new(&path);
-                c.args(&args);
-                c
-            }
-        }
-    };
-
-    cmd.current_dir(project)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    // Consumed by the pix-workspace extension to render the <pix_workspace>
-    // prompt section; plain sessions leave the variable unset.
-    if let Some(manifest) = &workspace_manifest {
-        cmd.env("PIX_WORKSPACE", manifest);
+    /// Snapshot the transport and release the session lock: slow round trips
+    /// must not block other RPCs. If the session is respawned meanwhile, the
+    /// stale transport's writes fail instead of hitting the wrong process.
+    pub(crate) async fn transport(&self) -> Option<SessionTransport> {
+        self.inner.lock().await.as_ref().map(SessionTransport::snapshot)
     }
 
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn pi: {e}"))?;
-    let session_label = session_file.clone().unwrap_or_else(|| "<new>".into());
-    crate::logs::write(
-        &state.runtime_id,
-        &format!(
-            "spawn pid={} project={} session={} args={:?}",
-            child
-                .id()
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "?".into()),
-            project,
-            session_label,
-            args
-        ),
-    );
-
-    let stdout = child.stdout.take().ok_or("no stdout")?;
-    let stderr = child.stderr.take().ok_or("no stderr")?;
-    let stdin = child.stdin.take().ok_or("no stdin")?;
-
-    let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(256);
-    let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
-    let next_id = Arc::new(AtomicU64::new(1));
-
-    // stdin writer
-    {
-        let runtime_id = state.runtime_id.clone();
-        tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(line) = stdin_rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err()
-                    || stdin.write_all(b"\n").await.is_err()
-                    || stdin.flush().await.is_err()
-                {
-                    crate::logs::write(&runtime_id, "stdin write failed (pi process gone)");
-                    break;
-                }
-            }
-        });
+    /// Current session generation; stale callers detect a respawn by
+    /// comparing against the value captured with their transport snapshot.
+    pub(crate) fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
     }
 
-    // stdout reader: strict LF framing at the byte level
-    {
-        let app = app.clone();
-        let pending = pending.clone();
-        let generation = state.generation.clone();
-        let own_gen = generation.load(Ordering::Relaxed);
-        let runtime_id = state.runtime_id.clone();
-        tokio::spawn(async move {
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut buf: Vec<u8> = Vec::new();
-            let mut chunk = [0u8; 8192];
-            // PiX-side measure of pi's cold start: first stdout line after spawn.
-            let spawned_at = std::time::Instant::now();
-            let mut first_output = true;
-            loop {
-                match reader.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                }
-                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let mut line: Vec<u8> = buf.drain(..=pos).collect();
-                    line.pop(); // \n
-                    if line.last() == Some(&b'\r') {
-                        line.pop();
-                    }
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if first_output {
-                        first_output = false;
-                        crate::logs::write(
-                            &runtime_id,
-                            &format!("[perf] pi first output after {}ms", spawned_at.elapsed().as_millis()),
-                        );
-                    }
-                    let Ok(value) = serde_json::from_slice::<Value>(&line) else {
-                        continue;
-                    };
-                    dispatch(&app, &pending, &runtime_id, value).await;
-                }
-            }
-            // stdout closed => process exited (or is gone).
-            // Only surface it if this reader still belongs to the current session.
-            if generation.load(Ordering::Relaxed) == own_gen {
-                crate::logs::write(
-                    &runtime_id,
-                    "unexpected exit: stdout closed (pi process exited)",
-                );
-                pending.lock().await.clear();
-                emit_process_event(
-                    &app,
-                    EXIT_EVENT,
-                    &runtime_id,
-                    json!({ "runtimeId": runtime_id }),
-                );
-            }
-        });
+    /// Serialize navigation operations (session switch, fork, rename).
+    pub(crate) async fn lock_navigation(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.navigation.lock().await
     }
-
-    // stderr reader: forward raw lines for logging
-    {
-        let app = app.clone();
-        let runtime_id = state.runtime_id.clone();
-        tokio::spawn(async move {
-            let mut reader = tokio::io::BufReader::new(stderr);
-            let mut buf: Vec<u8> = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                match reader.read(&mut chunk).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                }
-                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                    let mut line: Vec<u8> = buf.drain(..=pos).collect();
-                    line.pop();
-                    if line.last() == Some(&b'\r') {
-                        line.pop();
-                    }
-                    let text = String::from_utf8_lossy(&line).to_string();
-                    if !text.is_empty() {
-                        crate::logs::write(&runtime_id, &format!("stderr: {text}"));
-                        emit_process_event(
-                            &app,
-                            STDERR_EVENT,
-                            &runtime_id,
-                            json!({ "line": text, "runtimeId": runtime_id }),
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    *guard = Some(SessionInner {
-        child,
-        stdin_tx,
-        pending,
-        next_id,
-    });
-    Ok(())
-}
-
-/// Log run-lifecycle events so notification/kill decisions can be audited
-/// against the exact event stream pi produced. Streaming deltas and tool
-/// chatter are deliberately excluded.
-fn log_lifecycle_event(runtime_id: &str, value: &Value) {
-    let ty = value["type"].as_str().unwrap_or("");
-    let detail = match ty {
-        "agent_start" | "agent_settled" => String::new(),
-        "agent_end" => format!(
-            " willRetry={}",
-            value["willRetry"].as_bool().unwrap_or(false)
-        ),
-        "auto_retry_start" => format!(
-            " attempt={}/{}",
-            value["attempt"].as_u64().unwrap_or(0),
-            value["maxAttempts"].as_u64().unwrap_or(0)
-        ),
-        "auto_retry_end" => format!(" success={}", value["success"].as_bool().unwrap_or(false)),
-        "message_end" => match value["message"]["stopReason"].as_str() {
-            Some(reason @ ("error" | "aborted")) => format!(" stopReason={reason}"),
-            _ => return,
-        },
-        "compaction_start" => format!(" reason={}", value["reason"].as_str().unwrap_or("?")),
-        "compaction_end" => format!(
-            " willRetry={}",
-            value["willRetry"].as_bool().unwrap_or(false)
-        ),
-        _ => return,
-    };
-    crate::logs::write(runtime_id, &format!("event {ty}{detail}"));
-}
-
-async fn dispatch(app: &AppHandle, pending: &PendingMap, runtime_id: &str, mut value: Value) {
-    if value.get("type").and_then(|t| t.as_str()) == Some("response") {
-        if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
-            let tx = pending.lock().await.remove(&id);
-            if let Some(tx) = tx {
-                let _ = tx.send(value);
-            }
-        }
-        return;
-    }
-    log_lifecycle_event(runtime_id, &value);
-    value["runtimeId"] = json!(runtime_id);
-    emit_process_event(app, EVENT, runtime_id, value);
-}
-
-async fn write_line(inner: &SessionInner, line: String) -> Result<(), String> {
-    inner
-        .stdin_tx
-        .send(line)
-        .await
-        .map_err(|_| "pi is not running (stdin closed)".to_string())
 }
 
 /// Send a correlated request; resolves with the matching `response` object.
@@ -334,13 +92,32 @@ pub async fn process_request(state: &ProcessState, mut command: Value) -> Result
     process_request_timeout(state, &mut command, None).await
 }
 
+/// Remove a timed-out request's pending entry, but only if the session that
+/// issued it is still current. `next_id` restarts at 1 on every respawn, so a
+/// stale timeout must never delete the new session's in-flight entry.
+async fn remove_pending_if_current(state: &ProcessState, id: u64, generation: u64) {
+    if state.generation.load(Ordering::Relaxed) != generation {
+        return;
+    }
+    if let Some(inner) = state.inner.lock().await.as_ref() {
+        inner.pending.lock().await.remove(&id);
+    }
+}
+
 /// Same as `process_request`, with an optional per-request timeout. On timeout
-/// the pending entry is removed so a late response cannot be misattributed.
+/// the pending entry is removed so a late response cannot be misattributed
+/// (unless the process was respawned meanwhile, in which case the id belongs
+/// to a dead session and the new session's pending table is left alone).
 pub async fn process_request_timeout(
     state: &ProcessState,
     command: &mut Value,
     timeout: Option<std::time::Duration>,
 ) -> Result<Value, String> {
+    // Remote callers can submit arbitrary JSON; a non-object command cannot
+    // carry the correlation id and would panic serde_json's IndexMut below.
+    if command.as_object_mut().is_none() {
+        return Err("rpc command must be a JSON object".into());
+    }
     let _navigation = if matches!(
         command["type"].as_str(),
         Some("switch_session" | "new_session" | "fork" | "clone" | "set_session_name")
@@ -351,6 +128,10 @@ pub async fn process_request_timeout(
     };
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
+    // Read the generation while the session lock is held: a concurrent spawn
+    // bumps it before replacing `inner`, so this pair identifies the session
+    // the request is issued against.
+    let generation = state.generation.load(Ordering::Relaxed);
 
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     command["id"] = json!(id);
@@ -358,7 +139,7 @@ pub async fn process_request_timeout(
     let (tx, rx) = oneshot::channel();
     inner.pending.lock().await.insert(id, tx);
 
-    if let Err(e) = write_line(inner, command.to_string()).await {
+    if let Err(e) = write_line(&inner.stdin_tx, command.to_string()).await {
         inner.pending.lock().await.remove(&id);
         return Err(e);
     }
@@ -372,129 +153,23 @@ pub async fn process_request_timeout(
         None => rx.await.map_err(|_| "pi exited before responding".into()),
     };
     if result.is_err() {
-        if let Some(inner) = state.inner.lock().await.as_ref() {
-            inner.pending.lock().await.remove(&id);
-        }
+        remove_pending_if_current(state, id, generation).await;
     }
     result
 }
 
-/// pi allocates the path before persisting the log after its first response.
-/// Validate the existing parent, and reject traversal/symlinks outside sessions.
-fn normalize_session_file(reported: &str) -> std::path::PathBuf {
-    let path = std::path::Path::new(reported);
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => parent.join(name),
-        _ => path.to_path_buf(),
-    }
-}
-
-/// Serialize name writes with navigation so a delayed title cannot rename a different session.
-pub(crate) async fn process_set_session_name(
-    state: &ProcessState,
-    path: &std::path::Path,
-    title: String,
-    only_if_empty: bool,
-) -> Result<Option<String>, String> {
-    let _navigation = state.navigation.lock().await;
-    let guard = state.inner.lock().await;
-    if let Some(inner) = guard.as_ref() {
-        let response = name_request(inner, json!({"type": "get_state"})).await?;
-        let data = &response["data"];
-        let active = data["sessionFile"].as_str().map(normalize_session_file);
-        if active.as_deref() == Some(path) {
-            if only_if_empty {
-                if let Some(name) = data["sessionName"].as_str().filter(|s| !s.is_empty()) {
-                    return Ok(Some(name.into()));
-                }
-            }
-            name_request(inner, json!({"type": "set_session_name", "name": title})).await?;
-            return Ok(Some(title));
-        }
-    }
-    // Keep navigation locked while the SDK updates an inactive log as well.
-    if !path.is_file() {
-        return Err("Pi session has not been persisted".into());
-    }
-    let request =
-        json!({"op": "session_name", "file": path, "title": title, "onlyIfEmpty": only_if_empty});
-    let result = tokio::task::spawn_blocking(move || crate::pi_data::call(request))
+async fn write_line(stdin_tx: &mpsc::Sender<String>, line: String) -> Result<(), String> {
+    stdin_tx
+        .send(line)
         .await
-        .map_err(|e| e.to_string())??;
-    drop(guard);
-    Ok(result.as_str().map(str::to_owned))
-}
-
-async fn name_request(inner: &SessionInner, mut command: Value) -> Result<Value, String> {
-    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    command["id"] = json!(id);
-    let (tx, rx) = oneshot::channel();
-    inner.pending.lock().await.insert(id, tx);
-    let result = async {
-        write_line(inner, command.to_string()).await?;
-        let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-            .await
-            .map_err(|_| "Pi session name request timed out".to_string())?
-            .map_err(|_| "Pi exited before responding".to_string())?;
-        if response["success"] != true {
-            return Err(response["error"].to_string());
-        }
-        Ok(response)
-    }
-    .await;
-    inner.pending.lock().await.remove(&id);
-    result
+        .map_err(|_| "pi is not running (stdin closed)".to_string())
 }
 
 /// Fire-and-forget write (e.g. `extension_ui_response`).
 pub async fn process_notify(state: &ProcessState, command: Value) -> Result<(), String> {
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
-    write_line(inner, command.to_string()).await
-}
-
-pub async fn process_running(state: &ProcessState) -> bool {
-    let mut guard = state.inner.lock().await;
-    guard
-        .as_mut()
-        .is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
-}
-
-async fn kill_inner(
-    runtime_id: &str,
-    inner: &mut SessionInner,
-    reason: &str,
-) -> Result<(), String> {
-    crate::logs::write(
-        runtime_id,
-        &format!("kill pid={:?} reason={reason}", inner.child.id()),
-    );
-    // Drop pending response waiters first so callers fail fast.
-    inner.pending.lock().await.clear();
-    if let Some(pid) = inner.child.id() {
-        #[cfg(windows)]
-        {
-            // pi.cmd runs under cmd.exe: kill the whole tree.
-            let mut tk = Command::new("taskkill");
-            tk.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            tk.creation_flags(CREATE_NO_WINDOW);
-            let _ = tk.output().await;
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = inner.child.start_kill();
-        }
-    }
-    Ok(())
-}
-
-pub async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
-    state.generation.fetch_add(1, Ordering::Relaxed);
-    let mut guard = state.inner.lock().await;
-    if let Some(mut inner) = guard.take() {
-        kill_inner(&state.runtime_id, &mut inner, reason).await?;
-    }
-    Ok(())
+    write_line(&inner.stdin_tx, command.to_string()).await
 }
 
 /// Each runtime owns a process, request correlation table and navigation lock.
@@ -538,9 +213,12 @@ pub async fn spawn(
         extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
     }
     let id = runtime_id.unwrap_or_else(|| "default".into());
-    let mut pool = state.processes.lock().await;
-    if let Some(existing) = pool.get(&id) {
-        if process_running(existing).await {
+    // Probe from a snapshot: each probe can take up to PROBE_TIMEOUT, so the
+    // pool lock must never be held while a hung runtime is being probed.
+    let snapshot: Vec<Arc<ProcessState>> =
+        state.processes.lock().await.values().cloned().collect();
+    if let Some(existing) = snapshot.iter().find(|p| p.runtime_id == id) {
+        if child::process_running(existing).await {
             return Err("Runtime is already running".into());
         }
     }
@@ -548,8 +226,8 @@ pub async fn spawn(
     // time-bounded: a hung pi process must not block spawning forever.
     if let Some(file) = &session_file {
         let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
-        for process in pool.values() {
-            if !process_running(process).await {
+        for process in &snapshot {
+            if !child::process_running(process).await {
                 continue;
             }
             let mut probe = json!({"type": "get_state"});
@@ -576,7 +254,7 @@ pub async fn spawn(
         project: project.into(),
         ..Default::default()
     });
-    process_spawn(
+    child::process_spawn(
         app,
         &process,
         pi,
@@ -586,7 +264,7 @@ pub async fn spawn(
         workspace_manifest,
     )
     .await?;
-    pool.insert(id.clone(), process);
+    state.processes.lock().await.insert(id.clone(), process);
     state.last_activity.lock().await.insert(id, Instant::now());
     Ok(())
 }
@@ -598,7 +276,7 @@ pub async fn request(
 ) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
     if command["type"] == "rewind_prompt" {
-        return rewind_prompt(&process, &command).await;
+        return crate::sessions::edit::rewind_prompt(&process, &command).await;
     }
     let exporting = command["type"] == "export_html";
     let mut response = process_request(&process, command).await?;
@@ -606,107 +284,6 @@ pub async fn request(
         resolve_export_path(&mut response, &process.project)?;
     }
     Ok(response)
-}
-
-/// Rewind the persisted context as well as the UI; a normal prompt must not
-/// see the superseded question or its answer. Keep a backup until reload succeeds.
-async fn rewind_prompt(state: &ProcessState, command: &Value) -> Result<Value, String> {
-    let _navigation = state.navigation.lock().await;
-    let guard = state.inner.lock().await;
-    let inner = guard.as_ref().ok_or("pi is not running")?;
-    let status = name_request(inner, json!({"type": "get_state"})).await?;
-    let data = &status["data"];
-    if data["sessionFile"] != command["sessionFile"]
-        || data["isStreaming"] == true
-        || data["isCompacting"] == true
-        || data["pendingMessageCount"].as_u64().unwrap_or(0) > 0
-    {
-        return Err("Session changed or is still running".into());
-    }
-    let file = data["sessionFile"].as_str().ok_or("Missing session file")?;
-    let messages = name_request(inner, json!({"type": "get_fork_messages"})).await?;
-    let target = messages["data"]["messages"]
-        .as_array()
-        .and_then(|m| m.last())
-        .and_then(|m| m["entryId"].as_str())
-        .ok_or("No question to edit")?;
-    let original = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
-    let revised = rewind_log(&original, target)?;
-    replace_session_log(file, &revised)?;
-    let loaded = name_request(
-        inner,
-        json!({"type": "switch_session", "sessionPath": file}),
-    )
-    .await;
-    match loaded {
-        Ok(response) if response["data"]["cancelled"] != true => {
-            Ok(json!({"success": true, "command": "rewind_prompt"}))
-        }
-        result => {
-            replace_session_log(file, &original)
-                .map_err(|e| format!("Cannot restore session: {e}"))?;
-            let _ = name_request(
-                inner,
-                json!({"type": "switch_session", "sessionPath": file}),
-            )
-            .await;
-            Err(result
-                .err()
-                .unwrap_or_else(|| "Session reload cancelled".into()))
-        }
-    }
-}
-
-fn replace_session_log(file: &str, content: &str) -> Result<(), String> {
-    let temporary = Path::new(file).with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| {
-        std::fs::write(&temporary, content)?;
-        std::fs::rename(&temporary, file)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result.map_err(|e| e.to_string())
-}
-
-fn rewind_log(raw: &str, target: &str) -> Result<String, String> {
-    let entries: Vec<Value> = raw
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(serde_json::from_str)
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
-    let entry = entries
-        .iter()
-        .find(|entry| entry["id"] == target)
-        .ok_or("Question no longer exists in the session")?;
-    if entry["type"] != "message" || entry["message"]["role"] != "user" {
-        return Err("Edit target is not a user question".into());
-    }
-    let mut removed = std::collections::HashSet::from([target.to_owned()]);
-    let mut output = String::new();
-    for item in &entries {
-        if item["id"].as_str().is_some_and(|id| removed.contains(id))
-            || item["parentId"]
-                .as_str()
-                .is_some_and(|id| removed.contains(id))
-        {
-            if let Some(id) = item["id"].as_str() {
-                removed.insert(id.to_owned());
-            }
-            continue;
-        }
-        output.push_str(&item.to_string());
-        output.push('\n');
-    }
-    // The last record selects the original parent, without keeping abandoned answers
-    // in the active context. Other branches in the file remain intact.
-    let marker = json!({"type": "custom", "id": format!("edit-{}", uuid::Uuid::new_v4()),
-        "parentId": entry["parentId"], "timestamp": entry["timestamp"],
-        "customType": "pix-edit-position", "data": {}});
-    output.push_str(&marker.to_string());
-    output.push('\n');
-    Ok(output)
 }
 
 /// Pi writes the default HTML export relative to its own working directory,
@@ -734,7 +311,7 @@ pub async fn notify(
 }
 pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
     match state.process(runtime_id).await {
-        Ok(process) => process_running(&process).await,
+        Ok(process) => child::process_running(&process).await,
         Err(_) => false,
     }
 }
@@ -745,7 +322,7 @@ pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), Stri
         .await
         .remove(runtime_id.unwrap_or("default"));
     if let Some(process) = process {
-        process_kill(&process, "rpc_kill").await?;
+        child::process_kill(&process, "rpc_kill").await?;
         state.last_activity.lock().await.remove(&process.runtime_id);
     }
     Ok(())
@@ -754,7 +331,7 @@ pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
     for process in processes.values() {
-        process_kill(process, "kill_all (app exit)").await?;
+        child::process_kill(process, "kill_all (app exit)").await?;
     }
     Ok(())
 }
@@ -762,7 +339,7 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     let mut result = Vec::new();
     for process in processes {
-        if !process_running(&process).await {
+        if !child::process_running(&process).await {
             continue;
         }
         let mut probe = json!({"type": "get_state"});
@@ -782,7 +359,7 @@ pub(crate) async fn set_session_name(
 ) -> Result<Option<String>, String> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     for process in processes {
-        if !process_running(&process).await {
+        if !child::process_running(&process).await {
             continue;
         }
         let mut probe = json!({"type": "get_state"});
@@ -793,79 +370,122 @@ pub(crate) async fn set_session_name(
         };
         let active = response["data"]["sessionFile"]
             .as_str()
-            .map(normalize_session_file);
+            .map(crate::sessions::edit::normalize_session_file);
         if active.as_deref() == Some(path) {
-            return process_set_session_name(&process, path, title, only_if_empty).await;
+            return crate::sessions::edit::process_set_session_name(&process, path, title, only_if_empty)
+                .await;
         }
     }
-    process_set_session_name(&ProcessState::default(), path, title, only_if_empty).await
+    crate::sessions::edit::process_set_session_name(&ProcessState::default(), path, title, only_if_empty)
+        .await
 }
 
 #[cfg(test)]
-mod spawn_args_tests {
-    use super::build_spawn_args;
+mod pending_cleanup_tests {
+    use super::*;
+    use std::process::Stdio;
+    use tokio::process::Command;
 
-    #[test]
-    fn includes_session_and_extra_args() {
-        let args = build_spawn_args(
-            Some("C:\\tmp\\s.jsonl"),
-            vec![
-                "--provider".into(),
-                "home".into(),
-                "--model".into(),
-                "agnes-3.0-flash".into(),
-                "--thinking".into(),
-                "medium".into(),
-            ],
-        );
-        assert_eq!(
-            args,
-            vec![
-                "--mode",
-                "rpc",
-                "--session",
-                "C:\\tmp\\s.jsonl",
-                "--provider",
-                "home",
-                "--model",
-                "agnes-3.0-flash",
-                "--thinking",
-                "medium",
-            ]
+    /// `SessionInner` needs a live child handle; a trivially exiting process
+    /// is enough because only the pending map is exercised here.
+    async fn state_with_session() -> ProcessState {
+        let state = ProcessState::default();
+        let mut cmd = Command::new(if cfg!(windows) { "cmd" } else { "true" });
+        if cfg!(windows) {
+            cmd.args(["/C", "exit 0"]);
+        }
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn dummy child");
+        let (stdin_tx, _stdin_rx) = mpsc::channel::<String>(8);
+        *state.inner.lock().await = Some(SessionInner {
+            child,
+            stdin_tx,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: Arc::new(AtomicU64::new(1)),
+        });
+        state
+    }
+
+    #[tokio::test]
+    async fn timeout_cleanup_removes_pending_from_the_current_generation() {
+        let state = state_with_session().await;
+        let (tx, _rx) = oneshot::channel::<Value>();
+        let inner = state.inner.lock().await;
+        inner
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .insert(7, tx);
+        drop(inner);
+        let generation = state.generation.load(Ordering::Relaxed);
+        remove_pending_if_current(&state, 7, generation).await;
+        assert!(
+            state.inner.lock().await.as_ref().unwrap().pending.lock().await.is_empty(),
+            "timed-out entry of the current session is removed"
         );
     }
 
-    #[test]
-    fn omits_session_flag_without_session_file() {
-        let args = build_spawn_args(None, vec!["--approve".into()]);
-        assert_eq!(args, vec!["--mode", "rpc", "--approve"]);
+    #[tokio::test]
+    async fn timeout_cleanup_skips_pending_from_an_older_generation() {
+        let state = state_with_session().await;
+        let (tx, _rx) = oneshot::channel::<Value>();
+        let inner = state.inner.lock().await;
+        inner
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .insert(7, tx);
+        drop(inner);
+        let stale = state.generation.load(Ordering::Relaxed);
+        // Simulate a respawn: ids restart at 1 and the stale cleanup must not
+        // delete the new session's in-flight entry with the same numeric id.
+        state.generation.fetch_add(1, Ordering::Relaxed);
+        remove_pending_if_current(&state, 7, stale).await;
+        assert!(
+            state
+                .inner
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .pending
+                .lock()
+                .await
+                .contains_key(&7),
+            "a stale generation must never delete the new session's pending entry"
+        );
     }
+
 }
 
 #[cfg(test)]
-mod session_path_tests {
+mod command_validation_tests {
     use super::*;
 
-    #[test]
-    fn normalizes_reported_session_path_before_pi_persists_it() {
-        let dir = std::env::temp_dir().join(format!("pix-title-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&dir).unwrap();
-        let missing = dir.join("not-yet-written.jsonl");
-        // New session logs do not exist until the first assistant reply; the
-        // live process must still match by canonical parent plus file name.
-        let expected = dunce::canonicalize(&dir)
-            .unwrap()
-            .join("not-yet-written.jsonl");
-        assert_eq!(normalize_session_file(missing.to_str().unwrap()), expected);
+    #[tokio::test]
+    async fn non_object_command_from_remote_is_rejected_without_panicking() {
+        let state = ProcessState::default();
+        for raw in ["42", "\"prompt\"", "[]"] {
+            let mut command: Value = serde_json::from_str(raw).unwrap();
+            let err = process_request_timeout(&state, &mut command, None)
+                .await
+                .unwrap_err();
+            assert!(err.contains("JSON object"), "unexpected error: {err}");
+        }
+    }
 
-        std::fs::write(&missing, "{}").unwrap();
-        assert_eq!(
-            normalize_session_file(missing.to_str().unwrap()),
-            dunce::canonicalize(&missing).unwrap()
-        );
-
-        std::fs::remove_file(missing).unwrap();
-        std::fs::remove_dir(dir).unwrap();
+    #[tokio::test]
+    async fn object_command_without_a_process_reports_pi_not_running() {
+        let state = ProcessState::default();
+        let mut command = json!({"type": "prompt", "message": "hi"});
+        let err = process_request_timeout(&state, &mut command, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "pi is not running");
     }
 }
 
@@ -898,38 +518,5 @@ mod export_tests {
 
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(project).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod edit_tests {
-    use super::*;
-    #[test]
-    fn session_log_replacement_overwrites_existing_file() {
-        let path = std::env::temp_dir().join(format!("pix-edit-{}.jsonl", uuid::Uuid::new_v4()));
-        std::fs::write(&path, "original").unwrap();
-        replace_session_log(path.to_str().unwrap(), "replacement").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
-        std::fs::remove_file(path).unwrap();
-    }
-    #[test]
-    fn rewind_removes_replaced_turn_but_preserves_other_branches() {
-        let raw = [
-            json!({"type":"session","id":"session"}),
-            json!({"type":"message","id":"before","parentId":null,"message":{"role":"assistant"}}),
-            json!({"type":"message","id":"question","parentId":"before","message":{"role":"user"}}),
-            json!({"type":"message","id":"answer","parentId":"question","message":{"role":"assistant"}}),
-            json!({"type":"message","id":"sibling","parentId":"before","message":{"role":"user"}}),
-        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
-        let result = rewind_log(&raw, "question").unwrap();
-        let entries: Vec<Value> = result
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(entries.len(), 4);
-        assert_eq!(entries[2]["id"], "sibling");
-        assert_eq!(entries[3]["parentId"], "before");
-        assert!(rewind_log(&raw, "missing").is_err());
-        assert!(rewind_log(&raw, "answer").is_err());
     }
 }

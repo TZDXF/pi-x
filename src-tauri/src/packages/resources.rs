@@ -3,12 +3,14 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::{
     errors::{pix_error, pix_error_detail},
     trust,
 };
 
+use super::glob::{glob_match, resource_enabled, strip_pattern_marker};
 use super::runner::package_list;
 
 const RESOURCE_TYPES: [&str; 4] = ["extensions", "skills", "prompts", "themes"];
@@ -23,13 +25,40 @@ pub struct PackageResource {
     pub enabled: bool,
 }
 
-fn settings_path_for(scope: &str, project: Option<&str>) -> std::path::PathBuf {
+/// Settings file for one scope. Project-scope paths come from the frontend and
+/// would allow reading or writing `<any dir>/.pi/settings.json` unchecked, so
+/// the project root is canonicalized first (defusing `..` traversal) and must
+/// pass Pi's project trust check before it is used.
+fn settings_path_for(scope: &str, project: Option<&str>) -> Result<std::path::PathBuf, String> {
     if scope == "project" {
         if let Some(p) = project.map(str::trim).filter(|s| !s.is_empty()) {
-            return std::path::Path::new(p).join(".pi").join("settings.json");
+            let root = dunce::canonicalize(p).map_err(|e| {
+                pix_error_detail("projectDirMissing", format!("项目目录不存在: {p} ({e})"), e)
+            })?;
+            ensure_project_trusted(&root.to_string_lossy())?;
+            return Ok(root.join(".pi").join("settings.json"));
         }
     }
-    trust::agent_dir().join("settings.json")
+    Ok(trust::agent_dir().join("settings.json"))
+}
+
+/// Project settings are only touched for projects Pi already trusts, with the
+/// same preflight as the scheduler: undecided projects must decide first and
+/// untrusted projects are rejected. `trust::status` is async while these
+/// commands are synchronous, so it runs on a throwaway single-thread runtime.
+fn ensure_project_trusted(project: &str) -> Result<(), String> {
+    let status = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(trust::status(project))?;
+    if status["needsDecision"] == true {
+        return Err(pix_error("trustDecisionRequired", "项目信任需要先做出决定"));
+    }
+    if status["decision"] != true {
+        return Err(pix_error("projectUntrusted", "项目未被信任，无法访问项目设置"));
+    }
+    Ok(())
 }
 
 /// Locate the `packages` array entry matching `source`; returns (index, is_object).
@@ -53,70 +82,6 @@ fn filter_patterns(entry: &Value, resource_type: &str) -> Option<Vec<String>> {
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect(),
     )
-}
-
-/// Strip a leading override marker (`!`, `+`, `-`) from a filter pattern.
-fn strip_pattern_marker(p: &str) -> &str {
-    p.strip_prefix(['!', '+', '-']).unwrap_or(p)
-}
-
-/// Simplistic glob matcher supporting `**`, `*`, `?` against posix paths.
-fn glob_match(pattern: &str, path: &str) -> bool {
-    let mut re = String::from("^");
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '*' => {
-                if chars.peek() == Some(&'*') {
-                    chars.next();
-                    // `**/` should also match zero segments
-                    if chars.peek() == Some(&'/') {
-                        chars.next();
-                        re.push_str("(?:.*/)?");
-                    } else {
-                        re.push_str(".*");
-                    }
-                } else {
-                    re.push_str("[^/]*");
-                }
-            }
-            '?' => re.push_str("[^/]"),
-            c => re.push_str(&regex::escape(&c.to_string())),
-        }
-    }
-    re.push('$');
-    regex::Regex::new(&re)
-        .map(|r| r.is_match(path))
-        .unwrap_or(false)
-}
-
-/// Whether a resource is enabled under the given filter patterns
-/// (mirrors pi's pattern semantics: plain patterns include, `!` excludes,
-/// `+path` / `-path` force-include / force-exclude exact paths).
-fn resource_enabled(rel: &str, patterns: Option<&[String]>) -> bool {
-    let Some(pats) = patterns else { return true };
-    if pats.is_empty() {
-        return false; // explicit `[]` loads none of this type
-    }
-    let includes: Vec<&String> = pats
-        .iter()
-        .filter(|p| !p.starts_with(['!', '+', '-']))
-        .collect();
-    let mut enabled = includes.is_empty()
-        || includes
-            .iter()
-            .any(|p| glob_match(p.trim_end_matches("/*"), rel) || glob_match(p, rel));
-    for p in pats {
-        let marker = p.chars().next();
-        let target = strip_pattern_marker(p);
-        match marker {
-            Some('!') if glob_match(target, rel) => enabled = false,
-            Some('+') if target == rel => enabled = true,
-            Some('-') if target == rel => enabled = false,
-            _ => {}
-        }
-    }
-    enabled
 }
 
 /// Resolve the on-disk root of an installed package, mirroring pi's install
@@ -206,7 +171,30 @@ fn package_root_dir(
 
 const IGNORED_DIRS: [&str; 4] = ["node_modules", ".git", ".pi", "dist"];
 
+/// Max recursion depth for package walks; guards against pathological nests.
+const MAX_WALK_DEPTH: usize = 16;
+
 pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+    let mut visited = HashSet::new();
+    walk_files_inner(dir, root, 0, &mut visited, out);
+}
+
+fn walk_files_inner(
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    depth: usize,
+    visited: &mut HashSet<std::path::PathBuf>,
+    out: &mut Vec<String>,
+) {
+    if depth >= MAX_WALK_DEPTH {
+        return;
+    }
+    // `is_dir` below follows symlinks/junctions, so track canonical paths to
+    // break cycles instead of recursing forever.
+    let key = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(key) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -215,7 +203,7 @@ pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mu
         let path = e.path();
         if path.is_dir() {
             if !IGNORED_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
-                walk_files(&path, root, out);
+                walk_files_inner(&path, root, depth + 1, visited, out);
             }
         } else if name.starts_with('.') {
             continue;
@@ -225,20 +213,35 @@ pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mu
     }
 }
 
-/// Collect resource paths (relative, posix) for one type, honouring the
-/// package.json `pi` manifest when present, else conventional directories.
-fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String> {
-    let manifest_entry = std::fs::read_to_string(root.join("package.json"))
+/// Read the `pi` manifest entry of a package's package.json, when present.
+fn read_pi_manifest(root: &std::path::Path) -> Option<Value> {
+    std::fs::read_to_string(root.join("package.json"))
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .and_then(|pkg| pkg.get("pi").cloned())
-        .and_then(|pi| pi.get(resource_type).cloned());
+}
 
+/// Collect resource paths (relative, posix) for one type, honouring the
+/// package.json `pi` manifest when present, else conventional directories.
+/// Walks the package root; prefer [`collect_resources_from`] when the same
+/// package's files are needed for several resource types.
+fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String> {
+    let manifest = read_pi_manifest(root);
     let mut files = Vec::new();
     walk_files(root, root, &mut files);
+    collect_resources_from(root, resource_type, manifest.as_ref(), &files)
+}
 
+/// [`collect_resources`] over a pre-walked file list and pre-read manifest, so
+/// enumerating all resource types of one package walks its root only once.
+fn collect_resources_from(
+    root: &std::path::Path,
+    resource_type: &str,
+    manifest_entry: Option<&Value>,
+    files: &[String],
+) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    match &manifest_entry {
+    match manifest_entry.and_then(|pi| pi.get(resource_type)) {
         Some(Value::Array(entries)) => {
             for e in entries.iter().filter_map(|v| v.as_str()) {
                 if e.starts_with('!') || e.starts_with('+') || e.starts_with('-') {
@@ -264,10 +267,13 @@ fn collect_resources(root: &std::path::Path, resource_type: &str) -> Vec<String>
         _ => {
             let dir = root.join(resource_type);
             if dir.is_dir() {
+                // Exact directory-segment match: `skills-extra/x` must not be
+                // swept in by a bare `skills` prefix.
+                let prefix = format!("{resource_type}/");
                 out.extend(
                     files
                         .iter()
-                        .filter(|f| f.starts_with(resource_type))
+                        .filter(|f| f.as_str() == resource_type || f.starts_with(&prefix))
                         .cloned(),
                 );
             }
@@ -351,7 +357,7 @@ pub fn package_resources(
     scope: String,
     project: Option<String>,
 ) -> Result<Vec<PackageResource>, String> {
-    let settings_file = settings_path_for(&scope, project.as_deref());
+    let settings_file = settings_path_for(&scope, project.as_deref())?;
     let raw = std::fs::read_to_string(&settings_file)
         .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
     let doc: Value = serde_json::from_str(&raw)
@@ -367,11 +373,18 @@ pub fn package_resources(
         )
     })?;
 
+    // Walk the package root once and reuse the file list for every resource
+    // type: this runs inside a synchronous command, and per-type walks made
+    // large packages stall the IPC thread.
+    let manifest = read_pi_manifest(&root);
+    let mut files = Vec::new();
+    walk_files(&root, &root, &mut files);
+
     let mut out = Vec::new();
     for rt in RESOURCE_TYPES {
         let patterns = filter_patterns(entry, rt);
         let enabled_fn = |rel: &str| resource_enabled(rel, patterns.as_deref());
-        for rel in collect_resources(&root, rt) {
+        for rel in collect_resources_from(&root, rt, manifest.as_ref(), &files) {
             out.push(PackageResource {
                 resource_type: rt.to_string(),
                 enabled: enabled_fn(&rel),
@@ -401,7 +414,7 @@ pub fn package_set_resource(
             resource_type,
         ));
     }
-    let settings_file = settings_path_for(&scope, project.as_deref());
+    let settings_file = settings_path_for(&scope, project.as_deref())?;
     let raw = std::fs::read_to_string(&settings_file).unwrap_or_else(|_| "{}".into());
     let mut doc: Value = serde_json::from_str(&raw)
         .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
@@ -457,60 +470,69 @@ pub fn package_set_resource(
         packages[idx] = source_val;
     }
 
-    std::fs::write(
-        &settings_file,
-        serde_json::to_string_pretty(&doc).map_err(|e| {
-            pix_error_detail("settingsSerializeFailed", format!("序列化设置失败: {e}"), e)
-        })?,
-    )
-    .map_err(|e| pix_error_detail("settingsWriteFailed", format!("写入设置失败: {e}"), e))
+    // 原子写：先写临时文件再 rename 覆盖，避免写盘中途崩溃留下截断的
+    // settings.json（会丢失用户全部 packages/扩展配置）。
+    let body = serde_json::to_string_pretty(&doc).map_err(|e| {
+        pix_error_detail("settingsSerializeFailed", format!("序列化设置失败: {e}"), e)
+    })?;
+    crate::atomic_write::write(&settings_file, body.as_bytes())
+        .map_err(|e| pix_error_detail("settingsWriteFailed", format!("写入设置失败: {e}"), e))
+}
+
+/// List every file inside an installed package root (relative, posix paths),
+/// mirroring the walk used for resource discovery (ignores node_modules,
+/// .git, .pi, dist and dotfiles).
+#[tauri::command]
+pub fn package_list_files(
+    source: String,
+    scope: String,
+    project: Option<String>,
+) -> Result<Vec<String>, String> {
+    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
+        pix_error(
+            "pluginInstallDirNotFound",
+            "未找到插件安装目录（尚未安装或来源不支持）",
+        )
+    })?;
+    let mut files = Vec::new();
+    walk_files(&root, &root, &mut files);
+    files.sort();
+    Ok(files)
+}
+
+const PACKAGE_ROOT_GUARD: crate::preview_guard::RootGuardSpec = crate::preview_guard::RootGuardSpec {
+    read_failed_label: "读取资源文件失败",
+    root_resolve_label: "解析插件目录失败",
+    root_resolve_code: "pluginInstallDirNotFound",
+    outside_message: "资源路径越界",
+};
+
+/// Read one file inside an installed package for preview. `path` is relative
+/// to the package root with forward slashes. Text files are capped at 512 KB
+/// on a UTF-8 boundary; binary content is rejected with `resourceBinary`.
+#[tauri::command]
+pub fn package_read_file(
+    source: String,
+    scope: String,
+    path: String,
+    project: Option<String>,
+) -> Result<String, String> {
+    // Reject path traversal: the relative path must stay inside the package root.
+    crate::preview_guard::reject_unsafe_rel_path(&path, "无效的资源路径")?;
+    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
+        pix_error(
+            "pluginInstallDirNotFound",
+            "未找到插件安装目录（尚未安装或来源不支持）",
+        )
+    })?;
+    let canonical = crate::preview_guard::resolve_within_root(&root, &path, &PACKAGE_ROOT_GUARD)?;
+    let bytes = crate::preview_guard::read_preview_bytes(&canonical, root.join(&path).display())?;
+    crate::preview_guard::decode_preview_text(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn glob_matching() {
-        assert!(glob_match("extensions/*.ts", "extensions/foo.ts"));
-        assert!(!glob_match("extensions/*.ts", "extensions/sub/foo.ts"));
-        assert!(glob_match("extensions/**/*.ts", "extensions/sub/foo.ts"));
-        assert!(glob_match("extensions/**/*.ts", "extensions/foo.ts"));
-        assert!(glob_match("skills/*/SKILL.md", "skills/demo/SKILL.md"));
-        assert!(!glob_match("skills/*", "other/x"));
-    }
-
-    #[test]
-    fn preview_text_is_trimmed_to_utf8_boundary() {
-        assert_eq!(decode_preview_text(b"hello".to_vec()).unwrap(), "hello");
-        // A multi-byte character cut by the read cap is trimmed, not rejected.
-        let mut cut = "abc中".as_bytes().to_vec();
-        cut.pop();
-        assert_eq!(decode_preview_text(cut).unwrap(), "abc");
-        // A genuinely invalid sequence stays binary content.
-        assert!(decode_preview_text(vec![0x61, 0xFF, 0x62]).is_err());
-        assert!(decode_preview_text(b"ok\0binary".to_vec()).is_err());
-        assert_eq!(PREVIEW_MAX_BYTES, 512 * 1024);
-    }
-
-    #[test]
-    fn resource_enabled_semantics() {
-        // absent key -> all enabled
-        assert!(resource_enabled("a.ts", None));
-        // explicit [] -> none enabled
-        assert!(!resource_enabled("a.ts", Some(&[])));
-        // exclusion overrides
-        let pats: Vec<String> = vec!["!a.ts".into()];
-        assert!(!resource_enabled("a.ts", Some(&pats)));
-        assert!(resource_enabled("b.ts", Some(&pats)));
-        // force-exclude beats force-include
-        let pats: Vec<String> = vec!["+a.ts".into(), "-a.ts".into()];
-        assert!(!resource_enabled("a.ts", Some(&pats)));
-        // plain includes gate everything else
-        let pats: Vec<String> = vec!["extensions/*.ts".into()];
-        assert!(resource_enabled("extensions/a.ts", Some(&pats)));
-        assert!(!resource_enabled("skills/x/SKILL.md", Some(&pats)));
-    }
 
     #[test]
     fn package_skills_include_manifest_directories_and_files_and_honor_filters() {
@@ -569,203 +591,121 @@ mod tests {
     }
 
     #[test]
+    fn package_resources_enumerate_all_types_from_one_walk() {
+        // All four resource types enumerate their conventional directories
+        // from a single walk; `skills-extra` must not be swept into `skills`.
+        let root =
+            std::env::temp_dir().join(format!("pix-package-resources-{}", uuid::Uuid::new_v4()));
+        let write = |rel: &str, body: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        write("extensions/a.ts", "export {}");
+        write("extensions/nested/b.ts", "export {}");
+        write("skills/demo/SKILL.md", "---\nname: demo\ndescription: Demo\n---\n");
+        write("prompts/plan.md", "---\ndescription: Plan\n---\n");
+        write("themes/dark.json", "{}");
+        write(
+            "skills-extra/x.md",
+            "---\nname: extra\ndescription: Extra skill\n---\n",
+        );
+
+        let enumerate = |root: &std::path::Path| {
+            let manifest = read_pi_manifest(root);
+            let mut files = Vec::new();
+            walk_files(root, root, &mut files);
+            RESOURCE_TYPES
+                .iter()
+                .map(|rt| {
+                    (
+                        rt.to_string(),
+                        collect_resources_from(root, rt, manifest.as_ref(), &files),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let resources = enumerate(&root);
+        let by_type = |name: &str| {
+            resources
+                .iter()
+                .find(|(rt, _)| rt == name)
+                .map(|(_, rel)| rel.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            by_type("extensions"),
+            vec!["extensions/a.ts", "extensions/nested/b.ts"]
+        );
+        assert_eq!(by_type("skills"), vec!["skills/demo"]);
+        assert_eq!(by_type("prompts"), vec!["prompts/plan.md"]);
+        assert_eq!(by_type("themes"), vec!["themes/dark.json"]);
+
+        // Manifest globs keep working over the shared file list.
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"pi":{"extensions":["extensions/*.ts"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(enumerate(&root)[0].1, vec!["extensions/a.ts"]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn npm_name_strips_version() {
         let dir = package_root_dir("npm:@scope/pkg@1.2.3", "__none__", None);
         assert!(dir.is_none()); // not installed, but must not panic
     }
-}
 
-/// List every file inside an installed package root (relative, posix paths),
-/// mirroring the walk used for resource discovery (ignores node_modules,
-/// .git, .pi, dist and dotfiles).
-#[tauri::command]
-pub fn package_list_files(
-    source: String,
-    scope: String,
-    project: Option<String>,
-) -> Result<Vec<String>, String> {
-    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
-        pix_error(
-            "pluginInstallDirNotFound",
-            "未找到插件安装目录（尚未安装或来源不支持）",
-        )
-    })?;
-    let mut files = Vec::new();
-    walk_files(&root, &root, &mut files);
-    files.sort();
-    Ok(files)
-}
-
-/// Read one file inside an installed package for preview. `path` is relative
-/// to the package root with forward slashes. Text files are capped at 512 KB
-/// on a UTF-8 boundary; binary content is rejected with `resourceBinary`.
-#[tauri::command]
-pub fn package_read_file(
-    source: String,
-    scope: String,
-    path: String,
-    project: Option<String>,
-) -> Result<String, String> {
-    // Reject path traversal: the relative path must stay inside the package root.
-    if path.contains("..") || path.starts_with('/') || path.starts_with('\\') || path.contains(':') {
-        return Err(pix_error("invalidResourcePath", "无效的资源路径"));
+    #[test]
+    fn settings_path_falls_back_to_global_and_rejects_missing_projects() {
+        let global = trust::agent_dir().join("settings.json");
+        // Global scope ignores the project entirely.
+        assert_eq!(settings_path_for("global", None).unwrap(), global);
+        assert_eq!(
+            settings_path_for("global", Some("C:\\anything")).unwrap(),
+            global
+        );
+        // Project scope without a usable project falls back to global settings.
+        assert_eq!(settings_path_for("project", None).unwrap(), global);
+        assert_eq!(settings_path_for("project", Some("   ")).unwrap(), global);
+        // A nonexistent project directory is rejected before any trust lookup.
+        let missing = std::env::temp_dir().join(format!("pix-missing-{}", uuid::Uuid::new_v4()));
+        assert!(settings_path_for("project", Some(missing.to_str().unwrap())).is_err());
+        // `..` cannot smuggle a path out of a nonexistent base either.
+        let escape = missing
+            .join("..")
+            .join(format!("pix-missing-{}", uuid::Uuid::new_v4()));
+        assert!(settings_path_for("project", Some(escape.to_str().unwrap())).is_err());
     }
-    let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
-        pix_error(
-            "pluginInstallDirNotFound",
-            "未找到插件安装目录（尚未安装或来源不支持）",
-        )
-    })?;
-    let file = root.join(&path);
-    let canonical = dunce::canonicalize(&file).map_err(|e| {
-        pix_error_detail(
-            "resourceReadFailed",
-            format!("读取资源文件失败: {} ({e})", file.display()),
-            format!("{}: {e}", file.display()),
-        )
-    })?;
-    let canonical_root = dunce::canonicalize(&root)
-        .map_err(|e| pix_error_detail("pluginInstallDirNotFound", format!("解析插件目录失败: {e}"), e))?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(pix_error("invalidResourcePath", "资源路径越界"));
-    }
-    let bytes = read_preview_bytes(&canonical, file.display())?;
-    decode_preview_text(bytes)
-}
 
-/// Cap text previews at 512 KB so huge files don't flood the IPC bridge.
-pub(crate) const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
-
-/// Read at most [`PREVIEW_MAX_BYTES`] + 3 bytes (one maximal UTF-8 character
-/// of slack) so oversized files stop at the cap instead of loading whole.
-pub(crate) fn read_preview_bytes(path: &std::path::Path, display: std::path::Display) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-
-    let mut handle = std::fs::File::open(path).map_err(|e| {
-        pix_error_detail(
-            "resourceReadFailed",
-            format!("读取资源文件失败: {display} ({e})"),
-            format!("{display}: {e}"),
-        )
-    })?;
-    let mut bytes = Vec::new();
-    handle
-        .by_ref()
-        .take(PREVIEW_MAX_BYTES + 3)
-        .read_to_end(&mut bytes)
-        .map_err(|e| {
-            pix_error_detail(
-                "resourceReadFailed",
-                format!("读取资源文件失败: {display} ({e})"),
-                format!("{display}: {e}"),
-            )
-        })?;
-    Ok(bytes)
-}
-
-/// Decode preview bytes: binary sniff (git style, NUL in the first 8 KB),
-/// then UTF-8 validation. A multi-byte character cut at the read cap is
-/// trimmed instead of failing; any other invalid sequence is binary content.
-pub(crate) fn decode_preview_text(bytes: Vec<u8>) -> Result<String, String> {
-    // Binary sniff (git style): NUL in the first 8 KB.
-    let sniff_end = bytes.len().min(8_000);
-    if bytes[..sniff_end].contains(&0) {
-        return Err(pix_error("resourceBinary", "二进制文件，不支持文本预览"));
-    }
-    match String::from_utf8(bytes) {
-        Ok(text) => Ok(text),
-        Err(e) if e.utf8_error().error_len().is_none() && e.utf8_error().valid_up_to() > 0 => {
-            let valid_up_to = e.utf8_error().valid_up_to();
-            let bytes = e.into_bytes();
-            Ok(String::from_utf8_lossy(&bytes[..valid_up_to]).into_owned())
+    /// Create a directory symlink; returns false when the platform or
+    /// privileges do not allow it (tests skip instead of failing).
+    fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
         }
-        Err(_) => Err(pix_error("resourceBinary", "二进制文件，不支持文本预览")),
-    }
-}
-
-/// Translate a package resource file's content using the configured
-/// translation model. Spawns an isolated pi process (same pattern as title
-/// generation) and returns the translated text.
-#[tauri::command]
-pub async fn package_translate(
-    app: tauri::AppHandle,
-    content: String,
-    target_lang: String,
-) -> Result<String, String> {
-    let config = crate::commands::app_config_get(app)?;
-    let model = config.translation_model.clone().or_else(|| config.default_model.clone());
-    let Some(model) = model else {
-        return Err(pix_error("noTranslationModel", "未配置翻译模型，请在模型配置中选择"));
-    };
-    if model.provider.trim().is_empty() || model.model_id.trim().is_empty() || content.trim().is_empty() {
-        return Err(pix_error("noTranslationModel", "翻译模型或内容为空"));
-    }
-    let pi = crate::pi_locate::detect(config.pi_path).await;
-    let mut cmd = match pi.launcher {
-        Some(crate::pi_locate::Launcher::Node { node, script }) => {
-            let mut c = tokio::process::Command::new(node);
-            c.arg(script);
-            c
-        }
-        Some(crate::pi_locate::Launcher::Binary { path }) => tokio::process::Command::new(path),
-        None => return Err(pix_error("piNotFound", "未找到 pi，无法执行翻译")),
-    };
-    cmd.args([
-        "--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
-        "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
-        "--provider", model.provider.trim(),
-        "--model", model.model_id.trim(),
-        "--append-system-prompt", "",
-        "--system-prompt",
-        "You are a translator. Translate the user's input into the requested language. Preserve markdown formatting, code blocks, and inline code exactly. Output only the translation, no explanations.",
-    ])
-    .args(crate::builtin_extensions::provider_extension_args(
-        &model.provider,
-    ))
-    .current_dir(crate::trust::agent_dir())
-    .stdin(std::process::Stdio::piped())
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::null())
-    .kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000);
-
-    let output = tokio::time::timeout(std::time::Duration::from_secs(120), async {
-        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-        let mut stdin = child.stdin.take().ok_or("Missing stdin")?;
-        let prompt = format!("Translate the following into {target_lang}:\n\n{content}");
-        { use tokio::io::AsyncWriteExt; stdin.write_all(prompt.as_bytes()).await }.map_err(|e| e.to_string())?;
-        drop(stdin);
-        let mut stdout = child.stdout.take().ok_or("Missing stdout")?;
-        let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf).await.map_err(|e| e.to_string())?;
-        child.wait().await.map_err(|e| e.to_string())?;
-        Ok::<_, String>(buf)
-    })
-    .await
-    .map_err(|_| pix_error("translationTimeout", "翻译超时（2 分钟）"))??;
-
-    // Extract text from the last assistant message_end event (same as title generation).
-    let mut translated = String::new();
-    for line in output.split(|b| *b == b'\n') {
-        let Ok(event) = serde_json::from_slice::<Value>(line) else { continue };
-        if event["type"] != "message_end" || event["message"]["role"] != "assistant" { continue; }
-        if matches!(event["message"]["stopReason"].as_str(), Some("error" | "aborted")) {
-            return Err(pix_error("translationFailed", "翻译模型返回错误"));
-        }
-        if let Some(blocks) = event["message"]["content"].as_array() {
-            let text = blocks.iter()
-                .filter(|b| b["type"] == "text")
-                .filter_map(|b| b["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("");
-            if !text.trim().is_empty() {
-                translated = text;
-            }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
         }
     }
-    if translated.trim().is_empty() {
-        return Err(pix_error("translationEmpty", "翻译结果为空"));
+
+    #[test]
+    fn walk_files_survives_symlink_cycles() {
+        let root = std::env::temp_dir().join(format!("pix-walk-cycle-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        if !create_dir_symlink(&root, &root.join("loop")) {
+            std::fs::remove_dir_all(&root).unwrap();
+            return; // symlink/junction creation unavailable; nothing to test
+        }
+        let mut files = Vec::new();
+        walk_files(&root, &root, &mut files);
+        assert_eq!(files, vec!["a.txt"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
-    Ok(translated)
 }

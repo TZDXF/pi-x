@@ -96,15 +96,28 @@ fn validate(input: &TaskInput) -> Result<(), String> {
     next_run(&input.expression, Local::now().timestamp_millis())?;
     Ok(())
 }
-fn persist(tasks: &[Task]) -> Result<(), String> {
-    let path = data_dir::root().join("schedules.json");
-    let temporary = path.with_extension("tmp");
-    std::fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(tasks).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    std::fs::rename(temporary, path).map_err(|e| e.to_string())
+fn persist_to(path: &std::path::Path, tasks: &[Task]) -> Result<(), String> {
+    let body = serde_json::to_vec_pretty(tasks).map_err(|e| e.to_string())?;
+    crate::atomic_write::write(path, &body).map_err(|e| e.to_string())
+}
+
+fn persist_path() -> std::path::PathBuf {
+    data_dir::root().join("schedules.json")
+}
+
+/// 写盘移入 blocking 线程池：调用点持有 async Mutex 以保持
+/// “检查-修改-持久化”的原子语义（不会与其他并发保存交错），
+/// await 期间让出 worker，慢盘不再阻塞 tokio 运行时和其他任务。
+async fn persist_at(path: &std::path::Path, tasks: &[Task]) -> Result<(), String> {
+    let path = path.to_path_buf();
+    let tasks = tasks.to_vec();
+    tauri::async_runtime::spawn_blocking(move || persist_to(&path, &tasks))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+async fn persist(tasks: &[Task]) -> Result<(), String> {
+    persist_at(&persist_path(), tasks).await
 }
 #[tauri::command]
 pub async fn schedule_list(state: State<'_, ScheduleState>) -> Result<Vec<Task>, String> {
@@ -152,7 +165,7 @@ pub async fn schedule_save(
     } else {
         tasks.push(task.clone());
     }
-    persist(&tasks)?;
+    persist(&tasks).await?;
     *guard = tasks;
     Ok(task)
 }
@@ -167,7 +180,7 @@ pub async fn schedule_delete(state: State<'_, ScheduleState>, id: String) -> Res
     }
     let mut tasks = guard.clone();
     tasks.retain(|t| t.input.id.as_ref() != Some(&id));
-    persist(&tasks)?;
+    persist(&tasks).await?;
     *guard = tasks;
     Ok(())
 }
@@ -195,42 +208,66 @@ pub async fn schedule_run(
         task.session_file = None;
         task.error = None;
         task.last_run = Some(Local::now().timestamp_millis());
-        persist(&tasks)?;
+        persist(&tasks).await?;
         *guard = tasks;
         claimed
     };
     notify_schedules_changed(&app);
     tauri::async_runtime::spawn(async move {
         let result = execute(&app, &task).await;
-        let state = app.state::<ScheduleState>();
-        let mut guard = state.0.lock().await;
-        if let Some(current) = guard.iter_mut().find(|t| t.input.id == task.input.id) {
-            match result {
-                Ok(file) => {
-                    current.status = "success".into();
-                    current.session_file = Some(file);
-                }
-                Err(e) => {
-                    current.status = "failed".into();
-                    current.error = Some(e);
-                }
-            }
-            // 手动运行可能跨越了计划时刻；若 next_run 已错过，推进到下一个未来槽，
-            // 避免运行结束后下个 tick 立即补跑。
-            let now = Local::now().timestamp_millis();
-            if current.next_run <= now {
-                if let Ok(next) = next_run(&current.input.expression, now) {
-                    current.next_run = next;
-                }
-            }
-            if let Err(e) = persist(&guard) {
-                eprintln!("Schedule result persistence failed: {e}");
-            }
-            drop(guard);
-            notify_schedules_changed(&app);
-        }
+        finish_task(&app, &task, result, NextRunAdvance::IfMissed).await;
     });
     Ok(())
+}
+
+/// 完成回写时 `next_run` 的推进策略：手动运行与调度领取的语义不同。
+#[derive(Clone, Copy)]
+enum NextRunAdvance {
+    /// 手动运行可能跨越了计划时刻；仅在 next_run 已错过时推进到下一个未来槽，
+    /// 避免运行结束后下个 tick 立即补跑。
+    IfMissed,
+    /// 调度领取：claim 时已推进过一次，完成后无条件重算，跳过运行期间错过的槽位。
+    Always,
+}
+
+/// 按策略推进任务的 `next_run`（独立于回写，便于单测）。
+fn advance_next_run(task: &mut Task, policy: NextRunAdvance, now: i64) {
+    if matches!(policy, NextRunAdvance::IfMissed) && task.next_run > now {
+        return;
+    }
+    if let Ok(next) = next_run(&task.input.expression, now) {
+        task.next_run = next;
+    }
+}
+
+/// 执行完成后的回写：更新状态与会话文件并持久化，由手动运行与调度循环共用。
+async fn finish_task(
+    app: &AppHandle,
+    task: &Task,
+    result: Result<String, String>,
+    advance: NextRunAdvance,
+) {
+    let state = app.state::<ScheduleState>();
+    let mut guard = state.0.lock().await;
+    if let Some(current) = guard.iter_mut().find(|t| t.input.id == task.input.id) {
+        // 跳过任务运行期间错过的槽位（策略见 NextRunAdvance）。
+        advance_next_run(current, advance, Local::now().timestamp_millis());
+        match result {
+            Ok(file) => {
+                current.status = "success".into();
+                current.session_file = Some(file);
+            }
+            Err(e) => {
+                current.status = "failed".into();
+                current.error = Some(e);
+            }
+        }
+        if let Err(e) = persist(&guard).await {
+            eprintln!("Schedule result persistence failed: {e}");
+        }
+        drop(guard);
+        notify_schedules_changed(app);
+    }
 }
 
 async fn checked_request(state: &rpc::RpcState, id: &str, command: Value) -> Result<Value, String> {
@@ -270,6 +307,21 @@ async fn wait_for_completion(
     }
     Ok(())
 }
+/// Unregisters the run's global event listeners when dropped, so every exit
+/// path — normal return, error, or panic unwind — cleans up instead of
+/// leaking listeners that keep firing for this runtime id forever.
+struct ListenerGuard<'a> {
+    app: &'a AppHandle,
+    ids: Vec<tauri::EventId>,
+}
+impl Drop for ListenerGuard<'_> {
+    fn drop(&mut self) {
+        for id in self.ids.drain(..) {
+            self.app.unlisten(id);
+        }
+    }
+}
+
 async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     let input = &task.input;
     validate(input)?;
@@ -285,23 +337,24 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     let mut published = false;
     let mut settled = false;
     let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let mut listeners = ListenerGuard { app, ids: Vec::new() };
     let exit_sender = sender.clone();
     let exit_id = id.clone();
-    let exit_listener = app.listen("pi://schedule-exit", move |event| {
+    listeners.ids.push(app.listen("pi://schedule-exit", move |event| {
         if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
             if value["runtimeId"] == exit_id {
                 let _ = exit_sender.send(json!({"type":"process_exit"}));
             }
         }
-    });
+    }));
     let event_id = id.clone();
-    let listener = app.listen("pi://schedule-event", move |event| {
+    listeners.ids.push(app.listen("pi://schedule-event", move |event| {
         if let Ok(value) = serde_json::from_str::<Value>(event.payload()) {
             if value["runtimeId"] == event_id {
                 let _ = sender.send(value);
             }
         }
-    });
+    }));
     let args = vec![
         if approved {
             "--approve"
@@ -369,7 +422,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
                 .find(|t| t.input.id == input.id)
                 .ok_or_else(|| pix_error("taskNotFound", "任务不存在，可能已被删除"))?;
             current.session_file = Some(file.clone());
-            persist(&updated)?;
+            persist(&updated).await?;
             *guard = updated;
         }
         notify_schedules_changed(app);
@@ -406,8 +459,8 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
     .await
     .map_err(|_| pix_error("taskTimedOut", "任务超时（1 小时）"))
     .and_then(|v| v);
-    app.unlisten(listener);
-    app.unlisten(exit_listener);
+    // Listeners are unregistered by the guard's Drop on every path out of
+    // `execute` (including panics), so no explicit unlisten is needed here.
     if !published {
         let _ = rpc::kill(&state, Some(&id)).await;
     } else if let Err(error) = &outcome {
@@ -505,7 +558,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    persist(&tasks)?;
+    persist_to(&persist_path(), &tasks)?;
     *app.state::<ScheduleState>().0.blocking_lock() = tasks;
     tauri::async_runtime::spawn(async move {
         loop {
@@ -518,7 +571,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             if !changed {
                 continue;
             }
-            if let Err(e) = persist(&updated) {
+            if let Err(e) = persist(&updated).await {
                 eprintln!("Schedule claim failed: {e}");
                 continue;
             }
@@ -529,31 +582,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let result = execute(&app, &task).await;
-                    let state = app.state::<ScheduleState>();
-                    let mut guard = state.0.lock().await;
-                    if let Some(current) = guard.iter_mut().find(|t| t.input.id == task.input.id) {
-                        // Skip slots missed while this task was running.
-                        if let Ok(next) =
-                            next_run(&current.input.expression, Local::now().timestamp_millis())
-                        {
-                            current.next_run = next;
-                        }
-                        match result {
-                            Ok(file) => {
-                                current.status = "success".into();
-                                current.session_file = Some(file);
-                            }
-                            Err(e) => {
-                                current.status = "failed".into();
-                                current.error = Some(e);
-                            }
-                        }
-                        if let Err(e) = persist(&guard) {
-                            eprintln!("Schedule result persistence failed: {e}");
-                        }
-                        drop(guard);
-                        notify_schedules_changed(&app);
-                    }
+                    finish_task(&app, &task, result, NextRunAdvance::Always).await;
                 });
             }
         }
@@ -704,5 +733,87 @@ mod tests {
             .timestamp_millis();
         assert_eq!(next, expected);
         assert!(next_run("0 9 31 * *", next).unwrap() > next);
+    }
+
+    #[test]
+    fn completion_advance_follows_policy() {
+        let now = Local::now().timestamp_millis();
+        let mut task = fixture();
+        // 手动路径：next_run 仍在未来时不推进。
+        task.next_run = now + 3_600_000;
+        advance_next_run(&mut task, NextRunAdvance::IfMissed, now);
+        assert_eq!(task.next_run, now + 3_600_000);
+        // 已错过的槽位推进到下一个未来槽。
+        task.next_run = now - 1;
+        advance_next_run(&mut task, NextRunAdvance::IfMissed, now);
+        assert!(task.next_run > now);
+        // 调度路径：无条件重算为 now 之后的下一个槽位。
+        let expected = next_run(&task.input.expression, now).unwrap();
+        task.next_run = now + 3_600_000;
+        advance_next_run(&mut task, NextRunAdvance::Always, now);
+        assert_eq!(task.next_run, expected);
+    }
+
+    #[test]
+    fn persist_to_writes_complete_json_and_overwrites_previous_content() {
+        let dir = std::env::temp_dir().join(format!("pix-persist-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("schedules.json");
+        persist_to(&path, &[fixture()]).unwrap();
+        let loaded: Vec<Task> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded.len(), 1);
+        persist_to(&path, &[fixture(), fixture()]).unwrap();
+        let loaded: Vec<Task> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded.len(), 2);
+        // 原子写不留临时文件。
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 持久化走 spawn_blocking：await 期间其他任务仍可在同一 runtime 上推进，
+    /// 且并发写入各自使用随机临时名，最终文件始终是某个完整快照。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persist_at_yields_to_runtime_and_keeps_snapshots_complete() {
+        let dir = std::env::temp_dir().join(format!("pix-persist-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("schedules.json");
+        persist_at(&path, &[fixture()]).await.unwrap();
+        let loaded: Vec<Task> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded.len(), 1);
+
+        // 模拟慢盘：写盘期间 runtime 上的其他任务持续推进。
+        let slow_path = path.clone();
+        let slow = tokio::task::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            persist_to(&slow_path, &[fixture(), fixture()])
+        });
+        let mut ticks = 0u32;
+        while !slow.is_finished() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            ticks += 1;
+        }
+        slow.await.unwrap().unwrap();
+        assert!(ticks > 1, "runtime stalled while persisting");
+
+        // 并发持久化互不干扰：每个结果都是完整的 JSON 快照。
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let p = path.clone();
+            handles.push(tokio::spawn(async move {
+                persist_at(&p, &[fixture(), fixture()]).await
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+        let final_tasks: Vec<Task> =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(final_tasks.len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -338,18 +338,9 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
 }
 
 fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| pix_error_detail("rewindWriteFailed", "写入文件失败: {detail}", e))?;
-    }
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&temporary, content)
-        .map_err(|e| pix_error_detail("rewindWriteFailed", "写入文件失败: {detail}", e))?;
-    if path.exists() {
-        std::fs::remove_file(path)
-            .map_err(|e| pix_error_detail("rewindWriteFailed", "写入文件失败: {detail}", e))?;
-    }
-    std::fs::rename(&temporary, path)
+    // std::fs::rename 在 Windows 上可直接覆盖已存在的目标文件，
+    // 不能先删再写：两步之间崩溃会丢失原文件内容。
+    crate::atomic_write::write(path, content.as_bytes())
         .map_err(|e| pix_error_detail("rewindWriteFailed", "写入文件失败: {detail}", e))
 }
 
@@ -583,6 +574,25 @@ mod tests {
         assert!(plan.preview.can_apply);
         apply_plan(&plan).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), "before\n");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn write_text_atomic_overwrites_existing_file_in_place() {
+        // 覆盖写不得先删目标文件：rename 直接替换，原内容全程可见。
+        let dir = std::env::temp_dir().join(format!("pix-rewind-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("file.txt");
+        std::fs::write(&path, "original\n").unwrap();
+        write_text_atomic(&path, "replaced\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replaced\n");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
