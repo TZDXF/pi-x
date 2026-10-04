@@ -227,7 +227,7 @@ onBeforeUnmount(() => {
       />
       <!-- 内层保持展开时的固定宽度，收起动画中内容只被裁剪而不被压缩。 -->
       <div class="flex min-h-0 flex-1 flex-col min-w-0" :style="{ width: `${width}px` }">
-        <div class="bg-background/95 flex h-9 shrink-0 items-center gap-1 border-b px-2">
+        <div class="bg-background/95 flex h-12 shrink-0 items-center gap-1 border-b px-2">
           <TabsList as-child :loop="true" class="h-auto min-w-0 flex-1 justify-start bg-transparent p-0">
             <div :aria-label="t('sidebarTabs.title')">
               <VueDraggable
