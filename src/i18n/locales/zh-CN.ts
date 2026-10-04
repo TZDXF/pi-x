@@ -733,6 +733,7 @@ export default {
     forkFailedList: "加载分支消息失败",
     toastExported: "会话已导出",
     toastCopied: "已复制",
+    toastAlreadyInSplit: "该会话已参与分屏",
     errors: {
       newSession: "新建会话失败",
       modelSwitch: "切换模型失败",

@@ -754,6 +754,7 @@ export default {
     forkFailedList: "Failed to load fork messages",
     toastExported: "Session exported",
     toastCopied: "Copied",
+    toastAlreadyInSplit: "This session is already in a split view",
     errors: {
       newSession: "Failed to start a new session",
       modelSwitch: "Failed to switch model",

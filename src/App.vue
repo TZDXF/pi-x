@@ -557,7 +557,11 @@ async function handleSplitDrop(
   targetRuntimeId: string,
 ) {
   const newId = await ensureSessionForSplit(payload.file, payload.path)
-  if (!newId || !splitAtEdge(targetRuntimeId, zone, newId)) return
+  if (!newId) return
+  if (!splitAtEdge(targetRuntimeId, zone, newId)) {
+    if (isMember(newId)) ui.pushToast(t("chat.toastAlreadyInSplit"), "warning")
+    return
+  }
   activateSession(newId)
 }
 
