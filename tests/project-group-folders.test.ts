@@ -67,10 +67,12 @@ test("new sessions keep defaulting to the project primary directory", () => {
   // 侧栏组：+ 按钮直接在主目录开新会话，不提供组内目录选择。
   expect(group).toMatch(/@click="emit\('newSession', path\)"/)
   expect(group).not.toMatch(/folders\.length > 1/)
-  // ChatView 的新会话归到项目主目录。
-  expect(
-    app.match(/requestConversationNavigation\(projectRoute\(workspace\.projectRoot\(project\)\)/g)?.length,
-  ).toBeGreaterThanOrEqual(2)
+  // ChatView 的新会话归到项目主目录：包装已提为具名处理器，两处 ChatView
+  // 共用同一个处理器，其内部仍然走项目主目录路由。
+  const chatHandler = app.match(/function newSessionFromChat\(\)[\s\S]*?\n\}/)?.[0]
+  expect(chatHandler).toBeTruthy()
+  expect(chatHandler).toMatch(/requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) => newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/)
+  expect(app.match(/@new-session="newSessionFromChat"/g)?.length).toBeGreaterThanOrEqual(2)
   // 顶栏项目下拉不列出组内目录。
   expect(context).not.toMatch(/groupFolders/)
 })

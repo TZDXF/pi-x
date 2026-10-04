@@ -312,6 +312,15 @@ export default {
     unsaved: "Unsaved changes",
     errorAt: "(line {line}, column {column})",
     exposure: "Exposure",
+    tokens: "~{count} tokens",
+    exposureUnknown: "Unknown ({state})",
+    exposures: {
+      direct: "Direct",
+      codemode: "Codemode",
+      "codemode-deferred": "Codemode + deferred",
+      deferred: "Deferred",
+      hidden: "Hidden",
+    },
     toolsCount: "{count} tools",
     toolsTitle: 'Tools of "{name}"',
     toolsDialogDesc:
@@ -666,6 +675,7 @@ export default {
     export: "Export",
     exportDirectory: "Choose export directory",
     compactContext: "Compact context",
+    compactImagesUnsupported: "/compact does not support attached images. Remove the image and try again.",
     averageCacheRate: "Average cache rate",
     contextParts: {
       systemPrompt: "System prompt",
@@ -676,7 +686,6 @@ export default {
       title: "MCP tool calls",
       calls: "calls",
     },
-    emptyTitle: "What do you want to build today?",
     emptyDesc:
       "Explore code, solve problems, or turn an idea into reality. Adapt the tools to your workflow, not the other way around.",
     copyReply: "Copy reply",
@@ -1253,6 +1262,7 @@ export default {
   // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
     skillNotFound: "Skill path not found",
+    projectUntrusted: "The project is not trusted; project settings cannot be accessed.",
     invalidResourcePath: "Invalid resource path",
     resourceReadFailed: "Failed to read resource file",
     resourceBinary: "Binary file; text preview is not supported",

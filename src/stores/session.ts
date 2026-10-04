@@ -12,8 +12,7 @@ import {
   sessionMtime,
 } from "@/api/piClient"
 import { sessionChanges } from "@/lib/sessionChanges"
-import { fileChangeArtifactFromEntry, mergeArtifactChanges, type FileChangeArtifact } from "@/lib/fileChangeArtifacts"
-import { fileRewindState, markFileRewindState } from "@/lib/fileRewind"
+import { mergeArtifactChanges, type FileChangeArtifact } from "@/lib/fileChangeArtifacts"
 import { builtinExtensionPath, isBuiltinExtensionPath } from "@/lib/extensionNames"
 import type {
   CommandInfo,
@@ -26,6 +25,8 @@ import type {
 } from "@/api/protocol"
 import { createEventHandler } from "./session/events"
 import { createModelSelection } from "./session/modelSelection"
+import { createModelActions } from "./session/modelActions"
+import { createSessionArtifacts } from "./session/artifacts"
 import { createSessionHistory } from "./session/history"
 import { createPromptQueue } from "./session/promptQueue"
 import { createTurnCheckpoints } from "./session/checkpoints"
@@ -125,7 +126,8 @@ export const createSessionStore = (runtimeId = "default") =>
     const commands = ref<CommandInfo[]>([])
     const models = ref<Model[]>([])
     const cwd = ref("")
-    let pendingModelChange: { from: string; to: string } | null = null
+    /** Model switch to annotate the next user entry with, consumed by send(). */
+    const pendingModelChange = ref<{ from: string; to: string } | null>(null)
     const {
       remembered,
       desiredModelKey,
@@ -141,37 +143,24 @@ export const createSessionStore = (runtimeId = "default") =>
       loadOfflineModels,
       invalidateOfflineModels,
     } = createModelSelection(state, models)
-    async function refreshFileRewindState(file: string | null) {
-      if (!file) return
-      try {
-        const ids = await fileRewindState(file)
-        if (sessionFile.value === file) revertedFileChangeCalls.value = new Set(ids)
-      } catch {
-        /* Optional persisted UI state. */
-      }
-    }
-
-    async function markFileRewinds(toolCallIds: string[]) {
-      const file = sessionFile.value
-      if (!file || !toolCallIds.length) return
-      try {
-        const ids = await markFileRewindState(file, toolCallIds)
-        if (sessionFile.value === file) revertedFileChangeCalls.value = new Set(ids)
-      } catch {
-        /* The actual file rewind already succeeded. */
-      }
-    }
-
-    function mergeFileChangeArtifact(entry: any) {
-      const artifact = fileChangeArtifactFromEntry(entry)
-      if (!artifact) return
-      const key = `${artifact.entryId ?? ""}:${artifact.toolCallId}`
-      const index = fileChangeArtifacts.value.findIndex(item => `${item.entryId ?? ""}:${item.toolCallId}` === key)
-      fileChangeArtifacts.value =
-        index >= 0
-          ? fileChangeArtifacts.value.map((item, i) => (i === index ? artifact : item))
-          : [...fileChangeArtifacts.value, artifact]
-    }
+    const { setModel, setThinkingLevel, cycleModel, cycleThinkingLevel } = createModelActions({
+      rpcRequest,
+      state,
+      started,
+      pendingModelChange,
+      desiredModelKey,
+      desiredThinkingLevel,
+      rpcThinkingLevels,
+      remember,
+      syncSessionFile,
+      refreshState,
+      refreshThinkingLevels,
+    })
+    const { refreshFileRewindState, markFileRewinds, mergeFileChangeArtifact } = createSessionArtifacts({
+      sessionFile,
+      fileChangeArtifacts,
+      revertedFileChangeCalls,
+    })
 
     // streaming assembly
 
@@ -283,6 +272,18 @@ export const createSessionStore = (runtimeId = "default") =>
         dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t(queuedKey) }
     }
 
+    /** Surface a failed action as an assistant error bubble in the conversation.
+     *  Backend/transport errors go through tBackendError; plain messages
+     *  (already translated) pass through unchanged. */
+    function pushErrorEntry(error: unknown) {
+      entries.value.push({
+        kind: "assistant",
+        id: nextId(),
+        blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(error)}` }],
+        live: true,
+      })
+    }
+
     /** Hand a message queued during a run to pi's native follow_up queue: pi
      *  delivers it automatically once the agent finishes (and keeps running)
      *  and reports progress through queue_update events, so the client no
@@ -293,8 +294,8 @@ export const createSessionStore = (runtimeId = "default") =>
       expandedText?: string,
     ) {
       const version = conversationVersion
-      const modelChange = pendingModelChange ?? undefined
-      pendingModelChange = null
+      const modelChange = pendingModelChange.value ?? undefined
+      pendingModelChange.value = null
       entries.value.push({
         kind: "user",
         id: nextId(),
@@ -319,12 +320,7 @@ export const createSessionStore = (runtimeId = "default") =>
         .catch(e => {
           // The current run keeps going; only surface the rejected message.
           if (version !== conversationVersion) return
-          entries.value.push({
-            kind: "assistant",
-            id: nextId(),
-            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }],
-            live: true,
-          })
+          pushErrorEntry(e)
         })
     }
 
@@ -340,7 +336,13 @@ export const createSessionStore = (runtimeId = "default") =>
       // The desktop /compact command runs locally between runs; it can never be
       // steered into an active run, so queue it behind one instead.
       const compactMatch = /^\/compact(?:\s+([\s\S]*))?$/.exec(trimmed)
-      if (compactMatch && !images?.length && !commands.value.some(command => command.name === "compact")) {
+      if (compactMatch && images?.length) {
+        // Compaction runs locally and takes no attachments; forwarding the
+        // literal command text plus images to the model would be wrong.
+        pushErrorEntry(i18n.global.t("chat.compactImagesUnsupported"))
+        return
+      }
+      if (compactMatch && !commands.value.some(command => command.name === "compact")) {
         if (isStreaming.value || flow.stopping || isResending.value || isCompacting.value) {
           promptQueue.value.push({ id: nextId(), text: trimmed })
           return
@@ -348,12 +350,7 @@ export const createSessionStore = (runtimeId = "default") =>
         try {
           await compact(compactMatch[1]?.trim() || undefined)
         } catch (e) {
-          entries.value.push({
-            kind: "assistant",
-            id: nextId(),
-            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }],
-            live: true,
-          })
+          pushErrorEntry(e)
         }
         // compaction_end also drains the queue; cover RPC failures that emit none.
         if (!flow.stopping && !flow.queuePaused) dispatchQueuedPrompt()
@@ -391,8 +388,8 @@ export const createSessionStore = (runtimeId = "default") =>
       const promptText = expandedText || trimmed || "(see attached image)"
       // Only a real question consumes the notice; queued prompts consume it when
       // dispatched, and slash commands leave it for the next question.
-      const modelChange = trimmed.startsWith("/") ? undefined : (pendingModelChange ?? undefined)
-      if (modelChange) pendingModelChange = null
+      const modelChange = trimmed.startsWith("/") ? undefined : (pendingModelChange.value ?? undefined)
+      if (modelChange) pendingModelChange.value = null
       const turnIndex = ++userTurnCount
       entries.value.push({
         kind: "user",
@@ -423,12 +420,7 @@ export const createSessionStore = (runtimeId = "default") =>
             flow.awaitingAgentStart = false
             isStreaming.value = false
           }
-          entries.value.push({
-            kind: "assistant",
-            id: nextId(),
-            blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(e)}` }],
-            live: true,
-          })
+          pushErrorEntry(e)
         })
         .finally(() => {
           if (version !== conversationVersion) return
@@ -436,28 +428,41 @@ export const createSessionStore = (runtimeId = "default") =>
           void refreshStats()
         })
       if ((firstMessage || editingFirstQuestion) && titleFile && titleSessionId) {
-        const workspace = useWorkspaceStore()
-        workspace.preview({
-          file: titleFile,
-          id: titleSessionId,
-          cwd: titleProject,
-          mtimeMs: Date.now(),
-          timestamp: new Date().toISOString(),
-          preview: promptText.replace(/\s+/g, " ").slice(0, 120),
-        })
-        // Independent IPC call: do not await it or switch the active model.
-        const titleStart = nowMs()
-        void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
-          .then(async title => {
-            if (title) {
-              if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, title)
-              else workspace.generatedTitle(titleFile, title)
-            }
-            await workspace.refresh(titleProject)
-          })
-          .catch(error => console.warn("[pi] title generation failed; keeping preview:", error))
-          .finally(() => pixLog(`[perf] generateSessionTitle ${Math.round(nowMs() - titleStart)}ms`, runtimeId))
+        emitTitlePreview({ titleFile, titleProject, titleSessionId, promptText, editingFirstQuestion })
       }
+    }
+
+    /** Fire-and-forget workspace preview plus title generation for the first
+     *  question (or its edit). Independent IPC call: do not await it or switch
+     *  the active model. */
+    function emitTitlePreview(input: {
+      titleFile: string
+      titleProject: string
+      titleSessionId: string
+      promptText: string
+      editingFirstQuestion: boolean
+    }) {
+      const { titleFile, titleProject, titleSessionId, promptText, editingFirstQuestion } = input
+      const workspace = useWorkspaceStore()
+      workspace.preview({
+        file: titleFile,
+        id: titleSessionId,
+        cwd: titleProject,
+        mtimeMs: Date.now(),
+        timestamp: new Date().toISOString(),
+        preview: promptText.replace(/\s+/g, " ").slice(0, 120),
+      })
+      const titleStart = nowMs()
+      void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
+        .then(async title => {
+          if (title) {
+            if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, title)
+            else workspace.generatedTitle(titleFile, title)
+          }
+          await workspace.refresh(titleProject)
+        })
+        .catch(error => console.warn("[pi] title generation failed; keeping preview:", error))
+        .finally(() => pixLog(`[perf] generateSessionTitle ${Math.round(nowMs() - titleStart)}ms`, runtimeId))
     }
 
     /** Replace the last question at its original position, without creating a session fork. */
@@ -529,6 +534,12 @@ export const createSessionStore = (runtimeId = "default") =>
         if (operation === resendVersion) {
           flow.stopping = false
           isResending.value = false
+          // The edit owns the queue only while it runs; a failure in any step
+          // above (clear_queue/abort/get_state/rewind_prompt) must still
+          // release the scheduler or queued prompts would never dispatch.
+          // abortAndRestore keeps its pause on purpose: the user took the
+          // queued messages back into the composer.
+          flow.queuePaused = false
         }
       }
     }
@@ -560,18 +571,47 @@ export const createSessionStore = (runtimeId = "default") =>
       return restored.join("\n")
     }
 
-    async function newSession() {
-      const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
-      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.newSession"))
-      if (result.data?.cancelled) return
+    /** Reset per-conversation run-flow state so a run still in flight cannot
+     *  leak streaming/queue flags across the switch (newSession used to leave
+     *  isStreaming set, locking the UI forever once the in-flight prompt
+     *  rejected against a bumped conversationVersion). Shared by newSession()
+     *  and clear(); teardown specific to dropping the conversation (session
+     *  file, commands, offline models, auto-retry) stays with clear(). */
+    function resetRunFlow() {
       ++conversationVersion
       invalidateHistory()
-      pendingModelChange = null
+      pendingModelChange.value = null
       userTurnCount = 0
+      flow.agentStartedAt = undefined
+      flow.turnFailed = false
+      flow.turnAborted = false
+      flow.lastErrorMessage = null
+      flow.awaitingAgentStart = false
+      promptQueue.value = []
+      clearQueueTimer()
+      flow.stopping = false
+      ++resendVersion
+      isResending.value = false
+      flow.queuePaused = false
+      isStreaming.value = false
+      isCompacting.value = false
+      retryInfo.value = null
+      dispositionNotice.value = null
+      steering.value = []
+      followUp.value = []
       entries.value = []
       runs.value = {}
       partialBlocks.value = null
       streamingTurnId.value = null
+      stats.value = null
+      lastUsage.value = null
+    }
+
+    async function newSession() {
+      const result = await rpcRequest<{ cancelled?: boolean }>({ type: "new_session" })
+      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.newSession"))
+      if (result.data?.cancelled) return
+      resetRunFlow()
       await refreshState()
       await applyRememberedSelection()
       await refreshStats()
@@ -588,37 +628,6 @@ export const createSessionStore = (runtimeId = "default") =>
         isCompacting.value = false
         await refreshStats()
       }
-    }
-
-    async function setModel(provider: string, modelId: string, recordChange = true) {
-      const previous =
-        pendingModelChange?.from ?? (state.value?.model && `${state.value.model.provider}/${state.value.model.id}`)
-      const result = await rpcRequest({ type: "set_model", provider, modelId })
-      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
-      desiredModelKey.value = null
-      // Pi appends a model_change entry to the session file. Mark this as our
-      // own write before the file watcher can mistake it for an external edit
-      // and restart the worker while the picker is still refreshing.
-      await syncSessionFile()
-      await refreshState()
-      await refreshThinkingLevels()
-      if (state.value?.model) {
-        const current = `${state.value.model.provider}/${state.value.model.id}`
-        if (recordChange && started.value && previous)
-          pendingModelChange = previous === current ? null : { from: previous, to: current }
-        remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
-      }
-    }
-
-    async function setThinkingLevel(level: ThinkingLevel) {
-      const result = await rpcRequest({ type: "set_thinking_level", level })
-      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
-      desiredThinkingLevel.value = null
-      // Changing thinking level also appends to the session log.
-      await syncSessionFile()
-      await refreshState()
-      await refreshThinkingLevels()
-      remember(state.value?.model ?? undefined, state.value?.thinkingLevel ?? level, rpcThinkingLevels.value)
     }
 
     /** set_auto_retry: the runtime auto-retry switch of the running pi. */
@@ -643,51 +652,15 @@ export const createSessionStore = (runtimeId = "default") =>
       if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.abortRetry"))
     }
 
-    /** cycle_model: switch to the next available model. Returns false when no
-     *  other model is configured (pi answers success with null data). */
-    async function cycleModel(): Promise<boolean> {
-      const previous =
-        pendingModelChange?.from ?? (state.value?.model && `${state.value.model.provider}/${state.value.model.id}`)
-      const result = await rpcRequest<{ model: Model | null }>({ type: "cycle_model" })
-      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
-      if (!result.data?.model) return false
-      desiredModelKey.value = null
-      // Cycling appends a model_change entry like set_model does.
-      await syncSessionFile()
-      await refreshState()
-      await refreshThinkingLevels()
-      if (state.value?.model) {
-        const current = `${state.value.model.provider}/${state.value.model.id}`
-        if (started.value && previous)
-          pendingModelChange = previous === current ? null : { from: previous, to: current }
-        remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)
-      }
-      return true
-    }
-
-    /** cycle_thinking_level: next thinking level of the current model. Returns
-     *  false when the model does not support thinking (pi answers success with
-     *  null data). */
-    async function cycleThinkingLevel(): Promise<boolean> {
-      const result = await rpcRequest<{ level: ThinkingLevel | null }>({ type: "cycle_thinking_level" })
-      if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.thinkingSwitch"))
-      if (!result.data?.level) return false
-      desiredThinkingLevel.value = null
-      // Cycling appends a thinking-level entry like set_thinking_level does.
-      await syncSessionFile()
-      await refreshState()
-      await refreshThinkingLevels()
-      remember(
-        state.value?.model ?? undefined,
-        state.value?.thinkingLevel ?? result.data.level,
-        rpcThinkingLevels.value,
-      )
-      return true
-    }
-
     // ---- queries ----
+    /** Concurrent refreshes (events, actions, init) race the same get_state;
+     *  only the newest request may write, so a stale response cannot restore
+     *  an outdated state/sessionFile (same pattern as commandRequestVersion). */
+    let stateRequestVersion = 0
     async function refreshState() {
+      const version = ++stateRequestVersion
       const res = await rpcRequest<SessionState & { sessionFile?: string }>({ type: "get_state" })
+      if (version !== stateRequestVersion) return
       if (res.success && res.data) {
         state.value = res.data
         sessionFile.value = res.data.sessionFile ?? null
@@ -801,39 +774,15 @@ export const createSessionStore = (runtimeId = "default") =>
     }
 
     function clear() {
-      pendingModelChange = null
-      flow.agentStartedAt = undefined
-      flow.turnFailed = false
-      flow.turnAborted = false
-      flow.lastErrorMessage = null
-      flow.awaitingAgentStart = false
-      promptQueue.value = []
-      clearQueueTimer()
-      flow.stopping = false
-      ++resendVersion
-      isResending.value = false
-      flow.queuePaused = false
-      isStreaming.value = false
-      isCompacting.value = false
-      retryInfo.value = null
-      dispositionNotice.value = null
+      resetRunFlow()
       autoRetry.value = null
-      userTurnCount = 0
+      followUpMode.value = null
       sessionFile.value = null
       syncedSessionMtime.value = null
       ++mtimeSyncSeq
       invalidateOfflineModels()
-      ++conversationVersion
-      invalidateHistory()
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
-      steering.value = []
-      followUp.value = []
       state.value = null
-      stats.value = null
-      lastUsage.value = null
+      ++stateRequestVersion
       ++commandRequestVersion
       commands.value = []
     }

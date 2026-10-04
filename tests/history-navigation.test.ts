@@ -9,7 +9,8 @@ const run = (code, context) =>
   vm.runInContext(ts.transpile(code, { target: ts.ScriptTarget.ES2022 }), vm.createContext(context))
 
 test("navigation stays serialized and the latest pending selection wins", async () => {
-  const app = source("../src/App.vue")
+  // 导航队列逻辑已拆到 App 的导航 composable，按原文本切片执行。
+  const app = source("../src/composables/useAppNavigation.ts")
   const code = app.slice(app.indexOf("let queuedNavigation:"), app.indexOf("watch([connecting, navigating]"))
   const context = {
     ref: value => ({ value }),
@@ -19,7 +20,7 @@ test("navigation stays serialized and the latest pending selection wins", async 
     connecting: { value: false },
     navigating: { value: false },
     pendingResume: { value: null },
-    disposed: false,
+    isDisposed: () => false,
     route: { value: { name: "home", params: {} } },
     nextTick: async fn => fn?.(),
     watch: () => {},
@@ -92,7 +93,7 @@ test("conversation mounts immediately with instant initial positioning; loading 
 })
 
 test("streaming navigation switches without aborting the running generation", async () => {
-  const app = source("../src/App.vue")
+  const app = source("../src/composables/useAppNavigation.ts")
   const code = app.slice(app.indexOf("let queuedNavigation:"), app.indexOf("watch([connecting, navigating]"))
   const calls = []
   const context = {
@@ -109,7 +110,7 @@ test("streaming navigation switches without aborting the running generation", as
     connecting: { value: false },
     navigating: { value: false },
     pendingResume: { value: null },
-    disposed: false,
+    isDisposed: () => false,
     route: { value: { name: "home", params: {} } },
     nextTick: async fn => fn?.(),
     watch: () => {},

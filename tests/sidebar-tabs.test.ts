@@ -47,7 +47,7 @@ test("browser tab works on desktop and remote with chat insert support", () => {
   expect(panel).toMatch(/insertIntoChat/)
   expect(read("../src/lib/previewAnnotations.ts")).toMatch(/export function formatAnnotationsForChat/)
   // 代理仅由后端提供,远程 dispatch 必须放行 preview_proxy_info。
-  expect(read("../src-tauri/src/remote.rs")).toMatch(/"preview_proxy_info" =>/)
+  expect(read("../src-tauri/src/remote/dispatch/app.rs")).toMatch(/"preview_proxy_info" =>/)
 })
 
 test("sidebar tab state lives in ChatView with per-type add, close and review focus", () => {
@@ -66,6 +66,6 @@ test("project directory is available locally and remotely with containment check
   expect(files).toMatch(/relative\s*\.\s*components\(\)\s*\.\s*any/)
   expect(files).toMatch(/!directory\.starts_with\(&root\)/)
   expect(files).toMatch(/kind\.is_symlink\(\)/)
-  expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::list_project_directory/)
-  expect(read("../src-tauri/src/remote.rs")).toMatch(/"list_project_directory" =>/)
+  expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::files::list_project_directory/)
+  expect(read("../src-tauri/src/remote/dispatch/app.rs")).toMatch(/"list_project_directory" =>/)
 })

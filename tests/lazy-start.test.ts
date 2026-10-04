@@ -12,6 +12,11 @@ import { createConversationLoader } from "@/lib/conversationLoader"
 import { createWorkspaceRuntime } from "@/lib/workspaceRuntime"
 import { createWorkspaceStartup } from "@/lib/workspaceStartup"
 import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
+// App 的职责 composable 用真实实现（其运行时依赖全部来自 App 注入的桩）。
+import { useAppNavigation } from "@/composables/useAppNavigation"
+import { useProjectActions } from "@/composables/useProjectActions"
+import { useSessionOpening } from "@/composables/useSessionOpening"
+import { useAppShortcuts } from "@/composables/useAppShortcuts"
 
 async function loadVueSetup(source, require) {
   const { descriptor } = parse(source, { filename: "App.vue" })
@@ -152,6 +157,10 @@ async function harness(group = null) {
     "@/lib/conversationLoader": { createConversationLoader },
     "@/lib/workspaceRuntime": { createWorkspaceRuntime },
     "@/lib/workspaceStartup": { createWorkspaceStartup },
+    "@/composables/useAppNavigation": { useAppNavigation },
+    "@/composables/useProjectActions": { useProjectActions },
+    "@/composables/useSessionOpening": { useSessionOpening },
+    "@/composables/useAppShortcuts": { useAppShortcuts },
     "@/lib/paths": paths,
     "@/lib/backendError": backendError,
     "@/i18n": { tBackendError: value => value },

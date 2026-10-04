@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest"
-import appSource from "@/App.vue?raw"
+// openSessionAction 已拆到 App 的会话打开 composable。
+import appSource from "@/composables/useSessionOpening.ts?raw"
 
 const mocks = vi.hoisted(() => ({
   desktop: true,

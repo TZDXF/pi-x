@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type UnwrapRef } from "vue"
+import { computed, onBeforeUnmount, reactive, ref, watch, type UnwrapRef } from "vue"
 import { useI18n } from "vue-i18n"
-import { RefreshCw } from "@lucide/vue"
-import { Button } from "@/components/ui/button"
 import {
   Conversation,
   ConversationContent,
@@ -18,17 +16,16 @@ import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
+import ChatCompactionMarker from "./ChatCompactionMarker.vue"
+import ChatCustomEntry from "./ChatCustomEntry.vue"
+import RetryBanner from "./RetryBanner.vue"
+import SelectionAnchorBadges from "./SelectionAnchorBadges.vue"
 import ConversationSelectionMenu from "./ConversationSelectionMenu.vue"
-import ConversationSelectionPopup, { type SelectionPopupState } from "./ConversationSelectionPopup.vue"
+import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
+import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
-import {
-  CONVERSATION_SELECTION_MAX_COUNT,
-  CONVERSATION_SELECTION_MAX_TEXT_LENGTH,
-  type ConversationSelectionSource,
-} from "@/lib/conversationSelections"
-import { boundaryRect, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
-import { useConversationSelectionsStore } from "@/stores/conversationSelections"
-import { compactNumber } from "@/lib/format"
+import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import type { useChatTurnList } from "@/composables/useChatTurnList"
 import type { SessionStore } from "@/stores/session"
@@ -54,25 +51,41 @@ const emit = defineEmits<{
   openReview: [path: string]
   fork: [index: number]
 }>()
-const { session, ui } = props
-const changes = useTurnChanges(session, props.ui)
+const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
 /** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
 async function stopRetry() {
   try {
-    await session.abortRetry()
+    await props.session.abortRetry()
   } catch (e) {
-    ui.pushToast(String(e), "error")
+    props.ui.pushToast(formatCodedError(t, e), "error")
   }
 }
 // Kept outside VirtualMessage: virtualization may unmount an answer, but must
 // not forget that its process was already materialized.
 const openedProcesses = reactive(new Set<number>())
 watch(
-  () => session.sessionFile,
+  () => props.session.sessionFile,
   () => openedProcesses.clear(),
 )
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
+const {
+  selectionRoot,
+  anchorOverlays,
+  selectionPopup,
+  locateSelection,
+  editSelection,
+  onSelectionQuote,
+  onSelectionSave,
+  onSelectionRemove,
+  onSelectionCancel,
+} = useSelectionQuotes({
+  session: props.session,
+  ui: props.ui,
+  project: () => props.project,
+  renderedEntries: () => props.renderedEntries,
+  conversation,
+})
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
@@ -80,136 +93,13 @@ defineExpose({
   locateSelection,
   editSelection,
 })
-// ---- 对话划词引用（对齐 ZCode conversation selections）：选中文本暂存 composer，
-// ---- 随下一条消息以 "# userselect:" 尾块发出。引用按会话归属；
-// ---- 提交后在划词结束处渲染索引数字标记，支持定位与回显编辑。 ----
-const selectionStore = useConversationSelectionsStore()
-const selectionScope = computed(() => session.sessionFile ?? props.project)
-const selectionRoot = computed<HTMLElement | null>(() => (conversation.value?.$el as HTMLElement | undefined) ?? null)
-const pendingSelections = computed(() => (selectionStore.scope === selectionScope.value ? selectionStore.items : []))
-const selectionPopup = ref<(SelectionPopupState & { id?: string }) | null>(null)
-function pushSelectionToast(result: { ok: boolean; reason?: string; duplicate?: boolean }) {
-  if (!result.ok) {
-    if (result.reason === "count")
-      ui.pushToast(t("chat.selectionLimitCount", { count: CONVERSATION_SELECTION_MAX_COUNT }), "error")
-    else if (result.reason === "total") ui.pushToast(t("chat.selectionLimitTotal"), "error")
-    else ui.pushToast(t("chat.selectionLimitSingle"), "error")
-  } else if (result.duplicate) ui.pushToast(t("chat.selectionDuplicate"))
-}
-// 点击"引用到输入框"立即入库：批注可选，稍后通过索引标记或摘要列表补充。
-function onSelectionQuote(payload: {
-  text: string
-  source: ConversationSelectionSource
-  messageId: number
-  startOffset: number
-  endOffset: number
-}) {
-  const result = selectionStore.add(selectionScope.value, { ...payload })
-  pushSelectionToast(result)
-  window.getSelection()?.removeAllRanges()
-}
-function onSelectionSave(comment: string) {
-  const id = selectionPopup.value?.id
-  if (id) selectionStore.update(id, comment)
-  selectionPopup.value = null
-  window.getSelection()?.removeAllRanges()
-}
-function onSelectionRemove() {
-  const id = selectionPopup.value?.id
-  if (id) selectionStore.remove(id)
-  selectionPopup.value = null
-  window.getSelection()?.removeAllRanges()
-}
-function onSelectionCancel() {
-  selectionPopup.value = null
-  window.getSelection()?.removeAllRanges()
-}
-// ---- 索引标记覆盖层：按引用在列表中的序号渲染到划词结束处（布局变化时重算） ----
-const anchorOverlays = ref<Map<number, { id: string; index: number; left: number; top: number }[]>>(new Map())
-async function recomputeAnchors() {
-  const root = selectionRoot.value
-  const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
-  if (root) {
-    pendingSelections.value.forEach((item, index) => {
-      const wrapper = root.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
-      if (!wrapper) return
-      const rect = boundaryRect(wrapper, item.endOffset)
-      const wrapperRect = wrapper.getBoundingClientRect()
-      if (!rect) return
-      const list = map.get(item.messageId) ?? []
-      list.push({
-        id: item.id,
-        index: index + 1,
-        left: rect.right - wrapperRect.left + 2,
-        // 徽标抬到划词末行上方，避免盖住正文文字。
-        top: rect.top - wrapperRect.top - 16,
-      })
-      map.set(item.messageId, list)
-    })
-  }
-  anchorOverlays.value = map
-}
-watch(
-  [() => props.renderedEntries, pendingSelections],
-  () => {
-    // 编辑态弹窗对应的引用被删除/清空时同步关闭。
-    const popup = selectionPopup.value
-    if (popup?.id && !pendingSelections.value.some(item => item.id === popup.id)) selectionPopup.value = null
-    void nextTick(recomputeAnchors)
-  },
-  { deep: true, immediate: true },
-)
-onMounted(() => {
-  window.addEventListener("resize", recomputeAnchors)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener("resize", recomputeAnchors)
-})
-// ---- 摘要列表动作：定位（滚动到索引标记）与编辑（回显划选后打开弹窗） ----
-function locateSelection(id: string) {
-  const item = pendingSelections.value.find(entry => entry.id === id)
-  if (!item) return
-  const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
-  if (badge) {
-    badge.scrollIntoView({ block: "center", behavior: "smooth" })
-    return
-  }
-  conversation.value?.scrollToMessage(item.messageId)
-  void nextTick(recomputeAnchors)
-}
-async function editSelection(id: string) {
-  const item = pendingSelections.value.find(entry => entry.id === id)
-  if (!item) return
-  locateSelection(id)
-  await nextTick()
-  await new Promise(resolve => requestAnimationFrame(resolve))
-  const root = selectionRoot.value
-  const wrapper = root?.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
-  let anchor: { left: number; top: number; bottom: number } | null = null
-  const badge = root?.querySelector(`[data-selection-anchor="${id}"]`)
-  if (wrapper && restoreSelection(wrapper, item.startOffset, item.endOffset)) {
-    const selection = window.getSelection()
-    if (selection?.rangeCount) {
-      const endRect = selectionEndRect(selection.getRangeAt(0))
-      if (endRect) anchor = { left: endRect.right, top: endRect.top, bottom: endRect.bottom }
-    }
-  }
-  if (!anchor && badge) {
-    const badgeRect = badge.getBoundingClientRect()
-    anchor = { left: badgeRect.right, top: badgeRect.top, bottom: badgeRect.bottom }
-  }
-  if (!anchor) return
-  selectionPopup.value = {
-    id: item.id,
-    comment: item.comment ?? "",
-    anchor,
-  }
-}
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
 const waitingSeconds = ref(0)
+/** 会话是否已有用户消息：决定消息列的缩进布局（模板内联计算提为 computed）。 */
+const hasUserEntries = computed(() => props.session.entries.some(entry => entry.kind === "user"))
 let waitingClock: ReturnType<typeof setInterval> | undefined
 watch(
-  () => session.isStreaming && !session.partialBlocks,
+  () => props.session.isStreaming && !props.session.partialBlocks,
   waiting => {
     if (waiting && waitingClock === undefined) {
       waitingSeconds.value = 0
@@ -241,7 +131,7 @@ onBeforeUnmount(() => {
   >
     <ConversationContent
       class="conversation-column has-[[data-slot=conversation-empty-state]]:justify-center mx-auto w-full max-w-3xl gap-5 px-6 py-6 min-h-full max-[640px]:pl-4 max-[640px]:pr-4"
-      :class="{ 'pl-[42px] max-[640px]:pl-[42px]': session.entries.some(entry => entry.kind === 'user') }"
+      :class="{ 'pl-[42px] max-[640px]:pl-[42px]': hasUserEntries }"
     >
       <div
         v-if="session.hasOlderHistory"
@@ -269,39 +159,8 @@ onBeforeUnmount(() => {
         :live="entry.kind === 'assistant' && !entry.complete"
         v-slot="{ animate }"
       >
-        <!-- compaction marker: a divider at the position history collapsed -->
-        <details v-if="entry.kind === 'compaction'" class="group">
-          <summary
-            class="flex cursor-pointer list-none items-center gap-3 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden"
-          >
-            <span class="h-px flex-1 bg-border"></span>
-            <span class="flex items-center gap-1.5">
-              {{ t("chat.compacted") }}
-              <template v-if="entry.tokensBefore">
-                <span aria-hidden="true">&middot;</span>
-                {{ compactNumber(entry.tokensBefore)
-                }}<template v-if="entry.tokensAfter"> &rarr; {{ compactNumber(entry.tokensAfter) }}</template>
-              </template>
-            </span>
-            <span class="h-px flex-1 bg-border"></span>
-          </summary>
-          <p
-            class="mt-2 whitespace-pre-wrap rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
-          >
-            {{ entry.summary }}
-          </p>
-        </details>
-        <!-- unknown extension entry: low-key placeholder so custom session
-                 entries neither break nor clutter the conversation -->
-        <div
-          v-else-if="entry.kind === 'custom'"
-          class="flex items-center gap-3 text-xs text-muted-foreground/70"
-          role="status"
-        >
-          <span class="h-px flex-1 bg-border"></span>
-          <span>{{ t("chat.customEntry", { type: entry.customType }) }}</span>
-          <span class="h-px flex-1 bg-border"></span>
-        </div>
+        <ChatCompactionMarker v-if="entry.kind === 'compaction'" :entry="entry" />
+        <ChatCustomEntry v-else-if="entry.kind === 'custom'" :entry="entry" />
         <template v-else>
           <div
             v-if="entry.kind === 'user' && entry.modelChange"
@@ -338,16 +197,7 @@ onBeforeUnmount(() => {
                 @copy-text="emit('copyText', $event)"
               />
               <!-- 划词引用的索引数字标记：绝对定位在划词结束处，点击直接编辑 -->
-              <sup
-                v-for="badge in anchorOverlays.get(entry.id) ?? []"
-                :key="badge.id"
-                :data-selection-anchor="badge.id"
-                class="selection-anchor-badge selection-anchor-overlay"
-                :title="t('chat.selectionEdit')"
-                :style="{ left: `${badge.left}px`, top: `${badge.top}px` }"
-                @click="editSelection(badge.id)"
-                >{{ badge.index }}</sup
-              >
+              <SelectionAnchorBadges :badges="anchorOverlays.get(entry.id) ?? []" @edit="editSelection" />
             </div>
           </Message>
         </template>
@@ -400,44 +250,7 @@ onBeforeUnmount(() => {
         }}</span>
       </div>
 
-      <!-- Keep retry errors next to the conversation, not in the header. -->
-      <Message v-if="session.retryInfo" from="assistant" role="status" aria-live="polite">
-        <MessageContent class="w-full">
-          <div
-            class="flex w-full items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-3 text-amber-800 shadow-sm dark:border-amber-400/20 dark:bg-amber-400/[0.08] dark:text-amber-200"
-          >
-            <span
-              class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400"
-              aria-hidden="true"
-            >
-              <RefreshCw :size="14" class="animate-spin" />
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <p class="text-sm font-medium">{{ t("chat.retrying") }}</p>
-                <span
-                  class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
-                >
-                  {{
-                    t("chat.retryAttempt", {
-                      attempt: session.retryInfo.attempt,
-                      maxAttempts: session.retryInfo.maxAttempts,
-                    })
-                  }}
-                </span>
-              </div>
-              <p
-                class="mt-1 whitespace-pre-wrap text-xs leading-5 text-amber-700/85 [overflow-wrap:anywhere] dark:text-amber-200/80"
-              >
-                {{ session.retryInfo.errorMessage || t("chat.retryUnknownError") }}
-              </p>
-            </div>
-            <Button variant="outline" size="sm" class="h-7 shrink-0 text-xs" @click="stopRetry">
-              {{ t("chat.abortRetry") }}
-            </Button>
-          </div>
-        </MessageContent>
-      </Message>
+      <RetryBanner v-if="session.retryInfo" :retry="session.retryInfo" @stop="stopRetry" />
 
       <!-- pending steering / follow-up (pi-owned queue) -->
       <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
@@ -483,23 +296,3 @@ onBeforeUnmount(() => {
     @cancel="onSelectionCancel"
   />
 </template>
-
-<style>
-/* 划词引用的索引数字标记基础样式（消息内为绝对定位覆盖层，摘要列表内为行内徽标） */
-.selection-anchor-badge {
-  display: inline-block;
-  padding: 0 5px;
-  border-radius: 9999px;
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 14px;
-  user-select: none;
-}
-/* 消息内覆盖层变体：定位在划词结束处，点击直接编辑 */
-.selection-anchor-overlay {
-  position: absolute;
-  cursor: pointer;
-}
-</style>

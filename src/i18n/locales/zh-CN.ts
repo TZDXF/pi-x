@@ -303,6 +303,15 @@ export default {
     unsaved: "有未保存的修改",
     errorAt: "（第 {line} 行第 {column} 列）",
     exposure: "暴露方式",
+    tokens: "~{count} tokens",
+    exposureUnknown: "未知（{state}）",
+    exposures: {
+      direct: "直接暴露",
+      codemode: "代码模式",
+      "codemode-deferred": "代码模式 + 按需",
+      deferred: "按需加载",
+      hidden: "隐藏",
+    },
     toolsCount: "{count} 个工具",
     toolsTitle: "「{name}」的工具",
     toolsDialogDesc:
@@ -646,6 +655,7 @@ export default {
     export: "导出",
     exportDirectory: "选择会话导出目录",
     compactContext: "压缩上下文",
+    compactImagesUnsupported: "/compact 暂不支持附带图片，请移除图片后重试。",
     averageCacheRate: "平均缓存率",
     contextParts: {
       systemPrompt: "系统提示词",
@@ -656,7 +666,6 @@ export default {
       title: "MCP 工具调用",
       calls: "次",
     },
-    emptyTitle: "今天想构建什么？",
     emptyDesc: "探索代码、解决问题，或把一个想法变成现实。让工具适应你的工作流，而不是相反。",
     copyReply: "复制回复",
     editPrompt: "编辑提问",
@@ -1210,6 +1219,7 @@ export default {
   // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
     skillNotFound: "技能路径不存在",
+    projectUntrusted: "项目未被信任，无法访问项目设置",
     invalidResourcePath: "无效的资源路径",
     resourceReadFailed: "读取资源文件失败",
     resourceBinary: "二进制文件，不支持文本预览",

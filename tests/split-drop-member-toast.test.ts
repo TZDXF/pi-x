@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "vitest"
-import appSource from "@/App.vue?raw"
+// handleSplitDrop 已拆到 App 的会话打开 composable。
+import appSource from "@/composables/useSessionOpening.ts?raw"
 import { clear, enterSplit, splitAtEdge as realSplitAtEdge, isMember as realIsMember } from "@/stores/splitView"
 
 beforeEach(() => {

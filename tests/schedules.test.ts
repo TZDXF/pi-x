@@ -65,7 +65,7 @@ test("scheduled runs get unique Pix-owned runtimes and publish before prompting"
     source.indexOf('"type": "scheduled_session_created"') <
       source.indexOf('json!({"type":"prompt", "message":input.prompt})'),
   ).toBeTruthy()
-  expect(source).toMatch(/current\.session_file = Some\(file\.clone\(\)\);[\s\S]*persist\(&updated\)\?;/)
+  expect(source).toMatch(/current\.session_file = Some\(file\.clone\(\)\);[\s\S]*persist\(&updated\)\.await\?;/)
   expect(source).toMatch(/notify_schedules_changed\(app\);[\s\S]*published = true/)
 })
 

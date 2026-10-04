@@ -6,7 +6,8 @@ const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
 test("archived sessions live in a settings tab and the sidebar entry is gone", () => {
   const router = read("../src/lib/router.ts")
   const tabs = read("../src/components/settings/tabs.ts")
-  const app = read("../src/App.vue")
+  // 快捷键注册在 App 的 shortcuts composable 中。
+  const shortcuts = read("../src/composables/useAppShortcuts.ts")
   const sidebar = read("../src/components/WorkspaceSidebar.vue")
 
   expect(router).toMatch(/"archives",/)
@@ -15,7 +16,7 @@ test("archived sessions live in a settings tab and the sidebar entry is gone", (
   expect(router).not.toMatch(/name: "archives"/)
   expect(tabs).toMatch(/id: "archives"[\s\S]*?import\("@\/components\/ArchivedSessionsPage\.vue"\)/)
   expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "archives", "about"\]/)
-  expect(app).toMatch(/registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
+  expect(shortcuts).toMatch(/registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
   expect(sidebar).not.toMatch(/emit\('archives'\)/)
   expect(sidebar).not.toMatch(/archives: \[\]/)
 })
@@ -60,7 +61,7 @@ test("bulk delete is exposed per project and for the whole page behind confirmat
 })
 
 test("archived session list, restore and delete work through remote dispatch", () => {
-  const remote = read("../src-tauri/src/remote.rs")
+  const remote = read("../src-tauri/src/remote/dispatch/session.rs")
 
   expect(remote).toMatch(/"session_list_archived" =>/)
   expect(remote).toMatch(/"session_update" =>/)

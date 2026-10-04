@@ -43,12 +43,13 @@ test("stays a no-op without a manifest or with malformed JSON", () => {
 })
 
 test("switchProject falls back to a direct folder pick when groups are disabled", () => {
-  const app = read("../src/App.vue")
+  // switchProject 位于 App 的项目操作 composable 中。
+  const actions = read("../src/composables/useProjectActions.ts")
   // 配置读取放在点击时（设置页改动即时生效），关闭时直接选目录。
-  expect(app).toMatch(/cfg\.workspaceGroups !== false/)
-  expect(app).toMatch(/chooseDirectoryPath\(/)
-  expect(app).toMatch(/workspace\.rememberWorkspace\(dir\)/)
-  expect(app).toMatch(/projectDialogOpen\.value = true/)
+  expect(actions).toMatch(/cfg\.workspaceGroups !== false/)
+  expect(actions).toMatch(/chooseDirectoryPath\(/)
+  expect(actions).toMatch(/workspace\.rememberWorkspace\(dir\)/)
+  expect(actions).toMatch(/projectDialogOpen\.value = true/)
 })
 
 test("workspace settings expose the project group toggle", () => {
@@ -61,6 +62,7 @@ test("workspace settings expose the project group toggle", () => {
 test("no spawn path passes --append-system-prompt for the workspace manifest", () => {
   // 清单注入已迁移到扩展；命令上再传 --append-system-prompt 会抑制 pi 的
   // APPEND_SYSTEM.md 发现。标题生成与翻译仍有意使用该 flag 做隔离。
-  expect(read("../src-tauri/src/commands.rs")).not.toContain("--append-system-prompt")
-  expect(read("../src-tauri/src/rpc.rs")).toContain("PIX_WORKSPACE")
+  expect(read("../src-tauri/src/commands/pi.rs")).not.toContain("--append-system-prompt")
+  expect(read("../src-tauri/src/commands/workspace.rs")).not.toContain("--append-system-prompt")
+  expect(read("../src-tauri/src/rpc/child.rs")).toContain("PIX_WORKSPACE")
 })

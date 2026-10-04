@@ -135,9 +135,9 @@ test("入口、设置项与后端命令均已接线", () => {
   const read = path => readFileSync(new URL(path, import.meta.url), "utf8")
   // 后端：默认目录在 .pix 下、命令已注册、远程端可代理并保存该配置。
   expect(read("../src-tauri/src/data_dir.rs")).toMatch(/join\("workspace"\)/)
-  expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::projectless_dir_resolve/)
-  expect(read("../src-tauri/src/remote.rs")).toMatch(/"projectless_dir_resolve" =>/)
-  const remote = read("../src-tauri/src/remote.rs")
+  expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::config::projectless_dir_resolve/)
+  expect(read("../src-tauri/src/remote/dispatch/app.rs")).toMatch(/"projectless_dir_resolve" =>/)
+  const remote = read("../src-tauri/src/remote/dispatch/app.rs")
   expect(remote).toMatch(/apply_remote_app_config\(&mut cfg, &a\["config"\]\)/)
   expect(remote).toMatch(/cfg\.projectless_dir = config\["projectlessDir"\]/)
   // 前端：欢迎页/侧栏入口、设置页，以及会话空状态使用项目显示名。

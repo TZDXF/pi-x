@@ -64,7 +64,8 @@ const run = (code, context) =>
 
 function replayHarness(peekResult) {
   const calls = []
-  const app = source("../src/App.vue")
+  // followConversationRoute 已拆到 App 的导航 composable，按原文本切片执行。
+  const app = source("../src/composables/useAppNavigation.ts")
   const code = app.slice(app.indexOf("async function followConversationRoute"), app.indexOf("async function drainNavigation"))
   const context = {
     peekConversation: () => peekResult,
