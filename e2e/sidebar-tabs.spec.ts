@@ -44,7 +44,7 @@ let nextId = 6
 createApp({render:()=>h('div',{style:'display:flex;height:650px;width:1400px'},[
   h(RightSidebar,{
     tabs:fixture.tabs, activeId:fixture.activeId, open:fixture.open,
-    changes:[], project:'C:/fixture', focus:'src/example.ts', totals:{added:2,removed:1,unknown:false},
+    changes:[], project:'C:/fixture', focus:'src/example.ts',
     'onUpdate:activeId':id=>{fixture.activations.push(id);fixture.activeId=id},
     'onClose-tab':id=>{
       fixture.closes.push(id)
@@ -279,7 +279,7 @@ test("adding and closing duplicate tabs and the empty state reuse existing label
   await expect(page.getByRole("tab")).toHaveCount(0)
   await expect(page.locator('[role="tabpanel"]')).toHaveCount(0)
   await page.getByRole("button", { name: "Review", exact: true }).click()
-  await active(page, "Review +2 -1")
+  await active(page, "Review")
 })
 
 test("remote browser tabs keep visibility and send-to-chat without desktop gating", async ({ page }) => {
@@ -293,6 +293,10 @@ test("remote browser tabs keep visibility and send-to-chat without desktop gatin
     window.sidebarFixture.open = false
   })
   await expect(panel.locator("[data-visible]")).toHaveText("false")
+  // 关闭状态下侧栏自身隐藏（宽度收起），重新打开后才能继续操作工具栏。
+  await page.evaluate(() => {
+    window.sidebarFixture.open = true
+  })
   await page.getByRole("button", { name: "Add tab", exact: true }).click()
   // Terminal no longer gates on desktop: the entry is offered to remote browsers too.
   await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(1)

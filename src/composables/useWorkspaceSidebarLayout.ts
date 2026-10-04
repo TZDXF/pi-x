@@ -1,4 +1,4 @@
-import { computed, ref, watch, type Ref } from "vue"
+import { computed, getCurrentScope, onScopeDispose, ref, watch, type Ref } from "vue"
 import { usePanelKeyboardResize, type ResizablePanelApi } from "@/composables/usePanelKeyboardResize"
 
 /** Pixel-based splitter preference and narrow-screen overlay layout. */
@@ -28,6 +28,13 @@ export function useWorkspaceSidebarLayout(
     : Math.min(SIDEBAR_DEFAULT_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, preferredSidebarWidth.value))
   const sidebarPanel = ref<ResizablePanelApi | null>(null)
 
+  /**
+   * 仅在折叠/展开切换后短暂开启 flex-grow 过渡；窗口缩放与拖拽调整时保持即时，
+   * 避免面板宽度跟随迟滞。时长略大于 CSS 过渡（200ms）。
+   */
+  const sidebarAnimating = ref(false)
+  let animationTimer: ReturnType<typeof setTimeout> | undefined
+
   function clampSidebarWidth(width: number) {
     return Math.min(sidebarMaxWidth.value, Math.max(SIDEBAR_MIN_WIDTH, width))
   }
@@ -47,11 +54,18 @@ export function useWorkspaceSidebarLayout(
     collapsed => {
       const panel = sidebarPanel.value
       if (!panel) return
+      sidebarAnimating.value = true
+      clearTimeout(animationTimer)
+      animationTimer = setTimeout(() => {
+        sidebarAnimating.value = false
+      }, 240)
       if (collapsed) panel.collapse()
       else panel.resize(clampSidebarWidth(preferredSidebarWidth.value))
     },
     { flush: "post" },
   )
+  // 部分测试环境在无活跃 effect scope 时调用本组合式函数，此时跳过清理注册。
+  if (getCurrentScope()) onScopeDispose(() => clearTimeout(animationTimer))
 
   const resizeSidebarWithKeyboard = usePanelKeyboardResize(sidebarPanel, () => ({
     min: SIDEBAR_MIN_WIDTH,
@@ -66,6 +80,7 @@ export function useWorkspaceSidebarLayout(
     preferredSidebarWidth,
     defaultSidebarWidth,
     sidebarPanel,
+    sidebarAnimating,
     onSidebarResize,
     resizeSidebarWithKeyboard,
   }

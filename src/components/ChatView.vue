@@ -28,6 +28,7 @@ import { useSessionFork } from "@/composables/useSessionFork"
 import { usePromptEdit, type PromptEditTextarea } from "@/composables/usePromptEdit"
 import { useSessionDrop, type SessionDragPayload } from "@/composables/useSessionDrop"
 import type { SplitDropZone } from "@/lib/splitDropZone"
+import { computeBottomNotch } from "@/lib/splitDropZone"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
@@ -81,17 +82,6 @@ function insertIntoComposer(text: string) {
   bridge.value.setTextInput(existing + separator + text)
 }
 
-const changeTotals = computed(() =>
-  session.fileChanges.reduce(
-    (sum, change) => ({
-      added: sum.added + change.added,
-      removed: sum.removed + change.removed,
-      unknown: sum.unknown || change.unknownBefore,
-    }),
-    { added: 0, removed: 0, unknown: false },
-  ),
-)
-
 const { t } = useI18n()
 
 const props = defineProps<{
@@ -131,12 +121,39 @@ const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge)
 // Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
+const rootEl = ref<HTMLElement | null>(null)
+// 拖拽排除区只覆盖输入框的文本编辑部分（composer 顶部到控制行之间），
+// 模型选择/按钮行与状态栏仍归底部分屏热区。
+function composerRect(): DOMRect | null {
+  const root = rootEl.value
+  const dock = root?.querySelector<HTMLElement>(".composer-dock")
+  if (!root || !dock) return null
+  const dockRect = dock.getBoundingClientRect()
+  const controls = dock.querySelector<HTMLElement>(".composer-controls")
+  if (!controls) return dockRect
+  return new DOMRect(
+    dockRect.left,
+    dockRect.top,
+    dockRect.width,
+    Math.max(controls.getBoundingClientRect().top - dockRect.top, 0),
+  )
+}
 const { sessionDragOver, splitZone, onSessionDragOver, onSessionDragLeave, onSessionDrop } = useSessionDrop(
   session,
   bridge,
   knownSessions,
   (payload, zone) => emit("splitDrop", payload, zone),
+  // The composer's text area counts as center so dragging onto it keeps the reference hint.
+  { excludeRect: composerRect },
 )
+
+// 底部分屏预览带按输入框文本区挖出凹槽，控制行与状态栏仍显示可分屏高亮。
+const bottomNotch = computed(() => {
+  if (splitZone.value !== "bottom") return null
+  const root = rootEl.value
+  if (!root) return null
+  return computeBottomNotch(root.getBoundingClientRect(), composerRect())
+})
 
 const conversation = ref<InstanceType<typeof ChatTurnList> | null>(null)
 const { renderedEntries, navigateToQuestion, onHistoryScroll, lastAssistantTurn, scrollHistory } = useChatTurnList({
@@ -249,6 +266,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div
+    ref="rootEl"
     class="chat-review-layout flex flex-1 min-w-0 min-h-0 relative overflow-hidden"
     :class="{ 'session-drop-active': sessionDragOver }"
     @dragover.capture="onSessionDragOver"
@@ -269,14 +287,39 @@ onBeforeUnmount(() => {
         v-else-if="splitZone === 'top'"
         class="border-primary bg-primary/15 absolute inset-x-0 top-0 h-1/4 rounded-b-md border-t-4"
       />
-      <div
-        v-else-if="splitZone === 'bottom'"
-        class="border-primary bg-primary/15 absolute inset-x-0 bottom-0 h-1/4 rounded-t-md border-b-4"
-      />
+      <!-- 底部预览带挖去输入框文本区（凹槽），模型选择/按钮行仍显示可分屏高亮 -->
+      <template v-else-if="splitZone === 'bottom'">
+        <div
+          v-if="!bottomNotch"
+          class="border-primary bg-primary/15 absolute inset-x-0 bottom-0 h-1/4 rounded-t-md border-b-4"
+        />
+        <template v-else>
+          <div
+            class="border-primary bg-primary/15 absolute inset-x-0 rounded-t-md"
+            :style="{ top: `${bottomNotch.bandTop}px`, height: `${bottomNotch.holeTop - bottomNotch.bandTop}px` }"
+          />
+          <div
+            class="border-primary bg-primary/15 border-b-4 absolute bottom-0 left-0"
+            :style="{ top: `${bottomNotch.holeTop}px`, width: `${bottomNotch.holeLeft}px` }"
+          />
+          <div
+            class="border-primary bg-primary/15 border-b-4 absolute right-0 bottom-0"
+            :style="{ top: `${bottomNotch.holeTop}px`, left: `${bottomNotch.holeRight}px` }"
+          />
+          <div
+            class="border-primary bg-primary/15 border-b-4 absolute bottom-0"
+            :style="{
+              top: `${bottomNotch.holeBottom}px`,
+              left: `${bottomNotch.holeLeft}px`,
+              width: `${bottomNotch.holeRight - bottomNotch.holeLeft}px`,
+            }"
+          />
+        </template>
+      </template>
     </div>
     <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
       <header
-        class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border max-[900px]:flex-wrap max-[900px]:gap-1.5"
+        class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border transition-[padding-left] duration-200 ease-out max-[900px]:flex-wrap max-[900px]:gap-1.5"
       >
         <div class="min-w-0">
           <h1 class="max-w-[42vw] truncate text-sm font-medium leading-[1.8]">
@@ -402,14 +445,12 @@ onBeforeUnmount(() => {
     </div>
     <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget" defer>
       <RightSidebar
-        v-show="sidebarVisible"
         :open="sidebarVisible"
         :tabs="sidebarTabs"
         :active-id="activeTabId"
         :changes="session.fileChanges"
         :project="session.cwd || project"
         :focus="reviewFocus"
-        :totals="changeTotals"
         :checkpoints="session.turnCheckpointRecords"
         @update:active-id="activeTabId = $event"
         @add-tab="addSidebarTab"

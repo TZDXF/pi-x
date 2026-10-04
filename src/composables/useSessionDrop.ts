@@ -11,6 +11,14 @@ export interface SessionDragPayload {
   runtimeId?: string
 }
 
+export interface SessionDropOptions {
+  /**
+   * Rect (e.g. the composer dock) that always counts as center even when it
+   * sits inside an edge band, so dropping onto it keeps the @reference hint.
+   */
+  excludeRect?: () => DOMRect | null
+}
+
 /**
  * Drag a session row from the sidebar onto the chat view. Edge zones split the
  * view (reported through onSplitDrop); the center keeps the legacy behavior of
@@ -21,18 +29,25 @@ export function useSessionDrop(
   bridge: Ref<InstanceType<typeof PromptInputBridge> | null>,
   knownSessions: ComputedRef<KnownSession[]>,
   onSplitDrop?: (payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">) => void,
+  options?: SessionDropOptions,
 ) {
   const sessionDragOver = ref(false)
   /** Hot zone currently hovered during a split-capable drag; null when idle. */
   const splitZone = ref<SplitDropZone | null>(null)
 
+  function resolveZone(event: DragEvent): SplitDropZone {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    return resolveDropZone(event.clientX, event.clientY, rect, 0.18, options?.excludeRect?.() ?? null)
+  }
+
   function onSessionDragOver(event: DragEvent) {
     if (event.dataTransfer?.types.includes("application/x-pix-session-drag")) {
       event.preventDefault()
       event.dataTransfer.dropEffect = "copy"
-      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-      splitZone.value = resolveDropZone(event.clientX, event.clientY, rect)
-      sessionDragOver.value = false
+      const zone = resolveZone(event)
+      splitZone.value = zone
+      // Center (including the excluded composer) keeps the @reference hint.
+      sessionDragOver.value = zone === "center"
       return
     }
     if (!event.dataTransfer?.types.includes("application/x-pix-session")) return
@@ -51,8 +66,7 @@ export function useSessionDrop(
     sessionDragOver.value = false
     splitZone.value = null
     if (event.dataTransfer?.types.includes("application/x-pix-session-drag")) {
-      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-      const zone = resolveDropZone(event.clientX, event.clientY, rect)
+      const zone = resolveZone(event)
       // The center keeps the @session reference behavior below.
       if (zone !== "center") {
         event.preventDefault()

@@ -102,6 +102,7 @@ const {
   preferredSidebarWidth,
   defaultSidebarWidth,
   sidebarPanel,
+  sidebarAnimating,
   onSidebarResize,
   resizeSidebarWithKeyboard,
 } = useWorkspaceSidebarLayout(sidebarOpen, route, windowWidth, isNarrowViewport)
@@ -733,7 +734,11 @@ onUnmounted(() => {
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
     />
     <!-- Settings is a standalone full-page route: it covers the entire shell. -->
-    <ResizablePanelGroup direction="horizontal" class="flex-1 min-h-0 min-w-0">
+    <ResizablePanelGroup
+      direction="horizontal"
+      class="sidebar-panel-group flex-1 min-h-0 min-w-0"
+      :class="{ 'sidebar-animating': sidebarAnimating }"
+    >
       <ResizablePanel
         :ref="panel => (sidebarPanel = panel as typeof sidebarPanel)"
         class="min-h-0"
@@ -745,7 +750,8 @@ onUnmounted(() => {
         @resize="onSidebarResize"
       >
         <WorkspaceSidebar
-          v-show="sidebarOpen && route.name !== 'settings'"
+          :inert="!sidebarVisible"
+          :class="sidebarVisible ? undefined : 'max-[640px]:-translate-x-full max-[640px]:invisible'"
           :project="project"
           :ready="phase === 'chat'"
           :busy="navigating || workspace.gitBusy || phase === 'trust'"
@@ -930,6 +936,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 折叠/展开时对 reka 写入面板的内联 flex-grow 做过渡，两个面板同时过渡保证主区域同步伸缩；
+   仅在折叠/展开切换后短暂开启（sidebar-animating），窗口缩放与拖拽调整保持即时。 */
+:global(.sidebar-panel-group.sidebar-animating > [data-slot="resizable-panel"]) {
+  transition: flex-grow 200ms ease-out;
+}
+
 /* reka 手柄本体只有 1px，用 ::before 扩大命中区而不占布局空间。 */
 .sidebar-resize-handle {
   position: relative;

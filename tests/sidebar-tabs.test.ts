@@ -9,9 +9,9 @@ test("right sidebar keeps parent and panel integration wired", () => {
   const chat = read("../src/components/ChatView.vue")
   const sidebar = read("../src/components/RightSidebar.vue")
   const terminal = read("../src/components/terminal/TerminalPanel.vue")
-  expect(chat).toMatch(
-    /<RightSidebar\s+v-show="sidebarVisible"\s+:open="sidebarVisible"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/,
-  )
+  expect(chat).toMatch(/<RightSidebar\s+:open="sidebarVisible"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/)
+  // 开关动画由面板自身宽度过渡驱动，ChatView 不再用 v-show 瞬时显隐。
+  expect(chat).not.toMatch(/<RightSidebar\s+v-show=/)
   expect(sidebar).toMatch(/@click="addTab\('review'\)"/)
   expect(sidebar).toMatch(/@click="addTab\('files'\)"/)
   expect(sidebar).toMatch(/@click="addTab\('terminal'\)"/)
