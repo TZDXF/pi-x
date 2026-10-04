@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { fetchProviderModels, type FetchedModel, type ProviderEntry } from "@/api/piClient"
+import { resolveModelsListBaseUrl } from "@/lib/providerBaseUrl"
 
 export function useModelFetch(provider: () => ProviderEntry | undefined) {
   const { t } = useI18n()
@@ -34,7 +35,10 @@ export function useModelFetch(provider: () => ProviderEntry | undefined) {
     fetching.value = true
     fetchError.value = null
     try {
-      fetched.value = await fetchProviderModels(p)
+      // The provider URL may be a gateway root; the listing endpoint always
+      // needs the version-segment prefix for the API style.
+      const baseUrl = resolveModelsListBaseUrl(p.baseUrl, p.api ?? "openai-completions")
+      fetched.value = await fetchProviderModels({ ...p, baseUrl })
     } catch (e) {
       fetched.value = null
       fetchError.value = String(e)

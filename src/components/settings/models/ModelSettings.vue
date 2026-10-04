@@ -9,6 +9,7 @@ import { GripVertical, Pencil, Trash2 } from "@lucide/vue"
 import { VueDraggable } from "vue-draggable-plus"
 import { Button } from "@/components/ui/button"
 import type { ModelEntry } from "@/api/piClient"
+import { resolveProviderBaseUrl } from "@/lib/providerBaseUrl"
 import { useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore, useUiStore } from "@/stores/conversations"
 import ModelEditForm from "./ModelEditForm.vue"
@@ -85,6 +86,14 @@ async function saveForm() {
   busy.value = true
   try {
     const entry = modelEntryFromForm(f, id)
+    // The model-level baseUrl wins over the provider's; fill one in when the
+    // provider URL is a gateway root the model's API cannot use as-is. A
+    // custom baseUrl from the advanced JSON is respected.
+    if (!entry.baseUrl && provider.value.baseUrl?.trim()) {
+      const api = entry.api ?? provider.value.api ?? "openai-completions"
+      const resolved = resolveProviderBaseUrl(provider.value.baseUrl, api)
+      if (resolved !== provider.value.baseUrl.trim()) entry.baseUrl = resolved
+    }
     const list = [...models.value]
     if (editingIndex.value != null) list[editingIndex.value] = entry
     else list.push(entry)

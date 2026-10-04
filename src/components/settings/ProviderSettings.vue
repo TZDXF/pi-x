@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { ProviderEntry } from "@/api/piClient"
+import { syncModelBaseUrls } from "@/lib/providerBaseUrl"
 import { PROVIDER_API_TYPES, useModelsConfigStore } from "@/stores/modelsConfig"
 import { useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
@@ -69,8 +70,12 @@ async function saveForm() {
     // Spread the existing entry so unknown fields (headers, compat, oauth,
     // modelOverrides, …) survive the edit.
     const entry: ProviderEntry = provider.value ? { ...provider.value } : { models: [] }
+    const previousBaseUrl = entry.baseUrl
     entry.baseUrl = form.baseUrl.trim()
     entry.api = form.api
+    // Each chat API expects a different URL shape on top of the gateway root;
+    // keep every model's baseUrl in sync with the new provider URL.
+    syncModelBaseUrls(entry, previousBaseUrl)
     if (form.name.trim()) entry.name = form.name.trim()
     else delete entry.name
     if (form.apiKey.trim()) entry.apiKey = form.apiKey.trim()
@@ -130,9 +135,10 @@ async function remove() {
       <Input
         id="provider-base-url"
         v-model="form.baseUrl"
-        placeholder="https://api.example.com/v1"
+        placeholder="https://api.example.com"
         class="font-mono text-xs"
       />
+      <p class="text-muted-foreground mt-1 text-[11px]">{{ t("settings.providerBaseUrlHint") }}</p>
     </div>
     <div class="grid grid-cols-2 gap-3">
       <div>

@@ -60,6 +60,8 @@ export interface ModelEntry {
   id: string
   name?: string
   api?: string
+  /** Model-level override of the provider `baseUrl`; pi prefers it. */
+  baseUrl?: string
   reasoning?: boolean
   input?: ("text" | "image")[]
   inputLimits?: ModelInputLimits

@@ -974,6 +974,8 @@ export default {
     providerIdPlaceholder: "e.g. openrouter, ollama",
     providerName: "Display name (optional)",
     providerBaseUrl: "Base URL",
+    providerBaseUrlHint:
+      "Enter the service root URL. On save it is completed per model API type: OpenAI-style gets /v1, Anthropic none, Google /v1beta.",
     providerApi: "API type",
     providerApiKey: "API key (optional)",
     dragToReorder: "Drag to reorder",

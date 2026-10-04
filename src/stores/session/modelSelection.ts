@@ -129,7 +129,7 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
             name: m.name ?? m.id,
             api: m.api ?? entry.api ?? "",
             provider,
-            baseUrl: entry.baseUrl ?? "",
+            baseUrl: m.baseUrl ?? entry.baseUrl ?? "",
             reasoning: m.reasoning ?? false,
             thinkingLevelMap: m.thinkingLevelMap as Record<string, string | null> | undefined,
             input: m.input ?? ["text"],

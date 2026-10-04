@@ -945,6 +945,8 @@ export default {
     providerIdPlaceholder: "例如 openrouter、ollama",
     providerName: "显示名称（可选）",
     providerBaseUrl: "Base URL",
+    providerBaseUrlHint:
+      "填写服务根地址即可。保存时按每个模型的 API 类型自动补全：OpenAI 系补 /v1，Anthropic 不补，Google 补 /v1beta。",
     providerApi: "API 类型",
     providerApiKey: "API Key（可选）",
     dragToReorder: "拖拽调整顺序",
