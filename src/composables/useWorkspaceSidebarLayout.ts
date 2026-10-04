@@ -4,14 +4,13 @@ import { usePanelKeyboardResize, type ResizablePanelApi } from "@/composables/us
 /** Pixel-based splitter preference and narrow-screen overlay layout. */
 export function useWorkspaceSidebarLayout(
   sidebarOpen: Ref<boolean>,
-  route: Ref<{ name: string }>,
   windowWidth: Ref<number>,
   isNarrowViewport: Ref<boolean>,
 ) {
   const SIDEBAR_WIDTH_STORAGE_KEY = "pix.sidebar-width"
   const SIDEBAR_MIN_WIDTH = 220
   const SIDEBAR_DEFAULT_WIDTH = 272 // 与侧栏旧默认宽度 w-68 对齐
-  const sidebarVisible = computed(() => sidebarOpen.value && route.value.name !== "settings")
+  const sidebarVisible = computed(() => sidebarOpen.value)
   /** 窄屏下侧栏以覆盖层悬浮，面板需让出全部宽度。 */
   const sidebarCollapsed = computed(() => !sidebarVisible.value || isNarrowViewport.value)
   const sidebarMaxWidth = computed(() => Math.min(480, Math.max(280, windowWidth.value - 360)))
@@ -22,10 +21,10 @@ export function useWorkspaceSidebarLayout(
   } catch {
     /* Storage may be unavailable in restricted browsers. */
   }
-  /** reka 只在首次布局读取 default-size；初始折叠态直接体现到默认尺寸，避免布局就绪前调用命令式 API。 */
-  const defaultSidebarWidth = sidebarCollapsed.value
-    ? 0
-    : Math.min(SIDEBAR_DEFAULT_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, preferredSidebarWidth.value))
+  /** reka 只在面板挂载/首次布局读取 default-size；路由整页切换会重挂面板，需保持 computed 以反映当前折叠态。 */
+  const defaultSidebarWidth = computed(() =>
+    sidebarCollapsed.value ? 0 : Math.min(SIDEBAR_DEFAULT_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, preferredSidebarWidth.value)),
+  )
   const sidebarPanel = ref<ResizablePanelApi | null>(null)
 
   /**

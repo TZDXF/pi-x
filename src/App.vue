@@ -105,7 +105,7 @@ const {
   sidebarAnimating,
   onSidebarResize,
   resizeSidebarWithKeyboard,
-} = useWorkspaceSidebarLayout(sidebarOpen, route, windowWidth, isNarrowViewport)
+} = useWorkspaceSidebarLayout(sidebarOpen, windowWidth, isNarrowViewport)
 
 function closeProjectDialog() {
   projectDialogOpen.value = false
@@ -737,8 +737,10 @@ onUnmounted(() => {
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
     />
-    <!-- Settings is a standalone full-page route: it covers the entire shell. -->
+    <!-- Settings is a standalone full-page route: the whole panel group (sidebar included) is swapped out, so route changes never trigger the collapse animation. -->
+    <SettingsPage v-if="route.name === 'settings'" :project="project" />
     <ResizablePanelGroup
+      v-else
       direction="horizontal"
       class="sidebar-panel-group flex-1 min-h-0 min-w-0"
       :class="{ 'sidebar-animating': sidebarAnimating }"
@@ -793,111 +795,106 @@ onUnmounted(() => {
           :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }"
         >
           <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <template v-if="route.name === 'settings'">
-              <SettingsPage :project="project" />
-            </template>
-            <template v-else>
-              <ScheduledTasksPage
-                v-if="route.name === 'schedules'"
+            <ScheduledTasksPage
+              v-if="route.name === 'schedules'"
+              :project="project"
+              @resume-session="
+                (file, path) =>
+                  requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+              "
+            />
+            <WelcomeView
+              v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
+              :phase
+              :config
+              @configured="phase = 'pick'"
+              @open-project="switchProject"
+              @open-projectless="openProjectless"
+            />
+
+            <div v-else-if="phase === 'trust' && trustInfo" class="flex flex-1 items-center justify-center">
+              <TrustDialog :info="trustInfo" @done="onTrustDecision" />
+            </div>
+
+            <template v-else-if="phase === 'chat'">
+              <SplitChatLayout
+                v-if="splitView.tree && splitLeaf"
+                :key="splitView.tree.id"
+                :tree="splitView.tree"
+                :active-leaf-id="splitLeaf.id"
+                @activate="id => activateSession(id)"
+              >
+                <template #pane="{ runtimeId }">
+                  <ChatView
+                    :key="runtimeId"
+                    :session-id="runtimeId"
+                    :split-pane="splitView.tree.kind === 'group'"
+                    sidebar-target="#workspace-main"
+                    v-model:right-sidebar-open="rightSidebarOpen"
+                    @close-pane="closeSplitPane(runtimeId)"
+                    :project="sessionFor(runtimeId).cwd || project"
+                    :ensure-started="selection => startSession(runtimeId, selection)"
+                    :connecting="connecting"
+                    :selecting-project="selectingProject"
+                    :connected="sessionFor(runtimeId).started"
+                    @select-project="
+                      path => requestConversationNavigation(projectRoute(path), () => selectProject(path))
+                    "
+                    @open-project="requestNavigation(switchProject)"
+                    @new-session="
+                      () =>
+                        requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
+                          newProjectSession(workspace.projectRoot(project)),
+                        )
+                    "
+                    @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
+                  />
+                </template>
+              </SplitChatLayout>
+              <ChatView
+                v-else
+                sidebar-target="#workspace-main"
+                v-model:right-sidebar-open="rightSidebarOpen"
+                :key="activeRuntimeId"
+                :session-id="activeRuntimeId"
                 :project="project"
-                @resume-session="
-                  (file, path) =>
-                    requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
+                :ensure-started="start"
+                :connecting="connecting"
+                :selecting-project="selectingProject"
+                :connected="started"
+                @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
+                @open-project="requestNavigation(switchProject)"
+                @new-session="
+                  () =>
+                    requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
+                      newProjectSession(workspace.projectRoot(project)),
+                    )
                 "
+                @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
               />
-              <WelcomeView
-                v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
-                :phase
-                :config
-                @configured="phase = 'pick'"
-                @open-project="switchProject"
-                @open-projectless="openProjectless"
-              />
-
-              <div v-else-if="phase === 'trust' && trustInfo" class="flex flex-1 items-center justify-center">
-                <TrustDialog :info="trustInfo" @done="onTrustDecision" />
-              </div>
-
-              <template v-else-if="phase === 'chat'">
-                <SplitChatLayout
-                  v-if="splitView.tree && splitLeaf"
-                  :key="splitView.tree.id"
-                  :tree="splitView.tree"
-                  :active-leaf-id="splitLeaf.id"
-                  @activate="id => activateSession(id)"
-                >
-                  <template #pane="{ runtimeId }">
-                    <ChatView
-                      :key="runtimeId"
-                      :session-id="runtimeId"
-                      :split-pane="splitView.tree.kind === 'group'"
-                      sidebar-target="#workspace-main"
-                      v-model:right-sidebar-open="rightSidebarOpen"
-                      @close-pane="closeSplitPane(runtimeId)"
-                      :project="sessionFor(runtimeId).cwd || project"
-                      :ensure-started="selection => startSession(runtimeId, selection)"
-                      :connecting="connecting"
-                      :selecting-project="selectingProject"
-                      :connected="sessionFor(runtimeId).started"
-                      @select-project="
-                        path => requestConversationNavigation(projectRoute(path), () => selectProject(path))
-                      "
-                      @open-project="requestNavigation(switchProject)"
-                      @new-session="
-                        () =>
-                          requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
-                            newProjectSession(workspace.projectRoot(project)),
-                          )
-                      "
-                      @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
-                    />
-                  </template>
-                </SplitChatLayout>
-                <ChatView
-                  v-else
-                  sidebar-target="#workspace-main"
-                  v-model:right-sidebar-open="rightSidebarOpen"
-                  :key="activeRuntimeId"
-                  :session-id="activeRuntimeId"
-                  :project="project"
-                  :ensure-started="start"
-                  :connecting="connecting"
-                  :selecting-project="selectingProject"
-                  :connected="started"
-                  @select-project="path => requestConversationNavigation(projectRoute(path), () => selectProject(path))"
-                  @open-project="requestNavigation(switchProject)"
-                  @new-session="
-                    () =>
-                      requestConversationNavigation(projectRoute(workspace.projectRoot(project)), () =>
-                        newProjectSession(workspace.projectRoot(project)),
-                      )
-                  "
-                  @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
-                />
-              </template>
-
-              <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
-                <p class="text-lg font-medium">{{ t("app.exited") }}</p>
-                <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
-                  {{ lastError }}
-                </p>
-                <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
-                  <p class="text-muted-foreground mb-1 text-xs font-medium">
-                    {{ t("app.stderr") }}
-                  </p>
-                  <ScrollArea viewport-class="max-h-48">
-                    <pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
-                      ui.stderrLines.slice(-12).join("\n")
-                    }}</pre>
-                  </ScrollArea>
-                </div>
-                <div class="flex gap-2">
-                  <Button variant="outline" @click="switchProject">
-                    {{ t("app.chooseProject") }}
-                  </Button>
-                </div>
-              </div>
             </template>
+
+            <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+              <p class="text-lg font-medium">{{ t("app.exited") }}</p>
+              <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
+                {{ lastError }}
+              </p>
+              <div v-if="ui.stderrLines.length" class="bg-muted w-full max-w-2xl rounded-md p-3">
+                <p class="text-muted-foreground mb-1 text-xs font-medium">
+                  {{ t("app.stderr") }}
+                </p>
+                <ScrollArea viewport-class="max-h-48">
+                  <pre class="font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">{{
+                    ui.stderrLines.slice(-12).join("\n")
+                  }}</pre>
+                </ScrollArea>
+              </div>
+              <div class="flex gap-2">
+                <Button variant="outline" @click="switchProject">
+                  {{ t("app.chooseProject") }}
+                </Button>
+              </div>
+            </div>
           </div>
         </main>
       </ResizablePanel>
