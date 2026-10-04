@@ -29,22 +29,30 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-/// FNV-1a 64-bit hash for per-host token derivation.
-fn fnv1a(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in s.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
+use crate::secrets::constant_time_eq;
 
 /// Derives a per-host token from the shared secret and the target host.
-/// The proxy validates `token == fnv1a(secret + host)` so a page previewed on
-/// one host cannot use the same token to reach arbitrary loopback services.
+/// The proxy validates `token == HMAC-SHA256(secret, host)` so a page previewed
+/// on one host cannot use the same token to reach arbitrary loopback services.
+/// HMAC is required here: a plain hash would let an attacker who observes one
+/// (host, token) pair invert the hash step by step and forge tokens for any
+/// other host offline.
 fn host_token(secret: &str, host: &str) -> String {
-    format!("{:x}", fnv1a(&format!("{}{}", secret, host)))
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts keys of any length");
+    mac.update(host.as_bytes());
+    let digest = mac.finalize().into_bytes();
+    let mut token = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        token.push(HEX_DIGITS[(byte >> 4) as usize] as char);
+        token.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    token
 }
+
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
 const BRIDGE_JS: &str = include_str!("../resources/preview_bridge.js");
 /// Route root on the dedicated loopback server.
@@ -130,7 +138,7 @@ struct Target {
 }
 
 /// Parses `{root}/{token}/{scheme}/{host}[/{path}]` out of the raw request
-/// path. The token is `fnv1a(secret + host)` — a per-host capability that
+/// path. The token is `HMAC-SHA256(secret, host)` — a per-host capability that
 /// prevents a previewed page from using the same token to reach arbitrary
 /// loopback services. Returns the prefix (root + token) used to build
 /// absolute proxy URLs back into the page (bridge script, rewritten redirects).
@@ -149,7 +157,7 @@ fn parse_target(root: &str, raw_path: &str) -> Option<Target> {
     if !host_safe || (scheme != "http" && scheme != "https") {
         return None;
     }
-    // Validate the per-host token: it must equal fnv1a(secret + host).
+    // Validate the per-host token: it must equal HMAC-SHA256(secret, host).
     let expected = host_token(&proxy().secret, &host);
     if !constant_time_eq(&token, &expected) {
         return None;
@@ -208,16 +216,6 @@ fn bridge_js() -> Response {
         BRIDGE_JS,
     )
         .into_response()
-}
-
-/// Constant-time byte comparison so the proxy secret cannot be probed via
-/// timing side channels over the network.
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.is_empty() || a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn is_websocket_upgrade(req: &Request) -> bool {
@@ -339,6 +337,40 @@ fn rewrite_location(location: &str, target: &Target, query: Option<&str>) -> Opt
     ))
 }
 
+/// A body streamed into memory up to REWRITE_MAX_BYTES for rewriting.
+struct BufferedBody {
+    chunks: Vec<axum::body::Bytes>,
+    oversized: bool,
+}
+
+/// Streams the response body into memory so HTML/CSS can be rewritten, giving
+/// up once REWRITE_MAX_BYTES is exceeded. Oversized bodies are not buffered
+/// further (memory stays bounded regardless of Content-Length); the returned
+/// stream still holds the unread remainder, so the caller forwards buffered
+/// prefix + remainder untouched instead of buffering the whole body. This
+/// closes the memory-exhaustion hole of chunked responses without
+/// Content-Length, which previously bypassed the size check entirely.
+async fn read_limited<S>(mut stream: S) -> Result<(S, BufferedBody), reqwest::Error>
+where
+    S: futures_util::Stream<Item = reqwest::Result<axum::body::Bytes>> + Unpin,
+{
+    let mut out = BufferedBody {
+        chunks: Vec::new(),
+        oversized: false,
+    };
+    let mut total: u64 = 0;
+    while let Some(item) = stream.next().await {
+        let chunk = item?;
+        total += chunk.len() as u64;
+        out.chunks.push(chunk);
+        if total > REWRITE_MAX_BYTES {
+            out.oversized = true;
+            break;
+        }
+    }
+    Ok((stream, out))
+}
+
 async fn forward_http(req: Request, target: &Target) -> Response {
     let (parts, body) = req.into_parts();
     let url = target_url(target, parts.uri.query());
@@ -370,7 +402,12 @@ async fn forward_http(req: Request, target: &Target) -> Response {
     let response = match request.send().await {
         Ok(response) => response,
         Err(e) => {
-            eprintln!("preview proxy: failed to reach target: {}", e);
+            // The full URL can carry sensitive query parameters; log the
+            // scheme/host/path only, and keep it out of stdout.
+            crate::logs::write(
+                "preview",
+                &format!("preview proxy: failed to reach {}: {}", target_url(target, None), e),
+            );
             return (
                 StatusCode::BAD_GATEWAY,
                 "PiX preview proxy: failed to reach the target host",
@@ -402,57 +439,40 @@ async fn forward_http(req: Request, target: &Target) -> Response {
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_ascii_lowercase())
         .unwrap_or_default();
-    if content_type.contains("text/html") {
-        // Check Content-Length before buffering to avoid unbounded memory usage.
-        let content_length = response
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
-        if content_length.unwrap_or(0) > REWRITE_MAX_BYTES {
-            // Too large to rewrite; pass through without rewriting.
-            return builder
-                .body(Body::from_stream(response.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
-        }
-        let bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
+    // HTML and CSS are buffered (within REWRITE_MAX_BYTES) for rewriting; any
+    // other content type streams straight through.
+    if content_type.contains("text/html") || content_type.contains("text/css") {
+        let (stream, buffered) = match read_limited(response.bytes_stream()).await {
+            Ok(result) => result,
             Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
         };
-        // Double-check actual size after reading.
-        if bytes.len() as u64 > REWRITE_MAX_BYTES {
+        if buffered.oversized {
+            // Too large to rewrite: forward the buffered prefix followed by the
+            // rest of the stream untouched instead of buffering it all.
+            let passthrough = futures_util::stream::iter(
+                buffered
+                    .chunks
+                    .into_iter()
+                    .map(Ok::<_, reqwest::Error>),
+            )
+            .chain(stream);
             return builder
-                .body(Body::from(bytes))
+                .body(Body::from_stream(passthrough))
                 .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
         }
-        return builder
-            .body(Body::from(rewrite_document(&bytes, target)))
-            .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
-    }
-    if content_type.contains("text/css") {
-        let content_length = response
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
-        if content_length.unwrap_or(0) > REWRITE_MAX_BYTES {
-            return builder
-                .body(Body::from_stream(response.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+        let mut bytes = Vec::new();
+        for chunk in buffered.chunks {
+            bytes.extend_from_slice(&chunk);
         }
-        let bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
-        };
-        if bytes.len() as u64 > REWRITE_MAX_BYTES {
+        if content_type.contains("text/html") {
             return builder
-                .body(Body::from(bytes))
+                .body(Body::from(rewrite_document(&bytes, target)))
                 .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
         }
         let base = document_base(target);
         let rewritten = match std::str::from_utf8(&bytes) {
             Ok(text) => rewrite_css_urls(text, &base).into_bytes(),
-            Err(_) => bytes.to_vec(),
+            Err(_) => bytes,
         };
         return builder
             .body(Body::from(rewritten))
@@ -472,6 +492,12 @@ fn rewrite_referer(parts: &axum::http::request::Parts, target: &Target) -> Optio
     let scheme = segments.next()?.to_ascii_lowercase();
     let host = segments.next()?.to_string();
     if (scheme != "http" && scheme != "https") || host.is_empty() {
+        return None;
+    }
+    // Only rewrite referers that actually point at the target host; a
+    // mismatched referer (forged or cross-origin) is dropped rather than
+    // rewritten onto the wrong origin.
+    if host != target.host {
         return None;
     }
     Some(format!(
@@ -613,7 +639,24 @@ async fn forward_ws(ws: WebSocketUpgrade, target: &Target) -> Response {
         let remote =
             match tokio_tungstenite::connect_async_tls_with_config(&url, None, false, None).await {
                 Ok((stream, _)) => stream,
-                Err(_) => return,
+                Err(e) => {
+                    crate::logs::write(
+                        "preview",
+                        &format!("preview proxy: websocket connect to {url} failed: {e}"),
+                    );
+                    // Tell the browser why instead of leaving it a dead socket.
+                    let (mut sink, _) = socket.split();
+                    let _ = sink
+                        .send(axum::extract::ws::Message::Close(Some(
+                            axum::extract::ws::CloseFrame {
+                                code: axum::extract::ws::close_code::ERROR,
+                                reason: "preview proxy: upstream unavailable".into(),
+                            },
+                        )))
+                        .await;
+                    let _ = sink.close().await;
+                    return;
+                }
             };
         pump(socket, remote).await;
     })
@@ -922,6 +965,55 @@ mod tests {
         assert!(!is_websocket_upgrade(&request));
     }
 
+    #[test]
+    fn host_token_is_deterministic_hmac_sha256() {
+        // Known RFC-style test vector: HMAC-SHA256(key="key",
+        // msg="The quick brown fox jumps over the lazy dog").
+        assert_eq!(
+            host_token("key", "The quick brown fox jumps over the lazy dog"),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+        // Deterministic, 64 lowercase hex chars, and distinct per host.
+        for host in ["localhost:5173", "127.0.0.1:5173", "example.com"] {
+            let token = host_token(&secret(), host);
+            assert_eq!(token, host_token(&secret(), host), "deterministic for {host}");
+            assert_eq!(token.len(), 64);
+            assert!(
+                token.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "lowercase hex: {token}"
+            );
+        }
+        assert_ne!(host_token(&secret(), "a.local"), host_token(&secret(), "b.local"));
+        assert_ne!(host_token("secret-a", "host"), host_token("secret-b", "host"));
+    }
+
+    #[tokio::test]
+    async fn read_limited_caps_buffering_for_oversized_chunked_bodies() {
+        let chunk = axum::body::Bytes::from(vec![b'a'; 1024 * 1024]);
+        let chunks: Vec<Result<axum::body::Bytes, reqwest::Error>> =
+            (0..20).map(|_| Ok(chunk.clone())).collect();
+        let stream = futures_util::stream::iter(chunks);
+        let (mut rest, buffered) = read_limited(stream).await.unwrap();
+        assert!(buffered.oversized, "20MB body exceeds the 16MB rewrite limit");
+        let buffered_bytes: u64 = buffered.chunks.iter().map(|c| c.len() as u64).sum();
+        // Buffering stops right after the limit is crossed: at most one chunk past it.
+        assert!(buffered_bytes <= REWRITE_MAX_BYTES + 1024 * 1024);
+        // The unread remainder stays on the stream so the body can be passed through.
+        let mut remaining = 0u64;
+        while let Some(item) = rest.next().await {
+            remaining += item.unwrap().len() as u64;
+        }
+        assert_eq!(buffered_bytes + remaining, 20 * 1024 * 1024);
+
+        // Bodies within the limit are fully buffered and the stream is drained.
+        let small = axum::body::Bytes::from_static(b"<html></html>");
+        let stream = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(small)]);
+        let (mut rest, buffered) = read_limited(stream).await.unwrap();
+        assert!(!buffered.oversized);
+        assert_eq!(buffered.chunks.concat(), &b"<html></html>"[..]);
+        assert!(futures_util::StreamExt::next(&mut rest).await.is_none());
+    }
+
     // End-to-end: loopback server forwards to a stub target, injects the
     // bridge into the HTML and rejects unknown secrets.
     #[tokio::test]
@@ -995,5 +1087,65 @@ mod tests {
         let stranger_bridge =
             reqwest::get(format!("http://127.0.0.1:{proxy_port}/p/not-the-secret/http/{target_host}/__pix-preview-bridge.js")).await.unwrap();
         assert_eq!(stranger_bridge.status(), 404);
+    }
+
+    // End-to-end: a chunked HTML body (no Content-Length) larger than the
+    // rewrite limit is streamed through untouched — complete and unrewritten —
+    // instead of being buffered whole in memory.
+    #[tokio::test]
+    async fn passes_oversized_chunked_responses_through_without_buffering() {
+        use axum::routing::get;
+
+        const CHUNK: usize = 1024 * 1024;
+        const CHUNKS: usize = 17; // 17MB > REWRITE_MAX_BYTES (16MB)
+        let target = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let app = Router::new().route(
+            "/big",
+            get(|| async {
+                let head = format!("<html><body>{}", "h".repeat(CHUNK - 12));
+                let chunks: Vec<Result<axum::body::Bytes, std::io::Error>> = (0..CHUNKS)
+                    .map(|i| {
+                        Ok(if i == 0 {
+                            axum::body::Bytes::from(head.clone())
+                        } else if i == CHUNKS - 1 {
+                            axum::body::Bytes::from(format!(
+                                "{}t</body></html>",
+                                "t".repeat(CHUNK - 15)
+                            ))
+                        } else {
+                            axum::body::Bytes::from(vec![b'm'; CHUNK])
+                        })
+                    })
+                    .collect();
+                axum::body::Body::from_stream(futures_util::stream::iter(chunks))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(target, app).await.unwrap() });
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, router()).await.unwrap() });
+
+        let target_host = format!("127.0.0.1:{target_port}");
+        let token = host_token(&secret(), &target_host);
+        let response = reqwest::get(format!(
+            "http://127.0.0.1:{proxy_port}/p/{token}/http/{target_host}/big",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.headers().get(header::CONTENT_LENGTH).is_none());
+        let body = response.bytes().await.unwrap();
+        assert_eq!(body.len(), CHUNKS * CHUNK, "complete body forwarded");
+        assert!(body.starts_with(b"<html><body>"), "prefix preserved");
+        assert!(body.ends_with(b"</body></html>"), "tail preserved");
+        // Passed through unrewritten: no bridge injected, no URL prefixing.
+        assert!(!body.windows("__pix-preview-bridge".len()).any(|w| w == b"__pix-preview-bridge"));
+        assert!(!body.windows("/p/".len()).any(|w| w == b"/p/"));
     }
 }

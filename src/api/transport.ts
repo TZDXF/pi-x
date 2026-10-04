@@ -94,8 +94,10 @@ function connect(): Promise<void> {
   if (socket?.readyState === WebSocket.OPEN) return Promise.resolve()
   if (connecting) return connecting
   connecting = new Promise<void>((resolve, reject) => {
+    // The events socket no longer authenticates via the upgrade request: the
+    // token is sent as the first frame after connecting (see remote.rs).
     const ws = new WebSocket(
-      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/events?token=${encodeURIComponent(token)}`,
+      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/events`,
     )
     socket = ws
     const timeout = setTimeout(() => {
@@ -106,6 +108,10 @@ function connect(): Promise<void> {
     ws.onopen = () => {
       clearTimeout(timeout)
       if (socket !== ws) return
+      // First-frame auth: the server closes with 1008 when the token is not
+      // delivered within its window. It sends no ack, so "onopen" still means
+      // "connected" from the caller's point of view.
+      ws.send(JSON.stringify({ token }))
       connecting = undefined
       resolve()
     }

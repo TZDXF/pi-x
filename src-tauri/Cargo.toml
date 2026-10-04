@@ -43,6 +43,8 @@ url = "2"
 portable-pty = "0.9"
 base64 = "0.23"
 sha2 = "0.11"
+# 预览代理 per-host token 派生:HMAC-SHA256(secret, host);hmac 0.13 才与 sha2 0.11(digest 0.11)兼容
+hmac = "0.13"
 notify = "8"
 # 编辑器图标提取(image 负责缩放与 PNG 编码;pelite/ico 解析 Windows exe 资源;
 # plist/icns 解析 macOS .app 图标)——均为纯 Rust,参考 RepoMeow 的实现

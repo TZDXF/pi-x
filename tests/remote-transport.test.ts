@@ -38,6 +38,7 @@ function harness(desktop = false, fragment = "#token=test-key") {
   class Socket {
     static OPEN = 1
     readyState = 0
+    sent: string[] = []
     constructor(url) {
       this.url = url
       sockets.push(this)
@@ -45,6 +46,9 @@ function harness(desktop = false, fragment = "#token=test-key") {
         this.readyState = 1
         this.onopen()
       })
+    }
+    send(data) {
+      this.sent.push(data)
     }
     close() {
       this.readyState = 3
@@ -123,6 +127,17 @@ test("invalid access keys produce a useful error", async () => {
   h.fetch(async () => ({ status: 401 }))
   // The error carries the coded payload so the UI can translate it by locale.
   await expect(h.api.invoke("rpc_running")).rejects.toThrow(/PIXERR:.*remoteUnauthorized/)
+})
+
+test("the events socket authenticates with a first frame instead of a URL token", async () => {
+  const h = harness()
+  h.api = await loadTransport()
+  await h.api.listen("pi://event", () => {})
+  const ws = h.sockets[0]
+  // The upgrade URL must not leak the key; auth happens on the first frame
+  // right after onopen, before the connect promise resolves.
+  expect(ws.url).toBe("ws://localhost:1421/api/events")
+  expect(JSON.parse(ws.sent[0])).toEqual({ token: "test-key" })
 })
 
 const flush = () => new Promise(resolve => setImmediate(resolve))

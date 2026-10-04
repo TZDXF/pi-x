@@ -23,6 +23,7 @@ mod remote;
 mod remote;
 mod rpc;
 mod schedules;
+mod secrets;
 mod session_checkpoint;
 mod session_file_rewind;
 mod session_revert;
