@@ -193,6 +193,51 @@ function closeMapping() {
   <details class="border-border rounded-md border p-3">
     <summary class="cursor-pointer text-xs font-medium">{{ t("settings.modelAdvanced") }}</summary>
     <div class="mt-3 space-y-3 text-xs">
+      <div class="border-border space-y-2 rounded-md border p-2">
+        <div class="space-y-1">
+          <span class="font-medium">{{ t("settings.modelThinkingLevels") }}</span>
+          <p class="text-muted-foreground leading-relaxed">{{ t("settings.modelThinkingLevelsHint") }}</p>
+        </div>
+        <ButtonGroup class="w-full flex-wrap">
+          <Button
+            v-for="level in thinkingLevels"
+            :id="id + '-thinking-' + level"
+            :key="level"
+            type="button"
+            size="sm"
+            variant="outline"
+            class="min-w-14 flex-1 font-mono"
+            :class="
+              thinkingSelected(level)
+                ? mappingLevel === level
+                  ? 'bg-accent text-accent-foreground'
+                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                : 'text-muted-foreground line-through'
+            "
+            :disabled="!!parsed.error"
+            :aria-pressed="thinkingSelected(level)"
+            :title="t('settings.modelThinkingLevelHint', { level })"
+            @click="onLevelClick(level)"
+            @dblclick="onLevelDblClick(level)"
+          >
+            {{ t("chat.thinkingLevels." + level) }}
+          </Button>
+        </ButtonGroup>
+        <div v-if="mappingLevel" class="flex items-center gap-2">
+          <code class="font-mono">{{ mappingLevel }}</code>
+          <Input
+            :id="id + '-thinking-' + mappingLevel + '-map'"
+            :model-value="thinkingLevelValue(thinkingMap(), mappingLevel)"
+            :placeholder="mappingLevel"
+            :aria-label="t('settings.modelThinkingMappingLabel') + ' - ' + mappingLevel"
+            class="h-7 w-40 font-mono text-xs"
+            @update:model-value="setThinkingMapping(mappingLevel as ThinkingLevel, $event)"
+            @keydown.enter.prevent="closeMapping"
+            @keydown.esc.prevent="closeMapping"
+            @blur="closeMapping"
+          />
+        </div>
+      </div>
       <template v-if="api === 'openai-completions'">
         <div
           v-for="key in [...compatFlags, 'maxTokensField']"
@@ -309,51 +354,6 @@ function closeMapping() {
         <p v-if="fallbackError" role="alert" class="text-destructive break-all">
           {{ fieldErrorText(fallbackError) }}
         </p>
-      </div>
-      <div class="border-border space-y-2 rounded-md border p-2">
-        <div class="space-y-1">
-          <span class="font-medium">{{ t("settings.modelThinkingLevels") }}</span>
-          <p class="text-muted-foreground leading-relaxed">{{ t("settings.modelThinkingLevelsHint") }}</p>
-        </div>
-        <ButtonGroup class="w-full flex-wrap">
-          <Button
-            v-for="level in thinkingLevels"
-            :id="id + '-thinking-' + level"
-            :key="level"
-            type="button"
-            size="sm"
-            variant="outline"
-            class="min-w-14 flex-1 font-mono"
-            :class="
-              thinkingSelected(level)
-                ? mappingLevel === level
-                  ? 'bg-accent text-accent-foreground'
-                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'
-                : 'text-muted-foreground line-through'
-            "
-            :disabled="!!parsed.error"
-            :aria-pressed="thinkingSelected(level)"
-            :title="t('settings.modelThinkingLevelHint', { level })"
-            @click="onLevelClick(level)"
-            @dblclick="onLevelDblClick(level)"
-          >
-            {{ t("chat.thinkingLevels." + level) }}
-          </Button>
-        </ButtonGroup>
-        <div v-if="mappingLevel" class="flex items-center gap-2">
-          <code class="font-mono">{{ mappingLevel }}</code>
-          <Input
-            :id="id + '-thinking-' + mappingLevel + '-map'"
-            :model-value="thinkingLevelValue(thinkingMap(), mappingLevel)"
-            :placeholder="mappingLevel"
-            :aria-label="t('settings.modelThinkingMappingLabel') + ' - ' + mappingLevel"
-            class="h-7 w-40 font-mono text-xs"
-            @update:model-value="setThinkingMapping(mappingLevel as ThinkingLevel, $event)"
-            @keydown.enter.prevent="closeMapping"
-            @keydown.esc.prevent="closeMapping"
-            @blur="closeMapping"
-          />
-        </div>
       </div>
       <label class="block space-y-1">
         <span>{{ t("settings.modelAdvancedJson") }}</span>

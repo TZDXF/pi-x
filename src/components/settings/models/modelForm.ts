@@ -21,7 +21,8 @@ export function emptyModelForm(): ModelForm {
     id: "",
     name: "",
     api: "",
-    reasoning: false,
+    // Most coding models reason today; uncheck for the rare plain ones.
+    reasoning: true,
     image: true,
     contextWindow: "",
     maxTokens: "",
