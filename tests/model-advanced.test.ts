@@ -65,9 +65,9 @@ test("thinking levels render as a toggle group with double-click mapping", () =>
   expect(component).toMatch(/ALL_THINKING_LEVELS/)
   expect(component).toMatch(/<ButtonGroup/)
   expect(component).toMatch(/@dblclick="onLevelDblClick\(level\)"/)
-  expect(component).toMatch(/thinkingLevelMode/)
+  expect(component).toMatch(/thinkingLevelEnabled/)
   expect(component).toMatch(/setThinkingMapping/)
-  // A level without an override is selected: the button group defaults to all on.
+  // The button group mirrors pi: xhigh/max stay off until the map names them.
   expect(component).not.toMatch(/THINKING_INHERIT/)
 })
 
@@ -99,6 +99,25 @@ test("thinking level toggles and mappings keep the map minimal", async () => {
       thinkingLevelMap: levels.toggleThinkingLevel({ xhigh: null }, "xhigh"),
     }),
   ]).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"])
+})
+
+test("the button group counts xhigh and max as off until pi is told to enable them", async () => {
+  const levels = await import("@/lib/thinkingLevels")
+  const base: Record<string, unknown> = {}
+  expect(levels.thinkingLevelEnabled(base, "high")).toBe(true)
+  expect(levels.thinkingLevelEnabled({ high: "think" }, "high")).toBe(true)
+  expect(levels.thinkingLevelEnabled({ high: null }, "high")).toBe(false)
+  // A missing entry keeps pi's default, which does not offer the two extra levels.
+  expect(levels.thinkingLevelEnabled(base, "xhigh")).toBe(false)
+  expect(levels.thinkingLevelEnabled(base, "max")).toBe(false)
+  expect(levels.thinkingLevelEnabled({ xhigh: "xhigh" }, "xhigh")).toBe(true)
+  expect(levels.thinkingLevelEnabled({ xhigh: "extended" }, "xhigh")).toBe(true)
+  expect(levels.thinkingLevelEnabled({ xhigh: null }, "xhigh")).toBe(false)
+
+  // Toggling an unmapped extra level enables it instead of writing a disabling null.
+  expect(levels.toggleThinkingLevel(base, "xhigh")).toEqual({ xhigh: "xhigh" })
+  expect(levels.toggleThinkingLevel(base, "high")).toEqual({ high: null })
+  expect(levels.toggleThinkingLevel({ xhigh: "extended" }, "xhigh")).toEqual({ xhigh: null })
 })
 
 test("shared textareas preserve fallback draft/change events and advanced JSON validation", async () => {

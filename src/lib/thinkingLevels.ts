@@ -25,6 +25,14 @@ export function clampThinkingLevel(level: ThinkingLevel, available: ThinkingLeve
   return available[0] ?? "off"
 }
 
+/** Whether the button group shows a level as on: the base levels follow pi's
+ *  default (on), while xhigh/max stay off until the map names them explicitly. */
+export function thinkingLevelEnabled(map: Record<string, unknown> | undefined, level: ThinkingLevel): boolean {
+  const mapped = map?.[level]
+  if (mapped === null) return false
+  return typeof mapped === "string" || !needsExplicitMapping(level)
+}
+
 /** How one level is overridden in a models.json thinkingLevelMap. */
 export type ThinkingLevelMode = "inherit" | "disabled" | "custom"
 
@@ -75,13 +83,14 @@ export function setThinkingMapping(
 }
 
 /**
- * Button-group toggle: unavailable (null) <-> available. Levels pi enables
- * explicitly get a same-name mapping so turning them back on actually works.
+ * Button-group toggle: unavailable (null) <-> available. For xhigh/max the map
+ * must name the level for pi to enable it, so "on" there is the same-name entry.
  */
 export function toggleThinkingLevel(
   map: Record<string, unknown> | undefined,
   level: ThinkingLevel,
 ): Record<string, unknown> {
-  if (thinkingLevelMode(map, level) !== "disabled") return withThinkingLevel(map, level, null)
-  return withThinkingLevel(map, level, needsExplicitMapping(level) ? level : undefined)
+  if (!thinkingLevelEnabled(map, level))
+    return withThinkingLevel(map, level, needsExplicitMapping(level) ? level : undefined)
+  return withThinkingLevel(map, level, null)
 }

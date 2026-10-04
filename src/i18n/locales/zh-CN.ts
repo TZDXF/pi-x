@@ -991,7 +991,7 @@ export default {
       "编辑其他模型字段，例如 headers、cost、samplingParams 和 thinkingLevelMap；不要重复填写基础配置字段。",
     modelThinkingLevels: "思考挡位",
     modelThinkingLevelsHint:
-      "默认全部启用（沿用 Pi 默认值）。单击挡位可停用（写入 thinkingLevelMap 的 null），停用后再次单击即可恢复；双击挡位可改为服务的自定义映射值。",
+      "关闭至高挡位默认启用（沿用 Pi 默认值）；极高与最大需在 thinkingLevelMap 中显式映射后才会生效。单击挡位可停用（写入 thinkingLevelMap 的 null），停用后再次单击即可恢复；双击挡位可改为服务的自定义映射值。",
     modelThinkingLevelHint: "{level}：单击切换启用/停用，双击编辑映射值",
     modelThinkingMappingLabel: "映射值",
     modelAdvancedJson: "高级字段 JSON（不包含上方基础字段）",

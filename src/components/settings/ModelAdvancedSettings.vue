@@ -9,7 +9,7 @@ import { useI18n } from "vue-i18n"
 import {
   ALL_THINKING_LEVELS,
   setThinkingMapping as setThinkingMap,
-  thinkingLevelMode,
+  thinkingLevelEnabled,
   thinkingLevelValue,
   toggleThinkingLevel,
 } from "@/lib/thinkingLevels"
@@ -143,9 +143,9 @@ function thinkingMap(): Record<string, unknown> {
   const map = parsed.value.value?.thinkingLevelMap
   return map && typeof map === "object" && !Array.isArray(map) ? (map as Record<string, unknown>) : {}
 }
-/** Unmapped levels keep pi's default, which is the "all selected" state. */
+/** Mirrors pi's availability: base levels on by default, xhigh/max off until mapped. */
 function thinkingSelected(level: ThinkingLevel): boolean {
-  return thinkingLevelMode(thinkingMap(), level) !== "disabled"
+  return thinkingLevelEnabled(thinkingMap(), level)
 }
 function applyThinkingMap(map: Record<string, unknown>) {
   if (!parsed.value.value) return
