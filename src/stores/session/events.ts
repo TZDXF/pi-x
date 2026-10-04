@@ -13,7 +13,8 @@ import type { Block, Entry, RetryInfo, SessionFlow, TextBlock, ThinkingBlock, To
 export function formatRetryError(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : ""
   if (!raw) return ""
-  const match = raw.match(/^(\d{3})\s*:\s*(\{[\s\S]*\})$/)
+  // Providers emit both "404: {json}" and "404 {json}" separators.
+  const match = raw.match(/^(\d{3})\s*:?\s*(\{[\s\S]*\})$/)
   const status = match?.[1]
   const json = match?.[2] ?? raw
   try {
@@ -26,9 +27,21 @@ export function formatRetryError(value: unknown): string {
   return raw
 }
 
+/**
+ * The markdown renderer (comark) consumes balanced `{...}` runs as inline
+ * attribute syntax and silently drops them, which garbles raw provider
+ * payloads. Render brace-bearing errors as inline code so they survive.
+ */
+function protectBraces(text: string): string {
+  if (!/[{}]/.test(text)) return text
+  const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map(m => m[0].length))
+  const fence = "`".repeat(longestRun + 1)
+  return `${fence} ${text} ${fence}`
+}
+
 /** Shared phrasing between the live settle entry and history rendering. */
 export function errorBlockText(message: string): string {
-  return `**${i18n.global.t("chat.errorLabel")}:** ${formatRetryError(message)}`
+  return `**${i18n.global.t("chat.errorLabel")}:** ${protectBraces(formatRetryError(message))}`
 }
 
 export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {

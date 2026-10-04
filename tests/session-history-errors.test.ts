@@ -170,3 +170,45 @@ test("history without errors loads unchanged", async () => {
   expect(entries.length).toBe(2)
   expect(entries[1].blocks[0].text).toBe("ok")
 })
+
+test("provider error payloads without a colon separator unwrap to status · message", async () => {
+  // Real-world formats captured from session logs: providers emit "404 {json}"
+  // (space) rather than the "404: {json}" (colon) the unwrap used to require.
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: {
+      timestamp: 2500,
+      errorMessage: '404 {"error":{"type":"http_error","message":"Route not found"}}',
+    },
+  })
+  await store.loadHistory()
+  const last = store.entries.at(-1)
+  expect(last.blocks[0].text).toMatch(/404 · Route not found/)
+})
+
+test("wrapped provider payloads unwrap to the inner message", async () => {
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: {
+      timestamp: 2500,
+      errorMessage:
+        '403 {"error":{"type":"packy_api_error","message":"This API endpoint is only accessible via the official Claude CLI (request id: XYZ)"},"type":"packy_error"}',
+    },
+  })
+  await store.loadHistory()
+  const last = store.entries.at(-1)
+  expect(last.blocks[0].text).toMatch(/403 · This API endpoint is only accessible via the official Claude CLI/)
+})
+
+test("unparseable brace-bearing errors render as inline code", async () => {
+  // The markdown renderer drops balanced {...} as attribute syntax; the error
+  // block must wrap such payloads in a code span to keep them visible.
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: "boom {weird payload} end" },
+  })
+  await store.loadHistory()
+  const last = store.entries.at(-1)
+  expect(last.blocks[0].text).toContain("boom {weird payload} end")
+  expect(last.blocks[0].text).toContain("`")
+})
