@@ -32,6 +32,7 @@ mod session_revert;
 mod session_watch;
 mod sessions;
 mod skills;
+mod ssh;
 mod terminal;
 mod terminal_open;
 mod title_generation;
