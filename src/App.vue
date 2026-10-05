@@ -58,6 +58,7 @@ import { createConversationLoader } from "@/lib/conversationLoader"
 import { focusComposer } from "@/lib/composer"
 import { useWorkspaceStore, registerSessionMtimeSync } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
+import { useAppUpdateStore } from "@/stores/appUpdate"
 import WelcomeView from "@/components/WelcomeView.vue"
 import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
@@ -86,6 +87,7 @@ const navigating = ref(false)
 const pendingResume = ref<string | null>(null)
 const trustActivationBackup = ref<TrustActivationBackup | null>(null)
 const ui = useUiStore()
+const appUpdate = useAppUpdateStore()
 const { t } = useI18n()
 
 const rightSidebarOpen = ref(false)
@@ -379,6 +381,8 @@ function selectConversationFromSidebar(runtimeId: string) {
 
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKeydown)
+  // 启动后自动检查应用更新，发现新版本时标题栏会出现更新入口
+  void appUpdate.autoCheck()
   try {
     config.value = await getConfig()
   } catch {

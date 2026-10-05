@@ -76,6 +76,7 @@ function harness(props: {
         toasts.push({ message, kind })
       },
     }),
+    useAppUpdateStore: () => ({ status: null }),
     // 组件宏由 vue 编译器展开，这里直接提供运行时等价物以便对逻辑求值。
     defineProps: () => ({ ...props }),
     defineEmits: () => (event: string, payload: unknown) => {

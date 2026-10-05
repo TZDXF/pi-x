@@ -790,6 +790,7 @@ export default {
     checking: "检查中…",
     install: "下载并安装",
     installing: "正在下载安装…",
+    newVersion: "发现新版本 {version}，点击查看",
     confirm: "将 PiX 更新到 {version}？下载完成后需重启应用生效。",
     installed: "更新已安装完成，重启应用后生效。",
     restart: "重启应用",

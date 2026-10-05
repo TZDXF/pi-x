@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleArrowUp,
   Code,
   Folder,
   PanelLeft,
@@ -36,6 +37,7 @@ import {
   type EditorKind,
 } from "@/lib/openWith"
 import { useUiStore } from "@/stores/conversations"
+import { useAppUpdateStore } from "@/stores/appUpdate"
 
 const props = defineProps<{
   sidebarOpen?: boolean
@@ -155,6 +157,10 @@ const chooseOpenWith = (kind: EditorKind) => {
   return runProjectAction(project => openWithKind(kind, project))
 }
 const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))
+
+// ---- 标题栏更新入口：启动自动检查发现新版本后展示，点击进入关于页 ----
+const appUpdate = useAppUpdateStore()
+const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
 </script>
 
 <template>
@@ -202,6 +208,16 @@ const openInTerminal = () => runProjectAction(project => openTerminalInDir(proje
         @click="navigate('/settings/general')"
       >
         <Settings :size="16" />
+      </button>
+      <button
+        v-if="appUpdateAvailable"
+        type="button"
+        class="titlebar-control titlebar-update"
+        :title="t('appUpdate.newVersion', { version: appUpdate.status?.version ?? '' })"
+        :aria-label="t('appUpdate.newVersion', { version: appUpdate.status?.version ?? '' })"
+        @click="navigate('/settings/about')"
+      >
+        <CircleArrowUp :size="16" />
       </button>
       <Badge
         v-if="isDevelopment"
@@ -335,6 +351,12 @@ const openInTerminal = () => runProjectAction(project => openTerminalInDir(proje
 }
 .titlebar-control[aria-current="page"] {
   color: var(--foreground);
+}
+.titlebar-update {
+  color: var(--primary);
+}
+.titlebar-update:hover:not(:disabled) {
+  color: var(--primary);
 }
 .titlebar-open-main {
   width: auto;

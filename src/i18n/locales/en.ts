@@ -813,6 +813,7 @@ export default {
     checking: "Checking…",
     install: "Download & install",
     installing: "Downloading & installing…",
+    newVersion: "New version {version} available, click to view",
     confirm: "Update PiX to {version}? The app restarts to apply the update.",
     installed: "Update installed. Restart the app to apply it.",
     restart: "Restart app",
