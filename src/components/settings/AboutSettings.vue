@@ -31,6 +31,14 @@ import { formatCodedError } from "@/lib/backendError"
 import { confirmDialog, openExternal } from "@/lib/hostBridge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
 
@@ -55,6 +63,8 @@ const appInstalling = ref(false)
 const appInstalled = ref(false)
 const appProgress = ref<number | null>(null)
 const appError = ref("")
+/** 应用更新确认弹窗（应用内 Dialog 组件，替代原生确认框） */
+const installConfirmOpen = ref(false)
 let downloaded = 0
 let unlistenProgress: (() => void) | null = null
 
@@ -88,14 +98,14 @@ async function changeChannel(v: AcceptableValue) {
   void checkApp()
 }
 
-async function updateApp() {
+function updateApp() {
   if (!appStatus.value?.updateAvailable || appInstalling.value || appChecking.value) return
-  const confirmed = await confirmDialog(t("appUpdate.confirm", { version: appStatus.value.version }), {
-    title: t("appUpdate.title"),
-    okLabel: t("appUpdate.install"),
-    cancelLabel: t("common.cancel"),
-  })
-  if (!confirmed) return
+  installConfirmOpen.value = true
+}
+
+async function installApp() {
+  if (!appStatus.value?.updateAvailable || appInstalling.value || appChecking.value) return
+  installConfirmOpen.value = false
   appInstalling.value = true
   appInstalled.value = false
   downloaded = 0
@@ -406,4 +416,20 @@ onUnmounted(() => {
     </div>
   </SettingRow>
   <p class="text-muted-foreground mt-5 text-xs">{{ t("settings.dataDirectory") }}: ~/.pix</p>
+  <Dialog :open="installConfirmOpen" @update:open="v => (installConfirmOpen = v)">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ t("appUpdate.title") }}</DialogTitle>
+        <DialogDescription>
+          {{ t("appUpdate.confirm", { version: appStatus?.version ?? "" }) }}
+        </DialogDescription>
+      </DialogHeader>
+      <DialogFooter>
+        <Button variant="outline" :disabled="appInstalling" @click="installConfirmOpen = false">
+          {{ t("common.cancel") }}
+        </Button>
+        <Button :disabled="appInstalling" @click="installApp">{{ t("appUpdate.install") }}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
