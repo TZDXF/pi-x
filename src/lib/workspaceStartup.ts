@@ -3,6 +3,7 @@ import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceGitInfo, Worksp
 import type { SessionStore } from "@/stores/session"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
+import { isSshProject, resolveSshConnectionId } from "@/lib/ssh"
 import { encodeCodedError } from "@/lib/backendError"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
@@ -65,9 +66,23 @@ export function createWorkspaceStartup(context: StartupContext) {
   function contextSignature(dir: string) {
     return JSON.stringify(contextFor(dir) ?? null)
   }
+  /** 远程项目的 spawn 必须携带连接 id；SSH 连接是连接细节的唯一权威来源（契约 §3.1）。 */
+  function sshConnectionIdFor(dir: string): string {
+    const connectionId = resolveSshConnectionId(dir, config.value.sshConnections ?? [])
+    if (!connectionId)
+      throw new Error(encodeCodedError("sshConnectionMissing", "远程项目没有匹配的 SSH 连接，请在设置中检查连接配置"))
+    return connectionId
+  }
   async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
     // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
     if (!dir) throw new Error(encodeCodedError("projectDirMissing", "项目目录不存在"))
+    // 远程项目：P1 不支持多目录组，workspace 恒为 null（契约 §3.1 第 4 条）。
+    if (isSshProject(dir)) {
+      const connectionId = sshConnectionIdFor(dir)
+      await spawnPi(dir, file, runtimeId, undefined, connectionId)
+      runtimeWorkspaces.set(runtimeId, JSON.stringify(null))
+      return
+    }
     const context = contextFor(dir)
     await spawnPi(dir, file, runtimeId, context)
     runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
@@ -111,6 +126,11 @@ export function createWorkspaceStartup(context: StartupContext) {
     const sessionStart = nowMs()
     pixLog(`[perf] startSession begin selection=${selection?.branch ?? "-"}`, runtimeId)
     if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
+    // 远程项目必须无 branch/worktree 选择（契约 §5）；正常入口不会产生，这里兜底校验。
+    if (selection?.project && isSshProject(selection.project) && (selection.branch || selection.worktree)) {
+      ui.pushToast(t("ssh.gitUnavailable"), "error")
+      return false
+    }
     if (selection?.worktree && !selection.branch) {
       ui.pushToast(t("workspace.selectBaseBranch"), "error")
       return false
@@ -143,10 +163,13 @@ export function createWorkspaceStartup(context: StartupContext) {
       // The user explicitly picked this folder, so lift any earlier removal marker.
       workspace.unremoveProject(path)
       await workspace.rememberWorkspace(path, knownInfo)
-      const status = await trustStatus(path)
-      if (status.needsDecision) {
-        const allowed = await requestWorkspaceTrust(status)
-        if (!allowed) return false
+      // 远程项目 P1 跳过信任决策，直接 spawn（契约 §4.2）。
+      if (!isSshProject(path)) {
+        const status = await trustStatus(path)
+        if (status.needsDecision) {
+          const allowed = await requestWorkspaceTrust(status)
+          if (!allowed) return false
+        }
       }
       // Completion may already have started an empty worker in the original cwd.
       // Reuse the conversation identity (and composer), but never that old worker.

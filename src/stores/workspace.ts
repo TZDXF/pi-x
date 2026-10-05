@@ -2,6 +2,7 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
+import { isSshProject, forgetSshProjectConnection } from "@/lib/ssh"
 import { listSessions, pixLog, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
 import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
 import { invoke } from "@/api/transport"
@@ -318,6 +319,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function removeProject(path: string) {
     path = projectRoot(path)
+    if (isSshProject(path)) forgetSshProjectConnection(path)
     if (!isRemovedProject(path)) {
       removedProjects.value = [path, ...removedProjects.value]
       persistRemovedProjects()
@@ -359,6 +361,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
+    // 远程项目跳过本地 git 查询（契约 §5），直接进项目列表。
+    if (isSshProject(path)) {
+      remember(path)
+      return
+    }
     try {
       registerWorktrees(knownInfo ?? (await workspaceGitInfo(path)))
     } catch {
@@ -378,6 +385,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
+    // 远程项目不做本地扫盘（契约 §5）：历史为空，侧栏展示空态文案。
+    if (isSshProject(path)) {
+      versions[path] = (versions[path] || 0) + 1
+      histories.value[path] = []
+      return
+    }
     const version = (versions[path] = (versions[path] || 0) + 1)
     const start = nowMs()
     const rows = await listSessions(path)

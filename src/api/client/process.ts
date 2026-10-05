@@ -22,7 +22,16 @@ export const spawnPi = (
   sessionFile?: string,
   runtimeId = activeRuntimeId.value,
   workspace?: WorkspaceContext,
-) => invoke<void>("rpc_spawn", { project, sessionFile: sessionFile ?? null, runtimeId, workspace: workspace ?? null })
+  /** SSH 远程项目必传：选定连接的唯一权威来源；本地项目不传。 */
+  sshConnectionId?: string,
+) =>
+  invoke<void>("rpc_spawn", {
+    project,
+    sessionFile: sessionFile ?? null,
+    runtimeId,
+    workspace: workspace ?? null,
+    sshConnectionId: sshConnectionId ?? null,
+  })
 
 export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_kill", { runtimeId })
 

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { isDesktop } from "@/api/transport"
 import { openPath, openTerminalInDir } from "@/api/piClient"
+import { isSshProject } from "@/lib/ssh"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
 import {
   detectEditors,
@@ -112,7 +113,11 @@ const editorsDetected = ref(false)
 const editorIcons = ref<EditorIconMap>({})
 const openingProject = ref(false)
 
-const openInEditorVisible = computed(() => isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject)
+// 远程项目无法在本地编辑器/终端中打开（契约 §5），整块入口隐藏。
+const openInEditorVisible = computed(
+  () =>
+    isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject && !isSshProject(props.openInEditorProject),
+)
 
 const editorLabelOf = (kind: EditorKind) =>
   kind === "system" || kind === "custom"

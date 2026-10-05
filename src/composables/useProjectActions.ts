@@ -1,4 +1,5 @@
 import { normalizeProjectPath } from "@/lib/paths"
+import { isSshProject } from "@/lib/ssh"
 import type { Ref } from "vue"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
@@ -80,6 +81,12 @@ export function useProjectActions(context: UseProjectActionsContext) {
         config.value.lastProject = dir
         // Await so quick successive selections cannot persist out of order.
         await saveConfig({ ...config.value })
+      }
+      // 远程项目 P1 跳过信任决策，直接进入会话（契约 §4.2）。
+      if (isSshProject(dir)) {
+        phase.value = "chat"
+        if (!started.value) void session.loadOfflineModels()
+        return
       }
       const status = await trustStatus(dir)
       if (status.needsDecision) {
@@ -208,5 +215,13 @@ export function useProjectActions(context: UseProjectActionsContext) {
     }
   }
 
-  return { selectProject, switchProject, openProjectless, openProjectlessFromSidebar, editProject, saveProject, removeProject }
+  return {
+    selectProject,
+    switchProject,
+    openProjectless,
+    openProjectlessFromSidebar,
+    editProject,
+    saveProject,
+    removeProject,
+  }
 }

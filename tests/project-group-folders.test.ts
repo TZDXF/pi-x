@@ -33,6 +33,7 @@ test("grouped sidebar state aggregates every folder before hiding the session li
     errors: Record<string, string>,
     loading: Record<string, boolean>,
     histories: Record<string, unknown[]>,
+    path = "C:/repo",
   ) => {
     const vmContext = runSlice(
       sidebar,
@@ -42,10 +43,11 @@ test("grouped sidebar state aggregates every folder before hiding the session li
         workspace: { projectFolders: () => folders, histories },
         errors: { value: errors },
         loading: { value: loading },
+        isSshProject: (value: string) => value.startsWith("ssh://"),
       },
       "groupState",
     )
-    return (vmContext as { __out: (path: string) => Record<string, unknown> }).__out("C:/repo")
+    return (vmContext as { __out: (query: string) => Record<string, unknown> }).__out(path)
   }
   // 主目录缺失但组内其他目录健康：列表仍然显示，仅保留目录缺失警告。
   const partial = stateOf(["C:/repo", "C:/b"], { "C:/repo": "missing" }, {}, { "C:/b": [{}] })
@@ -53,6 +55,9 @@ test("grouped sidebar state aggregates every folder before hiding the session li
   // 所有目录都缺失时才隐藏整组列表。
   const allMissing = stateOf(["C:/repo", "C:/b"], { "C:/repo": "missing", "C:/b": "missing" }, {}, {})
   expect(allMissing).toMatchObject({ error: "missing", hidden: true, hasHistory: false })
+  // 远程项目标记 unavailable（P1 无会话历史，契约 §5）。
+  const remote = stateOf(["ssh://dev@host/proj"], {}, {}, {}, "ssh://dev@host/proj")
+  expect(remote).toMatchObject({ unavailable: true, hidden: false, hasHistory: false })
   // 全部目录加载失败才显示整组重试入口。
   const allFailed = stateOf(["C:/repo", "C:/b"], { "C:/repo": "failed", "C:/b": "failed" }, {}, { "C:/repo": [] })
   expect(allFailed).toMatchObject({ listError: "failed", hidden: false })
@@ -71,7 +76,9 @@ test("new sessions keep defaulting to the project primary directory", () => {
   // 共用同一个处理器，其内部仍然走项目主目录路由。
   const chatHandler = app.match(/function newSessionFromChat\(\)[\s\S]*?\n\}/)?.[0]
   expect(chatHandler).toBeTruthy()
-  expect(chatHandler).toMatch(/requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) => newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/)
+  expect(chatHandler).toMatch(
+    /requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) => newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/,
+  )
   expect(app.match(/@new-session="newSessionFromChat"/g)?.length).toBeGreaterThanOrEqual(2)
   // 顶栏项目下拉不列出组内目录。
   expect(context).not.toMatch(/groupFolders/)

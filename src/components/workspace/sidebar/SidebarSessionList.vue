@@ -26,6 +26,8 @@ defineProps<{
   error?: string
   loading?: boolean
   hasHistory: boolean
+  /** 远程项目 P1 无会话历史：展示专属空态而非“暂无会话”。 */
+  unavailable?: boolean
 }>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string]
@@ -112,6 +114,12 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
     >
     <p v-else-if="loading && !hasHistory" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">
       {{ t("sidebar.loading") }}
+    </p>
+    <p
+      v-else-if="unavailable && !rows.length && !pending.length"
+      class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto"
+    >
+      {{ t("ssh.sessionHistoryUnavailable") }}
     </p>
     <p v-else-if="!rows.length && query" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">
       {{ t("sidebar.noMatch") }}

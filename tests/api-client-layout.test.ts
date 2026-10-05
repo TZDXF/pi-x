@@ -39,6 +39,7 @@ const loaders = {
   rpc: () => import("@/api/client/rpc"),
   sessions: () => import("@/api/client/sessions"),
   skills: () => import("@/api/client/skills"),
+  ssh: () => import("@/api/client/ssh"),
   updates: () => import("@/api/client/updates"),
   workspace: () => import("@/api/client/workspace"),
 }
@@ -53,7 +54,7 @@ trustStatus trustSave WorkspaceContext spawnPi killPi piRunning pixLog
 SessionMeta listSessions sessionMtime sessionHistory SessionLastError sessionLastError duplicateSessionFile
 onSessionsChanged FileHit searchFiles openPath openTerminalInDir exportSessionHtml exportSessionFileHtml
 rpcRequest RpcImage rpcSteer rpcFollowUp rpcNotify onPiEvent onPiExit
-onPiStderr onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet PreviewProxyInfo
+onPiStderr onSshPathBound onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet PreviewProxyInfo
 previewProxyInfo ModelCostRates ModelFallbackModel ModelCompat ModelImageResize ModelImageInputLimits ModelInputLimits
 ModelPromptCache ModelEntry ProviderEntry ModelsConfig getModelsConfig saveModelsConfig FetchedModel
 fetchProviderModels updateSession listArchivedSessions deleteSession GitWorktree WorkspaceSelection prepareWorkspaceGit
@@ -61,7 +62,9 @@ WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle Catalo
 packageCatalog packageList packageInstall packageRemove packageUpdate PackageResource packageResources
 packageListFiles packageReadFile packageTranslate packageSetResource packageNameOf RunningSession listRunningSessions
 McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus McpStatusResult
-getMcpStatus McpCheckResult checkMcpServer`
+getMcpStatus McpCheckResult checkMcpServer
+SshProbeInfo SshConnection SshConnectionInput SshErrorKind SshProbeResult
+sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget`
   .split(/\s+/)
   .sort()
 
@@ -157,6 +160,16 @@ test("runtime defaults are evaluated at call time and explicit runtime ids still
     sessionFile: "saved.jsonl",
     runtimeId: "explicit",
     workspace: { name: "work", primary: "/project", roots: ["/project"] },
+    sshConnectionId: null,
+  })
+  // SSH 远程项目经同一命令分流，携带选定的连接 id（契约 §3.1）。
+  await api.spawnPi("ssh://dev@host:2222/home/dev", undefined, "explicit", undefined, "ssh-1")
+  expect(mocks.invoke).toHaveBeenLastCalledWith("rpc_spawn", {
+    project: "ssh://dev@host:2222/home/dev",
+    sessionFile: null,
+    runtimeId: "explicit",
+    workspace: null,
+    sshConnectionId: "ssh-1",
   })
   await api.rpcRequest({ type: "get_state" }, "explicit")
   expect(mocks.invoke).toHaveBeenLastCalledWith("rpc_request", {

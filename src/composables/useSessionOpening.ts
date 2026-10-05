@@ -1,4 +1,5 @@
 import { normalizeProjectPath } from "@/lib/paths"
+import { isSshProject } from "@/lib/ssh"
 import { createUuid } from "@/lib/uuid"
 import { splitAtEdge, isMember, leafByRuntime, firstLeafRuntime, closePane, splitView } from "@/stores/splitView"
 import type { Ref } from "vue"
@@ -10,9 +11,7 @@ type UiStore = ReturnType<typeof import("@/stores/conversations").useUiStore>
 type PiClient = typeof import("@/api/piClient")
 type Conversations = typeof import("@/stores/conversations")
 type SessionStore = ReturnType<Conversations["sessionFor"]>
-type ConversationLoader = ReturnType<
-  typeof import("@/lib/conversationLoader").createConversationLoader<SessionStore>
->
+type ConversationLoader = ReturnType<typeof import("@/lib/conversationLoader").createConversationLoader<SessionStore>>
 
 /** Active conversation before resumeSession paused on a trust decision; the
  *  user rejecting trust must not leave the untrusted session activated. */
@@ -102,8 +101,9 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
           config.value.lastProject = dir
           await saveConfig({ ...config.value })
         }
-        const status = await trustStatus(dir)
-        if (status.needsDecision) {
+        // 远程项目 P1 跳过信任决策（契约 §4.2）。
+        const status = isSshProject(dir) ? null : await trustStatus(dir)
+        if (status?.needsDecision) {
           trustInfo.value = status
           pendingResume.value = file
           trustActivationBackup.value = {
@@ -150,7 +150,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
         owner.cwd = dir
       }
       owner.sessionFile = file
-      if (!owner.started) {
+      if (!owner.started && !isSshProject(dir)) {
         const status = await trustStatus(dir)
         if (status.needsDecision) {
           const allowed = await requestWorkspaceTrust(status)

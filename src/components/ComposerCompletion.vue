@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n"
 import { sessionFor, activeRuntimeId } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { searchFiles, type FileHit } from "@/api/piClient"
+import { isSshProject } from "@/lib/ssh"
 import {
   completionToken,
   insertCompletion,
@@ -169,6 +170,11 @@ async function load(retry = false) {
   const searchRoots = [...new Set([project, ...roots.value])]
   loading.value = true
   if (current.kind === "file") {
+    // 远程项目 P1 不支持本地文件搜索（契约 §5），文件补全保持为空。
+    if (isSshProject(project)) {
+      loading.value = false
+      return
+    }
     timer = setTimeout(async () => {
       try {
         const results = await Promise.allSettled(searchRoots.map(root => searchFiles(root, current.query)))

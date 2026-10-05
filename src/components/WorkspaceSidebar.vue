@@ -5,6 +5,7 @@ import { VueDraggable } from "vue-draggable-plus"
 import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { normalizeProjectPath } from "@/lib/paths"
+import { isSshProject } from "@/lib/ssh"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
@@ -135,6 +136,8 @@ function groupState(path: string) {
     hidden: folders.length > 0 && folders.every(folder => errors.value[folder] === "missing"),
     loading: folders.some(folder => loading.value[folder]),
     hasHistory: folders.some(folder => !!workspace.histories[folder]),
+    // 远程项目 P1 无会话历史（契约 §5）。
+    unavailable: isSshProject(path),
   }
 }
 async function refreshGroup(path: string) {
@@ -262,6 +265,7 @@ watch(
               :error="projectStates[path]?.listError"
               :loading="projectStates[path]?.loading"
               :has-history="projectStates[path]?.hasHistory"
+              :unavailable="projectStates[path]?.unavailable"
               :show-draft="path === workspace.projectRoot(project) && showDraft"
               :draft-worktree="workspace.isWorktree(project)"
               v-on="sessionActions"

@@ -42,6 +42,8 @@ function harness(props: {
     navigate: () => {},
     canGoBack: false,
     canGoForward: false,
+    // lib/ssh 导入被 import 剥离替换，这里提供等价语义；ssh:// 项目不可本地打开。
+    isSshProject: (value: string) => typeof value === "string" && value.startsWith("ssh://"),
     isDesktop: props.isDesktop ?? true,
     getCurrentWindow: () => ({
       onResized: async () => () => {},
@@ -135,6 +137,11 @@ test("the entry is visible only with a project in an active desktop session", as
   const remote = harness({ showOpenInEditor: true, openInEditorProject: "C:/code/pi-x", isDesktop: false })
   await mount(remote)
   expect(remote.api.openInEditorVisible).toBe(false)
+
+  // SSH 远程项目（ssh:// URI）无法在本地编辑器/终端打开，入口隐藏（契约 §5）。
+  const sshProject = harness({ showOpenInEditor: true, openInEditorProject: "ssh://dev@host/proj" })
+  await mount(sshProject)
+  expect(sshProject.api.openInEditorVisible).toBe(false)
 })
 
 test("the menu lists the system default first, hides undetected IDEs and appends custom", async () => {

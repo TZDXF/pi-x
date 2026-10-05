@@ -1,6 +1,7 @@
 import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
 import { invoke, isDesktop } from "../transport"
 import type { UpdateChannel } from "./updates"
+import type { SshConnection } from "./ssh"
 
 export interface TrustStatus {
   projectPath: string
@@ -38,6 +39,8 @@ export interface AppConfig {
   builtinDelayedSend?: boolean
   /** 多目录项目组；缺省为启用，关闭后「添加项目」直接选择单目录且会话不注入工作区清单。 */
   workspaceGroups?: boolean
+  /** SSH 远程连接配置（契约 §2.1）；凭据不落盘。 */
+  sshConnections?: SshConnection[]
 }
 
 export interface PiSettings {

@@ -7,7 +7,9 @@ import ts from "typescript"
 const source = readFileSync(new URL("../src/components/WorkspaceContext.vue", import.meta.url), "utf8")
 
 test("environment and branch menus only record draft choices", () => {
-  const menu = source.split('<Popover v-if="!isProjectless" v-model:open="modeOpen"')[1].split("</Popover>")[0]
+  const menu = source
+    .split('<Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"')[1]
+    .split("</Popover>")[0]
   const content = menu.split("<PopoverContent")[1]
   expect((content.match(/<Button\b/g) || []).length).toBe(2)
   expect(content).toMatch(/@click="selectMode\(false\)"/)
@@ -46,12 +48,16 @@ test("projectless drafts show a default project and hide Git menus", () => {
   )
   expect(source).toMatch(/projectless\.name/)
   expect(source).toMatch(/if \(!props\.project\) return/)
-  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="modeOpen"/)
-  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="branchOpen"/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"/)
+  // 远程项目跳过本地 git 查询（契约 §5）。
+  expect(source).toMatch(/if \(isRemote\.value\)/)
 })
 
 test("branch menu offers create-and-checkout only in local mode", () => {
-  const menu = source.split('<Popover v-if="!isProjectless" v-model:open="branchOpen"')[1].split("</Popover>")[0]
+  const menu = source
+    .split('<Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"')[1]
+    .split("</Popover>")[0]
   expect(menu).toMatch(/<div v-if="!selection\?\.worktree"/)
   expect(menu).toMatch(/@click="openCreateDialog"/)
   expect(menu).toMatch(/workspace\.createBranch/)
@@ -85,6 +91,8 @@ function branchHarness(overrides = {}) {
     info: { value: null },
     selection: { value: { project: "C:/repo", worktree: false, branch: "main" } },
     gitError: { value: "" },
+    // isRemote 为 false 走本地 git 查询；远程分支的跳过行为单独覆盖。
+    isRemote: { value: false },
     blocked: { value: false },
     modeOpen: { value: false },
     projectOpen: { value: false },
@@ -209,6 +217,9 @@ function harness(overrides = {}) {
     },
     normalizeProjectPath: value => value,
     samePath: (a, b) => a === b,
+    // 远程守卫（lib/ssh 导入在切片外）：本测试全部使用本地项目。
+    isSshProject: () => false,
+    resolveSshConnectionId: () => null,
     trustStatus: async () => ({ needsDecision: false }),
     trustSave: async () => {},
     killPi: async () => events.push("kill"),
