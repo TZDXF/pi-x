@@ -11,4 +11,7 @@ if (import.meta.env.DEV || isDeveloperModeEnabled()) {
   elementDev()
 }
 
+// 禁用 WebView 默认右键菜单；reka-ui 自定义 ContextMenu 的触发器自行处理 contextmenu 事件，不受影响
+window.addEventListener("contextmenu", e => e.preventDefault())
+
 createApp(RemoteEntry).use(createPinia()).use(i18n).mount("#app")
