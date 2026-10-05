@@ -18,6 +18,7 @@ pub(crate) mod files;
 pub(crate) mod models;
 pub(crate) mod pi;
 pub(crate) mod prompts;
+pub(crate) mod ssh;
 pub(crate) mod workspace;
 
 // 再导出保持拆分前 `crate::commands::*` 的对外路径；部分调用方位于
@@ -41,6 +42,8 @@ pub use pi::{
 };
 #[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
+#[allow(unused_imports)]
+pub use ssh::{ssh_connection_delete, ssh_connection_list, ssh_connection_probe, ssh_connection_save, ssh_probe_target};
 #[allow(unused_imports)]
 pub use workspace::WorkspaceContext;
 

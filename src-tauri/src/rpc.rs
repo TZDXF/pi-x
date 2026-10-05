@@ -14,16 +14,16 @@
 
 mod child;
 
-use crate::pi_locate::PiInfo;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+pub use child::{SshSpawnSpec, SpawnProgram};
 use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
@@ -40,6 +40,9 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const EVENT: &str = "pi://event";
 const STDERR_EVENT: &str = "pi://stderr";
 const EXIT_EVENT: &str = "pi://exit";
+/// 重连 realpath 回绑事件（契约 §3.8）：payload 为 `{ runtimeId, project, path }`，
+/// `project` 是 path 回绑后重建的 `ssh://` 展示 URI，供前端更新项目展示。
+const SSH_PATH_BOUND_EVENT: &str = "pi://sshPathBound";
 
 /// Bound for internal `get_state` probes (spawn duplicate checks, session
 /// listing). A hung pi process must never block these indefinitely.
@@ -201,16 +204,20 @@ impl RpcState {
 pub async fn spawn(
     app: AppHandle,
     state: &RpcState,
-    pi: &PiInfo,
+    program: &SpawnProgram,
     project: &str,
     session_file: Option<String>,
     mut extra_args: Vec<String>,
     workspace_manifest: Option<String>,
     runtime_id: Option<String>,
 ) -> Result<(), String> {
-    extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
-    if workspace_manifest.is_some() {
-        extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
+    // P1 远程分支（契约 §3.1 第 7 条）：不注入 builtin extensions——它们物化的
+    // 是本地文件路径（builtin_extensions.rs），对远端无效；PIX_WORKSPACE 同理不设。
+    if matches!(program, SpawnProgram::LocalPi(_)) {
+        extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
+        if workspace_manifest.is_some() {
+            extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
+        }
     }
     let id = runtime_id.unwrap_or_else(|| "default".into());
     // Probe from a snapshot: each probe can take up to PROBE_TIMEOUT, so the
@@ -224,8 +231,15 @@ pub async fn spawn(
     }
     // Never open the same persisted conversation in two processes. Probes are
     // time-bounded: a hung pi process must not block spawning forever.
-    if let Some(file) = &session_file {
-        let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
+    // 远端 POSIX 会话路径不做本地 canonicalize（Windows 上必失败），按原串比对。
+    let session_key: Option<PathBuf> = match (&session_file, program) {
+        (None, _) => None,
+        (Some(file), SpawnProgram::LocalPi(_)) => {
+            Some(dunce::canonicalize(file).map_err(|e| e.to_string())?)
+        }
+        (Some(file), SpawnProgram::Ssh(_)) => Some(PathBuf::from(file)),
+    };
+    if let Some(path) = &session_key {
         for process in &snapshot {
             if !child::process_running(process).await {
                 continue;
@@ -236,12 +250,17 @@ pub async fn spawn(
             else {
                 continue;
             };
-            if response["data"]["sessionFile"]
-                .as_str()
-                .and_then(|f| dunce::canonicalize(f).ok())
-                .as_ref()
-                == Some(&path)
-            {
+            let matched = match program {
+                SpawnProgram::LocalPi(_) => response["data"]["sessionFile"]
+                    .as_str()
+                    .and_then(|f| dunce::canonicalize(f).ok())
+                    .as_ref()
+                    == Some(path),
+                SpawnProgram::Ssh(_) => response["data"]["sessionFile"]
+                    .as_str()
+                    .is_some_and(|f| f == path.to_string_lossy()),
+            };
+            if matched {
                 return Err(format!(
                     "Session already open in runtime {}",
                     process.runtime_id
@@ -257,7 +276,7 @@ pub async fn spawn(
     child::process_spawn(
         app,
         &process,
-        pi,
+        program,
         project,
         session_file,
         extra_args,
@@ -296,6 +315,11 @@ fn resolve_export_path(response: &mut Value, project: &str) -> Result<(), String
     let Some(path) = response["data"]["path"].as_str() else {
         return Ok(());
     };
+    // ssh:// 远程项目：导出路径位于远端文件系统，本地无法 canonicalize，
+    // 原样返回 pi 给的路径作为防御性兜底（契约 §5）。
+    if crate::ssh::is_ssh_uri(project) {
+        return Ok(());
+    }
     let absolute = dunce::canonicalize(Path::new(project).join(path))
         .map_err(|e| format!("Cannot locate exported HTML {path}: {e}"))?;
     response["data"]["path"] = json!(absolute.to_string_lossy());
@@ -402,6 +426,7 @@ mod pending_cleanup_tests {
             stdin_tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
+            remote: None,
         });
         state
     }
