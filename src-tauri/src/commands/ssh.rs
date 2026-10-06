@@ -289,9 +289,10 @@ const TRUST_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 /// 编译期内嵌的 pi_data.mjs（与本地 `pi_data.rs` 用同一份源）。
 const PI_DATA_MJS: &str = include_str!("../../resources/pi_data.mjs");
 
-/// 上传进程内串行化：并发首传共用远端固定临时名 `pi_data.mjs.pixtmp`
-///（契约 P2 §4.1 冻结脚本），交错写入可能 mv 出损坏的 mjs，而此时缓存已
-/// 标记上传完成、进程内不会重传，损坏会持续到重启。实机复现（2026-10-06）。
+/// 上传进程内串行化：减少并发重复上传。跨进程安全由上传脚本保证——临时名
+/// 带远端 shell 的 `$$`，并发各写各的临时文件，`mv` 为原子 rename（早期固定
+/// 临时名 `pi_data.mjs.pixtmp` 在多进程并发首传时产生 mv 竞态，实机复现
+/// 2026-10-06，后改为 `$$` 唯一临时名）。
 static UPLOAD_SERIAL: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// 每连接进程内一次：上传 pi_data.mjs 到远端 `~/.pix/pi_data.mjs`

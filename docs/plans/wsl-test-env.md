@@ -68,5 +68,9 @@ SYN 未到达 VM，为 hns/vfp 转发状态丢失。规律：波动期内所有�
 
 ## 待办（由本次冒烟产生）
 
-- [ ] 前端错误文案：`Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED` 归类为可操作的提示（传输层 `transport.rs` 错误归类处）。
-- [ ] `ssh-keyscan` 对该环境偶发抓不到指纹（原因未查），不阻塞 PiX（PiX 不做指纹采集）。
+- [x] 前端错误文案：`Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED` 已在 P2 落地（`SshErrorKind::HostKey` → `sshHostKeyUnverified`/`sshHostKeyChanged` coded error）。
+
+## 在 Git Bash 运行 ssh_real 实机测试的坑（2026-10-07 实测）
+
+- Git Bash 会对传给子进程的 `PIX_SSH_TEST_*` 环境变量做 MSYS 路径转换（`PIX_SSH_TEST_PROJECT=/home/tzdxf/...` 被篡改为 `C:/Program Files/Git/home/...`，远端报 `lstat '/home/tzdxf/C:'`）。必须加 `MSYS_NO_PATHCONV=1 MSYS2_ENV_CONV_EXCL='PIX_SSH_TEST_'`；同样适用于 `wsl.exe` 的参数（`/usr/sbin/sshd` 会被转换）。
+- 信任上传脚本曾用固定临时名 `pi_data.mjs.pixtmp`，多测试二进制并发首传时产生 mv 竞态（exit 96，串行可通过）；已改为 `$$` 唯一临时名（P2 契约 §4.1 v2 修订），并发实机测试 9/9 通过。

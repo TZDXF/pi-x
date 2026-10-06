@@ -1,6 +1,6 @@
 # SSH 远程项目：P2 接口契约
 
-> 状态：v1（契约冻结稿，供三方并行开发）
+> 状态：v2（v1 冻结稿 + 2026-10-07 修订：§4.1 上传脚本临时名改 `$$`，修多进程并发首传 mv 竞态，实机复现后修订）
 > 上游：`docs/plans/ssh-remote-project.md`（P2 = 会话历史与终端）；P1 契约 `docs/plans/ssh-remote-p1-contracts.md`（下称"P1 契约"）继续有效，本文档只做增量。
 > 立契约前通读的现有实现（引用为 `path:line`，相对仓库根）：
 > - 后端：`src-tauri/src/ssh/{mod,identity,payload,config,transport}.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/rpc/child.rs`、`src-tauri/src/commands/{pi,ssh,mod}.rs`、`src-tauri/src/sessions.rs`、`src-tauri/src/terminal.rs`、`src-tauri/src/trust.rs`、`src-tauri/src/pi_data.rs`、`src-tauri/resources/pi_data.mjs`、`src-tauri/src/lib.rs`
@@ -244,12 +244,14 @@ pub async fn ssh_exec_with_stdin(
 
 ```sh
 mkdir -p "$HOME/.pix" || exit 96
-cat > "$HOME/.pix/pi_data.mjs.pixtmp" || exit 95
-mv "$HOME/.pix/pi_data.mjs.pixtmp" "$HOME/.pix/pi_data.mjs" || exit 96
+TMP="$HOME/.pix/pi_data.mjs.$$"
+cat > "$TMP" || exit 95
+mv "$TMP" "$HOME/.pix/pi_data.mjs" || exit 96
 echo "PIX_TRUST_UPLOAD_DONE"
 ```
 
 - 原子落盘：同目录临时文件 + `mv`（远端 POSIX rename 语义），远端并发/中断不留半个文件。
+- 临时名带 `$$`（v2 修订，2026-10-07）：早期固定临时名 `pi_data.mjs.pixtmp` 在多客户端进程并发首传时产生 mv 竞态（一个进程先 mv 后另一个的 mv 失败退 96，实机复现）；`$$` 使各进程写各自临时文件，并发 `mv` 为原子 rename，内容相同无损坏。
 - `cat` 的 stdin 即 mjs 字节流（**不走 base64**——stdin 是二进制安全管道，无需转码；内层脚本经 wrap_payload 投递，内容只出现在 stdin）。
 - 退出码约定追加：95=写临时文件失败、96=目录创建/改名失败（与 90/92/93 同族，归 `sshRemoteFailed`）。
 - 跳过策略：`commands/ssh.rs` 持有 `static UPLOADED: Mutex<HashSet<String>>`（键 = 连接 id；mjs 内容随编译期常量固定，进程内无需再比对哈希）；上传失败不写入集合，下次调用重试。

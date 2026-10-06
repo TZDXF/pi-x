@@ -59,11 +59,14 @@ echo "PIX_SESSIONS_DONE"
 "#;
 
 /// 远程信任上传脚本（契约 P2 §4.1）：pi_data.mjs 内容走 ssh stdin、同目录临时
-/// 文件 + `mv` 原子落盘（不走 base64——stdin 是二进制安全管道）。
+/// 文件 + `mv` 原子落盘（不走 base64——stdin 是二进制安全管道）。临时名带远端
+/// shell 的 `$$`：多个客户端进程并发首传时各写各的临时文件，`mv` 为原子 rename，
+/// 避免固定临时名下的交错写入把损坏的 mjs 留在目标位。
 pub const TRUST_UPLOAD_SCRIPT: &str = r#"
 mkdir -p "$HOME/.pix" || exit 96
-cat > "$HOME/.pix/pi_data.mjs.pixtmp" || exit 95
-mv "$HOME/.pix/pi_data.mjs.pixtmp" "$HOME/.pix/pi_data.mjs" || exit 96
+TMP="$HOME/.pix/pi_data.mjs.$$"
+cat > "$TMP" || exit 95
+mv "$TMP" "$HOME/.pix/pi_data.mjs" || exit 96
 echo "PIX_TRUST_UPLOAD_DONE"
 "#;
 
@@ -258,9 +261,11 @@ mod tests {
 
     #[test]
     fn trust_scripts_carry_contract_markers_and_exit_codes() {
-        for marker in ["mkdir -p \"$HOME/.pix\"", "pi_data.mjs.pixtmp", "PIX_TRUST_UPLOAD_DONE"] {
+        for marker in ["mkdir -p \"$HOME/.pix\"", "pi_data.mjs.$$", "PIX_TRUST_UPLOAD_DONE"] {
             assert!(TRUST_UPLOAD_SCRIPT.contains(marker), "上传脚本缺 {marker:?}");
         }
+        // 临时名必须带 $$：固定名在多进程并发首传时会产生 mv 竞态（实机复现）。
+        assert!(!TRUST_UPLOAD_SCRIPT.contains(".pixtmp"));
         for marker in [
             "command -v pi",
             "core/settings-manager.js",
