@@ -29,6 +29,35 @@ wsl -d Ubuntu -u root -- /usr/sbin/sshd -f /etc/ssh/sshd_config_pix_test
 
 WSL2 的 localhost 转发使 Windows 直接以 `localhost:2222` 访问。
 
+## systemd 常驻（2026-10-07 起，替代手动启动）
+
+手动 `wsl.exe` 启动的 sshd 随 VM 生命周期消失，WSL 空闲/重启后 2222 不再监听。
+已安装并启用 systemd 单元 `/etc/systemd/system/sshd-pix-test.service`
+（`ExecStart=/usr/sbin/sshd -D -f /etc/ssh/sshd_config_pix_test`，`Restart=on-failure`），
+VM 每次启动自动拉起，无需手动重启：
+
+```bash
+wsl -d Ubuntu -u root -- bash -c "systemctl status sshd-pix-test"
+```
+
+## Windows→WSL 回环抖动（2026-10-07 实测，未解决的平台缺陷）
+
+本机（WSL 2.6.1 + Windows Insider build 26220）上 WSL 的 Windows→Linux 转发层
+（NAT 模式 localhost relay 与 mirrored 回环均如此）会间歇性对 2222 返回
+`Connection refused`（客户端表现为 `banner exchange: Connection to UNKNOWN
+port -1: Connection refused`），而 VM 内 sshd 一直 LISTEN、日志无异常——
+SYN 未到达 VM，为 hns/vfp 转发状态丢失。规律：波动期内所有新连接被拒；
+在 VM 内**新增一个监听 socket**（如 `timeout 2 python3 -m http.server
+<随机新端口>`）会触发 hns 重新同步，转发随即恢复且可持续数分钟以上；
+仅重启同一监听进程只能恢复约 1 个连接。曾试用 `.wslconfig`
+`networkingMode=mirrored`，回环同样失效且改变整机 WSL 网络语义，已回退 NAT。
+
+故障处置：先确认 VM 内 `ss -tln | grep 2222` 在监听（sshd-pix-test active），
+再从 VM 内起一个一次性新端口监听触发同步，然后用
+`ssh -p 2222 -i ~/.ssh/pix_wsl_test -o BatchMode=yes tzdxf@localhost -- uname`
+验证。实机测试（`cargo test ssh_real`）遇全量 Connection refused 时先按此处置，
+勿改代码"适配"环境。
+
 ## 已验证的冒烟结论（2026-10-06）
 
 1. **连通性**：`ssh -p 2222 -i pix_wsl_test -o BatchMode=yes tzdxf@localhost -- uname` 正常返回 `Linux x86_64`。
