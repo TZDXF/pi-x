@@ -66,17 +66,6 @@ function closeSidebarTab(id: number) {
   if (activeTabId.value === id)
     activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
 }
-// 远程项目 P1 无本地文件/终端入口（契约 §5）：切换项目时关闭已打开的本地专属 tab。
-watch(
-  () => props.project,
-  project => {
-    if (!isSshProject(project)) return
-    for (const tab of [...sidebarTabs.value]) {
-      if (tab.type === "files" || tab.type === "terminal") closeSidebarTab(tab.id)
-    }
-  },
-  { immediate: true },
-)
 function reorderSidebarTab(tabs: SidebarTabItem[]) {
   sidebarTabs.value = tabs
 }
@@ -109,6 +98,19 @@ const props = defineProps<{
   selectingProject?: boolean
   connected: boolean
 }>()
+
+// 远程项目无本地文件入口（契约 §5）：切换项目时关闭已打开的 files tab；
+// 终端自 P2 起经 ssh -tt 对远程项目可用，不再随项目切换关闭。
+watch(
+  () => props.project,
+  project => {
+    if (!isSshProject(project)) return
+    for (const tab of [...sidebarTabs.value]) {
+      if (tab.type === "files") closeSidebarTab(tab.id)
+    }
+  },
+  { immediate: true },
+)
 
 // 组件按会话 id 定向绑定（单屏由 App 以 :key 重挂载切换），分屏时每个窗格各自持有 id。
 const runtimeId = props.sessionId ?? activeRuntimeId.value
@@ -252,13 +254,11 @@ const offShortcutHandlers = [
     if (delayedSendEnabled.value) delayedSend.value = !delayedSend.value
   }),
   registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
-  // 远程项目 P1 无本地文件/终端入口（契约 §5）。
+  // 远程项目无本地文件入口（契约 §5）；终端 P2 起对远程项目开放（契约 §3.4）。
   registerShortcutHandler("sidebar.files", () => {
     if (!isSshProject(props.project)) addSidebarTab("files")
   }),
-  registerShortcutHandler("sidebar.terminal", () => {
-    if (!isSshProject(props.project)) addSidebarTab("terminal")
-  }),
+  registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
   registerShortcutHandler("sidebar.closeTab", () => {
     if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)

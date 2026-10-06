@@ -114,3 +114,11 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
+
+/** 远程信任状态（契约 §4.2）；返回形状与本地 trust_status 一致。放在 config 以避免 ssh↔config 依赖环。 */
+export const sshTrustStatus = (project: string, sshConnectionId: string) =>
+  invoke<TrustStatus>("ssh_trust_status", { project, sshConnectionId })
+
+/** 保存远程信任决策；返回决策后的状态。 */
+export const sshTrustSave = (project: string, sshConnectionId: string, trusted: boolean, trustParent: boolean) =>
+  invoke<TrustStatus>("ssh_trust_save", { project, sshConnectionId, trusted, trustParent })

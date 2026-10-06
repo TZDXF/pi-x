@@ -1,5 +1,6 @@
 import { normalizeProjectPath } from "@/lib/paths"
 import { isSshProject } from "@/lib/ssh"
+import { loadTrustStatusLenient } from "@/lib/sshTrust"
 import { createUuid } from "@/lib/uuid"
 import { splitAtEdge, isMember, leafByRuntime, firstLeafRuntime, closePane, splitView } from "@/stores/splitView"
 import type { Ref } from "vue"
@@ -37,14 +38,14 @@ interface UseSessionOpeningContext {
   ui: UiStore
   t(key: string): string
   translateError(error: unknown): string
-  api: Pick<PiClient, "saveConfig" | "trustStatus" | "exportSessionFileHtml">
+  api: Pick<PiClient, "saveConfig" | "trustStatus" | "sshTrustStatus" | "exportSessionFileHtml">
   conversations: Pick<
     Conversations,
     "sessionFor" | "findConversation" | "activateSession" | "createConversation" | "pruneDormantConversations"
   >
   session: ReturnType<Conversations["useSessionStore"]>
   conversationLoader: ConversationLoader
-  requestWorkspaceTrust(info: TrustStatus): Promise<boolean>
+  requestWorkspaceTrust(info: TrustStatus, sshProject?: string | null): Promise<boolean>
   selectProject(dir: string): Promise<void>
 }
 
@@ -66,13 +67,20 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
     ui,
     t,
     translateError: tBackendError,
-    api: { saveConfig, trustStatus, exportSessionFileHtml },
+    api: { saveConfig, trustStatus, sshTrustStatus, exportSessionFileHtml },
     conversations: { sessionFor, findConversation, activateSession, createConversation, pruneDormantConversations },
     session,
     conversationLoader,
     requestWorkspaceTrust,
     selectProject,
   } = context
+
+  /** 信任状态查询（契约 §4.3）：本地照旧；远程调 ssh_trust_status，连接缺失降级 null 并 toast。 */
+  async function trustStatusFor(dir: string): Promise<TrustStatus | null> {
+    return loadTrustStatusLenient(dir, config.value.sshConnections ?? [], { trustStatus, sshTrustStatus }, error =>
+      ui.pushToast(tBackendError(error), "error"),
+    )
+  }
 
   /** Activate a saved conversation, reusing or spawning its independent worker. */
   async function resumeSession(file: string, targetProject?: string) {
@@ -101,8 +109,8 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
           config.value.lastProject = dir
           await saveConfig({ ...config.value })
         }
-        // 远程项目 P1 跳过信任决策（契约 §4.2）。
-        const status = isSshProject(dir) ? null : await trustStatus(dir)
+        // 远程项目走远程信任命令（契约 §4.3）；连接缺失时降级为 null 继续。
+        const status = await trustStatusFor(dir)
         if (status?.needsDecision) {
           trustInfo.value = status
           pendingResume.value = file
@@ -150,10 +158,11 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
         owner.cwd = dir
       }
       owner.sessionFile = file
-      if (!owner.started && !isSshProject(dir)) {
-        const status = await trustStatus(dir)
-        if (status.needsDecision) {
-          const allowed = await requestWorkspaceTrust(status)
+      if (!owner.started) {
+        // 远程项目走远程信任命令（契约 §4.3）；本地照旧。
+        const status = await trustStatusFor(dir)
+        if (status?.needsDecision) {
+          const allowed = await requestWorkspaceTrust(status, isSshProject(dir) ? dir : null)
           if (!allowed) return null
         }
       }

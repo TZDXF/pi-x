@@ -64,7 +64,8 @@ packageListFiles packageReadFile packageTranslate packageSetResource packageName
 McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus McpStatusResult
 getMcpStatus McpCheckResult checkMcpServer
 SshProbeInfo SshConnection SshConnectionInput SshErrorKind SshProbeResult
-sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget`
+sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget sshSessions
+sshTrustStatus sshTrustSave`
   .split(/\s+/)
   .sort()
 

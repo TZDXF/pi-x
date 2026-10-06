@@ -30,6 +30,8 @@ import {
   setTrayLabels,
   toggleDevtools,
   spawnPi,
+  sshTrustSave,
+  sshTrustStatus,
   trustSave,
   trustStatus,
 } from "@/api/piClient"
@@ -76,6 +78,7 @@ import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionR
 import { developerModeEnabled } from "@/lib/developerMode"
 import { isDesktop } from "@/api/transport"
 import { tBackendError } from "@/i18n"
+import { saveTrustDecision } from "@/lib/sshTrust"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
 const route = useRoute()
@@ -147,7 +150,18 @@ watch(
   { immediate: true },
 )
 const startup = createWorkspaceStartup({
-  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog },
+  api: {
+    prepareWorkspaceGit,
+    workspaceGitInfo,
+    killPi,
+    spawnPi,
+    trustStatus,
+    trustSave,
+    sshTrustStatus,
+    sshTrustSave,
+    saveConfig,
+    pixLog,
+  },
   conversations: { sessionFor, uiFor, activeRuntimeId },
   workspace,
   phase,
@@ -262,7 +276,7 @@ const sessionOpening = useSessionOpening({
   ui,
   t,
   translateError: tBackendError,
-  api: { saveConfig, trustStatus, exportSessionFileHtml },
+  api: { saveConfig, trustStatus, sshTrustStatus, exportSessionFileHtml },
   conversations: { sessionFor, findConversation, activateSession, createConversation, pruneDormantConversations },
   session,
   conversationLoader,
@@ -352,7 +366,23 @@ function newSessionFromChat() {
 }
 
 async function onTrustDecision(trusted: boolean, trustParent: boolean) {
-  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
+  if (trustInfo.value) {
+    // 恢复会话的信任决策（契约 §4.3）：远程项目经 ssh_trust_save 落到远端；
+    // 恢复流程在暂停前已把 project 置为目标 URI。
+    try {
+      await saveTrustDecision(
+        project.value,
+        trustInfo.value.projectPath,
+        trusted,
+        trustParent,
+        config.value.sshConnections ?? [],
+        { trustSave, sshTrustSave },
+      )
+    } catch (e) {
+      ui.pushToast(tBackendError(e), "error")
+      return
+    }
+  }
   if (trusted) {
     phase.value = "chat"
     trustActivationBackup.value = null

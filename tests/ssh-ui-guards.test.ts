@@ -4,15 +4,17 @@ import { createPinia, setActivePinia } from "pinia"
 /**
  * 远程项目的调用侧守卫（契约 §5）与项目→连接解析：
  * - paths.normalizeProjectPath 对 ssh:// 走 POSIX 归一化，本地路径零影响
- * - workspace.refresh 不对远程项目扫盘，histories 置空
  * - workspace.rememberWorkspace 不对远程项目查 git
  * - resolveSshConnectionId：优先记住的连接，退化为 host/port/user 匹配
+ * （workspace.refresh 的远程分支详见 tests/ssh-sessions-ui.test.ts）
  */
 
 const mocks = vi.hoisted(() => ({
   storage: new Map<string, string>(),
   requests: [] as { path: string; resolve: (rows: unknown[]) => void }[],
   gitQueries: [] as string[],
+  sshConnectionListCalls: [] as string[],
+  sshSessionsCalls: [] as { project: string; sshConnectionId: string }[],
 }))
 
 vi.mock("@/api/piClient", () => ({
@@ -25,6 +27,14 @@ vi.mock("@/api/piClient", () => ({
   workspaceGitInfo: (path: string) => {
     mocks.gitQueries.push(path)
     throw new Error("not a repository")
+  },
+  sshConnectionList: async () => {
+    mocks.sshConnectionListCalls.push("list")
+    return []
+  },
+  sshSessions: (project: string, sshConnectionId: string) => {
+    mocks.sshSessionsCalls.push({ project, sshConnectionId })
+    return Promise.resolve([])
   },
   pixLog: () => {},
 }))
@@ -49,6 +59,8 @@ async function harness(initialStorage = new Map<string, string>()) {
   mocks.storage = initialStorage
   mocks.requests.length = 0
   mocks.gitQueries.length = 0
+  mocks.sshConnectionListCalls.length = 0
+  mocks.sshSessionsCalls.length = 0
   vi.resetModules()
   setActivePinia(createPinia())
   vi.stubGlobal("localStorage", localStorageFor(initialStorage))
@@ -70,11 +82,13 @@ test("normalizeProjectPath：远程 URI 走 POSIX 归一化，本地路径保持
   expect(normalizeProjectPath("/home/u/proj/")).toBe("/home/u/proj")
 })
 
-test("workspace.refresh：远程项目不调 listSessions，历史置空", async () => {
+test("workspace.refresh：远程项目不调 listSessions，也不扫本地盘", async () => {
   const store = await harness()
   const uri = "ssh://dev@host:2222/home/dev/proj"
-  await store.refresh(uri)
+  // 无匹配连接：远程分支直接失败，不触达本地 session 命令。
+  await expect(store.refresh(uri)).rejects.toThrow("sshConnectionMissing")
   expect(mocks.requests).toHaveLength(0)
+  expect(mocks.sshSessionsCalls).toHaveLength(0)
   expect(store.histories[uri]).toEqual([])
 })
 

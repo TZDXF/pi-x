@@ -222,6 +222,17 @@ function harness(overrides = {}) {
     resolveSshConnectionId: () => null,
     trustStatus: async () => ({ needsDecision: false }),
     trustSave: async () => {},
+    // 信任分流（lib/sshTrust 导入在切片外）：镜像真实实现的本地分派；
+    // 远程分支行为由 tests/ssh-trust.test.ts 直接覆盖，本地用例不应触达。
+    sshTrustStatus: async () => {
+      throw new Error("local test must not call sshTrustStatus")
+    },
+    sshTrustSave: async () => {
+      throw new Error("local test must not call sshTrustSave")
+    },
+    loadTrustStatus: (project, _connections, api) => api.trustStatus(project),
+    saveTrustDecision: (_project, localProjectPath, trusted, trustParent, _connections, api) =>
+      api.trustSave(localProjectPath, trusted, trustParent),
     killPi: async () => events.push("kill"),
     saveConfig: async () => events.push("save"),
     startRuntime: async () => {

@@ -24,6 +24,8 @@ const props = defineProps<{
   query: string
   queueNow: number
   worktree: boolean
+  /** 远程项目会话：元数据写操作（重命名/归档/删除等本地文件命令）入口隐藏（契约 §2.4）。 */
+  remote?: boolean
 }>()
 const emit = defineEmits<{
   open: [session: SessionMeta]
@@ -72,10 +74,11 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
           :disabled="navigationDisabled"
           :title="label"
           @click="emit('open', s)"
-          @dblclick.stop="emit('renameOnDoubleClick', s)"
+          @dblclick.stop="!remote && emit('renameOnDoubleClick', s)"
           >{{ label }}</Button
         >
         <Button
+          v-if="!remote"
           variant="quiet"
           size="row-action"
           class="session-archive hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
@@ -87,7 +90,13 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
         /></Button>
       </div>
     </ContextMenuTrigger>
-    <ContextMenuContent
+    <!-- 远程项目：右键菜单仅保留“打开”（契约 §2.4） -->
+    <ContextMenuContent v-if="remote">
+      <ContextMenuItem @select="emit('open', s)"
+        ><Link :size="14" class="size-auto shrink-0" />{{ t("workspace.open") }}</ContextMenuItem
+      ></ContextMenuContent
+    >
+    <ContextMenuContent v-else
       ><ContextMenuItem @select="emit('rename', s)"
         ><Pencil :size="14" class="size-auto shrink-0" />{{ t("workspace.rename") }}</ContextMenuItem
       ><ContextMenuItem @select="emit('duplicate', s)"

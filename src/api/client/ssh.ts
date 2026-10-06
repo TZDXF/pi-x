@@ -1,4 +1,5 @@
 import { invoke } from "../transport"
+import type { SessionMeta } from "./sessions"
 
 /** SSH 连接的最近一次探测缓存；仅 UI 展示与错误指引，spawn 不读缓存（契约 §2.3）。 */
 export interface SshProbeInfo {
@@ -32,7 +33,7 @@ export interface SshConnectionInput {
   keyPath?: string | null
 }
 
-export type SshErrorKind = "auth" | "network" | "sshMissing" | "remote" | "timeout"
+export type SshErrorKind = "auth" | "hostKey" | "network" | "sshMissing" | "remote" | "timeout"
 
 export interface SshProbeResult {
   ok: boolean
@@ -55,6 +56,10 @@ export const sshConnectionSave = (connection: SshConnectionInput) =>
 export const sshConnectionDelete = (id: string) => invoke<void>("ssh_connection_delete", { id })
 
 export const sshConnectionProbe = (id: string) => invoke<SshProbeResult>("ssh_connection_probe", { id })
+
+/** 远程项目会话列表（契约 §2.1）。project 为 `ssh://` 展示 URI，连接 id 与 rpc_spawn 同源。 */
+export const sshSessions = (project: string, sshConnectionId: string) =>
+  invoke<SessionMeta[]>("ssh_sessions", { project, sshConnectionId })
 
 /** 保存前的“测试连接”：参数即测，不写配置。 */
 export const sshProbeTarget = (target: {

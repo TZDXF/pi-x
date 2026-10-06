@@ -3,7 +3,8 @@ import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceGitInfo, Worksp
 import type { SessionStore } from "@/stores/session"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
-import { isSshProject, resolveSshConnectionId } from "@/lib/ssh"
+import { isSshProject } from "@/lib/ssh"
+import { requireSshConnectionId, loadTrustStatus, saveTrustDecision } from "@/lib/sshTrust"
 import { encodeCodedError } from "@/lib/backendError"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
@@ -20,6 +21,8 @@ interface StartupContext {
     | "spawnPi"
     | "trustStatus"
     | "trustSave"
+    | "sshTrustStatus"
+    | "sshTrustSave"
     | "saveConfig"
     | "pixLog"
   >
@@ -52,8 +55,18 @@ export function createWorkspaceStartup(context: StartupContext) {
     translateError: tBackendError,
   } = context
   const ui = { pushToast: context.pushToast }
-  const { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog } =
-    context.api
+  const {
+    prepareWorkspaceGit,
+    workspaceGitInfo,
+    killPi,
+    spawnPi,
+    trustStatus,
+    trustSave,
+    sshTrustStatus,
+    sshTrustSave,
+    saveConfig,
+    pixLog,
+  } = context.api
   const { sessionFor, uiFor, activeRuntimeId } = context.conversations
   const runtimeWorkspaces = new Map<string, string>()
   function contextFor(dir: string): WorkspaceContext | undefined {
@@ -68,10 +81,7 @@ export function createWorkspaceStartup(context: StartupContext) {
   }
   /** 远程项目的 spawn 必须携带连接 id；SSH 连接是连接细节的唯一权威来源（契约 §3.1）。 */
   function sshConnectionIdFor(dir: string): string {
-    const connectionId = resolveSshConnectionId(dir, config.value.sshConnections ?? [])
-    if (!connectionId)
-      throw new Error(encodeCodedError("sshConnectionMissing", "远程项目没有匹配的 SSH 连接，请在设置中检查连接配置"))
-    return connectionId
+    return requireSshConnectionId(dir, config.value.sshConnections ?? [])
   }
   async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
     // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
@@ -98,17 +108,31 @@ export function createWorkspaceStartup(context: StartupContext) {
   }
   async function decideWorkspaceTrust(trusted: boolean, trustParent: boolean) {
     try {
-      if (workspaceTrust.value) await trustSave(workspaceTrust.value.projectPath, trusted, trustParent)
+      if (workspaceTrust.value) {
+        // 远程项目经 ssh_trust_save 落到远端（契约 §4.3）；sshTrustProject 由
+        // requestWorkspaceTrust 记录，本地决策为 null。
+        const sshProject = sshTrustProject
+        sshTrustProject = null
+        await saveTrustDecision(
+          sshProject ?? "",
+          workspaceTrust.value.projectPath,
+          trusted,
+          trustParent,
+          config.value.sshConnections ?? [],
+          { trustSave, sshTrustSave },
+        )
+      }
       finishWorkspaceTrust(trusted)
     } catch (e) {
-      ui.pushToast(String(e), "error")
+      ui.pushToast(tBackendError(String(e)), "error")
       finishWorkspaceTrust(false)
     }
   }
-  function requestWorkspaceTrust(status: TrustStatus): Promise<boolean> {
+  function requestWorkspaceTrust(status: TrustStatus, sshProject?: string | null): Promise<boolean> {
     return new Promise(resolve => {
       // Only one startup can own the dialog; reject an abandoned previous request.
       finishWorkspaceTrust(false)
+      sshTrustProject = sshProject ?? null
       resolveWorkspaceTrust = resolve
       workspaceTrust.value = status
     })
@@ -116,6 +140,8 @@ export function createWorkspaceStartup(context: StartupContext) {
   // Cache successful creation before later initialization/trust steps. Retrying a
   // failed first send must reuse its checkout, not create another one.
   const preparedWorkspaces = new Map<string, { key: string; path: string }>()
+  /** 弹信任框期间的远程项目 URI：远程决策经 ssh_trust_save 保存（契约 §4.3）。 */
+  let sshTrustProject: string | null = null
   /** 单屏入口：始终启动当前激活会话。 */
   async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
     return startSession(activeRuntimeId.value, selection)
@@ -163,13 +189,14 @@ export function createWorkspaceStartup(context: StartupContext) {
       // The user explicitly picked this folder, so lift any earlier removal marker.
       workspace.unremoveProject(path)
       await workspace.rememberWorkspace(path, knownInfo)
-      // 远程项目 P1 跳过信任决策，直接 spawn（契约 §4.2）。
-      if (!isSshProject(path)) {
-        const status = await trustStatus(path)
-        if (status.needsDecision) {
-          const allowed = await requestWorkspaceTrust(status)
-          if (!allowed) return false
-        }
+      // 远程项目走远程信任命令（契约 §4.3）；本地照旧。
+      const status = await loadTrustStatus(path, config.value.sshConnections ?? [], {
+        trustStatus,
+        sshTrustStatus,
+      })
+      if (status.needsDecision) {
+        const allowed = await requestWorkspaceTrust(status, isSshProject(path) ? path : null)
+        if (!allowed) return false
       }
       // Completion may already have started an empty worker in the original cwd.
       // Reuse the conversation identity (and composer), but never that old worker.

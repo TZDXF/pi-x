@@ -55,9 +55,9 @@ test("grouped sidebar state aggregates every folder before hiding the session li
   // 所有目录都缺失时才隐藏整组列表。
   const allMissing = stateOf(["C:/repo", "C:/b"], { "C:/repo": "missing", "C:/b": "missing" }, {}, {})
   expect(allMissing).toMatchObject({ error: "missing", hidden: true, hasHistory: false })
-  // 远程项目标记 unavailable（P1 无会话历史，契约 §5）。
+  // 远程项目标记 remote（P2 起会话历史经 ssh_sessions 可用，契约 §2.4）。
   const remote = stateOf(["ssh://dev@host/proj"], {}, {}, {}, "ssh://dev@host/proj")
-  expect(remote).toMatchObject({ unavailable: true, hidden: false, hasHistory: false })
+  expect(remote).toMatchObject({ remote: true, hidden: false, hasHistory: false })
   // 全部目录加载失败才显示整组重试入口。
   const allFailed = stateOf(["C:/repo", "C:/b"], { "C:/repo": "failed", "C:/b": "failed" }, {}, { "C:/repo": [] })
   expect(allFailed).toMatchObject({ listError: "failed", hidden: false })

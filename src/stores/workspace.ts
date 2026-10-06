@@ -3,7 +3,16 @@ import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { isSshProject, forgetSshProjectConnection } from "@/lib/ssh"
-import { listSessions, pixLog, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
+import { requireSshConnectionId } from "@/lib/sshTrust"
+import {
+  listSessions,
+  pixLog,
+  resolveProjectlessDir,
+  updateSession,
+  sshConnectionList,
+  sshSessions,
+  type SessionMeta,
+} from "@/api/piClient"
 import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
 import { invoke } from "@/api/transport"
 
@@ -35,6 +44,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
+  /** 远程项目会话列表的加载状态（契约 §2.4），驱动侧栏刷新按钮 spinner。 */
+  const remoteSessionsLoading = ref<Record<string, boolean>>({})
   /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
   const projectless = ref("")
   const projectlessDefault = ref("")
@@ -385,10 +396,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
-    // 远程项目不做本地扫盘（契约 §5）：历史为空，侧栏展示空态文案。
+    // 远程项目走 ssh_sessions 远程列表（契约 §2.4）；失败置空并上抛由调用方 toast。
     if (isSshProject(path)) {
-      versions[path] = (versions[path] || 0) + 1
-      histories.value[path] = []
+      const version = (versions[path] = (versions[path] || 0) + 1)
+      remoteSessionsLoading.value[path] = true
+      try {
+        const connectionId = requireSshConnectionId(path, await sshConnectionList())
+        const rows = await sshSessions(path, connectionId)
+        if (versions[path] === version) {
+          histories.value[path] = rows
+          applySessionOrder(path)
+        }
+      } catch (error) {
+        if (versions[path] === version) histories.value[path] = []
+        throw error
+      } finally {
+        remoteSessionsLoading.value[path] = false
+      }
       return
     }
     const version = (versions[path] = (versions[path] || 0) + 1)
@@ -482,6 +506,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     isRemovedProject,
     unremoveProject,
     histories,
+    remoteSessionsLoading,
     reorderSessions,
     remember,
     refresh,

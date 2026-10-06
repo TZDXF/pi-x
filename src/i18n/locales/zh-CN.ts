@@ -476,6 +476,7 @@ export default {
     archived: "已归档",
     rename: "重命名",
     restore: "恢复会话",
+    open: "打开",
     archive: "归档会话",
     sessionActions: "会话操作",
     duplicate: "复制会话",
@@ -614,9 +615,10 @@ export default {
     probeFailed: "连接失败",
     lastProbe: "上次测试",
     lastProbeAt: "上次测试时间：{time}",
-    sessionHistoryUnavailable: "SSH 远程项目的会话历史暂不可用（P1）。",
     fileToolsUnavailable: "SSH 远程项目暂不支持本地文件浏览与搜索。",
     gitUnavailable: "SSH 远程项目暂不支持分支与工作树操作。",
+    remoteSessionsEmpty: "远程主机上暂无会话记录",
+    sessionsRefresh: "刷新远程会话",
   },
 
   trust: {
@@ -1451,5 +1453,13 @@ export default {
     sshConnectionInvalid: "SSH 连接配置无效: {detail}",
     sshWorkspaceUnsupported: "SSH 远程项目暂不支持多目录工作区",
     sshRemotePiMissing: "远程主机未安装 pi。请先在远程主机上安装 pi CLI（需要 Node.js）。",
+    sshHostKeyUnverified:
+      "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
+    sshHostKeyChanged:
+      "远程主机指纹与 known_hosts 记录不一致，可能是主机重装或中间人攻击。核实后在 ~/.ssh/known_hosts 中删除该主机条目再重试。",
+    sshSdkDistMissing:
+      "未找到远程 pi 的 SDK 安装目录，无法执行远程信任操作。请确认远程主机已完整安装 pi。",
+    sshTrustFailed: "远程信任操作失败: {detail}",
+    sshRemoteFailed: "远程操作失败: {detail}",
   },
 }

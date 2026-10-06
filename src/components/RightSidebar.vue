@@ -42,8 +42,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const addOpen = ref(false)
-// 远程项目 P1 不支持本地文件浏览与终端（契约 §5），相关入口整体隐藏。
-const localOnlyAvailable = computed(() => !isSshProject(props.project))
+// 远程项目不支持本地文件浏览（契约 §5）；终端自 P2 起经 ssh -tt 开放（契约 §3.4）。
+const filesAvailable = computed(() => !isSshProject(props.project))
 function iconFor(type: SidebarTabType) {
   return type === "review" ? FileCode : type === "files" ? FolderTree : type === "browser" ? Globe : SquareTerminal
 }
@@ -296,7 +296,7 @@ onBeforeUnmount(() => {
                 <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
               </Button>
               <Button
-                v-if="localOnlyAvailable"
+                v-if="filesAvailable"
                 type="button"
                 variant="ghost"
                 size="sm"
@@ -306,7 +306,6 @@ onBeforeUnmount(() => {
                 <FolderTree class="size-4 shrink-0" />{{ t("sidebarTabs.newFiles") }}
               </Button>
               <Button
-                v-if="localOnlyAvailable"
                 type="button"
                 variant="ghost"
                 size="sm"
@@ -368,7 +367,7 @@ onBeforeUnmount(() => {
             <FileCode class="size-6 shrink-0" />{{ t("sidebarTabs.newReview") }}
           </Button>
           <Button
-            v-if="localOnlyAvailable"
+            v-if="filesAvailable"
             type="button"
             variant="outline"
             size="lg"
@@ -378,7 +377,6 @@ onBeforeUnmount(() => {
             <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
           </Button>
           <Button
-            v-if="localOnlyAvailable"
             type="button"
             variant="outline"
             size="lg"

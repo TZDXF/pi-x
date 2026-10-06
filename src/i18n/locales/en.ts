@@ -492,6 +492,7 @@ export default {
     archived: "Archived",
     rename: "Rename",
     restore: "Restore chat",
+    open: "Open",
     archive: "Archive chat",
     sessionActions: "Chat actions",
     duplicate: "Duplicate chat",
@@ -633,9 +634,10 @@ export default {
     probeFailed: "Connection failed",
     lastProbe: "Last test",
     lastProbeAt: "Last tested: {time}",
-    sessionHistoryUnavailable: "Session history is not available for SSH remote projects (P1).",
     fileToolsUnavailable: "Local file browsing and search are not available for SSH remote projects yet.",
     gitUnavailable: "Branch and worktree operations are not available for SSH remote projects yet.",
+    remoteSessionsEmpty: "No sessions on the remote host yet",
+    sessionsRefresh: "Refresh remote sessions",
   },
 
   trust: {
@@ -1499,5 +1501,13 @@ export default {
     sshConnectionInvalid: "Invalid SSH connection profile: {detail}",
     sshWorkspaceUnsupported: "Multi-folder workspaces are not supported for SSH remote projects yet",
     sshRemotePiMissing: "pi is not installed on the remote host. Install the pi CLI there first (requires Node.js).",
+    sshHostKeyUnverified:
+      "The host key has not been verified yet. SSH into the host manually once in a terminal to confirm its fingerprint, then retry.",
+    sshHostKeyChanged:
+      "The remote host fingerprint no longer matches ~/.ssh/known_hosts — the host may have been reinstalled, or this could be a man-in-the-middle attack. Verify it, remove the host's entry from ~/.ssh/known_hosts, then retry.",
+    sshSdkDistMissing:
+      "Could not find the SDK installation directory of remote pi; the remote trust operation cannot run. Make sure pi is fully installed on the remote host.",
+    sshTrustFailed: "Remote trust operation failed: {detail}",
+    sshRemoteFailed: "Remote operation failed: {detail}",
   },
 }
