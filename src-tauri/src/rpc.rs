@@ -24,6 +24,9 @@ use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 pub use child::{SshSpawnSpec, SpawnProgram};
+// 仅实机集成测试（S-R1，`#[ignore]`）消费；对齐 commands/mod.rs 的既有做法。
+#[allow(unused_imports)]
+pub(crate) use child::{PathRebind, resolve_path_rebind};
 use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.

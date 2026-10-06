@@ -440,27 +440,26 @@ async fn process_spawn_impl(
             state.generation.fetch_add(1, Ordering::Relaxed);
             return Err(message);
         }
-        // 路径别名回绑（契约 §3.8）：重连（--session）spawn 成功后，一次 exec
-        // realpath 归一化远端路径，防 /home/dev 与 /dev 符号链接别名导致身份漂移；
-        // 与 URI path 不同则发 pi://sshPathBound 供前端更新展示。失败不阻塞 spawn。
-        if session_file.is_some() {
-            if let SpawnProgram::Ssh(spec) = program {
-                let rebind_sink = sink.clone();
-                let rebind_runtime_id = state.runtime_id.clone();
-                let rebind_endpoint = spec.endpoint.clone();
-                let rebind_project = project.to_string();
-                let rebind_path = spec.remote_path.clone();
-                tokio::spawn(async move {
-                    rebind_remote_path(
-                        &*rebind_sink,
-                        &rebind_runtime_id,
-                        &rebind_endpoint,
-                        &rebind_project,
-                        &rebind_path,
-                    )
-                    .await;
-                });
-            }
+        // 路径别名回绑（契约 §3.8 / P2 §1.1）：所有远程 spawn（含新建）就绪后
+        // 都执行回绑检查，一次 exec realpath 归一化远端路径，防 /home/dev 与
+        // /dev 符号链接别名导致身份漂移；与 URI path 不同则发
+        // pi://sshPathBound 供前端更新展示。失败不阻塞 spawn、不发事件。
+        if let SpawnProgram::Ssh(spec) = program {
+            let rebind_sink = sink.clone();
+            let rebind_runtime_id = state.runtime_id.clone();
+            let rebind_endpoint = spec.endpoint.clone();
+            let rebind_project = project.to_string();
+            let rebind_path = spec.remote_path.clone();
+            tokio::spawn(async move {
+                rebind_remote_path(
+                    &*rebind_sink,
+                    &rebind_runtime_id,
+                    &rebind_endpoint,
+                    &rebind_project,
+                    &rebind_path,
+                )
+                .await;
+            });
         }
     }
 
@@ -490,9 +489,57 @@ fn parse_realpath_output(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 重连 spawn 成功后的 realpath 回绑（契约 §3.8）：一次 exec（10s 超时），
-/// 解析失败或路径未变只记日志；路径变化则用回绑后的 path 重建展示 URI
-/// 并发 `pi://sshPathBound`，供前端 `workspace.remember` 更新展示。
+/// realpath 回绑解析结果（契约 §3.8 / P2 §1.1）。独立于事件发射，
+/// 供实机集成测试（S-R1）直接驱动。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PathRebind {
+    /// realpath 与原路径一致，无需回绑。
+    Unchanged,
+    /// 路径有差异：`resolved` 为归一化后的远端物理路径，`rebound_project`
+    /// 为用 `resolved` 回绑重建的 `ssh://` 展示 URI。
+    Rebound {
+        resolved: String,
+        rebound_project: String,
+    },
+}
+
+/// realpath 回绑解析（契约 §3.8）：一次 exec（10s 超时），解析失败或路径
+/// 未变返回 `Unchanged`/`Err`（原因供日志），路径变化则重建展示 URI。
+pub(crate) async fn resolve_path_rebind(
+    endpoint: &SshEndpoint,
+    project: &str,
+    remote_path: &str,
+) -> Result<PathRebind, String> {
+    let output = crate::ssh::ssh_exec(
+        endpoint,
+        &realpath_script(remote_path),
+        Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| e.detail)?;
+    let Some(resolved) = parse_realpath_output(&output.stdout) else {
+        return Err("empty output".to_string());
+    };
+    if resolved == remote_path {
+        return Ok(PathRebind::Unchanged);
+    }
+    // 重建展示 URI：host/port/user 沿用原 URI 解析结果，仅替换归一化后的 path。
+    let rebound = crate::ssh::parse_ssh_uri(project).and_then(|mut target| {
+        target.path = resolved.clone();
+        crate::ssh::build_ssh_uri(&target).ok()
+    });
+    let Some(rebound_project) = rebound else {
+        return Err(format!("cannot rebuild URI for {resolved}"));
+    };
+    Ok(PathRebind::Rebound {
+        resolved,
+        rebound_project,
+    })
+}
+
+/// 远程 spawn（新建与重连）就绪后的 realpath 回绑（契约 §3.8 / P2 §1.1）：
+/// 解析失败或路径未变只记日志；路径变化则发 `pi://sshPathBound`，
+/// 供前端 `workspace.remember` 更新展示。
 async fn rebind_remote_path(
     sink: &dyn EventSink,
     runtime_id: &str,
@@ -501,45 +548,27 @@ async fn rebind_remote_path(
     remote_path: &str,
 ) {
     let started = Instant::now();
-    let output = match crate::ssh::ssh_exec(
-        endpoint,
-        &realpath_script(remote_path),
-        Duration::from_secs(10),
-    )
-    .await
-    {
-        Ok(output) => output,
-        Err(e) => {
+    let rebind = match resolve_path_rebind(endpoint, project, remote_path).await {
+        Ok(rebind) => rebind,
+        Err(reason) => {
             crate::logs::write(
                 runtime_id,
-                &format!("realpath rebind skipped (ignored): {}", e.detail),
+                &format!("realpath rebind skipped (ignored): {reason}"),
             );
             return;
         }
     };
-    let Some(resolved) = parse_realpath_output(&output.stdout) else {
-        crate::logs::write(runtime_id, "realpath rebind skipped: empty output");
-        return;
-    };
-    if resolved == remote_path {
+    let PathRebind::Rebound {
+        resolved,
+        rebound_project,
+    } = rebind
+    else {
         crate::logs::write(
             runtime_id,
             &format!(
-                "realpath rebind: path unchanged ({resolved}) in {}ms",
+                "realpath rebind: path unchanged in {}ms",
                 started.elapsed().as_millis()
             ),
-        );
-        return;
-    }
-    // 重建展示 URI：host/port/user 沿用原 URI 解析结果，仅替换归一化后的 path。
-    let rebound = crate::ssh::parse_ssh_uri(project).and_then(|mut target| {
-        target.path = resolved.clone();
-        crate::ssh::build_ssh_uri(&target).ok()
-    });
-    let Some(rebound) = rebound else {
-        crate::logs::write(
-            runtime_id,
-            &format!("realpath rebind skipped: cannot rebuild URI for {resolved}"),
         );
         return;
     };
@@ -550,7 +579,7 @@ async fn rebind_remote_path(
     sink.emit(
         SSH_PATH_BOUND_EVENT,
         runtime_id,
-        json!({ "runtimeId": runtime_id, "project": rebound, "path": resolved }),
+        json!({ "runtimeId": runtime_id, "project": rebound_project, "path": resolved }),
     );
 }
 
@@ -635,9 +664,23 @@ fn ssh_exit_error(status: ExitStatus, stderr_tail: &str) -> String {
         _ => {
             let stderr = stderr_tail.trim();
             match classify_failure(code, stderr) {
+                // 契约 P2 §5.1：host key 两类场景从 auth 中细分，给可操作文案。
+                SshErrorKind::HostKey => {
+                    if stderr.to_lowercase().contains("remote host identification has changed") {
+                        pix_error(
+                            "sshHostKeyChanged",
+                            "远程主机指纹与 known_hosts 记录不一致，可能是主机重装或中间人攻击。核实后在 ~/.ssh/known_hosts 中删除该主机条目再重试。",
+                        )
+                    } else {
+                        pix_error(
+                            "sshHostKeyUnverified",
+                            "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
+                        )
+                    }
+                }
                 SshErrorKind::Auth => pix_error(
                     "sshAuthFailed",
-                    "SSH 认证失败。请检查密钥或 agent；若为主机指纹校验失败，请先在终端手动 ssh 一次该主机。",
+                    "SSH 认证失败。请检查密钥或 agent。",
                 ),
                 SshErrorKind::Network => pix_error(
                     "sshConnectFailed",
@@ -836,6 +879,20 @@ mod ssh_exit_error_tests {
         let coded = ssh_exit_error(status_with_code(1), "");
         assert!(coded.contains("sshProbeFailed"), "{coded}");
         assert!(coded.contains("1"));
+    }
+
+    #[test]
+    fn host_key_failures_map_to_operable_coded_errors() {
+        // 契约 P2 §5.1/§5.2：两段真实 stderr 文本（wsl-test-env.md 实机发现）。
+        let coded = ssh_exit_error(status_with_code(255), "Host key verification failed.");
+        assert!(coded.contains("sshHostKeyUnverified"), "{coded}");
+        let changed = concat!(
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+            "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n",
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+        );
+        let coded = ssh_exit_error(status_with_code(255), changed);
+        assert!(coded.contains("sshHostKeyChanged"), "{coded}");
     }
 }
 

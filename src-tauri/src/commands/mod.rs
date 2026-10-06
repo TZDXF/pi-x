@@ -43,7 +43,10 @@ pub use pi::{
 #[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
 #[allow(unused_imports)]
-pub use ssh::{ssh_connection_delete, ssh_connection_list, ssh_connection_probe, ssh_connection_save, ssh_probe_target};
+pub use ssh::{
+    ssh_connection_delete, ssh_connection_list, ssh_connection_probe, ssh_connection_save,
+    ssh_probe_target, ssh_trust_save, ssh_trust_status,
+};
 #[allow(unused_imports)]
 pub use workspace::WorkspaceContext;
 

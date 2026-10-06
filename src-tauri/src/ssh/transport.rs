@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use std::process::Stdio;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
 use super::payload::{wrap_payload, PROBE_SCRIPT};
@@ -57,7 +57,10 @@ pub struct SshError {
 pub enum SshErrorKind {
     /// 本机 spawn ssh 失败（未安装 ssh 客户端；Windows 为可选功能）。
     SshMissing,
-    /// 认证失败 / host key 校验失败。
+    /// 主机指纹校验失败（known_hosts 无记录或指纹变更），认证的细分
+    /// （契约 P2 §5.1）；coded error 由上层凭 stderr 关键词进一步二分。
+    HostKey,
+    /// 认证失败。
     Auth,
     /// 主机解析或网络连接失败。
     Network,
@@ -140,6 +143,36 @@ pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
     args
 }
 
+/// 纯函数：交互终端（`ssh -tt`）的参数数组（契约 P2 §3.3，由终端 agent 消费）。
+/// 与 [`build_ssh_args`] 的差别仅两处：去掉 `-o BatchMode=yes`（交互终端允许
+/// 密码 / host key 提示浮出）、在选项组后追加 `-tt`（强制分配远端 PTY，
+/// 本地 SIGWINCH 经 ssh 转发为远端 PTY 尺寸变更）。其余选项与目的地构造照旧。
+pub fn build_ssh_args_interactive(endpoint: &SshEndpoint) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ConnectTimeout=10",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    args.push("-tt".to_string());
+    args.push("-p".to_string());
+    args.push(endpoint.port.to_string());
+    if let Some(key_path) = &endpoint.key_path {
+        args.push("-i".to_string());
+        args.push(key_path.clone());
+    }
+    match &endpoint.user {
+        Some(user) => args.push(format!("{user}@{}", endpoint.host)),
+        None => args.push(endpoint.host.clone()),
+    }
+    args
+}
+
 /// 纯函数：完整本地命令 `(程序, 参数数组)`。
 /// 远端命令恒为最后一个 argv 元素（单元素，内部含引号是刻意设计）。
 pub fn build_ssh_command(endpoint: &SshEndpoint, remote_command: &str) -> (String, Vec<String>) {
@@ -151,17 +184,22 @@ pub fn build_ssh_command(endpoint: &SshEndpoint, remote_command: &str) -> (Strin
     (parts[0].clone(), args)
 }
 
-/// 按契约 §2.4 把退出码 + stderr 归一化为 errorKind。
+/// 按契约 §2.4 / P2 §5.1 把退出码 + stderr 归一化为 errorKind。
+/// host key 两类错误在 auth 关键词之前判定（任意退出码 + stderr 小写匹配）。
 pub fn classify_failure(exit_code: i32, stderr: &str) -> SshErrorKind {
     let lower = stderr.to_lowercase();
+    // 指纹变更：known_hosts 中的记录与远端不一致（主机重装或中间人）。
+    if lower.contains("remote host identification has changed") {
+        return SshErrorKind::HostKey;
+    }
+    // BatchMode 下 known_hosts 无记录时的报错。
+    if lower.contains("host key verification failed") {
+        return SshErrorKind::HostKey;
+    }
     if exit_code == 255
-        && [
-            "permission denied",
-            "host key verification failed",
-            "publickey",
-        ]
-        .iter()
-        .any(|keyword| lower.contains(keyword))
+        && ["permission denied", "publickey"]
+            .iter()
+            .any(|keyword| lower.contains(keyword))
     {
         return SshErrorKind::Auth;
     }
@@ -224,17 +262,50 @@ pub async fn ssh_exec(
     script: &str,
     timeout: Duration,
 ) -> Result<ExecOutput, SshError> {
+    exec_remote(endpoint, script, None, timeout).await
+}
+
+/// 带 stdin 数据的一次性 exec（上传 pi_data.mjs / 投递信任请求 JSON，
+/// 契约 P2 §4.1）：写完即 shutdown（EOF 结束远端 `cat`），输出收取同 [`ssh_exec`]。
+pub async fn ssh_exec_with_stdin(
+    endpoint: &SshEndpoint,
+    script: &str,
+    stdin_data: &[u8],
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
+    exec_remote(endpoint, script, Some(stdin_data.to_vec()), timeout).await
+}
+
+/// `ssh_exec` / `ssh_exec_with_stdin` 的共用实现：`stdin_data` 存在时写入
+/// child stdin 后 EOF；写失败（远端提前退出断开管道）不致命，结果由
+/// 退出码 + stderr 判定。
+async fn exec_remote(
+    endpoint: &SshEndpoint,
+    script: &str,
+    stdin_data: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
     let remote_command = wrap_payload(script);
     let mut command = build_command(endpoint, &remote_command);
     let mut child = command.spawn().map_err(spawn_error)?;
+    let mut stdin = child.stdin.take().expect("ssh stdin is piped");
     let mut stdout = child.stdout.take().expect("ssh stdout is piped");
     let mut stderr = child.stderr.take().expect("ssh stderr is piped");
     // 超时后 future 被 drop，kill_on_drop 负责杀掉 ssh 子进程。
     let waited = tokio::time::timeout(timeout, async move {
         let mut out_buf = Vec::new();
         let mut err_buf = Vec::new();
+        let stdin_write = async {
+            if let Some(data) = stdin_data {
+                // 写失败仅标记，远端失败经由退出码/stderr 归类。
+                let _ = stdin.write_all(&data).await;
+            }
+            // 必须显式 drop：tokio 进程管道的 shutdown 只 flush 不 half-close，
+            // 远端 `cat` 依赖管道写端关闭（EOF）结束。
+            drop(stdin);
+        };
         let (out_result, err_result, wait_result) = tokio::join!(
-            stdout.read_to_end(&mut out_buf),
+            async { stdin_write.await; stdout.read_to_end(&mut out_buf).await },
             stderr.read_to_end(&mut err_buf),
             child.wait(),
         );
@@ -316,13 +387,18 @@ fn summarize_failure(exit_code: i32, stderr: &str) -> String {
 pub trait SshTransport: Send + Sync {
     /// 探测远端平台与 node/pi 安装情况（单次 exec，30s 超时）。
     fn probe(&self) -> impl Future<Output = Result<RemoteProbe, SshError>> + Send;
-    /// 一次性远端命令。
+    /// 一次性远端命令。契约 P1 §1.4 冻结 API，P4 russh 后端启用
+    /// （P2 调用方继续用自由函数 `ssh_exec`/`ssh_exec_with_stdin`）。
+    #[allow(dead_code)]
     fn exec(
         &self,
         script: &str,
         timeout: Duration,
     ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
     /// 长驻流（`pi --mode rpc`），返回本地 ssh 子进程。
+    /// 契约 P1 §1.4 冻结 API，P4 russh 后端启用（P2 调用方用自由函数
+    /// `ssh_exec_stream`）。
+    #[allow(dead_code)]
     fn exec_stream(&self, script: &str)
         -> impl Future<Output = Result<Child, SshError>> + Send;
 }
@@ -387,6 +463,17 @@ pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 实机测试（过滤器 `ssh_real`）的进程内串行锁：WSL 测试环境是单 sshd +
+/// WSL2 localhost 转发，9 个用例并发开连接时实测会触发 `banner exchange:
+/// Connection refused`（sshd 默认 MaxStartups=10 丢弃超量未认证连接），
+/// 且信任组用例共享远端 `~/.pix/pi_data.mjs` 与固定临时名，并发上传会破坏
+/// S-R5 的 mtime 断言与上传脚本的 cat→mv 原子序列。实机用例统一先取此锁。
+#[cfg(test)]
+pub(crate) fn ssh_real_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[cfg(test)]
 mod tests {
@@ -486,10 +573,6 @@ mod tests {
             SshErrorKind::Auth
         );
         assert_eq!(
-            classify_failure(255, "Host key verification failed."),
-            SshErrorKind::Auth
-        );
-        assert_eq!(
             classify_failure(255, "ssh: Could not resolve hostname host: Name or service not known"),
             SshErrorKind::Network
         );
@@ -502,6 +585,55 @@ mod tests {
             SshErrorKind::Remote
         );
         assert_eq!(classify_failure(90, ""), SshErrorKind::Remote);
+    }
+
+    #[test]
+    fn classify_failure_maps_host_key_errors_before_auth() {
+        // 契约 P2 §5.1：两段真实 stderr 文本（wsl-test-env.md 实机发现）。
+        assert_eq!(
+            classify_failure(255, "Host key verification failed."),
+            SshErrorKind::HostKey
+        );
+        let changed = concat!(
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+            "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n",
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+            "IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\n"
+        );
+        assert_eq!(classify_failure(255, changed), SshErrorKind::HostKey);
+        // 任意退出码 + stderr 小写匹配同样命中（契约 P2 §5.1 第 2 条）。
+        assert_eq!(classify_failure(1, changed), SshErrorKind::HostKey);
+        // auth 关键词不再吞掉 host key 场景。
+        assert_ne!(
+            classify_failure(255, "Host key verification failed."),
+            SshErrorKind::Auth
+        );
+    }
+
+    #[test]
+    fn build_ssh_args_interactive_differs_only_by_batch_mode_and_tty() {
+        let mut endpoint = endpoint();
+        endpoint.key_path = Some("/home/dev/id_ed25519".to_string());
+        assert_eq!(
+            build_ssh_args_interactive(&endpoint),
+            vec![
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "ConnectTimeout=10",
+                "-tt",
+                "-p",
+                "2222",
+                "-i",
+                "/home/dev/id_ed25519",
+                "dev@host.example.com",
+            ]
+        );
+        // 交互分支不使用 BatchMode（密码/host key 提示必须能浮出）。
+        assert!(!build_ssh_args_interactive(&endpoint).contains(&"BatchMode=yes".to_string()));
+        assert!(build_ssh_args(&endpoint).contains(&"BatchMode=yes".to_string()));
     }
 
     #[test]
@@ -565,6 +697,30 @@ mod tests {
         assert_eq!(output.exit_code, 0);
         assert_eq!(output.stdout.trim_end(), wrap_payload("echo hi"));
         assert_eq!(output.stderr, "");
+    }
+
+    #[tokio::test]
+    async fn ssh_exec_with_stdin_carries_stdin_without_real_ssh() {
+        // 端到端验证 stdin 通道：注入 node 作为 mock ssh，把 stdin 原样
+        // 转发到 stdout（模拟远端 `cat > file`）。
+        let Some(node) = find_program("node") else {
+            eprintln!("跳过：开发环境未找到 node");
+            return;
+        };
+        if node.to_string_lossy().contains(' ') {
+            eprintln!("跳过：node 路径含空白，无法经 PIX_SSH_COMMAND 注入");
+            return;
+        }
+        let _guard = lock_env();
+        std::env::set_var(
+            "PIX_SSH_COMMAND",
+            format!("{} -e process.stdin.pipe(process.stdout) --", node.display()),
+        );
+        let result = ssh_exec_with_stdin(&endpoint(), "cat > out", b"mjs-bytes-123", Duration::from_secs(30)).await;
+        std::env::remove_var("PIX_SSH_COMMAND");
+        let output = result.expect("mock ssh exec_with_stdin 应成功");
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout, "mjs-bytes-123");
     }
 
     #[tokio::test]

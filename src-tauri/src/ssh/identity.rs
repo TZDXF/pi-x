@@ -8,7 +8,8 @@
 
 /// 展示 URI 前缀（小写字面量）。
 pub const SSH_URI_PREFIX: &str = "ssh://";
-/// 内部身份键前缀。
+/// 内部身份键前缀。契约 P1 §1.4 冻结 API，P4 身份快照持久化启用。
+#[allow(dead_code)]
 pub const IDENTITY_KEY_PREFIX: &str = "remote:ssh:";
 /// 缺省 SSH 端口。
 pub const DEFAULT_PORT: u16 = 22;
@@ -92,6 +93,8 @@ pub fn build_ssh_uri(target: &SshTarget) -> Result<String, String> {
 
 /// 构造内部身份键：`remote:ssh:<host>:<port>:<user>:<path>`。
 /// user 为 `None` 时写空串；host/user/path 任一含 `:` 时报错。
+/// 契约 P1 §1.4 冻结 API，P4 身份快照持久化启用。
+#[allow(dead_code)]
 pub fn identity_key(target: &SshTarget) -> Result<String, String> {
     let host = normalize_host(&target.host)?;
     require_port(target.port)?;
@@ -108,6 +111,8 @@ pub fn identity_key(target: &SshTarget) -> Result<String, String> {
 
 /// 解析内部身份键；user 字段为空串还原为 `None`。
 /// path 必须已是归一化形式（否则拒绝，防止身份键被手拼绕过归一化）。
+/// 契约 P1 §1.4 冻结 API，P4 身份快照持久化启用。
+#[allow(dead_code)]
 pub fn parse_identity_key(key: &str) -> Option<SshTarget> {
     let rest = key.strip_prefix(IDENTITY_KEY_PREFIX)?;
     // path 不允许含 `:`，因此整键恰为 4 段。
