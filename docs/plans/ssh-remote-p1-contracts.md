@@ -256,11 +256,12 @@ pub async fn ssh_exec_stream(endpoint: &SshEndpoint, script: &str) -> Result<tok
 **远端命令包装**（最后一个 argv 元素，**单元素**传递，内部含引号是刻意设计）：
 
 ```
-/bin/sh -c 'echo <B64> | base64 -d | /bin/sh'
+/bin/sh -c 'eval "$(echo <B64> | base64 -d)"'
 ```
 
 - 外层 `/bin/sh -c '<单引号包裹>'` 规避 fish/csh 等非 POSIX 登录 shell（ZCode posixShell 经验，规划文档 §4）。
 - B64 字符集仅 `[A-Za-z0-9+/=]`，不含单引号，内层安全。
+- **P2 修订（2026-10-06，WSL 实机验证）**：初版帧格式为 `echo <B64> | base64 -d | /bin/sh`（脚本经 stdin 投递）。实测发现该格式下脚本内所有命令继承的 stdin 是 base64 管道而非 ssh 会话 stdin——远端 pi 的 RPC stdin、信任请求 JSON、交互终端 shell 全部会静默读到 EOF。改为 `eval` 在外层 shell 内展开执行后，脚本内命令的 stdin 即 ssh 会话 stdin；命令替换输出不会被二次展开，语义与 stdin 投递等价。
 - argv 各元素独立传递给 `tokio::process::Command`（本地不经任何 shell），符合仓库"独立参数"约定；远端两段式 sh 管道是数据流而非本地拼接命令。
 - `-p` 恒定传递（含 22），保证参数序列确定、可测。
 
