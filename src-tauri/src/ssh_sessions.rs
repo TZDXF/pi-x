@@ -1,8 +1,9 @@
-//! 远程项目会话列表（契约 `docs/plans/ssh-remote-p2-contracts.md` §2）。
+//! 远程项目会话列表（契约 `docs/plans/ssh-remote-p2-contracts.md` §2 与
+//! 多后端契约 §5.2）。
 //!
-//! 单次 ssh exec 扫描远端 `~/.pi/agent/sessions/` 元数据：远端脚本
-//! （[`ssh::payload::SESSIONS_SCRIPT`]）输出 `PIX_SESSION_*` 标签行并以
-//! `PIX_SESSIONS_DONE` 收尾，本模块解析为 [`crate::sessions::SessionMeta`]
+//! 单次 exec 扫描远端 `~/.pi/agent/sessions/` 元数据（三后端同一脚本）：
+//! 远端脚本（[`ssh::payload::SESSIONS_SCRIPT`]）输出 `PIX_SESSION_*` 标签行
+//! 并以 `PIX_SESSIONS_DONE` 收尾，本模块解析为 [`crate::sessions::SessionMeta`]
 //! （前端类型零改动消费）。本地会话命令（`sessions.rs`）零改动。
 
 use std::time::Duration;
@@ -11,16 +12,17 @@ use serde_json::Value;
 
 use crate::errors::pix_error_detail;
 use crate::sessions::SessionMeta;
-use crate::ssh::transport::{ssh_exec, SshEndpoint};
+use crate::ssh::backend::RemoteEndpoint;
 use crate::ssh::payload;
+use crate::ssh::transport::remote_exec;
 
 /// exec 超时（契约 P2 §2.1：20s）。
 const SESSIONS_EXEC_TIMEOUT: Duration = Duration::from_secs(20);
 /// 返回条数上限（对齐本地 `sessions::MAX_SESSIONS`）。
 const MAX_SESSIONS: usize = 50;
 
-/// 远程项目会话列表。`project` 为 `ssh://` 展示 URI，`sshConnectionId` 为
-/// 连接 id（与 `rpc_spawn` 的 sshConnectionId 同源，连接细节的唯一权威来源）。
+/// 远程项目会话列表。`project` 为远程展示 URI（ssh/wsl/docker），`sshConnectionId`
+/// 为连接 id（与 `rpc_spawn` 的 sshConnectionId 同源，连接细节的唯一权威来源）。
 /// 返回类型复用 `sessions::SessionMeta`；校验链对齐 `spawn_remote`
 /// （parse/mismatch/notFound/missing，见 `commands::ssh::resolve_ssh_connection`）。
 #[tauri::command]
@@ -30,18 +32,18 @@ pub async fn ssh_sessions(
 ) -> Result<Vec<SessionMeta>, String> {
     let (target, connection) =
         crate::commands::ssh::resolve_ssh_connection(&project, &ssh_connection_id)?;
-    scan_remote_sessions(&connection.to_endpoint(), &target.path).await
+    scan_remote_sessions(&connection.to_remote_endpoint(), target.path()).await
 }
 
 /// 扫描 + 解析：命令实现与实机集成测试（S-R2）共用的入口。
 pub(crate) async fn scan_remote_sessions(
-    endpoint: &SshEndpoint,
+    endpoint: &RemoteEndpoint,
     project_path: &str,
 ) -> Result<Vec<SessionMeta>, String> {
     let script = payload::build_sessions_script(project_path);
-    let output = ssh_exec(endpoint, &script, SESSIONS_EXEC_TIMEOUT)
+    let output = remote_exec(endpoint, &script, SESSIONS_EXEC_TIMEOUT)
         .await
-        .map_err(|e| crate::commands::ssh::ssh_error_coded(&e))?;
+        .map_err(|e| crate::commands::ssh::remote_error_coded(endpoint, &e))?;
     parse_sessions_output(&output.stdout, project_path).ok_or_else(|| {
         // 扫描成功但 DONE 标记缺失（超时/截断）→ coded error（契约 P2 §2.1）。
         pix_error_detail(
@@ -315,7 +317,10 @@ mod tests {
     // ---- 实机集成测试（契约 P2 §6）：需 WSL 测试环境（wsl-test-env.md）。
     // 运行：cargo test ssh_real -- --ignored（环境变量见 real_env）。
 
-    use crate::ssh::transport::ssh_exec_with_stdin;
+    use crate::ssh::backend::RemoteEndpoint;
+    use crate::ssh::transport::remote_exec_with_stdin;
+    use crate::ssh::SshEndpoint;
+    use crate::ssh::transport::remote_exec;
 
     struct RealEnv {
         endpoint: SshEndpoint,
@@ -369,9 +374,13 @@ mod tests {
             format!("ssh://{}@{}:{}{}", self.user, self.host, self.port, path)
         }
 
+        fn remote_endpoint(&self) -> RemoteEndpoint {
+            RemoteEndpoint::Ssh(self.endpoint.clone())
+        }
+
         async fn remote_home(&self) -> String {
-            let output = ssh_exec(
-                &self.endpoint,
+            let output = remote_exec(
+                &self.remote_endpoint(),
                 "echo \"PIX_TEST_HOME=$HOME\"\n",
                 Duration::from_secs(15),
             )
@@ -405,15 +414,15 @@ mod tests {
             payload::posix_quote(&env.project),
             payload::posix_quote(&alias)
         );
-        ssh_exec(&env.endpoint, &setup, Duration::from_secs(15))
+        remote_exec(&env.remote_endpoint(), &setup, Duration::from_secs(15))
             .await
             .expect("创建远端符号链接应成功");
         let uri = env.uri_for(&alias);
         let result =
-            crate::rpc::resolve_path_rebind(&env.endpoint, &uri, &alias).await;
+            crate::rpc::resolve_path_rebind(&env.remote_endpoint(), &uri, &alias).await;
         // 清理符号链接（不影响断言）。
-        let _ = ssh_exec(
-            &env.endpoint,
+        let _ = remote_exec(
+            &env.remote_endpoint(),
             &format!("rm -f {}\n", payload::posix_quote(&alias)),
             Duration::from_secs(15),
         )
@@ -441,8 +450,8 @@ mod tests {
         let home = env.remote_home().await;
         // 别名按用例独立命名，避免并行用例间的清理竞态。
         let alias = format!("{home}/pix-ssh-alias-r2");
-        ssh_exec(
-            &env.endpoint,
+        remote_exec(
+            &env.remote_endpoint(),
             &format!(
                 "ln -sfn {} {}\n",
                 payload::posix_quote(&env.project),
@@ -469,8 +478,8 @@ mod tests {
                 "mkdir -p \"$HOME/.pi/agent/sessions\" && cat > {}\n",
                 payload::posix_quote(file)
             );
-            let output = ssh_exec_with_stdin(
-                &env.endpoint,
+            let output = remote_exec_with_stdin(
+                &env.remote_endpoint(),
                 &script,
                 content.as_bytes(),
                 Duration::from_secs(15),
@@ -480,7 +489,7 @@ mod tests {
             assert_eq!(output.exit_code, 0);
         }
 
-        let metas = scan_remote_sessions(&env.endpoint, &env.project)
+        let metas = scan_remote_sessions(&env.remote_endpoint(), &env.project)
             .await
             .expect("扫描应成功");
         let main = metas
@@ -497,7 +506,7 @@ mod tests {
 
         // 别名 URI 查询：主会话（cwd=物理路径）经 PIX_SESSION_CWD 物理路径
         // 兜底收录，别名会话（cwd=别名路径）与 URI 路径直接相等收录。
-        let metas = scan_remote_sessions(&env.endpoint, &alias)
+        let metas = scan_remote_sessions(&env.remote_endpoint(), &alias)
             .await
             .expect("别名扫描应成功");
         assert!(
@@ -512,10 +521,10 @@ mod tests {
             payload::posix_quote(&file_alias),
             payload::posix_quote(&alias)
         );
-        ssh_exec(&env.endpoint, &cleanup, Duration::from_secs(15))
+        remote_exec(&env.remote_endpoint(), &cleanup, Duration::from_secs(15))
             .await
             .expect("清理远端临时文件应成功");
-        let metas = scan_remote_sessions(&env.endpoint, &env.project)
+        let metas = scan_remote_sessions(&env.remote_endpoint(), &env.project)
             .await
             .expect("再次扫描应成功");
         assert!(!metas.iter().any(|meta| meta.file == file_main));

@@ -23,7 +23,7 @@ use std::time::Instant;
 use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-pub use child::{SshSpawnSpec, SpawnProgram};
+pub use child::{RemoteSpawnSpec, SpawnProgram};
 // 仅实机集成测试（S-R1，`#[ignore]`）消费；对齐 commands/mod.rs 的既有做法。
 #[allow(unused_imports)]
 pub(crate) use child::{PathRebind, resolve_path_rebind};
@@ -240,7 +240,7 @@ pub async fn spawn(
         (Some(file), SpawnProgram::LocalPi(_)) => {
             Some(dunce::canonicalize(file).map_err(|e| e.to_string())?)
         }
-        (Some(file), SpawnProgram::Ssh(_)) => Some(PathBuf::from(file)),
+        (Some(file), SpawnProgram::Remote(_)) => Some(PathBuf::from(file)),
     };
     if let Some(path) = &session_key {
         for process in &snapshot {
@@ -259,7 +259,7 @@ pub async fn spawn(
                     .and_then(|f| dunce::canonicalize(f).ok())
                     .as_ref()
                     == Some(path),
-                SpawnProgram::Ssh(_) => response["data"]["sessionFile"]
+                SpawnProgram::Remote(_) => response["data"]["sessionFile"]
                     .as_str()
                     .is_some_and(|f| f == path.to_string_lossy()),
             };
@@ -318,9 +318,9 @@ fn resolve_export_path(response: &mut Value, project: &str) -> Result<(), String
     let Some(path) = response["data"]["path"].as_str() else {
         return Ok(());
     };
-    // ssh:// 远程项目：导出路径位于远端文件系统，本地无法 canonicalize，
-    // 原样返回 pi 给的路径作为防御性兜底（契约 §5）。
-    if crate::ssh::is_ssh_uri(project) {
+    // 远程项目（ssh/wsl/docker URI）：导出路径位于远端文件系统，本地无法
+    // canonicalize，原样返回 pi 给的路径作为防御性兜底（契约 §5）。
+    if crate::ssh::is_remote_uri(project) {
         return Ok(());
     }
     let absolute = dunce::canonicalize(Path::new(project).join(path))

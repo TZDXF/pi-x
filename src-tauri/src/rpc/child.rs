@@ -6,9 +6,10 @@ use super::{
     emit_process_event, write_line, ProcessState, CREATE_NO_WINDOW, EVENT, EXIT_EVENT,
     SSH_PATH_BOUND_EVENT, STDERR_EVENT,
 };
-use crate::errors::{pix_error, pix_error_detail};
+use crate::errors::pix_error;
 use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
-use crate::ssh::transport::{classify_failure, SshEndpoint, SshErrorKind};
+use crate::ssh::backend::RemoteEndpoint;
+use crate::ssh::transport::{classify_failure, SshError, SshErrorKind};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
@@ -37,25 +38,26 @@ impl EventSink for TauriEventSink {
     }
 }
 
-/// spawn 程序的两个分支（契约 §3.7）：本地 pi 直连，或经本地 ssh 客户端
-/// 中继远端 `pi --mode rpc`（stdout 同样是 JSONL，桥接层零改动）。
+/// spawn 程序的两个分支（契约 §3.7 与多后端契约 §5.1）：本地 pi 直连，或经
+/// 本地传输客户端（ssh / wsl.exe / docker）中继远端 `pi --mode rpc`
+/// （stdout 同样是 JSONL，桥接层零改动）。
 pub enum SpawnProgram {
     LocalPi(PiInfo),
-    Ssh(SshSpawnSpec),
+    Remote(RemoteSpawnSpec),
 }
 
-/// ssh 分支的 spawn 规格：endpoint 即连接配置展开后的权威来源，
+/// 远程分支的 spawn 规格：endpoint 即连接配置展开后的权威来源，
 /// `remote_path` 为项目 URI 解析出的远端绝对 POSIX 路径。
 #[derive(Clone, Debug)]
-pub struct SshSpawnSpec {
-    pub endpoint: SshEndpoint,
+pub struct RemoteSpawnSpec {
+    pub endpoint: RemoteEndpoint,
     pub remote_path: String,
 }
 
-/// 一次远程会话的 kill 兜底信息：本地 ssh 子进程被杀后，远端 pi 可能
+/// 一次远程会话的 kill 兜底信息：本地传输子进程被杀后，远端 pi 可能
 /// 因 stdin EOF 语义未实测而残留，保存 endpoint 与远端 pid 以便补刀。
 pub(super) struct RemoteSession {
-    pub(super) endpoint: SshEndpoint,
+    pub(super) endpoint: RemoteEndpoint,
     /// 由 stderr reader 从 `PIX_PI_PID=` 行回填（payload 在 exec 前打印）。
     pub(super) remote_pid: Arc<Mutex<Option<u32>>>,
 }
@@ -197,13 +199,13 @@ async fn process_spawn_impl(
     // 远程会话上下文：endpoint 供 kill 兜底，remote_pid 由 stderr reader 回填；
     // 本地分支用哑 Arc 占位以复用同一套 reader 装配代码。
     let remote = match program {
-        SpawnProgram::Ssh(spec) => Some(RemoteSession {
+        SpawnProgram::Remote(spec) => Some(RemoteSession {
             endpoint: spec.endpoint.clone(),
             remote_pid: Arc::new(Mutex::new(None)),
         }),
         SpawnProgram::LocalPi(_) => None,
     };
-    let is_ssh = remote.is_some();
+    let is_remote = remote.is_some();
     let remote_pid = remote
         .as_ref()
         .map(|r| r.remote_pid.clone())
@@ -259,18 +261,19 @@ async fn process_spawn_impl(
             cmd.creation_flags(CREATE_NO_WINDOW);
             cmd.spawn().map_err(|e| format!("failed to spawn pi: {e}"))?
         }
-        SpawnProgram::Ssh(spec) => {
-            // 远程分支（契约 §3.1）：不设 current_dir；builtin extensions 不注入
-            //（extra_args 为空），payload 经 base64 通道投递，本地不经任何 shell。
-            // P1 远程 extra args 恒为空，接口预留 Vec<String>。
+        SpawnProgram::Remote(spec) => {
+            // 远程分支（契约 §3.1 与多后端契约 §5.1）：不设 current_dir；builtin
+            // extensions 不注入（extra_args 为空），payload 经 base64 通道投递，
+            // 本地不经任何 shell（argv 分流见 ssh::backend）。P1 远程 extra args
+            // 恒为空，接口预留 Vec<String>。
             let payload = crate::ssh::build_spawn_payload(
                 &spec.remote_path,
                 session_file.as_deref(),
                 &extra_args,
             );
-            crate::ssh::ssh_exec_stream(&spec.endpoint, &payload)
+            crate::ssh::remote_exec_stream(&spec.endpoint, &payload)
                 .await
-                .map_err(|e| crate::commands::ssh::ssh_error_coded(&e))?
+                .map_err(|e| crate::commands::ssh::remote_error_coded(&spec.endpoint, &e))?
         }
     };
 
@@ -288,17 +291,15 @@ async fn process_spawn_impl(
                 session_label,
             ),
         ),
-        SpawnProgram::Ssh(spec) => crate::logs::write(
+        SpawnProgram::Remote(spec) => crate::logs::write(
             &state.runtime_id,
             &format!(
-                "spawn (ssh) pid={} endpoint={}@{}:{} path={} session={}",
+                "spawn (remote) pid={} endpoint={} path={} session={}",
                 child
                     .id()
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "?".into()),
-                spec.endpoint.user.as_deref().unwrap_or(""),
-                spec.endpoint.host,
-                spec.endpoint.port,
+                spec.endpoint.describe(),
                 spec.remote_path,
                 session_label,
             ),
@@ -411,7 +412,7 @@ async fn process_spawn_impl(
                     }
                     // 远程 payload 在 exec 前把 shell pid 写到 stderr（契约 §3.5）：
                     // 回填 remote_pid 供 kill 兜底，且不向 pi://stderr 转发该行。
-                    if is_ssh && text.starts_with("PIX_PI_PID=") {
+                    if is_remote && text.starts_with("PIX_PI_PID=") {
                         if let Ok(pid) = text["PIX_PI_PID=".len()..].trim().parse::<u32>() {
                             *remote_pid.lock().await = Some(pid);
                         }
@@ -431,20 +432,20 @@ async fn process_spawn_impl(
         });
     }
 
-    // ssh 分支就绪等待（契约 §3.9）：把连接失败、cd 失败(90)、远程缺 pi(92)
-    // 归一化为 coded error 经 rpc_spawn 的 Err 返回给前端 toast。
-    if let SpawnProgram::Ssh(_) = program {
-        if let Err(message) = wait_ssh_ready(&state.runtime_id, &mut child, &remote_pid, &stderr_tail).await {
+    // 远程分支就绪等待（契约 §3.9 与多后端契约 §1.4）：把连接失败、cd 失败(90)、
+    // 远程缺 pi(92) 归一化为 coded error 经 rpc_spawn 的 Err 返回给前端 toast。
+    if let SpawnProgram::Remote(_) = program {
+        if let Err(message) = wait_ssh_ready(&state.runtime_id, &mut child, &remote_pid, &stderr_tail, remote.as_ref().map(|r| &r.endpoint)).await {
             // spawn 失败：再 bump generation，让已装配的 reader 不发 pi://exit
             //（该 runtime 从未进入进程池）。
             state.generation.fetch_add(1, Ordering::Relaxed);
             return Err(message);
         }
-        // 路径别名回绑（契约 §3.8 / P2 §1.1）：所有远程 spawn（含新建）就绪后
-        // 都执行回绑检查，一次 exec realpath 归一化远端路径，防 /home/dev 与
-        // /dev 符号链接别名导致身份漂移；与 URI path 不同则发
+        // 路径别名回绑（契约 §3.8 / P2 §1.1 / 多后端契约 §5.1）：所有远程 spawn
+        //（含新建）就绪后都执行回绑检查，一次 exec realpath 归一化远端路径，
+        // 防 /home/dev 与 /dev 符号链接别名导致身份漂移；与 URI path 不同则发
         // pi://sshPathBound 供前端更新展示。失败不阻塞 spawn、不发事件。
-        if let SpawnProgram::Ssh(spec) = program {
+        if let SpawnProgram::Remote(spec) = program {
             let rebind_sink = sink.clone();
             let rebind_runtime_id = state.runtime_id.clone();
             let rebind_endpoint = spec.endpoint.clone();
@@ -489,28 +490,28 @@ fn parse_realpath_output(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// realpath 回绑解析结果（契约 §3.8 / P2 §1.1）。独立于事件发射，
-/// 供实机集成测试（S-R1）直接驱动。
+/// realpath 回绑解析结果（契约 §3.8 / P2 §1.1 / 多后端契约 §5.1）。独立于事件
+/// 发射，供实机集成测试（S-R1）直接驱动。
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PathRebind {
     /// realpath 与原路径一致，无需回绑。
     Unchanged,
     /// 路径有差异：`resolved` 为归一化后的远端物理路径，`rebound_project`
-    /// 为用 `resolved` 回绑重建的 `ssh://` 展示 URI。
+    /// 为用 `resolved` 回绑重建的远程展示 URI。
     Rebound {
         resolved: String,
         rebound_project: String,
     },
 }
 
-/// realpath 回绑解析（契约 §3.8）：一次 exec（10s 超时），解析失败或路径
-/// 未变返回 `Unchanged`/`Err`（原因供日志），路径变化则重建展示 URI。
+/// realpath 回绑解析（契约 §3.8，多后端统一）：一次 exec（10s 超时），解析
+/// 失败或路径未变返回 `Unchanged`/`Err`（原因供日志），路径变化则重建展示 URI。
 pub(crate) async fn resolve_path_rebind(
-    endpoint: &SshEndpoint,
+    endpoint: &RemoteEndpoint,
     project: &str,
     remote_path: &str,
 ) -> Result<PathRebind, String> {
-    let output = crate::ssh::ssh_exec(
+    let output = crate::ssh::remote_exec(
         endpoint,
         &realpath_script(remote_path),
         Duration::from_secs(10),
@@ -523,11 +524,11 @@ pub(crate) async fn resolve_path_rebind(
     if resolved == remote_path {
         return Ok(PathRebind::Unchanged);
     }
-    // 重建展示 URI：host/port/user 沿用原 URI 解析结果，仅替换归一化后的 path。
-    let rebound = crate::ssh::parse_ssh_uri(project).and_then(|mut target| {
-        target.path = resolved.clone();
-        crate::ssh::build_ssh_uri(&target).ok()
-    });
+    // 重建展示 URI：host/port/user（或 distro/container）沿用原 URI 解析结果，
+    // 仅替换归一化后的 path。
+    let rebound = crate::ssh::parse_remote_uri(project)
+        .map(|target| target.with_path(resolved.clone()))
+        .and_then(|target| crate::ssh::build_remote_uri(&target).ok());
     let Some(rebound_project) = rebound else {
         return Err(format!("cannot rebuild URI for {resolved}"));
     };
@@ -543,7 +544,7 @@ pub(crate) async fn resolve_path_rebind(
 async fn rebind_remote_path(
     sink: &dyn EventSink,
     runtime_id: &str,
-    endpoint: &SshEndpoint,
+    endpoint: &RemoteEndpoint,
     project: &str,
     remote_path: &str,
 ) {
@@ -608,9 +609,20 @@ async fn wait_ssh_ready(
     child: &mut Child,
     remote_pid: &Mutex<Option<u32>>,
     stderr_tail: &Mutex<String>,
+    endpoint: Option<&RemoteEndpoint>,
 ) -> Result<(), String> {
     const READY_TIMEOUT: Duration = Duration::from_secs(20);
     const PID_GRACE: Duration = Duration::from_secs(1);
+    // 理论上 remote 分支恒有 endpoint；防御性缺省仅影响错误文案归类。
+    let ssh_default = crate::ssh::SshEndpoint {
+        host: String::new(),
+        port: 0,
+        user: None,
+        key_path: None,
+    };
+    let endpoint = endpoint
+        .cloned()
+        .unwrap_or(RemoteEndpoint::Ssh(ssh_default));
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -622,7 +634,7 @@ async fn wait_ssh_ready(
                     runtime_id,
                     &format!("ssh relay exited before ready: {status} stderr={}", tail.trim()),
                 );
-                return Err(ssh_exit_error(status, &tail));
+                return Err(ssh_exit_error(&endpoint, status, &tail));
             }
             Ok(None) => {}
             Err(e) => return Err(format!("failed to poll ssh relay: {e}")),
@@ -637,7 +649,7 @@ async fn wait_ssh_ready(
                         runtime_id,
                         &format!("ssh relay exited right after pid line: {status}"),
                     );
-                    return Err(ssh_exit_error(status, &tail));
+                    return Err(ssh_exit_error(&endpoint, status, &tail));
                 }
                 Ok(None) => return Ok(()),
                 Err(e) => return Err(format!("failed to poll ssh relay: {e}")),
@@ -651,8 +663,10 @@ async fn wait_ssh_ready(
     }
 }
 
-/// 把 ssh 中继子进程的退出码 + stderr 摘要归一化为 coded error。
-fn ssh_exit_error(status: ExitStatus, stderr_tail: &str) -> String {
+/// 把远程中继子进程的退出码 + stderr 摘要归一化为 coded error，
+/// 按端点 kind 分发归类（多后端契约 §4.4：wsl/docker 的混合编码 stderr
+/// 在对应归类函数内先做 NUL 剥除再匹配 ASCII 关键词）。
+fn ssh_exit_error(endpoint: &RemoteEndpoint, status: ExitStatus, stderr_tail: &str) -> String {
     let code = status.code().unwrap_or(-1);
     match code {
         // 契约 §3.5 约定退出码：90=cd 失败（目录不存在）、92=远程未装 pi。
@@ -663,38 +677,33 @@ fn ssh_exit_error(status: ExitStatus, stderr_tail: &str) -> String {
         ),
         _ => {
             let stderr = stderr_tail.trim();
-            match classify_failure(code, stderr) {
-                // 契约 P2 §5.1：host key 两类场景从 auth 中细分，给可操作文案。
-                SshErrorKind::HostKey => {
-                    if stderr.to_lowercase().contains("remote host identification has changed") {
-                        pix_error(
-                            "sshHostKeyChanged",
-                            "远程主机指纹与 known_hosts 记录不一致，可能是主机重装或中间人攻击。核实后在 ~/.ssh/known_hosts 中删除该主机条目再重试。",
-                        )
-                    } else {
-                        pix_error(
-                            "sshHostKeyUnverified",
-                            "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
-                        )
-                    }
-                }
-                SshErrorKind::Auth => pix_error(
-                    "sshAuthFailed",
-                    "SSH 认证失败。请检查密钥或 agent。",
-                ),
-                SshErrorKind::Network => pix_error(
-                    "sshConnectFailed",
-                    "无法连接到远程主机，请检查主机、端口与网络。",
-                ),
-                _ => match stderr.is_empty() {
-                    true => pix_error_detail(
-                        "sshProbeFailed",
-                        "远程启动失败: {detail}",
-                        format!("远程 pi 进程退出码 {code}"),
-                    ),
-                    false => pix_error_detail("sshProbeFailed", "远程启动失败: {detail}", stderr),
-                },
+            let kind = classify_failure(code, stderr);
+            // host key / auth / network 是 ssh 客户端专属场景，其余按端点 kind
+            // 归类（多后端契约 §4.4 的 wsl/docker 错误族）。
+            if matches!(endpoint, RemoteEndpoint::Ssh(_))
+                && matches!(kind, SshErrorKind::HostKey | SshErrorKind::Auth | SshErrorKind::Network)
+            {
+                let e = SshError {
+                    kind,
+                    exit_code: Some(code),
+                    detail: stderr.to_string(),
+                };
+                return crate::commands::ssh::ssh_error_coded(&e);
             }
+            let e = SshError {
+                kind: if matches!(kind, SshErrorKind::HostKey | SshErrorKind::Auth | SshErrorKind::Network)
+                {
+                    SshErrorKind::Remote
+                } else {
+                    kind
+                },
+                exit_code: Some(code),
+                detail: match stderr.is_empty() {
+                    true => format!("远程 pi 进程退出码 {code}"),
+                    false => stderr.to_string(),
+                },
+            };
+            crate::commands::ssh::remote_error_coded(endpoint, &e)
         }
     }
 }
@@ -776,13 +785,16 @@ async fn kill_inner(
     );
     // Drop pending response waiters first so callers fail fast.
     inner.pending.lock().await.clear();
-    // 远程 pid 兜底（契约 §3.9）：本地 ssh 通道断开后远端 pi 可能残留，
-    // 经一次独立 ssh exec 发 kill -TERM（5s 超时）；失败降级为日志，不阻塞本地 kill。
+    // 远程 pid 兜底（契约 §3.9 与多后端契约 §1.4）：本地通道断开后远端 pi 可能
+    // 残留，经一次独立 exec 发 kill -TERM（5s 超时，wsl 在发行版内、docker 在
+    // 容器 PID 命名空间内执行，语义相同）；失败降级为日志，不阻塞本地 kill。
+    // 绝不调用 wsl --terminate / docker stop：后端只杀自己 spawn 的本地子进程
+    // 与远端 pid（多后端契约 §1.4）。
     if let Some(remote) = &inner.remote {
         let pid = remote.remote_pid.lock().await.take();
         if let Some(pid) = pid {
             let script = format!("kill -TERM {pid} 2>/dev/null\n");
-            match crate::ssh::ssh_exec(&remote.endpoint, &script, Duration::from_secs(5)).await {
+            match crate::ssh::remote_exec(&remote.endpoint, &script, Duration::from_secs(5)).await {
                 Ok(_) => {
                     crate::logs::write(runtime_id, &format!("remote kill -TERM {pid} sent"));
                 }
@@ -860,23 +872,31 @@ mod ssh_exit_error_tests {
     #[test]
     fn contract_exit_codes_map_to_coded_errors() {
         // 契约 §3.5：90=cd 失败（复用 projectDirMissing）、92=远程缺 pi。
-        assert!(ssh_exit_error(status_with_code(90), "").contains("projectDirMissing"));
-        assert!(ssh_exit_error(status_with_code(92), "").contains("sshRemotePiMissing"));
+        assert!(ssh_exit_error(&ssh_endpoint(), status_with_code(90), "").contains("projectDirMissing"));
+        assert!(ssh_exit_error(&ssh_endpoint(), status_with_code(92), "").contains("sshRemotePiMissing"));
     }
 
     #[test]
     fn ssh_client_failures_classify_by_stderr() {
         assert!(
-            ssh_exit_error(status_with_code(255), "dev@host: Permission denied (publickey).")
-                .contains("sshAuthFailed")
+            ssh_exit_error(
+                &ssh_endpoint(),
+                status_with_code(255),
+                "dev@host: Permission denied (publickey)."
+            )
+            .contains("sshAuthFailed")
         );
-        assert!(ssh_exit_error(status_with_code(255), "ssh: Could not resolve hostname host")
-            .contains("sshConnectFailed"));
+        assert!(ssh_exit_error(
+            &ssh_endpoint(),
+            status_with_code(255),
+            "ssh: Could not resolve hostname host"
+        )
+        .contains("sshConnectFailed"));
         // 其余退出码携带 stderr 摘要（含退出码语境）。
-        let coded = ssh_exit_error(status_with_code(1), "sh: cd: no such directory");
+        let coded = ssh_exit_error(&ssh_endpoint(), status_with_code(1), "sh: cd: no such directory");
         assert!(coded.contains("sshProbeFailed"), "{coded}");
         assert!(coded.contains("no such directory"));
-        let coded = ssh_exit_error(status_with_code(1), "");
+        let coded = ssh_exit_error(&ssh_endpoint(), status_with_code(1), "");
         assert!(coded.contains("sshProbeFailed"), "{coded}");
         assert!(coded.contains("1"));
     }
@@ -884,15 +904,52 @@ mod ssh_exit_error_tests {
     #[test]
     fn host_key_failures_map_to_operable_coded_errors() {
         // 契约 P2 §5.1/§5.2：两段真实 stderr 文本（wsl-test-env.md 实机发现）。
-        let coded = ssh_exit_error(status_with_code(255), "Host key verification failed.");
+        let coded = ssh_exit_error(&ssh_endpoint(), status_with_code(255), "Host key verification failed.");
         assert!(coded.contains("sshHostKeyUnverified"), "{coded}");
         let changed = concat!(
             "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
             "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n",
             "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
         );
-        let coded = ssh_exit_error(status_with_code(255), changed);
+        let coded = ssh_exit_error(&ssh_endpoint(), status_with_code(255), changed);
         assert!(coded.contains("sshHostKeyChanged"), "{coded}");
+    }
+
+    /// 多后端契约 §4.4：wsl/docker 中继子进程的非零退出按端点 kind 归类
+    ///（exit 127 → wslDistroNotFound；stderr 含 is not running →
+    /// dockerContainerNotRunning），ssh 专属关键词不再吞掉 wsl/docker 场景。
+    #[test]
+    fn wsl_docker_relay_exits_classify_per_backend() {
+        let wsl = crate::ssh::backend::RemoteEndpoint::Wsl(crate::ssh::WslEndpoint {
+            distro: "NoSuchDistro".into(),
+            user: None,
+        });
+        // V8：wsl.exe 对不存在发行版报 exit 127，stderr 混合编码。
+        let mixed = "找不到 wsl\r\0W\0s\0l\0/\0S\0e\0r\0v\0i\0c\0e\0/\0W\0S\0L\0_\0E\0_\0D\0I\0S\0T\0R\0O\0_\0N\0O\0T\0_\0F\0O\0U\0N\0D\0";
+        let coded = ssh_exit_error(&wsl, status_with_code(127), mixed);
+        assert!(coded.contains("wslDistroNotFound"), "{coded}");
+
+        let docker = crate::ssh::backend::RemoteEndpoint::Docker(crate::ssh::DockerEndpoint {
+            container: "stopped".into(),
+        });
+        let coded = ssh_exit_error(
+            &docker,
+            status_with_code(1),
+            "Error response from daemon: Container stopped is not running",
+        );
+        assert!(coded.contains("dockerContainerNotRunning"), "{coded}");
+        // ssh 专属归类（auth/network/hostkey）不适用于 wsl/docker。
+        let coded = ssh_exit_error(&docker, status_with_code(255), "Permission denied (publickey).");
+        assert!(coded.contains("dockerExecFailed"), "{coded}");
+    }
+
+    fn ssh_endpoint() -> crate::ssh::backend::RemoteEndpoint {
+        crate::ssh::backend::RemoteEndpoint::Ssh(crate::ssh::SshEndpoint {
+            host: "host".to_string(),
+            port: 22,
+            user: None,
+            key_path: None,
+        })
     }
 }
 
@@ -1040,13 +1097,13 @@ mod mock_ssh_spawn_tests {
         let result = process_spawn_impl(
             sink,
             &state,
-            &SpawnProgram::Ssh(SshSpawnSpec {
-                endpoint: SshEndpoint {
+            &SpawnProgram::Remote(RemoteSpawnSpec {
+                endpoint: RemoteEndpoint::Ssh(crate::ssh::SshEndpoint {
                     host: "mock.test".to_string(),
                     port: 2222,
                     user: Some("dev".to_string()),
                     key_path: None,
-                },
+                }),
                 remote_path: "/home/dev/proj".to_string(),
             }),
             "ssh://dev@mock.test:2222/home/dev/proj",
@@ -1108,6 +1165,95 @@ mod mock_ssh_spawn_tests {
         // PIX_PI_PID= 行不得经 pi://stderr 外发（契约 §3.8）。
         while let Ok((event, _)) = rx.try_recv() {
             assert_ne!(event, STDERR_EVENT);
+        }
+    }
+
+    /// 多后端契约验收第 2 条：`PIX_WSL_COMMAND` / `PIX_DOCKER_COMMAND` 注入
+    /// mock 后，spawn → JSONL → `pi://exit` 全链路对 WSL / Docker 均可无网络
+    /// 跑通（SSH 分支已有上方同型用例）。
+    #[tokio::test]
+    async fn mock_wsl_and_docker_spawn_bridge_jsonl_to_exit_without_network() {
+        let Some(node) = find_test_program("node") else {
+            eprintln!("跳过：开发环境未找到 node");
+            return;
+        };
+        if node.to_string_lossy().contains(' ') {
+            eprintln!("跳过：node 路径含空白，无法经注入钩子 mock");
+            return;
+        }
+        let _guard = env_lock();
+        let mock = "process.stderr.write('PIX_PI_PID=4242\\n');\
+                    process.stdout.write(JSON.stringify({type:'agent_start'})+'\\n');\
+                    process.stdin.resume();process.stdin.on('end',()=>process.exit(0))";
+        let cases: Vec<(&str, RemoteEndpoint, &str, Vec<&str>)> = vec![
+            (
+                "PIX_WSL_COMMAND",
+                RemoteEndpoint::Wsl(crate::ssh::WslEndpoint {
+                    distro: "Ubuntu".to_string(),
+                    user: None,
+                }),
+                "wsl://Ubuntu/home/dev/proj",
+                vec!["-d", "Ubuntu", "--exec", "/bin/sh", "-c"],
+            ),
+            (
+                "PIX_DOCKER_COMMAND",
+                RemoteEndpoint::Docker(crate::ssh::DockerEndpoint {
+                    container: "mock-container".to_string(),
+                }),
+                "docker://mock-container/home/dev/proj",
+                vec!["exec", "-i", "mock-container", "/bin/sh", "-c"],
+            ),
+        ];
+        for (env_name, endpoint, project, expected_argv) in cases {
+            std::env::set_var(env_name, format!("{} -e {} --", node.display(), mock));
+            // 断言该后端的 argv 形态确实走了分流（注入变量仍在时构造）。
+            let (program, args) = crate::ssh::build_remote_command(&endpoint, "WRAPPED");
+            assert_eq!(program, node.display().to_string(), "{env_name}");
+            let expected: Vec<String> = expected_argv.iter().map(|s| s.to_string()).collect();
+            let position = args
+                .windows(expected.len())
+                .position(|window| window == &expected[..])
+                .unwrap_or_else(|| panic!("{env_name} argv 应含 {expected_argv:?}: {args:?}"));
+            assert_eq!(args[position + expected.len()], "WRAPPED");
+
+            let state = ProcessState {
+                runtime_id: "mock-remote-runtime".to_string(),
+                project: String::new(),
+                inner: Mutex::new(None),
+                navigation: Mutex::new(()),
+                generation: Arc::new(AtomicU64::new(0)),
+            };
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
+            let result = process_spawn_impl(
+                sink,
+                &state,
+                &SpawnProgram::Remote(RemoteSpawnSpec {
+                    endpoint,
+                    remote_path: "/home/dev/proj".to_string(),
+                }),
+                project,
+                None,
+                vec![],
+                None,
+            )
+            .await;
+            // spawn 读 env 后才能移除注入变量。
+            std::env::remove_var(env_name);
+            result.unwrap_or_else(|e| panic!("{env_name} mock spawn 应就绪: {e}"));
+
+            // 第一条事件（agent_start）到达即证明 JSONL 桥接接通。
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            let (event, payload) = tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .expect("等待桥接事件超时")
+                .expect("event channel closed");
+            assert_eq!(event, EVENT);
+            assert_eq!(payload["type"], "agent_start");
+
+            state.inner.lock().await.take();
+            let (event, _) = rx.recv().await.expect("event channel closed");
+            assert_eq!(event, EXIT_EVENT);
         }
     }
 }

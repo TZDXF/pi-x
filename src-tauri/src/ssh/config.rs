@@ -1,18 +1,43 @@
-//! SSH 连接配置的持久化（契约 §2.1）。
+//! 远程连接配置的持久化（契约 §2.1 与多后端契约 §3）。
 //!
-//! 复用 `~/.pix/config.json`：只读写 `sshConnections` 字段，其余字段经
-//! `serde(flatten)` 原样保留（`AppConfig` 归 `commands::config` 所有，互不越界）。
-//! 凭据不落盘：P1 认证仅 ssh key / ssh-agent（`BatchMode=yes`），只存私钥路径。
+//! 复用 `~/.pix/config.json`：只读写 `sshConnections` 字段（历史命名，语义已是
+//! "远程连接"），其余字段经 `serde(flatten)` 原样保留（`AppConfig` 归
+//! `commands::config` 所有，互不越界）。凭据不落盘：仅 ssh key / ssh-agent
+//! （`BatchMode=yes`），只存私钥路径；WSL/Docker 复用本机身份，无凭据字段。
+//! `kind` 字段（多后端契约 §3.1）：`"ssh" | "wsl" | "docker"`，缺省 `"ssh"`
+//! ——读路径即迁移（多后端契约 §3.2），旧 config.json 无需迁移脚本。
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use super::backend::{DockerEndpoint, RemoteEndpoint, WslEndpoint};
 use super::identity;
-use super::transport::SshEndpoint;
 use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
+
+/// 连接类型（多后端契约 §3.1）。serde 缺省 = Ssh：旧数据（无 kind 字段）
+/// 读取后全部视为 ssh 连接，读路径即迁移。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectionKind {
+    #[default]
+    Ssh,
+    Wsl,
+    Docker,
+}
+
+impl ConnectionKind {
+    /// 新增连接时 id 的前缀（多后端契约 §3.1）。
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            ConnectionKind::Ssh => "ssh-",
+            ConnectionKind::Wsl => "wsl-",
+            ConnectionKind::Docker => "docker-",
+        }
+    }
+}
 
 /// probe 结果缓存（仅 UI 展示与错误指引，spawn 不依赖）。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,12 +55,14 @@ pub struct SshProbeInfo {
     pub pi_version: Option<String>,
 }
 
-/// 一条已保存的 SSH 连接配置。
+/// 一条已保存的远程连接配置。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnection {
     #[serde(default)]
     pub id: String,
+    #[serde(default)]
+    pub kind: ConnectionKind,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -46,6 +73,12 @@ pub struct SshConnection {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    /// kind = "wsl" 专用：发行版名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    /// kind = "docker" 专用：容器名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,13 +87,16 @@ pub struct SshConnection {
     pub last_probe: Option<SshProbeInfo>,
 }
 
-/// 保存入参：有 `id` 时 upsert，无 `id` 时后端生成 `"ssh-" + UUID v4`。
+/// 保存入参：有 `id` 时 upsert，无 `id` 时后端生成 `<kind 前缀> + UUID v4`。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(default)]
+    pub kind: ConnectionKind,
     pub name: String,
+    #[serde(default)]
     pub host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
@@ -68,6 +104,10 @@ pub struct SshConnectionInput {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
 }
 
 /// config.json 的本模块视图：只关心 `sshConnections`，
@@ -151,21 +191,97 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
     if name.is_empty() {
         return Err(pix_error("sshConnectionInvalid", "SSH 连接名称不能为空"));
     }
-    let host = identity::normalize_host(input.host.trim()).map_err(|e| {
-        pix_error_with(
-            "sshConnectionInvalid",
-            "SSH 连接 host 无效: {detail}",
-            json!({ "detail": e }),
-        )
-    })?;
-    let port = input.port.unwrap_or(identity::DEFAULT_PORT);
-    if port == 0 {
-        return Err(pix_error(
-            "sshConnectionInvalid",
-            "SSH 端口必须在 1-65535 之间",
-        ));
+    let kind = input.kind;
+    let invalid = |detail: String| {
+        pix_error_with("sshConnectionInvalid", "SSH 连接配置无效: {detail}", json!({ "detail": detail }))
+    };
+    // per-kind 字段校验与裁剪（多后端契约 §3.1 表）。
+    let (host, port, user, key_path, distro, container) = match kind {
+        ConnectionKind::Ssh => {
+            let host = identity::normalize_host(input.host.trim()).map_err(invalid)?;
+            let port = input.port.unwrap_or(identity::DEFAULT_PORT);
+            if port == 0 {
+                return Err(pix_error(
+                    "sshConnectionInvalid",
+                    "SSH 端口必须在 1-65535 之间",
+                ));
+            }
+            let user = validate_optional_user(input.user.as_deref())?;
+            // keyPath 只存路径字符串（支持 ~ 前缀，使用时展开），无任何凭据内容。
+            let key_path = trimmed_non_empty(input.key_path.as_deref());
+            (host, port, user, key_path, None, None)
+        }
+        ConnectionKind::Wsl => {
+            let distro = input
+                .distro
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .ok_or_else(|| invalid("WSL 发行版名不能为空".to_string()))?;
+            identity::validate_wsl_distro(distro).map_err(invalid)?;
+            let user = validate_optional_user(input.user.as_deref())?;
+            (String::new(), 0, user, None, Some(distro.to_string()), None)
+        }
+        ConnectionKind::Docker => {
+            let container = input
+                .container
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| invalid("Docker 容器名不能为空".to_string()))?;
+            identity::validate_docker_container(container).map_err(invalid)?;
+            (String::new(), 0, None, None, None, Some(container.to_string()))
+        }
+    };
+
+    let id = input
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}{}", kind.id_prefix(), uuid::Uuid::new_v4()));
+
+    let mut view = read_view(path)?;
+    let list = view.ssh_connections.get_or_insert_with(Vec::new);
+    if let Some(existing) = list.iter_mut().find(|c| c.id == id) {
+        existing.kind = kind;
+        existing.name = name.to_string();
+        existing.host = host;
+        existing.port = port;
+        existing.user = user;
+        existing.key_path = key_path;
+        existing.distro = distro;
+        existing.container = container;
+        let connection = existing.clone();
+        write_view(path, &view)?;
+        return Ok(connection);
     }
-    let user = match input.user.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+    let connection = SshConnection {
+        id,
+        kind,
+        name: name.to_string(),
+        host,
+        port,
+        user,
+        key_path,
+        distro,
+        container,
+        created_at: timestamp_now(),
+        last_used_at: None,
+        last_probe: None,
+    };
+    list.push(connection.clone());
+    write_view(path, &view)?;
+    Ok(connection)
+}
+
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+}
+
+fn validate_optional_user(user: Option<&str>) -> Result<Option<String>, String> {
+    match user.map(str::trim).filter(|u| !u.is_empty()) {
         Some(user) => {
             identity::validate_user(user).map_err(|e| {
                 pix_error_with(
@@ -174,52 +290,10 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
                     json!({ "detail": e }),
                 )
             })?;
-            Some(user.to_string())
+            Ok(Some(user.to_string()))
         }
-        None => None,
-    };
-    // keyPath 只存路径字符串（支持 ~ 前缀，使用时展开），无任何凭据内容。
-    let key_path = input
-        .key_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
-        .map(str::to_string);
-
-    let id = input
-        .id
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("ssh-{}", uuid::Uuid::new_v4()));
-
-    let mut view = read_view(path)?;
-    let list = view.ssh_connections.get_or_insert_with(Vec::new);
-    if let Some(existing) = list.iter_mut().find(|c| c.id == id) {
-        existing.name = name.to_string();
-        existing.host = host;
-        existing.port = port;
-        existing.user = user;
-        existing.key_path = key_path;
-        let connection = existing.clone();
-        write_view(path, &view)?;
-        return Ok(connection);
+        None => Ok(None),
     }
-    let connection = SshConnection {
-        id,
-        name: name.to_string(),
-        host,
-        port,
-        user,
-        key_path,
-        created_at: timestamp_now(),
-        last_used_at: None,
-        last_probe: None,
-    };
-    list.push(connection.clone());
-    write_view(path, &view)?;
-    Ok(connection)
 }
 
 /// 删除连接；id 不存在也返回 Ok（幂等）。
@@ -278,21 +352,33 @@ pub fn record_probe_in(path: &Path, id: &str, probe: SshProbeInfo) -> Result<(),
 }
 
 impl SshConnection {
-    /// 转换为传输层端点；keyPath 的 `~` 前缀按 `data_dir::expand_home` 展开。
-    pub fn to_endpoint(&self) -> SshEndpoint {
-        let key_path = self.key_path.as_deref().map(|key_path| {
-            match dirs::home_dir() {
-                Some(home) => data_dir::expand_home(key_path, &home),
-                None => PathBuf::from(key_path),
+    /// 转换为传输层统一端点（多后端契约 §3.1），按 kind 装配。
+    /// ssh 分支：keyPath 的 `~` 前缀按 `data_dir::expand_home` 展开。
+    pub fn to_remote_endpoint(&self) -> RemoteEndpoint {
+        match self.kind {
+            ConnectionKind::Ssh => {
+                let key_path = self.key_path.as_deref().map(|key_path| {
+                    match dirs::home_dir() {
+                        Some(home) => data_dir::expand_home(key_path, &home),
+                        None => PathBuf::from(key_path),
+                    }
+                    .to_string_lossy()
+                    .into_owned()
+                });
+                RemoteEndpoint::Ssh(super::transport::SshEndpoint {
+                    host: self.host.clone(),
+                    port: self.port,
+                    user: self.user.clone(),
+                    key_path,
+                })
             }
-            .to_string_lossy()
-            .into_owned()
-        });
-        SshEndpoint {
-            host: self.host.clone(),
-            port: self.port,
-            user: self.user.clone(),
-            key_path,
+            ConnectionKind::Wsl => RemoteEndpoint::Wsl(WslEndpoint {
+                distro: self.distro.clone().unwrap_or_default(),
+                user: self.user.clone(),
+            }),
+            ConnectionKind::Docker => RemoteEndpoint::Docker(DockerEndpoint {
+                container: self.container.clone().unwrap_or_default(),
+            }),
         }
     }
 }
@@ -312,11 +398,14 @@ mod tests {
     fn input(name: &str, host: &str) -> SshConnectionInput {
         SshConnectionInput {
             id: None,
+            kind: ConnectionKind::Ssh,
             name: name.to_string(),
             host: host.to_string(),
             port: None,
             user: None,
             key_path: None,
+            distro: None,
+            container: None,
         }
     }
 
@@ -360,6 +449,8 @@ mod tests {
         assert!(raw.contains("\"sshConnections\""));
         assert!(raw.contains("\"keyPath\""));
         assert!(raw.contains("\"createdAt\""));
+        // kind 显式落盘（多后端契约 §3.2 第 1 条）。
+        assert!(raw.contains("\"kind\": \"ssh\""), "{raw}");
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -477,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn to_endpoint_expands_tilde_key_path() {
+    fn to_remote_endpoint_expands_tilde_key_path() {
         let connection = SshConnection {
             id: "ssh-1".to_string(),
             name: "n".to_string(),
@@ -485,16 +576,191 @@ mod tests {
             port: 2222,
             user: Some("dev".to_string()),
             key_path: Some("~/keys/id_ed25519".to_string()),
+            kind: ConnectionKind::Ssh,
+            distro: None,
+            container: None,
             created_at: String::new(),
             last_used_at: None,
             last_probe: None,
         };
-        let endpoint = connection.to_endpoint();
+        let RemoteEndpoint::Ssh(endpoint) = connection.to_remote_endpoint() else {
+            panic!("ssh kind 应装配为 Ssh 分支");
+        };
         assert_eq!(endpoint.host, "HOST.test");
         assert_eq!(endpoint.port, 2222);
         assert_eq!(endpoint.user.as_deref(), Some("dev"));
         let expanded = endpoint.key_path.unwrap().replace('\\', "/");
         assert!(expanded.ends_with("/keys/id_ed25519"), "{expanded}");
         assert!(!expanded.starts_with('~'));
+    }
+
+    #[test]
+    fn save_trims_fields_per_kind_and_generates_prefixed_ids() {
+        let path = temp_config_path("kinds");
+        let wsl = save_connection_in(
+            &path,
+            SshConnectionInput {
+                kind: ConnectionKind::Wsl,
+                name: "  WSL Ubuntu  ".to_string(),
+                distro: Some("  Ubuntu  ".to_string()),
+                user: Some("  tzdxf  ".to_string()),
+                // ssh/docker 专属字段全部被裁剪。
+                host: "leftover.invalid".to_string(),
+                port: Some(2222),
+                key_path: Some("~/.ssh/id_ed25519".to_string()),
+                container: Some("leftover".to_string()),
+                ..input("", "")
+            },
+        )
+        .unwrap();
+        assert!(wsl.id.starts_with("wsl-"));
+        assert_eq!(wsl.kind, ConnectionKind::Wsl);
+        assert_eq!(wsl.distro.as_deref(), Some("Ubuntu"));
+        assert_eq!(wsl.user.as_deref(), Some("tzdxf"));
+        assert_eq!(wsl.host, "");
+        assert_eq!(wsl.port, 0);
+        assert_eq!(wsl.key_path, None);
+        assert_eq!(wsl.container, None);
+
+        let docker = save_connection_in(
+            &path,
+            SshConnectionInput {
+                kind: ConnectionKind::Docker,
+                name: "docker test".to_string(),
+                container: Some("  pix-docker-test  ".to_string()),
+                host: "leftover.invalid".to_string(),
+                user: Some("leftover".to_string()),
+                distro: Some("leftover".to_string()),
+                ..input("", "")
+            },
+        )
+        .unwrap();
+        assert!(docker.id.starts_with("docker-"));
+        assert_eq!(docker.kind, ConnectionKind::Docker);
+        assert_eq!(docker.container.as_deref(), Some("pix-docker-test"));
+        assert_eq!(docker.host, "");
+        assert_eq!(docker.port, 0);
+        assert_eq!(docker.user, None);
+        assert_eq!(docker.key_path, None);
+        assert_eq!(docker.distro, None);
+
+        let list = list_connections_in(&path).unwrap();
+        assert_eq!(list.len(), 2);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn save_rejects_invalid_wsl_and_docker_fields_with_coded_error() {
+        let path = temp_config_path("kind-invalid");
+        for bad in [
+            SshConnectionInput {
+                kind: ConnectionKind::Wsl,
+                name: "n".to_string(),
+                distro: Some("default".to_string()),
+                ..input("", "")
+            },
+            SshConnectionInput {
+                kind: ConnectionKind::Wsl,
+                name: "n".to_string(),
+                distro: Some("  ".to_string()),
+                ..input("", "")
+            },
+            SshConnectionInput {
+                kind: ConnectionKind::Wsl,
+                name: "n".to_string(),
+                distro: Some("U buntu".to_string()),
+                ..input("", "")
+            },
+            SshConnectionInput {
+                kind: ConnectionKind::Wsl,
+                name: "n".to_string(),
+                distro: Some("Ubuntu".to_string()),
+                user: Some("de v".to_string()),
+                ..input("", "")
+            },
+            SshConnectionInput {
+                kind: ConnectionKind::Docker,
+                name: "n".to_string(),
+                container: Some("-bad".to_string()),
+                ..input("", "")
+            },
+            SshConnectionInput {
+                kind: ConnectionKind::Docker,
+                name: "n".to_string(),
+                container: None,
+                ..input("", "")
+            },
+        ] {
+            let err = save_connection_in(&path, bad).unwrap_err();
+            assert!(err.starts_with("PIXERR:"), "应为 coded error: {err}");
+            assert!(err.contains("sshConnectionInvalid"), "{err}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_config_without_kind_reads_as_ssh() {
+        // 多后端契约 §3.2：读路径即迁移——旧数据（无 kind）全部视为 ssh。
+        let path = temp_config_path("legacy");
+        std::fs::write(
+            &path,
+            r#"{"sshConnections":[{"id":"ssh-old","name":"old","host":"host.test","port":22,"createdAt":"2026-01-01T00:00:00.000Z"}]}"#,
+        )
+        .unwrap();
+        let list = list_connections_in(&path).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, ConnectionKind::Ssh);
+        assert_eq!(list[0].distro, None);
+        assert_eq!(list[0].container, None);
+        // 首次任意写回时 kind 显式落盘。
+        touch_connection_in(&path, "ssh-old").unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"kind\": \"ssh\""), "{raw}");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn to_remote_endpoint_assembles_per_kind() {
+        let wsl = SshConnection {
+            id: "wsl-1".to_string(),
+            kind: ConnectionKind::Wsl,
+            name: "n".to_string(),
+            distro: Some("Ubuntu".to_string()),
+            user: Some("tzdxf".to_string()),
+            host: String::new(),
+            port: 0,
+            key_path: None,
+            container: None,
+            created_at: String::new(),
+            last_used_at: None,
+            last_probe: None,
+        };
+        assert_eq!(
+            wsl.to_remote_endpoint(),
+            RemoteEndpoint::Wsl(WslEndpoint {
+                distro: "Ubuntu".to_string(),
+                user: Some("tzdxf".to_string()),
+            })
+        );
+        let docker = SshConnection {
+            id: "docker-1".to_string(),
+            kind: ConnectionKind::Docker,
+            name: "n".to_string(),
+            container: Some("pix-docker-test".to_string()),
+            host: String::new(),
+            port: 0,
+            user: None,
+            key_path: None,
+            distro: None,
+            created_at: String::new(),
+            last_used_at: None,
+            last_probe: None,
+        };
+        assert_eq!(
+            docker.to_remote_endpoint(),
+            RemoteEndpoint::Docker(DockerEndpoint {
+                container: "pix-docker-test".to_string(),
+            })
+        );
     }
 }

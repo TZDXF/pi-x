@@ -10,7 +10,7 @@ use crate::ssh::transport::SshErrorKind;
 use crate::{pi_locate, rpc, ssh, trust};
 
 use super::config::app_config_get;
-use super::ssh::ssh_error_coded;
+use super::ssh::{connection_matches_remote, remote_error_coded};
 use super::workspace::{workspace_manifest_for, WorkspaceContext};
 
 #[tauri::command]
@@ -42,9 +42,10 @@ pub(crate) fn validate_project_dir(project: &str) -> Result<(), String> {
 }
 
 /// Spawn `pi --mode rpc` for `project`. A local project resolves the pi
-/// executable from app config (falling back to auto-detection); an `ssh://`
-/// project URI routes to the remote branch (契约 §3.1). `session_file`
-/// optionally resumes a stored session via `--session <path>`.
+/// executable from app config (falling back to auto-detection); a remote
+/// project URI (`ssh://` / `wsl://` / `docker://`) routes to the remote branch
+/// (契约 §3.1 与多后端契约 §5.1). `session_file` optionally resumes a stored
+/// session via `--session <path>`.
 #[tauri::command]
 pub async fn rpc_spawn(
     app: AppHandle,
@@ -56,7 +57,7 @@ pub async fn rpc_spawn(
     ssh_connection_id: Option<String>,
 ) -> Result<(), String> {
     // 分流判据：parse 成功即远程分支；本地路径（含 C:/code 等盘符路径）照旧。
-    let Some(target) = ssh::parse_ssh_uri(&project) else {
+    let Some(target) = ssh::parse_remote_uri(&project) else {
         validate_project_dir(&project)?;
         let cfg = app_config_get(app.clone())?;
         let workspace_manifest = workspace_manifest_for(
@@ -96,13 +97,14 @@ pub async fn rpc_spawn(
     .await
 }
 
-/// 远程分支（契约 §3.1）：跳过本地目录校验与 pi_locate::detect，先做连接
-/// 一致性校验与远程目录检查，再经 ssh exec_stream 启动远端 `pi --mode rpc`。
+/// 远程分支（契约 §3.1 与多后端契约 §5.1）：跳过本地目录校验与
+/// pi_locate::detect，先做连接一致性校验与远程目录检查，再经
+/// remote_exec_stream 启动远端 `pi --mode rpc`。
 async fn spawn_remote(
     app: AppHandle,
     state: &rpc::RpcState,
     project: &str,
-    target: &ssh::SshTarget,
+    target: &ssh::RemoteTarget,
     session_file: Option<String>,
     has_workspace: bool,
     ssh_connection_id: Option<String>,
@@ -119,37 +121,36 @@ async fn spawn_remote(
     let connection = ssh::config::find_connection(&connection_id)?.ok_or_else(|| {
         pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除")
     })?;
-    // 连接的 host/port/user 与 project URI 解析结果完全一致（port 缺省 22
-    // 在保存时已归一化，直接参与 == 比较），两层冗余防止前端错配。
-    if connection.host != target.host
-        || connection.port != target.port
-        || connection.user != target.user
-    {
+    // 连接 kind 与 URI 解析结果的 kind 必须一致，再按 kind 比对应字段
+    //（ssh: host/port/user；wsl: distro/user；docker: container），
+    // 两层冗余防止前端错配（多后端契约 §5.1 第 3 条）。
+    if !connection_matches_remote(&connection, target) {
         return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
     }
     // 远程项目 P1 不支持多目录组（前端保证传 null，这里防御性兜底）。
     if has_workspace {
         return Err(pix_error("sshWorkspaceUnsupported", "SSH 远程项目暂不支持多目录工作区"));
     }
-    let endpoint = connection.to_endpoint();
-    // 远程目录校验：一次 ssh exec `test -d`；exit 1 → projectDirMissing
-    //（复用现有键与文案），其余失败按 §2.4 归类。
-    let script = format!("test -d {}", ssh::posix_quote(&target.path));
-    if let Err(e) = ssh::ssh_exec(&endpoint, &script, Duration::from_secs(15)).await {
+    let endpoint = connection.to_remote_endpoint();
+    // 远程目录校验：三后端同一脚本，一次 exec `test -d`；exit 1 →
+    // projectDirMissing（复用现有键与文案），其余失败按端点 kind 归类
+    //（多后端契约 §5.1 第 5 条；wsl/docker 的退出码传播已实测 V4）。
+    let script = format!("test -d {}", ssh::posix_quote(target.path()));
+    if let Err(e) = ssh::remote_exec(&endpoint, &script, Duration::from_secs(15)).await {
         if e.kind == SshErrorKind::Remote && e.exit_code == Some(1) {
             return Err(pix_error("projectDirMissing", "项目目录不存在"));
         }
-        return Err(ssh_error_coded(&e));
+        return Err(remote_error_coded(&endpoint, &e));
     }
-    let spec = rpc::SshSpawnSpec {
+    let spec = rpc::RemoteSpawnSpec {
         endpoint: endpoint.clone(),
-        remote_path: target.path.clone(),
+        remote_path: target.path().to_string(),
     };
     // P1 远程 extra_args 恒为空（builtin extensions 不上传），workspace 不设。
     rpc::spawn(
         app,
         state,
-        &rpc::SpawnProgram::Ssh(spec),
+        &rpc::SpawnProgram::Remote(spec),
         project,
         session_file,
         Vec::new(),

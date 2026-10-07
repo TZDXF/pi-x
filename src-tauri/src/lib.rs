@@ -127,6 +127,8 @@ pub fn run() {
             commands::ssh::ssh_probe_target,
             commands::ssh::ssh_trust_status,
             commands::ssh::ssh_trust_save,
+            commands::ssh::wsl_distro_list,
+            commands::ssh::docker_container_list,
             ssh_sessions::ssh_sessions,
             commands::files::session_list,
             sessions::session_mtime,

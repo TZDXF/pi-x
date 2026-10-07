@@ -1,12 +1,19 @@
-//! 系统 ssh 传输实现（契约 §3.2–§3.3）。
+//! 远程传输实现（契约 §3.2–§3.3 与多后端契约 §1.3）。
 //!
-//! 通过 `tokio::process::Command` 以独立参数数组调用本机 ssh 客户端，
-//! 本地不经任何 shell；远端命令经 payload 模块包装为单元素 argv。
-//! `PIX_SSH_COMMAND` 环境变量可整体替换 ssh 程序（`program` 或
-//! `program arg1 arg2 …`，ASCII 空白切分），供测试注入 mock，绝不发起真实 SSH。
+//! 通过 `tokio::process::Command` 以独立参数数组调用本地传输程序（ssh /
+//! wsl.exe / docker），本地不经任何 shell；远端命令经 payload 模块包装为
+//! 单元素 argv（SSH）或最后的 `-c` 参数（WSL/Docker），由 `backend.rs`
+//! 按 [`RemoteEndpoint`] 分流。函数名用 `remote_*` 中性名；`SshError`/
+//! `SshErrorKind`/`ExecOutput` 结构名不改（`SshError` 语义即"远程传输错误"）。
+//! `PIX_SSH_COMMAND` / `PIX_WSL_COMMAND` / `PIX_DOCKER_COMMAND` 环境变量可
+//! 整体替换传输程序（`program` 或 `program arg1 arg2 …`，ASCII 空白切分），
+//! 供测试注入 mock，绝不发起真实远程连接。
 //!
 //! host key 校验交给用户 known_hosts 默认（不覆盖 StrictHostKeyChecking）；
 //! `BatchMode=yes` 防挂在交互提示上；`ServerAliveInterval=15 × 3` 判定死链。
+//! keepalive / 断连语义（多后端契约 §1.4）：SSH 客户端可主动判定死链；
+//! WSL/Docker 无保活——本地子进程存活即"连接"，子进程退出 → stdout EOF →
+//! 现有 `pi://exit` 链路，三后端一致。
 
 use std::future::Future;
 use std::process::ExitStatus;
@@ -17,14 +24,14 @@ use std::process::Stdio;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
+use super::backend::{build_remote_command, RemoteEndpoint};
 use super::payload::{wrap_payload, PROBE_SCRIPT};
 
 /// probe 的整体超时（契约 §2.4：30s 内未见 `PIX_PROBE_DONE` 判 `timeout`）。
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Windows 下隐藏 ssh 客户端控制台窗口。
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Windows 下隐藏传输客户端（ssh/wsl.exe/docker.exe）控制台窗口。
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshEndpoint {
@@ -255,10 +262,10 @@ pub fn parse_probe_output(stdout: &str) -> Option<RemoteProbe> {
     done.then_some(probe)
 }
 
-/// 单次 exec：本地 ssh 进程以独立参数数组运行，输出整体收取；
+/// 单次 exec：本地传输进程以独立参数数组运行，输出整体收取；
 /// 超时或 spawn 失败返回 `Err`，非零退出按 §2.4 归类为 `Err`（保留退出码与 stderr）。
-pub async fn ssh_exec(
-    endpoint: &SshEndpoint,
+pub async fn remote_exec(
+    endpoint: &RemoteEndpoint,
     script: &str,
     timeout: Duration,
 ) -> Result<ExecOutput, SshError> {
@@ -266,9 +273,9 @@ pub async fn ssh_exec(
 }
 
 /// 带 stdin 数据的一次性 exec（上传 pi_data.mjs / 投递信任请求 JSON，
-/// 契约 P2 §4.1）：写完即 shutdown（EOF 结束远端 `cat`），输出收取同 [`ssh_exec`]。
-pub async fn ssh_exec_with_stdin(
-    endpoint: &SshEndpoint,
+/// 契约 P2 §4.1）：写完即 shutdown（EOF 结束远端 `cat`），输出收取同 [`remote_exec`]。
+pub async fn remote_exec_with_stdin(
+    endpoint: &RemoteEndpoint,
     script: &str,
     stdin_data: &[u8],
     timeout: Duration,
@@ -276,11 +283,11 @@ pub async fn ssh_exec_with_stdin(
     exec_remote(endpoint, script, Some(stdin_data.to_vec()), timeout).await
 }
 
-/// `ssh_exec` / `ssh_exec_with_stdin` 的共用实现：`stdin_data` 存在时写入
+/// `remote_exec` / `remote_exec_with_stdin` 的共用实现：`stdin_data` 存在时写入
 /// child stdin 后 EOF；写失败（远端提前退出断开管道）不致命，结果由
 /// 退出码 + stderr 判定。
 async fn exec_remote(
-    endpoint: &SshEndpoint,
+    endpoint: &RemoteEndpoint,
     script: &str,
     stdin_data: Option<Vec<u8>>,
     timeout: Duration,
@@ -288,10 +295,10 @@ async fn exec_remote(
     let remote_command = wrap_payload(script);
     let mut command = build_command(endpoint, &remote_command);
     let mut child = command.spawn().map_err(spawn_error)?;
-    let mut stdin = child.stdin.take().expect("ssh stdin is piped");
-    let mut stdout = child.stdout.take().expect("ssh stdout is piped");
-    let mut stderr = child.stderr.take().expect("ssh stderr is piped");
-    // 超时后 future 被 drop，kill_on_drop 负责杀掉 ssh 子进程。
+    let mut stdin = child.stdin.take().expect("remote transport stdin is piped");
+    let mut stdout = child.stdout.take().expect("remote transport stdout is piped");
+    let mut stderr = child.stderr.take().expect("remote transport stderr is piped");
+    // 超时后 future 被 drop，kill_on_drop 负责杀掉本地传输子进程。
     let waited = tokio::time::timeout(timeout, async move {
         let mut out_buf = Vec::new();
         let mut err_buf = Vec::new();
@@ -318,11 +325,11 @@ async fn exec_remote(
     match waited {
         Err(_elapsed) => Err(SshError::new(
             SshErrorKind::Timeout,
-            format!("ssh 执行超时（{} 秒）", timeout.as_secs()),
+            format!("远程执行超时（{} 秒）", timeout.as_secs()),
         )),
         Ok(Err(e)) => Err(SshError::new(
             SshErrorKind::Remote,
-            format!("读取 ssh 输出失败: {e}"),
+            format!("读取远程输出失败: {e}"),
         )),
         Ok(Ok((out_buf, err_buf, status))) => {
             let stdout_text = String::from_utf8_lossy(&out_buf).into_owned();
@@ -345,16 +352,16 @@ async fn exec_remote(
     }
 }
 
-/// 长驻流：返回已 stdio-piped 的本地 ssh 子进程（`kill_on_drop(true)`），
+/// 长驻流：返回已 stdio-piped 的本地传输子进程（`kill_on_drop(true)`），
 /// stdout 即远端进程输出；不设 `current_dir`。
-pub async fn ssh_exec_stream(endpoint: &SshEndpoint, script: &str) -> Result<Child, SshError> {
+pub async fn remote_exec_stream(endpoint: &RemoteEndpoint, script: &str) -> Result<Child, SshError> {
     let remote_command = wrap_payload(script);
     let mut command = build_command(endpoint, &remote_command);
     command.spawn().map_err(spawn_error)
 }
 
-fn build_command(endpoint: &SshEndpoint, remote_command: &str) -> Command {
-    let (program, args) = build_ssh_command(endpoint, remote_command);
+fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> Command {
+    let (program, args) = build_remote_command(endpoint, remote_command);
     let mut command = Command::new(program);
     command.args(&args);
     command
@@ -370,25 +377,40 @@ fn build_command(endpoint: &SshEndpoint, remote_command: &str) -> Command {
 fn spawn_error(e: std::io::Error) -> SshError {
     SshError::new(
         SshErrorKind::SshMissing,
-        format!("无法启动本机 ssh 客户端: {e}"),
+        format!("无法启动本机远程传输程序: {e}"),
     )
 }
 
 fn summarize_failure(exit_code: i32, stderr: &str) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
-        format!("ssh 退出码 {exit_code}")
+        format!("远程命令退出码 {exit_code}")
     } else {
-        format!("ssh 退出码 {exit_code}: {trimmed}")
+        format!("远程命令退出码 {exit_code}: {trimmed}")
     }
+}
+
+/// probe（契约 §2.3）：三后端同一 `PROBE_SCRIPT` 经一次 exec 投递，
+/// 标签行解析零改动。
+pub async fn remote_probe(endpoint: &RemoteEndpoint) -> Result<RemoteProbe, SshError> {
+    let output = remote_exec(endpoint, PROBE_SCRIPT, PROBE_TIMEOUT).await?;
+    parse_probe_output(&output.stdout).ok_or_else(|| {
+        SshError::new(
+            SshErrorKind::Timeout,
+            "probe 输出缺少完成标记 PIX_PROBE_DONE",
+        )
+    })
 }
 
 /// SSH 传输抽象：本地系统 ssh 是 P1 后端；russh 等后续后端按此 trait 接入。
 pub trait SshTransport: Send + Sync {
     /// 探测远端平台与 node/pi 安装情况（单次 exec，30s 超时）。
+    /// 契约 P1 §1.4 冻结 API；生产调用方改用自由函数 `remote_probe`
+    ///（多后端统一），保留 trait 方法供 P4 russh 后端接入。
+    #[allow(dead_code)]
     fn probe(&self) -> impl Future<Output = Result<RemoteProbe, SshError>> + Send;
     /// 一次性远端命令。契约 P1 §1.4 冻结 API，P4 russh 后端启用
-    /// （P2 调用方继续用自由函数 `ssh_exec`/`ssh_exec_with_stdin`）。
+    /// （调用方继续用自由函数 `remote_exec`/`remote_exec_with_stdin`）。
     #[allow(dead_code)]
     fn exec(
         &self,
@@ -396,8 +418,8 @@ pub trait SshTransport: Send + Sync {
         timeout: Duration,
     ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
     /// 长驻流（`pi --mode rpc`），返回本地 ssh 子进程。
-    /// 契约 P1 §1.4 冻结 API，P4 russh 后端启用（P2 调用方用自由函数
-    /// `ssh_exec_stream`）。
+    /// 契约 P1 §1.4 冻结 API，P4 russh 后端启用（调用方用自由函数
+    /// `remote_exec_stream`）。
     #[allow(dead_code)]
     fn exec_stream(&self, script: &str)
         -> impl Future<Output = Result<Child, SshError>> + Send;
@@ -409,6 +431,9 @@ pub struct SystemSsh {
 }
 
 impl SystemSsh {
+    /// 契约 P1 §1.4 冻结 API；生产调用方改用 `RemoteEndpoint::Ssh` 装配 +
+    /// 自由函数（多后端契约 §1.3）。
+    #[allow(dead_code)]
     pub fn new(endpoint: SshEndpoint) -> Self {
         Self { endpoint }
     }
@@ -416,21 +441,15 @@ impl SystemSsh {
 
 impl SshTransport for SystemSsh {
     async fn probe(&self) -> Result<RemoteProbe, SshError> {
-        let output = ssh_exec(&self.endpoint, PROBE_SCRIPT, PROBE_TIMEOUT).await?;
-        parse_probe_output(&output.stdout).ok_or_else(|| {
-            SshError::new(
-                SshErrorKind::Timeout,
-                "probe 输出缺少完成标记 PIX_PROBE_DONE",
-            )
-        })
+        remote_probe(&RemoteEndpoint::Ssh(self.endpoint.clone())).await
     }
 
     async fn exec(&self, script: &str, timeout: Duration) -> Result<ExecOutput, SshError> {
-        ssh_exec(&self.endpoint, script, timeout).await
+        remote_exec(&RemoteEndpoint::Ssh(self.endpoint.clone()), script, timeout).await
     }
 
     async fn exec_stream(&self, script: &str) -> Result<Child, SshError> {
-        ssh_exec_stream(&self.endpoint, script).await
+        remote_exec_stream(&RemoteEndpoint::Ssh(self.endpoint.clone()), script).await
     }
 }
 
@@ -691,7 +710,7 @@ mod tests {
             "PIX_SSH_COMMAND",
             format!("{} -e console.log(process.argv.at(-1)) --", node.display()),
         );
-        let result = ssh_exec(&endpoint(), "echo hi", Duration::from_secs(30)).await;
+        let result = remote_exec(&RemoteEndpoint::Ssh(endpoint()), "echo hi", Duration::from_secs(30)).await;
         std::env::remove_var("PIX_SSH_COMMAND");
         let output = result.expect("mock ssh exec 应成功");
         assert_eq!(output.exit_code, 0);
@@ -716,7 +735,13 @@ mod tests {
             "PIX_SSH_COMMAND",
             format!("{} -e process.stdin.pipe(process.stdout) --", node.display()),
         );
-        let result = ssh_exec_with_stdin(&endpoint(), "cat > out", b"mjs-bytes-123", Duration::from_secs(30)).await;
+        let result = remote_exec_with_stdin(
+            &RemoteEndpoint::Ssh(endpoint()),
+            "cat > out",
+            b"mjs-bytes-123",
+            Duration::from_secs(30),
+        )
+        .await;
         std::env::remove_var("PIX_SSH_COMMAND");
         let output = result.expect("mock ssh exec_with_stdin 应成功");
         assert_eq!(output.exit_code, 0);
