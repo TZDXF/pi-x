@@ -3,7 +3,7 @@ import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceGitInfo, Worksp
 import type { SessionStore } from "@/stores/session"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import { requireSshConnectionId, loadTrustStatus, saveTrustDecision } from "@/lib/sshTrust"
 import { encodeCodedError } from "@/lib/backendError"
 
@@ -87,7 +87,7 @@ export function createWorkspaceStartup(context: StartupContext) {
     // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
     if (!dir) throw new Error(encodeCodedError("projectDirMissing", "项目目录不存在"))
     // 远程项目：P1 不支持多目录组，workspace 恒为 null（契约 §3.1 第 4 条）。
-    if (isSshProject(dir)) {
+    if (isRemoteProject(dir)) {
       const connectionId = sshConnectionIdFor(dir)
       await spawnPi(dir, file, runtimeId, undefined, connectionId)
       runtimeWorkspaces.set(runtimeId, JSON.stringify(null))
@@ -153,7 +153,7 @@ export function createWorkspaceStartup(context: StartupContext) {
     pixLog(`[perf] startSession begin selection=${selection?.branch ?? "-"}`, runtimeId)
     if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
     // 远程项目必须无 branch/worktree 选择（契约 §5）；正常入口不会产生，这里兜底校验。
-    if (selection?.project && isSshProject(selection.project) && (selection.branch || selection.worktree)) {
+    if (selection?.project && isRemoteProject(selection.project) && (selection.branch || selection.worktree)) {
       ui.pushToast(t("ssh.gitUnavailable"), "error")
       return false
     }
@@ -195,7 +195,7 @@ export function createWorkspaceStartup(context: StartupContext) {
         sshTrustStatus,
       })
       if (status.needsDecision) {
-        const allowed = await requestWorkspaceTrust(status, isSshProject(path) ? path : null)
+        const allowed = await requestWorkspaceTrust(status, isRemoteProject(path) ? path : null)
         if (!allowed) return false
       }
       // Completion may already have started an empty worker in the original cwd.

@@ -6,7 +6,7 @@
  * 解析不到时按 coded error `sshConnectionMissing` 失败或降级。
  */
 import { encodeCodedError } from "@/lib/backendError"
-import { isSshProject, resolveSshConnectionId, type SshConnectionRef } from "@/lib/ssh"
+import { isRemoteProject, resolveSshConnectionId, type SshConnectionRef } from "@/lib/ssh"
 import type { TrustStatus } from "@/api/client/config"
 
 export const SSH_CONNECTION_MISSING_FALLBACK = "远程项目没有匹配的 SSH 连接"
@@ -21,7 +21,7 @@ interface TrustWriteApi {
   sshTrustSave(project: string, sshConnectionId: string, trusted: boolean, trustParent: boolean): Promise<unknown>
 }
 
-/** 解析远程项目必须使用的连接 id；本地路径不经此入口（返回前已由 isSshProject 分流）。 */
+/** 解析远程项目必须使用的连接 id；本地路径不经此入口（返回前已由 isRemoteProject 分流）。 */
 export function requireSshConnectionId(project: string, connections: readonly SshConnectionRef[]): string {
   const connectionId = resolveSshConnectionId(project, connections)
   if (!connectionId) throw new Error(encodeCodedError("sshConnectionMissing", SSH_CONNECTION_MISSING_FALLBACK))
@@ -34,7 +34,7 @@ export async function loadTrustStatus(
   connections: readonly SshConnectionRef[],
   api: TrustReadApi,
 ): Promise<TrustStatus> {
-  if (!isSshProject(project)) return api.trustStatus(project)
+  if (!isRemoteProject(project)) return api.trustStatus(project)
   return api.sshTrustStatus(project, requireSshConnectionId(project, connections))
 }
 
@@ -48,7 +48,7 @@ export async function loadTrustStatusLenient(
   api: TrustReadApi,
   onConnectionMissing?: (error: Error) => void,
 ): Promise<TrustStatus | null> {
-  if (!isSshProject(project)) return api.trustStatus(project)
+  if (!isRemoteProject(project)) return api.trustStatus(project)
   const connectionId = resolveSshConnectionId(project, connections)
   if (!connectionId) {
     onConnectionMissing?.(new Error(encodeCodedError("sshConnectionMissing", SSH_CONNECTION_MISSING_FALLBACK)))
@@ -69,7 +69,7 @@ export async function saveTrustDecision(
   connections: readonly SshConnectionRef[],
   api: TrustWriteApi,
 ): Promise<void> {
-  if (!isSshProject(project)) {
+  if (!isRemoteProject(project)) {
     await api.trustSave(localProjectPath, trusted, trustParent)
     return
   }
@@ -84,6 +84,6 @@ export async function terminalConnectionId(
   project: string,
   listConnections: () => Promise<SshConnectionRef[]>,
 ): Promise<string | undefined> {
-  if (!isSshProject(project)) return undefined
+  if (!isRemoteProject(project)) return undefined
   return requireSshConnectionId(project, await listConnections())
 }

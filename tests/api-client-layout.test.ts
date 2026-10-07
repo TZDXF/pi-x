@@ -65,7 +65,9 @@ McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus Mcp
 getMcpStatus McpCheckResult checkMcpServer
 SshProbeInfo SshConnection SshConnectionInput SshErrorKind SshProbeResult
 sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget sshSessions
-sshTrustStatus sshTrustSave`
+sshTrustStatus sshTrustSave
+WslDistroInfo WslDistroListResult wslDistroList
+DockerContainerInfo DockerContainerListResult dockerContainerList`
   .split(/\s+/)
   .sort()
 

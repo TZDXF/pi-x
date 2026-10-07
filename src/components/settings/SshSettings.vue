@@ -1,22 +1,29 @@
 <script setup lang="ts">
-/** SSH 连接管理（契约 §2）：连接列表、新增/编辑/删除与连接测试（probe）。 */
-import { onMounted, reactive, ref } from "vue"
+/** 远程连接管理（P1 契约 §2 + 多后端契约 §3/§4/§5.4）：连接列表、新增/编辑/删除与连接测试（probe）。 */
+import { computed, onMounted, reactive, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { LoaderCircle, Pencil, PlugZap, Plus, Trash2 } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import {
+  dockerContainerList,
   sshConnectionDelete,
   sshConnectionList,
   sshConnectionProbe,
   sshConnectionSave,
   sshProbeTarget,
+  wslDistroList,
+  type DockerContainerListResult,
   type SshConnection,
   type SshProbeResult,
+  type WslDistroListResult,
 } from "@/api/piClient"
 import { tBackendError } from "@/i18n"
 import { useUiStore } from "@/stores/conversations"
+import { connectionKind, isWslPlatform, type RemoteKind } from "@/lib/ssh"
+import { remoteFormFields, remoteKindOptions } from "@/lib/remoteBackends"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -40,7 +47,34 @@ const saving = ref(false)
 const probingForm = ref(false)
 const formProbe = ref<SshProbeResult | null>(null)
 const formError = ref("")
-const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "" })
+const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "", distro: "", container: "" })
+/** 连接后端种类（多后端契约 §3.1）；编辑时由连接的 kind 决定，不可更改。 */
+const formKind = ref<RemoteKind>("ssh")
+
+// ---- 后端枚举与不可用态（多后端契约 §4.1/§4.4）----
+// 平台守卫：wsl.exe 仅 Windows 提供，非 Windows 直接隐藏 WSL 入口。
+const isWindows = isWslPlatform()
+const wslList = ref<WslDistroListResult | null>(null)
+const dockerList = ref<DockerContainerListResult | null>(null)
+const enumsLoading = ref(false)
+
+const kindOptions = computed(() =>
+  remoteKindOptions({
+    isWindows,
+    wslAvailable: wslList.value?.available ?? null,
+    dockerAvailable: dockerList.value?.available ?? null,
+  }),
+)
+const formFields = computed(() => remoteFormFields(formKind.value))
+const wslAvailable = computed(() => wslList.value?.available ?? false)
+const dockerAvailable = computed(() => dockerList.value?.available ?? false)
+/** 保存按钮可用性：名称恒必填，其余按 kind 各有必填项。 */
+const formReady = computed(() => {
+  if (!form.name.trim()) return false
+  if (formKind.value === "ssh") return !!form.host.trim()
+  if (formKind.value === "wsl") return !!form.distro
+  return !!form.container
+})
 
 onMounted(load)
 
@@ -56,45 +90,97 @@ async function load() {
   }
 }
 
-function hostLabel(connection: SshConnection) {
+/**
+ * 枚举 WSL 发行版与 Docker 容器，驱动 kind 入口置灰与下拉选项。
+ * 枚举命令失败（如后端不可达）按不可用态呈现，不抛错 toast（多后端契约 §4.4）。
+ */
+async function loadEnumerations() {
+  if (enumsLoading.value) return
+  enumsLoading.value = true
+  const [wsl, docker] = await Promise.allSettled([wslDistroList(), dockerContainerList()])
+  wslList.value =
+    wsl.status === "fulfilled" ? wsl.value : { available: false, distros: [], errorKind: null, error: null }
+  dockerList.value =
+    docker.status === "fulfilled"
+      ? docker.value
+      : { available: false, containers: [], errorKind: null, error: null }
+  enumsLoading.value = false
+}
+
+function kindLabel(connection: SshConnection) {
+  const kind = connectionKind(connection)
+  return t(kind === "wsl" ? "ssh.kindWsl" : kind === "docker" ? "ssh.kindDocker" : "ssh.kindSsh")
+}
+
+function connectionLabel(connection: SshConnection) {
+  const kind = connectionKind(connection)
+  if (kind === "wsl") {
+    const distro = connection.distro ?? ""
+    return connection.user ? `${connection.user}@${distro}` : distro
+  }
+  if (kind === "docker") return connection.container ?? ""
   const authority = connection.user ? `${connection.user}@${connection.host}` : connection.host
   return connection.port === 22 ? authority : `${authority}:${connection.port}`
 }
 
 function openCreate() {
   editingId.value = null
-  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "" })
+  formKind.value = "ssh"
+  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "", distro: "", container: "" })
   formProbe.value = null
   formError.value = ""
   dialogOpen.value = true
+  void loadEnumerations()
 }
 
 function openEdit(connection: SshConnection) {
   editingId.value = connection.id
+  formKind.value = connectionKind(connection)
   Object.assign(form, {
     name: connection.name,
     host: connection.host,
     port: String(connection.port),
     user: connection.user ?? "",
     keyPath: connection.keyPath ?? "",
+    distro: connection.distro ?? "",
+    container: connection.container ?? "",
   })
   formProbe.value = null
   formError.value = ""
   dialogOpen.value = true
+  void loadEnumerations()
 }
 
-/** 表单可用时的目标参数；非法返回 null 并写 formError。 */
+/** 表单可用时的目标参数；非法返回 null 并写 formError。后端做 per-kind 裁剪与最终校验（契约 §3.1）。 */
 function formTarget() {
-  const host = form.host.trim()
   const name = form.name.trim()
+  if (!name) {
+    formError.value = t("ssh.nameRequired")
+    return null
+  }
+  const base = { id: editingId.value ?? undefined, name, kind: formKind.value }
+  if (formKind.value === "wsl") {
+    if (!form.distro) {
+      formError.value = t("ssh.distroRequired")
+      return null
+    }
+    return { ...base, kind: "wsl" as const, distro: form.distro, user: form.user.trim() || null }
+  }
+  if (formKind.value === "docker") {
+    if (!form.container) {
+      formError.value = t("ssh.containerRequired")
+      return null
+    }
+    return { ...base, kind: "docker" as const, container: form.container }
+  }
+  const host = form.host.trim()
   const port = Number(form.port)
-  if (!name) formError.value = t("ssh.nameRequired")
-  else if (!host) formError.value = t("ssh.hostRequired")
+  if (!host) formError.value = t("ssh.hostRequired")
   else if (!Number.isInteger(port) || port < 1 || port > 65535) formError.value = t("ssh.portInvalid")
   else
     return {
-      id: editingId.value ?? undefined,
-      name,
+      ...base,
+      kind: "ssh" as const,
       host,
       port,
       user: form.user.trim() || null,
@@ -105,7 +191,8 @@ function formTarget() {
 
 async function testForm() {
   const target = formTarget()
-  if (!target) return
+  // ssh_probe_target 仅接受 SSH 目标参数；按钮也只在 SSH 表单出现。
+  if (!target || target.kind !== "ssh") return
   probingForm.value = true
   formProbe.value = null
   try {
@@ -197,8 +284,12 @@ function probeLines(info: {
       <ul v-else class="[list-style:none] m-0 p-0 space-y-2">
         <li v-for="connection in connections" :key="connection.id" class="rounded-xl border border-border p-4">
           <div class="flex flex-wrap items-center gap-2">
+            <span
+              class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+              :title="t('ssh.kindLabel')"
+            >{{ kindLabel(connection) }}</span>
             <span class="text-sm font-medium">{{ connection.name }}</span>
-            <span class="text-muted-foreground font-mono text-xs">{{ hostLabel(connection) }}</span>
+            <span class="text-muted-foreground font-mono text-xs">{{ connectionLabel(connection) }}</span>
             <span
               v-if="probes[connection.id]"
               class="ms-auto rounded-full px-2 py-0.5 text-xs"
@@ -244,7 +335,10 @@ function probeLines(info: {
               </Button>
             </div>
           </div>
-          <p v-if="connection.keyPath" class="mt-1 text-muted-foreground truncate font-mono text-xs">
+          <p
+            v-if="connectionKind(connection) === 'ssh' && connection.keyPath"
+            class="mt-1 text-muted-foreground truncate font-mono text-xs"
+          >
             {{ connection.keyPath }}
           </p>
           <p v-if="probes[connection.id]?.ok" class="mt-1 text-xs text-muted-foreground">
@@ -288,25 +382,98 @@ function probeLines(info: {
               :placeholder="t('ssh.namePlaceholder')"
             />
           </label>
-          <div class="grid grid-cols-[1fr_7rem] gap-3">
-            <label class="block space-y-2 text-sm font-medium" for="ssh-host">
-              {{ t("ssh.host") }}
-              <Input id="ssh-host" v-model="form.host" :placeholder="t('ssh.hostPlaceholder')" />
-            </label>
-            <label class="block space-y-2 text-sm font-medium" for="ssh-port">
-              {{ t("ssh.port") }}
-              <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" />
-            </label>
+          <!-- kind 选择器（多后端契约 §5.4）：编辑时种类不可更改；非 Windows 隐藏 WSL，
+               枚举不可用的后端入口置灰并提示（§4.4）。 -->
+          <div v-if="!editingId" class="space-y-2">
+            <span class="block text-sm font-medium">{{ t("ssh.kindLabel") }}</span>
+            <div class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium" role="tablist">
+              <button
+                v-for="option in kindOptions"
+                :key="option.kind"
+                type="button"
+                role="tab"
+                :disabled="option.disabled"
+                :title="option.disabled ? t(option.hintKey!) : undefined"
+                class="flex-1 rounded-md px-3 py-1.5 transition-colors"
+                :class="[
+                  formKind === option.kind ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground',
+                  { 'cursor-not-allowed opacity-50': option.disabled },
+                ]"
+                :aria-selected="formKind === option.kind"
+                @click="formKind = option.kind"
+              >
+                {{ t(option.kind === "wsl" ? "ssh.kindWsl" : option.kind === "docker" ? "ssh.kindDocker" : "ssh.kindSsh") }}
+              </button>
+            </div>
+            <p v-if="enumsLoading" class="text-xs text-muted-foreground">{{ t("ssh.loading") }}</p>
           </div>
-          <label class="block space-y-2 text-sm font-medium" for="ssh-user">
-            {{ t("ssh.user") }}
-            <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" />
-          </label>
-          <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
-            {{ t("ssh.keyPath") }}
-            <Input id="ssh-key-path" v-model="form.keyPath" :placeholder="t('ssh.keyPathPlaceholder')" />
-          </label>
-          <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
+          <!-- kind = ssh：主机/端口/用户/私钥（表单不变） -->
+          <template v-if="formFields.includes('host')">
+            <div class="grid grid-cols-[1fr_7rem] gap-3">
+              <label class="block space-y-2 text-sm font-medium" for="ssh-host">
+                {{ t("ssh.host") }}
+                <Input id="ssh-host" v-model="form.host" :placeholder="t('ssh.hostPlaceholder')" />
+              </label>
+              <label class="block space-y-2 text-sm font-medium" for="ssh-port">
+                {{ t("ssh.port") }}
+                <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" />
+              </label>
+            </div>
+            <label class="block space-y-2 text-sm font-medium" for="ssh-user">
+              {{ t("ssh.user") }}
+              <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" />
+            </label>
+            <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
+              {{ t("ssh.keyPath") }}
+              <Input id="ssh-key-path" v-model="form.keyPath" :placeholder="t('ssh.keyPathPlaceholder')" />
+            </label>
+            <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
+          </template>
+          <!-- kind = wsl：发行版下拉（wsl_distro_list）+ 可选用户名 -->
+          <template v-if="formFields.includes('distro')">
+            <label class="block space-y-2 text-sm font-medium" for="ssh-distro">
+              {{ t("ssh.distro") }}
+              <Select v-model="form.distro" :disabled="!wslAvailable">
+                <SelectTrigger id="ssh-distro" class="w-full">
+                  <SelectValue :placeholder="t('ssh.distroPlaceholder')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="distro in wslList?.distros ?? []" :key="distro.name" :value="distro.name">
+                    {{ distro.name }}（{{ distro.state
+                    }}<template v-if="distro.isDefault"> · {{ t("ssh.distroDefault") }}</template>）
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            <div v-if="wslList && !wslAvailable" class="rounded-md border border-border px-3 py-2 text-xs">
+              <p class="text-muted-foreground">{{ t("ssh.wslUnavailable") }}</p>
+              <p v-if="wslList.error" class="text-destructive">{{ tBackendError(wslList.error) }}</p>
+            </div>
+            <label class="block space-y-2 text-sm font-medium" for="ssh-wsl-user">
+              {{ t("ssh.user") }}
+              <Input id="ssh-wsl-user" v-model="form.user" :placeholder="t('ssh.wslUserPlaceholder')" />
+            </label>
+          </template>
+          <!-- kind = docker：容器下拉（docker_container_list，含未运行容器） -->
+          <template v-if="formFields.includes('container')">
+            <label class="block space-y-2 text-sm font-medium" for="ssh-container">
+              {{ t("ssh.container") }}
+              <Select v-model="form.container" :disabled="!dockerAvailable">
+                <SelectTrigger id="ssh-container" class="w-full">
+                  <SelectValue :placeholder="t('ssh.containerPlaceholder')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="container in dockerList?.containers ?? []" :key="container.name" :value="container.name">
+                    {{ container.name }}（{{ container.status || container.state }}）
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            <div v-if="dockerList && !dockerAvailable" class="rounded-md border border-border px-3 py-2 text-xs">
+              <p class="text-muted-foreground">{{ t("ssh.dockerUnavailable") }}</p>
+              <p v-if="dockerList.error" class="text-destructive">{{ tBackendError(dockerList.error) }}</p>
+            </div>
+          </template>
 
           <div v-if="formProbe" class="rounded-md border border-border px-3 py-2 text-xs">
             <p
@@ -323,11 +490,13 @@ function probeLines(info: {
           <p v-if="formError" role="alert" class="text-sm text-destructive">{{ formError }}</p>
 
           <DialogFooter class="gap-2">
-            <Button type="button" variant="outline" :disabled="probingForm || saving" @click="testForm">
+            <!-- 「测试连接」走 ssh_probe_target（SSH 专属参数），仅 SSH 表单提供；
+                 WSL/Docker 连接保存后可用列表行的 probe 按钮测试。 -->
+            <Button v-if="formKind === 'ssh'" type="button" variant="outline" :disabled="probingForm || saving" @click="testForm">
               <LoaderCircle v-if="probingForm" :size="15" class="animate-spin" />
               {{ t("ssh.testConnection") }}
             </Button>
-            <Button type="submit" :disabled="saving || !form.name.trim() || !form.host.trim()">
+            <Button type="submit" :disabled="saving || !formReady">
               {{ t("ssh.save") }}
             </Button>
           </DialogFooter>

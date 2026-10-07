@@ -2,7 +2,7 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
-import { isSshProject, forgetSshProjectConnection } from "@/lib/ssh"
+import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
 import { requireSshConnectionId } from "@/lib/sshTrust"
 import {
   listSessions,
@@ -330,7 +330,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function removeProject(path: string) {
     path = projectRoot(path)
-    if (isSshProject(path)) forgetSshProjectConnection(path)
+    if (isRemoteProject(path)) forgetSshProjectConnection(path)
     if (!isRemovedProject(path)) {
       removedProjects.value = [path, ...removedProjects.value]
       persistRemovedProjects()
@@ -373,7 +373,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
     // 远程项目跳过本地 git 查询（契约 §5），直接进项目列表。
-    if (isSshProject(path)) {
+    if (isRemoteProject(path)) {
       remember(path)
       return
     }
@@ -397,7 +397,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
     // 远程项目走 ssh_sessions 远程列表（契约 §2.4）；失败置空并上抛由调用方 toast。
-    if (isSshProject(path)) {
+    if (isRemoteProject(path)) {
       const version = (versions[path] = (versions[path] || 0) + 1)
       remoteSessionsLoading.value[path] = true
       try {

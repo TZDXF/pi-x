@@ -18,10 +18,11 @@ import { parseCodedError } from "@/lib/backendError"
 const chatViewSource = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
 const rightSidebarSource = readFileSync(new URL("../src/components/RightSidebar.vue", import.meta.url), "utf8")
 
-test("ChatView 终端快捷键不再受 isSshProject 守卫，files 守卫保留", () => {
+test("ChatView 终端快捷键不再受远程守卫，files 守卫保留", () => {
   expect(chatViewSource).toMatch(/registerShortcutHandler\("sidebar\.terminal", \(\) => addSidebarTab\("terminal"\)\)/)
+  // 守卫入口按多后端契约 §2.3 统一为 isRemoteProject（SSH/WSL/Docker 一视同仁）。
   expect(chatViewSource).toMatch(
-    /registerShortcutHandler\("sidebar\.files", \(\) => \{\s*\n\s*if \(!isSshProject\(props\.project\)\) addSidebarTab\("files"\)/,
+    /registerShortcutHandler\("sidebar\.files", \(\) => \{\s*\n\s*if \(!isRemoteProject\(props\.project\)\) addSidebarTab\("files"\)/,
   )
   // 切换到远程项目时仍关闭 files tab，但不再关闭终端 tab
   expect(chatViewSource).toMatch(/if \(tab\.type === "files"\) closeSidebarTab\(tab\.id\)/)

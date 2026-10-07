@@ -12,7 +12,7 @@ import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import type { FileChange } from "@/lib/sessionChanges"
 import type { TurnCheckpointRecord } from "@/lib/checkpoints"
 
@@ -43,7 +43,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const addOpen = ref(false)
 // 远程项目不支持本地文件浏览（契约 §5）；终端自 P2 起经 ssh -tt 开放（契约 §3.4）。
-const filesAvailable = computed(() => !isSshProject(props.project))
+const filesAvailable = computed(() => !isRemoteProject(props.project))
 function iconFor(type: SidebarTabType) {
   return type === "review" ? FileCode : type === "files" ? FolderTree : type === "browser" ? Globe : SquareTerminal
 }

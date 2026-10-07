@@ -11,7 +11,17 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useWorkspaceStore, type ProjectGroup } from "@/stores/workspace"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
-import { buildSshUri, isSshProject, parseSshUri, normalizeSshPath, rememberSshProjectConnection } from "@/lib/ssh"
+import {
+  buildDockerUri,
+  buildSshUri,
+  buildWslUri,
+  connectionKind,
+  isRemoteProject,
+  normalizeSshPath,
+  parseRemoteUri,
+  rememberSshProjectConnection,
+  resolveSshConnectionId,
+} from "@/lib/ssh"
 import { tBackendError } from "@/i18n"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
@@ -26,8 +36,8 @@ const adding = ref(false)
 const folderName = baseName
 const valid = computed(() => !!title.value.trim() && folders.value.length > 0 && folders.value.includes(primary.value))
 
-// ---- SSH 远程项目模式（契约 §6.3）：选连接 + 输入远程路径 → probe 校验 → 保存为项目 ----
-const mode = ref<"local" | "ssh">("local")
+// ---- 远程项目模式（P1 契约 §6.3 + 多后端契约 §5.4）：选连接（SSH/WSL/Docker）+ 输入远程路径 → probe 校验 → 保存为项目 ----
+const mode = ref<"local" | "remote">("local")
 const connections = ref<SshConnection[]>([])
 const connectionsLoading = ref(false)
 const connectionId = ref("")
@@ -38,9 +48,18 @@ const probeResult = ref<SshProbeResult | null>(null)
 const selectedConnection = computed(
   () => connections.value.find(connection => connection.id === connectionId.value) ?? null,
 )
-/** SSH 模式：连接与路径就绪即可提交；probe 仅做校验提示，不阻塞（目录校验由 spawn 侧兜底）。 */
-const sshValid = computed(() => !!selectedConnection.value && normalizeSshPath(remotePath.value.trim()) !== null)
-const submitValid = computed(() => (mode.value === "ssh" ? sshValid.value : valid.value))
+const selectedKind = computed(() => (selectedConnection.value ? connectionKind(selectedConnection.value) : null))
+/** 路径输入标签按连接 kind 区分：ssh=远程路径、wsl=发行版内路径、docker=容器内路径。 */
+const pathLabelKey = computed(() =>
+  selectedKind.value === "wsl"
+    ? "projectDialog.wslPath"
+    : selectedKind.value === "docker"
+      ? "projectDialog.dockerPath"
+      : "projectDialog.sshPath",
+)
+/** 远程模式：连接与路径就绪即可提交；probe 仅做校验提示，不阻塞（目录校验由 spawn 侧兜底）。 */
+const remoteValid = computed(() => !!selectedConnection.value && normalizeSshPath(remotePath.value.trim()) !== null)
+const submitValid = computed(() => (mode.value === "remote" ? remoteValid.value : valid.value))
 
 async function loadConnections() {
   if (!isDesktop || connectionsLoading.value) return
@@ -54,16 +73,15 @@ async function loadConnections() {
   }
 }
 
-/** 连接与 URI 解析结果必须一致（host/port/user），供编辑态回选连接。 */
-function connectionFor(uri: string): SshConnection | null {
-  const target = parseSshUri(uri)
-  if (!target) return null
-  return (
-    connections.value.find(
-      connection =>
-        connection.host === target.host && connection.port === target.port && (connection.user ?? null) === target.user,
-    ) ?? null
-  )
+/** 连接下拉项的描述（per-kind）：ssh 显示 user@host:port，wsl 显示 user@distro，docker 显示容器名。 */
+function connectionLabel(connection: SshConnection): string {
+  const kind = connectionKind(connection)
+  if (kind === "wsl") {
+    return connection.user ? `${connection.user}@${connection.distro ?? ""}` : connection.distro ?? ""
+  }
+  if (kind === "docker") return connection.container ?? ""
+  const authority = connection.user ? `${connection.user}@${connection.host}` : connection.host
+  return connection.port === 22 ? authority : `${authority}:${connection.port}`
 }
 
 watch(
@@ -79,24 +97,23 @@ watch(
     probeResult.value = null
     remotePath.value = ""
     connectionId.value = ""
-    // 编辑远程项目时按 URI 回选连接与路径。
-    if (props.editPath && isSshProject(props.editPath)) {
-      mode.value = "ssh"
-      const target = parseSshUri(props.editPath)
-      remotePath.value = target?.path ?? ""
+    // 编辑远程项目时按 URI 回选连接与路径（per-kind 匹配，多后端契约 §5.4）。
+    if (props.editPath && isRemoteProject(props.editPath)) {
+      mode.value = "remote"
+      const target = parseRemoteUri(props.editPath)
+      remotePath.value = target?.target.path ?? ""
       void loadConnections().then(() => {
-        const match = props.editPath ? connectionFor(props.editPath) : null
-        connectionId.value = match?.id ?? ""
+        connectionId.value = (props.editPath && resolveSshConnectionId(props.editPath, connections.value)) || ""
       })
     } else {
       mode.value = "local"
     }
-    if (mode.value === "ssh") void loadConnections()
+    if (mode.value === "remote") void loadConnections()
   },
 )
 
 watch(mode, value => {
-  if (value === "ssh") {
+  if (value === "remote") {
     probeResult.value = null
     void loadConnections()
   }
@@ -116,14 +133,26 @@ async function testConnection() {
   }
 }
 
-/** SSH 模式提交：构造 ssh:// URI（唯一入口 buildSshUri），记录连接关联后按普通项目保存。 */
-function submitSsh() {
+/** 按连接的 kind 构造展示 URI（唯一入口 build*Uri，禁止手拼；多后端契约 §5.4）。 */
+function remoteUriFor(connection: SshConnection, path: string): string {
+  switch (connectionKind(connection)) {
+    case "wsl":
+      return buildWslUri({ distro: connection.distro ?? "", user: connection.user ?? null, path })
+    case "docker":
+      return buildDockerUri({ container: connection.container ?? "", path })
+    default:
+      return buildSshUri({ host: connection.host, port: connection.port, user: connection.user, path })
+  }
+}
+
+/** 远程模式提交：构造远程 URI，记录连接关联后按普通项目保存。 */
+function submitRemote() {
   const connection = selectedConnection.value
   const path = normalizeSshPath(remotePath.value.trim())
   if (!connection || !path) return
   let uri: string
   try {
-    uri = buildSshUri({ host: connection.host, port: connection.port, user: connection.user, path })
+    uri = remoteUriFor(connection, path)
   } catch (e) {
     error.value = tBackendError(e)
     return
@@ -181,8 +210,8 @@ function removeFolder(path: string) {
 }
 
 function submit() {
-  if (mode.value === "ssh") {
-    submitSsh()
+  if (mode.value === "remote") {
+    submitRemote()
     return
   }
   if (!valid.value) return
@@ -205,7 +234,7 @@ function submit() {
           t(props.editPath ? "projectDialog.editTitle" : "projectDialog.title")
         }}</DialogTitle></DialogHeader
       >
-      <!-- 项目来源切换：本地文件夹 / SSH 远程（P1 远程项目为单目录） -->
+      <!-- 项目来源切换：本地文件夹 / 远程（SSH/WSL/Docker，多后端契约 §5.4；远程项目为单目录） -->
       <div
         v-if="!props.editPath"
         class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium"
@@ -213,7 +242,7 @@ function submit() {
         :aria-label="t('projectDialog.modeLabel')"
       >
         <button
-          v-for="value in ['local', 'ssh'] as const"
+          v-for="value in ['local', 'remote'] as const"
           :key="value"
           v-show="value === 'local' || isDesktop"
           type="button"
@@ -223,22 +252,20 @@ function submit() {
           :aria-selected="mode === value"
           @click="mode = value"
         >
-          {{ t(value === "local" ? "projectDialog.modeLocal" : "projectDialog.modeSsh") }}
+          {{ t(value === "local" ? "projectDialog.modeLocal" : "projectDialog.modeRemote") }}
         </button>
       </div>
       <form class="space-y-5" @submit.prevent="submit">
-        <template v-if="mode === 'ssh'">
+        <template v-if="mode === 'remote'">
           <label class="block space-y-2 text-sm font-medium" for="ssh-project-connection">
-            {{ t("projectDialog.sshConnection") }}
+            {{ t("projectDialog.remoteConnection") }}
             <Select v-model="connectionId">
               <SelectTrigger id="ssh-project-connection" class="w-full">
-                <SelectValue :placeholder="t('projectDialog.sshConnectionPlaceholder')" />
+                <SelectValue :placeholder="t('projectDialog.remoteConnectionPlaceholder')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="connection in connections" :key="connection.id" :value="connection.id">
-                  {{ connection.name }}（{{ connection.user ? `${connection.user}@` : "" }}{{ connection.host
-                  }}<template v-if="connection.port !== 22">:{{ connection.port }}</template
-                  >）
+                  {{ connection.name }}（{{ connectionLabel(connection) }}）
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -248,11 +275,11 @@ function submit() {
             v-else-if="!connections.length"
             class="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground"
           >
-            {{ t("projectDialog.sshNoConnections") }}
+            {{ t("projectDialog.noRemoteConnections") }}
           </p>
           <div class="flex items-end gap-2">
             <label class="min-w-0 flex-1 space-y-2 text-sm font-medium" for="ssh-project-path">
-              {{ t("projectDialog.sshPath") }}
+              {{ t(pathLabelKey) }}
               <Input
                 id="ssh-project-path"
                 v-model="remotePath"

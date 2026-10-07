@@ -1,12 +1,24 @@
 import { describe, expect, test } from "vitest"
 import {
+  buildDockerUri,
   buildSshUri,
+  buildWslUri,
+  dockerIdentityKey,
+  isRemoteUri,
   isSshUri,
   normalizeSshPath,
+  parseDockerIdentityKey,
+  parseDockerUri,
+  parseRemoteUri,
   parseSshIdentityKey,
   parseSshUri,
+  parseWslIdentityKey,
+  parseWslUri,
   sshIdentityKey,
+  wslIdentityKey,
+  type DockerTarget,
   type SshTarget,
+  type WslTarget,
 } from "@/lib/ssh"
 
 /** 契约 §1.5 的 8 组用例；与 Rust identity.rs 单测保持一一对应。 */
@@ -98,5 +110,145 @@ describe("ssh identity", () => {
     expect(normalizeSshPath("/a\nb")).toBeNull()
     expect(normalizeSshPath("/a\tb")).toBeNull()
     expect(normalizeSshPath("/a b")).toBe("/a b")
+  })
+})
+
+/**
+ * 多后端契约（docs/plans/remote-backends-contract.md）§2.4 用例表：
+ * WSL / Docker 身份与伞型解析；与 Rust identity.rs 单测保持一一对应。
+ */
+describe("wsl identity（契约 §2.4 用例 1-4）", () => {
+  test("case 1: user + distro round-trip 与身份键", () => {
+    const uri = "wsl://tzdxf@Ubuntu-22.04/home/dev/proj"
+    const target = parseWslUri(uri)
+    expect(target).toEqual({ distro: "Ubuntu-22.04", user: "tzdxf", path: "/home/dev/proj" })
+    expect(buildWslUri(target!)).toBe(uri)
+    expect(wslIdentityKey(target!)).toBe("remote:wsl:Ubuntu-22.04:tzdxf:/home/dev/proj")
+  })
+
+  test("case 2: 缺省 user、path 大小写保留、身份键空 user 段", () => {
+    const target = parseWslUri("wsl://Ubuntu/Proj")
+    expect(target).toEqual({ distro: "Ubuntu", user: null, path: "/Proj" })
+    expect(wslIdentityKey(target!)).toBe("remote:wsl:Ubuntu::/Proj")
+    expect(buildWslUri(target!)).toBe("wsl://Ubuntu/Proj")
+  })
+
+  test("case 3: 路径归一化复用 normalizeSshPath", () => {
+    expect(parseWslUri("wsl://Ubuntu/a/b///")).toMatchObject({ path: "/a/b" })
+    expect(parseWslUri("wsl://Ubuntu/./a")).toMatchObject({ path: "/a" })
+    expect(parseWslUri("wsl://Ubuntu/../etc")).toBeNull()
+    // 契约 §2.2：不单独存在 normalizeWslPath，复用 normalizeSshPath。
+    expect(normalizeSshPath("\\home\\dev")).toBe("/home/dev")
+  })
+
+  test("case 4: 非法输入全部返回 null", () => {
+    for (const uri of [
+      "wsl://default/x",
+      "wsl://Default/x",
+      "wsl://Ubuntu",
+      "wsl:///x",
+      "wsl://@U/x",
+      "wsl://U a/x",
+      "wsl://U:b/x",
+      "C:/code",
+      "/home/u",
+    ]) {
+      expect(parseWslUri(uri), uri).toBeNull()
+    }
+  })
+
+  test("buildWslUri / wslIdentityKey 对非法字段抛错", () => {
+    expect(() => buildWslUri({ distro: "default", user: null, path: "/a" })).toThrow()
+    expect(() => buildWslUri({ distro: "Ubuntu", user: "in valid", path: "/a" })).toThrow()
+    expect(() => buildWslUri({ distro: "Ubuntu", user: null, path: "relative" })).toThrow()
+    expect(() => wslIdentityKey({ distro: "-bad", user: null, path: "/a" })).toThrow()
+    expect(() => wslIdentityKey({ distro: "Ubuntu", user: null, path: "/a:b" })).toThrow()
+  })
+
+  test("身份键互逆与缺失 path 段", () => {
+    const targets: WslTarget[] = [
+      { distro: "Ubuntu-22.04", user: "tzdxf", path: "/home/dev/proj" },
+      { distro: "Ubuntu", user: null, path: "/" },
+      { distro: "Debian", user: "Dev.Name", path: "/a b/c" },
+    ]
+    for (const target of targets) {
+      expect(parseWslIdentityKey(wslIdentityKey(target))).toEqual(target)
+    }
+    expect(parseWslIdentityKey("remote:wsl:Ubuntu:tzdxf")).toBeNull()
+    expect(parseWslIdentityKey("remote:wsl:Ubuntu:tzdxf:/a")).toEqual({
+      distro: "Ubuntu",
+      user: "tzdxf",
+      path: "/a",
+    })
+    // 未归一化 path 拒绝
+    expect(parseWslIdentityKey("remote:wsl:Ubuntu::/a/")).toBeNull()
+    expect(parseWslIdentityKey("remote:wsl:Ubuntu::a")).toBeNull()
+    // distro 为 default（任何大小写）拒绝
+    expect(parseWslIdentityKey("remote:wsl:default::/a")).toBeNull()
+  })
+})
+
+describe("docker identity（契约 §2.4 用例 5-7）", () => {
+  test("case 5: 容器名 round-trip 与身份键", () => {
+    const uri = "docker://pix-docker-test/root/pix-docker-demo"
+    const target = parseDockerUri(uri)
+    expect(target).toEqual({ container: "pix-docker-test", path: "/root/pix-docker-demo" })
+    expect(dockerIdentityKey(target!)).toBe("remote:docker:pix-docker-test:/root/pix-docker-demo")
+    expect(buildDockerUri(target!)).toBe(uri)
+  })
+
+  test("case 6: 短 ID 合法，非法输入返回 null", () => {
+    expect(parseDockerUri("docker://fdc995e5a8fc/root/demo")).toEqual({
+      container: "fdc995e5a8fc",
+      path: "/root/demo",
+    })
+    for (const uri of ["docker://-x/y", "docker://x", "docker://x:1/y", "docker:///y"]) {
+      expect(parseDockerUri(uri), uri).toBeNull()
+    }
+  })
+
+  test("case 7: 身份键互逆、缺失段与未归一化 path", () => {
+    const targets: DockerTarget[] = [
+      { container: "pix-docker-test", path: "/root/pix-docker-demo" },
+      { container: "fdc995e5a8fc", path: "/" },
+    ]
+    for (const target of targets) {
+      expect(parseDockerIdentityKey(dockerIdentityKey(target))).toEqual(target)
+    }
+    expect(parseDockerIdentityKey("remote:docker:c:/a")).toBeNull()
+    expect(parseDockerIdentityKey("remote:docker:c")).toBeNull()
+    expect(parseDockerIdentityKey("remote:docker:pix-docker-test:/a/")).toBeNull()
+    expect(parseDockerIdentityKey("remote:docker:pix-docker-test:a")).toBeNull()
+  })
+
+  test("buildDockerUri / dockerIdentityKey 对非法字段抛错", () => {
+    expect(() => buildDockerUri({ container: "-x", path: "/a" })).toThrow()
+    expect(() => buildDockerUri({ container: "x:1", path: "/a" })).toThrow()
+    expect(() => buildDockerUri({ container: "pix", path: "relative" })).toThrow()
+    expect(() => dockerIdentityKey({ container: "", path: "/a" })).toThrow()
+  })
+})
+
+describe("伞型 parseRemoteUri / isRemoteUri（契约 §2.4 用例 8）", () => {
+  test("三后端分别命中对应分支", () => {
+    expect(parseRemoteUri("ssh://dev@h:22/a")).toMatchObject({ kind: "ssh" })
+    expect(parseRemoteUri("wsl://U/a")).toMatchObject({ kind: "wsl" })
+    // 契约 §2.4 用例 8 经发起人修订：容器名至少 2 字符（对齐 moby 规则）。
+    expect(parseRemoteUri("docker://ci/a")).toMatchObject({ kind: "docker" })
+    expect(parseRemoteUri("docker://c/a")).toBeNull()
+  })
+
+  test("本地路径与未知前缀返回 null，本地项目零影响", () => {
+    for (const value of ["C:/code", "/home/u", "", "wslx://a/b", "https://host/x"]) {
+      expect(parseRemoteUri(value), value).toBeNull()
+      expect(isRemoteUri(value), value).toBe(false)
+      expect(isSshUri(value), value).toBe(false)
+    }
+  })
+
+  test("isRemoteUri 对三后端前缀为 true", () => {
+    expect(isRemoteUri("ssh://host/a")).toBe(true)
+    expect(isRemoteUri("wsl://Ubuntu/a")).toBe(true)
+    expect(isRemoteUri("docker://c/a")).toBe(true)
   })
 })

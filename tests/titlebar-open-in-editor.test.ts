@@ -42,8 +42,11 @@ function harness(props: {
     navigate: () => {},
     canGoBack: false,
     canGoForward: false,
-    // lib/ssh 导入被 import 剥离替换，这里提供等价语义；ssh:// 项目不可本地打开。
+    // lib/ssh 导入被 import 剥离替换，这里提供等价语义；远程项目不可本地打开。
     isSshProject: (value: string) => typeof value === "string" && value.startsWith("ssh://"),
+    isRemoteProject: (value: string) =>
+      typeof value === "string" &&
+      (value.startsWith("ssh://") || value.startsWith("wsl://") || value.startsWith("docker://")),
     isDesktop: props.isDesktop ?? true,
     getCurrentWindow: () => ({
       onResized: async () => () => {},

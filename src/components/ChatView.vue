@@ -33,7 +33,7 @@ import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import RightSidebar, { type SidebarTabItem, type SidebarTabType } from "@/components/RightSidebar.vue"
@@ -104,7 +104,7 @@ const props = defineProps<{
 watch(
   () => props.project,
   project => {
-    if (!isSshProject(project)) return
+    if (!isRemoteProject(project)) return
     for (const tab of [...sidebarTabs.value]) {
       if (tab.type === "files") closeSidebarTab(tab.id)
     }
@@ -256,7 +256,7 @@ const offShortcutHandlers = [
   registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
   // 远程项目无本地文件入口（契约 §5）；终端 P2 起对远程项目开放（契约 §3.4）。
   registerShortcutHandler("sidebar.files", () => {
-    if (!isSshProject(props.project)) addSidebarTab("files")
+    if (!isRemoteProject(props.project)) addSidebarTab("files")
   }),
   registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),

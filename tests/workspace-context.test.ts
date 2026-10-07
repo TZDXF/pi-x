@@ -219,6 +219,7 @@ function harness(overrides = {}) {
     samePath: (a, b) => a === b,
     // 远程守卫（lib/ssh 导入在切片外）：本测试全部使用本地项目。
     isSshProject: () => false,
+    isRemoteProject: () => false,
     resolveSshConnectionId: () => null,
     trustStatus: async () => ({ needsDecision: false }),
     trustSave: async () => {},

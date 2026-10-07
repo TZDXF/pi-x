@@ -1,5 +1,5 @@
 import { normalizeProjectPath } from "@/lib/paths"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import { loadTrustStatusLenient } from "@/lib/sshTrust"
 import { createUuid } from "@/lib/uuid"
 import { splitAtEdge, isMember, leafByRuntime, firstLeafRuntime, closePane, splitView } from "@/stores/splitView"
@@ -162,7 +162,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
         // 远程项目走远程信任命令（契约 §4.3）；本地照旧。
         const status = await trustStatusFor(dir)
         if (status?.needsDecision) {
-          const allowed = await requestWorkspaceTrust(status, isSshProject(dir) ? dir : null)
+          const allowed = await requestWorkspaceTrust(status, isRemoteProject(dir) ? dir : null)
           if (!allowed) return null
         }
       }

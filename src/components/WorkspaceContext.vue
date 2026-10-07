@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { workspaceGitInfo, createWorkspaceGit, type WorkspaceGitInfo, type WorkspaceSelection } from "@/api/piClient"
 import { tBackendError } from "@/i18n"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceStore } from "@/stores/workspace"
 const props = defineProps<{ project: string; disabled?: boolean }>()
 const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
@@ -33,7 +33,7 @@ const name = (path: string) => workspace.projectName(path)
 // 空项目仅作为无项目会话的初始展示；真正切换仍由父组件完成。
 const isProjectless = computed(() => !props.project || workspace.isProjectless(props.project))
 // 远程项目 P1 不查询本地 git，也不提供分支/工作树选择（契约 §5）。
-const isRemote = computed(() => isSshProject(props.project))
+const isRemote = computed(() => isRemoteProject(props.project))
 const projectTitle = computed(() => props.project || workspace.projectless)
 const projectLabel = computed(() => (props.project ? name(props.project) : t("projectless.name")))
 // An unborn HEAD is the current branch, but it has no commit to use as a base.

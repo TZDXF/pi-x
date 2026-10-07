@@ -44,6 +44,8 @@ test("grouped sidebar state aggregates every folder before hiding the session li
         errors: { value: errors },
         loading: { value: loading },
         isSshProject: (value: string) => value.startsWith("ssh://"),
+        isRemoteProject: (value: string) =>
+          value.startsWith("ssh://") || value.startsWith("wsl://") || value.startsWith("docker://"),
       },
       "groupState",
     )

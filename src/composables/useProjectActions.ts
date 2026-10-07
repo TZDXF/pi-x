@@ -1,5 +1,5 @@
 import { normalizeProjectPath } from "@/lib/paths"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import type { Ref } from "vue"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
@@ -83,7 +83,7 @@ export function useProjectActions(context: UseProjectActionsContext) {
         await saveConfig({ ...config.value })
       }
       // 远程项目 P1 跳过信任决策，直接进入会话（契约 §4.2）。
-      if (isSshProject(dir)) {
+      if (isRemoteProject(dir)) {
         phase.value = "chat"
         if (!started.value) void session.loadOfflineModels()
         return

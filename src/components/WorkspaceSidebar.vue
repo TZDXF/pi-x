@@ -6,7 +6,7 @@ import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
 import { normalizeProjectPath } from "@/lib/paths"
-import { isSshProject } from "@/lib/ssh"
+import { isRemoteProject } from "@/lib/ssh"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
@@ -105,7 +105,7 @@ async function refresh(path: string) {
   try {
     await workspace.refresh(path)
   } catch (error) {
-    if (isSshProject(path)) {
+    if (isRemoteProject(path)) {
       // 远程会话列表失败走 toast（translateError 渲染 coded error，契约 §2.4）；
       // 刷新按钮由 remote 驱动，不走本地 loadFailed 行。
       ui.pushToast(tBackendError(error), "error")
@@ -144,7 +144,7 @@ function groupState(path: string) {
     loading: folders.some(folder => loading.value[folder]),
     hasHistory: folders.some(folder => !!workspace.histories[folder]),
     // 远程项目会话历史来自 ssh_sessions（契约 §2.4），不再是不可用态。
-    remote: isSshProject(path),
+    remote: isRemoteProject(path),
   }
 }
 async function refreshGroup(path: string) {
