@@ -236,6 +236,7 @@ test("edit UI allows a running answer and preserves the draft when stopping fail
   const reconcile = loader.slice(loader.indexOf("async function reconcile("), loader.indexOf("async function load("))
   expect((reconcile.match(/owner\.isResending/g) ?? []).length).toBe(2)
   const owner = {
+    cwd: "/project",
     started: true,
     sessionFile: "current.jsonl",
     isStreaming: false,

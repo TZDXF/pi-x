@@ -143,10 +143,10 @@ watch(
     )
       return null
     const file = session.sessionFile
-    const status = file ? sessionRunStatus(file) : undefined
-    return status === "completed" || status === "error" ? file : null
+    const status = file ? sessionRunStatus(file, session.cwd) : undefined
+    return status === "completed" || status === "error" ? { file, project: session.cwd } : null
   },
-  file => acknowledgeSessionRunStatus(file),
+  identity => identity && acknowledgeSessionRunStatus(identity.file, identity.project),
   { immediate: true },
 )
 const startup = createWorkspaceStartup({

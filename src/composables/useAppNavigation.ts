@@ -86,7 +86,7 @@ export function useAppNavigation(context: AppNavigationContext) {
       // file for saved ones. Resolve both to the in-memory store first: passing
       // a runtime id to resumeSession (or a file path to selectQueuedConversation)
       // would open a wrong, fresh conversation instead of replaying history.
-      const owner = peekConversation(id)
+      const owner = peekConversation(id, targetProject)
       if (owner) {
         // Dormant stores with a saved file must go through resume so the worker
         // reattaches or respawns; live ones (and file-less pending ones) activate

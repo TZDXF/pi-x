@@ -38,8 +38,8 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const label = computed(() => props.s.title || props.s.preview || t("sidebar.untitled"))
-const status = computed(() => sessionRunStatus(props.s.file))
-const queue = computed(() => findConversation(props.s.file)?.promptQueue)
+const status = computed(() => sessionRunStatus(props.s.file, props.path))
+const queue = computed(() => findConversation(props.s.file, props.path)?.promptQueue)
 </script>
 
 <template>

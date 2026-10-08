@@ -5,13 +5,14 @@ import path from "node:path"
 import * as vue from "vue"
 import { compileScript, compileStyle, parse } from "vue/compiler-sfc"
 import ts from "typescript"
+import * as sessionIdentity from "@/lib/sessionIdentity"
 import { setSidebarSessionDragData } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { sidebarQueueTitle } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 
 // Compile the actual SFCs against a minimal Vue host; only external widgets/stores are stubbed.
 // This avoids browser/E2E dependencies while testing render branches and emitted events.
 const directory = path.resolve("src/components/workspace/sidebar")
-const session = vue.reactive({ sessionFile: "saved.jsonl" })
+const session = vue.reactive({ sessionFile: "saved.jsonl", cwd: "root" })
 const activeRuntimeId = vue.ref("pending-1")
 const workspace = {
   isWorktree: (cwd: string) => cwd.endsWith("worktree"),
@@ -71,6 +72,7 @@ function loadComponent(filename: string) {
   const module = { exports: {} as any }
   const require = (id: string) => {
     if (id === "vue") return vue
+    if (id === "@/lib/sessionIdentity") return sessionIdentity
     if (id === "vue-i18n") return { useI18n: () => ({ t: key => key }) }
     if (id === "@lucide/vue")
       return new Proxy({}, { get: (_, name) => ({ render: () => vue.h("svg", { icon: name }) }) })
@@ -318,4 +320,13 @@ test("scoped hover selectors remain attached to row/group DOM, including touch s
   expect(parent.match(/v-on="sessionActions"/g)).toHaveLength(2)
   expect(parent).toContain("emit('projectless')")
   expect(parent).toContain(".sidebar-section-label:is(:hover, :has(:focus-visible)) > .hover-action")
+})
+
+test("a same-path remote row is active only in its own project", () => {
+  session.cwd = "ssh://dev@first:22/project"
+  const first = mount("SidebarSessionList.vue", { ...listProps, path: session.cwd, pending: [], showDraft: false })
+  const second = mount("SidebarSessionList.vue", { ...listProps, path: "ssh://dev@second:22/project", pending: [], showDraft: false })
+  expect(byClass(first, "session-row")[0].props["aria-current"]).toBe("page")
+  expect(byClass(second, "session-row")[0].props["aria-current"]).toBeUndefined()
+  session.cwd = "root"
 })

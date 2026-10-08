@@ -1,3 +1,4 @@
+import { isRemoteProject } from "@/lib/ssh"
 import { clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
@@ -108,7 +109,7 @@ export const createSessionStore = (runtimeId = "default") =>
     async function syncSessionFile() {
       const seq = ++mtimeSyncSeq
       const file = sessionFile.value
-      if (!file) return
+      if (!file || isRemoteProject(cwd.value)) return
       try {
         const mtime = await sessionMtime(file)
         if (seq === mtimeSyncSeq && sessionFile.value === file) syncedSessionMtime.value = mtime
@@ -331,7 +332,7 @@ export const createSessionStore = (runtimeId = "default") =>
         flow.turnFailed = false
         flow.turnAborted = false
       }
-      setSessionRunStatus(sessionFile.value, "running")
+      setSessionRunStatus(sessionFile.value, "running", cwd.value)
       const version = conversationVersion
       const firstMessage = !entries.value.some(entry => entry.kind === "user") && !state.value?.messageCount
       // Editing the first question replaces the session's identity: its title
@@ -371,7 +372,7 @@ export const createSessionStore = (runtimeId = "default") =>
         .catch(e => {
           if (version !== conversationVersion) return
           flow.turnFailed = true
-          setSessionRunStatus(sessionFile.value, "error")
+          setSessionRunStatus(sessionFile.value, "error", cwd.value)
           if (!wasStreaming) {
             flow.awaitingAgentStart = false
             isStreaming.value = false
@@ -521,7 +522,7 @@ export const createSessionStore = (runtimeId = "default") =>
       } finally {
         flow.turnAborted = true
         isStreaming.value = false
-        setSessionRunStatus(sessionFile.value, null)
+        setSessionRunStatus(sessionFile.value, null, cwd.value)
         flow.stopping = false
       }
       return restored.join("\n")
@@ -768,7 +769,7 @@ export const createSessionStore = (runtimeId = "default") =>
       markInterrupted: () => {
         pixLog(`interrupted: streaming=${isStreaming.value}`, runtimeId)
         if (!isStreaming.value) return
-        setSessionRunStatus(sessionFile.value, "error")
+        setSessionRunStatus(sessionFile.value, "error", cwd.value)
         // The sidebar badge alone does not explain what happened; leave a
         // visible note in the conversation itself.
         entries.value.push({
@@ -778,7 +779,7 @@ export const createSessionStore = (runtimeId = "default") =>
           live: true,
         })
       },
-      markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
+      markRunning: () => setSessionRunStatus(sessionFile.value, "running", cwd.value),
       isCompacting,
       retryInfo,
       dispositionNotice,

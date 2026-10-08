@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { Button } from "@/components/ui/button"
 import SidebarPendingSessionRow from "./SidebarPendingSessionRow.vue"
 import SidebarSavedSessionRow from "./SidebarSavedSessionRow.vue"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
 import { setSidebarSessionDragData } from "./useSidebarSessionOrdering"
 
 defineProps<{
@@ -45,7 +46,7 @@ const { t } = useI18n()
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
 function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
-  setSidebarSessionDragData(transfer, item, file => findConversation(file)?.runtimeId)
+  setSidebarSessionDragData(transfer, item, (file, path) => findConversation(file, path)?.runtimeId)
 }
 </script>
 
@@ -106,7 +107,7 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
         :key="row.file"
         :s="row"
         :path="path"
-        :active="row.file === session.sessionFile"
+        :active="sameSessionIdentity(session.sessionFile, session.cwd, row.file, path)"
         :disabled="disabled"
         :navigation-disabled="navigationDisabled"
         :query="query"

@@ -91,7 +91,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
     const prevActive = activeRuntimeId.value
     const prevProject = project.value
     const prevLastProject = config.value.lastProject
-    const existing = findConversation(file)
+    const existing = findConversation(file, targetProject || project.value)
     const prevOwnerFile = existing?.sessionFile ?? null
     phase.value = "chat"
     connecting.value = true
@@ -149,7 +149,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
   async function ensureSessionForSplit(file: string, targetProject?: string): Promise<string | null> {
     if (workspace.gitBusy || navigating.value || connecting.value) return null
     connecting.value = true
-    let owner = findConversation(file)
+    let owner = findConversation(file, targetProject || project.value)
     try {
       const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
       if (!owner) {

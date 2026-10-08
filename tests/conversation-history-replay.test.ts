@@ -3,7 +3,7 @@ import { beforeEach, expect, test, vi } from "vitest"
 import vm from "node:vm"
 import ts from "typescript"
 import { createPinia, setActivePinia } from "pinia"
-import { peekConversation, sessionFor, allConversations } from "@/stores/conversations"
+import { peekConversation, findConversation, sessionFor, allConversations } from "@/stores/conversations"
 
 const controls = vi.hoisted(() => {
   const state = {}
@@ -113,4 +113,23 @@ test("project routes replay as a new session in that project", async () => {
   const { calls, replay } = replayHarness(undefined)
   await replay({ name: "project", params: { project: "p" } })
   expect(calls).toEqual([["new", "p"]])
+})
+
+test("saved file lookup and history replay isolate local, SSH, WSL and Docker conversations", () => {
+  const file = "/home/dev/.pi/agent/sessions/copied.jsonl"
+  const projects = ["/project", "ssh://dev@host-a:22/project", "ssh://dev@host-b:22/project", "wsl://Ubuntu/project", "docker://box/project"]
+  const owners = projects.map((project, index) => {
+    const owner = sessionFor(`isolated-${index}`)
+    owner.cwd = project
+    owner.sessionFile = file
+    return owner
+  })
+  projects.forEach((project, index) => {
+    expect(findConversation(file, project)).toBe(owners[index])
+    expect(peekConversation(file, project)).toBe(owners[index])
+  })
+  // Unscoped filesystem watcher/metadata callbacks refer only to local files.
+  expect(findConversation(file)).toBe(owners[0])
+  expect(findConversation(file, "docker://other/project")).toBeUndefined()
+  expect(peekConversation(owners[2].runtimeId)).toBe(owners[2])
 })

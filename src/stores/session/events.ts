@@ -240,7 +240,7 @@ export function createEventHandler(ctx: EventContext) {
         entries.value.push({ kind: "user", id: nextId(), text: ev.prompt, timestamp: Date.now() })
         isStreaming.value = true
         flow.awaitingAgentStart = true
-        setSessionRunStatus(sessionFile.value, "running")
+        setSessionRunStatus(sessionFile.value, "running", cwd.value)
         break
 
       case "scheduled_session_failed":
@@ -261,7 +261,7 @@ export function createEventHandler(ctx: EventContext) {
         flow.turnFailed = false
         flow.turnAborted = false
         flow.lastErrorMessage = null
-        setSessionRunStatus(sessionFile.value, "running")
+        setSessionRunStatus(sessionFile.value, "running", cwd.value)
         checkpointStart()
         break
 
@@ -292,7 +292,7 @@ export function createEventHandler(ctx: EventContext) {
           `settled: finalize status=${finalStatus ?? "none"} notify=${!flow.turnAborted && !flow.stopping} failed=${flow.turnFailed} aborted=${flow.turnAborted}`,
           runtimeId,
         )
-        setSessionRunStatus(sessionFile.value, finalStatus)
+        setSessionRunStatus(sessionFile.value, finalStatus, cwd.value)
         // Error messages carry an empty content array, so a finally-failed run
         // would otherwise leave no trace in the conversation. Transient errors
         // that a retry recovered from never reach this point.
@@ -453,7 +453,7 @@ export function createEventHandler(ctx: EventContext) {
 
       case "auto_retry_start":
         isStreaming.value = true
-        setSessionRunStatus(sessionFile.value, "running")
+        setSessionRunStatus(sessionFile.value, "running", cwd.value)
         retryInfo.value = {
           attempt: Number(ev.attempt) || 1,
           maxAttempts: Number(ev.maxAttempts) || Number(ev.attempt) || 1,

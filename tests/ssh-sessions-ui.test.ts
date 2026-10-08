@@ -6,6 +6,7 @@ import path from "node:path"
 import * as vue from "vue"
 import { compileScript, parse } from "vue/compiler-sfc"
 import ts from "typescript"
+import * as sessionIdentity from "@/lib/sessionIdentity"
 
 /**
  * 远程会话列表（契约 §2.4）：
@@ -215,6 +216,7 @@ function loadComponent(filename: string) {
   const module = { exports: {} as any }
   const require = (id: string) => {
     if (id === "vue") return vue
+    if (id === "@/lib/sessionIdentity") return sessionIdentity
     if (id === "vue-i18n") return { useI18n: () => ({ t: key => key }) }
     if (id === "@lucide/vue")
       return new Proxy({}, { get: (_, name) => ({ render: () => vue.h("svg", { icon: name }) }) })
