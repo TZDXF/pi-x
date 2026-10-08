@@ -738,7 +738,7 @@ export default {
     newSession: "New session",
     compacting: "Compacting…",
     compacted: "Context compacted",
-    customEntry: "Extension entry: {type}",
+    modelChangeMarker: "Model switched",
     fork: "Fork",
     exporting: "Exporting…",
     export: "Export",
@@ -808,7 +808,6 @@ export default {
     selectionLimitCount: "You can add up to {count} references",
     selectionLimitTotal: "Reference content limit reached",
     attachImage: "Attach image",
-    modelChanged: "Model changed from {from} to {to}",
     selectModel: "Select model",
     thinkingLevel: "Thinking level",
     thinkingLevels: {

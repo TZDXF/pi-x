@@ -17,7 +17,7 @@ import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
 import ChatCompactionMarker from "./ChatCompactionMarker.vue"
-import ChatCustomEntry from "./ChatCustomEntry.vue"
+import ChatModelChangeMarker from "./ChatModelChangeMarker.vue"
 import RetryBanner from "./RetryBanner.vue"
 import SelectionAnchorBadges from "./SelectionAnchorBadges.vue"
 import ConversationSelectionMenu from "./ConversationSelectionMenu.vue"
@@ -89,6 +89,7 @@ const {
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
+  scrollToBottom: () => conversation.value?.scrollToBottom(),
   scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
   locateSelection,
   editSelection,
@@ -160,15 +161,8 @@ onBeforeUnmount(() => {
         v-slot="{ animate }"
       >
         <ChatCompactionMarker v-if="entry.kind === 'compaction'" :entry="entry" />
-        <ChatCustomEntry v-else-if="entry.kind === 'custom'" :entry="entry" />
+        <ChatModelChangeMarker v-else-if="entry.kind === 'model_change'" :entry="entry" />
         <template v-else>
-          <div
-            v-if="entry.kind === 'user' && entry.modelChange"
-            class="text-muted-foreground my-3 text-center text-xs"
-            role="status"
-          >
-            {{ t("chat.modelChanged", entry.modelChange) }}
-          </div>
           <Message :data-message-id="entry.id" :from="entry.kind === 'user' ? 'user' : 'assistant'">
             <div
               class="relative flex min-w-0 flex-col"

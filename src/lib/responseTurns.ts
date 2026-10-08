@@ -1,4 +1,4 @@
-import type { Block, CompactionEntry, ContextEditEntry, CustomEntry, Entry, UserEntry } from "@/stores/session"
+import type { Block, CompactionEntry, ContextEditEntry, Entry, ModelChangeEntry, UserEntry } from "@/stores/session"
 
 export interface AssistantTurn {
   kind: "assistant"
@@ -17,8 +17,8 @@ export interface AssistantTurn {
 export function responseTurns(
   entries: Entry[],
   streaming: boolean,
-): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | CustomEntry)[] {
-  const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | CustomEntry)[] = []
+): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] {
+  const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] = []
   let questionTime: number | undefined
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
@@ -35,16 +35,20 @@ export function responseTurns(
     }
     if (entry.kind === "context_edit") {
       // pi writes a context_edit after every retried failed attempt; the
-      // marker renders nowhere in the chat (unlike compaction/custom), so it
-      // must not split the assistant turn into separate bubbles either.
+      // marker renders nowhere in the chat, so it must not split the
+      // assistant turn into separate bubbles either.
       continue
     }
-    if (entry.kind === "custom") {
-      // Light markers (extension entries) render in place and
-      // must not be swallowed by the assistant-turn grouping. They change no
-      // conversation content, so the question stays the duration anchor; the
-      // next assistant message simply starts a fresh turn after the marker.
+    // Extension entries never render. The Entry union has no custom kind
+    // anymore, but runtime data (hand-built fixtures, stale stores) still
+    // can; skipping here keeps surrounding assistant messages in one turn
+    // instead of splitting the answer around an invisible marker.
+    if ((entry as { kind?: string }).kind === "custom") continue
+    if (entry.kind === "model_change") {
+      // Model switches are rendered as dividers and break turn grouping;
+      // no duration flows across them.
       result.push(entry)
+      questionTime = undefined
       continue
     }
     const previous = result[result.length - 1]

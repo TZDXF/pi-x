@@ -79,18 +79,18 @@ export interface ContextEditEntry {
   timestamp?: number
   live?: true
 }
-/** Unknown extension entry (arbitrary pi type or customType, e.g.
- *  "pi.bug-report"); rendered as a low-key placeholder or skipped. */
-export interface CustomEntry {
-  kind: "custom"
+/** Model switch (pi model_change entry); rendered as a divider. */
+export interface ModelChangeEntry {
+  kind: "model_change"
   id: number
-  customType: string
+  provider: string
+  modelId: string
   timestamp?: number
   live?: true
 }
-export type Entry = (
-  UserEntry | AssistantEntry | CompactionEntry | ContextEditEntry | CustomEntry
-) & { turnIndex?: number }
+export type Entry = (UserEntry | AssistantEntry | CompactionEntry | ContextEditEntry | ModelChangeEntry) & {
+  turnIndex?: number
+}
 
 export interface RetryInfo {
   attempt: number

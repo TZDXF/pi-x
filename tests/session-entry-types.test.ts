@@ -68,36 +68,68 @@ test("uiEntryFromAppendedEntry maps context_edit to a light marker", async () =>
   const { uiEntryFromAppendedEntry } = await import("@/stores/session/events")
   // replacement: null → the target is omitted from model context
   const omitted = uiEntryFromAppendedEntry(
-    { type: "context_edit", id: "a1b2c2d3", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", targetId: "m1", replacement: null },
+    {
+      type: "context_edit",
+      id: "a1b2c2d3",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      targetId: "m1",
+      replacement: null,
+    },
     7,
     1000,
   )
   expect(omitted).toEqual({ kind: "context_edit", id: 7, targetId: "m1", replaced: false, timestamp: 1000, live: true })
   // non-null replacement → content replaced
-  const replaced = uiEntryFromAppendedEntry({ type: "context_edit", targetId: "m2", replacement: { content: "..." } }, 8, 2000)
+  const replaced = uiEntryFromAppendedEntry(
+    { type: "context_edit", targetId: "m2", replacement: { content: "..." } },
+    8,
+    2000,
+  )
   expect(replaced).toMatchObject({ kind: "context_edit", targetId: "m2", replaced: true })
   // malformed entries must not throw
-  expect(uiEntryFromAppendedEntry({ type: "context_edit" }, 9, 0)).toMatchObject({ kind: "context_edit", targetId: "", replaced: false })
+  expect(uiEntryFromAppendedEntry({ type: "context_edit" }, 9, 0)).toMatchObject({
+    kind: "context_edit",
+    targetId: "",
+    replaced: false,
+  })
 })
 
-test("uiEntryFromAppendedEntry keeps extension entries low-key and internal ones silent", async () => {
+test("uiEntryFromAppendedEntry renders model changes and silences extension entries", async () => {
   const { uiEntryFromAppendedEntry } = await import("@/stores/session/events")
-  // extension custom entries (e.g. /bug reports) become placeholders
-  expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pi.bug-report", data: {} }, 1, 0)).toMatchObject({
-    kind: "custom",
-    customType: "pi.bug-report",
+  // model switches become conversation dividers
+  expect(uiEntryFromAppendedEntry({ type: "model_change", provider: "p", modelId: "m" }, 14, 0)).toEqual({
+    kind: "model_change",
+    id: 14,
+    provider: "p",
+    modelId: "m",
+    timestamp: 0,
+    live: true,
   })
-  // arbitrary unknown type strings also become placeholders
-  expect(uiEntryFromAppendedEntry({ type: "vendor.custom-thing" }, 2, 0)).toMatchObject({
-    kind: "custom",
-    customType: "vendor.custom-thing",
+  // malformed model fields stay tolerant
+  expect(uiEntryFromAppendedEntry({ type: "model_change" }, 15, 0)).toMatchObject({
+    kind: "model_change",
+    provider: "",
+    modelId: "",
   })
+  // extension entries never render: known-internal state and arbitrary
+  // extension payloads alike stay out of the conversation
+  expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pi.bug-report", data: {} }, 1, 0)).toBeNull()
+  expect(uiEntryFromAppendedEntry({ type: "vendor.custom-thing" }, 2, 0)).toBeNull()
   // internal bookkeeping stays out of the conversation
   expect(uiEntryFromAppendedEntry({ type: "usage", kind: "cache_warm" }, 3, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pi.virtual-model-state" }, 4, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom", customType: "pix-file-change", data: {} }, 5, 0)).toBeNull()
   // codemode's store() writes are internal script state, not conversation
-  expect(uiEntryFromAppendedEntry({ type: "custom", customType: "codemode-store", data: { set: { pid: 1 }, delete: [] } }, 12, 0)).toBeNull()
+  expect(
+    uiEntryFromAppendedEntry(
+      { type: "custom", customType: "codemode-store", data: { set: { pid: 1 }, delete: [] } },
+      12,
+      0,
+    ),
+  ).toBeNull()
+  // web-search results duplicate the tool output already in the conversation
+  expect(uiEntryFromAppendedEntry({ type: "custom", customType: "web-search-results", data: {} }, 13, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "message", message: { role: "user", content: "hi" } }, 6, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "compaction", summary: "s" }, 7, 0)).toBeNull()
   expect(uiEntryFromAppendedEntry({ type: "custom" }, 8, 0)).toBeNull()
@@ -107,11 +139,15 @@ test("uiEntryFromAppendedEntry keeps extension entries low-key and internal ones
   expect(uiEntryFromAppendedEntry({}, 11, 0)).toBeNull()
 })
 
-test("entry_appended materializes context_edit in the conversation without touching history", async () => {
+test("entry_appended materializes model_change without touching extension entries", async () => {
   const store = await sessionHarness()
   store.handleEvent({
     type: "entry_appended",
     entry: { type: "context_edit", id: "e1", targetId: "m1", replacement: null },
+  })
+  store.handleEvent({
+    type: "entry_appended",
+    entry: { type: "model_change", id: "e2", provider: "p", modelId: "m" },
   })
   store.handleEvent({
     type: "entry_appended",
@@ -123,13 +159,13 @@ test("entry_appended materializes context_edit in the conversation without touch
     entry: { type: "custom", customType: "pix-file-change", data: { toolCallId: "call_1", files: [] } },
   })
   const kinds = store.entries.map(entry => entry.kind)
-  // context_edit and the extension entry surface; usage stays silent
-  expect(kinds).toEqual(["context_edit", "custom"])
+  // context_edit and model_change surface; usage and extension entries stay silent
+  expect(kinds).toEqual(["context_edit", "model_change"])
   expect(store.entries[0]).toMatchObject({ kind: "context_edit", targetId: "m1", replaced: false })
-  expect(store.entries[1]).toMatchObject({ kind: "custom", customType: "pi.bug-report" })
+  expect(store.entries[1]).toMatchObject({ kind: "model_change", provider: "p", modelId: "m" })
 })
 
-test("responseTurns hides context-edit markers and keeps grouping predictable", async () => {
+test("responseTurns hides markers, keeps model changes as dividers and grouping predictable", async () => {
   const { responseTurns } = await import("@/lib/responseTurns")
   const entries = [
     { kind: "user", id: 1, text: "q1", timestamp: 100 },
@@ -138,43 +174,41 @@ test("responseTurns hides context-edit markers and keeps grouping predictable", 
     { kind: "custom", id: 4, customType: "pi.bug-report" },
     { kind: "assistant", id: 5, blocks: [{ type: "text", text: "a2" }], timestamp: 300 },
   ] as any
-  const turns = responseTurns(entries, false)
+  let turns = responseTurns(entries, false)
   // context_edit renders nowhere in the chat (pi writes one per retried
-  // failed attempt), so it is skipped entirely; a custom marker still renders
-  // in place and starts a fresh turn after it.
-  expect(turns.map(entry => entry.kind)).toEqual(["user", "assistant", "custom", "assistant"])
-  const first = turns[1] as any
-  const second = turns[3] as any
-  expect(first.blocks).toHaveLength(1)
-  expect(second.blocks).toHaveLength(1)
-  expect(second.durationMs).toBe(200)
+  // failed attempt) and extension entries never render, so both are skipped
+  // entirely and the surrounding assistant messages stay in one turn.
+  expect(turns.map(entry => entry.kind)).toEqual(["user", "assistant"])
+  expect((turns[1] as any).blocks).toHaveLength(2)
   // markers must never be merged into an assistant turn's blocks
-  expect(first.blocks.some((block: any) => block.type === undefined)).toBe(false)
+  expect((turns[1] as any).blocks.some((block: any) => block.type === undefined)).toBe(false)
+  // a model switch renders as a divider and breaks the turn grouping
+  const withSwitch = [
+    { kind: "user", id: 1, text: "q1", timestamp: 100 },
+    { kind: "assistant", id: 2, blocks: [{ type: "text", text: "a1" }], timestamp: 200 },
+    { kind: "model_change", id: 3, provider: "p", modelId: "m" },
+    { kind: "assistant", id: 4, blocks: [{ type: "text", text: "a2" }], timestamp: 400 },
+  ] as any
+  turns = responseTurns(withSwitch, false)
+  expect(turns.map(entry => entry.kind)).toEqual(["user", "assistant", "model_change", "assistant"])
+  expect((turns[3] as any).durationMs).toBeNull()
 })
 
 test("buildTimelineTurns renders context_edit as a non-question node", async () => {
   const { buildTimelineTurns } = await import("@/lib/conversationTimeline")
   // fully materialized session (snapshot released)
-  const materialized = buildTimelineTurns(
-    [],
-    0,
-    [
-      { kind: "user", id: 1, text: "q1" },
-      { kind: "context_edit", id: 2, targetId: "m0", replaced: false },
-      { kind: "context_edit", id: 3, targetId: "m1", replaced: true },
-    ] as any,
-  )
+  const materialized = buildTimelineTurns([], 0, [
+    { kind: "user", id: 1, text: "q1" },
+    { kind: "context_edit", id: 2, targetId: "m0", replaced: false },
+    { kind: "context_edit", id: 3, targetId: "m1", replaced: true },
+  ] as any)
   expect(materialized.map(turn => turn.contextEdit)).toEqual([undefined, { replaced: false }, { replaced: true }])
   expect(materialized.every(turn => turn.question === "" || turn.question === "q1")).toBe(true)
   // live markers arriving while a history snapshot is still held
-  const withSnapshot = buildTimelineTurns(
-    [{ role: "user", content: "q1", timestamp: 1 }],
-    1,
-    [
-      { kind: "user", id: 11, text: "q1" },
-      { kind: "context_edit", id: 12, targetId: "m1", replaced: true, live: true },
-    ] as any,
-  )
+  const withSnapshot = buildTimelineTurns([{ role: "user", content: "q1", timestamp: 1 }], 1, [
+    { kind: "user", id: 11, text: "q1" },
+    { kind: "context_edit", id: 12, targetId: "m1", replaced: true, live: true },
+  ] as any)
   const liveMarker = withSnapshot.find(turn => turn.contextEdit)
   expect(liveMarker).toMatchObject({ entryId: 12, contextEdit: { replaced: true } })
 })

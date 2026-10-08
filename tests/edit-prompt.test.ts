@@ -144,7 +144,7 @@ test("agent-end during abort cannot dispatch queued prompts ahead of the edited 
     },
   })
   h.store.isStreaming = true
-  // slash commands stay in the client queue; plain queued messages live in pi's follow_up queue
+  // queued messages (slash or plain) stay in the client queue across resends
   await h.store.send("/local queued", undefined, undefined, "queue")
   await h.store.resendPrompt("revised")
   expect(h.calls.filter(call => call.type === "prompt").map(call => call.message)).toEqual(["revised"])
@@ -228,6 +228,8 @@ test("edit UI allows a running answer and preserves the draft when stopping fail
   const edit = source("../src/composables/usePromptEdit.ts")
   expect(edit).not.toMatch(/session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
   expect(edit).toMatch(/await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
+  // 重发成功后通知视图回到底部，与普通发送一致
+  expect(edit).toMatch(/editedPrompt\.value = null\s*deps\.onResent\?\.\(\)/)
   // Reconciliation moved out of App; keep both resend guards covered at the
   // actual boundary, including a resend starting during the mtime request.
   const loader = source("../src/lib/conversationLoader.ts")

@@ -37,8 +37,8 @@ export type {
   Block,
   CompactionEntry,
   ContextEditEntry,
-  CustomEntry,
   Entry,
+  ModelChangeEntry,
   QueuedPrompt,
   RetryInfo,
   TextBlock,
@@ -284,46 +284,6 @@ export const createSessionStore = (runtimeId = "default") =>
       })
     }
 
-    /** Hand a message queued during a run to pi's native follow_up queue: pi
-     *  delivers it automatically once the agent finishes (and keeps running)
-     *  and reports progress through queue_update events, so the client no
-     *  longer has to re-send it after agent_settled. */
-    function queueNativeFollowUp(
-      trimmed: string,
-      images?: { data: string; mimeType: string }[],
-      expandedText?: string,
-    ) {
-      const version = conversationVersion
-      const modelChange = pendingModelChange.value ?? undefined
-      pendingModelChange.value = null
-      entries.value.push({
-        kind: "user",
-        id: nextId(),
-        turnIndex: ++userTurnCount,
-        timestamp: Date.now(),
-        text: trimmed,
-        modelChange,
-        images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
-        live: true,
-      })
-      const command: Record<string, unknown> = {
-        type: "follow_up",
-        message: expandedText || trimmed || "(see attached image)",
-      }
-      if (images?.length) command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
-      rpcRequest(command)
-        .then(res => {
-          if (version !== conversationVersion) return
-          if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
-          reportDisposition("follow_up", res.data, "chat.followUpQueued")
-        })
-        .catch(e => {
-          // The current run keeps going; only surface the rejected message.
-          if (version !== conversationVersion) return
-          pushErrorEntry(e)
-        })
-    }
-
     async function send(
       text: string,
       images?: { data: string; mimeType: string }[],
@@ -357,14 +317,10 @@ export const createSessionStore = (runtimeId = "default") =>
         return
       }
       if (isStreaming.value && behavior === "queue") {
-        if (trimmed.startsWith("/")) {
-          // pi's steer/follow_up reject extension commands, so slash commands
-          // (including /compact) stay in the client queue and are sent via
-          // `prompt` once the session is idle again.
-          promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
-          return
-        }
-        queueNativeFollowUp(trimmed, images, expandedText)
+        // Keep queued messages in the client panel (delete / edit / run now /
+        // drag to reorder); they are dispatched via `prompt` once the run
+        // settles, so nothing is handed to the model while it is still busy.
+        promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
         return
       }
       flow.queuePaused = false

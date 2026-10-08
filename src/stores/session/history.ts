@@ -98,6 +98,18 @@ export function createSessionHistory(context: HistoryContext) {
           mergeFileChangeArtifact(msg)
           continue
         }
+        if (msg.type === "model_change") {
+          // Passthrough session-file entry (timestamp is RFC3339 there);
+          // renders as a conversation divider.
+          page.push({
+            kind: "model_change",
+            id: nextId(),
+            provider: typeof msg.provider === "string" ? msg.provider : "",
+            modelId: typeof msg.modelId === "string" ? msg.modelId : "",
+            timestamp: typeof msg.timestamp === "number" ? msg.timestamp : Date.parse(msg.timestamp) || undefined,
+          })
+          continue
+        }
         if (msg.role === "user") {
           const text = contentText(msg.content)
           const images = Array.isArray(msg.content)
