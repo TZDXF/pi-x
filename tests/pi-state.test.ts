@@ -206,14 +206,18 @@ test("a model switch is announced before the next question, without changing the
   store.isStreaming = true
   await store.send("queued question", undefined, undefined, "queue")
   await tick()
+  // queued messages stay in the panel; the announcement is attached when dispatched
+  expect(store.entries.length).toBe(0)
+  expect(calls.some(c => c.type === "prompt" || c.type === "follow_up")).toBe(false)
+  store.isStreaming = false
+  store.dispatchQueuedPrompt()
+  await tick()
   const first = store.entries[0]
   expect(JSON.parse(JSON.stringify(first.modelChange))).toEqual({
     from: "restored/session-model",
     to: "next/model-b",
   })
-  expect(calls.findLast(c => c.type === "follow_up").message).toBe("queued question")
-  expect(calls.some(c => c.type === "prompt")).toBe(false)
-  store.isStreaming = false
+  expect(calls.findLast(c => c.type === "prompt").message).toBe("queued question")
   await store.send("another question")
   expect(store.entries[1].modelChange).toBe(undefined)
   await store.setModel("next", "model-b")

@@ -20,10 +20,10 @@ export interface PromptQueueContext {
 }
 
 // ---- queue scheduling ----
-/** Client-side scheduler for the scenarios pi's native queue cannot cover:
- *  delayed sends (sendAt timing) and slash/extension commands that must go
- *  through `prompt` on an idle session. Plain queued messages are handed to
- *  pi's native follow_up queue instead (see store.queueNativeFollowUp). */
+/** Client-side scheduler for prompts sent while a run is active: plain queued
+ *  messages (queue mode), delayed sends (sendAt timing) and slash/extension
+ *  commands. Everything here is dispatched via `prompt` once the session is
+ *  idle again, so the model never sees a message before its turn. */
 export function createPromptQueue(ctx: PromptQueueContext) {
   const { promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send } = ctx
 

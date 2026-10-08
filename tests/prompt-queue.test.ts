@@ -98,23 +98,28 @@ async function sessionHarness(rpcOverrides: Record<string, (command: any) => unk
   }
 }
 
-test("messages queued during a run go to pi's native follow_up queue", async () => {
-  const h = await sessionHarness({ follow_up: () => ({ success: true, data: { disposition: "queued" } }) })
+test("messages queued during a run stay in the client panel until the run settles", async () => {
+  const h = await sessionHarness()
   h.store.isStreaming = true
   const images = [{ data: "YWJj", mimeType: "image/png" }]
   await h.store.send("next", images, "expanded next", "queue")
   await tick()
-  expect(h.store.promptQueue.length).toBe(0)
-  expect(h.calls.filter(c => c.type === "prompt").length).toBe(0)
-  const followUps = h.calls.filter(c => c.type === "follow_up")
-  expect(followUps.length).toBe(1)
-  expect(followUps[0].message).toBe("expanded next")
-  expect(followUps[0].images[0].data).toBe("YWJj")
-  // the question is visible right away and pi reports the queue via queue_update
+  // nothing is handed to pi and the question is not echoed into the conversation
+  expect(h.calls.filter(c => c.type === "prompt" || c.type === "follow_up").length).toBe(0)
+  expect(h.store.entries.length).toBe(0)
+  expect(h.store.promptQueue).toEqual([
+    { id: expect.any(Number), text: "next", images, expandedText: "expanded next" },
+  ])
+  // settling the run dispatches it as a normal prompt
+  h.store.handleEvent({ type: "agent_end" })
+  h.store.handleEvent({ type: "agent_settled" })
+  await tick()
+  const prompt = h.calls.find(c => c.type === "prompt")
+  expect(prompt.message).toBe("expanded next")
+  expect(prompt.images[0].data).toBe("YWJj")
+  expect(prompt.streamingBehavior).toBe(undefined)
   expect(h.store.entries[0].text).toBe("next")
-  expect(h.store.dispositionNotice?.message).toBe("chat.followUpQueued")
-  h.store.handleEvent({ type: "queue_update", steering: [], followUp: ["expanded next"] })
-  expect(h.store.pendingCount).toBe(1)
+  expect(h.store.promptQueue.length).toBe(0)
 })
 
 test("reorder and remove use stable IDs, including identical prompts", async () => {
@@ -139,11 +144,10 @@ test("steering goes to the running agent without draining the queue", async () =
   h.store.isStreaming = true
   await h.store.send("later", undefined, undefined, "queue")
   await h.store.send("change direction", undefined, undefined, "steer")
-  expect(h.calls.find(c => c.type === "follow_up")).toBeTruthy()
   const prompt = h.calls.find(c => c.type === "prompt")
   expect(prompt.streamingBehavior).toBe("steer")
   expect(prompt.message).toBe("change direction")
-  expect(h.store.promptQueue.length).toBe(0)
+  expect(h.store.promptQueue.map(item => item.text)).toEqual(["later"])
 })
 
 test("steering disposition is surfaced as a notice", async () => {
@@ -159,15 +163,6 @@ test("a prompt consumed by an extension reports the handled disposition", async 
   await h.store.send("/mycommand")
   await tick()
   expect(h.store.dispositionNotice?.message).toBe("chat.dispositionHandled")
-})
-
-test("a rejected follow_up surfaces an error without touching the running turn", async () => {
-  const h = await sessionHarness({ follow_up: () => ({ success: false, error: "cannot queue" }) })
-  h.store.isStreaming = true
-  await h.store.send("next", undefined, undefined, "queue")
-  await tick()
-  expect(h.store.isStreaming).toBe(true)
-  expect(h.store.entries.at(-1).blocks[0].text).toContain("cannot queue")
 })
 
 test("clear removes pending prompts", async () => {
