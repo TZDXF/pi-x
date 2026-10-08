@@ -649,7 +649,7 @@ export default {
     newSession: "新会话",
     compacting: "正在压缩…",
     compacted: "上下文已压缩",
-    customEntry: "扩展条目：{type}",
+    modelChangeMarker: "切换模型",
     fork: "分支",
     exporting: "导出中…",
     export: "导出",
@@ -718,7 +718,6 @@ export default {
     selectionLimitCount: "最多引用 {count} 条内容",
     selectionLimitTotal: "引用内容总长度已达上限",
     attachImage: "插入图片",
-    modelChanged: "模型变化：从 {from} 切换到 {to}",
     selectModel: "选择模型",
     thinkingLevel: "思考强度",
     thinkingLevels: {

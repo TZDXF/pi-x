@@ -137,7 +137,6 @@ const IGNORED_ENTRY_TYPES = new Set([
   "session",
   "message",
   "compaction",
-  "model_change",
   "thinking_level_change",
   "branch_summary",
   "label",
@@ -145,16 +144,12 @@ const IGNORED_ENTRY_TYPES = new Set([
   "usage",
   "custom_message",
 ])
-/** Custom entries with their own render path or known-internal state.
- *  `codemode-store` is pi's builtin codemode extension persisting script
- *  `store()` writes; the values are only meaningful to later scripts. */
-const IGNORED_CUSTOM_TYPES = new Set(["pi.virtual-model-state", "pix-file-change", "codemode-store"])
-
 /**
  * Map one raw session entry delivered by RPC `entry_appended` to a UI entry;
- * null means "skip silently". `context_edit` becomes a light marker, unknown
- * extension entries (e.g. "pi.bug-report") become low-key placeholders, and
- * everything else is ignored without breaking the conversation flow.
+ * null means "skip silently". `context_edit` becomes a light marker,
+ * `model_change` becomes a conversation divider, extension entries (custom
+ * and unknown types) never render, and everything else is ignored without
+ * breaking the conversation flow.
  */
 export function uiEntryFromAppendedEntry(raw: any, id: number, timestamp: number): Entry | null {
   if (!raw || typeof raw !== "object" || typeof raw.type !== "string") return null
@@ -167,13 +162,20 @@ export function uiEntryFromAppendedEntry(raw: any, id: number, timestamp: number
       timestamp,
       live: true,
     }
+  if (raw.type === "model_change")
+    return {
+      kind: "model_change",
+      id,
+      provider: typeof raw.provider === "string" ? raw.provider : "",
+      modelId: typeof raw.modelId === "string" ? raw.modelId : "",
+      timestamp,
+      live: true,
+    }
   if (IGNORED_ENTRY_TYPES.has(raw.type)) return null
-  if (raw.type === "custom") {
-    const customType = typeof raw.customType === "string" ? raw.customType : ""
-    if (!customType || IGNORED_CUSTOM_TYPES.has(customType)) return null
-    return { kind: "custom", id, customType, timestamp, live: true }
-  }
-  return { kind: "custom", id, customType: raw.type, timestamp, live: true }
+  // Extension entries (custom and unknown types) stay out of the
+  // conversation: they duplicate tool output or carry internal state that
+  // only their own extension reads back.
+  return null
 }
 
 /** Reactive state and store callbacks the event handler needs. */
