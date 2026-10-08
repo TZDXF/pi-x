@@ -44,6 +44,18 @@ pub(crate) async fn scan_remote_sessions(
     let output = remote_exec(endpoint, &script, SESSIONS_EXEC_TIMEOUT)
         .await
         .map_err(|e| crate::commands::ssh::remote_error_coded(endpoint, &e))?;
+    // 远端明确报错（Node 缺失/扫描失败）：标签行带具体原因，直接转为 coded error。
+    if let Some(detail) = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("PIX_SESSIONS_ERROR="))
+    {
+        return Err(pix_error_detail(
+            "sshRemoteFailed",
+            "远程操作失败: {detail}",
+            detail,
+        ));
+    }
     parse_sessions_output(&output.stdout, project_path).ok_or_else(|| {
         // 扫描成功但 DONE 标记缺失（超时/截断）→ coded error（契约 P2 §2.1）。
         pix_error_detail(
@@ -69,6 +81,12 @@ struct RawSessionRecord {
 /// cwd 过滤 = 会话头 cwd 与 URI 路径或 `pwd -P` 物理路径任一相等，
 /// 防别名路径把会话滤空；输出按 mtimeMs 降序、上限 50。
 fn parse_sessions_output(stdout: &str, project_path: &str) -> Option<Vec<SessionMeta>> {
+    if stdout
+        .lines()
+        .any(|line| line.starts_with("PIX_SESSIONS_ERROR="))
+    {
+        return None;
+    }
     let mut records: Vec<RawSessionRecord> = Vec::new();
     let mut phys_cwd: Option<String> = None;
     let mut done = false;
@@ -229,6 +247,8 @@ mod tests {
         // 未读到 DONE（超时/截断）→ None。
         assert!(parse_sessions_output("PIX_SESSION_CWD=/a\n", "/a").is_none());
         assert!(parse_sessions_output("", "/a").is_none());
+        // 远端明确报错（Node 缺失/扫描失败）时不得伪装成空列表。
+        assert!(parse_sessions_output("PIX_SESSIONS_ERROR=远端未安装 Node.js\n", "/a").is_none());
     }
 
     #[test]
@@ -312,6 +332,126 @@ mod tests {
         );
         let metas = parse_sessions_output(&stdout, "/proj").unwrap();
         assert_eq!(metas[0].title, None);
+    }
+
+    #[test]
+    fn parse_filters_before_limiting_with_over_200_newer_unrelated_sessions() {
+        let mut records = Vec::new();
+        for i in 0..205 {
+            records.push((
+                format!("/s/other-{i}.jsonl"),
+                1000 + i,
+                header_json("/other", &format!("other-{i}")),
+            ));
+        }
+        for i in 0..60 {
+            let cwd = if i % 2 == 0 {
+                "/physical/project"
+            } else {
+                "/alias"
+            };
+            records.push((
+                format!("/s/project-{i}.jsonl"),
+                i,
+                header_json(cwd, &format!("project-{i}")),
+            ));
+        }
+        let borrowed: Vec<_> = records
+            .iter()
+            .map(|(file, mtime, header)| (file.as_str(), *mtime, header.as_str(), None))
+            .collect();
+        let stdout = scan_output("/physical/project", &borrowed);
+        let metas = parse_sessions_output(&stdout, "/alias").unwrap();
+        assert_eq!(metas.len(), 50);
+        let ids: Vec<_> = metas.iter().map(|meta| meta.id.clone()).collect();
+        assert_eq!(
+            ids,
+            (10..60)
+                .rev()
+                .map(|i| format!("project-{i}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // 真正执行扫描脚本，使用隔离的本地 HOME；不调用 SSH 或任何外部服务。
+    #[cfg(unix)]
+    #[test]
+    fn local_scan_keeps_project_sessions_after_205_newer_other_files() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use std::process::Command;
+        use std::time::SystemTime;
+
+        struct TempHome(std::path::PathBuf);
+        impl Drop for TempHome {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let home =
+            TempHome(std::env::temp_dir().join(format!("pix-sessions-{}", uuid::Uuid::new_v4())));
+        let root = home.0.join(".pi/agent/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let project = home.0.join("project");
+        fs::create_dir(&project).unwrap();
+        let physical = fs::canonicalize(&project).unwrap();
+        let alias = home.0.join("project-alias");
+        symlink(&physical, &alias).unwrap();
+        let physical = physical.to_str().unwrap();
+        let alias = alias.to_str().unwrap();
+        for i in 0..265 {
+            let (cwd, id, mtime) = if i < 205 {
+                ("/other", format!("other-{i}"), 1000 + i)
+            } else {
+                let n = i - 205;
+                (
+                    if n % 2 == 0 { physical } else { alias },
+                    format!("project-{n}"),
+                    n,
+                )
+            };
+            let file = root.join(format!("{id}.jsonl"));
+            let header = serde_json::json!({"type": "session", "cwd": cwd, "id": id});
+            fs::write(&file, format!("{header}\n")).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + mtime))
+                .unwrap();
+        }
+        for query in [alias, physical] {
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(payload::build_sessions_script(query))
+                .env("HOME", &home.0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(
+                stdout
+                    .lines()
+                    .filter(|line| line.starts_with("PIX_SESSION_FILE="))
+                    .count(),
+                if query == alias { 50 } else { 30 }
+            );
+            let metas = parse_sessions_output(&stdout, query).unwrap();
+            let expected: Vec<_> = (0..60)
+                .rev()
+                .filter(|i| query == alias || i % 2 == 0)
+                .take(50)
+                .map(|i| format!("project-{i}"))
+                .collect();
+            assert_eq!(
+                metas.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     // ---- 实机集成测试（契约 P2 §6）：需 WSL 测试环境（wsl-test-env.md）。

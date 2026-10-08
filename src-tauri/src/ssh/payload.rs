@@ -35,27 +35,86 @@ if [ -n "$PI_BIN" ]; then echo "PI_V=$("$PI_BIN" --version 2>/dev/null | head -n
 echo "PIX_PROBE_DONE"
 "#;
 
-/// 远程会话扫描脚本模板（契约 P2 §2.2 冻结文本）：单次 exec 完成枚举 + 逐文件
-/// 元数据提取，输出 `PIX_SESSION_*` 标签行并以 `PIX_SESSIONS_DONE` 收尾；
-/// 退出码恒 0（业务语义走标签行 + DONE 标记），`find`/`stat`/`grep` 失败静默降级。
-/// `'<PROJECT>'` 占位符（含单引号）由 [`build_sessions_script`] 以 `posix_quote`
-/// 注入；`IFS="	"` 中的字面制表符（0x09）用于按 tab 切分 mtime 与路径。
+/// 单次 Node 扫描：所有文件只读最多 8192 字节头部，cwd 过滤、排序、取 50 条后
+/// 才流式读取标题。项目路径仅作为 argv 传递，不拼入 JavaScript。
+/// Node 缺失或扫描失败输出 PIX_SESSIONS_ERROR 且不输出 DONE，不能伪装成空列表；
+/// 退出码恒 0（对齐契约 P2 §2.1：remote_exec 对非零退出码只回传 stderr，
+/// 业务错误必须走 stdout 标签行才能携带具体原因）。
 pub const SESSIONS_SCRIPT: &str = r#"
-SESS_ROOT="$HOME/.pi/agent/sessions"
-PHYS=$(cd '<PROJECT>' >/dev/null 2>&1 && pwd -P)
-echo "PIX_SESSION_CWD=$PHYS"
-[ -n "$PHYS" ] || { echo "PIX_SESSIONS_DONE"; exit 0; }
-[ -d "$SESS_ROOT" ] || { echo "PIX_SESSIONS_DONE"; exit 0; }
-find "$SESS_ROOT" -type f -name '*.jsonl' 2>/dev/null | while IFS= read -r f; do
-  m=$(stat -c %Y "$f" 2>/dev/null) || m=$(stat -f %m "$f" 2>/dev/null) || m=0
-  printf '%s\t%s\n' "$m" "$f"
-done | sort -rn | head -n 200 | while IFS="	" read -r m f; do
-  echo "PIX_SESSION_FILE=$f"
-  echo "PIX_SESSION_MTIME=$m"
-  echo "PIX_SESSION_HEADER=$(head -c 8192 "$f" 2>/dev/null | head -n 1)"
-  echo "PIX_SESSION_TITLE=$(grep '\"type\":\"session_info\"' "$f" 2>/dev/null | tail -n 1)"
-done
-echo "PIX_SESSIONS_DONE"
+command -v node >/dev/null 2>&1 || {
+  echo "PIX_SESSIONS_ERROR=远端未安装 Node.js，无法扫描会话"
+  exit 0
+}
+node -e '<NODE_SCRIPT>' -- '<PROJECT>'
+"#;
+
+pub(crate) const SESSIONS_NODE_SCRIPT: &str = r#"
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const readline = require('node:readline');
+const project = process.argv[1];
+const root = path.join(os.homedir(), '.pi', 'agent', 'sessions');
+const emit = (key, value) => console.log(key + '=' + value);
+async function scan() {
+  let physical;
+  try {
+    physical = fs.realpathSync(project);
+    if (!fs.statSync(physical).isDirectory()) throw new Error('not a directory');
+  } catch {
+    console.log('PIX_SESSIONS_DONE');
+    return;
+  }
+  emit('PIX_SESSION_CWD', physical);
+  const records = [];
+  const buffer = Buffer.alloc(8192);
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(file); continue; }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      let fd;
+      try {
+        fd = fs.openSync(file, 'r');
+        const size = fs.readSync(fd, buffer, 0, buffer.length, 0);
+        const header = JSON.parse(buffer.toString('utf8', 0, size).split('\n', 1)[0]);
+        if (header?.type !== 'session' ||
+            (header.cwd !== project && header.cwd !== physical)) continue;
+        const mtime = Math.max(0, Math.floor(fs.fstatSync(fd).mtimeMs / 1000));
+        records.push({ file, mtime, header });
+      } catch { /* 损坏、删除或不可读的单个文件不影响其余会话。 */ }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
+    }
+  }
+  walk(root);
+  records.sort((a, b) => b.mtime - a.mtime ||
+    Buffer.compare(Buffer.from(a.file), Buffer.from(b.file)));
+  for (const record of records.slice(0, 50)) {
+    let title = '';
+    const input = fs.createReadStream(record.file);
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        try {
+          const value = JSON.parse(line);
+          if (value?.type === 'session_info') title = JSON.stringify(value);
+        } catch { /* 忽略损坏的 JSONL 行。 */ }
+      }
+    } catch { /* 文件消失或读取失败时仍保留头部元数据。 */ }
+    finally { lines.close(); input.destroy(); }
+    emit('PIX_SESSION_FILE', record.file);
+    emit('PIX_SESSION_MTIME', record.mtime);
+    emit('PIX_SESSION_HEADER', JSON.stringify(record.header));
+    emit('PIX_SESSION_TITLE', title);
+  }
+  console.log('PIX_SESSIONS_DONE');
+}
+scan().catch(() => {
+  console.log('PIX_SESSIONS_ERROR=远端会话扫描失败');
+});
 "#;
 
 /// 远程信任上传脚本（契约 P2 §4.1）：pi_data.mjs 内容走 ssh stdin、同目录临时
@@ -117,9 +176,12 @@ pub fn wrap_payload(script: &str) -> String {
     )
 }
 
-/// 远程会话扫描脚本：把项目路径按契约 §3.4 单引号包裹注入 [`SESSIONS_SCRIPT`]。
+/// 远程会话扫描脚本：Node 内联脚本与项目路径均按契约 §3.4 单引号包裹注入
+/// [`SESSIONS_SCRIPT`]（路径仅作 `node -e` 的 argv，不进入 JavaScript 源码）。
 pub fn build_sessions_script(project_path: &str) -> String {
-    SESSIONS_SCRIPT.replace("'<PROJECT>'", &posix_quote(project_path))
+    SESSIONS_SCRIPT
+        .replace("'<NODE_SCRIPT>'", &posix_quote(SESSIONS_NODE_SCRIPT))
+        .replace("'<PROJECT>'", &posix_quote(project_path))
 }
 
 /// 远程 spawn payload（契约 §3.5 精确文本）：
@@ -234,23 +296,12 @@ mod tests {
     #[test]
     fn sessions_script_injects_project_path_and_contract_markers() {
         let script = build_sessions_script("/home/d'v/proj");
-        assert!(script.contains("PHYS=$(cd '/home/d'\\''v/proj' >/dev/null 2>&1 && pwd -P)"));
-        for marker in [
-            "PIX_SESSION_CWD=",
-            "PIX_SESSION_FILE=",
-            "PIX_SESSION_MTIME=",
-            "PIX_SESSION_HEADER=",
-            "PIX_SESSION_TITLE=",
-            "PIX_SESSIONS_DONE",
-        ] {
-            assert!(script.contains(marker), "sessions 脚本缺 {marker:?}");
-        }
-        // 契约 P2 §2.2 冻结要点：head -c 8192 截头、200 个上限、tab 切分、
-        // stat -c/-f 回退链。
-        assert!(script.contains("head -c 8192"));
-        assert!(script.contains("head -n 200"));
-        assert!(script.contains("while IFS=\"\t\" read -r m f"));
-        assert!(script.contains("stat -c %Y") && script.contains("stat -f %m"));
+        assert!(script.ends_with(" -- '/home/d'\\''v/proj'\n"));
+        assert!(script.contains("command -v node"));
+        assert!(script.contains("PIX_SESSIONS_ERROR="));
+        assert!(SESSIONS_NODE_SCRIPT.contains("Buffer.alloc(8192)"));
+        assert!(SESSIONS_NODE_SCRIPT.contains("records.slice(0, 50)"));
+        assert!(!script.contains("grep"));
         // 脚本中不得再残留占位符。
         assert!(!script.contains("<PROJECT>"));
         // 可整体经 base64 通道无损往返。
