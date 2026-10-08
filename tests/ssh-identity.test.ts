@@ -1,5 +1,8 @@
-import { describe, expect, test } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import {
+  copySshProjectConnection,
+  rememberSshProjectConnection,
+  resolveSshConnectionId,
   buildDockerUri,
   buildSshUri,
   buildWslUri,
@@ -250,5 +253,88 @@ describe("伞型 parseRemoteUri / isRemoteUri（契约 §2.4 用例 8）", () =>
     expect(isRemoteUri("ssh://host/a")).toBe(true)
     expect(isRemoteUri("wsl://Ubuntu/a")).toBe(true)
     expect(isRemoteUri("docker://c/a")).toBe(true)
+  })
+})
+
+describe("回绑项目连接选择", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const previous = "ssh://dev@host:2222/alias"
+  const rebound = "ssh://dev@host:2222/real"
+  const connections = [
+    { id: "first", host: "host", port: 2222, user: "dev", keyPath: "/keys/first" },
+    { id: "selected", host: "host", port: 2222, user: "dev", keyPath: "/keys/selected" },
+    { id: "other", host: "other", port: 2222, user: "dev" },
+  ]
+
+  function storage() {
+    const values = new Map<string, string>()
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    })
+    return values
+  }
+
+  test("复制当前来源选择并覆盖目标旧选择，保留来源与无关项目", () => {
+    storage()
+    rememberSshProjectConnection(previous, "selected")
+    rememberSshProjectConnection(rebound, "first")
+    const unrelated = "ssh://dev@host:2222/unrelated"
+    rememberSshProjectConnection(unrelated, "first")
+    copySshProjectConnection(previous, rebound, connections)
+    expect(resolveSshConnectionId(previous, connections)).toBe("selected")
+    expect(resolveSshConnectionId(rebound, connections)).toBe("selected")
+    expect(resolveSshConnectionId(unrelated, connections)).toBe("first")
+    // 同一目标再次回绑时，以这次来源为准。
+    copySshProjectConnection(unrelated, rebound, connections)
+    expect(resolveSshConnectionId(rebound, connections)).toBe("first")
+    expect(resolveSshConnectionId(previous, connections)).toBe("selected")
+  })
+
+  test.each([undefined, "deleted", "other"])("来源绑定 %s 时复制有效回退而非目标旧选择", remembered => {
+    storage()
+    if (remembered) rememberSshProjectConnection(previous, remembered)
+    rememberSshProjectConnection(rebound, "selected")
+    copySshProjectConnection(previous, rebound, connections)
+    expect(resolveSshConnectionId(rebound, connections)).toBe("first")
+  })
+
+  test.each([
+    "ssh://dev@other:2222/real",
+    "ssh://dev@host:22/real",
+    "ssh://another@host:2222/real",
+    "wsl://Ubuntu/real",
+    "ssh://host",
+    "/local",
+  ])("不向不同目标或非法 URI %s 复制连接", target => {
+    const values = storage()
+    rememberSshProjectConnection(previous, "selected")
+    const before = values.get("pix.sshProjectConnections")
+    copySshProjectConnection(previous, target, connections)
+    expect(values.get("pix.sshProjectConnections")).toBe(before)
+  })
+
+  test("来源无有效连接时不修改已有绑定", () => {
+    const values = storage()
+    rememberSshProjectConnection(previous, "deleted")
+    rememberSshProjectConnection(rebound, "selected")
+    const before = values.get("pix.sshProjectConnections")
+    copySshProjectConnection(previous, rebound, [])
+    copySshProjectConnection("/local", rebound, connections)
+    copySshProjectConnection(previous, previous, connections)
+    expect(values.get("pix.sshProjectConnections")).toBe(before)
+  })
+
+  test("存储不可用不会阻断回绑", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("unavailable")
+      },
+      setItem: () => {
+        throw new Error("unavailable")
+      },
+    })
+    expect(() => copySshProjectConnection(previous, rebound, connections)).not.toThrow()
   })
 })

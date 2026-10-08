@@ -1,4 +1,5 @@
 import type { Ref } from "vue"
+import { copySshProjectConnection } from "@/lib/ssh"
 import type { AppConfig, RunningSession } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
 
@@ -121,6 +122,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
             const previous = owner.cwd
             if (!previous || previous === rebound) return
             pixLog(`ssh path rebound: ${previous} -> ${rebound}`, owner.runtimeId)
+            copySshProjectConnection(previous, rebound, config.value.sshConnections ?? [])
             owner.cwd = rebound
             workspace.remember(rebound)
             if (project.value === previous) {

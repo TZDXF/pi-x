@@ -433,3 +433,15 @@ export function resolveSshConnectionId(uri: string, connections: readonly SshCon
     return remembered
   return connections.find(connection => connectionMatches(connection, remote))?.id ?? null
 }
+
+/** realpath 回绑时复制来源的有效连接选择，保留旧项目关联；禁止跨连接目标迁移。 */
+export function copySshProjectConnection(previous: string, rebound: string, connections: readonly SshConnectionRef[]) {
+  if (previous === rebound) return
+  const remote = parseRemoteUri(rebound)
+  if (!remote) return
+  const connectionId = resolveSshConnectionId(previous, connections)
+  if (!connectionId) return
+  const connection = connections.find(connection => connection.id === connectionId)
+  if (!connection || !connectionMatches(connection, remote)) return
+  rememberSshProjectConnection(rebound, connectionId)
+}
