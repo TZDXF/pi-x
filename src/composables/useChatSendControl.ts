@@ -27,6 +27,8 @@ export function useChatSendControl(deps: {
   workspaceSelection: () => WorkspaceSelection | null
   ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
   newSession: () => void
+  /** 消息实际进入对话流（非本地排队/延迟发送）后触发，用于滚动回底部。 */
+  onSent?: () => void
 }) {
   const { session, ui, workspace, bridge } = deps
   const { t } = useI18n()
@@ -165,9 +167,13 @@ export function useChatSendControl(deps: {
         if (comments.length) codeComments.clear()
         if (selections.length) conversationSelections.clear()
       } else {
+        // 运行中且偏好本地排队时消息不进对话流，保持阅读位置；否则发送后回底，
+        // 即使此前向上翻阅过历史，也能立刻看到新消息与即将开始的回答。
+        const queuedLocally = session.isStreaming && runningBehavior.value === "queue"
         if (comments.length) codeComments.clear()
         if (selections.length) conversationSelections.clear()
         await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
+        if (!queuedLocally) deps.onSent?.()
       }
     } finally {
       // 无论启动、命令校验还是发送如何退出，都清理本次首条消息的预回显。

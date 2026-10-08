@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { WorkspaceSelection } from "@/api/piClient"
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import ContextBreakdown from "@/components/ContextBreakdown.vue"
 import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
@@ -156,6 +156,10 @@ const bottomNotch = computed(() => {
 })
 
 const conversation = ref<InstanceType<typeof ChatTurnList> | null>(null)
+/** 发送/重发后回对话底部：向上翻阅会解除吸底跟随，发送即阅读意图，需强制回底。 */
+function jumpToConversationBottom() {
+  void nextTick().then(() => conversation.value?.scrollToBottom())
+}
 const { renderedEntries, navigateToQuestion, onHistoryScroll, lastAssistantTurn, scrollHistory } = useChatTurnList({
   session,
   ui,
@@ -179,6 +183,7 @@ const promptEdit = usePromptEdit({
   connecting: () => props.connecting,
   connected: () => props.connected,
   knownSessions: () => knownSessions.value,
+  onResent: jumpToConversationBottom,
 })
 const edit = reactive(promptEdit)
 const { editedPrompt, editBusy } = promptEdit
@@ -208,6 +213,7 @@ const sendControl = useChatSendControl({
   workspaceSelection: () => workspaceSelection.value,
   ensureStarted: selection => props.ensureStarted(selection),
   newSession: () => emit("newSession"),
+  onSent: jumpToConversationBottom,
 })
 const controls = reactive(sendControl)
 const { delayedSend, delayedSendEnabled, abort } = sendControl

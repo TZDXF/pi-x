@@ -29,6 +29,8 @@ export function usePromptEdit(deps: {
   connecting: () => boolean
   connected: () => boolean
   knownSessions: () => KnownSession[]
+  /** 重发成功后触发，用于滚动回对话底部。 */
+  onResent?: () => void
 }) {
   const { t } = useI18n()
   const { session, ui, workspace, editTextarea } = deps
@@ -94,6 +96,7 @@ export function usePromptEdit(deps: {
         withSessionReferences(text, knownSessions()),
       )
       editedPrompt.value = null
+      deps.onResent?.()
     } catch (error) {
       ui.pushToast(String(error), "error")
     } finally {

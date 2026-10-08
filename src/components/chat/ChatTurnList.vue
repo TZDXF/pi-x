@@ -89,6 +89,7 @@ const {
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
+  scrollToBottom: () => conversation.value?.scrollToBottom(),
   scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
   locateSelection,
   editSelection,

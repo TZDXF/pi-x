@@ -228,6 +228,8 @@ test("edit UI allows a running answer and preserves the draft when stopping fail
   const edit = source("../src/composables/usePromptEdit.ts")
   expect(edit).not.toMatch(/session\.isStreaming|session\.isCompacting|pendingCount|type: "fork"|session\.clear\(/)
   expect(edit).toMatch(/await session\.resendPrompt[\s\S]*editedPrompt\.value = null[\s\S]*catch/)
+  // 重发成功后通知视图回到底部，与普通发送一致
+  expect(edit).toMatch(/editedPrompt\.value = null\s*deps\.onResent\?\.\(\)/)
   // Reconciliation moved out of App; keep both resend guards covered at the
   // actual boundary, including a resend starting during the mtime request.
   const loader = source("../src/lib/conversationLoader.ts")

@@ -12,6 +12,8 @@ import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 // Execute the production composable with real Vue reactivity and pure helpers,
 // replacing only application boundaries (RPC/config, i18n, project comments).
 function harness(config = Promise.resolve({})) {
+  const behavior = ref("steer")
+  const onSent = vi.fn()
   const comments = reactive({ project: "repo", comments: [], clear: vi.fn() })
   const selections = reactive({ scope: "repo", items: [], clear: vi.fn() })
   const imports = {
@@ -23,7 +25,7 @@ function harness(config = Promise.resolve({})) {
     "@/lib/completion": { withSessionReferences, desktopCommands },
     "@/lib/codeComments": { commentFilePath },
     "@/lib/promptContexts": { serializeComposerPromptContexts },
-    "@/lib/runningBehavior": { runningBehavior: ref("steer") },
+    "@/lib/runningBehavior": { runningBehavior: behavior },
     "@/stores/codeComments": { useCodeCommentsStore: () => comments },
     "@/stores/conversationSelections": { useConversationSelectionsStore: () => selections },
   }
@@ -64,6 +66,7 @@ function harness(config = Promise.resolve({})) {
       workspaceSelection: () => selection,
       ensureStarted,
       newSession,
+      onSent,
     })
   })
   return {
@@ -74,6 +77,8 @@ function harness(config = Promise.resolve({})) {
     workspace,
     bridge,
     flags,
+    behavior,
+    onSent,
     comments,
     selections,
     selection,
@@ -82,6 +87,40 @@ function harness(config = Promise.resolve({})) {
   }
 }
 const image = "data:image/png;base64,aGVsbG8="
+
+test("sending scrolls back to the bottom; queued and delayed sends keep the reading position", async () => {
+  const h = harness()
+  try {
+    await h.controls.onSubmit({ text: "hello" })
+    expect(h.session.send).toHaveBeenCalledOnce()
+    expect(h.onSent).toHaveBeenCalledOnce()
+
+    // 运行中且偏好本地排队：消息不进对话流，不打断当前阅读位置
+    h.onSent.mockClear()
+    h.session.isStreaming = true
+    h.behavior.value = "queue"
+    await h.controls.onSubmit({ text: "queued" })
+    expect(h.session.send).toHaveBeenCalledTimes(2)
+    expect(h.onSent).not.toHaveBeenCalled()
+
+    // steer 行为下消息进入对话流，回底展示新问题
+    h.behavior.value = "steer"
+    await h.controls.onSubmit({ text: "steered" })
+    expect(h.session.send).toHaveBeenCalledTimes(3)
+    expect(h.onSent).toHaveBeenCalledOnce()
+
+    // 延迟发送进本地队列，不回底
+    h.onSent.mockClear()
+    h.controls.delayedSend.value = true
+    h.controls.sendDelayMinutes.value = 0
+    h.controls.sendDelaySeconds.value = 5
+    await h.controls.onSubmit({ text: "later" })
+    expect(h.session.schedulePrompt).toHaveBeenCalledWith("later", 5000, undefined, "later")
+    expect(h.onSent).not.toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
 
 test("send controls and extension editor text stay in their owning split pane", async () => {
   const left = harness()

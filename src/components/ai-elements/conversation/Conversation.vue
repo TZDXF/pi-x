@@ -23,6 +23,7 @@ interface Props {
 const emit = defineEmits<{ scroll: [event: Event] }>()
 defineExpose({
   stopScroll: () => context.stopScroll(),
+  scrollToBottom: () => context.scrollToBottom(),
   scrollToMessage: async (id: number) => {
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
