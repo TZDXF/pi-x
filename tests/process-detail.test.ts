@@ -74,7 +74,7 @@ test("storage failures do not break the in-memory preference", () => {
 
 test("concise mode hides thinking blocks in AssistantBlocks; detailed keeps them", () => {
   const blocks = source("../src/components/AssistantBlocks.vue")
-  expect(blocks).toMatch(/block\.type === 'thinking' && processDetail === 'detailed'/)
+  expect(blocks).toMatch(/block\.type === 'thinking' && displayDetail === 'detailed'/)
 
   const settings = source("../src/components/settings/RunConfigSettings.vue")
   expect(settings).toMatch(/:model-value="processDetail"/)
@@ -88,4 +88,22 @@ test("concise mode shows a thinking status indicator only while thinking streams
   // Streaming thinking still surfaces a shimmer status so the run does not look idle;
   // completed thinking renders nothing in concise mode.
   expect(blocks).toMatch(/block\.type === 'thinking' && block\.streaming/)
+})
+
+test("concise tool groups precede all specialized renderers and expand with a local detailed override", () => {
+  const blocks = source("../src/components/AssistantBlocks.vue")
+  expect(blocks).toMatch(/props\.detail \?\? processDetail\.value/)
+  expect(blocks).toMatch(/displayDetail === 'concise' && conciseGroups\.has\(i\)/)
+  expect(blocks).toMatch(/<template v-else-if="block\.type === 'toolCall' && displayDetail === 'concise'"/)
+  expect(blocks.indexOf("<ToolCallGroup")).toBeLessThan(blocks.indexOf("&& isBash(block)"))
+  expect(blocks).toMatch(/detail="detailed"/)
+  expect(blocks).toMatch(/@open-review="emit\('openReview', \$event\)"/)
+
+  const group = source("../src/components/chat/ToolCallGroup.vue")
+  expect(group).toMatch(/const expanded = ref\(false\)/)
+  expect(group).toMatch(/:aria-expanded="expanded"/)
+  expect(group).toMatch(/@click="expanded = !expanded"/)
+  expect(group).toMatch(/<div v-if="expanded"[^>]*>\s*<slot \/>/)
+  expect(group).toMatch(/v-if="status\.running"/)
+  expect(group).toMatch(/v-if="status\.errors"/)
 })

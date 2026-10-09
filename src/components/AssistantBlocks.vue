@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { computed } from "vue"
+import ToolCallGroup from "@/components/chat/ToolCallGroup.vue"
+import { toolCallGroups } from "@/lib/toolCallGroups"
 import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
@@ -11,7 +14,7 @@ import { BrainIcon, ChevronRight, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall } from "@/lib/sessionChanges"
 import { isSubagentTool } from "@/lib/subagents"
-import { processDetail } from "@/lib/processDetail"
+import { processDetail, type ProcessDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 import SubagentToolGroup from "@/components/chat/SubagentToolGroup.vue"
@@ -21,11 +24,18 @@ const props = withDefaults(
     blocks: Block[]
     runs: Record<string, ToolRun>
     animate?: boolean
+    /** Expanded concise groups reuse the detailed tool renderers without changing the preference. */
+    detail?: ProcessDetail
     /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
      *  keeps the same keys it had while the full block list was streaming. */
     keyOffset?: number
   }>(),
   { keyOffset: 0, animate: true },
+)
+
+const displayDetail = computed(() => props.detail ?? processDetail.value)
+const conciseGroups = computed(() =>
+  displayDetail.value === "concise" ? toolCallGroups(props.blocks) : new Map<number, ToolCallBlock[]>(),
 )
 
 const emit = defineEmits<{ openReview: [path: string] }>()
@@ -206,7 +216,7 @@ const { t } = useI18n()
 
       <!-- thinking: collapsed by default; the trigger streams the latest reasoning line.
            Concise mode hides thinking entirely: only tool calls and answers are shown. -->
-      <Thinking v-else-if="block.type === 'thinking' && processDetail === 'detailed'" :is-streaming="block.streaming">
+      <Thinking v-else-if="block.type === 'thinking' && displayDetail === 'detailed'" :is-streaming="block.streaming">
         <ThinkingTrigger :streaming-text="block.text" />
         <ThinkingContent :content="block.text" />
       </Thinking>
@@ -221,6 +231,23 @@ const { t } = useI18n()
         <BrainIcon class="size-4 shrink-0" />
         <Shimmer :duration="1" class="font-medium">{{ t("blocks.thinking") }}</Shimmer>
       </div>
+
+      <!-- Concise mode folds every tool type into one lightweight, opt-in group. -->
+      <ToolCallGroup
+        v-else-if="block.type === 'toolCall' && displayDetail === 'concise' && conciseGroups.has(i)"
+        :blocks="conciseGroups.get(i)!"
+        :runs="props.runs"
+      >
+        <AssistantBlocks
+          :blocks="conciseGroups.get(i)!"
+          :runs="props.runs"
+          :animate="false"
+          detail="detailed"
+          @open-review="emit('openReview', $event)"
+        />
+      </ToolCallGroup>
+      <!-- Later calls in a concise group are rendered only inside its expanded content. -->
+      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise'" />
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">

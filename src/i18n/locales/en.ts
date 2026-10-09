@@ -864,7 +864,7 @@ export default {
       "How a message sent while generating is handled: queued to wait, or steers the current run immediately.",
     processDetail: "Process detail level",
     processDetailDesc:
-      "How much of the assistant's run is shown: detailed includes thinking content; concise hides all thinking and shows only tool calls and answers.",
+      "How much of the assistant's run is shown: detailed includes thinking content; concise hides thinking and collapses consecutive tool calls into an expandable summary.",
     processDetailDetailed: "Detailed",
     processDetailConcise: "Concise",
     themeLight: "Light",
@@ -1133,6 +1133,9 @@ export default {
     openInReview: "View this file in the review page",
     elapsed: "Elapsed time",
     copyTerminal: "Copy terminal content",
+    toolsRunning: "Using tools · {count} calls",
+    toolsCompleted: "Used tools · {count} calls",
+    toolsFailed: "{count} failed",
     thinking: "Thinking",
     thinkingSeconds: "Thinking · {seconds}s",
     thoughtFew: "Thought for a few seconds",
