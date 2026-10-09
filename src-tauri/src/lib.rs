@@ -26,9 +26,7 @@ mod remote;
 mod rpc;
 mod schedules;
 mod secrets;
-mod session_checkpoint;
 mod session_file_rewind;
-mod session_revert;
 mod session_watch;
 mod sessions;
 mod skills;
@@ -130,18 +128,9 @@ pub fn run() {
             workspace_git::workspace_git_info,
             workspace_git::workspace_git_create,
             workspace_git::workspace_git_prepare,
-            session_revert::session_revert_changes,
             session_file_rewind::session_file_rewind_preview,
             session_file_rewind::session_file_rewind_apply,
             session_file_rewind::session_file_rewind_state_get,
-            session_file_rewind::session_file_rewind_state_mark,
-            session_checkpoint::session_checkpoint_create,
-            session_checkpoint::session_checkpoint_diff,
-            session_checkpoint::session_checkpoint_restore,
-            session_checkpoint::session_checkpoint_manifest_get,
-            session_checkpoint::session_checkpoint_manifest_set,
-            session_checkpoint::session_checkpoint_manifest_delete,
-            session_checkpoint::session_checkpoint_content,
             commands::files::search_files,
             commands::files::list_project_directory,
             commands::files::read_file_preview,

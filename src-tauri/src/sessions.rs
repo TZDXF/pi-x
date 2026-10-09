@@ -671,6 +671,8 @@ pub async fn session_delete(file: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     // Presentation metadata is optional; ignore a missing sidecar.
     let _ = std::fs::remove_file(path.with_extension("pix.json"));
+    // JSONL 已删除；用验证过的路径清理撤销状态，不能依赖前端再次校验文件存在。
+    let _ = crate::session_file_rewind::delete_state_for_session(&path);
     invalidate_meta_cache(&path);
     Ok(())
 }

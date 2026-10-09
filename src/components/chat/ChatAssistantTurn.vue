@@ -26,14 +26,7 @@ const emit = defineEmits<{
   copyText: [text: string]
 }>()
 const { t } = useI18n()
-const {
-  changesForTurn,
-  artifactsForTurn,
-  checkpointForTurn,
-  onTurnReverted,
-  onTurnRevertedAll,
-  turnArtifactsReverted,
-} = props.changes
+const { changesForTurn, artifactsForTurn, onTurnReverted, onTurnRevertedAll, turnArtifactsReverted } = props.changes
 
 function onProcessToggle(event: Event) {
   if ((event.target as HTMLDetailsElement).open) emit("processOpened")
@@ -93,10 +86,10 @@ function onProcessToggle(event: Event) {
         :artifacts="artifactsForTurn(entry)"
         :was-reverted="turnArtifactsReverted(entry)"
         :project="session.cwd || project"
-        :checkpoint="checkpointForTurn(entry)"
+        :session-file="session.sessionFile"
         @open-review="emit('openReview', $event)"
         @reverted="onTurnReverted"
-        @reverted-all="onTurnRevertedAll(entry)"
+        @reverted-all="onTurnRevertedAll"
       />
     </div>
   </MessageContent>

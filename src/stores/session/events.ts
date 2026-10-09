@@ -198,9 +198,6 @@ export interface EventContext {
   refreshState: () => Promise<void>
   syncSessionFile: () => Promise<void>
   dispatchQueuedPrompt: () => void
-  /** 轮次 Git 快照：agent_start 建开始快照，settled 建结束快照并计算差异。 */
-  checkpointStart: () => void
-  checkpointSettle: () => void
   /** Extension custom entry (e.g. exact file before/after artifact). */
   customEntryAppended: (entry: any) => void
 }
@@ -228,8 +225,6 @@ export function createEventHandler(ctx: EventContext) {
     refreshState,
     syncSessionFile,
     dispatchQueuedPrompt,
-    checkpointStart,
-    checkpointSettle,
     customEntryAppended,
   } = ctx
 
@@ -263,7 +258,6 @@ export function createEventHandler(ctx: EventContext) {
         flow.turnAborted = false
         flow.lastErrorMessage = null
         setSessionRunStatus(sessionFile.value, "running")
-        checkpointStart()
         break
 
       case "agent_end":
@@ -317,8 +311,6 @@ export function createEventHandler(ctx: EventContext) {
         }
         void refreshStats()
         void refreshState()
-        // Turn snapshot: record the files changed during this round (including partial changes from aborted rounds), for the summary card and git rollback.
-        checkpointSettle()
         // Our own worker just flushed the file; sync so watcher events for
         // this write are not mistaken for external edits.
         void syncSessionFile()

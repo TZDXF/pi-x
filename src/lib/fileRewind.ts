@@ -22,20 +22,28 @@ export interface FileRewindApplyResult {
   applied: boolean
   preview: FileRewindPreview
   response: string
+  revertedToolCallIds: string[]
 }
 
 export function previewFileRewind(project: string, artifacts: FileChangeArtifact[]): Promise<FileRewindPreview> {
   return invoke<FileRewindPreview>("session_file_rewind_preview", { project, artifacts })
 }
 
-export function applyFileRewind(project: string, artifacts: FileChangeArtifact[]): Promise<FileRewindApplyResult> {
-  return invoke<FileRewindApplyResult>("session_file_rewind_apply", { project, artifacts })
+/** 文件恢复与已撤销标记由后端一起提交，失败时补偿文件写入。 */
+export function applyFileRewind(
+  project: string,
+  artifacts: FileChangeArtifact[],
+  file?: string | null,
+): Promise<FileRewindApplyResult> {
+  return invoke<FileRewindApplyResult>("session_file_rewind_apply", { project, artifacts, file: file ?? null })
 }
 
 export function fileRewindState(file: string): Promise<string[]> {
   return invoke<string[]>("session_file_rewind_state_get", { file })
 }
 
-export function markFileRewindState(file: string, toolCallIds: string[]): Promise<string[]> {
-  return invoke<string[]>("session_file_rewind_state_mark", { file, toolCallIds })
+export interface FileRewindFileResult {
+  path: string
+  ok: boolean
+  error?: string
 }

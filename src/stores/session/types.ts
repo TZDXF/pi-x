@@ -49,7 +49,6 @@ export interface UserEntry {
   images?: { url: string }[]
   live?: true
   timestamp?: number
-  turnIndex?: number
 }
 export interface AssistantEntry {
   kind: "assistant"
@@ -94,9 +93,7 @@ export interface ModelChangeEntry {
   timestamp?: number
   live?: true
 }
-export type Entry = (UserEntry | AssistantEntry | CompactionEntry | ContextEditEntry | ModelChangeEntry) & {
-  turnIndex?: number
-}
+export type Entry = UserEntry | AssistantEntry | CompactionEntry | ContextEditEntry | ModelChangeEntry
 
 export interface RetryInfo {
   attempt: number

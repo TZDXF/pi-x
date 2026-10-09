@@ -1,4 +1,5 @@
 import { test, expect } from "vitest"
+import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -61,4 +62,48 @@ test("records overwrite content and ignores failed tool results", async t => {
     { cwd: dir },
   )
   expect(entries.length).toBe(1)
+})
+
+test("git pull and other terminal mutations never create file artifacts", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "pix-file-change-"))
+  t.onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, "pulled.ts")
+  const { handlers, entries } = harness()
+  await handlers.get("tool_call")(
+    { toolCallId: "pull", toolName: "bash", input: { command: "git pull", path: file } },
+    { cwd: dir },
+  )
+  writeFileSync(file, "remote change\n")
+  await handlers.get("tool_result")({ toolCallId: "pull", toolName: "bash", isError: false }, { cwd: dir })
+  expect(entries).toEqual([])
+})
+
+test("UTF-8 BOM bytes are preserved in captured content and hashes", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "pix-file-change-"))
+  t.onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, "bom.ts")
+  const { handlers, entries } = harness()
+  writeFileSync(file, "\uFEFFbefore\n")
+  await handlers.get("tool_call")({ toolCallId: "bom", toolName: "write", input: { path: file } }, { cwd: dir })
+  writeFileSync(file, "\uFEFFafter\n")
+  await handlers.get("tool_result")({ toolCallId: "bom", toolName: "write", isError: false }, { cwd: dir })
+  expect(entries[0].data.files[0].beforeContent).toBe("\uFEFFbefore\n")
+  expect(entries[0].data.files[0].afterHash).toBe(createHash("sha256").update("\uFEFFafter\n").digest("hex"))
+})
+
+test("independent plugin registrations cannot consume each other's pending tool snapshots", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "pix-file-change-"))
+  t.onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
+  const first = harness()
+  const second = harness()
+  const file = join(dir, "a.ts")
+  await first.handlers.get("tool_call")(
+    { toolCallId: "shared", toolName: "write", input: { path: file } },
+    { cwd: dir },
+  )
+  writeFileSync(file, "after")
+  await second.handlers.get("tool_result")({ toolCallId: "shared", toolName: "write", isError: false }, { cwd: dir })
+  expect(second.entries).toEqual([])
+  await first.handlers.get("tool_result")({ toolCallId: "shared", toolName: "write", isError: false }, { cwd: dir })
+  expect(first.entries.length).toBe(1)
 })

@@ -25,15 +25,8 @@ vi.mock("@/i18n", () => ({
   i18n: { global: { t: key => key } },
   tBackendError: value => String(value ?? ""),
 }))
-vi.mock("@/lib/checkpoints", () => ({
-  createCheckpoint: async () => ({ commitOid: "oid" }),
-  diffCheckpoints: async () => [],
-  loadCheckpointManifest: async () => null,
-  saveCheckpointManifest: async () => {},
-}))
 vi.mock("@/lib/fileRewind", () => ({
   fileRewindState: async () => [],
-  markFileRewindState: async () => [],
 }))
 vi.mock("@/lib/notifications", () => ({
   notifyTurnComplete: (...args) => controls.notifications.push(args),

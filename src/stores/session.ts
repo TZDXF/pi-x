@@ -29,7 +29,6 @@ import { createModelActions } from "./session/modelActions"
 import { createSessionArtifacts } from "./session/artifacts"
 import { createSessionHistory } from "./session/history"
 import { createPromptQueue } from "./session/promptQueue"
-import { createTurnCheckpoints } from "./session/checkpoints"
 import type { Block, Entry, QueuedPrompt, RetryInfo, SessionFlow, ToolRun, UserEntry } from "./session/types"
 
 export type {
@@ -158,7 +157,7 @@ export const createSessionStore = (runtimeId = "default") =>
       refreshState,
       refreshThinkingLevels,
     })
-    const { refreshFileRewindState, markFileRewinds, mergeFileChangeArtifact } = createSessionArtifacts({
+    const { refreshFileRewindState, recordFileRewinds, mergeFileChangeArtifact } = createSessionArtifacts({
       sessionFile,
       fileChangeArtifacts,
       revertedFileChangeCalls,
@@ -230,11 +229,6 @@ export const createSessionStore = (runtimeId = "default") =>
     } = createPromptQueue({ promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send })
 
     let userTurnCount = 0
-    const turnCheckpoints = createTurnCheckpoints({
-      cwd,
-      sessionFile,
-      userTurnCount: () => userTurnCount,
-    })
 
     const handleEvent = createEventHandler({
       runtimeId,
@@ -257,8 +251,6 @@ export const createSessionStore = (runtimeId = "default") =>
       refreshState,
       syncSessionFile,
       dispatchQueuedPrompt,
-      checkpointStart: turnCheckpoints.onAgentStart,
-      checkpointSettle: turnCheckpoints.onAgentSettled,
       customEntryAppended: mergeFileChangeArtifact,
     })
 
@@ -354,11 +346,10 @@ export const createSessionStore = (runtimeId = "default") =>
       // dispatched, and slash commands leave it for the next question.
       const modelChange = trimmed.startsWith("/") ? undefined : (pendingModelChange.value ?? undefined)
       if (modelChange) pendingModelChange.value = null
-      const turnIndex = ++userTurnCount
+      ++userTurnCount
       entries.value.push({
         kind: "user",
         id: replacement?.id ?? nextId(),
-        turnIndex,
         timestamp: Date.now(),
         text: trimmed,
         modelChange: modelChange ?? replacement?.modelChange,
@@ -773,10 +764,7 @@ export const createSessionStore = (runtimeId = "default") =>
       ),
       fileChangeArtifacts,
       revertedFileChangeCalls,
-      markFileRewinds,
-      /** 轮次 Git 快照回滚记录（按 turnIndex 关联）。 */
-      turnCheckpointRecords: turnCheckpoints.records,
-      markTurnReverted: turnCheckpoints.markReverted,
+      recordFileRewinds,
       timelineTurns,
       revealTimelineTurn,
       runs,

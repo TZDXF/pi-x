@@ -13,7 +13,6 @@ import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import type { FileChange } from "@/lib/sessionChanges"
-import type { TurnCheckpointRecord } from "@/lib/checkpoints"
 
 export type SidebarTabType = "review" | "files" | "terminal" | "browser"
 export interface SidebarTabItem {
@@ -28,7 +27,6 @@ const props = defineProps<{
   changes: FileChange[]
   project: string
   focus?: string | null
-  checkpoints?: TurnCheckpointRecord[]
 }>()
 const emit = defineEmits<{
   close: []
@@ -336,7 +334,6 @@ onBeforeUnmount(() => {
             :changes="changes"
             :project="project"
             :focus="tab.id === activeId ? focus : null"
-            :checkpoints="checkpoints"
           />
           <ProjectFiles v-else-if="tab.type === 'files'" :project="project" />
           <TerminalPanel

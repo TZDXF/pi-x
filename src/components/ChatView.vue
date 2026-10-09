@@ -453,7 +453,6 @@ onBeforeUnmount(() => {
         :changes="session.fileChanges"
         :project="session.cwd || project"
         :focus="reviewFocus"
-        :checkpoints="session.turnCheckpointRecords"
         @update:active-id="activeTabId = $event"
         @add-tab="addSidebarTab"
         @close-tab="closeSidebarTab"
