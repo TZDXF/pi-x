@@ -45,7 +45,8 @@ const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
 const tasksCollapsed = ref(false)
 const projectsCollapsed = ref(false)
-const navigationDisabled = computed<boolean>(() => !!props.navigationBusy || workspace.gitBusy || saving.value)
+// Navigation can queue during startup; the parent decides when it must be blocked.
+const navigationDisabled = computed<boolean>(() => !!props.navigationBusy || saving.value)
 const disabled = computed<boolean>(() => props.busy || workspace.gitBusy || saving.value)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
 const { renaming, title, saving, archiving, rename, openSession, renameOnDoubleClick, saveTitle, archive } =

@@ -478,7 +478,7 @@ onUnmounted(() => {
           :project="project"
           :ready="phase === 'chat'"
           :busy="navigating || workspace.gitBusy || phase === 'trust'"
-          :navigation-busy="workspace.gitBusy || phase === 'trust'"
+          :navigation-busy="(workspace.gitBusy && !connecting) || phase === 'trust'"
           @switch-project="requestNavigation(() => switchProject())"
           @select-project="selectProjectFromRoute"
           @select-conversation="selectConversationFromSidebar"

@@ -47,10 +47,11 @@ export function useAppNavigation(context: AppNavigationContext) {
   } = context
 
   // Serialize backend switches, but keep navigation clickable and retain the latest choice.
+  // Startup owns both gitBusy and connecting; accept its clicks now and drain after startup.
   let queuedNavigation: (() => Promise<unknown>) | null = null
   const navigationRunning = ref(false)
   function requestNavigation(action: () => Promise<unknown>) {
-    if (workspace.gitBusy || phase.value === "trust") return
+    if ((workspace.gitBusy && !connecting.value) || phase.value === "trust") return
     queuedNavigation = action
     void drainNavigation()
   }
@@ -62,7 +63,7 @@ export function useAppNavigation(context: AppNavigationContext) {
     // left a never-loaded conversation in the history stack, and
     // suppressRouteAction also silenced the route-watch fallback. The sidebar
     // already communicates the blocked state via its navigation-busy prop.
-    if (workspace.gitBusy || phase.value === "trust") return
+    if ((workspace.gitBusy && !connecting.value) || phase.value === "trust") return
     suppressRouteAction = true
     // The initial home entry is only a shell state; make the first project route replace it.
     navigate(path, route.value.name === "home")
