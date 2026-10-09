@@ -5,7 +5,7 @@ import { MessageContent, MessageActions, MessageAction } from "@/components/ai-e
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import TurnChangesCard from "@/components/TurnChangesCard.vue"
 import type { useTurnChanges } from "@/composables/useTurnChanges"
-import { blocksText, hasSummary } from "@/composables/useChatTurnList"
+import { blocksText, hasFoldedProcess } from "@/composables/useChatTurnList"
 import { formatMessageTime } from "@/lib/format"
 import type { AssistantTurn } from "@/lib/responseTurns"
 import type { SessionStore } from "@/stores/session"
@@ -45,9 +45,10 @@ function onProcessToggle(event: Event) {
       <!-- The answer keeps one stable render path: while streaming it
            is the flat block list, on completion only the trailing
            summary stays visible (same keys via keyOffset), so the
-           markdown below never remounts and re-flashes. -->
+           markdown below never remounts and re-flashes. Interrupted or
+           failed turns also fold, even when there is no summary. -->
       <details
-        v-if="entry.complete && entry.process.length && blocksText(entry.summary).trim()"
+        v-if="hasFoldedProcess(entry)"
         class="response-process border-b border-border pb-3"
         @toggle="onProcessToggle"
       >
@@ -74,8 +75,8 @@ function onProcessToggle(event: Event) {
       </details>
       <AssistantBlocks
         :animate="animate"
-        :blocks="hasSummary(entry) ? entry.summary : entry.blocks"
-        :key-offset="hasSummary(entry) ? entry.blocks.length - entry.summary.length : 0"
+        :blocks="hasFoldedProcess(entry) ? entry.summary : entry.blocks"
+        :key-offset="hasFoldedProcess(entry) ? entry.blocks.length - entry.summary.length : 0"
         :runs="session.runs"
         @open-review="emit('openReview', $event)"
       />

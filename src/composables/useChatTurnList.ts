@@ -21,6 +21,11 @@ export function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
 }
 
+/** Settled turns fold their process even when interruption leaves no final text. */
+export function hasFoldedProcess(entry: AssistantTurn): boolean {
+  return entry.complete && entry.process.length > 0
+}
+
 /** 流式 turn 投影与分页锚点恢复；状态与滚动句柄均属于当前窗格。 */
 export function useChatTurnList(deps: {
   session: SessionStore

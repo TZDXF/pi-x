@@ -2,6 +2,7 @@ import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { responseTurns } from "@/lib/responseTurns"
+import { hasFoldedProcess } from "@/composables/useChatTurnList"
 const user = id => ({ kind: "user", id, text: "question" })
 const text = text => ({ type: "text", text })
 const assistant = (id, ...blocks) => ({ kind: "assistant", id, blocks })
@@ -52,7 +53,8 @@ test("empty history and pending questions are preserved", () => {
 test("chat uses an initially closed process disclosure and original index for branching", () => {
   const chat = turnSources()
   const blocks = readFileSync(new URL("../src/components/AssistantBlocks.vue", import.meta.url), "utf8")
-  expect(chat).toMatch(/entry.complete && entry.process.length && blocksText\(entry.summary\).trim\(\)/)
+  expect(chat).toMatch(/v-if="hasFoldedProcess\(entry\)"/)
+  expect(chat).toMatch(/:blocks="hasFoldedProcess\(entry\) \? entry.summary : entry.blocks"/)
   expect(chat).toMatch(/<details[\s\S]*?class="response-process(?:\s[^"]*)?"/)
   expect(chat).not.toMatch(/response-process[^>]*\bopen\b/)
   expect(chat).toMatch(/emit\('fork', entry.lastIndex\)/)
@@ -73,7 +75,7 @@ test("streaming and completed answers share one render path so markdown never re
   // The summary tail reuses the streaming block keys instead of remounting.
   expect(blocks).toMatch(/keyOffset\??: number/)
   expect(blocks).toMatch(/:key="props.keyOffset \+ i"/)
-  expect(chat).toMatch(/:key-offset="hasSummary\(entry\) \? entry.blocks.length - entry.summary.length : 0"/)
+  expect(chat).toMatch(/:key-offset="hasFoldedProcess\(entry\) \? entry.blocks.length - entry.summary.length : 0"/)
   // The collapsed process renders lazily, not on completion.
   expect(chat).toMatch(/@toggle="onProcessToggle"/)
 })
@@ -246,4 +248,36 @@ test("completed replies without tool calls keep a thinking disclosure but show n
     /<template v-if="entry.toolCallCount > 0">[\s\S]*?chat.durationUnknown[\s\S]*?chat.executionDuration[\s\S]*?chat.toolCallCount[\s\S]*?<\/template>/,
   )
   expect(summary).toMatch(/<template v-else>\{\{ t\("chat.responseProcess"\) \}\}<\/template>/)
+})
+
+test.each([
+  ["interrupted thinking", [assistant(2, thinking)]],
+  ["interrupted tool call", [assistant(2, text("working"), tool)]],
+  ["failed assistant message", [{ ...assistant(2, thinking, tool), failed: true }]],
+  ["empty failed final entry", [assistant(2, thinking, tool), { ...assistant(3), failed: true }]],
+])("%s folds its process after completion even without a final answer", (_name, replies) => {
+  const entries = [user(1), ...replies]
+  const active = responseTurns(entries, true)[1]
+  expect(hasFoldedProcess(active)).toBe(false)
+  const completed = responseTurns(entries, false)[1]
+  expect(completed.summary).toEqual([])
+  expect(completed.process).toEqual(completed.blocks)
+  expect(hasFoldedProcess(completed)).toBe(true)
+  // History replay and live entries use the same completion-based disclosure.
+  const live = responseTurns(
+    entries.map(entry => ({ ...entry, live: true })),
+    false,
+  )[1]
+  expect(hasFoldedProcess(live)).toBe(true)
+})
+
+test("process disclosures keep trailing text visible and never wrap plain answers or empty turns", () => {
+  const withAnswer = responseTurns([assistant(1, thinking, tool, text("answer"))], false)[0]
+  expect(hasFoldedProcess(withAnswer)).toBe(true)
+  expect(withAnswer.summary).toEqual([text("answer")])
+  expect(withAnswer.process).toEqual([thinking, tool])
+  const plainAnswer = responseTurns([assistant(1, text("answer"))], false)[0]
+  expect(hasFoldedProcess(plainAnswer)).toBe(false)
+  const emptyTurn = responseTurns([assistant(1)], false)[0]
+  expect(hasFoldedProcess(emptyTurn)).toBe(false)
 })
