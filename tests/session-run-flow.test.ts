@@ -188,5 +188,66 @@ test("a compact command with images is rejected instead of reaching the model", 
   await h.store.send("/compact", [{ data: "YWJj", mimeType: "image/png" }])
   expect(h.calls.some(call => call.type === "prompt")).toBe(false)
   expect(h.calls.some(call => call.type === "compact")).toBe(false)
-  expect(h.store.entries.at(-1).blocks[0].text).toContain("chat.compactImagesUnsupported")
+  expect(h.store.compactionError).toBe("chat.compactImagesUnsupported")
+  expect(h.store.entries).toHaveLength(1)
+})
+
+test("failed compact commands use transient errors and the next prompt clears them", async () => {
+  const h = await harness({ compact: () => ({ success: false, error: '503: {"message":"compaction unavailable"}' }) })
+  await h.store.send("/compact")
+  expect(h.store.compactionError).toBe("503 · compaction unavailable")
+  expect(h.store.isCompacting).toBe(false)
+  expect(h.store.entries).toHaveLength(1)
+  await h.store.send("continue")
+  expect(h.store.compactionError).toBe(null)
+  expect(h.store.entries.at(-1).kind).toBe("user")
+})
+
+test("automatic compaction errors clear on continuation and successful compaction", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "compaction_start" })
+  h.store.handleEvent({ type: "compaction_end", errorMessage: "summary request failed", result: null })
+  expect(h.store.compactionError).toBe("summary request failed")
+  expect(h.store.entries).toHaveLength(1)
+  h.store.handleEvent({ type: "agent_start" })
+  expect(h.store.compactionError).toBe(null)
+  h.store.handleEvent({ type: "compaction_end", errorMessage: "failed again" })
+  h.store.handleEvent({ type: "compaction_start" })
+  expect(h.store.compactionError).toBe(null)
+  h.store.handleEvent({ type: "compaction_end", result: { summary: "kept context" } })
+  expect(h.store.compactionError).toBe(null)
+  expect(h.store.entries.at(-1).kind).toBe("compaction")
+})
+
+test("loading another transcript clears transient compaction errors", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "compaction_end", errorMessage: "failed" })
+  await h.store.loadMessages([{ role: "user", content: "another conversation" }])
+  expect(h.store.compactionError).toBe(null)
+})
+
+test("prompt RPC failures are error records rather than markdown replies", async () => {
+  const h = await harness({ prompt: () => ({ success: false, error: "request rejected {payload}" }) })
+  await h.store.send("hello")
+  await tick()
+  const error = h.store.entries.at(-1)
+  expect(error.failed).toBe(true)
+  expect(error.blocks).toEqual([{ type: "error", text: "request rejected {payload}" }])
+})
+
+test("a delayed compact failure cannot reappear after the next prompt starts", async () => {
+  let resolveCompact
+  const h = await harness({
+    compact: () =>
+      new Promise(resolve => {
+        resolveCompact = resolve
+      }),
+  })
+  const compact = h.store.send("/compact")
+  h.store.handleEvent({ type: "compaction_end", errorMessage: "compaction failed" })
+  await h.store.send("continue")
+  expect(h.store.compactionError).toBe(null)
+  resolveCompact({ success: false, error: "compaction failed" })
+  await compact
+  expect(h.store.compactionError).toBe(null)
 })

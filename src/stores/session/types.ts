@@ -26,7 +26,12 @@ export interface ToolCallBlock {
   name: string
   argsText: string
 }
-export type Block = TextBlock | ThinkingBlock | ToolCallBlock
+/** Operational errors are never markdown or reasoning content. */
+export interface ErrorBlock {
+  type: "error"
+  text: string
+}
+export type Block = TextBlock | ThinkingBlock | ToolCallBlock | ErrorBlock
 
 export interface QueuedPrompt {
   id: number
@@ -50,6 +55,7 @@ export interface AssistantEntry {
   kind: "assistant"
   id: number
   blocks: Block[]
+  failed?: boolean
   live?: true
   startedAt?: number
   completedAt?: number

@@ -1,4 +1,12 @@
-import type { Block, CompactionEntry, ContextEditEntry, Entry, ModelChangeEntry, UserEntry } from "@/stores/session"
+import type {
+  ErrorBlock,
+  Block,
+  CompactionEntry,
+  ContextEditEntry,
+  Entry,
+  ModelChangeEntry,
+  UserEntry,
+} from "@/stores/session"
 
 export interface AssistantTurn {
   kind: "assistant"
@@ -7,6 +15,8 @@ export interface AssistantTurn {
   blocks: Block[]
   process: Block[]
   summary: Block[]
+  errors: ErrorBlock[]
+  failed: boolean
   complete: boolean
   durationMs: number | null
   toolCallCount: number
@@ -79,12 +89,17 @@ export function responseTurns(
             blocks: [],
             process: [],
             summary: [],
+            errors: [],
+            failed: false,
             complete: true,
             durationMs: null,
             toolCallCount: 0,
           }
     if (turn !== previous) result.push(turn)
     turn.lastIndex = index
+    turn.failed = entry.failed === true || entry.blocks.some(block => block.type === "error")
+    const blocks = entry.blocks.filter(block => block.type !== "error")
+    turn.errors.push(...entry.blocks.filter((block): block is ErrorBlock => block.type === "error"))
     // Live messages have an observed completion time; history retains the
     // recorded message timestamp. Never substitute the history loading time.
     const start = questionTime ?? entry.startedAt
@@ -100,10 +115,12 @@ export function responseTurns(
         : null
     // Only trailing text from the final assistant entry is a final answer.
     // Commentary before a tool call must never be mistaken for a summary.
-    let summaryStart = entry.blocks.length
-    while (summaryStart > 0 && entry.blocks[summaryStart - 1]!.type === "text") summaryStart--
-    turn.summary = entry.blocks.slice(summaryStart)
-    turn.blocks.push(...entry.blocks)
+    let summaryStart = blocks.length
+    while (summaryStart > 0 && blocks[summaryStart - 1]!.type === "text") summaryStart--
+    // An error-only entry must not move earlier content into a reasoning fold.
+    if (turn.failed) turn.summary = []
+    else if (blocks.length) turn.summary = blocks.slice(summaryStart)
+    turn.blocks.push(...blocks)
   }
   for (const entry of result) {
     if (entry.kind === "assistant") {

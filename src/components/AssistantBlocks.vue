@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import ChatErrorRecord from "@/components/chat/ChatErrorRecord.vue"
 import ToolCallGroup from "@/components/chat/ToolCallGroup.vue"
 import { toolCallGroups } from "@/lib/toolCallGroups"
 import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
@@ -209,6 +210,8 @@ const { t } = useI18n()
         :enable-animate="props.animate"
         class="text-sm"
       />
+
+      <ChatErrorRecord v-else-if="block.type === 'error'" :text="block.text" />
 
       <!-- thinking: collapsed by default; the trigger streams the latest reasoning line.
            Concise mode hides thinking entirely: only tool calls and answers are shown. -->

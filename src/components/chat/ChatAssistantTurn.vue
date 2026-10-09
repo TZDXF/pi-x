@@ -2,6 +2,7 @@
 import { useI18n } from "vue-i18n"
 import { Copy, GitBranch } from "@lucide/vue"
 import { MessageContent, MessageActions, MessageAction } from "@/components/ai-elements/message"
+import ChatErrorRecord from "./ChatErrorRecord.vue"
 import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import TurnChangesCard from "@/components/TurnChangesCard.vue"
 import type { useTurnChanges } from "@/composables/useTurnChanges"
@@ -80,6 +81,12 @@ function onProcessToggle(event: Event) {
         :runs="session.runs"
         @open-review="emit('openReview', $event)"
       />
+      <ChatErrorRecord
+        v-for="(error, index) in entry.errors"
+        :key="`error-${index}`"
+        :text="error.text"
+        :timestamp="entry.timestamp"
+      />
       <TurnChangesCard
         v-if="entry.complete && changesForTurn(entry).length"
         :files="changesForTurn(entry)"
@@ -94,7 +101,7 @@ function onProcessToggle(event: Event) {
     </div>
   </MessageContent>
   <MessageActions
-    v-if="entry.complete"
+    v-if="entry.complete && !entry.failed"
     class="invisible mt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 focus-within:visible focus-within:opacity-100"
   >
     <MessageAction :tooltip="t('chat.fork')" @click="emit('fork', entry.lastIndex)">

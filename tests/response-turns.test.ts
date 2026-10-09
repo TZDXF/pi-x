@@ -281,3 +281,35 @@ test("process disclosures keep trailing text visible and never wrap plain answer
   const emptyTurn = responseTurns([assistant(1)], false)[0]
   expect(hasFoldedProcess(emptyTurn)).toBe(false)
 })
+
+test("API errors are separate records, not summary text or folded reasoning", () => {
+  const error = { type: "error", text: "503 · provider overloaded {details}" }
+  const entries = [user(1), assistant(2, thinking, text("partial reply")), { ...assistant(3, error), failed: true }]
+  const turn = responseTurns(entries, false)[1]
+  expect(turn.failed).toBe(true)
+  expect(turn.errors).toEqual([error])
+  expect(turn.blocks).toEqual([thinking, text("partial reply")])
+  expect(turn.process).toEqual(turn.blocks)
+  expect(turn.summary).toEqual([])
+  expect(turn.lastIndex).toBe(2)
+})
+
+test("an error-only turn has no answer or reasoning and stays recorded after a new question", () => {
+  const error = { type: "error", text: "API failure" }
+  const turns = responseTurns([user(1), assistant(2, error), user(3), assistant(4, text("recovered"))], false)
+  expect(turns[1].errors).toEqual([error])
+  expect(turns[1].blocks).toEqual([])
+  expect(turns[1].process).toEqual([])
+  expect(turns[1].summary).toEqual([])
+  expect(turns[1].failed).toBe(true)
+  expect(turns[3].failed).toBe(false)
+})
+
+test("partial content from a failed attempt is not a completed summary and recovery clears failure", () => {
+  const failed = { ...assistant(2, thinking, text("partial")), failed: true }
+  expect(responseTurns([user(1), failed], false)[1].summary).toEqual([])
+  const recovered = responseTurns([user(1), failed, assistant(3, text("done"))], false)[1]
+  expect(recovered.failed).toBe(false)
+  expect(recovered.summary).toEqual([text("done")])
+  expect(recovered.errors).toEqual([])
+})

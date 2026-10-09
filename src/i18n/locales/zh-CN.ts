@@ -648,6 +648,7 @@ export default {
     loadOlderHistory: "加载更早的消息",
     newSession: "新会话",
     compacting: "正在压缩…",
+    compactionFailed: "压缩失败",
     compacted: "上下文已压缩",
     modelChangeMarker: "切换模型",
     fork: "分支",

@@ -668,6 +668,7 @@ export default {
     loadOlderHistory: "Load earlier messages",
     newSession: "New session",
     compacting: "Compacting…",
+    compactionFailed: "Compaction failed",
     compacted: "Context compacted",
     modelChangeMarker: "Model switched",
     fork: "Fork",

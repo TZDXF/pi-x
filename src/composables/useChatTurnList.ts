@@ -54,6 +54,8 @@ export function useChatTurnList(deps: {
           blocks: [...partial],
           process: [],
           summary: [],
+          errors: [],
+          failed: false,
           complete: false,
           durationMs: null,
           toolCallCount: 0,

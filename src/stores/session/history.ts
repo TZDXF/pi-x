@@ -3,7 +3,7 @@ import { sessionHistory, sessionLastError, type SessionLastError, type rpcReques
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentText } from "@/lib/content"
-import { blocksFromMessage, errorBlockText } from "./events"
+import { blocksFromMessage, errorBlock } from "./events"
 import type { Block, Entry, ToolRun } from "./types"
 
 interface HistoryContext {
@@ -120,10 +120,29 @@ export function createSessionHistory(context: HistoryContext) {
           if (text.trim() || images.length)
             page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
         } else if (msg.role === "assistant") {
-          // Failed responses persist with empty content and are dropped here;
-          // loadHistory surfaces the final turn's failure separately at the end.
           const blocks = blocksFromMessage(msg)
-          if (blocks.length) page.push({ kind: "assistant", id: nextId(), blocks, timestamp: msg.timestamp })
+          if (msg.stopReason === "error" && msg.errorMessage) {
+            // Keep final failures as records, including turns followed by a new
+            // question. A later assistant message in the same turn is a retry,
+            // so only its final failure (if any) should be visible.
+            let nextMessage: any
+            for (let next = i + 1; next < source.length; next++) {
+              if (source[next].role === "user" || source[next].role === "assistant") {
+                nextMessage = source[next]
+                break
+              }
+            }
+            if (nextMessage?.role === "user" || (!nextMessage && !isStreaming.value))
+              blocks.push(errorBlock(msg.errorMessage))
+          }
+          if (blocks.length)
+            page.push({
+              kind: "assistant",
+              id: nextId(),
+              blocks,
+              failed: msg.stopReason === "error",
+              timestamp: msg.timestamp,
+            })
         } else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
           page.push({
             kind: "compaction",
@@ -162,12 +181,23 @@ export function createSessionHistory(context: HistoryContext) {
     const pending = pendingHistoryError.value
     if (!pending) return
     pendingHistoryError.value = null
+    const block = errorBlock(pending.errorMessage)
+    if (
+      entries.value.some(
+        entry =>
+          entry.kind === "assistant" &&
+          entry.timestamp === pending.timestamp &&
+          entry.blocks.some(existing => existing.type === "error" && existing.text === block.text),
+      )
+    )
+      return
     entries.value = [
       ...entries.value,
       {
         kind: "assistant",
         id: nextId(),
-        blocks: [{ type: "text", text: errorBlockText(pending.errorMessage) }],
+        blocks: [block],
+        failed: true,
         timestamp: typeof pending.timestamp === "number" ? pending.timestamp : undefined,
       },
     ]

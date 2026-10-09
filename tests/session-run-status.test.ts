@@ -254,7 +254,8 @@ test("finally-failed run surfaces the provider error in the conversation", async
   store.handleEvent({ type: "agent_settled" })
   expect(statuses.get("fail.jsonl")).toBe("error")
   const note = store.entries.at(-1)
-  expect(note.blocks[0].text).toMatch(/chat\.errorLabel/)
+  expect(note.blocks[0].type).toBe("error")
+  expect(note.failed).toBe(true)
   // The JSON payload is humanized: status code + inner message, no raw body.
   expect(note.blocks[0].text).toMatch(/503 · provider overloaded/)
   expect(note.blocks[0].text).not.toMatch(/http_error/)
@@ -406,4 +407,57 @@ test("queued prompts show a left-hand clock without a count and hover for the li
   expect(status).toMatch(/:title="queueTitle"/)
   expect(countdown).toMatch(/sendCountdown\(nextSendAt, now\)/)
   expect(sidebar).toMatch(/queueNow = useCountdownNow\(/)
+})
+
+test("successful retry without retry_end does not leave the answer marked failed", async () => {
+  const { session, statuses } = await harness()
+  const store = session("recovered", "recovered.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "error", errorMessage: "503", content: [] },
+  })
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] },
+  })
+  store.handleEvent({ type: "agent_settled" })
+  expect(statuses.get("recovered.jsonl")).toBe("completed")
+  expect(store.entries).toHaveLength(1)
+  expect(store.entries[0].failed).toBe(false)
+})
+
+test("failed API attempts with partial reasoning settle as one separate error record", async () => {
+  const { session } = await harness()
+  const store = session("partial-error", "partial-error.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "API disconnected",
+      content: [
+        { type: "thinking", thinking: "working" },
+        { type: "text", text: "partial" },
+      ],
+    },
+  })
+  store.handleEvent({ type: "agent_settled" })
+  const { responseTurns } = await import("@/lib/responseTurns")
+  const turn = responseTurns(store.entries, false)[0]
+  expect(turn.failed).toBe(true)
+  expect(turn.errors).toEqual([{ type: "error", text: "API disconnected" }])
+  expect(turn.blocks.map(block => block.type)).toEqual(["thinking", "text"])
+  expect(turn.summary).toEqual([])
+})
+
+test("a failed API response with no error message still suppresses answer actions", async () => {
+  const { session } = await harness()
+  const store = session("unknown-error", "unknown-error.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
+  store.handleEvent({ type: "agent_settled" })
+  expect(store.entries.at(-1).failed).toBe(true)
+  expect(store.entries.at(-1).blocks).toEqual([{ type: "error", text: "chat.retryUnknownError" }])
 })

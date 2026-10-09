@@ -23,7 +23,7 @@ import type {
   ThinkingLevel,
   Usage,
 } from "@/api/protocol"
-import { createEventHandler } from "./session/events"
+import { createEventHandler, errorBlock } from "./session/events"
 import { createModelSelection } from "./session/modelSelection"
 import { createModelActions } from "./session/modelActions"
 import { createSessionArtifacts } from "./session/artifacts"
@@ -38,6 +38,7 @@ export type {
   CompactionEntry,
   ContextEditEntry,
   Entry,
+  ErrorBlock,
   ModelChangeEntry,
   QueuedPrompt,
   RetryInfo,
@@ -81,6 +82,7 @@ export const createSessionStore = (runtimeId = "default") =>
     const partialBlocks = ref<Block[] | null>(null)
     const isStreaming = ref(false)
     const isCompacting = ref(false)
+    const compactionError = ref<string | null>(null)
     const retryInfo = ref<RetryInfo | null>(null)
     /** Last prompt/steer/follow_up response disposition that needs surfacing
      *  (ChatView watches this and raises a toast). Null once consumed. */
@@ -201,6 +203,7 @@ export const createSessionStore = (runtimeId = "default") =>
         revertedFileChangeCalls.value = new Set()
       },
       invalidateConversation: () => {
+        compactionError.value = null
         ++conversationVersion
       },
     })
@@ -240,6 +243,7 @@ export const createSessionStore = (runtimeId = "default") =>
       partialBlocks,
       isStreaming,
       isCompacting,
+      compactionError,
       retryInfo,
       steering,
       followUp,
@@ -279,7 +283,9 @@ export const createSessionStore = (runtimeId = "default") =>
       entries.value.push({
         kind: "assistant",
         id: nextId(),
-        blocks: [{ type: "text", text: `**${i18n.global.t("chat.errorLabel")}:** ${tBackendError(error)}` }],
+        blocks: [errorBlock(tBackendError(error instanceof Error ? error.message : error))],
+        failed: true,
+        timestamp: Date.now(),
         live: true,
       })
     }
@@ -299,7 +305,7 @@ export const createSessionStore = (runtimeId = "default") =>
       if (compactMatch && images?.length) {
         // Compaction runs locally and takes no attachments; forwarding the
         // literal command text plus images to the model would be wrong.
-        pushErrorEntry(i18n.global.t("chat.compactImagesUnsupported"))
+        compactionError.value = i18n.global.t("chat.compactImagesUnsupported")
         return
       }
       if (compactMatch && !commands.value.some(command => command.name === "compact")) {
@@ -309,8 +315,8 @@ export const createSessionStore = (runtimeId = "default") =>
         }
         try {
           await compact(compactMatch[1]?.trim() || undefined)
-        } catch (e) {
-          pushErrorEntry(e)
+        } catch {
+          // compact() stores the transient error separately from the transcript.
         }
         // compaction_end also drains the queue; cover RPC failures that emit none.
         if (!flow.stopping && !flow.queuePaused) dispatchQueuedPrompt()
@@ -323,6 +329,7 @@ export const createSessionStore = (runtimeId = "default") =>
         promptQueue.value.push({ id: nextId(), text: trimmed, images, expandedText })
         return
       }
+      compactionError.value = null
       flow.queuePaused = false
       const wasStreaming = isStreaming.value
       isStreaming.value = true
@@ -551,6 +558,7 @@ export const createSessionStore = (runtimeId = "default") =>
       flow.queuePaused = false
       isStreaming.value = false
       isCompacting.value = false
+      compactionError.value = null
       retryInfo.value = null
       dispositionNotice.value = null
       steering.value = []
@@ -574,12 +582,21 @@ export const createSessionStore = (runtimeId = "default") =>
     }
 
     async function compact(customInstructions?: string) {
+      const version = conversationVersion
+      const turnCount = userTurnCount
+      compactionError.value = null
       isCompacting.value = true
       try {
         const command: Record<string, unknown> = { type: "compact" }
         if (customInstructions) command.customInstructions = customInstructions
         const result = await rpcRequest(command)
         if (!result.success) throw new Error(result.error ?? i18n.global.t("chat.errors.compaction"))
+      } catch (error) {
+        // A delayed RPC rejection must not restore an error after continuation
+        // or after switching to another transcript.
+        if (version === conversationVersion && turnCount === userTurnCount)
+          compactionError.value = errorBlock(tBackendError(error instanceof Error ? error.message : error)).text
+        throw error
       } finally {
         isCompacting.value = false
         await refreshStats()
@@ -774,12 +791,14 @@ export const createSessionStore = (runtimeId = "default") =>
         entries.value.push({
           kind: "assistant",
           id: nextId(),
-          blocks: [{ type: "text", text: i18n.global.t("chat.processExited") }],
+          blocks: [errorBlock(i18n.global.t("chat.processExited"))],
+          failed: true,
           live: true,
         })
       },
       markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
       isCompacting,
+      compactionError,
       retryInfo,
       dispositionNotice,
       steering,

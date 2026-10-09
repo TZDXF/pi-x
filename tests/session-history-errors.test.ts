@@ -81,9 +81,7 @@ const failed = (errorMessage, timestamp) => ({
   timestamp,
 })
 const errorEntries = store =>
-  store.entries.filter(
-    e => e.kind === "assistant" && e.blocks.some(b => b.type === "text" && b.text.includes("chat.errorLabel")),
-  )
+  store.entries.filter(e => e.kind === "assistant" && e.blocks.some(b => b.type === "error"))
 
 test("history does not render mid-conversation error messages", async () => {
   const store = await harness({
@@ -112,7 +110,8 @@ test("a final failure is appended after the conversation", async () => {
   expect(entries.length).toBe(3)
   const last = entries.at(-1)
   expect(last.kind).toBe("assistant")
-  expect(last.blocks[0].text).toMatch(/chat\.errorLabel/)
+  expect(last.blocks[0].type).toBe("error")
+  expect(last.failed).toBe(true)
   // Provider JSON payloads unwrap to "status · message".
   expect(last.blocks[0].text).toMatch(/503 · provider overloaded/)
   expect(entries[1].blocks[0].text).toBe("working")
@@ -200,9 +199,8 @@ test("wrapped provider payloads unwrap to the inner message", async () => {
   expect(last.blocks[0].text).toMatch(/403 · This API endpoint is only accessible via the official Claude CLI/)
 })
 
-test("unparseable brace-bearing errors render as inline code", async () => {
-  // The markdown renderer drops balanced {...} as attribute syntax; the error
-  // block must wrap such payloads in a code span to keep them visible.
+test("unparseable brace-bearing errors remain plain text outside markdown", async () => {
+  // Dedicated records preserve payloads without markdown escaping or formatting.
   const store = await harness({
     messages: [user("hi", 1000), assistant("working", 2000)],
     lastError: { timestamp: 2500, errorMessage: "boom {weird payload} end" },
@@ -210,5 +208,29 @@ test("unparseable brace-bearing errors render as inline code", async () => {
   await store.loadHistory()
   const last = store.entries.at(-1)
   expect(last.blocks[0].text).toContain("boom {weird payload} end")
-  expect(last.blocks[0].text).toContain("`")
+  expect(last.blocks[0]).toEqual({ type: "error", text: "boom {weird payload} end" })
+})
+
+test("final API failure records remain in older turns after the user continues", async () => {
+  const store = await harness({
+    messages: [
+      user("first", 1000),
+      failed('503: {"message":"overloaded"}', 2000),
+      user("continue", 3000),
+      assistant("done", 4000),
+    ],
+  })
+  await store.loadHistory()
+  expect(errorEntries(store)).toHaveLength(1)
+  expect(errorEntries(store)[0].blocks).toEqual([{ type: "error", text: "503 · overloaded" }])
+  expect(store.entries.at(-1).blocks[0].text).toBe("done")
+})
+
+test("a terminal error in raw history and supplemental last error is not duplicated", async () => {
+  const store = await harness({
+    messages: [user("hi", 1000), failed("API failed", 2000)],
+    lastError: { errorMessage: "API failed", timestamp: 2000 },
+  })
+  await store.loadHistory()
+  expect(errorEntries(store)).toHaveLength(1)
 })
