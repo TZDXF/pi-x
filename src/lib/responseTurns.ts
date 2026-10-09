@@ -23,6 +23,23 @@ export function responseTurns(
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
     if (entry.kind === "user") {
+      const target = entry.modelChange?.to
+      const previous = result[result.length - 1]
+      // set_model / cycle_model annotate the next question even when pi
+      // emits no entry_appended event. Reuse the history divider rendering,
+      // but do not duplicate a matching divider already delivered live.
+      if (target && !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)) {
+        const separator = target.indexOf("/")
+        result.push({
+          kind: "model_change",
+          // Store IDs are positive; -1 is reserved for an uncommitted stream.
+          id: -entry.id - 1,
+          provider: separator < 0 ? "" : target.slice(0, separator),
+          modelId: separator < 0 ? target : target.slice(separator + 1),
+          timestamp: entry.timestamp,
+          live: entry.live,
+        })
+      }
       result.push(entry)
       questionTime = entry.timestamp
       continue

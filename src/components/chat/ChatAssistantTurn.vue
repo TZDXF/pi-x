@@ -52,15 +52,16 @@ function onProcessToggle(event: Event) {
         @toggle="onProcessToggle"
       >
         <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-          {{
-            entry.durationMs == null
-              ? t("chat.durationUnknown")
-              : t("chat.executionDuration", { seconds: (entry.durationMs / 1000).toFixed(1) })
-          }}
           <template v-if="entry.toolCallCount > 0">
+            {{
+              entry.durationMs == null
+                ? t("chat.durationUnknown")
+                : t("chat.executionDuration", { seconds: (entry.durationMs / 1000).toFixed(1) })
+            }}
             <span class="mx-1.5" aria-hidden="true">&middot;</span>
             {{ t("chat.toolCallCount", { count: entry.toolCallCount }) }}
           </template>
+          <template v-else>{{ t("chat.responseProcess") }}</template>
         </summary>
         <AssistantBlocks
           v-if="processOpened"

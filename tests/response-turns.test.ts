@@ -156,3 +156,94 @@ test("context edits from retried failed attempts never split the live turn", () 
   expect(turn.toolCallCount).toBe(2)
   expect(plain(turn.summary)).toEqual([text("done")])
 })
+
+test("a live model-switch annotation renders a divider before the next question without mutating store entries", () => {
+  const question = {
+    ...user(3),
+    modelChange: { from: "old/model-a", to: "company/models/model-b" },
+    timestamp: 1000,
+    live: true,
+  }
+  const entries = [
+    user(1),
+    assistant(2, text("first answer")),
+    question,
+    { ...assistant(4, text("next answer")), timestamp: 1500 },
+  ]
+  const original = JSON.stringify(entries)
+  const result = responseTurns(entries, false)
+  expect(result.map(entry => entry.kind)).toEqual(["user", "assistant", "model_change", "user", "assistant"])
+  expect(result[2]).toEqual({
+    kind: "model_change",
+    id: -4,
+    provider: "company",
+    modelId: "models/model-b",
+    timestamp: 1000,
+    live: true,
+  })
+  expect(result[3]).toBe(question)
+  expect(result[4].lastIndex).toBe(3)
+  expect(result[4].durationMs).toBe(500)
+  expect(new Set(result.map(entry => entry.id)).size).toBe(result.length)
+  expect(JSON.stringify(entries)).toBe(original)
+  expect(responseTurns(entries, true)[2].id).toBe(result[2].id)
+})
+
+test("a model-switch annotation does not duplicate the matching live divider", () => {
+  const marker = { kind: "model_change", id: 3, provider: "company", modelId: "model-b" }
+  const entries = [
+    user(1),
+    assistant(2, text("first answer")),
+    marker,
+    { kind: "context_edit", id: 4, targetId: "x", replaced: false },
+    { ...user(5), modelChange: { from: "old/model-a", to: "company/model-b" } },
+  ]
+  const result = responseTurns(entries, false)
+  expect(result.map(entry => entry.kind)).toEqual(["user", "assistant", "model_change", "user"])
+  expect(result[2]).toBe(marker)
+})
+
+test("initial and different recorded model dividers do not swallow a later live switch", () => {
+  const entries = [
+    { kind: "model_change", id: 1, provider: "old", modelId: "model-a" },
+    user(2),
+    assistant(3, text("first answer")),
+    { ...user(4), modelChange: { from: "old/model-a", to: "company/model-b" } },
+    assistant(5, text("next answer")),
+    user(6),
+  ]
+  expect(responseTurns(entries, false).map(entry => entry.kind)).toEqual([
+    "model_change",
+    "user",
+    "assistant",
+    "model_change",
+    "user",
+    "assistant",
+    "user",
+  ])
+  const consecutive = responseTurns([entries[0], entries[3]], false)
+  expect(consecutive.map(entry => entry.kind)).toEqual(["model_change", "model_change", "user"])
+})
+
+test("completed replies without tool calls keep a thinking disclosure but show no elapsed-time label", () => {
+  const turn = responseTurns(
+    [
+      { ...user(1), timestamp: 1000 },
+      { ...assistant(2, thinking, text("answer")), timestamp: 2000 },
+    ],
+    false,
+  )[1]
+  expect(turn.complete).toBe(true)
+  expect(turn.toolCallCount).toBe(0)
+  expect(turn.durationMs).toBe(1000)
+  expect(plain(turn.process)).toEqual([thinking])
+  expect(plain(turn.summary)).toEqual([text("answer")])
+  const chat = turnSources()
+  const summary = chat.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/)?.[1]
+  expect(summary).toBeDefined()
+  // Both known and unknown durations belong only to the tool-call branch.
+  expect(summary).toMatch(
+    /<template v-if="entry.toolCallCount > 0">[\s\S]*?chat.durationUnknown[\s\S]*?chat.executionDuration[\s\S]*?chat.toolCallCount[\s\S]*?<\/template>/,
+  )
+  expect(summary).toMatch(/<template v-else>\{\{ t\("chat.responseProcess"\) \}\}<\/template>/)
+})

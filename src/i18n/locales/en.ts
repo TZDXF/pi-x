@@ -704,6 +704,7 @@ export default {
     executionDuration: "Elapsed {seconds}s",
     durationUnknown: "Elapsed time unknown",
     toolCallCount: "Tool calls: {count}",
+    responseProcess: "Thinking process",
     thinking: "thinking…",
     thinkingSeconds: "thinking · {seconds}s",
     startingSession: "Starting session…",

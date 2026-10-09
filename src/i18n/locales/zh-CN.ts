@@ -683,6 +683,7 @@ export default {
     executionDuration: "用时 {seconds} 秒",
     durationUnknown: "用时未知",
     toolCallCount: "工具调用 {count} 次",
+    responseProcess: "思考过程",
     thinking: "思考中…",
     thinkingSeconds: "思考中 · {seconds} 秒",
     startingSession: "正在启动会话…",
