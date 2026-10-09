@@ -322,7 +322,8 @@ export const createSessionStore = (runtimeId = "default") =>
         if (!flow.stopping && !flow.queuePaused) dispatchQueuedPrompt()
         return
       }
-      if (isStreaming.value && behavior === "queue") {
+      if (isCompacting.value || (isStreaming.value && behavior === "queue")) {
+        // Pi rejects prompts during compaction, including steering messages.
         // Keep queued messages in the client panel (delete / edit / run now /
         // drag to reorder); they are dispatched via `prompt` once the run
         // settles, so nothing is handed to the model while it is still busy.

@@ -107,9 +107,7 @@ test("messages queued during a run stay in the client panel until the run settle
   // nothing is handed to pi and the question is not echoed into the conversation
   expect(h.calls.filter(c => c.type === "prompt" || c.type === "follow_up").length).toBe(0)
   expect(h.store.entries.length).toBe(0)
-  expect(h.store.promptQueue).toEqual([
-    { id: expect.any(Number), text: "next", images, expandedText: "expanded next" },
-  ])
+  expect(h.store.promptQueue).toEqual([{ id: expect.any(Number), text: "next", images, expandedText: "expanded next" }])
   // settling the run dispatches it as a normal prompt
   h.store.handleEvent({ type: "agent_end" })
   h.store.handleEvent({ type: "agent_settled" })
@@ -121,6 +119,80 @@ test("messages queued during a run stay in the client panel until the run settle
   expect(h.store.entries[0].text).toBe("next")
   expect(h.store.promptQueue.length).toBe(0)
 })
+
+test.each([
+  { streaming: false, behavior: "queue" },
+  { streaming: false, behavior: "steer" },
+  { streaming: true, behavior: "queue" },
+  { streaming: true, behavior: "steer" },
+] as const)("compacting queues $behavior messages while streaming=$streaming", async ({ streaming, behavior }) => {
+  const h = await sessionHarness()
+  h.store.isStreaming = streaming
+  h.store.handleEvent({ type: "compaction_start" })
+  const images = [{ data: "YWJj", mimeType: "image/png" }]
+  await h.store.send("  next  ", images, "expanded next", behavior)
+  await h.store.send("second", undefined, undefined, behavior)
+  await tick()
+  expect(h.calls).toEqual([])
+  expect(h.store.entries).toEqual([])
+  expect(h.store.isStreaming).toBe(streaming)
+  expect(h.store.promptQueue).toEqual([
+    { id: expect.any(Number), text: "next", images, expandedText: "expanded next" },
+    { id: expect.any(Number), text: "second", images: undefined, expandedText: undefined },
+  ])
+
+  h.store.handleEvent({ type: "compaction_end", result: null, aborted: false })
+  if (streaming) {
+    // Automatic compaction may resume the current run; wait for it to settle.
+    expect(h.calls.filter(c => c.type === "prompt")).toEqual([])
+    expect(h.store.promptQueue).toHaveLength(2)
+    h.store.handleEvent({ type: "agent_settled" })
+  }
+  await tick()
+  expect(h.calls.filter(c => c.type === "prompt")).toEqual([
+    { type: "prompt", message: "expanded next", images: [{ type: "image", ...images[0] }] },
+  ])
+  expect(h.store.entries[0].text).toBe("next")
+  expect(h.store.promptQueue.map(item => item.text)).toEqual(["second"])
+  // Repeated completion events must not send the second message mid-run.
+  h.store.handleEvent({ type: "compaction_end", result: null, aborted: false })
+  expect(h.calls.filter(c => c.type === "prompt")).toHaveLength(1)
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled" })
+  expect(h.calls.filter(c => c.type === "prompt").map(c => c.message)).toEqual(["expanded next", "second"])
+  expect(h.store.promptQueue).toHaveLength(0)
+})
+
+test("messages submitted during a manual compact command stay queued", async () => {
+  const h = await sessionHarness()
+  void h.store.send("/compact")
+  expect(h.store.isCompacting).toBe(true)
+  await h.store.send("next")
+  expect(h.calls.map(c => c.type)).toEqual(["compact"])
+  expect(h.store.entries).toHaveLength(0)
+  expect(h.store.promptQueue.map(item => item.text)).toEqual(["next"])
+  h.store.handleEvent({ type: "compaction_end", result: null, aborted: false })
+  expect(h.calls.find(c => c.type === "prompt")).toEqual({ type: "prompt", message: "next" })
+})
+
+test.each([{ aborted: true }, { aborted: false, errorMessage: "compaction failed" }])(
+  "queued prompts continue when compaction ends with %j",
+  async outcome => {
+    const h = await sessionHarness()
+    h.store.handleEvent({ type: "compaction_start" })
+    const images = [{ data: "YWJj", mimeType: "image/png" }]
+    await h.store.send("", images)
+    expect(h.calls).toEqual([])
+    expect(h.store.promptQueue).toHaveLength(1)
+    h.store.handleEvent({ type: "compaction_end", result: null, ...outcome })
+    expect(h.calls.find(c => c.type === "prompt")).toEqual({
+      type: "prompt",
+      message: "(see attached image)",
+      images: [{ type: "image", ...images[0] }],
+    })
+    expect(h.store.promptQueue).toHaveLength(0)
+  },
+)
 
 test("reorder and remove use stable IDs, including identical prompts", async () => {
   const h = await sessionHarness()

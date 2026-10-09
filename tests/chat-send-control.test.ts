@@ -39,6 +39,7 @@ function harness(config = Promise.resolve({})) {
     entries: [],
     commands: [],
     isStreaming: false,
+    isCompacting: false,
     dispositionNotice: null,
     refreshCommands: vi.fn(async () => {}),
     send: vi.fn(async () => {}),
@@ -116,6 +117,25 @@ test("sending scrolls back to the bottom; queued and delayed sends keep the read
     h.controls.sendDelaySeconds.value = 5
     await h.controls.onSubmit({ text: "later" })
     expect(h.session.schedulePrompt).toHaveBeenCalledWith("later", 5000, undefined, "later")
+    expect(h.onSent).not.toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test.each([
+  { streaming: false, behavior: "queue" },
+  { streaming: false, behavior: "steer" },
+  { streaming: true, behavior: "queue" },
+  { streaming: true, behavior: "steer" },
+])("compacting keeps the reading position for $behavior with streaming=$streaming", async ({ streaming, behavior }) => {
+  const h = harness()
+  try {
+    h.session.isCompacting = true
+    h.session.isStreaming = streaming
+    h.behavior.value = behavior
+    await h.controls.onSubmit({ text: "next", files: [{ url: image }] })
+    expect(h.session.send).toHaveBeenCalledWith("next", [{ data: "aGVsbG8=", mimeType: "image/png" }], "next", behavior)
     expect(h.onSent).not.toHaveBeenCalled()
   } finally {
     h.scope.stop()
