@@ -10,9 +10,10 @@ import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import ToolStatusBadge from "@/components/ai-elements/tool/ToolStatusBadge.vue"
 import { Terminal, TerminalContent, TerminalCopyButton } from "@/components/ai-elements/terminal"
-import { BrainIcon, ChevronRight, SquareTerminal } from "@lucide/vue"
+import { BrainIcon, ChevronRight, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall } from "@/lib/sessionChanges"
+import { readToolTitle } from "@/lib/readToolTitle"
 import { isSubagentTool } from "@/lib/subagents"
 import { processDetail, type ProcessDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
@@ -116,14 +117,9 @@ function subagentGroupAt(index: number): ToolCallBlock[] | null {
   return group
 }
 
-/** File path, tolerating still-streaming (unterminated) JSON arguments. */
-function pathOf(block: ToolCallBlock): string {
-  const args = parsedArgs(block)
-  const direct = args?.path ?? args?.file_path ?? args?.filePath
-  if (typeof direct === "string") return direct
-  const match = (block.argsText || "").match(/"(?:path|file_path|filePath)"\s*:\s*"((?:[^"\\]|\\.)*)/)
-  if (!match) return ""
-  return match[1]!.replace(/\\\\/g, "\\").replace(/\\"/g, `"`)
+/** Read preview uses the same argument fallback as the other tool specializations. */
+function readTitle(block: ToolCallBlock): string {
+  return readToolTitle(block.argsText || runFor(block)?.argsText || "")
 }
 
 function terminalText(block: ToolCallBlock): string {
@@ -328,7 +324,7 @@ const { t } = useI18n()
       <!-- consumed by the group rendered at the run's first call -->
       <template v-else-if="block.type === 'toolCall' && isSubagent(block)" />
 
-      <!-- other tools: generic collapsible input/output; read shows the file path -->
+      <!-- other tools: generic collapsible input/output; read shows the file path and offset -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
           class="gap-2 px-3 py-2 [&>div]:min-w-0"
@@ -338,7 +334,8 @@ const { t } = useI18n()
               : '[&>div]:flex-wrap [&>div>span]:break-all'
           "
           :type="`tool-${block.name}`"
-          :title="isRead(block) ? pathOf(block) || undefined : undefined"
+          :icon="isRead(block) ? FileText : undefined"
+          :title="isRead(block) ? readTitle(block) || undefined : undefined"
           :state="runFor(block)?.state ?? 'input-streaming'"
         />
         <div
