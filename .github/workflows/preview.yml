@@ -3,6 +3,11 @@ name: Preview Release
 # 预览版：每天北京时间 04:00（UTC 20:00）检测 dev 分支，
 # 相对上一个预览版有新提交时自动构建并发布 prerelease，版本号为当天日期（如 2026.9.27）。
 # 也可在 Actions 页面手动触发（可勾选 force 跳过更新检测）。
+#
+# 日期零填充：tag 与发布名用 %Y.%m.%d（如 preview-v2026.10.09），应用内版本号仍为
+# 不带前导零的 %Y.%-m.%-d（semver 不允许前导零）。GitHub Releases 页面按 UTC 日期（天）
+# 分组倒序，同一天内按名称字典序排序；定时任务延迟跨过 UTC 零点会让相邻两个版本
+# 落入同一 UTC 日，零填充保证此时字典序与时间顺序一致，页面顺序不乱。
 
 on:
   schedule:
@@ -29,6 +34,7 @@ jobs:
       should-build: ${{ steps.detect.outputs.should-build }}
       version: ${{ steps.detect.outputs.version }}
       tag: ${{ steps.detect.outputs.tag }}
+      release-name: ${{ steps.detect.outputs.release-name }}
       changes: ${{ steps.detect.outputs.changes }}
     steps:
       - uses: actions/checkout@v7
@@ -43,10 +49,14 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
+          # 应用版本号不带前导零（semver 要求）；tag/发布名零填充，
+          # 使 Releases 页面同日内的字典序与时间顺序一致（见文件头部说明）。
           VERSION=$(TZ=Asia/Shanghai date +'%Y.%-m.%-d')
-          TAG="preview-v${VERSION}"
+          TAG_DATE=$(TZ=Asia/Shanghai date +'%Y.%m.%d')
+          TAG="preview-v${TAG_DATE}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release-name=PiX Preview ${TAG_DATE}" >> "$GITHUB_OUTPUT"
 
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
             echo "今日预览 tag $TAG 已存在，跳过构建"
@@ -134,7 +144,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ needs.check.outputs.tag }}
-          releaseName: PiX Preview ${{ needs.check.outputs.version }}
+          releaseName: ${{ needs.check.outputs.release-name }}
           releaseBody: ${{ needs.check.outputs.changes }}
           prerelease: true
           updaterJsonPreferNsis: true
