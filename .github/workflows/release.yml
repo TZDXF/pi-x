@@ -112,11 +112,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 生成发布说明并转为正式 release
-        # gh release edit 不支持 --generate-notes（runner 版本限制），改用 REST API；
-        # 同时将 prepare 阶段创建的草稿发布为正式版。
-        run: |
-          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq .id)
-          gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F generate_release_notes=true --jq .html_url
-          gh release edit "${{ github.ref_name }}" --draft=false
+        # 作业内无 git 仓库上下文，所有 gh 调用必须显式指定仓库（-R 或 API 路径）；
+        # generate_release_notes=true 对无 PR 的直接推送仓库不生效，改用 generate-notes 接口取回说明后显式写入。
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq .id)
+          BODY=$(gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name="${{ github.ref_name }}" --jq .body)
+          gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F body="$BODY" --jq .html_url
+          gh release edit "${{ github.ref_name }}" --draft=false -R "${{ github.repository }}"
