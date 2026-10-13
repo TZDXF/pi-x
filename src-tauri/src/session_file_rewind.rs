@@ -1,7 +1,7 @@
 //! Hash-checked file rewind for tool-level file-change artifacts.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,7 @@ struct RewindState {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileRewindArtifact {
+    pub tool_call_id: String,
     pub tool_name: String,
     pub files: Vec<FileRewindArtifactFile>,
 }
@@ -36,6 +37,7 @@ pub struct FileRewindArtifactFile {
     pub path: String,
     pub existed_before: bool,
     pub before_content: Option<String>,
+    pub before_hash: Option<String>,
     pub after_content: Option<String>,
     pub after_hash: Option<String>,
     pub unsupported_reason: Option<String>,
@@ -72,6 +74,7 @@ pub struct FileRewindApplyResult {
     pub applied: bool,
     pub preview: FileRewindPreview,
     pub response: String,
+    pub reverted_tool_call_ids: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -113,6 +116,18 @@ fn hash_optional(content: Option<&str>) -> String {
 
 fn resolve_project_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let candidate = Path::new(raw);
+    // 缺失路径不能靠 starts_with 检查含 .. 的未归一化字符串，避免越过项目边界。
+    if raw.trim().is_empty()
+        || candidate
+            .components()
+            .any(|part| part == Component::ParentDir)
+    {
+        return Err(pix_error_detail(
+            "rewindPathInvalid",
+            "无效的文件路径: {detail}",
+            raw,
+        ));
+    }
     let mut path = if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
@@ -211,7 +226,7 @@ fn unsafe_file(
 }
 
 fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
-    let mut plans: HashMap<String, PlannedFile> = HashMap::new();
+    let mut plans: HashMap<PathBuf, PlannedFile> = HashMap::new();
     let mut unsafe_files: Vec<FileRewindFile> = Vec::new();
     let mut ignored_files: Vec<FileRewindFile> = Vec::new();
 
@@ -240,10 +255,23 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
         }
 
         for file in &artifact.files {
-            if let Some(reason) = file.unsupported_reason.as_deref() {
+            let complete = file.existed_before == file.before_content.is_some()
+                && file
+                    .before_hash
+                    .as_deref()
+                    .is_none_or(|hash| hash == hash_optional(file.before_content.as_deref()))
+                && file
+                    .after_hash
+                    .as_deref()
+                    .is_none_or(|hash| hash == hash_optional(file.after_content.as_deref()));
+            let unsupported = file.unsupported_reason.as_deref().or_else(|| {
+                (!complete || artifact.tool_call_id.trim().is_empty())
+                    .then_some("incomplete_artifact")
+            });
+            if let Some(reason) = unsupported {
                 unsafe_files.push(unsafe_file(
                     file.path.clone(),
-                    "unsupported_checkpoint",
+                    "unsupported_artifact",
                     1,
                     BTreeSet::from([artifact.tool_name.clone()]),
                     Some(reason.into()),
@@ -263,14 +291,21 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
                     continue;
                 }
             };
-            let expected_hash = file
-                .after_hash
-                .clone()
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| hash_optional(file.after_content.as_deref()));
-            let delete = !file.existed_before || file.before_content.is_none();
-            let key = file.path.clone();
+            let expected_hash = hash_optional(file.after_content.as_deref());
+            let delete = !file.existed_before;
+            let key = resolved.clone();
             if let Some(existing) = plans.get_mut(&key) {
+                // 必须逐操作验证 before/after 衔接，不能只检查最后一次 after。
+                // 两次工具修改之间的外部编辑也会使整组撤销失败。
+                if existing.expected_hash != hash_optional(file.before_content.as_deref()) {
+                    unsafe_files.push(unsafe_file(
+                        file.path.clone(),
+                        "unsupported_artifact",
+                        existing.operation_count + 1,
+                        BTreeSet::from([artifact.tool_name.clone()]),
+                        Some("File change records are discontinuous.".into()),
+                    ));
+                }
                 existing.operation_count += 1;
                 existing.tool_names.insert(artifact.tool_name.clone());
                 existing.expected_hash = expected_hash;
@@ -291,8 +326,16 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
         }
     }
 
+    let unsafe_paths = unsafe_files
+        .iter()
+        .filter_map(|file| resolve_project_path(root, &file.path).ok())
+        .collect::<BTreeSet<_>>();
     let mut safe_plans = Vec::new();
-    for file in plans.into_values() {
+    for (path, file) in plans {
+        // 同一实际文件的任一记录不安全，就不能又出现在“可安全回滚”列表里。
+        if unsafe_paths.contains(&path) {
+            continue;
+        }
         match read_optional_text(&file.resolved) {
             Ok(current) => {
                 let current_hash = hash_optional(current.as_deref());
@@ -325,7 +368,7 @@ fn build_plan(root: &Path, artifacts: &[FileRewindArtifact]) -> RewindPlan {
     unsafe_files.sort_by(|a, b| a.path.cmp(&b.path));
     ignored_files.sort_by(|a, b| a.path.cmp(&b.path));
     let safe_files = safe_plans.iter().map(safe_file).collect::<Vec<_>>();
-    let can_apply = !safe_files.is_empty() && unsafe_files.is_empty() && ignored_files.is_empty();
+    let can_apply = !safe_files.is_empty() && unsafe_files.is_empty();
     RewindPlan {
         preview: FileRewindPreview {
             can_apply,
@@ -356,48 +399,72 @@ fn remove_missing_ok(path: &Path) -> Result<(), String> {
     }
 }
 
-fn compensate(journal: &[(PathBuf, Option<String>)]) {
+fn compensate(journal: &[(PathBuf, Option<String>)]) -> Result<(), String> {
+    let mut errors = Vec::new();
     for (path, previous) in journal.iter().rev() {
-        match previous {
-            Some(content) => {
-                let _ = write_text_atomic(path, content);
-            }
-            None => {
-                let _ = remove_missing_ok(path);
-            }
+        let result = match previous {
+            Some(content) => write_text_atomic(path, content),
+            None => remove_missing_ok(path),
+        };
+        if let Err(error) = result {
+            errors.push(format!("{}: {error}", path.display()));
         }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 
-fn apply_plan(plan: &RewindPlan) -> Result<(), String> {
+fn apply_plan_with_commit(
+    root: &Path,
+    plan: &RewindPlan,
+    commit: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     let mut journal = Vec::new();
-    for file in &plan.files {
-        let previous = match read_optional_text(&file.resolved) {
-            Ok(value) => value,
-            Err(error) => {
-                compensate(&journal);
-                return Err(error);
+    let result = (|| {
+        for file in &plan.files {
+            // 预览后父目录/符号链接可能改变，写入前再次确认路径仍属于项目。
+            if resolve_project_path(root, &file.path)? != file.resolved {
+                return Err(pix_error(
+                    "rewindPathInvalid",
+                    "文件路径已改变，无法自动回滚",
+                ));
             }
-        };
-        if hash_optional(previous.as_deref()) != file.expected_hash {
-            compensate(&journal);
-            return Err(pix_error(
-                "rewindExternalModified",
-                "文件已被外部修改，无法自动回滚",
+            let previous = read_optional_text(&file.resolved)?;
+            if hash_optional(previous.as_deref()) != file.expected_hash {
+                return Err(pix_error(
+                    "rewindExternalModified",
+                    "文件已被外部修改，无法自动回滚",
+                ));
+            }
+            journal.push((file.resolved.clone(), previous));
+            if file.delete {
+                remove_missing_ok(&file.resolved)?;
+            } else {
+                write_text_atomic(&file.resolved, file.before_content.as_deref().unwrap_or(""))?;
+            }
+        }
+        // 已撤销标记属于这次操作的提交边界；保存失败时文件也恢复原状。
+        commit()
+    })();
+    if let Err(error) = result {
+        if let Err(compensation_error) = compensate(&journal) {
+            return Err(pix_error_detail(
+                "rewindCompensationFailed",
+                "撤销失败且无法完整恢复文件: {detail}",
+                format!("{error}; {compensation_error}"),
             ));
         }
-        journal.push((file.resolved.clone(), previous));
-        let result = if file.delete {
-            remove_missing_ok(&file.resolved)
-        } else {
-            write_text_atomic(&file.resolved, file.before_content.as_deref().unwrap_or(""))
-        };
-        if let Err(error) = result {
-            compensate(&journal);
-            return Err(error);
-        }
+        return Err(error);
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn apply_plan(root: &Path, plan: &RewindPlan) -> Result<(), String> {
+    apply_plan_with_commit(root, plan, || Ok(()))
 }
 
 fn state_hash(text: &str) -> u64 {
@@ -416,7 +483,11 @@ fn state_path(file: &Path) -> PathBuf {
 }
 
 fn read_state(file: &Path) -> RewindState {
-    let Ok(raw) = std::fs::read_to_string(state_path(file)) else {
+    read_state_at(&state_path(file))
+}
+
+fn read_state_at(path: &Path) -> RewindState {
+    let Ok(raw) = std::fs::read_to_string(path) else {
         return RewindState {
             version: 1,
             reverted: Vec::new(),
@@ -430,7 +501,10 @@ fn read_state(file: &Path) -> RewindState {
 }
 
 fn write_state(file: &Path, state: &RewindState) -> Result<(), String> {
-    let path = state_path(file);
+    write_state_at(&state_path(file), state)
+}
+
+fn write_state_at(path: &Path, state: &RewindState) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e)
@@ -438,7 +512,7 @@ fn write_state(file: &Path, state: &RewindState) -> Result<(), String> {
     }
     let body = serde_json::to_string_pretty(state)
         .map_err(|e| pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e))?;
-    std::fs::write(path, body)
+    crate::atomic_write::write(path, body.as_bytes())
         .map_err(|e| pix_error_detail("rewindStateWriteFailed", "写入回滚状态失败: {detail}", e))
 }
 
@@ -460,27 +534,75 @@ pub async fn session_file_rewind_preview(
 pub async fn session_file_rewind_apply(
     project: String,
     artifacts: Vec<FileRewindArtifact>,
+    file: Option<String>,
 ) -> Result<FileRewindApplyResult, String> {
     spawn_blocking(move || {
         let root = dunce::canonicalize(&project)
             .map_err(|_| pix_error("projectDirMissing", "项目目录不存在"))?;
-        let plan = build_plan(&root, &artifacts);
+        // 先验证会话路径，再进行任何文件写入；锁防止并发撤销重复消费同一记录。
+        let session = file
+            .as_deref()
+            .map(sessions::validate_session_path)
+            .transpose()?;
+        let _guard = REWIND_STATE_LOCK.lock().map_err(|e| e.to_string())?;
+        let mut state = session.as_deref().map(read_state);
+        let mut plan = build_plan(&root, &artifacts);
+        if let Some(state) = &state {
+            for artifact in &artifacts {
+                if !is_ignored_shell(&artifact.tool_name)
+                    && state.reverted.contains(&artifact.tool_call_id)
+                {
+                    for item in &artifact.files {
+                        plan.preview.unsafe_files.push(unsafe_file(
+                            &item.path,
+                            "already_reverted",
+                            1,
+                            BTreeSet::from([artifact.tool_name.clone()]),
+                            None,
+                        ));
+                    }
+                    plan.preview
+                        .safe_files
+                        .retain(|file| !artifact.files.iter().any(|item| item.path == file.path));
+                    plan.preview.can_apply = false;
+                }
+            }
+        }
         if !plan.preview.can_apply {
             return Ok(FileRewindApplyResult {
                 applied: false,
                 preview: plan.preview,
                 response: "File rewind was not applied because at least one file is unsafe.".into(),
+                reverted_tool_call_ids: Vec::new(),
             });
         }
-        apply_plan(&plan)?;
+        let reverted_tool_call_ids = artifacts
+            .iter()
+            .filter(|artifact| !is_ignored_shell(&artifact.tool_name))
+            .map(|artifact| artifact.tool_call_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        apply_plan_with_commit(&root, &plan, || {
+            if let (Some(session), Some(state)) = (session.as_deref(), state.as_mut()) {
+                state
+                    .reverted
+                    .extend(reverted_tool_call_ids.iter().cloned());
+                state.reverted.sort();
+                state.reverted.dedup();
+                write_state(session, state)?;
+            }
+            Ok(())
+        })?;
         let count = plan.preview.safe_files.len();
         Ok(FileRewindApplyResult {
             applied: true,
             preview: plan.preview,
             response: format!(
-                "Rewound {count} file{} from summary checkpoints.",
+                "Rewound {count} file{} from tool change records.",
                 if count == 1 { "" } else { "s" }
             ),
+            reverted_tool_call_ids,
         })
     })
     .await
@@ -498,26 +620,10 @@ pub async fn session_file_rewind_state_get(file: String) -> Result<Vec<String>, 
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn session_file_rewind_state_mark(
-    file: String,
-    tool_call_ids: Vec<String>,
-) -> Result<Vec<String>, String> {
-    spawn_blocking(move || {
-        let path = sessions::validate_session_path(&file)?;
-        let _guard = REWIND_STATE_LOCK.lock().map_err(|e| e.to_string())?;
-        let mut state = read_state(&path);
-        state.version = 1;
-        state
-            .reverted
-            .extend(tool_call_ids.into_iter().filter(|id| !id.trim().is_empty()));
-        state.reverted.sort();
-        state.reverted.dedup();
-        write_state(&path, &state)?;
-        Ok(state.reverted)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+/** 删除会话时使用此前已验证的路径，不能再要求 JSONL 仍存在。 */
+pub(crate) fn delete_state_for_session(path: &Path) -> Result<(), String> {
+    let _guard = REWIND_STATE_LOCK.lock().map_err(|e| e.to_string())?;
+    remove_missing_ok(&state_path(path))
 }
 
 #[cfg(test)]
@@ -531,11 +637,13 @@ mod tests {
         after: Option<&str>,
     ) -> FileRewindArtifact {
         FileRewindArtifact {
+            tool_call_id: uuid::Uuid::new_v4().to_string(),
             tool_name: tool_name.into(),
             files: vec![FileRewindArtifactFile {
                 path: path.into(),
                 existed_before: before.is_some(),
                 before_content: before.map(str::to_string),
+                before_hash: before.map(|value| hash_bytes(value.as_bytes())),
                 after_content: after.map(str::to_string),
                 after_hash: after.map(|value| hash_bytes(value.as_bytes())),
                 unsupported_reason: None,
@@ -572,7 +680,7 @@ mod tests {
             )],
         );
         assert!(plan.preview.can_apply);
-        apply_plan(&plan).unwrap();
+        apply_plan(&dir, &plan).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), "before\n");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -623,5 +731,322 @@ mod tests {
             Some("bash_ignored")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    struct Workspace(PathBuf);
+
+    impl Workspace {
+        fn new() -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("pix-artifact-undo-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dunce::canonicalize(dir).unwrap())
+        }
+
+        fn write(&self, path: &str, content: &str) {
+            write_text_atomic(&self.0.join(path), content).unwrap();
+        }
+
+        fn read(&self, path: &str) -> String {
+            std::fs::read_to_string(self.0.join(path)).unwrap()
+        }
+    }
+
+    impl Drop for Workspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn repeated_tools_restore_first_before_without_a_git_repository() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "final\n");
+        workspace.write("untouched.txt", "external\n");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "file.txt", Some("initial\n"), Some("middle\n")),
+                artifact("edit", "file.txt", Some("middle\n"), Some("final\n")),
+            ],
+        );
+        assert!(plan.preview.can_apply);
+        assert_eq!(plan.preview.safe_files[0].operation_count, 2);
+        apply_plan(&workspace.0, &plan).unwrap();
+        assert_eq!(workspace.read("file.txt"), "initial\n");
+        assert_eq!(workspace.read("untouched.txt"), "external\n");
+        assert!(!workspace.0.join(".git").exists());
+    }
+
+    #[test]
+    fn canonical_paths_group_relative_and_absolute_aliases() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "final");
+        let path = workspace.0.join("file.txt").to_string_lossy().into_owned();
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "./file.txt", Some("initial"), Some("middle")),
+                artifact("edit", &path, Some("middle"), Some("final")),
+            ],
+        );
+        assert!(plan.preview.can_apply);
+        assert_eq!(plan.preview.safe_files.len(), 1);
+        assert_eq!(plan.preview.safe_files[0].operation_count, 2);
+        apply_plan(&workspace.0, &plan).unwrap();
+        assert_eq!(workspace.read("file.txt"), "initial");
+    }
+
+    #[test]
+    fn external_edit_between_tools_blocks_even_when_final_hash_matches() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "final");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "file.txt", Some("initial"), Some("middle")),
+                artifact("edit", "file.txt", Some("external edit"), Some("final")),
+            ],
+        );
+        assert!(!plan.preview.can_apply);
+        assert_eq!(
+            plan.preview.unsafe_files[0].reason.as_deref(),
+            Some("unsupported_artifact")
+        );
+        assert!(plan.preview.safe_files.is_empty());
+        assert_eq!(workspace.read("file.txt"), "final");
+    }
+
+    #[test]
+    fn incomplete_before_is_not_treated_as_a_created_file() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "after");
+        let mut record = artifact("write", "file.txt", None, Some("after"));
+        record.files[0].existed_before = true;
+        let plan = build_plan(&workspace.0, &[record]);
+        assert!(!plan.preview.can_apply);
+        assert_eq!(
+            plan.preview.unsafe_files[0].reason.as_deref(),
+            Some("unsupported_artifact")
+        );
+        assert_eq!(workspace.read("file.txt"), "after");
+    }
+
+    #[test]
+    fn inconsistent_content_hashes_are_not_trusted() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "after");
+        let mut record = artifact("write", "file.txt", Some("before"), Some("after"));
+        record.files[0].after_hash = Some(hash_bytes(b"different content"));
+        let plan = build_plan(&workspace.0, &[record]);
+        assert!(!plan.preview.can_apply);
+        assert_eq!(workspace.read("file.txt"), "after");
+    }
+
+    #[test]
+    fn new_files_are_deleted_and_captured_deletions_can_be_restored() {
+        let workspace = Workspace::new();
+        workspace.write("created.txt", "created");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "created.txt", None, Some("created")),
+                artifact("edit", "deleted.txt", Some("deleted before"), None),
+            ],
+        );
+        assert!(plan.preview.can_apply);
+        apply_plan(&workspace.0, &plan).unwrap();
+        assert!(!workspace.0.join("created.txt").exists());
+        assert_eq!(workspace.read("deleted.txt"), "deleted before");
+    }
+
+    #[test]
+    fn shell_files_are_ignored_without_blocking_safe_recorded_tools() {
+        let workspace = Workspace::new();
+        workspace.write("tool.txt", "after");
+        workspace.write("pulled.txt", "remote change");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "tool.txt", Some("before"), Some("after")),
+                artifact("Bash", "pulled.txt", Some("old"), Some("remote change")),
+            ],
+        );
+        assert!(plan.preview.can_apply);
+        assert_eq!(plan.preview.ignored_files.len(), 1);
+        apply_plan(&workspace.0, &plan).unwrap();
+        assert_eq!(workspace.read("tool.txt"), "before");
+        assert_eq!(workspace.read("pulled.txt"), "remote change");
+    }
+
+    #[tokio::test]
+    async fn one_unsafe_file_blocks_the_whole_apply() {
+        let workspace = Workspace::new();
+        workspace.write("safe.txt", "after");
+        workspace.write("unsafe.txt", "user edited");
+        let result = session_file_rewind_apply(
+            workspace.0.to_string_lossy().into_owned(),
+            vec![
+                artifact("write", "safe.txt", Some("before"), Some("after")),
+                artifact("write", "unsafe.txt", Some("before"), Some("after")),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!result.applied);
+        assert!(result.reverted_tool_call_ids.is_empty());
+        assert_eq!(workspace.read("safe.txt"), "after");
+        assert_eq!(workspace.read("unsafe.txt"), "user edited");
+    }
+
+    #[test]
+    fn later_file_drift_compensates_earlier_writes() {
+        let workspace = Workspace::new();
+        workspace.write("a.txt", "after a");
+        workspace.write("b.txt", "after b");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "a.txt", Some("before a"), Some("after a")),
+                artifact("write", "b.txt", Some("before b"), Some("after b")),
+            ],
+        );
+        assert!(plan.preview.can_apply);
+        workspace.write("b.txt", "external change after preview");
+        assert!(apply_plan(&workspace.0, &plan).is_err());
+        assert_eq!(workspace.read("a.txt"), "after a");
+        assert_eq!(workspace.read("b.txt"), "external change after preview");
+    }
+
+    #[test]
+    fn marker_commit_failure_compensates_restores_and_deletions() {
+        let workspace = Workspace::new();
+        workspace.write("created.txt", "created");
+        workspace.write("existing.txt", "after");
+        let plan = build_plan(
+            &workspace.0,
+            &[
+                artifact("write", "created.txt", None, Some("created")),
+                artifact("write", "existing.txt", Some("before"), Some("after")),
+            ],
+        );
+        let result =
+            apply_plan_with_commit(&workspace.0, &plan, || Err("marker write failed".into()));
+        assert_eq!(result.unwrap_err(), "marker write failed");
+        assert_eq!(workspace.read("created.txt"), "created");
+        assert_eq!(workspace.read("existing.txt"), "after");
+    }
+
+    #[test]
+    fn compensation_failure_is_reported_instead_of_silently_swallowed() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "after");
+        let plan = build_plan(
+            &workspace.0,
+            &[artifact("write", "file.txt", Some("before"), Some("after"))],
+        );
+        let error = apply_plan_with_commit(&workspace.0, &plan, || {
+            std::fs::remove_file(workspace.0.join("file.txt")).unwrap();
+            std::fs::create_dir(workspace.0.join("file.txt")).unwrap();
+            Err("commit failed".into())
+        })
+        .unwrap_err();
+        assert!(error.contains("rewindCompensationFailed"));
+    }
+
+    #[test]
+    fn missing_paths_cannot_use_parent_traversal_to_escape_the_project() {
+        let workspace = Workspace::new();
+        let project = workspace.0.join("project");
+        std::fs::create_dir(&project).unwrap();
+        workspace.write("outside.txt", "do not touch");
+        let plan = build_plan(
+            &project,
+            &[artifact(
+                "write",
+                "missing/../../outside.txt",
+                None,
+                Some("do not touch"),
+            )],
+        );
+        assert!(!plan.preview.can_apply);
+        assert_eq!(
+            plan.preview.unsafe_files[0].reason.as_deref(),
+            Some("file_read_failed")
+        );
+        assert_eq!(workspace.read("outside.txt"), "do not touch");
+    }
+
+    #[test]
+    fn absolute_paths_outside_the_project_and_binary_files_are_unsafe() {
+        let workspace = Workspace::new();
+        let project = workspace.0.join("project");
+        std::fs::create_dir(&project).unwrap();
+        workspace.write("outside.txt", "do not touch");
+        let outside = workspace
+            .0
+            .join("outside.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !build_plan(
+                &project,
+                &[artifact("write", &outside, None, Some("do not touch"))]
+            )
+            .preview
+            .can_apply
+        );
+        std::fs::write(project.join("binary.txt"), [0xff, 0xfe]).unwrap();
+        assert!(
+            !build_plan(
+                &project,
+                &[artifact("write", "binary.txt", None, Some("text"))]
+            )
+            .preview
+            .can_apply
+        );
+    }
+
+    #[test]
+    fn utf8_bom_and_crlf_are_restored_byte_for_byte() {
+        let workspace = Workspace::new();
+        workspace.write("file.txt", "\u{feff}after\r\n");
+        let plan = build_plan(
+            &workspace.0,
+            &[artifact(
+                "write",
+                "file.txt",
+                Some("\u{feff}before\r\n"),
+                Some("\u{feff}after\r\n"),
+            )],
+        );
+        assert!(plan.preview.can_apply);
+        apply_plan(&workspace.0, &plan).unwrap();
+        assert_eq!(workspace.read("file.txt"), "\u{feff}before\r\n");
+    }
+
+    #[test]
+    fn marker_state_is_atomic_and_survives_reopening() {
+        let workspace = Workspace::new();
+        let state_path = workspace.0.join("state").join("rewinds.json");
+        write_state_at(
+            &state_path,
+            &RewindState {
+                version: 1,
+                reverted: vec!["second".into(), "first".into(), "first".into()],
+            },
+        )
+        .unwrap();
+        let reopened = read_state_at(&state_path);
+        assert_eq!(reopened.version, 1);
+        assert_eq!(reopened.reverted, ["first", "second"]);
+        assert!(std::fs::read_dir(state_path.parent().unwrap())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "tmp")));
     }
 }

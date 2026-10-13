@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, shallowRef, watch } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { ChevronRight, Columns2, ExternalLink, FolderTree, Highlighter, List, Rows2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -10,14 +10,12 @@ import { normalizeSlashes } from "@/lib/paths"
 import SessionDiff from "@/components/SessionDiff.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 import { buildFileTree, flatFileRows, flattenVisibleTree } from "@/lib/reviewFileTree"
-import { changedLines, type FileChange } from "@/lib/sessionChanges"
-import { checkpointFileContent, type TurnCheckpointRecord } from "@/lib/checkpoints"
+import type { FileChange } from "@/lib/sessionChanges"
 
 const props = defineProps<{
   changes: FileChange[]
   project: string
   focus?: string | null
-  checkpoints?: TurnCheckpointRecord[]
 }>()
 const { t } = useI18n()
 
@@ -100,79 +98,6 @@ function selectRow(row: (typeof fileRows.value)[number]) {
     collapsed.value = next
   } else if (row.data) selectedPath.value = row.data.changes[0]?.path ?? row.fullPath
 }
-
-// ---- 真实差异：artifact 优先，Git checkpoint 兼容旧会话 ----
-// 内置文件变更插件已经为 write/edit 保存精确 before/after；没有 artifact 的
-// 旧轮次再使用 Git 快照，最后才回退到工具参数片段。
-const coveredPaths = computed(() => {
-  const set = new Set<string>()
-  for (const record of props.checkpoints ?? []) {
-    for (const file of record.files) set.add(file.path)
-  }
-  return set
-})
-// Artifact-backed changes already carry exact before/after content. Never
-// replace them with a broader checkpoint span from another turn.
-const artifactBacked = computed(
-  () => activeFile.value?.changes.some(change => change.id.startsWith("artifact:")) ?? false,
-)
-const coverage = computed(() => {
-  if (artifactBacked.value) return null
-  const path = activeFile.value?.path
-  const records = (props.checkpoints ?? []).filter(record => record.files.some(file => file.path === path))
-  if (!path || !records.length) return null
-  return { startOid: records[0]!.startOid, endOid: records[records.length - 1]!.endOid }
-})
-const realDiffKey = computed(() => {
-  const span = coverage.value
-  const path = activeFile.value?.path
-  return span && path ? `${props.project}|${span.startOid}|${span.endOid}|${path}` : null
-})
-const realCache = new Map<string, FileChange | null>()
-const realDiff = shallowRef<FileChange | null>(null)
-watch(
-  realDiffKey,
-  key => {
-    if (!key || !coverage.value || !activeFile.value) {
-      realDiff.value = null
-      return
-    }
-    const hit = realCache.get(key)
-    if (hit !== undefined) {
-      realDiff.value = hit
-      return
-    }
-    realDiff.value = null
-    const span = coverage.value
-    const path = activeFile.value.path
-    void (async () => {
-      try {
-        const [before, after] = await Promise.all([
-          checkpointFileContent(props.project, span.startOid, path),
-          checkpointFileContent(props.project, span.endOid, path),
-        ])
-        if (realDiffKey.value !== key) return
-        const lines = changedLines(before ?? "", after ?? "")
-        const change: FileChange = {
-          id: `snapshot:${key}`,
-          path,
-          tool: "git",
-          lines,
-          added: lines.filter(line => line.kind === "add").length,
-          removed: lines.filter(line => line.kind === "remove").length,
-          unknownBefore: false,
-        }
-        realCache.set(key, change)
-        realDiff.value = change
-      } catch {
-        // 快照不可读（历史会话残留 ref 被 GC 等）→ 保持参数片段视图。
-        realCache.set(key, null)
-        if (realDiffKey.value === key) realDiff.value = null
-      }
-    })()
-  },
-  { immediate: true },
-)
 </script>
 
 <template>
@@ -211,7 +136,7 @@ watch(
           <Button
             variant="quiet"
             size="review"
-            v-if="realDiff || activeFile.changes.some(change => !change.unknownBefore)"
+            v-if="activeFile.changes.some(change => !change.unknownBefore)"
             :title="t(splitDiff ? 'changes.unified' : 'changes.split')"
             :aria-label="t(splitDiff ? 'changes.unified' : 'changes.split')"
             :aria-pressed="splitDiff"
@@ -230,22 +155,15 @@ watch(
           viewport-class="pb-2.5"
           :aria-label="t('changes.fileDiff')"
         >
-          <template v-if="realDiff">
-            <section class="border-b">
-              <div class="px-3 py-2 text-xs text-muted-foreground">{{ t("changes.realDiff") }}</div>
-              <SessionDiff :change="realDiff" :split="splitDiff" :word="wordDiff" />
-            </section>
-          </template>
-          <template v-else>
-            <section v-for="(change, operation) in activeFile.changes" :key="change.id" class="border-b">
-              <div class="px-3 py-2 text-xs text-muted-foreground">
-                {{ operation + 1 }} · {{ change.tool
-                }}<span v-if="!change.unknownBefore"> · {{ t("changes.snippetLines") }}</span
-                ><span v-if="change.unknownBefore"> · {{ t("changes.unknown") }}</span>
-              </div>
-              <SessionDiff :change="change" :split="splitDiff" :word="wordDiff" />
-            </section>
-          </template>
+          <section v-for="(change, operation) in activeFile.changes" :key="change.id" class="border-b">
+            <div class="px-3 py-2 text-xs text-muted-foreground">
+              {{ operation + 1 }} · {{ change.tool
+              }}<span v-if="!change.unknownBefore">
+                · {{ t(change.id.startsWith("artifact:") ? "changes.exactLines" : "changes.snippetLines") }}</span
+              ><span v-if="change.unknownBefore"> · {{ t("changes.unknown") }}</span>
+            </div>
+            <SessionDiff :change="change" :split="splitDiff" :word="wordDiff" />
+          </section>
         </ScrollArea>
       </section>
       <nav
@@ -291,12 +209,7 @@ watch(
               <span v-if="row.data.removed" class="shrink-0 text-red-600 dark:text-red-400"
                 >-{{ row.data.removed }}</span
               >
-              <!-- 快照覆盖的文件在右侧展示真实 diff，原内容不再"未知"，无需标记。 -->
-              <span
-                v-if="row.data.changes.some(change => change.unknownBefore) && !coveredPaths.has(row.data.path)"
-                :title="t('changes.unknown')"
-                >*</span
-              >
+              <span v-if="row.data.changes.some(change => change.unknownBefore)" :title="t('changes.unknown')">*</span>
             </template>
           </button>
         </ScrollArea>

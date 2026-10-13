@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024
-const pending = new Map()
 
 function hashBytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex")
@@ -42,7 +41,7 @@ async function snapshot(cwd, rawPath) {
     }
     let text
     try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
     } catch {
       return {
         path: absolutePath,
@@ -68,6 +67,7 @@ async function snapshot(cwd, rawPath) {
 }
 
 export default function pixFileChanges(pi) {
+  const pending = new Map()
   if (!pi || typeof pi.on !== "function" || typeof pi.appendEntry !== "function") return
   pi.on("tool_call", async (event, ctx) => {
     if (!isFileMutation(event.toolName)) return

@@ -7,7 +7,17 @@ import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { useWorkspaceStore } from "@/stores/workspace"
 import type { Ref } from "vue"
 import type { AssistantMessageEvent, Usage } from "@/api/protocol"
-import type { Block, Entry, RetryInfo, SessionFlow, TextBlock, ThinkingBlock, ToolCallBlock, ToolRun } from "./types"
+import type {
+  Block,
+  Entry,
+  RetryInfo,
+  SessionFlow,
+  ErrorBlock,
+  TextBlock,
+  ThinkingBlock,
+  ToolCallBlock,
+  ToolRun,
+} from "./types"
 
 /** Keep the status code but unwrap JSON error payloads emitted by providers. */
 export function formatRetryError(value: unknown): string {
@@ -27,21 +37,9 @@ export function formatRetryError(value: unknown): string {
   return raw
 }
 
-/**
- * The markdown renderer (comark) consumes balanced `{...}` runs as inline
- * attribute syntax and silently drops them, which garbles raw provider
- * payloads. Render brace-bearing errors as inline code so they survive.
- */
-function protectBraces(text: string): string {
-  if (!/[{}]/.test(text)) return text
-  const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map(m => m[0].length))
-  const fence = "`".repeat(longestRun + 1)
-  return `${fence} ${text} ${fence}`
-}
-
-/** Shared phrasing between the live settle entry and history rendering. */
-export function errorBlockText(message: string): string {
-  return `**${i18n.global.t("chat.errorLabel")}:** ${protectBraces(formatRetryError(message))}`
+/** Shared plain-text error record for live failures and history. */
+export function errorBlock(message: string): ErrorBlock {
+  return { type: "error", text: formatRetryError(message) || i18n.global.t("chat.retryUnknownError") }
 }
 
 export function applyDelta(blocks: Block[], delta: AssistantMessageEvent) {
@@ -186,6 +184,7 @@ export interface EventContext {
   partialBlocks: Ref<Block[] | null>
   isStreaming: Ref<boolean>
   isCompacting: Ref<boolean>
+  compactionError: Ref<string | null>
   retryInfo: Ref<RetryInfo | null>
   steering: Ref<string[]>
   followUp: Ref<string[]>
@@ -199,9 +198,6 @@ export interface EventContext {
   refreshState: () => Promise<void>
   syncSessionFile: () => Promise<void>
   dispatchQueuedPrompt: () => void
-  /** 轮次 Git 快照：agent_start 建开始快照，settled 建结束快照并计算差异。 */
-  checkpointStart: () => void
-  checkpointSettle: () => void
   /** Extension custom entry (e.g. exact file before/after artifact). */
   customEntryAppended: (entry: any) => void
 }
@@ -215,6 +211,7 @@ export function createEventHandler(ctx: EventContext) {
     partialBlocks,
     isStreaming,
     isCompacting,
+    compactionError,
     retryInfo,
     steering,
     followUp,
@@ -228,8 +225,6 @@ export function createEventHandler(ctx: EventContext) {
     refreshState,
     syncSessionFile,
     dispatchQueuedPrompt,
-    checkpointStart,
-    checkpointSettle,
     customEntryAppended,
   } = ctx
 
@@ -254,6 +249,7 @@ export function createEventHandler(ctx: EventContext) {
         break
 
       case "agent_start":
+        compactionError.value = null
         flow.awaitingAgentStart = false
         flow.agentStartedAt = Date.now()
         streamingTurnId.value = null
@@ -262,7 +258,6 @@ export function createEventHandler(ctx: EventContext) {
         flow.turnAborted = false
         flow.lastErrorMessage = null
         setSessionRunStatus(sessionFile.value, "running", cwd.value)
-        checkpointStart()
         break
 
       case "agent_end":
@@ -296,11 +291,13 @@ export function createEventHandler(ctx: EventContext) {
         // Error messages carry an empty content array, so a finally-failed run
         // would otherwise leave no trace in the conversation. Transient errors
         // that a retry recovered from never reach this point.
-        if (finalStatus === "error" && flow.lastErrorMessage) {
+        if (finalStatus === "error") {
           entries.value.push({
             kind: "assistant",
             id: nextId(),
-            blocks: [{ type: "text", text: errorBlockText(flow.lastErrorMessage) }],
+            blocks: [errorBlock(flow.lastErrorMessage ?? "")],
+            failed: true,
+            timestamp: Date.now(),
             live: true,
           })
         }
@@ -314,8 +311,6 @@ export function createEventHandler(ctx: EventContext) {
         }
         void refreshStats()
         void refreshState()
-        // Turn snapshot: record the files changed during this round (including partial changes from aborted rounds), for the summary card and git rollback.
-        checkpointSettle()
         // Our own worker just flushed the file; sync so watcher events for
         // this write are not mistaken for external edits.
         void syncSessionFile()
@@ -351,7 +346,11 @@ export function createEventHandler(ctx: EventContext) {
         if (msg?.role === "assistant") {
           // A successful response means the retried request recovered, even if
           // the runtime's matching auto_retry_end event is delayed.
-          if (msg.stopReason !== "error" && msg.stopReason !== "aborted") retryInfo.value = null
+          if (msg.stopReason !== "error" && msg.stopReason !== "aborted") {
+            retryInfo.value = null
+            flow.turnFailed = false
+            flow.lastErrorMessage = null
+          }
           if (msg.stopReason === "error") {
             flow.turnFailed = true
             flow.lastErrorMessage = msg.errorMessage ?? null
@@ -367,6 +366,7 @@ export function createEventHandler(ctx: EventContext) {
               kind: "assistant",
               id: streamingTurnId.value ?? nextId(),
               blocks,
+              failed: msg.stopReason === "error",
               live: true,
               startedAt: flow.agentStartedAt,
               completedAt: Date.now(),
@@ -427,11 +427,13 @@ export function createEventHandler(ctx: EventContext) {
       }
 
       case "compaction_start":
+        compactionError.value = null
         isCompacting.value = true
         break
 
       case "compaction_end": {
         isCompacting.value = false
+        compactionError.value = ev.errorMessage ? formatRetryError(ev.errorMessage) : null
         // Keep a visible marker at the position where history was collapsed.
         if (ev.result?.summary)
           entries.value.push({

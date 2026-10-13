@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { Check, ChevronRight, Eye, Undo2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -7,27 +7,32 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ScrollArea } from "@/components/ui/scroll-area"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
 import { relativeDisplayPath } from "@/lib/paths"
-import { encodeCodedError, formatCodedError } from "@/lib/backendError"
-import { restoreCheckpoints, type TurnCheckpointRecord } from "@/lib/checkpoints"
-import { revertTurnFiles, type RevertFileResult } from "@/lib/revertChanges"
-import { applyFileRewind, previewFileRewind, type FileRewindFile, type FileRewindPreview } from "@/lib/fileRewind"
+import { formatCodedError } from "@/lib/backendError"
+import {
+  applyFileRewind,
+  previewFileRewind,
+  type FileRewindFile,
+  type FileRewindFileResult,
+  type FileRewindPreview,
+} from "@/lib/fileRewind"
 import type { FileChangeArtifact } from "@/lib/fileChangeArtifacts"
 import type { TurnFileChange } from "@/lib/turnChanges"
 
 const props = defineProps<{
   files: TurnFileChange[]
   project: string
-  checkpoint?: TurnCheckpointRecord | null
+  sessionFile?: string | null
   artifacts?: FileChangeArtifact[]
   wasReverted?: boolean
 }>()
-const emit = defineEmits<{ openReview: [path: string]; reverted: [results: RevertFileResult[]]; revertedAll: [] }>()
+const emit = defineEmits<{
+  openReview: [path: string]
+  reverted: [results: FileRewindFileResult[]]
+  revertedAll: [file: string | null, toolCallIds: string[]]
+}>()
 const { t } = useI18n()
 
 const expanded = ref(false)
-const busy = ref(false)
-const confirmOpen = ref(false)
-const reverted = ref(new Set<string>())
 const rewindOpen = ref(false)
 const rewindLoading = ref(false)
 const rewindApplying = ref(false)
@@ -40,15 +45,23 @@ const totals = computed(() =>
     removed: 0,
   }),
 )
-const revertibleFiles = computed(() => props.files.filter(file => file.revertible && !reverted.value.has(file.path)))
 const exactArtifacts = computed(() => props.artifacts ?? [])
 const hasArtifacts = computed(() => exactArtifacts.value.length > 0)
-// Git 快照回滚：该轮处于「未回滚」状态才可用；否则降级为内容回放。
-const gitRevertible = computed(() => !!props.checkpoint && props.checkpoint.state === "active")
-const turnReverted = computed(() => !!props.checkpoint && props.checkpoint.state === "reverted")
-const isTurnReverted = computed(() => turnReverted.value || revertedByArtifact.value || props.wasReverted === true)
+const isTurnReverted = computed(() => revertedByArtifact.value || props.wasReverted === true)
+const rewindKey = computed(() =>
+  JSON.stringify([props.project, props.sessionFile, exactArtifacts.value.map(artifact => artifact.toolCallId)]),
+)
+let previewKey: string | null = null
 
-// 项目内显示相对路径，项目外显示原路径；目录段弱化、文件名保持高亮。
+// 会话/工具记录变化后丢弃旧预览；异步结果不能更新另一个会话的卡片。
+watch(rewindKey, () => {
+  previewKey = null
+  rewindOpen.value = false
+  rewindPreview.value = null
+  rewindError.value = ""
+  revertedByArtifact.value = false
+})
+
 const rows = computed(() =>
   props.files.map(file => {
     const display = relativeDisplayPath(file.path, props.project)
@@ -62,45 +75,50 @@ const rows = computed(() =>
   }),
 )
 
-function confirmRevertAll() {
-  confirmOpen.value = false
-  void revert(revertibleFiles.value, true)
-}
-
 async function openArtifactRewind() {
-  if (busy.value || rewindLoading.value || rewindApplying.value) return
+  if (!hasArtifacts.value || isTurnReverted.value || rewindLoading.value || rewindApplying.value) return
+  const key = rewindKey.value
   rewindOpen.value = true
   rewindLoading.value = true
   rewindError.value = ""
   rewindPreview.value = null
+  previewKey = null
   try {
-    rewindPreview.value = await previewFileRewind(props.project, exactArtifacts.value)
+    const preview = await previewFileRewind(props.project, exactArtifacts.value)
+    if (key !== rewindKey.value) return
+    rewindPreview.value = preview
+    previewKey = key
   } catch (error) {
-    rewindError.value = formatCodedError(t, String(error))
+    if (key === rewindKey.value) rewindError.value = formatCodedError(t, String(error))
   } finally {
     rewindLoading.value = false
   }
 }
 
 async function confirmArtifactRewind() {
-  if (!rewindPreview.value?.canApply || rewindApplying.value) return
+  if (!rewindPreview.value?.canApply || previewKey !== rewindKey.value || rewindApplying.value) return
+  const key = rewindKey.value
+  const file = props.sessionFile ?? null
   rewindApplying.value = true
   rewindError.value = ""
   try {
-    const result = await applyFileRewind(props.project, exactArtifacts.value)
+    // 后端重新构建计划并检查 Hash；预览后发生的新修改也不能被覆盖。
+    const result = await applyFileRewind(props.project, exactArtifacts.value, file)
+    if (key !== rewindKey.value) return
     rewindPreview.value = result.preview
     if (!result.applied) {
       rewindError.value = t("turnChanges.rewindFailed")
       return
     }
     revertedByArtifact.value = true
-    for (const file of result.preview.safeFiles) reverted.value.add(file.path)
-    const results = result.preview.safeFiles.map(file => ({ path: file.path, ok: true }))
-    emit("reverted", results)
-    emit("revertedAll")
+    emit(
+      "reverted",
+      result.preview.safeFiles.map(item => ({ path: item.path, ok: true })),
+    )
+    emit("revertedAll", file, result.revertedToolCallIds)
     rewindOpen.value = false
   } catch (error) {
-    rewindError.value = formatCodedError(t, String(error))
+    if (key === rewindKey.value) rewindError.value = formatCodedError(t, String(error))
   } finally {
     rewindApplying.value = false
   }
@@ -112,50 +130,13 @@ function rewindReason(file: FileRewindFile): string {
       return t("turnChanges.rewindReasonExternalModified")
     case "bash_ignored":
       return t("turnChanges.rewindReasonBashIgnored")
+    case "already_reverted":
+      return t("turnChanges.reverted")
     case "file_read_failed":
     case "rewindReadFailed":
       return t("turnChanges.rewindReasonReadFailed")
     default:
       return t("turnChanges.rewindReasonUnsupported")
-  }
-}
-
-async function revert(list: TurnFileChange[], full: boolean) {
-  if (busy.value || !list.length) return
-  busy.value = true
-  try {
-    let results: RevertFileResult[]
-    if (gitRevertible.value && props.checkpoint) {
-      // 回滚 = 从结束态恢复到轮开始前的快照；子集回滚只传受影响路径。
-      // tool_touched_files 限定只恢复该列表内的文件，避免覆盖用户手改。
-      const outcome = await restoreCheckpoints(
-        props.project,
-        props.checkpoint.endOid,
-        props.checkpoint.startOid,
-        full ? undefined : list.map(file => file.path),
-        list.map(file => file.path),
-      )
-      results = [
-        ...outcome.restored.map(path => ({ path, ok: true })),
-        ...outcome.conflicts.map(conflict => ({
-          path: conflict.path,
-          ok: false,
-          error: encodeCodedError("checkpointConflict", "文件在回滚前被再次修改，已跳过", { detail: conflict.path }),
-        })),
-      ]
-    } else {
-      results = await revertTurnFiles(
-        props.project,
-        list.map(file => ({ path: file.path, ops: file.ops })),
-      )
-    }
-    for (const result of results) if (result.ok) reverted.value.add(result.path)
-    if (full && results.length > 0 && results.every(result => result.ok)) emit("revertedAll")
-    emit("reverted", results)
-  } catch (error) {
-    emit("reverted", [{ path: "", ok: false, error: String(error) }])
-  } finally {
-    busy.value = false
   }
 }
 </script>
@@ -188,18 +169,24 @@ async function revert(list: TurnFileChange[], full: boolean) {
           >{{ t("turnChanges.reverted") }}</span
         >
       </button>
+      <span
+        v-if="!hasArtifacts && !isTurnReverted"
+        class="shrink-0 px-1 text-[11px] text-muted-foreground"
+        :title="t('turnChanges.notRevertible')"
+        >{{ t("turnChanges.readOnly") }}</span
+      >
       <Button
-        v-if="(revertibleFiles.length || hasArtifacts) && !isTurnReverted"
+        v-if="hasArtifacts && !isTurnReverted"
         type="button"
         variant="ghost"
         size="xs"
         class="shrink-0 text-muted-foreground"
-        :disabled="busy || rewindLoading || rewindApplying"
+        :disabled="rewindLoading || rewindApplying"
         :title="t('turnChanges.revertAll')"
         :aria-label="t('turnChanges.revertAll')"
-        @click="hasArtifacts ? openArtifactRewind() : (confirmOpen = true)"
+        @click="openArtifactRewind"
       >
-        <Undo2 data-icon="inline-start" />{{ busy || rewindApplying ? t("turnChanges.busy") : t("turnChanges.revert") }}
+        <Undo2 data-icon="inline-start" />{{ rewindApplying ? t("turnChanges.busy") : t("turnChanges.revert") }}
       </Button>
     </div>
     <div v-if="expanded" class="border-t border-border" role="list" :aria-label="t('turnChanges.title')">
@@ -238,64 +225,16 @@ async function revert(list: TurnFileChange[], full: boolean) {
             ><Eye
           /></Button>
           <span
-            v-if="isTurnReverted || reverted.has(row.file.path)"
+            v-if="isTurnReverted"
             class="flex size-6 shrink-0 items-center justify-center text-green-600 dark:text-green-400"
             :title="t('turnChanges.reverted')"
             :aria-label="t('turnChanges.reverted')"
           >
             <Check class="size-3.5" />
           </span>
-          <Button
-            v-else-if="!hasArtifacts"
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            class="text-muted-foreground"
-            :disabled="busy || !row.file.revertible"
-            :title="row.file.revertible ? t('turnChanges.revertFile') : t('turnChanges.notRevertible')"
-            :aria-label="row.file.revertible ? t('turnChanges.revertFile') : t('turnChanges.notRevertible')"
-            @click="revert([row.file], false)"
-            ><Undo2
-          /></Button>
         </div>
       </div>
     </div>
-
-    <Dialog :open="confirmOpen" @update:open="confirmOpen = $event">
-      <DialogContent class="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{{ t("turnChanges.confirmTitle") }}</DialogTitle>
-        </DialogHeader>
-        <p class="text-muted-foreground text-xs">{{ t("turnChanges.confirmDesc") }}</p>
-        <ScrollArea viewport-class="max-h-60">
-          <div class="flex flex-col gap-0.5 pr-2">
-            <div
-              v-for="file in revertibleFiles"
-              :key="file.path"
-              class="flex items-center gap-2 rounded-md px-1 py-1.5 font-mono text-xs hover:bg-muted"
-            >
-              <span class="min-w-0 flex-1 truncate" :title="file.path">{{
-                relativeDisplayPath(file.path, project)
-              }}</span>
-              <span v-if="file.added" class="shrink-0 tabular-nums text-green-600 dark:text-green-400"
-                >+{{ file.added }}</span
-              >
-              <span v-if="file.removed" class="shrink-0 tabular-nums text-red-600 dark:text-red-400"
-                >-{{ file.removed }}</span
-              >
-            </div>
-          </div>
-        </ScrollArea>
-        <div class="flex justify-end gap-2">
-          <Button type="button" variant="outline" size="sm" :disabled="busy" @click="confirmOpen = false">{{
-            t("common.cancel")
-          }}</Button>
-          <Button type="button" size="sm" :disabled="busy" @click="confirmRevertAll">{{
-            busy ? t("turnChanges.busy") : t("turnChanges.confirmAction")
-          }}</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
 
     <Dialog :open="rewindOpen" @update:open="rewindOpen = $event">
       <DialogContent class="max-w-lg">

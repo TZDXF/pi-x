@@ -21,6 +21,17 @@ export function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
 }
 
+/**
+ * Settled turns fold their process even when interruption leaves no final text.
+ * Concise mode hides completed thinking, so a reasoning-only process would
+ * expand to nothing and therefore needs no disclosure.
+ */
+export function hasFoldedProcess(entry: AssistantTurn, concise = false): boolean {
+  if (!entry.complete || entry.process.length === 0) return false
+  if (!concise) return true
+  return entry.process.some(block => block.type === "toolCall" || (block.type === "text" && !!block.text?.trim()))
+}
+
 /** 流式 turn 投影与分页锚点恢复；状态与滚动句柄均属于当前窗格。 */
 export function useChatTurnList(deps: {
   session: SessionStore
@@ -49,6 +60,8 @@ export function useChatTurnList(deps: {
           blocks: [...partial],
           process: [],
           summary: [],
+          errors: [],
+          failed: false,
           complete: false,
           durationMs: null,
           toolCallCount: 0,

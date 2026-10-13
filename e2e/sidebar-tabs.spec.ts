@@ -13,7 +13,7 @@ const panelTypes: Record<string, string> = {
 function panelSource(type: string) {
   return `<script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-defineProps(['visible', 'focus', 'project', 'changes', 'checkpoints', 'embedded'])
+defineProps(['visible', 'focus', 'project', 'changes', 'embedded'])
 const emit = defineEmits(['send-to-chat'])
 const fixture = window.sidebarFixture
 const text = ref('')

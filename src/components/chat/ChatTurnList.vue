@@ -15,6 +15,7 @@ import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
+import ChatErrorRecord from "./ChatErrorRecord.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
 import ChatCompactionMarker from "./ChatCompactionMarker.vue"
 import ChatModelChangeMarker from "./ChatModelChangeMarker.vue"
@@ -257,6 +258,13 @@ onBeforeUnmount(() => {
           </QueueItem>
         </QueueList>
       </QueueSection>
+
+      <ChatErrorRecord
+        v-if="session.compactionError"
+        :text="session.compactionError"
+        :title="t('chat.compactionFailed')"
+        class="mt-2"
+      />
 
       <!-- compaction progress: a divider inside the conversation -->
       <div v-if="session.isCompacting" class="mt-2 flex items-center gap-3 text-xs text-muted-foreground" role="status">

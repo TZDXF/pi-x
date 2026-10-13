@@ -14,7 +14,6 @@ import {
   type SessionMeta,
 } from "@/api/piClient"
 import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
-import { invoke } from "@/api/transport"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
 const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
@@ -475,10 +474,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         histories.value[path] = next
       }
     }
-    // Delete the checkpoint manifest file for the removed session.
-    invoke("session_checkpoint_manifest_delete", { file }).catch(() => {
-      // Silently ignore errors — the manifest may not exist.
-    })
   }
   return {
     gitBusy,

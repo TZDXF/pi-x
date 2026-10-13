@@ -87,7 +87,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
     />
     <PromptInput
       :group-class="[
-        'relative rounded-[22px] bg-card p-2 shadow-[var(--composer-shadow)]',
+        'relative rounded-[22px] bg-card dark:bg-card p-2 shadow-[var(--composer-shadow)]',
         sessionDragOver && 'outline-2 outline-dashed outline-primary outline-offset-[3px]',
       ]"
       :initial-input="initialDraft"

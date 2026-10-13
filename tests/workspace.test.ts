@@ -310,14 +310,13 @@ test("drag order spans every folder in a grouped project and survives refresh", 
   reopened.store.histories.back = h.store.histories.back
   expect(Array.from(reopened.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])
 })
-test("removing a session deletes its checkpoint manifest", async () => {
+test("removing a session updates caches without a second file-deletion command", async () => {
   const h = await harness()
   h.store.histories.project = [{ file: "session.jsonl" }]
   h.store.removeSession("session.jsonl")
   await Promise.resolve()
-  expect(JSON.parse(JSON.stringify(h.invokes))).toEqual([
-    ["session_checkpoint_manifest_delete", { file: "session.jsonl" }],
-  ])
+  expect(JSON.parse(JSON.stringify(h.invokes))).toEqual([])
+  expect(h.store.histories.project).toEqual([])
 })
 
 test("removing a project also clears its session order", async () => {

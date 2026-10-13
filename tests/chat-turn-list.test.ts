@@ -135,3 +135,11 @@ test("process materialization survives virtual row unmounting and content/action
   expect(root).toMatch(/setShortcutsSuppressed\("chat-dialogs", active\)/)
   expect(root.split("\n").length).toBeLessThan(500)
 })
+
+test("error records stay outside answer/process rendering and failed turns have no actions", () => {
+  const assistant = chatSource("components/chat/ChatAssistantTurn.vue")
+  const list = chatSource("components/chat/ChatTurnList.vue")
+  expect(assistant).toMatch(/v-for="\(error, index\) in entry.errors"/)
+  expect(assistant).toMatch(/<MessageActions\s+v-if="entry.complete && !entry.failed"/)
+  expect(list).toMatch(/v-if="session.compactionError"/)
+})

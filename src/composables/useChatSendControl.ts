@@ -167,9 +167,9 @@ export function useChatSendControl(deps: {
         if (comments.length) codeComments.clear()
         if (selections.length) conversationSelections.clear()
       } else {
-        // 运行中且偏好本地排队时消息不进对话流，保持阅读位置；否则发送后回底，
+        // 压缩中或运行中且偏好本地排队时消息不进对话流，保持阅读位置；否则发送后回底，
         // 即使此前向上翻阅过历史，也能立刻看到新消息与即将开始的回答。
-        const queuedLocally = session.isStreaming && runningBehavior.value === "queue"
+        const queuedLocally = session.isCompacting || (session.isStreaming && runningBehavior.value === "queue")
         if (comments.length) codeComments.clear()
         if (selections.length) conversationSelections.clear()
         await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)

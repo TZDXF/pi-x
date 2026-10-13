@@ -247,11 +247,11 @@ const offShortcutHandlers = [
   }),
   registerShortcutHandler("chat.forkLast", () => {
     const entry = lastAssistantTurn()
-    if (entry) void forkFromAnswer(entry.lastIndex)
+    if (entry?.complete && !entry.failed) void forkFromAnswer(entry.lastIndex)
   }),
   registerShortcutHandler("chat.copyLastAnswer", () => {
     const entry = lastAssistantTurn()
-    if (entry) void copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))
+    if (entry?.complete && !entry.failed) void copyText(blocksText(entry.summary.length ? entry.summary : entry.blocks))
   }),
   registerShortcutHandler("chat.scrollTop", () => scrollHistory(-1)),
   registerShortcutHandler("chat.scrollBottom", () => scrollHistory(1)),
@@ -470,7 +470,6 @@ onBeforeUnmount(() => {
         :changes="session.fileChanges"
         :project="session.cwd || project"
         :focus="reviewFocus"
-        :checkpoints="session.turnCheckpointRecords"
         @update:active-id="activeTabId = $event"
         @add-tab="addSidebarTab"
         @close-tab="closeSidebarTab"

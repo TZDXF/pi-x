@@ -1,4 +1,12 @@
-import type { Block, CompactionEntry, ContextEditEntry, Entry, ModelChangeEntry, UserEntry } from "@/stores/session"
+import type {
+  ErrorBlock,
+  Block,
+  CompactionEntry,
+  ContextEditEntry,
+  Entry,
+  ModelChangeEntry,
+  UserEntry,
+} from "@/stores/session"
 
 export interface AssistantTurn {
   kind: "assistant"
@@ -7,6 +15,8 @@ export interface AssistantTurn {
   blocks: Block[]
   process: Block[]
   summary: Block[]
+  errors: ErrorBlock[]
+  failed: boolean
   complete: boolean
   durationMs: number | null
   toolCallCount: number
@@ -20,10 +30,33 @@ export function responseTurns(
 ): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] {
   const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] = []
   let questionTime: number | undefined
+  let hasUser = false
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
     if (entry.kind === "user") {
+      const target = entry.modelChange?.to
+      const previous = result[result.length - 1]
+      // set_model / cycle_model annotate the next question even when pi
+      // emits no entry_appended event. Reuse the history divider rendering,
+      // but do not duplicate a matching divider already delivered live.
+      if (
+        hasUser &&
+        target &&
+        !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)
+      ) {
+        const separator = target.indexOf("/")
+        result.push({
+          kind: "model_change",
+          // Store IDs are positive; -1 is reserved for an uncommitted stream.
+          id: -entry.id - 1,
+          provider: separator < 0 ? "" : target.slice(0, separator),
+          modelId: separator < 0 ? target : target.slice(separator + 1),
+          timestamp: entry.timestamp,
+          live: entry.live,
+        })
+      }
       result.push(entry)
+      hasUser = true
       questionTime = entry.timestamp
       continue
     }
@@ -45,9 +78,12 @@ export function responseTurns(
     // instead of splitting the answer around an invisible marker.
     if ((entry as { kind?: string }).kind === "custom") continue
     if (entry.kind === "model_change") {
-      // Model switches are rendered as dividers and break turn grouping;
-      // no duration flows across them.
-      result.push(entry)
+      // A divider belongs between turns, not before the first question. Rapid
+      // switches at the same boundary collapse to the model actually used.
+      if (!hasUser) continue
+      const previous = result[result.length - 1]
+      if (previous?.kind === "model_change") result[result.length - 1] = entry
+      else result.push(entry)
       questionTime = undefined
       continue
     }
@@ -62,12 +98,17 @@ export function responseTurns(
             blocks: [],
             process: [],
             summary: [],
+            errors: [],
+            failed: false,
             complete: true,
             durationMs: null,
             toolCallCount: 0,
           }
     if (turn !== previous) result.push(turn)
     turn.lastIndex = index
+    turn.failed = entry.failed === true || entry.blocks.some(block => block.type === "error")
+    const blocks = entry.blocks.filter(block => block.type !== "error")
+    turn.errors.push(...entry.blocks.filter((block): block is ErrorBlock => block.type === "error"))
     // Live messages have an observed completion time; history retains the
     // recorded message timestamp. Never substitute the history loading time.
     const start = questionTime ?? entry.startedAt
@@ -83,10 +124,12 @@ export function responseTurns(
         : null
     // Only trailing text from the final assistant entry is a final answer.
     // Commentary before a tool call must never be mistaken for a summary.
-    let summaryStart = entry.blocks.length
-    while (summaryStart > 0 && entry.blocks[summaryStart - 1]!.type === "text") summaryStart--
-    turn.summary = entry.blocks.slice(summaryStart)
-    turn.blocks.push(...entry.blocks)
+    let summaryStart = blocks.length
+    while (summaryStart > 0 && blocks[summaryStart - 1]!.type === "text") summaryStart--
+    // An error-only entry must not move earlier content into a reasoning fold.
+    if (turn.failed) turn.summary = []
+    else if (blocks.length) turn.summary = blocks.slice(summaryStart)
+    turn.blocks.push(...blocks)
   }
   for (const entry of result) {
     if (entry.kind === "assistant") {

@@ -4,55 +4,27 @@ import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import type { AssistantTurn } from "@/lib/responseTurns"
 import { turnFileChanges, type TurnFileChange } from "@/lib/turnChanges"
-import { turnFileChangesFromArtifacts } from "@/lib/fileChangeArtifacts"
-import type { TurnCheckpointRecord } from "@/lib/checkpoints"
+import { artifactsForToolCalls, turnFileChangesFromArtifacts } from "@/lib/fileChangeArtifacts"
 import { formatCodedError } from "@/lib/backendError"
-import type { RevertFileResult } from "@/lib/revertChanges"
+import type { FileRewindFileResult } from "@/lib/fileRewind"
 
-/**
- * Per-turn file changes (summary card with git revert). Streaming re-renders
- * this list constantly; the cache keeps the line diffs from being recomputed
- * while the turn's calls and their run states stand still.
- */
+/** 以成功工具调用的稳定 ID 关联文件记录；不依赖轮次计数或 Git 状态。 */
 export function useTurnChanges(session: SessionStore, ui: UiStore) {
   const { t } = useI18n()
   const cache = new Map<number, { signature: string; files: TurnFileChange[] }>()
 
-  /** 渲染轮次对应的用户消息 turnIndex，与会话清单里的快照记录精确匹配。 */
-  function turnUserTurnIndex(entry: AssistantTurn): number | undefined {
-    for (let index = Math.min(entry.lastIndex, session.entries.length - 1); index >= 0; index--) {
-      const candidate = session.entries[index]
-      if (candidate?.kind === "user") return candidate.turnIndex
-    }
-    return undefined
-  }
-
-  function checkpointForTurn(entry: AssistantTurn): TurnCheckpointRecord | null {
-    const turnIndex = turnUserTurnIndex(entry)
-    if (turnIndex === undefined) return null
-    return session.turnCheckpointRecords.find(record => record.turnIndex === turnIndex) ?? null
+  function allArtifactsForTurn(entry: AssistantTurn) {
+    return artifactsForToolCalls(entry.blocks, session.runs, session.fileChangeArtifacts)
   }
 
   function changesForTurn(entry: AssistantTurn): TurnFileChange[] {
-    // Built-in file-change tracking records exact before/after content around
-    // write/edit calls. Prefer it over reconstructed snippets or turn snapshots.
-    const exact = turnFileChangesFromArtifacts(entry.blocks, session.runs, session.fileChangeArtifacts)
-    if (exact.length) return exact
-    // 有 Git 快照记录的轮次以快照差异为准（覆盖 bash 等工具的文件修改）。
-    const checkpoint = checkpointForTurn(entry)
-    if (checkpoint)
-      return checkpoint.files.map(file => ({
-        path: file.path,
-        added: file.added,
-        removed: file.removed,
-        unknown: false,
-        ops: [],
-        revertible: true,
-      }))
+    const artifacts = allArtifactsForTurn(entry)
+    // 有精确记录时只展示可归属的真实修改，终端和外部工作区变化不参与摘要。
+    if (artifacts.length) return turnFileChangesFromArtifacts(entry.blocks, session.runs, artifacts)
     const signature = entry.blocks
       .flatMap(block =>
         block.type === "toolCall"
-          ? [`${block.callId}:${block.argsText.length}:${session.runs[block.callId]?.state ?? "-"}`]
+          ? [`${block.callId}:${block.argsText}:${session.runs[block.callId]?.state ?? "-"}`]
           : [],
       )
       .join("|")
@@ -64,25 +36,21 @@ export function useTurnChanges(session: SessionStore, ui: UiStore) {
   }
 
   function artifactsForTurn(entry: AssistantTurn) {
-    const ids = new Set(entry.blocks.flatMap(block => (block.type === "toolCall" ? [block.callId] : [])))
-    return session.fileChangeArtifacts.filter(artifact => ids.has(artifact.toolCallId))
+    return allArtifactsForTurn(entry).filter(artifact => !session.revertedFileChangeCalls.has(artifact.toolCallId))
   }
 
-  function onTurnReverted(results: RevertFileResult[]) {
+  function onTurnReverted(results: FileRewindFileResult[]) {
     const ok = results.filter(result => result.ok).length
     if (ok) ui.pushToast(t("turnChanges.toastReverted", { count: ok }), "info")
     for (const result of results) if (!result.ok) ui.pushToast(formatCodedError(t, result.error ?? ""), "error")
   }
 
-  function onTurnRevertedAll(entry: AssistantTurn) {
-    const artifacts = artifactsForTurn(entry)
-    if (artifacts.length) void session.markFileRewinds(artifacts.map(artifact => artifact.toolCallId))
-    const checkpoint = checkpointForTurn(entry)
-    if (checkpoint) session.markTurnReverted(checkpoint.turnIndex)
+  function onTurnRevertedAll(file: string | null, toolCallIds: string[]) {
+    session.recordFileRewinds(file, toolCallIds)
   }
 
   function turnArtifactsReverted(entry: AssistantTurn): boolean {
-    const artifacts = artifactsForTurn(entry)
+    const artifacts = allArtifactsForTurn(entry)
     return artifacts.length > 0 && artifacts.every(artifact => session.revertedFileChangeCalls.has(artifact.toolCallId))
   }
 
@@ -94,7 +62,6 @@ export function useTurnChanges(session: SessionStore, ui: UiStore) {
   return {
     changesForTurn,
     artifactsForTurn,
-    checkpointForTurn,
     onTurnReverted,
     onTurnRevertedAll,
     turnArtifactsReverted,

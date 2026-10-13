@@ -28,7 +28,7 @@ async function loadVueSetup(source, props, require) {
 }
 
 async function harness(changes) {
-  const props = reactive({ changes, checkpoints: [] })
+  const props = reactive({ changes })
   const bindings = await loadVueSetup(reviewSource, props, {
     vue: { ...vueRuntime, onMounted: () => {}, onBeforeUnmount: () => {}, watch: () => {} },
     "vue-i18n": { useI18n: () => ({ t: key => key }) },
