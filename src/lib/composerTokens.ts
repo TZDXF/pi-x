@@ -15,7 +15,11 @@ export function composerChipText(part: ComposerPart): string {
 }
 
 /** Keep transport text intact; only replace complete references in the editor display. */
-export function composerParts(text: string, sessionLabels: Record<string, string> = {}): ComposerPart[] {
+export function composerParts(
+  text: string,
+  sessionLabels: Record<string, string> = {},
+  commandNames?: ReadonlySet<string>,
+): ComposerPart[] {
   const parts: ComposerPart[] = []
   const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s)|^\/[^\s/]+(?=\s)/g
   let cursor = 0
@@ -26,8 +30,10 @@ export function composerParts(text: string, sessionLabels: Record<string, string
     let kind: ComposerPart["kind"]
     let label: string
     if (raw.startsWith("/")) {
-      kind = "command"
       label = raw.slice(1)
+      // Live editors validate commands; historical messages can retain their original chips.
+      if (commandNames && !commandNames.has(label)) continue
+      kind = "command"
     } else {
       const session = raw.startsWith("@session(")
       const value = session ? raw.slice(9, -1) : raw.slice(1)

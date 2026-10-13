@@ -175,6 +175,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
         :ensure-started="ensureStarted"
       />
       <ComposerRichEditor
+        :commands="session.commands"
         @input="completion?.onEditorEvent($event)"
         @click="completion?.onEditorEvent($event)"
         @keyup="completion?.onEditorEvent($event)"
