@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import { Copy, GitBranch } from "@lucide/vue"
 import { MessageContent, MessageActions, MessageAction } from "@/components/ai-elements/message"
@@ -7,6 +8,7 @@ import AssistantBlocks from "@/components/AssistantBlocks.vue"
 import TurnChangesCard from "@/components/TurnChangesCard.vue"
 import type { useTurnChanges } from "@/composables/useTurnChanges"
 import { blocksText, hasFoldedProcess } from "@/composables/useChatTurnList"
+import { processDetail } from "@/lib/processDetail"
 import { formatMessageTime } from "@/lib/format"
 import type { AssistantTurn } from "@/lib/responseTurns"
 import type { SessionStore } from "@/stores/session"
@@ -27,6 +29,8 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const { changesForTurn, artifactsForTurn, onTurnReverted, onTurnRevertedAll, turnArtifactsReverted } = props.changes
+const concise = computed(() => processDetail.value === "concise")
+const showProcess = computed(() => hasFoldedProcess(props.entry, concise.value))
 
 function onProcessToggle(event: Event) {
   if ((event.target as HTMLDetailsElement).open) emit("processOpened")
@@ -41,11 +45,7 @@ function onProcessToggle(event: Event) {
            summary stays visible (same keys via keyOffset), so the
            markdown below never remounts and re-flashes. Interrupted or
            failed turns also fold, even when there is no summary. -->
-      <details
-        v-if="hasFoldedProcess(entry)"
-        class="response-process border-b border-border pb-3"
-        @toggle="onProcessToggle"
-      >
+      <details v-if="showProcess" class="response-process border-b border-border pb-3" @toggle="onProcessToggle">
         <summary class="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
           <template v-if="entry.toolCallCount > 0">
             {{
@@ -69,8 +69,8 @@ function onProcessToggle(event: Event) {
       </details>
       <AssistantBlocks
         :animate="animate"
-        :blocks="hasFoldedProcess(entry) ? entry.summary : entry.blocks"
-        :key-offset="hasFoldedProcess(entry) ? entry.blocks.length - entry.summary.length : 0"
+        :blocks="showProcess ? entry.summary : entry.blocks"
+        :key-offset="showProcess ? entry.blocks.length - entry.summary.length : 0"
         :runs="session.runs"
         @open-review="emit('openReview', $event)"
       />

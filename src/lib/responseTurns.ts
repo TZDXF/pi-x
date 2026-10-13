@@ -30,6 +30,7 @@ export function responseTurns(
 ): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] {
   const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] = []
   let questionTime: number | undefined
+  let hasUser = false
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
     if (entry.kind === "user") {
@@ -38,7 +39,11 @@ export function responseTurns(
       // set_model / cycle_model annotate the next question even when pi
       // emits no entry_appended event. Reuse the history divider rendering,
       // but do not duplicate a matching divider already delivered live.
-      if (target && !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)) {
+      if (
+        hasUser &&
+        target &&
+        !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)
+      ) {
         const separator = target.indexOf("/")
         result.push({
           kind: "model_change",
@@ -51,6 +56,7 @@ export function responseTurns(
         })
       }
       result.push(entry)
+      hasUser = true
       questionTime = entry.timestamp
       continue
     }
@@ -72,9 +78,12 @@ export function responseTurns(
     // instead of splitting the answer around an invisible marker.
     if ((entry as { kind?: string }).kind === "custom") continue
     if (entry.kind === "model_change") {
-      // Model switches are rendered as dividers and break turn grouping;
-      // no duration flows across them.
-      result.push(entry)
+      // A divider belongs between turns, not before the first question. Rapid
+      // switches at the same boundary collapse to the model actually used.
+      if (!hasUser) continue
+      const previous = result[result.length - 1]
+      if (previous?.kind === "model_change") result[result.length - 1] = entry
+      else result.push(entry)
       questionTime = undefined
       continue
     }
