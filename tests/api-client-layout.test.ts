@@ -57,7 +57,7 @@ onPiStderr onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet P
 previewProxyInfo ModelCostRates ModelFallbackModel ModelCompat ModelImageResize ModelImageInputLimits ModelInputLimits
 ModelPromptCache ModelEntry ProviderEntry ModelsConfig getModelsConfig saveModelsConfig FetchedModel
 fetchProviderModels updateSession listArchivedSessions deleteSession GitWorktree WorkspaceSelection prepareWorkspaceGit
-WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle CatalogPackage InstalledPackage CatalogPage
+getWorkspaceState updateWorkspaceState onWorkspaceStateChanged WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle CatalogPackage InstalledPackage CatalogPage
 packageCatalog packageList packageInstall packageRemove packageUpdate PackageResource packageResources
 packageListFiles packageReadFile packageTranslate packageSetResource packageNameOf RunningSession listRunningSessions
 McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus McpStatusResult
@@ -260,4 +260,23 @@ test("RPC and session listeners forward payloads, including subagent events, unc
   expect(reconnect).toHaveBeenCalledOnce()
   unsubscribe()
   expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+})
+
+test("workspace metadata uses shared commands and forwards full change events", async () => {
+  const api = await import("@/api/client/workspace")
+  const patch = { projects: { add: ["project"], remove: [] } }
+  await api.getWorkspaceState()
+  await api.updateWorkspaceState(patch)
+  expect(mocks.invoke.mock.calls).toEqual([["workspace_state_get"], ["workspace_state_update", { patch }]])
+  const handler = vi.fn()
+  await api.onWorkspaceStateChanged(handler)
+  const state = { revision: 1, projects: ["project"] }
+  mocks.listeners.get("pi://workspace-state-changed")!({ payload: state })
+  expect(handler).toHaveBeenCalledWith(state)
+  const lib = readFileSync(resolve("src-tauri/src/lib.rs"), "utf8")
+  const dispatch = readFileSync(resolve("src-tauri/src/remote/dispatch/workspace.rs"), "utf8")
+  for (const command of ["workspace_state_get", "workspace_state_update"]) {
+    expect(lib).toContain(`commands::workspace_state::${command}`)
+    expect(dispatch).toContain(`"${command}" =>`)
+  }
 })

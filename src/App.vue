@@ -23,6 +23,7 @@ import {
   onPiExit,
   onPiStderr,
   onReconnected,
+  onWorkspaceStateChanged,
   onSessionsChanged,
   saveConfig,
   sessionMtime,
@@ -182,6 +183,7 @@ const runtimeLifecycle = createWorkspaceRuntime({
     onPiExit,
     onPiStderr,
     onReconnected,
+    onWorkspaceStateChanged,
     onSessionsChanged,
     pixLog,
     sessionMtime,
@@ -379,6 +381,13 @@ function selectConversationFromSidebar(runtimeId: string) {
   requestConversationNavigation(sessionRoute(runtimeId, cwd), () => selectQueuedConversation(runtimeId))
 }
 
+watch(
+  () => workspace.persistenceError,
+  error => {
+    if (error) ui.pushToast(tBackendError(error), "error")
+  },
+)
+
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKeydown)
   // 启动后自动检查应用更新，发现新版本时标题栏会出现更新入口
@@ -394,6 +403,7 @@ onMounted(async () => {
 
   try {
     await runtimeLifecycle.listen()
+    await workspace.syncState()
 
     // Reattach after UI reload / remote connection without spawning duplicates.
     const restored = await reattachRunningSessions()

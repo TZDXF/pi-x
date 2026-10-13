@@ -9,6 +9,10 @@ pub(super) async fn handle(app: &AppHandle, cmd: &str, a: &Value) -> Option<Resu
     handled(
         async {
             match cmd {
+                "workspace_state_get" => to_json(crate::commands::workspace_state::workspace_state_get()?),
+                "workspace_state_update" => to_json(crate::commands::workspace_state::workspace_state_update(
+                    app.clone(), serde_json::from_value(a["patch"].clone()).map_err(|e| e.to_string())?,
+                )?),
                 "workspace_git_info" => Ok(to_json(
                     crate::workspace_git::workspace_git_info(text(a, "project")?).await?,
                 )?),

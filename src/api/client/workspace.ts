@@ -1,4 +1,11 @@
-import { invoke } from "../transport"
+import { invoke, listen } from "../transport"
+import type { WorkspaceState, WorkspaceStatePatch } from "@/lib/workspaceState"
+
+export const getWorkspaceState = () => invoke<WorkspaceState>("workspace_state_get")
+export const updateWorkspaceState = (patch: WorkspaceStatePatch) =>
+  invoke<WorkspaceState>("workspace_state_update", { patch })
+export const onWorkspaceStateChanged = (handler: (state: WorkspaceState) => void) =>
+  listen<WorkspaceState>("pi://workspace-state-changed", event => handler(event.payload))
 
 export interface GitWorktree {
   path: string

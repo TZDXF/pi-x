@@ -115,6 +115,7 @@ Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远�
 ## 数据与平台
 
 - Pi 数据由 Pi 管理，默认在 `~/.pi/agent`，尊重 `PI_CODING_AGENT_DIR`；模型、凭据、信任、会话和扩展与终端 Pi 共用。
+- `~/.pix/workspace.json` 保存项目列表、置顶、项目分组、移除标记和会话手动排序，桌面端与 Web 端共用并实时同步；不迁移旧的浏览器本地项目数据。
 - `.pix` 保存 PiX 自有设置、无项目任务目录和托管技能；会话标题使用 Pi 原生 `session_info`，不复制会话数据到私有格式。
 - PiX 主要在 Windows 上开发与验证；macOS 和 Linux 理论可用，尚未系统测试。
 - 推送和 PR 由 GitHub Actions 执行 lint、类型检查、前端构建、单元测试、E2E 测试与 Rust 检查；Release workflow 支持 Windows / macOS / Linux 产物和签名更新。
