@@ -230,6 +230,9 @@ onMounted(() => {
       /* 默认正式版 */
     }
     unlistenProgress = await listen<AppUpdateProgress>(APP_UPDATE_PROGRESS_EVENT, onProgress)
+    // 打开关于页时自动获取 Pi 版本并检查更新
+    void check()
+    void checkApp()
   })()
 })
 
