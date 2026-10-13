@@ -19,13 +19,22 @@ export function composerParts(
   text: string,
   sessionLabels: Record<string, string> = {},
   commandNames?: ReadonlySet<string>,
+  mode: "editor" | "message" = "editor",
 ): ComposerPart[] {
   const parts: ComposerPart[] = []
-  const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s)|^\/[^\s/]+(?=\s)/g
+  // Sending trims the completion delimiter; message tokens also end at EOF.
+  const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s|$)|^\/[^\s/]+(?=\s|$)/g
   let cursor = 0
   for (const match of text.matchAll(pattern)) {
     const raw = match[0]
     const start = match.index
+    if (
+      mode === "editor" &&
+      start + raw.length === text.length &&
+      !raw.startsWith('@"') &&
+      !raw.startsWith("@session(")
+    )
+      continue
     if (start > 0 && !/\s/.test(text[start - 1]!)) continue
     let kind: ComposerPart["kind"]
     let label: string

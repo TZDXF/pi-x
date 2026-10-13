@@ -108,7 +108,7 @@ test("rendered user messages reuse the composer chip styling", () => {
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
   // 历史消息先解析掉 "# Code comments:" 尾块再交给 chip 渲染。
   expect(view).toMatch(/<ComposerText v-else :text="parsedPrompt\.visibleContent" \/>/)
-  expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value\)/)
+  expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value, undefined, "message"\)/)
   expect(display).toMatch(/composerChipClass/)
   expect(display).toMatch(/composerChipText\(part\)/)
   for (const source of [display, editor]) {
@@ -148,4 +148,23 @@ test("backspace and delete remove reference chips at their whole boundaries", ()
     caret: start - 1,
   })
   expect(composerChipDeletion(text, parts, "Backspace", text.length)).toBeNull()
+})
+
+test("sent messages retain chips after completion delimiters are trimmed", () => {
+  for (const draft of ["/skill:review ", "/review ", "@src/App.vue ", "/skill:review @src/App.vue "]) {
+    const text = draft.trim()
+    const parts = composerParts(text, {}, undefined, "message")
+    expect(parts.filter(p => p.kind !== "text")).toEqual(composerParts(draft).filter(p => p.kind !== "text"))
+    expect(parts.map(p => p.raw).join("")).toBe(text)
+  }
+})
+
+test("message mode preserves reference boundaries and incomplete quoted text", () => {
+  for (const text of ["mail@example.com", "explain /review", '@"src/unclosed', "@../secret", "/"]) {
+    expect(composerParts(text, {}, undefined, "message")).toEqual([{ kind: "text", raw: text, label: text }])
+  }
+  expect(
+    composerParts('@session("C:/sessions/old.jsonl")', { "C:/sessions/old.jsonl": "历史对话" }, undefined, "message")[0]
+      ?.label,
+  ).toBe("历史对话")
 })
