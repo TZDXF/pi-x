@@ -15,9 +15,10 @@
 
 pub mod backend;
 pub mod config;
+pub mod deploy;
 pub mod docker;
 pub mod identity;
-pub mod payload;
+ pub mod payload;
 pub mod transport;
 pub mod wsl;
 
@@ -31,6 +32,13 @@ pub use backend::{
 };
 #[allow(unused_imports)]
 pub use config::{SshConnection, SshConnectionInput, SshProbeInfo};
+#[allow(unused_imports)]
+pub use deploy::{
+    ensure_pi_available, DeployProgress, DeployResult, DeployStep, LocalPiBundle,
+    EXIT_CODE_DIR_CREATE_FAILED, EXIT_CODE_MARKER_WRITE_FAILED, EXIT_CODE_NODE_MISSING,
+    EXIT_CODE_TAR_EXTRACT_FAILED, EXIT_CODE_TAR_WRITE_FAILED, PI_CHECK_SCRIPT,
+    PI_DEPLOY_SCRIPT_TEMPLATE, REMOTE_DEPLOY_INFO, REMOTE_PI_BIN, REMOTE_PI_DIR,
+};
 #[allow(unused_imports)]
 pub use identity::{
     build_docker_uri, build_remote_uri, build_ssh_uri, build_wsl_uri, docker_identity_key,

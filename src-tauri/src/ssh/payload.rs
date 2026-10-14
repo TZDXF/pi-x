@@ -192,10 +192,16 @@ pub fn build_spawn_payload(
     session_file: Option<&str>,
     extra_args: &[String],
 ) -> String {
+    // PATH pi 优先；缺失时回退到 PiX 部署版（~/.pix/pi/bin/pi）。
+    // 两者都无 → exit 92（sshRemotePiMissing）。
     let mut script = format!(
         "cd {} || exit {EXIT_CODE_CHDIR_FAILED}\n\
          echo \"PIX_PI_PID=$$\" >&2\n\
-         PI_BIN=$(command -v pi) || exit {EXIT_CODE_PI_MISSING}\n\
+         PI_BIN=$(command -v pi 2>/dev/null)\n\
+         if [ -z \"$PI_BIN\" ]; then\n\
+         \tPI_BIN=\"$HOME/.pix/pi/bin/pi\"\n\
+         \t[ -x \"$PI_BIN\" ] || exit {EXIT_CODE_PI_MISSING}\n\
+         fi\n\
          exec \"$PI_BIN\" --mode rpc",
         posix_quote(project_path)
     );
@@ -253,7 +259,11 @@ mod tests {
             payload,
             "cd '/home/dev/proj' || exit 90\n\
              echo \"PIX_PI_PID=$$\" >&2\n\
-             PI_BIN=$(command -v pi) || exit 92\n\
+             PI_BIN=$(command -v pi 2>/dev/null)\n\
+             if [ -z \"$PI_BIN\" ]; then\n\
+             \tPI_BIN=\"$HOME/.pix/pi/bin/pi\"\n\
+             \t[ -x \"$PI_BIN\" ] || exit 92\n\
+             fi\n\
              exec \"$PI_BIN\" --mode rpc --session '/home/dev/.pi/sessions/s.jsonl'\n"
         );
         // 无 --session 时不追加该参数。
@@ -262,7 +272,11 @@ mod tests {
             bare,
             "cd '/a' || exit 90\n\
              echo \"PIX_PI_PID=$$\" >&2\n\
-             PI_BIN=$(command -v pi) || exit 92\n\
+             PI_BIN=$(command -v pi 2>/dev/null)\n\
+             if [ -z \"$PI_BIN\" ]; then\n\
+             \tPI_BIN=\"$HOME/.pix/pi/bin/pi\"\n\
+             \t[ -x \"$PI_BIN\" ] || exit 92\n\
+             fi\n\
              exec \"$PI_BIN\" --mode rpc\n"
         );
     }

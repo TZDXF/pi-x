@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::ssh::backend::RemoteEndpoint;
+use crate::ssh::transport::AuthMethod;
 use crate::ssh::{self};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -356,6 +357,8 @@ mod tests {
             port: 2222,
             user: Some("dev".to_string()),
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         }
     }
 
@@ -375,6 +378,7 @@ mod tests {
             port,
             user: user.map(str::to_string),
             key_path: None,
+            auth_method: AuthMethod::Key,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -746,6 +750,8 @@ mod tests {
             port: target.port,
             user: target.user.clone(),
             key_path: Some(key_path.clone()),
+            auth_method: AuthMethod::Key,
+            password: None,
         });
 
         // 拿 env_lock 防其它测试并发改动 PIX_SSH_COMMAND。Windows OpenSSH
@@ -937,6 +943,8 @@ mod tests {
             port,
             user: Some(user.clone()),
             key_path: Some(key_path.clone()),
+            auth_method: AuthMethod::Key,
+            password: None,
         });
         let env = (host, port, user, key_path, _project);
         let (state, rx, id) = ssh_real_open_terminal(&env);

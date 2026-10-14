@@ -9,7 +9,7 @@ use super::{
 use crate::errors::pix_error;
 use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
 use crate::ssh::backend::RemoteEndpoint;
-use crate::ssh::transport::{classify_failure, SshError, SshErrorKind};
+use crate::ssh::transport::{AuthMethod, classify_failure, SshError, SshErrorKind};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::{ExitStatus, Stdio};
@@ -619,6 +619,8 @@ async fn wait_ssh_ready(
         port: 0,
         user: None,
         key_path: None,
+        auth_method: AuthMethod::Key,
+        password: None,
     };
     let endpoint = endpoint
         .cloned()
@@ -949,6 +951,8 @@ mod ssh_exit_error_tests {
             port: 22,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         })
     }
 }
@@ -1103,6 +1107,8 @@ mod mock_ssh_spawn_tests {
                     port: 2222,
                     user: Some("dev".to_string()),
                     key_path: None,
+                    auth_method: AuthMethod::Key,
+                    password: None,
                 }),
                 remote_path: "/home/dev/proj".to_string(),
             }),

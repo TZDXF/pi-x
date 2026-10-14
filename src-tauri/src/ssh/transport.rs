@@ -39,6 +39,19 @@ pub struct SshEndpoint {
     pub port: u16,
     pub user: Option<String>,
     pub key_path: Option<String>,
+    /// 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。
+    pub auth_method: AuthMethod,
+    /// 密码（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
+    pub password: Option<String>,
+}
+
+/// SSH 认证方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthMethod {
+    #[default]
+    Key,
+    Password,
 }
 
 /// 一次性命令输出。
@@ -123,20 +136,20 @@ pub fn ssh_program_parts() -> Vec<String> {
 
 /// 纯函数：ssh 客户端参数数组（不含程序本体与 `PIX_SSH_COMMAND` 前置参数）。
 /// `-p` 恒定传递（含 22），保证参数序列确定、可测。
+/// 密码认证时移除 `BatchMode=yes`（允许密码提示），密钥认证时保留。
 pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ServerAliveInterval=15",
-        "-o",
-        "ServerAliveCountMax=3",
-        "-o",
-        "ConnectTimeout=10",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
+    let mut args: Vec<String> = Vec::new();
+    // BatchMode=yes 禁用密码提示，仅密钥认证时启用
+    if endpoint.auth_method == AuthMethod::Key {
+        args.push("-o".to_string());
+        args.push("BatchMode=yes".to_string());
+    }
+    args.push("-o".to_string());
+    args.push("ServerAliveInterval=15".to_string());
+    args.push("-o".to_string());
+    args.push("ServerAliveCountMax=3".to_string());
+    args.push("-o".to_string());
+    args.push("ConnectTimeout=10".to_string());
     args.push("-p".to_string());
     args.push(endpoint.port.to_string());
     if let Some(key_path) = &endpoint.key_path {
@@ -371,7 +384,51 @@ fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> Command {
     command.kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
+
+    // SSH_ASKPASS 机制：密码认证时创建临时 askpass 脚本
+    if let RemoteEndpoint::Ssh(ep) = endpoint {
+        if ep.auth_method == AuthMethod::Password {
+            if let Some(password) = &ep.password {
+                // 创建临时 askpass 脚本
+                if let Ok(askpass_path) = create_askpass_script(password) {
+                    command.env("SSH_ASKPASS", &askpass_path);
+                    command.env("SSH_ASKPASS_REQUIRE", "force");
+                    command.env("DISPLAY", ":0"); // 某些 ssh 版本需要
+                }
+            }
+        }
+    }
+
     command
+}
+
+/// 创建临时 askpass 脚本，返回脚本路径。
+/// 脚本在 ssh 调用后自动清理（通过 Drop trait）。
+fn create_askpass_script(password: &str) -> std::io::Result<String> {
+    let temp_dir = std::env::temp_dir();
+    let script_path = temp_dir.join(format!("pix_askpass_{}", uuid::Uuid::new_v4()));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script_content = format!("#!/bin/sh\necho '{}'\n", password.replace('\'', "'\\''"));
+        std::fs::write(&script_path, script_content)?;
+        let mut perms = std::fs::metadata(&script_path)?.permissions();
+        perms.set_mode(0o700);
+        std::fs::set_permissions(&script_path, perms)?;
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: 使用批处理文件
+        let bat_path = script_path.with_extension("bat");
+        let script_content = format!("@echo off\necho {}", password);
+        std::fs::write(&bat_path, script_content)?;
+        return Ok(bat_path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(windows))]
+    Ok(script_path.to_string_lossy().into_owned())
 }
 
 fn spawn_error(e: std::io::Error) -> SshError {
@@ -510,6 +567,8 @@ mod tests {
             port: 2222,
             user: Some("dev".to_string()),
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         }
     }
 
@@ -544,6 +603,8 @@ mod tests {
             port: 22,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         };
         let args = build_ssh_args(&endpoint);
         // -p 恒定传递（含 22）；未配置 keyPath 时不出现 -i；目的地无 user 前缀。

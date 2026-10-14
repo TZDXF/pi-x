@@ -14,7 +14,7 @@ use crate::errors::pix_error_detail;
 use crate::sessions::SessionMeta;
 use crate::ssh::backend::RemoteEndpoint;
 use crate::ssh::payload;
-use crate::ssh::transport::remote_exec;
+use crate::ssh::transport::{remote_exec, AuthMethod};
 
 /// exec 超时（契约 P2 §2.1：20s）。
 const SESSIONS_EXEC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -501,6 +501,8 @@ mod tests {
                 port,
                 user: Some(user.clone()),
                 key_path: Some(key_path),
+                auth_method: AuthMethod::Key,
+                password: None,
             },
             project,
             host,

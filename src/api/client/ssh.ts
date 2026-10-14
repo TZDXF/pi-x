@@ -26,6 +26,8 @@ export interface SshConnection {
   port: number
   user: string | null
   keyPath: string | null
+  /** SSH 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。 */
+  authMethod?: "key" | "password"
   /** ---- kind = "wsl" 专用（skip_serializing_if 缺省时字段可能缺席）---- */
   distro?: string | null
   /** ---- kind = "docker" 专用 ---- */
@@ -45,6 +47,8 @@ export interface SshConnectionInput {
   port?: number
   user?: string | null
   keyPath?: string | null
+  /** SSH 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。 */
+  authMethod?: "key" | "password"
   /** kind = "wsl" 专用 */
   distro?: string | null
   /** kind = "docker" 专用 */
@@ -156,3 +160,28 @@ export const sshProbeTarget = (target: {
     user: target.user ?? null,
     keyPath: target.keyPath ?? null,
   })
+
+// ---- 远程 pi 部署（P4）----
+
+export interface DeployStatus {
+  piFound: boolean
+  piBin: string | null
+  deployed: boolean
+  version: string | null
+  contentHash: string | null
+}
+
+export interface DeployResult {
+  piBin: string
+  deployed: boolean
+  version: string | null
+  contentHash: string | null
+}
+
+/** 获取远端 pi 部署状态：PATH pi / 部署版 / 未安装。 */
+export const sshDeployStatus = (sshConnectionId: string) =>
+  invoke<DeployStatus>("ssh_deploy_status", { sshConnectionId })
+
+/** 手动触发远端 pi 部署（幂等）。 */
+export const sshDeployPi = (sshConnectionId: string) =>
+  invoke<DeployResult>("ssh_deploy_pi", { sshConnectionId })

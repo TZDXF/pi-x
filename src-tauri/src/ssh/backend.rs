@@ -20,7 +20,7 @@
 //! 逐字一致（`program` 或 `program arg1 arg2 …`，ASCII 空白切分，首段为程序，
 //! 其余为前置参数），注入 mock 后三后端全链路均可无网络跑通。
 
-use super::transport::{build_ssh_args_interactive, split_program_spec, SshEndpoint};
+use super::transport::{build_ssh_args_interactive, split_program_spec, AuthMethod, SshEndpoint};
 
 /// WSL 端点：发行版名（大小写保留）与可选用户（None = 发行版默认用户）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +178,8 @@ mod tests {
             port: 2222,
             user: Some("dev".to_string()),
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         }
     }
 

@@ -11,13 +11,13 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::ssh::transport::{
-    remote_exec_with_stdin, remote_probe, SshEndpoint, SshError, SshErrorKind,
+    remote_exec, remote_exec_with_stdin, remote_probe, AuthMethod, SshEndpoint, SshError, SshErrorKind,
 };
-use crate::ssh::{backend, config, docker, identity, payload, wsl};
+use crate::ssh::{backend, config, deploy, docker, identity, payload, wsl};
 
 /// probe 结果（契约 §2.1 的 `SshProbeResult`）：成功时填远端信息，
 /// 失败时 `errorKind`/`error` 分别给 errorKind 归类与 coded error。
@@ -198,6 +198,8 @@ fn endpoint_for_target(
         port,
         user,
         key_path,
+        auth_method: AuthMethod::Key,
+        password: None,
     })
 }
 
@@ -457,6 +459,81 @@ fn clear_upload_cache(connection_id: &str, endpoint: &backend::RemoteEndpoint) {
         .remove(&upload_cache_key(connection_id, endpoint));
 }
 
+/// 远端 pi 部署状态（供前端展示）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployStatus {
+    pub pi_found: bool,
+    pub pi_bin: Option<String>,
+    pub deployed: bool,
+    pub version: Option<String>,
+    pub content_hash: Option<String>,
+}
+
+/// 获取远端 pi 部署状态：PATH pi / 部署版 / 未安装。
+#[tauri::command]
+pub async fn ssh_deploy_status(
+    _app: AppHandle,
+    ssh_connection_id: String,
+) -> Result<DeployStatus, String> {
+    let connection = config::find_connection(&ssh_connection_id)?
+        .ok_or_else(|| pix_error("sshConnectionNotFound", "SSH 连接不存在"))?;
+    let endpoint = connection.to_remote_endpoint();
+    let output = remote_exec(&endpoint, deploy::PI_CHECK_SCRIPT, Duration::from_secs(15))
+        .await
+        .map_err(|e| deploy::deploy_error(&endpoint, &e))?;
+
+    let (pi_bin, info) = deploy::parse_check_output(&output.stdout)
+        .ok_or_else(|| pix_error("sshRemotePiMissing", "远程主机未安装 pi"))?;
+
+    let is_deployed = pi_bin.contains("/.pix/pi/bin/pi");
+    let (version, content_hash) = if is_deployed {
+        if let Some(info) = info {
+            let info: Value = serde_json::from_str(&info).map_err(|e| {
+                pix_error_detail(
+                    "sshRemoteDeployFailed",
+                    "解析部署信息失败: {detail}",
+                    &e.to_string(),
+                )
+            })?;
+            (
+                info.get("version").and_then(|v| v.as_str()).map(String::from),
+                info.get("contentHash").and_then(|v| v.as_str()).map(String::from),
+            )
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
+    Ok(DeployStatus {
+        pi_found: true,
+        pi_bin: Some(pi_bin),
+        deployed: is_deployed,
+        version,
+        content_hash,
+    })
+}
+
+/// 手动触发远端 pi 部署（幂等）。
+#[tauri::command]
+pub async fn ssh_deploy_pi(
+    app: AppHandle,
+    ssh_connection_id: String,
+) -> Result<deploy::DeployResult, String> {
+    let connection = config::find_connection(&ssh_connection_id)?
+        .ok_or_else(|| pix_error("sshConnectionNotFound", "SSH 连接不存在"))?;
+    let endpoint = connection.to_remote_endpoint();
+    deploy::ensure_pi_available(&ssh_connection_id, &endpoint, Some(std::sync::Arc::new({
+        let app = app.clone();
+        move |p: deploy::DeployProgress| {
+            let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
+        }
+    })))
+    .await
+}
+
 /// 信任流程的 exec 超时（契约 P2 §4.1：30s，node 冷启动）。
 const TRUST_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -667,6 +744,8 @@ mod tests {
             port: 22,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         });
         assert!(remote_error_coded(&ssh_ep, &e).contains("sshProbeFailed"));
         let wsl_ep = backend::RemoteEndpoint::Wsl(backend::WslEndpoint {
@@ -708,6 +787,8 @@ mod tests {
             port: 22,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         });
         let e = SshError {
             kind: SshErrorKind::Remote,
@@ -738,6 +819,8 @@ mod tests {
             port: 22,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
         });
         for code in [
             payload::EXIT_CODE_UPLOAD_WRITE_FAILED,
@@ -781,6 +864,8 @@ mod tests {
             port: 22,
             user: Some("dev".into()),
             key_path: Some("k1".into()),
+            auth_method: AuthMethod::Key,
+            password: None,
         });
         let key = |ep: &backend::RemoteEndpoint| upload_cache_key("ssh-1", ep);
         // 同 id + 同端点 → 同键。
@@ -832,6 +917,7 @@ mod tests {
             port: 22,
             user: Some("dev".into()),
             key_path: None,
+            auth_method: AuthMethod::Key,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -1004,6 +1090,8 @@ mod ssh_real_tests {
                 port,
                 user: Some(user),
                 key_path: Some(key_path),
+                auth_method: AuthMethod::Key,
+                password: None,
             },
             project,
         })

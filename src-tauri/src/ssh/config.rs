@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 
 use super::backend::{DockerEndpoint, RemoteEndpoint, WslEndpoint};
 use super::identity;
+use super::transport::AuthMethod;
 use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
 
@@ -73,6 +74,9 @@ pub struct SshConnection {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    /// SSH 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。
+    #[serde(default)]
+    pub auth_method: AuthMethod,
     /// kind = "wsl" 专用：发行版名。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distro: Option<String>,
@@ -104,6 +108,9 @@ pub struct SshConnectionInput {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    /// SSH 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。
+    #[serde(default)]
+    pub auth_method: AuthMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -234,6 +241,12 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         }
     };
 
+    // SSH 认证方式校验：password 时 keyPath 应为空，key 时 password 不落盘。
+    let auth_method = match kind {
+        ConnectionKind::Ssh => input.auth_method,
+        _ => AuthMethod::Key, // WSL/Docker 无 SSH 认证概念，默认 key
+    };
+
     let id = input
         .id
         .as_deref()
@@ -251,6 +264,7 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         existing.port = port;
         existing.user = user;
         existing.key_path = key_path;
+        existing.auth_method = auth_method;
         existing.distro = distro;
         existing.container = container;
         let connection = existing.clone();
@@ -265,6 +279,7 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         port,
         user,
         key_path,
+        auth_method,
         distro,
         container,
         created_at: timestamp_now(),
@@ -370,6 +385,8 @@ impl SshConnection {
                     port: self.port,
                     user: self.user.clone(),
                     key_path,
+                    auth_method: self.auth_method,
+                    password: None,
                 })
             }
             ConnectionKind::Wsl => RemoteEndpoint::Wsl(WslEndpoint {
@@ -404,6 +421,7 @@ mod tests {
             port: None,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
             distro: None,
             container: None,
         }
@@ -577,6 +595,7 @@ mod tests {
             user: Some("dev".to_string()),
             key_path: Some("~/keys/id_ed25519".to_string()),
             kind: ConnectionKind::Ssh,
+            auth_method: AuthMethod::Key,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -730,6 +749,7 @@ mod tests {
             host: String::new(),
             port: 0,
             key_path: None,
+            auth_method: AuthMethod::Key,
             container: None,
             created_at: String::new(),
             last_used_at: None,
@@ -751,6 +771,7 @@ mod tests {
             port: 0,
             user: None,
             key_path: None,
+            auth_method: AuthMethod::Key,
             distro: None,
             created_at: String::new(),
             last_used_at: None,

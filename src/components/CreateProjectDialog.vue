@@ -4,8 +4,8 @@ import { useI18n } from "vue-i18n"
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog"
 import { FolderPlus, LoaderCircle, PlugZap, X } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
-import { sshConnectionList, sshConnectionProbe, type SshConnection, type SshProbeResult } from "@/api/piClient"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { sshConnectionList, sshConnectionProbe, sshDeployPi, sshDeployStatus, type SshConnection, type SshProbeResult } from "@/api/piClient"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -23,6 +23,7 @@ import {
   resolveSshConnectionId,
 } from "@/lib/ssh"
 import { tBackendError } from "@/i18n"
+import { listen } from "@tauri-apps/api/event"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
@@ -44,6 +45,9 @@ const connectionId = ref("")
 const remotePath = ref("")
 const probing = ref(false)
 const probeResult = ref<SshProbeResult | null>(null)
+const deployStatus = ref<{ piFound: boolean; deployed: boolean; version: string | null } | null>(null)
+const deploying = ref(false)
+const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
 
 const selectedConnection = computed(
   () => connections.value.find(connection => connection.id === connectionId.value) ?? null,
@@ -88,6 +92,10 @@ watch(
   () => [props.open, props.editPath] as const,
   ([open]) => {
     if (!open) return
+    // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
+    listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
+      deployProgress.value = event.payload
+    })
     const group = props.editPath ? workspace.projectGroups[props.editPath] : null
     title.value = group?.name || (props.editPath ? workspace.projectName(props.editPath) : "")
     folders.value = group ? [...group.folders] : props.editPath ? [props.editPath] : []
@@ -124,12 +132,46 @@ async function testConnection() {
   if (!connection || probing.value) return
   probing.value = true
   probeResult.value = null
+  deployStatus.value = null
   try {
     probeResult.value = await sshConnectionProbe(connection.id)
+    // probe 成功后异步获取部署状态
+    void loadDeployStatus(connection)
   } catch (e) {
     error.value = tBackendError(e)
   } finally {
     probing.value = false
+  }
+}
+
+async function loadDeployStatus(connection: SshConnection) {
+  try {
+    const status = await sshDeployStatus(connection.id)
+    deployStatus.value = status
+  } catch {
+    // 部署状态获取失败静默忽略
+  }
+}
+
+async function deployPi() {
+  const connection = selectedConnection.value
+  if (!connection || deploying.value) return
+  deploying.value = true
+  try {
+    const result = await sshDeployPi(connection.id)
+    deployStatus.value = {
+      piFound: true,
+      deployed: result.deployed,
+      version: result.version,
+      contentHash: result.contentHash,
+    }
+    ui.pushToast(t("ssh.deploySuccess"), "info")
+    deployProgress.value = null
+  } catch (e) {
+    error.value = tBackendError(e)
+    deployProgress.value = null
+  } finally {
+    deploying.value = false
   }
 }
 
@@ -228,12 +270,15 @@ function submit() {
       }
     "
   >
-    <DialogContent class="sm:max-w-lg">
-      <DialogHeader
-        ><DialogTitle>{{
+    <DialogContent class="sm:max-w-lg" aria-describedby="project-dialog-description">
+      <DialogHeader>
+        <DialogTitle>{{
           t(props.editPath ? "projectDialog.editTitle" : "projectDialog.title")
-        }}</DialogTitle></DialogHeader
-      >
+        }}</DialogTitle>
+        <DialogDescription id="project-dialog-description">
+          {{ t("projectDialog.description") }}
+        </DialogDescription>
+      </DialogHeader>
       <!-- 项目来源切换：本地文件夹 / 远程（SSH/WSL/Docker，多后端契约 §5.4；远程项目为单目录） -->
       <div
         v-if="!props.editPath"
@@ -302,6 +347,53 @@ function submit() {
             </span>
             <span v-else class="text-destructive">{{ tBackendError(probeResult.error) }}</span>
           </p>
+          <!-- 部署状态显示（P4） -->
+          <div
+            v-if="deployStatus"
+            class="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"
+          >
+            <span class="text-muted-foreground">{{ t("ssh.deployStatus") }}:</span>
+            <span
+              :class="
+                deployStatus.piFound
+                  ? 'text-green-700 dark:text-green-400'
+                  : 'text-amber-700 dark:text-amber-400'
+              "
+            >
+              {{ deployStatus.piFound ? (deployStatus.deployed ? t("ssh.piDeployed") : t("ssh.piInPATH")) : t("ssh.piNotDeployed") }}
+            </span>
+            <span v-if="deployStatus.version" class="text-muted-foreground">
+              {{ deployStatus.version }}
+            </span>
+            <Button
+              v-if="!deployStatus.piFound"
+              variant="ghost"
+              size="sm"
+              class="ms-auto h-6 px-2 text-xs"
+              :disabled="deploying"
+              @click="deployPi"
+            >
+              <LoaderCircle v-if="deploying" :size="12" class="animate-spin" />
+              {{ t("ssh.deploy") }}
+            </Button>
+          </div>
+          <!-- 部署进度条（对齐 ZCode RemoteConnectionConnectingStep） -->
+          <div
+            v-if="deploying && deployProgress"
+            class="rounded-md border border-border px-2 py-2 text-xs"
+          >
+            <div class="flex items-center gap-2">
+              <LoaderCircle :size="12" class="animate-spin text-muted-foreground" />
+              <span class="text-muted-foreground">{{ deployProgress.message }}</span>
+              <span class="ms-auto text-muted-foreground">{{ deployProgress.percent }}%</span>
+            </div>
+            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+              <div
+                class="h-full rounded-full bg-blue-500 transition-all duration-300"
+                :style="{ width: `${deployProgress.percent}%` }"
+              />
+            </div>
+          </div>
           <label class="block space-y-2 text-sm font-medium" for="project-name-ssh">
             {{ t("projectDialog.name") }}
             <Input

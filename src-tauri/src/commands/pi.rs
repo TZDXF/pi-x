@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::ssh::transport::SshErrorKind;
@@ -142,6 +142,16 @@ async fn spawn_remote(
         }
         return Err(remote_error_coded(&endpoint, &e));
     }
+    // 远程环境引导（P4）：确保远端 pi 可用。PATH pi 优先；缺失时自动部署
+    // 本地 pi bundle 到 ~/.pix/pi/（幂等 + 原子锁）。部署失败返回 coded error。
+    // 进度通过 Tauri 事件推送到前端（对齐 ZCode RemoteConnectionConnectingStep）。
+    ssh::ensure_pi_available(&connection_id, &endpoint, Some(std::sync::Arc::new({
+        let app = app.clone();
+        move |p: ssh::DeployProgress| {
+            let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
+        }
+    })))
+    .await?;
     let spec = rpc::RemoteSpawnSpec {
         endpoint: endpoint.clone(),
         remote_path: target.path().to_string(),

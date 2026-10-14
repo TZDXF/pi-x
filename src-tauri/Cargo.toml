@@ -43,6 +43,8 @@ url = "2"
 portable-pty = "0.9"
 base64 = "0.23"
 sha2 = "0.11"
+tar = "0.4"
+flate2 = "1"
 # 预览代理 per-host token 派生:HMAC-SHA256(secret, host);hmac 0.13 才与 sha2 0.11(digest 0.11)兼容
 hmac = "0.13"
 notify = "8"

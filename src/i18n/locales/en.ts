@@ -571,6 +571,7 @@ export default {
   projectDialog: {
     title: "Add project",
     editTitle: "Edit project",
+    description: "Choose a local folder or remote connection as the project workspace.",
     save: "Save project",
     name: "Project name",
     namePlaceholder: "Enter a project name",
@@ -626,6 +627,11 @@ export default {
     user: "User (optional)",
     userPlaceholder: "Leave empty for the SSH default",
     wslUserPlaceholder: "Leave empty for the distro default user",
+    authMethod: "Authentication method",
+    authPassword: "Password",
+    authKey: "SSH Key",
+    password: "Password",
+    passwordPlaceholder: "Enter SSH password",
     keyPath: "Private key path (optional)",
     keyPathPlaceholder: "~/.ssh/id_ed25519",
     keyPathHint: "Only the key path is stored, never passwords or passphrases; ~ is supported.",
@@ -1504,6 +1510,8 @@ export default {
     sshConnectionInvalid: "Invalid SSH connection profile: {detail}",
     sshWorkspaceUnsupported: "Multi-folder workspaces are not supported for SSH remote projects yet",
     sshRemotePiMissing: "pi is not installed on the remote host. Install the pi CLI there first (requires Node.js).",
+    sshRemoteNodeMissing: "Node.js is not installed on the remote host. Install Node.js 22 or later to run pi.",
+    sshRemoteDeployFailed: "Remote pi deployment failed: {detail}",
     sshHostKeyUnverified:
       "The host key has not been verified yet. SSH into the host manually once in a terminal to confirm its fingerprint, then retry.",
     sshHostKeyChanged:
@@ -1523,5 +1531,15 @@ export default {
     dockerContainerNotRunning:
       "The container is not running. Start it first — PiX will not start it automatically.",
     dockerExecFailed: "Docker command failed: {detail}",
+    deployStatus: "pi deploy status",
+    deployChecking: "Checking remote pi...",
+    deploying: "Deploying pi to remote...",
+    deploySuccess: "pi deployed successfully",
+    deployFailed: "pi deployment failed: {detail}",
+    nodeMissing: "Node.js is not installed on the remote host",
+    piDeployed: "Deployed",
+    piNotDeployed: "Not deployed",
+    piInPATH: "Installed in PATH",
+    deploy: "Deploy pi",
   },
 }

@@ -10,8 +10,11 @@ import {
   sshConnectionList,
   sshConnectionProbe,
   sshConnectionSave,
+  sshDeployPi,
+  sshDeployStatus,
   sshProbeTarget,
   wslDistroList,
+  type DeployStatus,
   type DockerContainerListResult,
   type SshConnection,
   type SshProbeResult,
@@ -20,7 +23,9 @@ import {
 import { tBackendError } from "@/i18n"
 import { useUiStore } from "@/stores/conversations"
 import { connectionKind, isWslPlatform, type RemoteKind } from "@/lib/ssh"
+import { addSshHistoryEntry, getSshHistorySuggestions } from "@/lib/sshHistory"
 import { remoteFormFields, remoteKindOptions } from "@/lib/remoteBackends"
+import { listen } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -40,6 +45,10 @@ const connections = ref<SshConnection[]>([])
 const loading = ref(false)
 const busyIds = ref(new Set<string>())
 const probes = ref<Record<string, SshProbeResult>>({})
+const deployStatuses = ref<Record<string, DeployStatus>>({})
+const deployingIds = ref(new Set<string>())
+const historySuggestions = ref(getSshHistorySuggestions())
+const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
 
 const dialogOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -47,7 +56,7 @@ const saving = ref(false)
 const probingForm = ref(false)
 const formProbe = ref<SshProbeResult | null>(null)
 const formError = ref("")
-const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "", distro: "", container: "" })
+const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "", password: "", authMethod: "key" as "key" | "password", distro: "", container: "" })
 /** 连接后端种类（多后端契约 §3.1）；编辑时由连接的 kind 决定，不可更改。 */
 const formKind = ref<RemoteKind>("ssh")
 
@@ -76,7 +85,13 @@ const formReady = computed(() => {
   return !!form.container
 })
 
-onMounted(load)
+onMounted(() => {
+  load()
+  // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
+  listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
+    deployProgress.value = event.payload
+  })
+})
 
 async function load() {
   if (!isDesktop) return
@@ -126,7 +141,7 @@ function connectionLabel(connection: SshConnection) {
 function openCreate() {
   editingId.value = null
   formKind.value = "ssh"
-  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "", distro: "", container: "" })
+  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "", password: "", authMethod: "key", distro: "", container: "" })
   formProbe.value = null
   formError.value = ""
   dialogOpen.value = true
@@ -142,6 +157,8 @@ function openEdit(connection: SshConnection) {
     port: String(connection.port),
     user: connection.user ?? "",
     keyPath: connection.keyPath ?? "",
+    password: "", // 密码不落盘，编辑时需重新输入
+    authMethod: connection.authMethod ?? "key",
     distro: connection.distro ?? "",
     container: connection.container ?? "",
   })
@@ -185,6 +202,7 @@ function formTarget() {
       port,
       user: form.user.trim() || null,
       keyPath: form.keyPath.trim() || null,
+      authMethod: form.authMethod,
     }
   return null
 }
@@ -216,6 +234,16 @@ async function save() {
   formError.value = ""
   try {
     await sshConnectionSave(target)
+    // 保存成功时记录历史（用于自动补全）
+    if (target.kind === "ssh") {
+      addSshHistoryEntry({
+        host: target.host,
+        port: target.port,
+        user: target.user ?? "",
+        keyPath: target.keyPath ?? "",
+      })
+      historySuggestions.value = getSshHistorySuggestions()
+    }
     dialogOpen.value = false
     ui.pushToast(t("ssh.saved"), "info")
     await load()
@@ -244,11 +272,53 @@ async function probe(connection: SshConnection) {
   busyIds.value.add(connection.id)
   try {
     probes.value = { ...probes.value, [connection.id]: await sshConnectionProbe(connection.id) }
+    // probe 成功后异步获取部署状态（不阻塞 probe 结果展示）
+    void loadDeployStatus(connection)
   } catch (e) {
     ui.pushToast(tBackendError(e), "error")
   } finally {
     busyIds.value.delete(connection.id)
   }
+}
+
+async function loadDeployStatus(connection: SshConnection) {
+  try {
+    const status = await sshDeployStatus(connection.id)
+    deployStatuses.value = { ...deployStatuses.value, [connection.id]: status }
+  } catch {
+    // 部署状态获取失败静默忽略，不影响 probe 结果展示
+  }
+}
+
+async function deployPi(connection: SshConnection) {
+  if (deployingIds.value.has(connection.id)) return
+  deployingIds.value.add(connection.id)
+  try {
+    const result = await sshDeployPi(connection.id)
+    deployStatuses.value = {
+      ...deployStatuses.value,
+      [connection.id]: {
+        piFound: true,
+        piBin: result.piBin,
+        deployed: result.deployed,
+        version: result.version,
+        contentHash: result.contentHash,
+      },
+    }
+    ui.pushToast(t("ssh.deploySuccess"), "info")
+    deployProgress.value = null
+  } catch (e) {
+    ui.pushToast(tBackendError(e), "error")
+    deployProgress.value = null
+  } finally {
+    deployingIds.value.delete(connection.id)
+  }
+}
+
+function deployStatusLabel(status: DeployStatus | undefined): string {
+  if (!status) return ""
+  if (!status.piFound) return t("ssh.piNotDeployed")
+  return status.deployed ? t("ssh.piDeployed") : t("ssh.piInPATH")
 }
 
 function probeLines(info: {
@@ -354,6 +424,53 @@ function probeLines(info: {
           >
             {{ t("ssh.lastProbe") }}: {{ probeLines(connection.lastProbe).join(" · ") }}
           </p>
+          <!-- 部署状态显示（P4） -->
+          <div
+            v-if="deployStatuses[connection.id]"
+            class="mt-2 flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"
+          >
+            <span class="text-muted-foreground">{{ t("ssh.deployStatus") }}:</span>
+            <span
+              :class="
+                deployStatuses[connection.id]!.piFound
+                  ? 'text-green-700 dark:text-green-400'
+                  : 'text-amber-700 dark:text-amber-400'
+              "
+            >
+              {{ deployStatusLabel(deployStatuses[connection.id]) }}
+            </span>
+            <span v-if="deployStatuses[connection.id]!.version" class="text-muted-foreground">
+              {{ deployStatuses[connection.id]!.version }}
+            </span>
+            <Button
+              v-if="!deployStatuses[connection.id]!.piFound"
+              variant="ghost"
+              size="sm"
+              class="ms-auto h-6 px-2 text-xs"
+              :disabled="deployingIds.has(connection.id)"
+              @click="deployPi(connection)"
+            >
+              <LoaderCircle v-if="deployingIds.has(connection.id)" :size="12" class="animate-spin" />
+              {{ t("ssh.deploy") }}
+            </Button>
+          </div>
+          <!-- 部署进度条（对齐 ZCode RemoteConnectionConnectingStep） -->
+          <div
+            v-if="deployingIds.has(connection.id) && deployProgress"
+            class="mt-2 rounded-md border border-border px-2 py-2 text-xs"
+          >
+            <div class="flex items-center gap-2">
+              <LoaderCircle :size="12" class="animate-spin text-muted-foreground" />
+              <span class="text-muted-foreground">{{ deployProgress.message }}</span>
+              <span class="ms-auto text-muted-foreground">{{ deployProgress.percent }}%</span>
+            </div>
+            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+              <div
+                class="h-full rounded-full bg-blue-500 transition-all duration-300"
+                :style="{ width: `${deployProgress.percent}%` }"
+              />
+            </div>
+          </div>
         </li>
       </ul>
     </div>
@@ -366,10 +483,10 @@ function probeLines(info: {
         }
       "
     >
-      <DialogContent class="sm:max-w-lg">
+      <DialogContent class="sm:max-w-lg" aria-describedby="ssh-dialog-description">
         <DialogHeader>
           <DialogTitle>{{ t(editingId ? "ssh.editTitle" : "ssh.createTitle") }}</DialogTitle>
-          <DialogDescription>{{ t("ssh.dialogDescription") }}</DialogDescription>
+          <DialogDescription id="ssh-dialog-description">{{ t("ssh.dialogDescription") }}</DialogDescription>
         </DialogHeader>
         <form class="space-y-4" @submit.prevent="save">
           <label class="block space-y-2 text-sm font-medium" for="ssh-name">
@@ -407,27 +524,73 @@ function probeLines(info: {
             </div>
             <p v-if="enumsLoading" class="text-xs text-muted-foreground">{{ t("ssh.loading") }}</p>
           </div>
-          <!-- kind = ssh：主机/端口/用户/私钥（表单不变） -->
+          <!-- kind = ssh：主机/端口/用户/认证方式/密码或私钥 -->
           <template v-if="formFields.includes('host')">
             <div class="grid grid-cols-[1fr_7rem] gap-3">
               <label class="block space-y-2 text-sm font-medium" for="ssh-host">
                 {{ t("ssh.host") }}
-                <Input id="ssh-host" v-model="form.host" :placeholder="t('ssh.hostPlaceholder')" />
+                <Input id="ssh-host" v-model="form.host" :placeholder="t('ssh.hostPlaceholder')" list="ssh-host-history" />
+                <datalist id="ssh-host-history">
+                  <option v-for="host in historySuggestions.hosts" :key="host" :value="host" />
+                </datalist>
               </label>
               <label class="block space-y-2 text-sm font-medium" for="ssh-port">
                 {{ t("ssh.port") }}
-                <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" />
+                <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" list="ssh-port-history" />
+                <datalist id="ssh-port-history">
+                  <option v-for="port in historySuggestions.ports" :key="port" :value="port" />
+                </datalist>
               </label>
             </div>
             <label class="block space-y-2 text-sm font-medium" for="ssh-user">
               {{ t("ssh.user") }}
-              <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" />
+              <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" list="ssh-user-history" />
+              <datalist id="ssh-user-history">
+                <option v-for="user in historySuggestions.users" :key="user" :value="user" />
+              </datalist>
             </label>
-            <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
-              {{ t("ssh.keyPath") }}
-              <Input id="ssh-key-path" v-model="form.keyPath" :placeholder="t('ssh.keyPathPlaceholder')" />
+            <!-- 认证方式选择（ZCode 风格：密码/密钥切换） -->
+            <div class="space-y-2">
+              <span class="block text-sm font-medium">{{ t("ssh.authMethod") }}</span>
+              <div class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  class="flex-1 rounded-md px-3 py-1.5 transition-colors"
+                  :class="form.authMethod === 'password' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'"
+                  :aria-selected="form.authMethod === 'password'"
+                  @click="form.authMethod = 'password'"
+                >
+                  {{ t("ssh.authPassword") }}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  class="flex-1 rounded-md px-3 py-1.5 transition-colors"
+                  :class="form.authMethod === 'key' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'"
+                  :aria-selected="form.authMethod === 'key'"
+                  @click="form.authMethod = 'key'"
+                >
+                  {{ t("ssh.authKey") }}
+                </button>
+              </div>
+            </div>
+            <!-- 密码输入框（密码认证时显示） -->
+            <label v-if="form.authMethod === 'password'" class="block space-y-2 text-sm font-medium" for="ssh-password">
+              {{ t("ssh.password") }}
+              <Input id="ssh-password" v-model="form.password" type="password" :placeholder="t('ssh.passwordPlaceholder')" />
             </label>
-            <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
+            <!-- 私钥路径输入框（密钥认证时显示） -->
+            <template v-if="form.authMethod === 'key'">
+              <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
+                {{ t("ssh.keyPath") }}
+                <Input id="ssh-key-path" v-model="form.keyPath" :placeholder="t('ssh.keyPathPlaceholder')" list="ssh-key-path-history" />
+                <datalist id="ssh-key-path-history">
+                  <option v-for="keyPath in historySuggestions.keyPaths" :key="keyPath" :value="keyPath" />
+                </datalist>
+              </label>
+              <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
+            </template>
           </template>
           <!-- kind = wsl：发行版下拉（wsl_distro_list）+ 可选用户名 -->
           <template v-if="formFields.includes('distro')">

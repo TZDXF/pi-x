@@ -123,6 +123,8 @@ pub fn run() {
             commands::ssh::ssh_connection_delete,
             commands::ssh::ssh_connection_probe,
             commands::ssh::ssh_probe_target,
+            commands::ssh::ssh_deploy_status,
+            commands::ssh::ssh_deploy_pi,
             commands::ssh::ssh_trust_status,
             commands::ssh::ssh_trust_save,
             commands::ssh::wsl_distro_list,
