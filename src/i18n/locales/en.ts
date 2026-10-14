@@ -598,6 +598,16 @@ export default {
   },
 
   ssh: {
+    deployStatus: "pi deploy status",
+    deployChecking: "Checking remote pi...",
+    deploying: "Deploying pi to remote...",
+    deploySuccess: "pi deployed successfully",
+    deployFailed: "pi deployment failed: {detail}",
+    nodeMissing: "Node.js is not installed on the remote host",
+    piDeployed: "Deployed",
+    piNotDeployed: "Not deployed",
+    piInPATH: "Installed in PATH",
+    deploy: "Deploy pi",
     nav: "SSH connections",
     title: "SSH connections",
     desc: "Manage connection profiles for remote projects (SSH / WSL / Docker); no credentials are stored — SSH connections use key/agent auth only.",
@@ -1503,7 +1513,7 @@ export default {
     sshMissing:
       "No local ssh client found. On Windows, install the OpenSSH client under Settings → Apps → Optional features.",
     sshAuthFailed:
-      "SSH authentication failed. Check your key or agent; if the host key was rejected, ssh to the host manually once first.",
+      "SSH authentication failed. Check your password, key or agent. After restarting the app, re-enter your password or key passphrase in connection settings.",
     sshConnectFailed: "Could not reach the remote host. Check the host, port and network.",
     sshTimeout: "The connection timed out: the network is slow or the host is not responding.",
     sshProbeFailed: "Remote probe failed: {detail}",
@@ -1513,6 +1523,7 @@ export default {
     sshConnectionInvalid: "Invalid SSH connection profile: {detail}",
     sshWorkspaceUnsupported: "Multi-folder workspaces are not supported for SSH remote projects yet",
     sshRemotePiMissing: "pi is not installed on the remote host. Install the pi CLI there first (requires Node.js).",
+    piBundleMissing: "Could not locate the local pi bundle. Select an npm installation of pi.",
     sshRemoteNodeMissing: "Node.js is not installed on the remote host. Install Node.js 22 or later to run pi.",
     sshRemoteDeployFailed: "Remote pi deployment failed: {detail}",
     sshHostKeyUnverified:
@@ -1534,15 +1545,5 @@ export default {
     dockerContainerNotRunning:
       "The container is not running. Start it first — PiX will not start it automatically.",
     dockerExecFailed: "Docker command failed: {detail}",
-    deployStatus: "pi deploy status",
-    deployChecking: "Checking remote pi...",
-    deploying: "Deploying pi to remote...",
-    deploySuccess: "pi deployed successfully",
-    deployFailed: "pi deployment failed: {detail}",
-    nodeMissing: "Node.js is not installed on the remote host",
-    piDeployed: "Deployed",
-    piNotDeployed: "Not deployed",
-    piInPATH: "Installed in PATH",
-    deploy: "Deploy pi",
   },
 }

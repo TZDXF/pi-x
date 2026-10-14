@@ -30,6 +30,7 @@ export interface SshConnection {
   authMethod?: "key" | "password"
   /** 密钥口令（不落盘，仅内存中）。通过 SSH_ASKPASS 机制传递给 ssh。 */
   keyPassphrase?: string | null
+  password?: string | null
   /** ---- kind = "wsl" 专用（skip_serializing_if 缺省时字段可能缺席）---- */
   distro?: string | null
   /** ---- kind = "docker" 专用 ---- */
@@ -53,6 +54,7 @@ export interface SshConnectionInput {
   authMethod?: "key" | "password"
   /** 密钥口令（不落盘，仅内存中）。通过 SSH_ASKPASS 机制传递给 ssh。 */
   keyPassphrase?: string | null
+  password?: string | null
   /** kind = "wsl" 专用 */
   distro?: string | null
   /** kind = "docker" 专用 */
@@ -153,12 +155,18 @@ export const dockerContainerList = () => invoke<DockerContainerListResult>("dock
 
 /** 保存前的“测试连接”：参数即测，不写配置。 */
 export const sshProbeTarget = (target: {
+  authMethod?: "key" | "password"
+  password?: string | null
+  keyPassphrase?: string | null
   host: string
   port?: number | null
   user?: string | null
   keyPath?: string | null
 }) =>
   invoke<SshProbeResult>("ssh_probe_target", {
+    authMethod: target.authMethod ?? "key",
+    password: target.password ?? null,
+    keyPassphrase: target.keyPassphrase ?? null,
     host: target.host,
     port: target.port ?? null,
     user: target.user ?? null,

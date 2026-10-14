@@ -134,7 +134,16 @@ echo "PIX_TRUST_UPLOAD_DONE"
 /// 响应 JSON 走 stdout；`--eval "$(cat …)"` + `argv[1]=dist` 与本地
 /// `pi_data.rs` 的调用形态一致。
 pub const TRUST_RUN_SCRIPT: &str = r#"
-PI_BIN=$(command -v pi) || exit 92
+PI_BIN=$(command -v pi 2>/dev/null)
+if [ -z "$PI_BIN" ]; then
+  PI_BIN="$HOME/.pix/pi/bin/pi"
+  [ -x "$PI_BIN" ] || exit 92
+fi
+if [ "$PI_BIN" = "$HOME/.pix/pi/bin/pi" ]; then
+  [ -f "$HOME/.pix/pi/bundle/index.js" ] || exit 93
+  node --input-type=module --eval "$(cat "$HOME/.pix/pi_data.mjs")" "$HOME/.pix/pi/bundle" bundle
+  exit $?
+fi
 REAL=$(readlink -f "$PI_BIN"); DIR=$(dirname "$REAL")
 for i in 1 2 3 4 5; do
   DIR=$(dirname "$DIR")

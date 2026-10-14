@@ -10,6 +10,7 @@ import SshSettings from "@/components/settings/SshSettings.vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore, type ProjectGroup } from "@/stores/workspace"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import {
@@ -30,6 +31,7 @@ const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
+const ui = useUiStore()
 const title = ref("")
 const folders = ref<string[]>([])
 const primary = ref("")
@@ -176,7 +178,6 @@ async function deployPi() {
       piFound: true,
       deployed: result.deployed,
       version: result.version,
-      contentHash: result.contentHash,
     }
     ui.pushToast(t("ssh.deploySuccess"), "info")
     deployProgress.value = null

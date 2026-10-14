@@ -207,7 +207,8 @@ function formTarget() {
       user: form.user.trim() || null,
       keyPath: form.keyPath.trim() || null,
       authMethod: form.authMethod,
-      keyPassphrase: form.keyPassphrase.trim() || null,
+      keyPassphrase: form.keyPassphrase || null,
+      password: form.password || null,
     }
   return null
 }
@@ -224,6 +225,9 @@ async function testForm() {
       port: target.port,
       user: target.user,
       keyPath: target.keyPath,
+      authMethod: target.authMethod,
+      password: target.password,
+      keyPassphrase: target.keyPassphrase,
     })
   } catch (e) {
     ui.pushToast(tBackendError(e), "error")

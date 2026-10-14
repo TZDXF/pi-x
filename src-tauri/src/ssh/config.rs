@@ -2,12 +2,14 @@
 //!
 //! 复用 `~/.pix/config.json`：只读写 `sshConnections` 字段（历史命名，语义已是
 //! "远程连接"），其余字段经 `serde(flatten)` 原样保留（`AppConfig` 归
-//! `commands::config` 所有，互不越界）。凭据不落盘：仅 ssh key / ssh-agent
-//! （`BatchMode=yes`），只存私钥路径；WSL/Docker 复用本机身份，无凭据字段。
+//! `commands::config` 所有，互不越界）。密码与密钥口令仅保存在进程内缓存，
+//! 重启后需重新输入；WSL/Docker 复用本机身份，无凭据字段。
 //! `kind` 字段（多后端契约 §3.1）：`"ssh" | "wsl" | "docker"`，缺省 `"ssh"`
 //! ——读路径即迁移（多后端契约 §3.2），旧 config.json 无需迁移脚本。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -17,6 +19,55 @@ use super::identity;
 use super::transport::AuthMethod;
 use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
+
+// Credentials are scoped to both the config file and the endpoint identity.
+#[derive(Clone, Default)]
+struct Credentials {
+    target: String,
+    password: Option<String>,
+    passphrase: Option<String>,
+}
+fn credential_target(connection: &SshConnection) -> String {
+    serde_json::json!([
+        connection.kind,
+        connection.host,
+        connection.port,
+        connection.user,
+        connection.key_path,
+        connection.auth_method
+    ])
+    .to_string()
+}
+fn credentials() -> &'static Mutex<HashMap<(PathBuf, String), Credentials>> {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), Credentials>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn hydrate(path: &Path, mut connection: SshConnection) -> SshConnection {
+    if let Some(secret) = credentials()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(path.to_path_buf(), connection.id.clone()))
+    {
+        if secret.target == credential_target(&connection) {
+            connection.password = secret.password.clone();
+            connection.key_passphrase = secret.passphrase.clone();
+        }
+    }
+    connection
+}
+fn remember_credentials(path: &Path, connection: &SshConnection) {
+    credentials()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            (path.to_path_buf(), connection.id.clone()),
+            Credentials {
+                target: credential_target(connection),
+                password: connection.password.clone(),
+                passphrase: connection.key_passphrase.clone(),
+            },
+        );
+}
 
 /// 连接类型（多后端契约 §3.1）。serde 缺省 = Ssh：旧数据（无 kind 字段）
 /// 读取后全部视为 ssh 连接，读路径即迁移。
@@ -78,8 +129,10 @@ pub struct SshConnection {
     #[serde(default)]
     pub auth_method: AuthMethod,
     /// 密钥口令（不落盘，仅内存中）。通过 SSH_ASKPASS 机制传递给 ssh。
-    #[serde(skip_serializing, default)]
+    #[serde(skip)]
     pub key_passphrase: Option<String>,
+    #[serde(skip)]
+    pub password: Option<String>,
     /// kind = "wsl" 专用：发行版名。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distro: Option<String>,
@@ -117,6 +170,8 @@ pub struct SshConnectionInput {
     /// 密钥口令（不落盘，仅内存中）。通过 SSH_ASKPASS 机制传递给 ssh。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_passphrase: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,7 +245,8 @@ pub fn find_connection_in(path: &Path, id: &str) -> Result<Option<SshConnection>
         .ssh_connections
         .unwrap_or_default()
         .into_iter()
-        .find(|c| c.id == id))
+        .find(|c| c.id == id)
+        .map(|c| hydrate(path, c)))
 }
 
 /// 按 `id` upsert 连接配置：校验 name/host/port/user（host 走 identity 归一化规则），
@@ -255,8 +311,14 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
 
     // 密钥口令（不落盘，仅内存中）
     let key_passphrase = match kind {
-        ConnectionKind::Ssh => input.key_passphrase.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        ConnectionKind::Ssh if auth_method == AuthMethod::Key => input.key_passphrase.clone().filter(|s| !s.is_empty()),
         _ => None,
+    };
+
+    let password = if kind == ConnectionKind::Ssh && auth_method == AuthMethod::Password {
+        input.password.clone().filter(|s| !s.is_empty())
+    } else {
+        None
     };
 
     let id = input
@@ -270,6 +332,7 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
     let mut view = read_view(path)?;
     let list = view.ssh_connections.get_or_insert_with(Vec::new);
     if let Some(existing) = list.iter_mut().find(|c| c.id == id) {
+        let previous = hydrate(path, existing.clone());
         existing.kind = kind;
         existing.name = name.to_string();
         existing.host = host;
@@ -277,11 +340,17 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         existing.user = user;
         existing.key_path = key_path;
         existing.auth_method = auth_method;
-        existing.key_passphrase = key_passphrase.clone();
+        // Do not forward a cached credential after changing the destination/key.
+        let same_target = credential_target(existing) == credential_target(&previous);
+        existing.password = password.clone()
+            .or_else(|| same_target.then_some(previous.password).flatten());
+        existing.key_passphrase = key_passphrase.clone()
+            .or_else(|| same_target.then_some(previous.key_passphrase).flatten());
         existing.distro = distro;
         existing.container = container;
         let connection = existing.clone();
         write_view(path, &view)?;
+        remember_credentials(path, &connection);
         return Ok(connection);
     }
     let connection = SshConnection {
@@ -294,6 +363,7 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         key_path,
         auth_method,
         key_passphrase,
+        password,
         distro,
         container,
         created_at: timestamp_now(),
@@ -302,6 +372,7 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
     };
     list.push(connection.clone());
     write_view(path, &view)?;
+    remember_credentials(path, &connection);
     Ok(connection)
 }
 
@@ -335,6 +406,8 @@ pub fn delete_connection_in(path: &Path, id: &str) -> Result<(), String> {
     let Some(list) = view.ssh_connections.as_mut() else {
         return Ok(());
     };
+    credentials().lock().unwrap_or_else(|e| e.into_inner())
+        .remove(&(path.to_path_buf(), id.to_string()));
     let before = list.len();
     list.retain(|c| c.id != id);
     if list.len() == before {
@@ -400,7 +473,7 @@ impl SshConnection {
                     user: self.user.clone(),
                     key_path,
                     auth_method: self.auth_method,
-                    password: None,
+                    password: self.password.clone(),
                     key_passphrase: self.key_passphrase.clone(),
                 })
             }
@@ -438,9 +511,72 @@ mod tests {
             key_path: None,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             distro: None,
             container: None,
         }
+    }
+
+    #[test]
+    fn credentials_survive_reload_without_persistence() {
+        let path = temp_config_path("credentials");
+        let mut request = input("password", "host.example.com");
+        request.auth_method = AuthMethod::Password;
+        request.password = Some(" secret & % ! ' ".into());
+        let saved = save_connection_in(&path, request).unwrap();
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("secret"));
+        assert!(!disk.contains("\"password\":"));
+        let reloaded = find_connection_in(&path, &saved.id).unwrap().unwrap();
+        assert_eq!(reloaded.password.as_deref(), Some(" secret & % ! ' "));
+        let RemoteEndpoint::Ssh(endpoint) = reloaded.to_remote_endpoint() else {
+            panic!()
+        };
+        assert_eq!(endpoint.password.as_deref(), Some(" secret & % ! ' "));
+        assert!(list_connections_in(&path).unwrap()[0].password.is_none());
+        let mut edit = input("renamed", "host.example.com");
+        edit.id = Some(saved.id.clone());
+        edit.auth_method = AuthMethod::Password;
+        save_connection_in(&path, edit).unwrap();
+        assert_eq!(
+            find_connection_in(&path, &saved.id)
+                .unwrap()
+                .unwrap()
+                .password,
+            saved.password
+        );
+        let mut changed = input("changed host", "other.example.com");
+        changed.id = Some(saved.id.clone());
+        changed.auth_method = AuthMethod::Password;
+        save_connection_in(&path, changed).unwrap();
+        assert!(find_connection_in(&path, &saved.id).unwrap().unwrap().password.is_none());
+        delete_connection_in(&path, &saved.id).unwrap();
+        assert!(!credentials()
+            .lock()
+            .unwrap()
+            .contains_key(&(path.clone(), saved.id)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn passphrase_survives_reload_without_persistence() {
+        let path = temp_config_path("passphrase");
+        let mut request = input("key", "host.example.com");
+        request.key_passphrase = Some(" spaced passphrase ".into());
+        let saved = save_connection_in(&path, request).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("passphrase"));
+        assert_eq!(
+            find_connection_in(&path, &saved.id)
+                .unwrap()
+                .unwrap()
+                .key_passphrase
+                .as_deref(),
+            Some(" spaced passphrase ")
+        );
+        delete_connection_in(&path, &saved.id).unwrap();
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -613,6 +749,7 @@ mod tests {
             kind: ConnectionKind::Ssh,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -768,6 +905,7 @@ mod tests {
             key_path: None,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             container: None,
             created_at: String::new(),
             last_used_at: None,
@@ -791,6 +929,7 @@ mod tests {
             key_path: None,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             distro: None,
             created_at: String::new(),
             last_used_at: None,

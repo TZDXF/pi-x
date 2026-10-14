@@ -67,7 +67,7 @@ pub(crate) fn ssh_error_coded(e: &SshError) -> String {
         SshErrorKind::HostKey => host_key_error(e),
         SshErrorKind::Auth => pix_error(
             "sshAuthFailed",
-            "SSH 认证失败。请检查密钥或 agent。",
+            "SSH 认证失败。请检查密码、密钥或 agent；应用重启后请重新填写密码或密钥口令。",
         ),
         SshErrorKind::Network => pix_error(
             "sshConnectFailed",
@@ -251,8 +251,14 @@ pub async fn ssh_probe_target(
     port: Option<u16>,
     user: Option<String>,
     key_path: Option<String>,
+    auth_method: Option<AuthMethod>,
+    password: Option<String>,
+    key_passphrase: Option<String>,
 ) -> Result<SshProbeResult, String> {
-    let endpoint = endpoint_for_target(&host, port, user, key_path)?;
+    let mut endpoint = endpoint_for_target(&host, port, user, key_path)?;
+    endpoint.auth_method = auth_method.unwrap_or_default();
+    endpoint.password = password;
+    endpoint.key_passphrase = key_passphrase;
     Ok(probe_endpoint(&backend::RemoteEndpoint::Ssh(endpoint)).await)
 }
 
@@ -538,8 +544,8 @@ pub async fn ssh_deploy_pi(
 /// 信任流程的 exec 超时（契约 P2 §4.1：30s，node 冷启动）。
 const TRUST_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 编译期内嵌的 pi_data.mjs（与本地 `pi_data.rs` 用同一份源）。
-const PI_DATA_MJS: &str = include_str!("../../resources/pi_data.mjs");
+/// 远程信任适配器：同时支持完整 SDK 与自包含 bundle，仍使用 Pi 的信任存储。
+const PI_DATA_MJS: &str = include_str!("../../resources/remote_trust.mjs");
 
 /// 上传进程内串行化：减少并发重复上传。跨进程安全由上传脚本保证——临时名
 /// 带远端 shell 的 `$$`，并发各写各的临时文件，`mv` 为原子 rename（早期固定
@@ -659,6 +665,7 @@ async fn remote_trust_call(
     connection_id: &str,
     request: Value,
 ) -> Result<Value, String> {
+    deploy::ensure_pi_available(connection_id, endpoint, None).await?;
     ensure_mjs_uploaded(connection_id, endpoint).await?;
     trust_run(endpoint, &request).await
 }
@@ -924,6 +931,7 @@ mod tests {
             key_path: None,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             distro: None,
             container: None,
             created_at: String::new(),

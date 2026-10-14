@@ -148,6 +148,8 @@ pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
         args.push("BatchMode=yes".to_string());
     }
     args.push("-o".to_string());
+    args.push("StrictHostKeyChecking=yes".to_string());
+    args.push("-o".to_string());
     args.push("ServerAliveInterval=15".to_string());
     args.push("-o".to_string());
     args.push("ServerAliveCountMax=3".to_string());
@@ -309,7 +311,7 @@ async fn exec_remote(
     timeout: Duration,
 ) -> Result<ExecOutput, SshError> {
     let remote_command = wrap_payload(script);
-    let mut command = build_command(endpoint, &remote_command);
+    let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
     let mut child = command.spawn().map_err(spawn_error)?;
     let mut stdin = child.stdin.take().expect("remote transport stdin is piped");
     let mut stdout = child.stdout.take().expect("remote transport stdout is piped");
@@ -372,11 +374,11 @@ async fn exec_remote(
 /// stdout 即远端进程输出；不设 `current_dir`。
 pub async fn remote_exec_stream(endpoint: &RemoteEndpoint, script: &str) -> Result<Child, SshError> {
     let remote_command = wrap_payload(script);
-    let mut command = build_command(endpoint, &remote_command);
+    let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
     command.spawn().map_err(spawn_error)
 }
 
-fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> Command {
+fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> std::io::Result<Command> {
     let (program, args) = build_remote_command(endpoint, remote_command);
     let mut command = Command::new(program);
     command.args(&args);
@@ -388,60 +390,58 @@ fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> Command {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    // SSH_ASKPASS 机制：密码认证或密钥口令认证时创建临时 askpass 脚本
+    // The app itself is the askpass executable. Credentials never enter a file or
+    // shell source; only this child receives the environment variables.
     if let RemoteEndpoint::Ssh(ep) = endpoint {
         let secret = if ep.auth_method == AuthMethod::Password {
-            ep.password.as_deref()
-        } else if ep.key_passphrase.is_some() {
-            ep.key_passphrase.as_deref()
+            Some(ep.password.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "SSH password required; edit the connection to enter it again",
+                )
+            })?)
         } else {
-            None
+            ep.key_passphrase.as_deref()
         };
         if let Some(secret) = secret {
-            // 创建临时 askpass 脚本
-            if let Ok(askpass_path) = create_askpass_script(secret) {
-                command.env("SSH_ASKPASS", &askpass_path);
-                command.env("SSH_ASKPASS_REQUIRE", "force");
-                command.env("DISPLAY", ":0"); // 某些 ssh 版本需要
-            }
+            let helper = std::env::current_exe()?;
+            #[cfg(test)]
+            let helper = std::env::var_os("PIX_SSH_TEST_ASKPASS_PROGRAM")
+                .map(std::path::PathBuf::from)
+                .unwrap_or(helper);
+            command.env("SSH_ASKPASS", helper);
+            command.env("SSH_ASKPASS_REQUIRE", "force");
+            command.env("DISPLAY", ":0");
+            command.env("PIX_SSH_ASKPASS_SECRET", secret);
+            command.env("PIX_SSH_ASKPASS_HELPER", "1");
         }
     }
-
-    command
+    Ok(command)
 }
 
-/// 创建临时 askpass 脚本，返回脚本路径。
-/// 脚本在 ssh 调用后自动清理（通过 Drop trait）。
-fn create_askpass_script(password: &str) -> std::io::Result<String> {
-    let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join(format!("pix_askpass_{}", uuid::Uuid::new_v4()));
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let script_content = format!("#!/bin/sh\necho '{}'\n", password.replace('\'', "'\\''"));
-        std::fs::write(&script_path, script_content)?;
-        let mut perms = std::fs::metadata(&script_path)?.permissions();
-        perms.set_mode(0o700);
-        std::fs::set_permissions(&script_path, perms)?;
+/// Must run before Tauri/logging initialization, including in Windows GUI builds.
+/// OpenSSH supplies its prompt as argv[1]; host-key confirmation is never accepted.
+pub fn answer_askpass() -> bool {
+    if std::env::var_os("PIX_SSH_ASKPASS_HELPER").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return false;
     }
-
-    #[cfg(windows)]
-    {
-        // Windows: 使用批处理文件
-        let bat_path = script_path.with_extension("bat");
-        let script_content = format!("@echo off\necho {}", password);
-        std::fs::write(&bat_path, script_content)?;
-        return Ok(bat_path.to_string_lossy().into_owned());
+    if std::env::var("SSH_ASKPASS_PROMPT").as_deref() == Ok("confirm") {
+        return true;
     }
-
-    #[cfg(not(windows))]
-    Ok(script_path.to_string_lossy().into_owned())
+    if let Ok(secret) = std::env::var("PIX_SSH_ASKPASS_SECRET") {
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout().lock(), "{secret}");
+    }
+    true
 }
 
 fn spawn_error(e: std::io::Error) -> SshError {
     SshError::new(
-        SshErrorKind::SshMissing,
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            SshErrorKind::Auth
+        } else {
+            SshErrorKind::SshMissing
+        },
         format!("无法启动本机远程传输程序: {e}"),
     )
 }
@@ -582,6 +582,37 @@ mod tests {
     }
 
     #[test]
+    fn askpass_keeps_secret_out_of_args_and_files() {
+        let endpoint = RemoteEndpoint::Ssh(SshEndpoint {
+            host: "host.example.com".into(),
+            port: 22,
+            user: None,
+            key_path: None,
+            auth_method: AuthMethod::Password,
+            password: Some(" secret & % ! ' ".into()),
+            key_passphrase: None,
+        });
+        let command = build_command(&endpoint, "true").unwrap();
+        let command = command.as_std();
+        assert!(!command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains("secret")));
+        let env: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("PIX_SSH_ASKPASS_SECRET"))
+                .unwrap()
+                .unwrap(),
+            " secret & % ! ' "
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("SSH_ASKPASS_REQUIRE"))
+                .unwrap()
+                .unwrap(),
+            "force"
+        );
+    }
+
+    #[test]
     fn build_ssh_args_follows_contract_order() {
         let mut endpoint = endpoint();
         endpoint.key_path = Some("/home/dev/id_ed25519".to_string());
@@ -590,6 +621,8 @@ mod tests {
             vec![
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
                 "-o",
                 "ServerAliveInterval=15",
                 "-o",

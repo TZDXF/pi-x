@@ -381,6 +381,7 @@ mod tests {
             key_path: None,
             auth_method: AuthMethod::Key,
             key_passphrase: None,
+            password: None,
             distro: None,
             container: None,
             created_at: String::new(),

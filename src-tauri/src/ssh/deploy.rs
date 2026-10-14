@@ -101,8 +101,10 @@ fi
 /// 部署 pi bundle（stdin = tar.gz）。含 mkdir 原子锁 + stale 回收。
 /// `__DEPLOY_INFO__` 占位符由 Rust 侧替换为完整 JSON。
 pub const PI_DEPLOY_SCRIPT_TEMPLATE: &str = r#"set -eu
+mkdir -p "$HOME/.pix" || exit 96
 LOCK="$HOME/.pix/pi.deploy.lock"
 while ! mkdir "$LOCK" 2>/dev/null; do
+  [ -d "$LOCK" ] || exit 96
   now=$(date +%s)
   mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo 0)
   if [ "$mtime" -gt 0 ] && [ $((now - mtime)) -ge 600 ]; then
@@ -458,6 +460,89 @@ async fn deploy_pi(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opt-in real host regression. Credentials are supplied only by environment;
+    /// all remote writes are confined to a fresh mktemp HOME, removed on exit.
+    #[tokio::test]
+    #[ignore = "requires PIX_SSH_TEST_HOST/USER/PASSWORD and PIX_SSH_TEST_ASKPASS_PROGRAM"]
+    async fn ssh_password_deploy_trust_rpc_real() {
+        use crate::ssh::payload;
+        use crate::ssh::transport::{remote_exec_stream, AuthMethod, SshEndpoint};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let endpoint = RemoteEndpoint::Ssh(SshEndpoint {
+            host: std::env::var("PIX_SSH_TEST_HOST").expect("test host required"),
+            port: std::env::var("PIX_SSH_TEST_PORT")
+                .unwrap_or_else(|_| "22".into())
+                .parse()
+                .unwrap(),
+            user: Some(std::env::var("PIX_SSH_TEST_USER").expect("test user required")),
+            key_path: None,
+            auth_method: AuthMethod::Password,
+            password: Some(std::env::var("PIX_SSH_TEST_PASSWORD").expect("test password required")),
+            key_passphrase: None,
+        });
+        let timeout = Duration::from_secs(120);
+        let root = remote_exec(&endpoint, "mktemp -d /tmp/pix-ssh-check-XXXXXXXX", timeout)
+            .await
+            .unwrap()
+            .stdout
+            .trim()
+            .to_string();
+        assert!(root.starts_with("/tmp/pix-ssh-check-") && !root.contains(char::is_whitespace));
+        let prefix = format!(
+            "export HOME={}\nexport PATH=/usr/bin:/bin\n",
+            payload::posix_quote(&root)
+        );
+        let result: Result<(), String> = async {
+            let local = locate_local_bundle().await?;
+            let archive = pack_bundle(&local.bundle_dir)?;
+            let info = serde_json::json!({ "contentHash": local.content_hash });
+            let deploy = PI_DEPLOY_SCRIPT_TEMPLATE.replace("__DEPLOY_INFO__", &info.to_string());
+            for _ in 0..2 {
+                let output = remote_exec_with_stdin(&endpoint, &format!("{prefix}{deploy}"), &archive, timeout).await.map_err(|e| e.detail)?;
+                if !output.stdout.contains("PIX_PI_DEPLOY_DONE") { return Err("missing deployment marker".into()); }
+            }
+            eprintln!("real SSH: password authentication, fresh HOME deployment and redeployment passed");
+            let upload = format!("{prefix}{}\nmkdir -p \"$HOME/project/.pi\"\nprintf '{{}}' > \"$HOME/project/.pi/settings.json\"", payload::TRUST_UPLOAD_SCRIPT);
+            remote_exec_with_stdin(&endpoint, &upload, include_bytes!("../../resources/remote_trust.mjs"), timeout).await.map_err(|e| e.detail)?;
+            for decision in [None, Some(true), Some(false)] {
+                let request = serde_json::json!({ "op": if decision.is_some() { "trust_save" } else { "trust_status" }, "project": format!("{root}/project"), "trusted": decision, "trustParent": false });
+                let output = remote_exec_with_stdin(&endpoint, &format!("{prefix}{}", payload::TRUST_RUN_SCRIPT), request.to_string().as_bytes(), timeout).await.map_err(|e| e.detail)?;
+                let value: serde_json::Value = serde_json::from_str(output.stdout.trim()).map_err(|e| format!("trust response: {e}"))?;
+                if value["decision"] != serde_json::json!(decision) { return Err("trust decision did not round-trip".into()); }
+                if decision.is_none() && value["needsDecision"] != true { return Err("fresh project must require trust".into()); }
+            }
+            eprintln!("real SSH: bundled SDK trust status/save true/save false passed");
+            // No prompt is sent: get_state never calls a model provider.
+            let script = format!("{prefix}{}", payload::build_spawn_payload(&format!("{root}/project"), None, &[]));
+            let mut child = remote_exec_stream(&endpoint, &script).await.map_err(|e| e.detail)?;
+            let mut input = child.stdin.take().unwrap();
+            let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+            input.write_all(b"{\"id\":\"regression\",\"type\":\"get_state\"}\n").await.map_err(|e| e.to_string())?;
+            let response = tokio::time::timeout(Duration::from_secs(30), async {
+                while let Some(line) = lines.next_line().await? {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                        if value["id"] == "regression" { return Ok::<_, std::io::Error>(value); }
+                    }
+                }
+                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "pi closed stdout"))
+            }).await;
+            drop(input);
+            let _ = child.kill().await;
+            let value = response.map_err(|_| "RPC handshake timeout".to_string())?.map_err(|e| e.to_string())?;
+            if value["success"] != true { return Err(format!("RPC handshake failed: {value}")); }
+            eprintln!("real SSH: pi --mode rpc get_state passed (no model request)");
+            Ok(())
+        }.await;
+        let cleanup = remote_exec(
+            &endpoint,
+            &format!("rm -rf -- {}", payload::posix_quote(&root)),
+            timeout,
+        )
+        .await;
+        assert!(cleanup.is_ok(), "remote test HOME cleanup failed");
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+    }
 
     #[test]
     fn parse_check_output_extracts_path_and_info() {

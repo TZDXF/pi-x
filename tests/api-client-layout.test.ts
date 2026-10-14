@@ -65,7 +65,7 @@ McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus Mcp
 getMcpStatus McpCheckResult checkMcpServer
 SshProbeInfo SshConnection SshConnectionInput SshErrorKind SshProbeResult
 sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget sshSessions
-sshTrustStatus sshTrustSave
+sshTrustStatus sshTrustSave sshDeployPi sshDeployStatus DeployResult DeployStatus
 WslDistroInfo WslDistroListResult wslDistroList
 DockerContainerInfo DockerContainerListResult dockerContainerList`
   .split(/\s+/)
@@ -276,4 +276,16 @@ test("RPC and session listeners forward payloads, including subagent events, unc
   expect(reconnect).toHaveBeenCalledOnce()
   unsubscribe()
   expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+})
+
+
+test("SSH probe forwards in-memory credentials without trimming", async () => {
+  const { sshProbeTarget, sshConnectionSave } = await loaders.ssh()
+  const target = { host: "host.test", authMethod: "password" as const, password: " secret & % ", keyPassphrase: " passphrase " }
+  await sshProbeTarget(target)
+  expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_probe_target", {
+    ...target, port: null, user: null, keyPath: null,
+  })
+  await sshConnectionSave({ ...target, name: "test" })
+  expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_connection_save", { connection: { ...target, name: "test" } })
 })
