@@ -2,10 +2,11 @@
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog"
-import { FolderPlus, LoaderCircle, PlugZap, X } from "@lucide/vue"
+import { FolderPlus, LoaderCircle, PlugZap, Plus, X } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { sshConnectionList, sshConnectionProbe, sshDeployPi, sshDeployStatus, type SshConnection, type SshProbeResult } from "@/api/piClient"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import SshSettings from "@/components/settings/SshSettings.vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -48,6 +49,7 @@ const probeResult = ref<SshProbeResult | null>(null)
 const deployStatus = ref<{ piFound: boolean; deployed: boolean; version: string | null } | null>(null)
 const deploying = ref(false)
 const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
+const showConnectionDialog = ref(false)
 
 const selectedConnection = computed(
   () => connections.value.find(connection => connection.id === connectionId.value) ?? null,
@@ -75,6 +77,17 @@ async function loadConnections() {
   } finally {
     connectionsLoading.value = false
   }
+}
+
+/** 打开连接创建对话框 */
+function openConnectionDialog() {
+  showConnectionDialog.value = true
+}
+
+/** 连接创建完成后刷新列表 */
+function onConnectionCreated() {
+  showConnectionDialog.value = false
+  void loadConnections()
 }
 
 /** 连接下拉项的描述（per-kind）：ssh 显示 user@host:port，wsl 显示 user@distro，docker 显示容器名。 */
@@ -302,19 +315,25 @@ function submit() {
       </div>
       <form class="space-y-5" @submit.prevent="submit">
         <template v-if="mode === 'remote'">
-          <label class="block space-y-2 text-sm font-medium" for="ssh-project-connection">
-            {{ t("projectDialog.remoteConnection") }}
-            <Select v-model="connectionId">
-              <SelectTrigger id="ssh-project-connection" class="w-full">
-                <SelectValue :placeholder="t('projectDialog.remoteConnectionPlaceholder')" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="connection in connections" :key="connection.id" :value="connection.id">
-                  {{ connection.name }}（{{ connectionLabel(connection) }}）
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
+          <div class="flex items-end gap-2">
+            <label class="min-w-0 flex-1 space-y-2 text-sm font-medium" for="ssh-project-connection">
+              {{ t("projectDialog.remoteConnection") }}
+              <Select v-model="connectionId">
+                <SelectTrigger id="ssh-project-connection" class="w-full">
+                  <SelectValue :placeholder="t('projectDialog.remoteConnectionPlaceholder')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="connection in connections" :key="connection.id" :value="connection.id">
+                    {{ connection.name }}（{{ connectionLabel(connection) }}）
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+            <Button type="button" variant="outline" @click="openConnectionDialog">
+              <Plus :size="15" />
+              {{ t("projectDialog.newConnection") }}
+            </Button>
+          </div>
           <p v-if="connectionsLoading" class="text-xs text-muted-foreground">{{ t("ssh.loading") }}</p>
           <p
             v-else-if="!connections.length"
@@ -480,4 +499,10 @@ function submit() {
       </form>
     </DialogContent>
   </Dialog>
+  <!-- 连接创建对话框 -->
+  <SshSettings
+    v-if="showConnectionDialog"
+    @close="showConnectionDialog = false"
+    @created="onConnectionCreated"
+  />
 </template>

@@ -38,6 +38,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+const props = defineProps<{ standalone?: boolean }>()
+const emit = defineEmits<{ close: []; created: [] }>()
+
 const { t } = useI18n()
 const ui = useUiStore()
 
@@ -56,7 +59,7 @@ const saving = ref(false)
 const probingForm = ref(false)
 const formProbe = ref<SshProbeResult | null>(null)
 const formError = ref("")
-const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "", password: "", authMethod: "key" as "key" | "password", distro: "", container: "" })
+const form = reactive({ name: "", host: "", port: "22", user: "", keyPath: "", keyPassphrase: "", password: "", authMethod: "key" as "key" | "password", distro: "", container: "" })
 /** 连接后端种类（多后端契约 §3.1）；编辑时由连接的 kind 决定，不可更改。 */
 const formKind = ref<RemoteKind>("ssh")
 
@@ -141,7 +144,7 @@ function connectionLabel(connection: SshConnection) {
 function openCreate() {
   editingId.value = null
   formKind.value = "ssh"
-  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "", password: "", authMethod: "key", distro: "", container: "" })
+  Object.assign(form, { name: "", host: "", port: "22", user: "", keyPath: "", keyPassphrase: "", password: "", authMethod: "key", distro: "", container: "" })
   formProbe.value = null
   formError.value = ""
   dialogOpen.value = true
@@ -157,6 +160,7 @@ function openEdit(connection: SshConnection) {
     port: String(connection.port),
     user: connection.user ?? "",
     keyPath: connection.keyPath ?? "",
+    keyPassphrase: "", // 密钥口令不落盘，编辑时需重新输入
     password: "", // 密码不落盘，编辑时需重新输入
     authMethod: connection.authMethod ?? "key",
     distro: connection.distro ?? "",
@@ -203,6 +207,7 @@ function formTarget() {
       user: form.user.trim() || null,
       keyPath: form.keyPath.trim() || null,
       authMethod: form.authMethod,
+      keyPassphrase: form.keyPassphrase.trim() || null,
     }
   return null
 }
@@ -247,6 +252,11 @@ async function save() {
     dialogOpen.value = false
     ui.pushToast(t("ssh.saved"), "info")
     await load()
+    // 非独立模式（嵌入到其他对话框中）时发送 created 事件
+    if (!props.standalone) {
+      emit("created")
+      emit("close")
+    }
   } catch (e) {
     formError.value = tBackendError(e)
   } finally {
@@ -580,7 +590,7 @@ function probeLines(info: {
               {{ t("ssh.password") }}
               <Input id="ssh-password" v-model="form.password" type="password" :placeholder="t('ssh.passwordPlaceholder')" />
             </label>
-            <!-- 私钥路径输入框（密钥认证时显示） -->
+            <!-- 密钥认证时显示密钥口令输入框 -->
             <template v-if="form.authMethod === 'key'">
               <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
                 {{ t("ssh.keyPath") }}
@@ -588,6 +598,10 @@ function probeLines(info: {
                 <datalist id="ssh-key-path-history">
                   <option v-for="keyPath in historySuggestions.keyPaths" :key="keyPath" :value="keyPath" />
                 </datalist>
+              </label>
+              <label class="block space-y-2 text-sm font-medium" for="ssh-key-passphrase">
+                {{ t("ssh.keyPassphrase") }}
+                <Input id="ssh-key-passphrase" v-model="form.keyPassphrase" type="password" :placeholder="t('ssh.keyPassphrasePlaceholder')" />
               </label>
               <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
             </template>

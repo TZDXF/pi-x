@@ -460,7 +460,7 @@ mod tests {
     use crate::ssh::backend::RemoteEndpoint;
     use crate::ssh::transport::remote_exec_with_stdin;
     use crate::ssh::SshEndpoint;
-    use crate::ssh::transport::remote_exec;
+    use crate::ssh::transport::{remote_exec, AuthMethod};
 
     struct RealEnv {
         endpoint: SshEndpoint,
@@ -502,6 +502,7 @@ mod tests {
                 user: Some(user.clone()),
                 key_path: Some(key_path),
                 auth_method: AuthMethod::Key,
+            key_passphrase: None,
                 password: None,
             },
             project,

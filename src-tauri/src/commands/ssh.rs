@@ -199,6 +199,7 @@ fn endpoint_for_target(
         user,
         key_path,
         auth_method: AuthMethod::Key,
+            key_passphrase: None,
         password: None,
     })
 }
@@ -745,6 +746,7 @@ mod tests {
             user: None,
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
         assert!(remote_error_coded(&ssh_ep, &e).contains("sshProbeFailed"));
@@ -788,6 +790,7 @@ mod tests {
             user: None,
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
         let e = SshError {
@@ -820,6 +823,7 @@ mod tests {
             user: None,
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
         for code in [
@@ -865,6 +869,7 @@ mod tests {
             user: Some("dev".into()),
             key_path: Some("k1".into()),
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
         let key = |ep: &backend::RemoteEndpoint| upload_cache_key("ssh-1", ep);
@@ -918,6 +923,7 @@ mod tests {
             user: Some("dev".into()),
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -1091,6 +1097,7 @@ mod ssh_real_tests {
                 user: Some(user),
                 key_path: Some(key_path),
                 auth_method: AuthMethod::Key,
+            key_passphrase: None,
                 password: None,
             },
             project,

@@ -620,6 +620,7 @@ async fn wait_ssh_ready(
         user: None,
         key_path: None,
         auth_method: AuthMethod::Key,
+            key_passphrase: None,
         password: None,
     };
     let endpoint = endpoint
@@ -952,6 +953,7 @@ mod ssh_exit_error_tests {
             user: None,
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         })
     }
@@ -1108,6 +1110,7 @@ mod mock_ssh_spawn_tests {
                     user: Some("dev".to_string()),
                     key_path: None,
                     auth_method: AuthMethod::Key,
+            key_passphrase: None,
                     password: None,
                 }),
                 remote_path: "/home/dev/proj".to_string(),

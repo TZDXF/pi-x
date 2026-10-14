@@ -519,6 +519,7 @@ mod tests {
             key_path: None,
             auth_method: super::super::transport::AuthMethod::Key,
             password: None,
+            key_passphrase: None,
         });
         let e = SshError {
             kind: SshErrorKind::Remote,

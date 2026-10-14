@@ -358,6 +358,7 @@ mod tests {
             user: Some("dev".to_string()),
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         }
     }
@@ -379,6 +380,7 @@ mod tests {
             user: user.map(str::to_string),
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             distro: None,
             container: None,
             created_at: String::new(),
@@ -751,6 +753,7 @@ mod tests {
             user: target.user.clone(),
             key_path: Some(key_path.clone()),
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
 
@@ -944,6 +947,7 @@ mod tests {
             user: Some(user.clone()),
             key_path: Some(key_path.clone()),
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         });
         let env = (host, port, user, key_path, _project);

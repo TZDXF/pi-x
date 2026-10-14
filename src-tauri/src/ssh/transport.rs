@@ -43,6 +43,8 @@ pub struct SshEndpoint {
     pub auth_method: AuthMethod,
     /// 密码（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
     pub password: Option<String>,
+    /// 密钥口令（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
+    pub key_passphrase: Option<String>,
 }
 
 /// SSH 认证方式。
@@ -136,11 +138,12 @@ pub fn ssh_program_parts() -> Vec<String> {
 
 /// 纯函数：ssh 客户端参数数组（不含程序本体与 `PIX_SSH_COMMAND` 前置参数）。
 /// `-p` 恒定传递（含 22），保证参数序列确定、可测。
-/// 密码认证时移除 `BatchMode=yes`（允许密码提示），密钥认证时保留。
+/// 密码认证或密钥口令认证时移除 `BatchMode=yes`（允许密码/口令提示），仅普通密钥认证时保留。
 pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
-    // BatchMode=yes 禁用密码提示，仅密钥认证时启用
-    if endpoint.auth_method == AuthMethod::Key {
+    // BatchMode=yes 禁用密码/口令提示，仅普通密钥认证时启用
+    let need_batch_mode = endpoint.auth_method == AuthMethod::Key && endpoint.key_passphrase.is_none();
+    if need_batch_mode {
         args.push("-o".to_string());
         args.push("BatchMode=yes".to_string());
     }
@@ -385,16 +388,21 @@ fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> Command {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    // SSH_ASKPASS 机制：密码认证时创建临时 askpass 脚本
+    // SSH_ASKPASS 机制：密码认证或密钥口令认证时创建临时 askpass 脚本
     if let RemoteEndpoint::Ssh(ep) = endpoint {
-        if ep.auth_method == AuthMethod::Password {
-            if let Some(password) = &ep.password {
-                // 创建临时 askpass 脚本
-                if let Ok(askpass_path) = create_askpass_script(password) {
-                    command.env("SSH_ASKPASS", &askpass_path);
-                    command.env("SSH_ASKPASS_REQUIRE", "force");
-                    command.env("DISPLAY", ":0"); // 某些 ssh 版本需要
-                }
+        let secret = if ep.auth_method == AuthMethod::Password {
+            ep.password.as_deref()
+        } else if ep.key_passphrase.is_some() {
+            ep.key_passphrase.as_deref()
+        } else {
+            None
+        };
+        if let Some(secret) = secret {
+            // 创建临时 askpass 脚本
+            if let Ok(askpass_path) = create_askpass_script(secret) {
+                command.env("SSH_ASKPASS", &askpass_path);
+                command.env("SSH_ASKPASS_REQUIRE", "force");
+                command.env("DISPLAY", ":0"); // 某些 ssh 版本需要
             }
         }
     }
@@ -568,6 +576,7 @@ mod tests {
             user: Some("dev".to_string()),
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         }
     }
@@ -604,6 +613,7 @@ mod tests {
             user: None,
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         };
         let args = build_ssh_args(&endpoint);

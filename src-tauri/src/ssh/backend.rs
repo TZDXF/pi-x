@@ -179,6 +179,7 @@ mod tests {
             user: Some("dev".to_string()),
             key_path: None,
             auth_method: AuthMethod::Key,
+            key_passphrase: None,
             password: None,
         }
     }
