@@ -5,6 +5,7 @@ export interface ToolRun {
   name: string
   argsText: string
   outputText: string
+  outputImages?: string[]
   state: "input-streaming" | "input-available" | "output-available" | "output-error"
   /** Execution start (tool_execution_start); drives the elapsed-time display. */
   startedAt?: number

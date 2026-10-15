@@ -4,6 +4,7 @@ import ChatErrorRecord from "@/components/chat/ChatErrorRecord.vue"
 import ToolCallGroup from "@/components/chat/ToolCallGroup.vue"
 import { toolCallGroups } from "@/lib/toolCallGroups"
 import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
+import ToolImageGallery from "@/components/chat/ToolImageGallery.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -37,7 +38,7 @@ const props = withDefaults(
 
 const displayDetail = computed(() => props.detail ?? processDetail.value)
 const conciseGroups = computed(() =>
-  displayDetail.value === "concise" ? toolCallGroups(props.blocks) : new Map<number, ToolCallBlock[]>(),
+  displayDetail.value === "concise" ? toolCallGroups(props.blocks, hasReadImages) : new Map<number, ToolCallBlock[]>(),
 )
 
 const emit = defineEmits<{ openReview: [path: string] }>()
@@ -95,6 +96,10 @@ function commandPreview(block: ToolCallBlock): string {
 const READ_TOOLS = new Set(["read", "read_file", "cat", "view", "open_file"])
 function isRead(block: ToolCallBlock): boolean {
   return READ_TOOLS.has(toolBase(block))
+}
+
+function hasReadImages(block: ToolCallBlock): boolean {
+  return isRead(block) && !!runFor(block)?.outputImages?.length
 }
 
 // pi-subagents is a plugin, not a pi core tool: all its knowledge lives in
@@ -246,7 +251,7 @@ const { t } = useI18n()
         />
       </ToolCallGroup>
       <!-- Later calls in a concise group are rendered only inside its expanded content. -->
-      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise'" />
+      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise' && !hasReadImages(block)" />
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">
@@ -351,6 +356,12 @@ const { t } = useI18n()
         <ToolContent>
           <ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />
         </ToolContent>
+        <ToolImageGallery
+          v-if="hasReadImages(block)"
+          :images="runFor(block)!.outputImages!"
+          :alt="readTitle(block)"
+          class="px-3 pb-3"
+        />
       </Tool>
     </template>
     <slot />

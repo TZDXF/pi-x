@@ -1,6 +1,6 @@
 import { i18n, tBackendError } from "@/i18n"
 import { pixLog } from "@/api/piClient"
-import { contentText } from "@/lib/content"
+import { contentImages, contentText } from "@/lib/content"
 import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
@@ -396,6 +396,7 @@ export function createEventHandler(ctx: EventContext) {
         if (run && ev.partialResult) {
           // partialResult is the accumulated output so far (per rpc.md)
           run.outputText = contentText(ev.partialResult.content)
+          run.outputImages = contentImages(ev.partialResult.content)
         }
         break
       }
@@ -404,6 +405,7 @@ export function createEventHandler(ctx: EventContext) {
         const run = runs.value[ev.toolCallId]
         if (run) {
           run.outputText = ev.result ? contentText(ev.result.content) : run.outputText
+          if (ev.result) run.outputImages = contentImages(ev.result.content)
           run.state = ev.isError ? "output-error" : "output-available"
           run.completedAt = Date.now()
         }

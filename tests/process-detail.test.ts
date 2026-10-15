@@ -94,7 +94,9 @@ test("concise tool groups precede all specialized renderers and expand with a lo
   const blocks = source("../src/components/AssistantBlocks.vue")
   expect(blocks).toMatch(/props\.detail \?\? processDetail\.value/)
   expect(blocks).toMatch(/displayDetail === 'concise' && conciseGroups\.has\(i\)/)
-  expect(blocks).toMatch(/<template v-else-if="block\.type === 'toolCall' && displayDetail === 'concise'"/)
+  expect(blocks).toMatch(
+    /<template v-else-if="block\.type === 'toolCall' && displayDetail === 'concise' && !hasReadImages\(block\)"/,
+  )
   expect(blocks.indexOf("<ToolCallGroup")).toBeLessThan(blocks.indexOf("&& isBash(block)"))
   expect(blocks).toMatch(/detail="detailed"/)
   expect(blocks).toMatch(/@open-review="emit\('openReview', \$event\)"/)
