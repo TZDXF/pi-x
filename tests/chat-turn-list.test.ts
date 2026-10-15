@@ -143,3 +143,26 @@ test("error records stay outside answer/process rendering and failed turns have 
   expect(assistant).toMatch(/<MessageActions\s+v-if="entry.complete && !entry.failed"/)
   expect(list).toMatch(/v-if="session.compactionError"/)
 })
+
+test.each([
+  ["sent prompts", "components/chat/ChatUserPrompt.vue", "<template>", "entry.images"],
+  [
+    "pending prompts",
+    "components/chat/ChatTurnList.vue",
+    '<template v-if="ui.pendingUserMessage">',
+    "ui.pendingUserMessage.images",
+  ],
+])("%s show a wrapping image row above and outside the text bubble", (_name, file, marker, images) => {
+  const template = chatSource(file).split(marker)[1]!
+  const aboveBubble = template.split("<MessageContent>")[0]!
+  const bubble = template.match(/<MessageContent>([\s\S]*?)<\/MessageContent>/)![1]!
+  expect(aboveBubble).toContain(`v-if="${images}${images === "entry.images" ? "?." : "."}length"`)
+  expect(aboveBubble).toContain('class="mb-2 flex max-w-full flex-wrap justify-end gap-2"')
+  expect(aboveBubble).toContain(`v-for="(im, i) in ${images}"`)
+  expect(aboveBubble).toContain("size-16 shrink-0")
+  expect(aboveBubble).toContain(`:aria-label="t('chat.previewImage')"`)
+  expect(aboveBubble).toContain(`@click="emit('previewImage', im.url)"`)
+  expect(aboveBubble).toMatch(/<img :src="im.url"/)
+  expect(bubble).not.toContain("<img")
+  expect(bubble).toContain("<ComposerText")
+})

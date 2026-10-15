@@ -202,22 +202,22 @@ onBeforeUnmount(() => {
       <template v-if="ui.pendingUserMessage">
         <Message from="user">
           <div class="relative flex min-w-0 flex-col items-end">
+            <div v-if="ui.pendingUserMessage.images.length" class="mb-2 flex max-w-full flex-wrap justify-end gap-2">
+              <button
+                v-for="(im, i) in ui.pendingUserMessage.images"
+                :key="i"
+                type="button"
+                class="border-border bg-muted relative size-16 shrink-0 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+                :title="t('chat.previewImage')"
+                :aria-label="t('chat.previewImage')"
+                @click="emit('previewImage', im.url)"
+              >
+                <img :src="im.url" class="size-full object-cover" alt="" />
+              </button>
+            </div>
             <MessageContent>
               <div class="text-sm">
                 <ComposerText :text="ui.pendingUserMessage.text" />
-                <div v-if="ui.pendingUserMessage.images.length" class="mt-1.5 flex flex-wrap gap-2">
-                  <button
-                    v-for="(im, i) in ui.pendingUserMessage.images"
-                    :key="i"
-                    type="button"
-                    class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
-                    :title="t('chat.previewImage')"
-                    :aria-label="t('chat.previewImage')"
-                    @click="emit('previewImage', im.url)"
-                  >
-                    <img :src="im.url" class="size-full object-cover" alt="" />
-                  </button>
-                </div>
               </div>
             </MessageContent>
           </div>
