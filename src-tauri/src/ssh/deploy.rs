@@ -2,13 +2,14 @@
 //!
 //! 参考 ZCode `packages/server/src/remote/` 的 deploy 机制：detect → 幂等校验
 //! （SHA256）→ 原子锁部署。pi 的 `dist/bundle/` 自包含（仅 `node:` 内置模块与
-//! 相对路径），上传后在远端以 `node bundle/cli.js --mode rpc` 运行。
+//! 相对路径），连同包元数据上传后在远端以 `node bundle/cli.js --mode rpc` 运行。
 //!
 //! 远端布局：
 //! ```text
 //! ~/.pix/pi/
 //! ├── bin/pi            # wrapper: exec node <dir>/../bundle/cli.js "$@"
 //! ├── bundle/           # 本地 dist/bundle 内容（约 8.8M）
+//! ├── package.json      # 运行时版本与 piConfig 等包元数据
 //! └── .deploy-info      # JSON：contentHash / version / platform / arch / deployedAt
 //! ```
 
@@ -139,6 +140,7 @@ echo "PIX_PI_DEPLOY_DONE"
 /// 本地 pi bundle 信息（定位 + 版本 + 内容哈希）。
 pub struct LocalPiBundle {
     pub bundle_dir: PathBuf,
+    pub package_json: Vec<u8>,
     pub version: String,
     pub content_hash: String,
 }
@@ -179,10 +181,11 @@ pub async fn locate_local_bundle() -> Result<LocalPiBundle, String> {
         ));
     }
     let bundle_dir = resolve_bundle_dir(&info)?;
-    let version = info.version.unwrap_or_else(|| "unknown".into());
-    let content_hash = content_hash(&bundle_dir)?;
+    let (version, package_json) = bundle_package_metadata(&bundle_dir)?;
+    let content_hash = content_hash(&bundle_dir, &package_json)?;
     Ok(LocalPiBundle {
         bundle_dir,
+        package_json,
         version,
         content_hash,
     })
@@ -221,19 +224,64 @@ fn resolve_bundle_dir(info: &crate::pi_locate::PiInfo) -> Result<PathBuf, String
     ))
 }
 
+/// bundle 的 config 代码向上查找 package.json；只上传 bundle 会让 VERSION 回退到 0.0.0。
+/// 保留运行时实际读取的字段，不携带本地依赖、脚本和发布配置。
+fn bundle_package_metadata(bundle_dir: &Path) -> Result<(String, Vec<u8>), String> {
+    let invalid_metadata = || {
+        pix_error(
+            "piBundleMetadataInvalid",
+            "本地 pi 的 package.json 缺失或无效。请重新安装 npm 版 pi。",
+        )
+    };
+    let mut package_path = bundle_dir
+        .ancestors()
+        .map(|dir| dir.join("package.json"))
+        .find(|path| path.is_file())
+        .ok_or_else(invalid_metadata)?;
+    // 与 pi 的 findNodePackageDir 一致：dist 下可能有仅供 Bun 使用的元数据。
+    if let Some(dist) = package_path.parent().filter(|dir| dir.ends_with("dist")) {
+        if let Some(root_package) = dist.parent().map(|dir| dir.join("package.json")) {
+            if root_package.is_file() {
+                package_path = root_package;
+            }
+        }
+    }
+    let bytes = std::fs::read(package_path).map_err(|_| invalid_metadata())?;
+    let source: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| invalid_metadata())?;
+    let version = source
+        .get("version")
+        .and_then(|v| v.as_str())
+        .filter(|version| !version.is_empty())
+        .ok_or_else(invalid_metadata)?
+        .to_string();
+    let mut package = serde_json::Map::new();
+    for key in ["name", "version", "type", "piConfig"] {
+        if let Some(value) = source.get(key) {
+            package.insert(key.to_string(), value.clone());
+        }
+    }
+    let bytes = serde_json::to_vec(&package).map_err(|e| e.to_string())?;
+    Ok((version, bytes))
+}
+
 // ---------------------------------------------------------------------------
 // 确定性内容哈希
 // ---------------------------------------------------------------------------
 
 /// 对 bundle 目录取确定性哈希：排序相对路径 + 逐文件 SHA256，消除目录枚举
 /// 顺序差异，使同内容同哈希（幂等判断的基础）。
-fn content_hash(bundle_dir: &Path) -> Result<String, String> {
+fn content_hash(bundle_dir: &Path, package_json: &[u8]) -> Result<String, String> {
     let mut entries: Vec<(String, String)> = Vec::new();
     collect_file_hashes(bundle_dir, bundle_dir, &mut entries)?;
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = Sha256::new();
+    hasher.update(b"package.json\0");
+    hasher.update(package_json);
+    hasher.update(b"\n");
     for (path, hash) in entries {
+        hasher.update(b"bundle/");
         hasher.update(path.as_bytes());
         hasher.update(b"\0");
         hasher.update(hash.as_bytes());
@@ -269,8 +317,8 @@ fn collect_file_hashes(
 // ---------------------------------------------------------------------------
 
 /// 打包 bundle 目录为 tar.gz（`bundle/` 前缀，远端解包到 `~/.pix/pi/` 后
-/// 得到 `~/.pix/pi/bundle/`）。
-fn pack_bundle(bundle_dir: &Path) -> Result<Vec<u8>, String> {
+/// 得到 `~/.pix/pi/bundle/`），并在其上层放置运行时包元数据。
+fn pack_bundle(bundle_dir: &Path, package_json: &[u8]) -> Result<Vec<u8>, String> {
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use tar::Builder;
@@ -278,6 +326,14 @@ fn pack_bundle(bundle_dir: &Path) -> Result<Vec<u8>, String> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     {
         let mut builder = Builder::new(&mut encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(package_json.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "package.json", package_json)
+            .map_err(|e| format!("打包 pi 包元数据失败: {e}"))?;
         builder
             .append_dir_all("bundle", bundle_dir)
             .map_err(|e| format!("打包 bundle 失败: {e}"))?;
@@ -430,7 +486,7 @@ async fn deploy_pi(
 ) -> Result<(), String> {
     let _serial = deploy_serial().lock().await;
     progress(DeployStep::Pack, "打包本地 pi bundle...", 10);
-    let tar_gz = pack_bundle(&local.bundle_dir)?;
+    let tar_gz = pack_bundle(&local.bundle_dir, &local.package_json)?;
 
     progress(DeployStep::Upload, "上传 pi 到远端...", 30);
     let deploy_info = serde_json::json!({
@@ -495,7 +551,7 @@ mod tests {
         );
         let result: Result<(), String> = async {
             let local = locate_local_bundle().await?;
-            let archive = pack_bundle(&local.bundle_dir)?;
+            let archive = pack_bundle(&local.bundle_dir, &local.package_json)?;
             let info = serde_json::json!({ "contentHash": local.content_hash });
             let deploy = PI_DEPLOY_SCRIPT_TEMPLATE.replace("__DEPLOY_INFO__", &info.to_string());
             for _ in 0..2 {
@@ -621,6 +677,131 @@ mod tests {
         assert!(deploy_error(&endpoint, &e).contains("sshRemoteDeployFailed"));
     }
 
+    struct BundleFixture {
+        root: PathBuf,
+        bundle_dir: PathBuf,
+    }
+
+    impl BundleFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("pix-bundle-test-{}", uuid::Uuid::new_v4()));
+            let bundle_dir = root.join("dist/bundle");
+            std::fs::create_dir_all(&bundle_dir).unwrap();
+            Self { root, bundle_dir }
+        }
+    }
+
+    impl Drop for BundleFixture {
+        fn drop(&mut self) {
+            assert_eq!(self.root.parent(), Some(std::env::temp_dir().as_path()));
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bundle_archive_preserves_runtime_package_metadata_and_version() {
+        let fixture = BundleFixture::new();
+        std::fs::write(
+                fixture.root.join("package.json"),
+                r#"{"name":"@earendil-works/pi-coding-agent","version":"1.0.2","type":"module","piConfig":{"configDir":".pi"},"scripts":{"test":"unused"},"dependencies":{"unused":"1"}}"#,
+            ).unwrap();
+        // 模拟 bundle 向上查找版本，不加载真正的 SDK 或连接模型服务。
+        std::fs::write(
+                fixture.bundle_dir.join("cli.js"),
+                r#"import { readFileSync } from 'node:fs';
+    console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);"#,
+            ).unwrap();
+        std::fs::write(
+            fixture.root.join("dist/package.json"),
+            r#"{"version":"0.0.0"}"#,
+        )
+        .unwrap();
+        let (version, package_json) = bundle_package_metadata(&fixture.bundle_dir).unwrap();
+        assert_eq!(version, "1.0.2");
+        let package: serde_json::Value = serde_json::from_slice(&package_json).unwrap();
+        assert_eq!(
+            package,
+            serde_json::json!({
+                "name": "@earendil-works/pi-coding-agent",
+                "version": "1.0.2",
+                "type": "module",
+                "piConfig": { "configDir": ".pi" },
+            })
+        );
+
+        let bytes = pack_bundle(&fixture.bundle_dir, &package_json).unwrap();
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes.as_slice()));
+        let deployed = fixture.root.join("deployed");
+        archive.unpack(&deployed).unwrap();
+        assert_eq!(
+            std::fs::read(deployed.join("package.json")).unwrap(),
+            package_json
+        );
+        assert!(deployed.join("bundle/cli.js").is_file());
+        assert!(!deployed.join("bundle/package.json").exists());
+
+        let Some(node) = super::super::transport::find_test_program("node") else {
+            eprintln!("跳过运行时版本验证：开发环境未找到 node");
+            return;
+        };
+        let output = std::process::Command::new(node)
+            .arg(deployed.join("bundle/cli.js"))
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1.0.2");
+    }
+
+    /// 验证实际 npm 版 pi 的打包产物，无 SSH 或模型请求。
+    #[tokio::test]
+    #[ignore = "requires a local npm installation of pi and Node.js"]
+    async fn local_bundle_archive_reports_installed_version() {
+        let fixture = BundleFixture::new();
+        let local = locate_local_bundle().await.unwrap();
+        let bytes = pack_bundle(&local.bundle_dir, &local.package_json).unwrap();
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes.as_slice()));
+        let deployed = fixture.root.join("deployed");
+        archive.unpack(&deployed).unwrap();
+        let node = super::super::transport::find_test_program("node").expect("Node.js required");
+        let output = std::process::Command::new(node)
+            .arg(deployed.join("bundle/cli.js"))
+            .arg("--version")
+            .env_remove("PI_PACKAGE_DIR")
+            .env("PI_OFFLINE", "1")
+            .env("PI_TELEMETRY", "off")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let version = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(version.trim(), local.version);
+        assert_ne!(version.trim(), "0.0.0");
+        eprintln!("packaged pi --version: {}", version.trim());
+    }
+
+    #[test]
+    fn bundle_metadata_requires_a_nonempty_version() {
+        let fixture = BundleFixture::new();
+        for package in [
+            r#"{}"#,
+            r#"{"version":""}"#,
+            r#"{"version":null}"#,
+            "invalid JSON",
+        ] {
+            std::fs::write(fixture.root.join("package.json"), package).unwrap();
+            let error = bundle_package_metadata(&fixture.bundle_dir).unwrap_err();
+            assert!(error.contains("piBundleMetadataInvalid"));
+        }
+    }
+
     #[test]
     fn content_hash_is_deterministic() {
         // 创建两个内容相同但文件创建顺序不同的目录，哈希应一致
@@ -636,13 +817,15 @@ mod tests {
         std::fs::write(dir2.join("sub/b.txt"), b"world").unwrap();
         std::fs::write(dir2.join("a.txt"), b"hello").unwrap();
 
-        let h1 = content_hash(&dir1).unwrap();
-        let h2 = content_hash(&dir2).unwrap();
+        let h1 = content_hash(&dir1, b"{}").unwrap();
+        let h2 = content_hash(&dir2, b"{}").unwrap();
         assert_eq!(h1, h2, "同内容不同创建顺序应产生相同哈希");
+        let metadata_hash = content_hash(&dir1, br#"{"version":"1.0.2"}"#).unwrap();
+        assert_ne!(h1, metadata_hash, "包元数据变化必须触发重新部署");
 
         // 内容变化 → 哈希变化
         std::fs::write(dir2.join("a.txt"), b"changed").unwrap();
-        let h3 = content_hash(&dir2).unwrap();
+        let h3 = content_hash(&dir2, b"{}").unwrap();
         assert_ne!(h1, h3, "内容变化应产生不同哈希");
 
         let _ = std::fs::remove_dir_all(&dir1);

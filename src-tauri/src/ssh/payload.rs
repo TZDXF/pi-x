@@ -30,6 +30,9 @@ echo "UNAME_S=$(uname -s 2>/dev/null)"
 echo "UNAME_M=$(uname -m 2>/dev/null)"
 if command -v node >/dev/null 2>&1; then echo "NODE_V=$(node -v 2>/dev/null)"; fi
 PI_BIN=$(command -v pi 2>/dev/null)
+if [ -z "$PI_BIN" ] && [ -x "$HOME/.pix/pi/bin/pi" ]; then
+  PI_BIN="$HOME/.pix/pi/bin/pi"
+fi
 echo "PI_BIN=$PI_BIN"
 if [ -n "$PI_BIN" ]; then echo "PI_V=$("$PI_BIN" --version 2>/dev/null | head -n 1)"; fi
 echo "PIX_PROBE_DONE"

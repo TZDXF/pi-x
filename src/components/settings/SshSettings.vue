@@ -657,11 +657,8 @@ function probeLines(info: {
           </template>
 
           <div v-if="formProbe" class="rounded-md border border-border px-3 py-2 text-xs">
-            <p
-              v-if="formProbe.ok"
-              :class="formProbe.piFound ? 'text-green-700 dark:text-green-400' : 'text-amber-700 dark:text-amber-400'"
-            >
-              {{ formProbe.piFound ? t("ssh.probeOk") : t("ssh.probeOkWithoutPi") }}
+            <p v-if="formProbe.ok" class="text-green-700 dark:text-green-400">
+              {{ t("ssh.probeOk") }}
               <template v-if="probeLines(formProbe).length"> · {{ probeLines(formProbe).join(" · ") }}</template>
             </p>
             <template v-else>

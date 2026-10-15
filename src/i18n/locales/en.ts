@@ -662,7 +662,6 @@ export default {
     saved: "Connection saved",
     probe: "Test connection",
     probeOk: "Connected",
-    probeOkWithoutPi: "Reachable, but pi is not installed (or not on PATH) on the remote host",
     probeFailed: "Connection failed",
     lastProbe: "Last test",
     lastProbeAt: "Last tested: {time}",
@@ -1524,6 +1523,7 @@ export default {
     sshWorkspaceUnsupported: "Multi-folder workspaces are not supported for SSH remote projects yet",
     sshRemotePiMissing: "pi is not installed on the remote host. Install the pi CLI there first (requires Node.js).",
     piBundleMissing: "Could not locate the local pi bundle. Select an npm installation of pi.",
+    piBundleMetadataInvalid: "The local pi package.json is missing or invalid. Reinstall the npm version of pi.",
     sshRemoteNodeMissing: "Node.js is not installed on the remote host. Install Node.js 22 or later to run pi.",
     sshRemoteDeployFailed: "Remote pi deployment failed: {detail}",
     sshHostKeyUnverified:

@@ -643,7 +643,6 @@ export default {
     saved: "连接已保存",
     probe: "测试连接",
     probeOk: "连接正常",
-    probeOkWithoutPi: "可连接，但远程未安装 pi（或不在 PATH 中）",
     probeFailed: "连接失败",
     lastProbe: "上次测试",
     lastProbeAt: "上次测试时间：{time}",
@@ -1477,6 +1476,7 @@ export default {
     sshWorkspaceUnsupported: "SSH 远程项目暂不支持多目录工作区",
     sshRemotePiMissing: "远程主机未安装 pi。请先在远程主机上安装 pi CLI（需要 Node.js）。",
     piBundleMissing: "无法定位本地 pi bundle。请选择 npm 版 pi。",
+    piBundleMetadataInvalid: "本地 pi 的 package.json 缺失或无效。请重新安装 npm 版 pi。",
     sshRemoteNodeMissing: "远程主机未安装 Node.js。请安装 Node.js 22 或更高版本以运行 pi。",
     sshRemoteDeployFailed: "远程 pi 部署失败: {detail}",
     sshHostKeyUnverified:
