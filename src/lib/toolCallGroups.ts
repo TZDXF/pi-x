@@ -1,6 +1,6 @@
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
-/** Thinking never splits concise tool groups, including while it is streaming. */
+/** Hidden, completed thinking does not split consecutive tool calls in concise mode. */
 export function toolCallGroups(
   blocks: Block[],
   standalone: (block: ToolCallBlock) => boolean = () => false,
@@ -19,7 +19,7 @@ export function toolCallGroups(
         groups.set(index, group)
       }
       group.push(block)
-    } else if (block.type !== "thinking") {
+    } else if (block.type !== "thinking" || block.streaming) {
       group = undefined
     }
   }
