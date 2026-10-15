@@ -106,6 +106,7 @@ function connectionLabel(connection: SshConnection): string {
 watch(
   () => [props.open, props.editPath] as const,
   ([open]) => {
+    showConnectionDialog.value = false
     if (!open) return
     // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
     listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
@@ -498,12 +499,13 @@ function submit() {
           </div>
         </template>
       </form>
+      <!-- 作为嵌套弹窗打开，避免将设置页的连接列表渲染到项目弹窗外。 -->
+      <SshSettings
+        v-if="showConnectionDialog"
+        create-only
+        @close="showConnectionDialog = false"
+        @created="onConnectionCreated"
+      />
     </DialogContent>
   </Dialog>
-  <!-- 连接创建对话框 -->
-  <SshSettings
-    v-if="showConnectionDialog"
-    @close="showConnectionDialog = false"
-    @created="onConnectionCreated"
-  />
 </template>

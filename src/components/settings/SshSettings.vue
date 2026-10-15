@@ -38,7 +38,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-const props = defineProps<{ standalone?: boolean }>()
+/** 项目创建入口只展示新建弹窗；设置页默认展示完整连接管理。 */
+const props = defineProps<{ createOnly?: boolean }>()
 const emit = defineEmits<{ close: []; created: [] }>()
 
 const { t } = useI18n()
@@ -89,7 +90,8 @@ const formReady = computed(() => {
 })
 
 onMounted(() => {
-  load()
+  if (props.createOnly) openCreate()
+  else void load()
   // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
   listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
     deployProgress.value = event.payload
@@ -139,6 +141,11 @@ function connectionLabel(connection: SshConnection) {
   if (kind === "docker") return connection.container ?? ""
   const authority = connection.user ? `${connection.user}@${connection.host}` : connection.host
   return connection.port === 22 ? authority : `${authority}:${connection.port}`
+}
+
+function onDialogOpenChange(open: boolean) {
+  dialogOpen.value = open
+  if (!open && props.createOnly) emit("close")
 }
 
 function openCreate() {
@@ -255,11 +262,11 @@ async function save() {
     }
     dialogOpen.value = false
     ui.pushToast(t("ssh.saved"), "info")
-    await load()
-    // 非独立模式（嵌入到其他对话框中）时发送 created 事件
-    if (!props.standalone) {
+    if (props.createOnly) {
       emit("created")
       emit("close")
+    } else {
+      await load()
     }
   } catch (e) {
     formError.value = tBackendError(e)
@@ -351,7 +358,7 @@ function probeLines(info: {
 
 <template>
   <template v-if="isDesktop">
-    <div class="space-y-5">
+    <div v-if="!props.createOnly" class="space-y-5">
       <div class="flex items-center justify-between gap-3">
         <p class="text-xs text-muted-foreground">{{ t("ssh.connectionsHint") }}</p>
         <Button size="sm" class="shrink-0" @click="openCreate"><Plus :size="15" />{{ t("ssh.addConnection") }}</Button>
@@ -489,14 +496,7 @@ function probeLines(info: {
       </ul>
     </div>
 
-    <Dialog
-      :open="dialogOpen"
-      @update:open="
-        value => {
-          if (!value) dialogOpen = false
-        }
-      "
-    >
+    <Dialog :open="dialogOpen" @update:open="onDialogOpenChange">
       <DialogContent class="sm:max-w-lg" aria-describedby="ssh-dialog-description">
         <DialogHeader>
           <DialogTitle>{{ t(editingId ? "ssh.editTitle" : "ssh.createTitle") }}</DialogTitle>
