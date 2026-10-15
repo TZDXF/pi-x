@@ -23,7 +23,6 @@ import {
 import { tBackendError } from "@/i18n"
 import { useUiStore } from "@/stores/conversations"
 import { connectionKind, isWslPlatform, type RemoteKind } from "@/lib/ssh"
-import { addSshHistoryEntry, getSshHistorySuggestions } from "@/lib/sshHistory"
 import { remoteFormFields, remoteKindOptions } from "@/lib/remoteBackends"
 import { listen } from "@tauri-apps/api/event"
 import { Button } from "@/components/ui/button"
@@ -51,7 +50,6 @@ const busyIds = ref(new Set<string>())
 const probes = ref<Record<string, SshProbeResult>>({})
 const deployStatuses = ref<Record<string, DeployStatus>>({})
 const deployingIds = ref(new Set<string>())
-const historySuggestions = ref(getSshHistorySuggestions())
 const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
 
 const dialogOpen = ref(false)
@@ -250,16 +248,6 @@ async function save() {
   formError.value = ""
   try {
     await sshConnectionSave(target)
-    // 保存成功时记录历史（用于自动补全）
-    if (target.kind === "ssh") {
-      addSshHistoryEntry({
-        host: target.host,
-        port: target.port,
-        user: target.user ?? "",
-        keyPath: target.keyPath ?? "",
-      })
-      historySuggestions.value = getSshHistorySuggestions()
-    }
     dialogOpen.value = false
     ui.pushToast(t("ssh.saved"), "info")
     if (props.createOnly) {
@@ -502,7 +490,7 @@ function probeLines(info: {
           <DialogTitle>{{ t(editingId ? "ssh.editTitle" : "ssh.createTitle") }}</DialogTitle>
           <DialogDescription id="ssh-dialog-description">{{ t("ssh.dialogDescription") }}</DialogDescription>
         </DialogHeader>
-        <form class="space-y-4" @submit.prevent="save">
+        <form class="space-y-4" autocomplete="off" @submit.prevent="save">
           <label class="block space-y-2 text-sm font-medium" for="ssh-name">
             {{ t("ssh.name") }}
             <Input
@@ -543,25 +531,16 @@ function probeLines(info: {
             <div class="grid grid-cols-[1fr_7rem] gap-3">
               <label class="block space-y-2 text-sm font-medium" for="ssh-host">
                 {{ t("ssh.host") }}
-                <Input id="ssh-host" v-model="form.host" :placeholder="t('ssh.hostPlaceholder')" list="ssh-host-history" />
-                <datalist id="ssh-host-history">
-                  <option v-for="host in historySuggestions.hosts" :key="host" :value="host" />
-                </datalist>
+                <Input id="ssh-host" v-model="form.host" />
               </label>
               <label class="block space-y-2 text-sm font-medium" for="ssh-port">
                 {{ t("ssh.port") }}
-                <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" list="ssh-port-history" />
-                <datalist id="ssh-port-history">
-                  <option v-for="port in historySuggestions.ports" :key="port" :value="port" />
-                </datalist>
+                <Input id="ssh-port" v-model="form.port" type="number" min="1" max="65535" />
               </label>
             </div>
             <label class="block space-y-2 text-sm font-medium" for="ssh-user">
               {{ t("ssh.user") }}
-              <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" list="ssh-user-history" />
-              <datalist id="ssh-user-history">
-                <option v-for="user in historySuggestions.users" :key="user" :value="user" />
-              </datalist>
+              <Input id="ssh-user" v-model="form.user" :placeholder="t('ssh.userPlaceholder')" />
             </label>
             <!-- 认证方式选择（ZCode 风格：密码/密钥切换） -->
             <div class="space-y-2">
@@ -598,16 +577,12 @@ function probeLines(info: {
             <template v-if="form.authMethod === 'key'">
               <label class="block space-y-2 text-sm font-medium" for="ssh-key-path">
                 {{ t("ssh.keyPath") }}
-                <Input id="ssh-key-path" v-model="form.keyPath" :placeholder="t('ssh.keyPathPlaceholder')" list="ssh-key-path-history" />
-                <datalist id="ssh-key-path-history">
-                  <option v-for="keyPath in historySuggestions.keyPaths" :key="keyPath" :value="keyPath" />
-                </datalist>
+                <Input id="ssh-key-path" v-model="form.keyPath" />
               </label>
               <label class="block space-y-2 text-sm font-medium" for="ssh-key-passphrase">
                 {{ t("ssh.keyPassphrase") }}
                 <Input id="ssh-key-passphrase" v-model="form.keyPassphrase" type="password" :placeholder="t('ssh.keyPassphrasePlaceholder')" />
               </label>
-              <p class="text-xs text-muted-foreground">{{ t("ssh.keyPathHint") }}</p>
             </template>
           </template>
           <!-- kind = wsl：发行版下拉（wsl_distro_list）+ 可选用户名 -->

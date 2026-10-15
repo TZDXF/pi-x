@@ -33,7 +33,6 @@ function harness(createOnly = false) {
     "@/i18n": { tBackendError: error => error.message },
     "@/stores/conversations": { useUiStore: () => ({ pushToast: vi.fn() }) },
     "@/lib/ssh": { isWslPlatform: () => true, connectionKind: connection => connection.kind ?? "ssh" },
-    "@/lib/sshHistory": { getSshHistorySuggestions: () => [], addSshHistoryEntry: vi.fn() },
     "@/lib/remoteBackends": { remoteKindOptions: () => [], remoteFormFields: () => [] },
     "@tauri-apps/api/event": { listen: vi.fn(async () => () => {}) },
   }
@@ -128,4 +127,27 @@ test("项目弹窗在 DialogContent 内以仅新建模式挂载连接弹窗", ()
   expect(settings).toHaveLength(1)
   expect(settings[0].props.some(prop => prop.name === "create-only")).toBe(true)
   expect(settings[0].props.some(prop => prop.name === "if" && prop.exp?.content === "showConnectionDialog")).toBe(true)
+})
+
+test("远程连接表单关闭自动补全，不提供历史输入建议", () => {
+  const template = descriptor.template!.ast
+  const forms = elements(template, "form")
+  expect(forms).toHaveLength(1)
+  expect(forms[0].props.some(prop => prop.name === "autocomplete" && prop.value?.content === "off")).toBe(true)
+  expect(elements(template, "datalist")).toHaveLength(0)
+  for (const input of elements(forms[0], "Input")) {
+    expect(input.props.some(prop => prop.name === "list" || (prop.name === "bind" && prop.arg?.content === "list"))).toBe(false)
+  }
+})
+
+test("主机和私钥路径不显示占位文字，移除私钥存储说明", () => {
+  const inputs = elements(descriptor.template!.ast, "Input")
+  for (const id of ["ssh-host", "ssh-key-path"]) {
+    const input = inputs.find(element => element.props.some(prop => prop.name === "id" && prop.value?.content === id))
+    expect(input).toBeDefined()
+    expect(
+      input.props.some(prop => prop.name === "placeholder" || (prop.name === "bind" && prop.arg?.content === "placeholder")),
+    ).toBe(false)
+  }
+  expect(descriptor.template!.content).not.toContain("ssh.keyPathHint")
 })
