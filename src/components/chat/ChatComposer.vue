@@ -92,6 +92,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
       ]"
       :initial-input="initialDraft"
       @submit="onSubmit"
+      @error="controls.onInputError"
     >
       <PromptInputBridge :ref="bindBridge" />
       <PromptInputHeader v-if="attachments.length">

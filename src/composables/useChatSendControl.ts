@@ -91,6 +91,10 @@ export function useChatSendControl(deps: {
     target.value = next
   }
 
+  function onInputError(error: { code: string }) {
+    if (error.code === "attachment_read_error") ui.pushToast(t("chat.attachmentReadFailed"), "error")
+  }
+
   async function onSubmit(message: { text?: string; files?: { url?: string }[] }) {
     if (workspace.gitBusy || deps.connecting() || deps.editBusy()) return
     const text = (message.text ?? "").trim()
@@ -188,6 +192,7 @@ export function useChatSendControl(deps: {
 
   return {
     attachments,
+    onInputError,
     pendingComments,
     pendingSelections,
     codeComments,

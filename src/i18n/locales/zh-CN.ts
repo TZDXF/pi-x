@@ -692,6 +692,7 @@ export default {
     cycleNoOtherModel: "没有其他可用模型",
     cycleThinkingUnsupported: "当前模型不支持思考等级",
     removeAttachment: "移除",
+    attachmentReadFailed: "附件读取失败，消息未发送。请重新添加附件后重试。",
     previewImage: "预览图片",
     attachment: "附件",
     noMatchingFiles: "没有匹配的文件。",

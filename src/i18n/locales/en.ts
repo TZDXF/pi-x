@@ -712,6 +712,8 @@ export default {
     cycleNoOtherModel: "No other model available",
     cycleThinkingUnsupported: "The current model does not support thinking levels",
     removeAttachment: "Remove",
+    attachmentReadFailed:
+      "Could not read the attachment. Your message was not sent. Please add the attachment again and retry.",
     previewImage: "Preview image",
     attachment: "Attachment",
     noMatchingFiles: "No matching files.",

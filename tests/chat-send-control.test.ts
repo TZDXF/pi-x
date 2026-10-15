@@ -426,3 +426,15 @@ test("send failure also clears the first-message echo", async () => {
     h.scope.stop()
   }
 })
+
+test("attachment read failures show a localized error without duplicating other submit errors", () => {
+  const h = harness()
+  try {
+    h.controls.onInputError({ code: "attachment_read_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.attachmentReadFailed", "error")
+    h.controls.onInputError({ code: "submit_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledOnce()
+  } finally {
+    h.scope.stop()
+  }
+})
