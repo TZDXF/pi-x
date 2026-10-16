@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import ImageViewer from "@/components/ImageViewer.vue"
+import { Dialog } from "@/components/ui/dialog"
+import ImagePreviewContent from "./ImagePreviewContent.vue"
 
 defineProps<{ images: string[]; alt: string }>()
 const { t } = useI18n()
@@ -22,13 +22,8 @@ const preview = ref<string | null>(null)
     >
       <img :src="src" :alt="alt" class="h-32 w-40 object-contain" loading="lazy" />
     </button>
-    <Dialog :open="!!preview" @update:open="preview = null">
-      <DialogContent class="flex h-[85dvh] max-w-4xl flex-col">
-        <DialogHeader>
-          <DialogTitle>{{ t("chat.previewImage") }}</DialogTitle>
-        </DialogHeader>
-        <ImageViewer v-if="preview" :src="preview" :alt="alt" class="min-h-0 flex-1" />
-      </DialogContent>
+    <Dialog :open="!!preview" :modal="false" @update:open="preview = null">
+      <ImagePreviewContent v-if="preview" :src="preview" :alt="alt" />
     </Dialog>
   </div>
 </template>
