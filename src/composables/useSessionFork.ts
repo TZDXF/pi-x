@@ -1,5 +1,6 @@
 import { ref } from "vue"
 import { useI18n } from "vue-i18n"
+import { duplicateSessionFile } from "@/api/piClient"
 import type { RpcResponse } from "@/api/protocol"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
@@ -34,6 +35,7 @@ export function useSessionFork(
    * Branch right AFTER the answer at entryIndex: the new branch keeps this
    * answer and drops the questions (and everything else) that follow it.
    * pi forks *before* a user message, so we fork at the next question.
+   * Without a later question, duplicate the session and switch to the copy.
    */
   async function forkFromAnswer(entryIndex: number) {
     const list = session.entries
@@ -47,11 +49,14 @@ export function useSessionFork(
         break
       }
     }
-    if (questionText === null) {
-      ui.pushToast(t("chat.toastForkNoLater"), "info")
-      return
-    }
     try {
+      if (questionText === null) {
+        const file = session.sessionFile
+        if (!file) throw new Error(t("chat.forkFailed"))
+        const sessionPath = await duplicateSessionFile(file)
+        await navigateFork({ type: "switch_session", sessionPath })
+        return
+      }
       const res = await rpcRequest<{
         messages: { entryId: string; text: string }[]
       }>({ type: "get_fork_messages" })
@@ -74,12 +79,13 @@ export function useSessionFork(
   }
 
   async function doFork(entryId: string) {
+    await navigateFork({ type: "fork", entryId })
+  }
+
+  async function navigateFork(command: Record<string, unknown>) {
     forkOpen.value = false
     try {
-      const res = await rpcRequest<{ text?: string; cancelled?: boolean }>({
-        type: "fork",
-        entryId,
-      })
+      const res = await rpcRequest<{ text?: string; cancelled?: boolean }>(command)
       if (!res.success) throw new Error(res.error ?? t("chat.forkFailed"))
       if (res.data?.cancelled) {
         ui.pushToast(t("chat.toastForkCancelled"), "info")

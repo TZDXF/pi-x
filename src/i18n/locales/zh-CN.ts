@@ -735,7 +735,6 @@ export default {
     forkEmpty: "暂无可用的用户消息。",
     toastForkCancelled: "扩展取消了分支操作",
     toastForked: "已从较早的提问分支",
-    toastForkNoLater: "这条回答之后没有提问，无需分支",
     forkFailed: "分支失败",
     forkFailedList: "加载分支消息失败",
     toastExported: "会话已导出",
