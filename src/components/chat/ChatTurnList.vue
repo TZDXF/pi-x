@@ -28,7 +28,7 @@ import { useTurnChanges } from "@/composables/useTurnChanges"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
-import type { useChatTurnList } from "@/composables/useChatTurnList"
+import { isWaitingForReply, type useChatTurnList } from "@/composables/useChatTurnList"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import type { usePromptEdit, PromptEditTextarea } from "@/composables/usePromptEdit"
@@ -97,11 +97,12 @@ defineExpose({
 })
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
 const waitingSeconds = ref(0)
+const waitingForReply = computed(() => isWaitingForReply(props.session))
 /** 会话是否已有用户消息：决定消息列的缩进布局（模板内联计算提为 computed）。 */
 const hasUserEntries = computed(() => props.session.entries.some(entry => entry.kind === "user"))
 let waitingClock: ReturnType<typeof setInterval> | undefined
 watch(
-  () => props.session.isStreaming && !props.session.partialBlocks,
+  waitingForReply,
   waiting => {
     if (waiting && waitingClock === undefined) {
       waitingSeconds.value = 0
@@ -235,7 +236,7 @@ onBeforeUnmount(() => {
       <!-- waiting indicator before any content arrives: icon on the left,
                loading status (with elapsed seconds) on the right -->
       <div
-        v-if="session.isStreaming && !session.partialBlocks"
+        v-if="waitingForReply"
         class="text-muted-foreground flex items-center gap-2 text-sm"
         role="status"
       >

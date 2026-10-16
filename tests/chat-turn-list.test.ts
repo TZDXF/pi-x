@@ -1,7 +1,24 @@
 import { expect, test, vi } from "vitest"
 import { reactive, ref } from "vue"
-import { useChatTurnList, blocksText, hasSummary } from "@/composables/useChatTurnList"
+import { useChatTurnList, blocksText, hasSummary, isWaitingForReply } from "@/composables/useChatTurnList"
 import { chatSource } from "./fixtures/chatSources"
+
+test("waiting status hides during tool calls and returns after all tools settle", () => {
+  const session = reactive({ isStreaming: true, partialBlocks: null, runs: {} })
+  expect(isWaitingForReply(session)).toBe(true)
+  session.runs.first = { state: "input-available" }
+  session.runs.second = { state: "input-streaming" }
+  expect(isWaitingForReply(session)).toBe(false)
+  session.runs.first.state = "output-available"
+  expect(isWaitingForReply(session)).toBe(false)
+  session.runs.second.state = "output-error"
+  expect(isWaitingForReply(session)).toBe(true)
+  session.partialBlocks = [{ type: "text", text: "reply" }]
+  expect(isWaitingForReply(session)).toBe(false)
+  session.partialBlocks = null
+  session.isStreaming = false
+  expect(isWaitingForReply(session)).toBe(false)
+})
 
 function harness() {
   const session = reactive({

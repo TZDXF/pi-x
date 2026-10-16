@@ -21,6 +21,14 @@ export function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
 }
 
+export function isWaitingForReply(session: Pick<SessionStore, "isStreaming" | "partialBlocks" | "runs">): boolean {
+  return (
+    session.isStreaming &&
+    !session.partialBlocks &&
+    !Object.values(session.runs).some(run => run.state === "input-streaming" || run.state === "input-available")
+  )
+}
+
 /**
  * Settled turns fold their process even when interruption leaves no final text.
  * Concise mode hides completed thinking, so a reasoning-only process would
