@@ -92,6 +92,19 @@ function onInput() {
 function insertAtSelection(value: string, lineBreak = false): boolean {
   if (lineBreak) return document.execCommand("insertLineBreak")
   if (!value) return true
+  value = value.replace(/\r\n?/g, "\n")
+  if (value.includes("\n")) {
+    // insertText creates block wrappers for pasted lines, but our model uses explicit BRs.
+    // Build HTML from text nodes to preserve literal markup and one native undo step.
+    const fragment = document.createElement("div")
+    appendText(fragment, value)
+    if (value.endsWith("\n")) {
+      const caretBreak = document.createElement("br")
+      caretBreak.dataset.editorCaret = ""
+      fragment.append(caretBreak)
+    }
+    return document.execCommand("insertHTML", false, fragment.innerHTML)
+  }
   return document.execCommand("insertText", false, value)
 }
 

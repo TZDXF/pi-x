@@ -251,6 +251,25 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await editor.press("Shift+Enter")
   await expectEditorText(editor, "@none\n\n")
 
+  // Native multiline insertion can create DIVs that the composer serializes without line breaks.
+  const pasted = 'location /example/ {\n    value "<tag>&";\n\n}\n'
+  await editor.fill("")
+  await editor.focus()
+  await editor.evaluate((element, text) => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData("text/plain", text.replace(/\n/g, "\r\n"))
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }))
+  }, pasted)
+  await expectEditorText(editor, pasted)
+  await editor.press("Control+z")
+  await expectEditorText(editor, "")
+  await editor.press("Control+Shift+z")
+  await expectEditorText(editor, pasted)
+  await editor.press("Enter")
+  await expect
+    .poll(() => calls.filter(call => call.args.command?.type === "prompt").at(-1)?.args.command?.message)
+    .toBe(pasted.trim())
+
   await editor.fill("/new ")
   await editor.press("Escape")
   await editor.press("Enter")
