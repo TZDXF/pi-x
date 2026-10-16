@@ -252,6 +252,46 @@ test("projectless rows use the same saved/pending components without project wor
   expect(byClass(root, "session-running")).toHaveLength(1)
 })
 
+test("project sessions default to five including draft and pending, and toggle independently", async () => {
+  const rows = Array.from({ length: 7 }, (_, index) => ({ ...saved, file: `${index}.jsonl` }))
+  const props = { ...listProps, rows, orderedFiles: rows.map(row => row.file) }
+  const root = mount("SidebarSessionList.vue", props)
+  const other = mount("SidebarSessionList.vue", props)
+  expect(byClass(root, "session-row")).toHaveLength(5)
+  const toggle = byClass(root, "session-list-toggle")[0]
+  expect(toggle.props["aria-expanded"]).toBe(false)
+  toggle.props.onClick()
+  await vue.nextTick()
+  expect(byClass(root, "session-row")).toHaveLength(9)
+  expect(byClass(other, "session-row")).toHaveLength(5)
+  toggle.props.onClick()
+  await vue.nextTick()
+  expect(byClass(root, "session-row")).toHaveLength(5)
+  for (const overrides of [{ query: "saved" }, { projectless: true }]) {
+    const unlimited = mount("SidebarSessionList.vue", { ...props, ...overrides })
+    expect(byClass(unlimited, "session-row")).toHaveLength(9)
+    expect(byClass(unlimited, "session-list-toggle")).toHaveLength(0)
+  }
+})
+
+test("folded session sorting retains hidden files and five sessions need no toggle", () => {
+  const rows = Array.from({ length: 7 }, (_, index) => ({ ...saved, file: `${index}.jsonl` }))
+  const reorder = vi.fn()
+  const props = { ...listProps, rows, orderedFiles: rows.map(row => row.file), pending: [], showDraft: false }
+  const root = mount("SidebarSessionList.vue", { ...props, onReorder: reorder })
+  const sortable = find(root, item => item.props.sortableFiles)[0]
+  expect(sortable.props.sortableFiles).toEqual(props.orderedFiles.slice(0, 5))
+  sortable.props.onSort([...sortable.props.sortableFiles].reverse())
+  expect(reorder).toHaveBeenCalledWith(["4.jsonl", "3.jsonl", "2.jsonl", "1.jsonl", "0.jsonl", "5.jsonl", "6.jsonl"])
+  const five = mount("SidebarSessionList.vue", {
+    ...props,
+    rows: rows.slice(0, 5),
+    orderedFiles: props.orderedFiles.slice(0, 5),
+  })
+  expect(byClass(five, "session-row")).toHaveLength(5)
+  expect(byClass(five, "session-list-toggle")).toHaveLength(0)
+})
+
 test("run and queue indicators react without changing row padding/positions", async () => {
   const root = mount("SidebarSavedSessionRow.vue", {
     s: saved,

@@ -598,6 +598,8 @@ export default {
   },
 
   sidebar: {
+    expandSessions: "Show more ({count})",
+    collapseSessions: "Show fewer sessions",
     ariaLabel: "Projects and sessions",
     collapse: "Collapse sidebar",
     resizeWidth: "Resize sidebar",

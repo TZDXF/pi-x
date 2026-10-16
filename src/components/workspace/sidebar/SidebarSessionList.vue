@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
 import { Layers } from "@lucide/vue"
@@ -11,7 +12,7 @@ import SidebarPendingSessionRow from "./SidebarPendingSessionRow.vue"
 import SidebarSavedSessionRow from "./SidebarSavedSessionRow.vue"
 import { setSidebarSessionDragData } from "./useSidebarSessionOrdering"
 
-defineProps<{
+const props = defineProps<{
   path: string
   rows: SessionMeta[]
   orderedFiles: string[]
@@ -42,6 +43,21 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
+const expanded = ref(false)
+const hiddenCount = computed(() => Math.max(0, props.rows.length + props.pending.length + Number(props.showDraft) - 5))
+const canCollapse = computed(() => !props.projectless && !props.query && hiddenCount.value > 0)
+const limited = computed(() => canCollapse.value && !expanded.value)
+const visiblePending = computed(() =>
+  limited.value ? props.pending.slice(0, 5 - Number(props.showDraft)) : props.pending,
+)
+const visibleRows = computed(() =>
+  limited.value ? props.rows.slice(0, Math.max(0, 5 - Number(props.showDraft) - props.pending.length)) : props.rows,
+)
+const sortableFiles = computed(() => (limited.value ? visibleRows.value.map(row => row.file) : props.orderedFiles))
+function reorder(files: string[]) {
+  const visible = new Set(sortableFiles.value)
+  emit("reorder", limited.value ? [...files, ...props.orderedFiles.filter(file => !visible.has(file))] : files)
+}
 function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
   setSidebarSessionDragData(transfer, item, file => findConversation(file)?.runtimeId)
 }
@@ -65,7 +81,7 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
       <span class="truncate">{{ t("chat.newSession") }}</span>
     </div>
     <SidebarPendingSessionRow
-      v-for="conversation in pending"
+      v-for="conversation in visiblePending"
       :key="conversation.runtimeId"
       :pending="conversation"
       :active="conversation.runtimeId === activeRuntimeId"
@@ -76,15 +92,15 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
     />
     <VueDraggable
       tag="div"
-      :model-value="orderedFiles"
+      :model-value="sortableFiles"
       :animation="150"
       :disabled="disabled || !!query"
       chosen-class="drag-source"
       :set-data="setSessionDragData"
-      @update:model-value="emit('reorder', $event)"
+      @update:model-value="reorder"
     >
       <SidebarSavedSessionRow
-        v-for="row in rows"
+        v-for="row in visibleRows"
         :key="row.file"
         :s="row"
         :path="path"
@@ -103,6 +119,15 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
         @export="emit('export', $event)"
       />
     </VueDraggable>
+    <Button
+      v-if="canCollapse"
+      variant="quiet"
+      size="content"
+      class="session-list-toggle w-full justify-start py-1.5 pl-7 pr-2 text-xs text-muted-foreground"
+      :aria-expanded="expanded"
+      @click="expanded = !expanded"
+      >{{ expanded ? t("sidebar.collapseSessions") : t("sidebar.expandSessions", { count: hiddenCount }) }}</Button
+    >
     <Button
       v-if="projectless ? !!error : error === 'failed'"
       variant="ghost"
