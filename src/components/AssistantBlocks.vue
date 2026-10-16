@@ -27,6 +27,7 @@ const props = withDefaults(
     blocks: Block[]
     runs: Record<string, ToolRun>
     animate?: boolean
+    streaming?: boolean
     /** Expanded concise groups reuse the detailed tool renderers without changing the preference. */
     detail?: ProcessDetail
     /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
@@ -212,6 +213,7 @@ const { t } = useI18n()
       <MessageResponse
         v-if="block.type === 'text'"
         :content="block.text"
+        :streaming="props.streaming"
         :enable-animate="props.animate"
         class="text-sm"
       />

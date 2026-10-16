@@ -8,12 +8,13 @@ import 'vue-stream-markdown/index.css'
 
 interface Props {
   content?: string
+  streaming?: boolean
   class?: HTMLAttributes['class']
   /** 代码块是否默认自动换行（vue-stream-markdown 无内置配置，通过样式实现） */
   wrapCode?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { wrapCode: true })
+const props = withDefaults(defineProps<Props>(), { wrapCode: true, streaming: false })
 
 const slots = useSlots()
 const slotContent = computed<string | undefined>(() => {
@@ -35,6 +36,7 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
 <template>
   <Markdown
     :content="md"
+    :mode="props.streaming ? 'streaming' : 'static'"
     :link-options="markdownLinkOptions"
     :class="
       cn(
