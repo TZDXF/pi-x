@@ -42,12 +42,20 @@ test("standalone image reads split concise groups and remain visible in order", 
   expect([...toolCallGroups(blocks)]).toEqual([[0, blocks]])
 })
 
-test("live, final and restored results retain images and previews sit outside collapsed details", () => {
+test("live, final and restored results retain images and image reads have no expandable IO", () => {
   const events = chatSource("stores/session/events.ts")
   expect(events).toContain("run.outputImages = contentImages(ev.partialResult.content)")
   expect(events).toContain("if (ev.result) run.outputImages = contentImages(ev.result.content)")
   expect(chatSource("stores/session/history.ts")).toContain("outputImages: contentImages(msg.content)")
-  expect(chatSource("components/AssistantBlocks.vue")).toMatch(/<\/ToolContent>\s*<ToolImageGallery/)
+  const blocks = chatSource("components/AssistantBlocks.vue")
+  const imageCard = blocks.slice(
+    blocks.indexOf('v-else-if="block.type === \'toolCall\' && hasReadImages(block)"'),
+    blocks.indexOf("<!-- other tools:"),
+  )
+  expect(imageCard).toContain("<ToolImageGallery")
+  expect(imageCard).toContain("<ToolStatusBadge")
+  expect(imageCard).not.toMatch(/<Tool(?:Header|Content|RunDetails)\b/)
+  expect(blocks).toContain('<ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />')
   const gallery = chatSource("components/chat/ToolImageGallery.vue")
   expect(gallery).toContain('@click="preview = src"')
   expect(gallery).toContain(':src="preview"')

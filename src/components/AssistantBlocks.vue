@@ -334,6 +334,22 @@ const { t } = useI18n()
       <!-- consumed by the group rendered at the run's first call -->
       <template v-else-if="block.type === 'toolCall' && isSubagent(block)" />
 
+      <!-- Image reads show their preview directly, without expandable input/output. -->
+      <div
+        v-else-if="block.type === 'toolCall' && hasReadImages(block)"
+        class="not-prose w-full overflow-hidden rounded-md border bg-background/50"
+      >
+        <div class="flex items-center gap-2 px-3 py-2">
+          <FileText class="size-4 shrink-0 text-muted-foreground" />
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="readTitle(block)">{{ readTitle(block) }}</span>
+          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{
+            elapsedText(block)
+          }}</span>
+          <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
+        </div>
+        <ToolImageGallery :images="runFor(block)!.outputImages!" :alt="readTitle(block)" class="px-3 pb-3" />
+      </div>
+
       <!-- other tools: generic collapsible input/output; read shows the file path and offset -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
@@ -358,12 +374,6 @@ const { t } = useI18n()
         <ToolContent>
           <ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />
         </ToolContent>
-        <ToolImageGallery
-          v-if="hasReadImages(block)"
-          :images="runFor(block)!.outputImages!"
-          :alt="readTitle(block)"
-          class="px-3 pb-3"
-        />
       </Tool>
     </template>
     <slot />
