@@ -147,11 +147,6 @@ export function useChatSendControl(deps: {
           }
           return
         }
-        if (!session.commands.some(c => c.name === commandName)) {
-          const error = t("completion.unsupported", { name: commandName })
-          ui.pushToast(error, "error")
-          throw new Error(error)
-        }
       }
       const extensionCommand =
         commandName && session.commands.some(c => c.name === commandName && c.source === "extension")

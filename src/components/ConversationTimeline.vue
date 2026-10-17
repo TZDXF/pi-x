@@ -278,6 +278,7 @@ function onViewportScroll() {
   background: var(--primary);
 }
 .timeline-preview {
+  display: block;
   width: min(280px, calc(100vw - 64px));
   max-width: 280px;
   padding: 12px;

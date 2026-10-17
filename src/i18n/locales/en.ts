@@ -252,8 +252,6 @@ export default {
     extension: "Extension",
     prompt: "Prompt",
     skill: "Skill",
-    unsupported:
-      "Unsupported command /{name}. Type / to see available commands; use the UI for terminal-only commands.",
   },
   skillsConfig: {
     title: "Skills",

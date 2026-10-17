@@ -247,7 +247,6 @@ export default {
     extension: "扩展",
     prompt: "提示词",
     skill: "技能",
-    unsupported: "不支持的命令 /{name}。请输入 / 查看可用命令；终端内置命令请使用界面对应功能。",
   },
   skillsConfig: {
     title: "Skills 管理",
