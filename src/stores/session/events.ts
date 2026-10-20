@@ -281,6 +281,10 @@ export function createEventHandler(ctx: EventContext) {
         }
         retryInfo.value = null
         flow.awaitingAgentStart = false
+        // Settled is the terminal boundary even if a message_end was missed.
+        // Never let its transient tools/thinking keep the completed turn live.
+        partialBlocks.value = null
+        streamingTurnId.value = null
         isStreaming.value = false
         const finalStatus = flow.turnAborted || flow.stopping ? null : flow.turnFailed ? "error" : "completed"
         pixLog(

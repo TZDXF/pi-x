@@ -67,10 +67,28 @@ test("partial deltas append without mutating committed blocks and context edits 
     { kind: "context_edit", id: 3 },
     { kind: "assistant", id: 2, blocks: [{ type: "text", text: "committed" }] },
   )
+  h.session.isStreaming = true
   h.session.partialBlocks = [{ type: "text", text: "delta" }]
   expect(h.controls.renderedEntries.value.map(e => e.kind)).toEqual(["user", "assistant"])
   expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe("committed\n\ndelta")
   expect(h.session.entries[2].blocks).toHaveLength(1)
+})
+
+test("idle turns ignore stale tool and thinking deltas after the final answer", () => {
+  const h = harness()
+  h.session.entries.push(
+    { kind: "user", id: 1, text: "q" },
+    { kind: "assistant", id: 2, blocks: [{ type: "text", text: "final answer" }] },
+  )
+  h.session.partialBlocks = [
+    { type: "toolCall", callId: "old-tool", name: "bash", argsText: "{}" },
+    { type: "thinking", text: "", streaming: true },
+  ]
+  const turn = h.controls.lastAssistantTurn()
+  expect(turn.complete).toBe(true)
+  expect(turn.blocks).toEqual([{ type: "text", text: "final answer" }])
+  expect(hasSummary(turn)).toBe(true)
+  expect(turn.toolCallCount).toBe(0)
 })
 
 test("history paging ignores duplicate events and restores only the still-current connected viewport", async () => {
