@@ -51,6 +51,8 @@ async function harness(group = null) {
     // App 挂载即解析无项目会话目录（不阻塞启动），桩掉即可。
     ensureProjectless: async () => "",
     projectlessDefault: "",
+    syncState: async () => {},
+    applyState: () => {},
     isProjectless: () => false,
     // 移除项目标记：默认没有任何已移除项目。
     isRemovedProject: () => false,
@@ -119,6 +121,7 @@ async function harness(group = null) {
       onPiStderr: async () => () => {},
       onSshPathBound: async () => () => {},
       onReconnected: async () => () => {},
+      onWorkspaceStateChanged: async () => () => {},
       onSessionsChanged: async () => () => {},
       saveConfig: async () => {},
       sessionMtime: async () => 0,

@@ -44,6 +44,14 @@ vi.mock("@/api/piClient", () => ({
     if (mocks.remoteError) return Promise.reject(mocks.remoteError)
     return Promise.resolve(mocks.remoteRows)
   },
+  getWorkspaceState: async () => {
+    const { emptyWorkspaceState } = await import("@/lib/workspaceState")
+    return emptyWorkspaceState()
+  },
+  updateWorkspaceState: async () => {
+    const { emptyWorkspaceState } = await import("@/lib/workspaceState")
+    return emptyWorkspaceState()
+  },
   pixLog: () => {},
 }))
 
@@ -92,8 +100,8 @@ test("workspace.refresh：远程项目按连接 id 调 ssh_sessions 并填充历
   resetMocks()
   mocks.connections = [{ id: "ssh-1", host: "host", port: 2222, user: "dev" }]
   mocks.remoteRows = [
-    { file: "/home/dev/proj/.pi/sessions/a.jsonl", id: "a", cwd: URI, mtimeMs: 200, title: "Remote A" },
-    { file: "/home/dev/proj/.pi/sessions/b.jsonl", id: "b", cwd: URI, mtimeMs: 100 },
+    { file: "/home/dev/proj/.pi/sessions/a.jsonl", id: "a", cwd: URI, mtimeMs: 200, timestamp: "2026-01-02T00:00:00Z", title: "Remote A" },
+    { file: "/home/dev/proj/.pi/sessions/b.jsonl", id: "b", cwd: URI, mtimeMs: 100, timestamp: "2026-01-01T00:00:00Z" },
   ]
   const store = await harness()
   await store.refresh(URI)

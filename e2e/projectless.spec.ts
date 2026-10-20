@@ -68,7 +68,7 @@ app.use(pinia).use(createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-
 setActivePinia(pinia)
 if (view === 'sidebar') {
   // 侧栏按解析结果命名项目；未解析时应退回目录名。
-  useWorkspaceStore().projects = [window.projectlessDir, 'C:/demo']
+  await useWorkspaceStore().initialize()
   await useWorkspaceStore().ensureProjectless()
 }
 app.mount('#app')
@@ -116,6 +116,15 @@ test.describe("projectless", () => {
               isDefault: projectWindow.projectlessDir === projectWindow.defaultProjectlessDir,
             }
           }
+          if (command === "workspace_state_get")
+            return {
+              revision: 0,
+              projects: [projectWindow.projectlessDir, "C:/demo"],
+              pinnedProjects: [],
+              projectGroups: {},
+              removedProjects: [],
+              sessionOrder: {},
+            }
           if (command === "session_list") return []
           return {}
         },

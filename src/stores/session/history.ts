@@ -2,7 +2,7 @@ import { computed, ref, shallowRef, type Ref } from "vue"
 import { sessionHistory, sessionLastError, type SessionLastError, type rpcRequest } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
-import { contentText } from "@/lib/content"
+import { contentImages, contentText } from "@/lib/content"
 import { blocksFromMessage, errorBlock } from "./events"
 import type { Block, Entry, ToolRun } from "./types"
 
@@ -160,6 +160,7 @@ export function createSessionHistory(context: HistoryContext) {
               name: "tool",
               argsText: "",
               outputText: contentText(msg.content),
+              outputImages: contentImages(msg.content),
               state: msg.isError ? "output-error" : "output-available",
             }
         }

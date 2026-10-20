@@ -30,6 +30,20 @@ const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text
 </script>
 
 <template>
+  <!-- 图片独立排列在提问气泡上方，避免受正文宽度限制。 -->
+  <div v-if="entry.images?.length" class="mb-2 flex max-w-full flex-wrap justify-end gap-2">
+    <button
+      v-for="(im, i) in entry.images"
+      :key="i"
+      type="button"
+      class="border-border bg-muted relative size-16 shrink-0 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+      :title="t('chat.previewImage')"
+      :aria-label="t('chat.previewImage')"
+      @click="emit('previewImage', im.url)"
+    >
+      <img :src="im.url" class="size-full object-cover" alt="" loading="lazy" />
+    </button>
+  </div>
   <MessageContent>
     <div class="text-sm">
       <div v-if="editedPrompt?.id === entry.id" class="w-[min(36rem,75vw)] space-y-2">
@@ -86,21 +100,6 @@ const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text
           >
           <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
         </div>
-      </div>
-      <!-- sent attachments keep the composer's chip look: a small
-           thumbnail, click to zoom, instead of large inline images -->
-      <div v-if="entry.images?.length" class="mt-1.5 flex flex-wrap gap-2">
-        <button
-          v-for="(im, i) in entry.images"
-          :key="i"
-          type="button"
-          class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
-          :title="t('chat.previewImage')"
-          :aria-label="t('chat.previewImage')"
-          @click="emit('previewImage', im.url)"
-        >
-          <img :src="im.url" class="size-full object-cover" alt="" loading="lazy" />
-        </button>
       </div>
     </div>
   </MessageContent>

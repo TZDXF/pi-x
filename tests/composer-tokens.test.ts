@@ -2,6 +2,7 @@ import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { composerChipDeletion, composerParts } from "@/lib/composerTokens"
 import { normalizeSlashes } from "@/lib/paths"
+import { desktopCommands } from "@/lib/completion"
 
 test("composer chips hide paths and slash prefixes without changing raw text", () => {
   const text = '/review @"C:/project/src/my file.ts" @session("C:/sessions/old.jsonl") with @src/App.vue '
@@ -13,6 +14,43 @@ test("composer chips hide paths and slash prefixes without changing raw text", (
     ["file", "App.vue"],
   ])
   expect(parts.map(p => p.raw).join("")).toBe(text)
+})
+
+test("live composer only styles exact known command names", () => {
+  const commands = new Set([...desktopCommands, "review", "skill:review", "my-template", "检查"])
+  for (const name of commands) {
+    const text = `/${name} args`
+    expect(composerParts(text, {}, commands)).toEqual([
+      { kind: "command", raw: `/${name}`, label: name },
+      { kind: "text", raw: " args", label: " args" },
+    ])
+  }
+  for (const text of ["/unknown ", "/rev ", "/review-extra args", "/Review args", "explain /review args", "/review"]) {
+    expect(composerParts(text, {}, commands)).toEqual([{ kind: "text", raw: text, label: text }])
+  }
+  expect(composerParts("/review args", {}, new Set()).some(part => part.kind === "command")).toBe(false)
+})
+
+test("unknown commands stay editable without hiding subsequent reference chips", () => {
+  const text = '/unknown @src/App.vue @session("C:/sessions/old.jsonl") '
+  const commands = new Set<string>(desktopCommands)
+  const parts = composerParts(text, {}, commands)
+  expect(parts[0]).toEqual({ kind: "text", raw: "/unknown ", label: "/unknown " })
+  expect(parts.filter(part => part.kind !== "text").map(part => part.kind)).toEqual(["file", "session"])
+  expect(parts.map(part => part.raw).join("")).toBe(text)
+  expect(composerChipDeletion(text, parts, "Backspace", "/unknown ".length)).toBeNull()
+  expect(composerChipDeletion(text, parts, "Delete", 0)).toBeNull()
+  expect(composerChipDeletion(text, parts, "Backspace", text.indexOf(" @session"))?.chipIndex).toBe(0)
+})
+
+test("command chips follow the current session's command list", () => {
+  const text = "/review args"
+  const commands = new Set<string>(desktopCommands)
+  expect(composerParts(text, {}, commands).some(part => part.kind === "command")).toBe(false)
+  commands.add("review")
+  expect(composerParts(text, {}, commands).some(part => part.kind === "command")).toBe(true)
+  commands.delete("review")
+  expect(composerParts(text, {}, commands).some(part => part.kind === "command")).toBe(false)
 })
 
 test("unfinished completion tokens remain editable plain text", () => {
@@ -51,8 +89,17 @@ test("rich editor wires workspace session titles into chip rendering", () => {
   const composable = readFileSync(new URL("../src/composables/useSessionLabels.ts", import.meta.url), "utf8")
   expect(editor).toMatch(/useSessionLabels/)
   expect(composable).toMatch(/row\.title \|\| row\.preview/)
-  expect(editor).toMatch(/composerParts\(value, sessionLabels\.value\)/)
+  expect(editor).toMatch(/composerParts\(value, sessionLabels\.value, commandNames\.value\)/)
   expect(editor).toMatch(/watch\(sessionLabels/)
+})
+
+test("rich editor validates rendering and chip deletion against its own session commands", () => {
+  const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
+  const composer = readFileSync(new URL("../src/components/chat/ChatComposer.vue", import.meta.url), "utf8")
+  expect(composer).toMatch(/<ComposerRichEditor\s+:commands="session\.commands"/)
+  expect(editor).toMatch(/new Set\(\[\.\.\.desktopCommands, \.\.\.\(props\.commands/)
+  expect(editor.match(/composerParts\([^\n]+commandNames\.value\)/g)).toHaveLength(3)
+  expect(editor).toMatch(/watch\(commandNames/)
 })
 
 test("rendered user messages reuse the composer chip styling", () => {
@@ -61,7 +108,7 @@ test("rendered user messages reuse the composer chip styling", () => {
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
   // 历史消息先解析掉 "# Code comments:" 尾块再交给 chip 渲染。
   expect(view).toMatch(/<ComposerText v-else :text="parsedPrompt\.visibleContent" \/>/)
-  expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value\)/)
+  expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value, undefined, "message"\)/)
   expect(display).toMatch(/composerChipClass/)
   expect(display).toMatch(/composerChipText\(part\)/)
   for (const source of [display, editor]) {
@@ -101,4 +148,23 @@ test("backspace and delete remove reference chips at their whole boundaries", ()
     caret: start - 1,
   })
   expect(composerChipDeletion(text, parts, "Backspace", text.length)).toBeNull()
+})
+
+test("sent messages retain chips after completion delimiters are trimmed", () => {
+  for (const draft of ["/skill:review ", "/review ", "@src/App.vue ", "/skill:review @src/App.vue "]) {
+    const text = draft.trim()
+    const parts = composerParts(text, {}, undefined, "message")
+    expect(parts.filter(p => p.kind !== "text")).toEqual(composerParts(draft).filter(p => p.kind !== "text"))
+    expect(parts.map(p => p.raw).join("")).toBe(text)
+  }
+})
+
+test("message mode preserves reference boundaries and incomplete quoted text", () => {
+  for (const text of ["mail@example.com", "explain /review", '@"src/unclosed', "@../secret", "/"]) {
+    expect(composerParts(text, {}, undefined, "message")).toEqual([{ kind: "text", raw: text, label: text }])
+  }
+  expect(
+    composerParts('@session("C:/sessions/old.jsonl")', { "C:/sessions/old.jsonl": "历史对话" }, undefined, "message")[0]
+      ?.label,
+  ).toBe("历史对话")
 })

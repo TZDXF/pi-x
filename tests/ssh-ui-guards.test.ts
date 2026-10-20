@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   gitQueries: [] as string[],
   sshConnectionListCalls: [] as string[],
   sshSessionsCalls: [] as { project: string; sshConnectionId: string }[],
+  statePatches: [] as unknown[],
 }))
 
 vi.mock("@/api/piClient", () => ({
@@ -35,6 +36,15 @@ vi.mock("@/api/piClient", () => ({
   sshSessions: (project: string, sshConnectionId: string) => {
     mocks.sshSessionsCalls.push({ project, sshConnectionId })
     return Promise.resolve([])
+  },
+  getWorkspaceState: async () => {
+    const { emptyWorkspaceState } = await import("@/lib/workspaceState")
+    return emptyWorkspaceState()
+  },
+  updateWorkspaceState: async (patch: never) => {
+    mocks.statePatches.push(patch)
+    const { emptyWorkspaceState, applyWorkspaceStatePatch } = await import("@/lib/workspaceState")
+    return applyWorkspaceStatePatch(emptyWorkspaceState(), patch)
   },
   pixLog: () => {},
 }))
@@ -98,8 +108,9 @@ test("workspace.rememberWorkspace：远程项目跳过 git 查询，直接进项
   await store.rememberWorkspace(uri)
   expect(mocks.gitQueries).toHaveLength(0)
   expect(store.projects).toContain(uri)
-  // recentProjects 持久化的是展示 URI
-  expect(JSON.parse(mocks.storage.get("pix.recentProjects")!)).toContain(uri)
+  // 项目列表经后端 workspace_state 持久化，记录的是展示 URI
+  await vi.waitFor(() => expect(mocks.statePatches.length).toBeGreaterThan(0))
+  expect(JSON.stringify(mocks.statePatches)).toContain(uri)
 })
 
 test("resolveSshConnectionId：优先记住的连接，失效后按 host/port/user 匹配", async () => {

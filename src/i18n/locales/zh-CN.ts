@@ -247,7 +247,6 @@ export default {
     extension: "扩展",
     prompt: "提示词",
     skill: "技能",
-    unsupported: "不支持的命令 /{name}。请输入 / 查看可用命令；终端内置命令请使用界面对应功能。",
   },
   skillsConfig: {
     title: "Skills 管理",
@@ -662,6 +661,7 @@ export default {
   },
 
   sidebar: {
+    expandSessions: "展开更多",
     ariaLabel: "项目与会话",
     collapse: "收起侧栏",
     resizeWidth: "调整侧栏宽度",
@@ -774,6 +774,7 @@ export default {
     cycleNoOtherModel: "没有其他可用模型",
     cycleThinkingUnsupported: "当前模型不支持思考等级",
     removeAttachment: "移除",
+    attachmentReadFailed: "附件读取失败，消息未发送。请重新添加附件后重试。",
     previewImage: "预览图片",
     attachment: "附件",
     noMatchingFiles: "没有匹配的文件。",
@@ -816,7 +817,6 @@ export default {
     forkEmpty: "暂无可用的用户消息。",
     toastForkCancelled: "扩展取消了分支操作",
     toastForked: "已从较早的提问分支",
-    toastForkNoLater: "这条回答之后没有提问，无需分支",
     forkFailed: "分支失败",
     forkFailedList: "加载分支消息失败",
     toastExported: "会话已导出",

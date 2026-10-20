@@ -58,7 +58,7 @@ onPiStderr onSshPathBound onReconnected RemoteStatus remoteStatus remoteSet remo
 previewProxyInfo ModelCostRates ModelFallbackModel ModelCompat ModelImageResize ModelImageInputLimits ModelInputLimits
 ModelPromptCache ModelEntry ProviderEntry ModelsConfig getModelsConfig saveModelsConfig FetchedModel
 fetchProviderModels updateSession listArchivedSessions deleteSession GitWorktree WorkspaceSelection prepareWorkspaceGit
-WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle CatalogPackage InstalledPackage CatalogPage
+getWorkspaceState updateWorkspaceState onWorkspaceStateChanged WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle CatalogPackage InstalledPackage CatalogPage
 packageCatalog packageList packageInstall packageRemove packageUpdate PackageResource packageResources
 packageListFiles packageReadFile packageTranslate packageSetResource packageNameOf RunningSession listRunningSessions
 McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus McpStatusResult
@@ -278,7 +278,6 @@ test("RPC and session listeners forward payloads, including subagent events, unc
   expect(mocks.unsubscribe).toHaveBeenCalledOnce()
 })
 
-
 test("SSH probe forwards in-memory credentials without trimming", async () => {
   const { sshProbeTarget, sshConnectionSave } = await loaders.ssh()
   const target = { host: "host.test", authMethod: "password" as const, password: " secret & % ", keyPassphrase: " passphrase " }
@@ -288,4 +287,23 @@ test("SSH probe forwards in-memory credentials without trimming", async () => {
   })
   await sshConnectionSave({ ...target, name: "test" })
   expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_connection_save", { connection: { ...target, name: "test" } })
+})
+
+test("workspace metadata uses shared commands and forwards full change events", async () => {
+  const api = await import("@/api/client/workspace")
+  const patch = { projects: { add: ["project"], remove: [] } }
+  await api.getWorkspaceState()
+  await api.updateWorkspaceState(patch)
+  expect(mocks.invoke.mock.calls).toEqual([["workspace_state_get"], ["workspace_state_update", { patch }]])
+  const handler = vi.fn()
+  await api.onWorkspaceStateChanged(handler)
+  const state = { revision: 1, projects: ["project"] }
+  mocks.listeners.get("pi://workspace-state-changed")!({ payload: state })
+  expect(handler).toHaveBeenCalledWith(state)
+  const lib = readFileSync(resolve("src-tauri/src/lib.rs"), "utf8")
+  const dispatch = readFileSync(resolve("src-tauri/src/remote/dispatch/workspace.rs"), "utf8")
+  for (const command of ["workspace_state_get", "workspace_state_update"]) {
+    expect(lib).toContain(`commands::workspace_state::${command}`)
+    expect(dispatch).toContain(`"${command}" =>`)
+  }
 })

@@ -4,6 +4,7 @@ import ChatErrorRecord from "@/components/chat/ChatErrorRecord.vue"
 import ToolCallGroup from "@/components/chat/ToolCallGroup.vue"
 import { toolCallGroups } from "@/lib/toolCallGroups"
 import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
+import ToolImageGallery from "@/components/chat/ToolImageGallery.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -26,6 +27,7 @@ const props = withDefaults(
     blocks: Block[]
     runs: Record<string, ToolRun>
     animate?: boolean
+    streaming?: boolean
     /** Expanded concise groups reuse the detailed tool renderers without changing the preference. */
     detail?: ProcessDetail
     /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
@@ -37,7 +39,7 @@ const props = withDefaults(
 
 const displayDetail = computed(() => props.detail ?? processDetail.value)
 const conciseGroups = computed(() =>
-  displayDetail.value === "concise" ? toolCallGroups(props.blocks) : new Map<number, ToolCallBlock[]>(),
+  displayDetail.value === "concise" ? toolCallGroups(props.blocks, hasReadImages) : new Map<number, ToolCallBlock[]>(),
 )
 
 const emit = defineEmits<{ openReview: [path: string] }>()
@@ -95,6 +97,10 @@ function commandPreview(block: ToolCallBlock): string {
 const READ_TOOLS = new Set(["read", "read_file", "cat", "view", "open_file"])
 function isRead(block: ToolCallBlock): boolean {
   return READ_TOOLS.has(toolBase(block))
+}
+
+function hasReadImages(block: ToolCallBlock): boolean {
+  return isRead(block) && !!runFor(block)?.outputImages?.length
 }
 
 // pi-subagents is a plugin, not a pi core tool: all its knowledge lives in
@@ -207,6 +213,7 @@ const { t } = useI18n()
       <MessageResponse
         v-if="block.type === 'text'"
         :content="block.text"
+        :streaming="props.streaming"
         :enable-animate="props.animate"
         class="text-sm"
       />
@@ -246,7 +253,7 @@ const { t } = useI18n()
         />
       </ToolCallGroup>
       <!-- Later calls in a concise group are rendered only inside its expanded content. -->
-      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise'" />
+      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise' && !hasReadImages(block)" />
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">
@@ -326,6 +333,22 @@ const { t } = useI18n()
       />
       <!-- consumed by the group rendered at the run's first call -->
       <template v-else-if="block.type === 'toolCall' && isSubagent(block)" />
+
+      <!-- Image reads show their preview directly, without expandable input/output. -->
+      <div
+        v-else-if="block.type === 'toolCall' && hasReadImages(block)"
+        class="not-prose w-full overflow-hidden rounded-md border bg-background/50"
+      >
+        <div class="flex items-center gap-2 px-3 py-2">
+          <FileText class="size-4 shrink-0 text-muted-foreground" />
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="readTitle(block)">{{ readTitle(block) }}</span>
+          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{
+            elapsedText(block)
+          }}</span>
+          <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
+        </div>
+        <ToolImageGallery :images="runFor(block)!.outputImages!" :alt="readTitle(block)" class="px-3 pb-3" />
+      </div>
 
       <!-- other tools: generic collapsible input/output; read shows the file path and offset -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">

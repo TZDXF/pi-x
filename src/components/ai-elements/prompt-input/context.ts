@@ -3,6 +3,8 @@ import { nanoid } from 'nanoid'
 import { inject, onBeforeUnmount, provide, ref } from 'vue'
 import { PROMPT_INPUT_KEY } from './types'
 
+class AttachmentReadError extends Error {}
+
 export function usePromptInputProvider(props: {
   initialInput?: string
   maxFiles?: number
@@ -15,6 +17,8 @@ export function usePromptInputProvider(props: {
   const files = ref<AttachmentFile[]>([])
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const isLoading = ref(false)
+  const pendingFiles = new Set<AttachmentFile>()
+  let unmounted = false
 
   const revokeObjectUrl = (file: AttachmentFile) => {
     if (file.url && file.url.startsWith('blob:')) {
@@ -28,7 +32,10 @@ export function usePromptInputProvider(props: {
 
   // Cleanup object URLs to avoid memory leaks
   onBeforeUnmount(() => {
+    unmounted = true
     revokeObjectUrls(files.value)
+    revokeObjectUrls([...pendingFiles])
+    pendingFiles.clear()
   })
 
   const setTextInput = (val: string) => {
@@ -113,24 +120,6 @@ export function usePromptInputProvider(props: {
     files.value = []
   }
 
-  const clearSubmittedFiles = (submittedIds: Set<string>) => {
-    if (submittedIds.size === 0)
-      return
-
-    const remainingFiles: AttachmentFile[] = []
-
-    files.value.forEach((file) => {
-      if (submittedIds.has(file.id)) {
-        revokeObjectUrl(file)
-      }
-      else {
-        remainingFiles.push(file)
-      }
-    })
-
-    files.value = remainingFiles
-  }
-
   const clearInput = () => {
     textInput.value = ''
   }
@@ -139,19 +128,37 @@ export function usePromptInputProvider(props: {
     fileInputRef.value?.click()
   }
 
-  const convertBlobUrlToDataUrl = async (url: string): Promise<string | null> => {
+  const attachmentToDataUrl = async (item: AttachmentFile): Promise<string> => {
     try {
-      const response = await fetch(url)
-      const blob = await response.blob()
-      return new Promise((resolve) => {
+      // Read the original File directly: fetching its preview blob URL can be
+      // blocked by the desktop's connect-src CSP even though img-src allows it.
+      let blob: Blob
+      if (item.file) {
+        blob = item.file
+      }
+      else {
+        const response = await fetch(item.url)
+        if (!response.ok)
+          throw new Error('Attachment fetch failed.')
+        blob = await response.blob()
+      }
+      return await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.onerror = () => resolve(null)
+        reader.onload = () => {
+          if (typeof reader.result === 'string' && reader.result.startsWith('data:'))
+            resolve(reader.result)
+          else
+            reject(new Error('Invalid attachment data.'))
+        }
+        reader.onerror = () => reject(new Error('Attachment read failed.'))
+        reader.onabort = () => reject(new Error('Attachment read aborted.'))
         reader.readAsDataURL(blob)
       })
     }
     catch {
-      return null
+      // Never pass an unreadable blob URL to the send layer: it would silently
+      // omit the attachment and the successful submit would clear the original.
+      throw new AttachmentReadError('Failed to read attachment.')
     }
   }
 
@@ -161,7 +168,10 @@ export function usePromptInputProvider(props: {
 
     const submittedText = textInput.value
     const submittedFiles = [...files.value]
-    const submittedIds = new Set(submittedFiles.map(file => file.id))
+    // Detach this submission from the composer immediately, just like the text.
+    // Keep its object URLs alive until it succeeds or is restored on failure.
+    submittedFiles.forEach(file => pendingFiles.add(file))
+    files.value = []
     clearInput()
 
     try {
@@ -170,8 +180,8 @@ export function usePromptInputProvider(props: {
       const processedFiles = await Promise.all(
         submittedFiles.map(async (item) => {
           if (item.url && item.url.startsWith('blob:')) {
-            const dataUrl = await convertBlobUrlToDataUrl(item.url)
-            return { ...item, url: dataUrl ?? item.url }
+            const dataUrl = await attachmentToDataUrl(item)
+            return { ...item, url: dataUrl }
           }
           return item
         }),
@@ -184,11 +194,15 @@ export function usePromptInputProvider(props: {
 
       await props.onSubmit(message)
 
-      clearSubmittedFiles(submittedIds)
+      if (!unmounted)
+        revokeObjectUrls(submittedFiles)
     }
     catch (e) {
-      if (textInput.value === '') {
-        setTextInput(submittedText)
+      if (!unmounted) {
+        if (textInput.value === '')
+          setTextInput(submittedText)
+        // Preserve any attachments added to the next draft while this send ran.
+        files.value = [...submittedFiles, ...files.value]
       }
 
       if (props.onError) {
@@ -196,13 +210,14 @@ export function usePromptInputProvider(props: {
           ? e.message
           : String(e) || 'An unknown error occurred during submission.'
         props.onError({
-          code: 'submit_error',
+          code: e instanceof AttachmentReadError ? 'attachment_read_error' : 'submit_error',
           message: errorMessage,
         })
       }
       console.error('Submission failed:', e)
     }
     finally {
+      submittedFiles.forEach(file => pendingFiles.delete(file))
       isLoading.value = false
     }
   }

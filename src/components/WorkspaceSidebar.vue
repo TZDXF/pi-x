@@ -173,12 +173,13 @@ watch(
     if (props.ready && !session.isStreaming && props.project) void refresh(props.project)
   },
 )
-for (const path of workspace.projects.flatMap(project => workspace.projectFolders(project)))
-  void workspace.rememberWorkspace(path)
 watch(
   () => workspace.projects.flatMap(path => workspace.projectFolders(path)),
   folders => {
-    for (const folder of new Set(folders)) void refresh(folder)
+    for (const folder of new Set(folders)) {
+      void workspace.registerProjectWorktrees(folder)
+      void refresh(folder)
+    }
   },
   { immediate: true },
 )

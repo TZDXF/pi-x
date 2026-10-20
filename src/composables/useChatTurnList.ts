@@ -21,6 +21,14 @@ export function hasSummary(entry: AssistantTurn): boolean {
   return entry.complete && !!blocksText(entry.summary).trim()
 }
 
+export function isWaitingForReply(session: Pick<SessionStore, "isStreaming" | "partialBlocks" | "runs">): boolean {
+  return (
+    session.isStreaming &&
+    !session.partialBlocks &&
+    !Object.values(session.runs).some(run => run.state === "input-streaming" || run.state === "input-available")
+  )
+}
+
 /**
  * Settled turns fold their process even when interruption leaves no final text.
  * Concise mode hides completed thinking, so a reasoning-only process would
@@ -41,11 +49,12 @@ export function useChatTurnList(deps: {
 }) {
   const { session, ui, conversation } = deps
   const renderedEntries = computed(() => {
-    const streaming = session.isStreaming || !!session.partialBlocks
+    // Transient blocks cannot reopen a turn once its run has settled.
+    const streaming = session.isStreaming
     // Context-edit markers stay in the session data but never surface here:
     // responseTurns already skips them so they cannot split a turn.
     const turns = responseTurns(session.entries, streaming)
-    const partial = session.partialBlocks
+    const partial = streaming ? session.partialBlocks : null
     if (partial?.length) {
       const last = turns[turns.length - 1]
       if (last?.kind === "assistant") {

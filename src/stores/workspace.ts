@@ -11,9 +11,21 @@ import {
   updateSession,
   sshConnectionList,
   sshSessions,
+  getWorkspaceState,
+  updateWorkspaceState,
+  workspaceGitInfo,
   type SessionMeta,
+  type WorkspaceGitInfo,
 } from "@/api/piClient"
-import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
+import {
+  applyWorkspaceStatePatch,
+  diffWorkspaceState,
+  emptyWorkspaceState,
+  type WorkspaceState,
+  type WorkspaceStatePatch,
+} from "@/lib/workspaceState"
+import type { ProjectGroup } from "@/lib/workspaceState"
+export type { ProjectGroup } from "@/lib/workspaceState"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
 const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
@@ -27,12 +39,6 @@ export function registerSessionMtimeSync(sync: (file: string, mtimeMs: number) =
 }
 function notifySessionMtimeSync(file: string, mtimeMs: number) {
   sessionMtimeSync?.(file, mtimeMs)
-}
-
-export interface ProjectGroup {
-  name: string
-  folders: string[]
-  primary: string
 }
 
 export const useWorkspaceStore = defineStore("workspace", () => {
@@ -51,113 +57,106 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   let projectlessRequest: Promise<string> | null = null
   const pending = new Map<string, SessionMeta>()
   const versions: Record<string, number> = {}
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.recentProjects") || "[]")
-    if (Array.isArray(stored)) {
-      for (const item of stored) {
-        if (typeof item !== "string") continue
-        const path = normalizeProjectPath(item)
-        if (path && !projects.value.some(existing => samePath(existing, path))) projects.value.push(path)
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
-    if (Array.isArray(stored))
-      pinnedProjects.value = projects.value.filter(path => stored.some(p => typeof p === "string" && samePath(p, path)))
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.sessionOrder") || "{}")
-    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-      for (const [path, files] of Object.entries(stored)) {
-        if (Array.isArray(files)) {
-          const key = projects.value.find(project => samePath(project, path)) || normalizeProjectPath(path)
-          sessionOrder.value[key] = [
-            ...new Set([
-              ...(sessionOrder.value[key] || []),
-              ...files.filter((f): f is string => typeof f === "string"),
-            ]),
-          ]
-        }
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.projectGroups") || "{}")
-    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-      for (const [primary, value] of Object.entries(stored)) {
-        const key = projects.value.find(path => samePath(path, primary))
-        if (!key || projectGroups.value[key] || !value || typeof value !== "object") continue
-        const group = value as Partial<ProjectGroup>
-        if (
-          typeof group.name === "string" &&
-          Array.isArray(group.folders) &&
-          group.folders.every(p => typeof p === "string") &&
-          group.folders.some(folder => samePath(folder, primary))
-        ) {
-          const folders: string[] = []
-          for (const folder of group.folders) {
-            const normalized = normalizeProjectPath(folder)
-            if (!folders.some(existing => samePath(existing, normalized))) folders.push(normalized)
-          }
-          projectGroups.value[key] = { name: group.name, folders, primary: key }
-        }
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  // Projects the user explicitly removed: automatic paths (activating a
-  // session, route replay, restart restore) must never re-add them. Only
-  // explicit add flows (project dialog, folder pick) clear the marker.
   const removedProjects = ref<string[]>([])
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.removedProjects") || "[]")
-    if (Array.isArray(stored)) {
-      for (const item of stored) {
-        if (typeof item !== "string") continue
-        const path = normalizeProjectPath(item)
-        if (path && !removedProjects.value.some(existing => samePath(existing, path))) removedProjects.value.push(path)
+  const persistenceError = ref<unknown>(null)
+  let revision = -1
+  let recorded = emptyWorkspaceState()
+  let authoritative = emptyWorkspaceState()
+  let initialized = false
+  let loading: Promise<void> | null = null
+  let saving: Promise<void> | null = null
+  const changes: WorkspaceStatePatch[] = []
+
+  function snapshot(): WorkspaceState {
+    // JSON cloning also unwraps Vue's reactive arrays and objects.
+    return JSON.parse(
+      JSON.stringify({
+        revision,
+        projects: projects.value,
+        pinnedProjects: pinnedProjects.value,
+        projectGroups: projectGroups.value,
+        removedProjects: removedProjects.value,
+        sessionOrder: sessionOrder.value,
+      }),
+    )
+  }
+  /** Apply authoritative state, then replay edits not yet acknowledged by the backend. */
+  function applyState(state: WorkspaceState) {
+    if (state.revision >= revision) {
+      revision = state.revision
+      authoritative = structuredClone(state)
+    }
+    const next = changes.reduce(applyWorkspaceStatePatch, structuredClone(authoritative))
+    // Avoid retriggering sidebar/Git loads when only pins or session ordering changed.
+    if (JSON.stringify(projects.value) !== JSON.stringify(next.projects)) projects.value = next.projects
+    if (JSON.stringify(pinnedProjects.value) !== JSON.stringify(next.pinnedProjects))
+      pinnedProjects.value = next.pinnedProjects
+    if (JSON.stringify(projectGroups.value) !== JSON.stringify(next.projectGroups))
+      projectGroups.value = next.projectGroups
+    if (JSON.stringify(removedProjects.value) !== JSON.stringify(next.removedProjects))
+      removedProjects.value = next.removedProjects
+    sessionOrder.value = next.sessionOrder
+    recorded = snapshot()
+    for (const path of Object.keys(histories.value)) applySessionOrder(path)
+  }
+  async function loadState() {
+    if (loading) return loading
+    loading = (async () => {
+      applyState(await getWorkspaceState())
+      initialized = true
+    })().finally(() => {
+      loading = null
+    })
+    return loading
+  }
+  async function initialize() {
+    if (!initialized) await loadState()
+  }
+  /** Retry queued writes after reconnect; never replace the backend with a stale snapshot. */
+  async function flushPersistence() {
+    if (saving) return saving
+    saving = (async () => {
+      await initialize()
+      while (changes.length) {
+        const state = await updateWorkspaceState(changes[0]!)
+        changes.shift()
+        applyState(state)
       }
-    }
-  } catch {
-    /* Optional storage. */
+      persistenceError.value = null
+    })()
+      .catch(error => {
+        persistenceError.value = error
+        throw error
+      })
+      .finally(() => {
+        saving = null
+        if (!persistenceError.value && changes.length)
+          void flushPersistence().catch(error => console.warn("[pi] workspace persistence failed:", error))
+      })
+    return saving
   }
-  function persistProjects() {
-    try {
-      localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
-      localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
-      localStorage.setItem("pix.projectGroups", JSON.stringify(projectGroups.value))
-    } catch {
-      /* Optional storage. */
-    }
+  async function syncState() {
+    await loadState()
+    await flushPersistence()
   }
-  function persistSessionOrder() {
-    try {
-      localStorage.setItem("pix.sessionOrder", JSON.stringify(sessionOrder.value))
-    } catch {
-      /* Optional storage. */
-    }
+  function persistState() {
+    const next = snapshot()
+    const patch = diffWorkspaceState(recorded, next)
+    recorded = next
+    if (!Object.keys(patch).length) return
+    changes.push(patch)
+    void flushPersistence().catch(error => console.warn("[pi] workspace persistence failed:", error))
   }
-  // Normalize existing localStorage records once, including group keys and pinned/order metadata.
-  persistProjects()
-  persistSessionOrder()
-  function persistRemovedProjects() {
-    localStorage.setItem("pix.removedProjects", JSON.stringify(removedProjects.value))
-  }
+  const persistProjects = persistState
+  const persistSessionOrder = persistState
+  const persistRemovedProjects = persistState
   /** Whether the user explicitly removed this project, so automatic paths must not re-add it. */
   function isRemovedProject(path: string) {
     path = normalizeProjectPath(path)
     return !!path && removedProjects.value.some(existing => samePath(existing, path))
   }
   /** Clear the removed marker; only explicit add flows (dialog, folder pick) call this. */
-  function unremoveProject(path: string) {
+  function unremoveProject(path: string, persist = true) {
     path = normalizeProjectPath(path)
     if (!path) return
     const targets = [path]
@@ -166,7 +165,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const next = removedProjects.value.filter(existing => !targets.some(target => samePath(existing, target)))
     if (next.length === removedProjects.value.length) return
     removedProjects.value = next
-    persistRemovedProjects()
+    if (persist) persistRemovedProjects()
   }
   function orderedProjects() {
     return [...projects.value].sort(
@@ -186,10 +185,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function sortSessions(rows: SessionMeta[], order: string[]) {
     const index = new Map(order.map((f, i) => [f, i]))
+    const createdAt = (row: SessionMeta) => Date.parse(row.timestamp || "") || 0
     return [...rows].sort((a, b) => {
       const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
       const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
-      return ia - ib || b.mtimeMs - a.mtimeMs
+      return ia - ib || createdAt(b) - createdAt(a) || b.file.localeCompare(a.file)
     })
   }
   /** A project can span several folders; its sidebar order belongs to the project. */
@@ -230,8 +230,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     projects.value = [primary, ...projects.value]
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
     // Re-adding a project explicitly also lifts its removed marker.
-    unremoveProject(primary)
-    for (const folder of folders) unremoveProject(folder)
+    unremoveProject(primary, false)
+    for (const folder of folders) unremoveProject(folder, false)
     persistProjects()
   }
   function projectRoot(path: string) {
@@ -298,9 +298,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     projects.value = projects.value.map(path => (path === oldPrimary ? primary : path))
     pinnedProjects.value = pinnedProjects.value.map(path => (path === oldPrimary ? primary : path))
     delete projectGroups.value[oldPrimary]
+    if (oldPrimary !== primary && sessionOrder.value[oldPrimary]) {
+      sessionOrder.value[primary] = sessionOrder.value[oldPrimary]
+      delete sessionOrder.value[oldPrimary]
+    }
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
-    unremoveProject(primary)
-    for (const folder of folders) unremoveProject(folder)
+    unremoveProject(primary, false)
+    for (const folder of folders) unremoveProject(folder, false)
     persistProjects()
   }
   function projectName(path: string) {
@@ -332,7 +336,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (isRemoteProject(path)) forgetSshProjectConnection(path)
     if (!isRemovedProject(path)) {
       removedProjects.value = [path, ...removedProjects.value]
-      persistRemovedProjects()
     }
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
@@ -368,6 +371,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     persistProjects()
     persistSessionOrder()
+  }
+  /** Sidebar hydration discovers worktrees but must not re-add a removed group member. */
+  async function registerProjectWorktrees(path: string) {
+    try {
+      const info = await workspaceGitInfo(path)
+      if (projects.value.some(project => samePath(project, projectRoot(path)))) registerWorktrees(info)
+    } catch {
+      // Non-Git and unavailable directories remain ordinary projects.
+    }
   }
   async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
@@ -421,7 +433,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
       const previews = [...pending.values()].filter(row => samePath(row.cwd, path))
-      histories.value[path] = [...rows, ...previews].sort((a, b) => b.mtimeMs - a.mtimeMs)
+      histories.value[path] = [...rows, ...previews]
       applySessionOrder(path)
     }
   }
@@ -432,6 +444,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (rows.some(s => s.file === row.file)) return
     pending.set(row.file, row)
     histories.value[path] = [row, ...rows]
+    applySessionOrder(path)
   }
   function generatedTitle(file: string, title: string) {
     for (const rows of Object.values(histories.value)) {
@@ -476,8 +489,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
   return {
+    initialize,
+    syncState,
+    applyState,
+    flushPersistence,
+    persistenceError,
     gitBusy,
     registerWorktrees,
+    registerProjectWorktrees,
     rememberWorkspace,
     isWorktree,
     projects,

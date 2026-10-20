@@ -40,6 +40,7 @@ function harness() {
     onPiStderr: subscribe("stderr"),
     onSshPathBound: subscribe("sshPathBound"),
     onReconnected: subscribe("reconnected"),
+    onWorkspaceStateChanged: subscribe("workspace"),
     onSessionsChanged: subscribe("changed"),
     listRunningSessions: vi.fn(async () => []),
     killPi: vi.fn(async () => {}),
@@ -61,6 +62,8 @@ function harness() {
       refresh: vi.fn(async () => {}),
       isRemovedProject: path => path === "/removed",
       remember: vi.fn(),
+      applyState: vi.fn(),
+      syncState: vi.fn(async () => {}),
     },
     phase: ref("chat"),
     config: ref({ lastProject: "/project" }),
@@ -84,7 +87,7 @@ afterEach(() => {
 test("subscriptions are disposed exactly once and metadata synchronization is registered", async () => {
   const { runtime, context, off } = harness()
   await runtime.listen()
-  expect(off).toHaveLength(6)
+  expect(off).toHaveLength(7)
   expect(context.registerSessionMtimeSync).toHaveBeenCalledOnce()
   runtime.dispose()
   runtime.dispose()
@@ -234,5 +237,32 @@ test("ssh 回绑使用事件所属 runtime 的连接选择，保留旧 URI 绑�
   expect(resolveSshConnectionId(active, connections)).toBe("first")
   expect(context.project.value).toBe(active)
   expect(context.config.value.lastProject).toBe(active)
+  runtime.dispose()
+})
+
+test("workspace change events apply shared metadata without saving it again", async () => {
+  const { runtime, context, callbacks } = harness()
+  await runtime.listen()
+  const state = { revision: 3, projects: ["shared"] }
+  callbacks.workspace(state)
+  expect(context.workspace.applyState).toHaveBeenCalledWith(state)
+})
+
+test("reconnect synchronizes project metadata before reattaching running sessions", async () => {
+  const { runtime, context, callbacks } = harness()
+  await runtime.listen()
+  context.phase.value = "down"
+  let resolve
+  context.workspace.syncState.mockImplementation(
+    () =>
+      new Promise(done => {
+        resolve = done
+      }),
+  )
+  callbacks.reconnected()
+  expect(context.api.listRunningSessions).not.toHaveBeenCalled()
+  resolve()
+  await vi.waitFor(() => expect(context.api.listRunningSessions).toHaveBeenCalledOnce())
+  expect(context.phase.value).toBe("pick")
   runtime.dispose()
 })

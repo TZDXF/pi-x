@@ -10,6 +10,7 @@ export interface SessionMeta {
   file: string
   id: string
   cwd: string
+  /** Creation time from the session header, independent of later file writes. */
   timestamp?: string
   mtimeMs: number
   title?: string | null

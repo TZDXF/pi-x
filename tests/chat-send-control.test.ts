@@ -278,6 +278,26 @@ test("desktop slash commands reject scheduling but compact remains queued while 
   }
 })
 
+test.each(["/szls", "/szls 这只是消息开头", "/some/path 请检查这个路径"])(
+  "unknown slash prefix is sent as ordinary text: %s",
+  async text => {
+    const h = harness()
+    try {
+      await h.controls.onSubmit({ text, files: [{ url: image }] })
+      expect(h.session.send).toHaveBeenCalledWith(text, [{ data: "aGVsbG8=", mimeType: "image/png" }], text, "steer")
+      expect(h.ui.pushToast).not.toHaveBeenCalled()
+      expect(h.ui.pendingUserMessage).toBeNull()
+
+      h.controls.delayedSend.value = true
+      await h.controls.onSubmit({ text })
+      expect(h.session.schedulePrompt).toHaveBeenCalledWith(text, 600000, undefined, text)
+      expect(h.ui.pushToast).not.toHaveBeenCalled()
+    } finally {
+      h.scope.stop()
+    }
+  },
+)
+
 test("edit, connection and git guards do not dispatch or prepare a send", async () => {
   const h = harness()
   try {
@@ -365,7 +385,6 @@ test.each([
   { failure: "startup false", text: "draft", error: "completion.startFailed", restoreText: true },
   { failure: "startup throw", text: "draft", error: "worker failed", restoreText: false },
   { failure: "command refresh", text: "/known", error: "refresh failed", restoreText: false },
-  { failure: "unknown command", text: "/unknown", error: "completion.unsupported", restoreText: false },
 ])(
   "$failure clears the first-message echo without consuming pending contexts",
   async ({ failure, text, error, restoreText }) => {
@@ -422,6 +441,18 @@ test("send failure also clears the first-message echo", async () => {
     })
     await expect(h.controls.onSubmit({ text: "draft" })).rejects.toThrow("send failed")
     expect(h.ui.pendingUserMessage).toBeNull()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("attachment read failures show a localized error without duplicating other submit errors", () => {
+  const h = harness()
+  try {
+    h.controls.onInputError({ code: "attachment_read_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.attachmentReadFailed", "error")
+    h.controls.onInputError({ code: "submit_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledOnce()
   } finally {
     h.scope.stop()
   }

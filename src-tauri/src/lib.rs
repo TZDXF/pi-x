@@ -107,6 +107,8 @@ pub fn run() {
             app_update::app_update_restart,
             commands::pi::pi_settings_get,
             commands::pi::pi_settings_save,
+            commands::workspace_state::workspace_state_get,
+            commands::workspace_state::workspace_state_update,
             commands::config::app_config_get,
             commands::config::app_config_save,
             commands::config::projectless_dir_resolve,

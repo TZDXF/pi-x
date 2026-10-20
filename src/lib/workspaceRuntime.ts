@@ -16,6 +16,7 @@ interface RuntimeContext {
     | "onPiStderr"
     | "onSshPathBound"
     | "onReconnected"
+    | "onWorkspaceStateChanged"
     | "onSessionsChanged"
     | "pixLog"
     | "sessionMtime"
@@ -60,6 +61,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
     onPiStderr,
     onSshPathBound,
     onReconnected,
+    onWorkspaceStateChanged,
     onSessionsChanged,
     pixLog,
     sessionMtime,
@@ -98,6 +100,9 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
               void workspace.refresh(owner.cwd).catch(console.warn)
           }),
           onSessionsChanged(files => handleExternalSessionChanges(files)),
+          onWorkspaceStateChanged(state => {
+            if (!isDisposed()) workspace.applyState(state)
+          }),
           onPiExit(runtimeId => {
             pixLog(`pi exit: runtimeId=${runtimeId ?? "<transport>"}`, runtimeId ?? null)
             // An unscoped exit is a transport disconnect; it is not an agent exit.
@@ -132,20 +137,19 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
           }),
           onReconnected(() => {
             if (isDisposed()) return
-            // Events during the disconnect gap are lost; restore from the backend.
-            if (phase.value === "down") {
-              void reattachRunningSessions()
-                .then(restored => {
-                  if (restored) return
-                  phase.value = "pick"
-                  refreshVisibleHistories()
-                })
-                .catch(e => {
-                  lastError.value = String(e)
-                })
-              return
-            }
-            refreshVisibleHistories()
+            // Recover metadata before reattachment so newly removed projects cannot auto-activate.
+            void (async () => {
+              await workspace.syncState()
+              if (isDisposed()) return
+              if (phase.value === "down") {
+                const restored = await reattachRunningSessions()
+                if (restored) return
+                phase.value = "pick"
+              }
+              refreshVisibleHistories()
+            })().catch(error => {
+              lastError.value = String(error)
+            })
           }),
         ].map(async registration => {
           const off = await registration

@@ -13,6 +13,8 @@ const props = defineProps<{
   svg?: boolean
 }>()
 
+const emit = defineEmits<{ backgroundClick: [] }>()
+
 const { t } = useI18n()
 
 const MIN_SCALE = 0.05
@@ -196,8 +198,14 @@ watch(
 </script>
 
 <template>
-  <div ref="viewport" class="relative h-full overflow-hidden p-2" :title="t('projectFiles.zoomHint')" @wheel="onWheel">
-    <div class="flex h-full items-center justify-center">
+  <div
+    ref="viewport"
+    class="relative h-full overflow-hidden p-2"
+    :title="t('projectFiles.zoomHint')"
+    @wheel="onWheel"
+    @click.self="emit('backgroundClick')"
+  >
+    <div class="flex h-full items-center justify-center" @click.self="emit('backgroundClick')">
       <img
         v-if="!loadFailed"
         :src="src"

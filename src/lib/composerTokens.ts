@@ -15,19 +15,34 @@ export function composerChipText(part: ComposerPart): string {
 }
 
 /** Keep transport text intact; only replace complete references in the editor display. */
-export function composerParts(text: string, sessionLabels: Record<string, string> = {}): ComposerPart[] {
+export function composerParts(
+  text: string,
+  sessionLabels: Record<string, string> = {},
+  commandNames?: ReadonlySet<string>,
+  mode: "editor" | "message" = "editor",
+): ComposerPart[] {
   const parts: ComposerPart[] = []
-  const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s)|^\/[^\s/]+(?=\s)/g
+  // Sending trims the completion delimiter; message tokens also end at EOF.
+  const pattern = /@session\("(?:\\.|[^"\\])*"\)|@"(?:\\.|[^"\\])*"|@[^\s"@]+(?=\s|$)|^\/[^\s/]+(?=\s|$)/g
   let cursor = 0
   for (const match of text.matchAll(pattern)) {
     const raw = match[0]
     const start = match.index
+    if (
+      mode === "editor" &&
+      start + raw.length === text.length &&
+      !raw.startsWith('@"') &&
+      !raw.startsWith("@session(")
+    )
+      continue
     if (start > 0 && !/\s/.test(text[start - 1]!)) continue
     let kind: ComposerPart["kind"]
     let label: string
     if (raw.startsWith("/")) {
-      kind = "command"
       label = raw.slice(1)
+      // Live editors validate commands; historical messages can retain their original chips.
+      if (commandNames && !commandNames.has(label)) continue
+      kind = "command"
     } else {
       const session = raw.startsWith("@session(")
       const value = session ? raw.slice(9, -1) : raw.slice(1)

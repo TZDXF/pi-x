@@ -92,6 +92,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
       ]"
       :initial-input="initialDraft"
       @submit="onSubmit"
+      @error="controls.onInputError"
     >
       <PromptInputBridge :ref="bindBridge" />
       <PromptInputHeader v-if="attachments.length">
@@ -175,6 +176,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
         :ensure-started="ensureStarted"
       />
       <ComposerRichEditor
+        :commands="session.commands"
         @input="completion?.onEditorEvent($event)"
         @click="completion?.onEditorEvent($event)"
         @keyup="completion?.onEditorEvent($event)"

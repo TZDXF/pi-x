@@ -2,6 +2,7 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
+import ImagePreviewContent from "./ImagePreviewContent.vue"
 
 defineProps<{
   forkOpen: boolean
@@ -47,14 +48,7 @@ const emit = defineEmits<{
   </Dialog>
 
   <!-- image preview dialog -->
-  <Dialog :open="!!previewImage" @update:open="emit('update:previewImage', null)">
-    <DialogContent class="max-w-4xl p-2">
-      <img
-        v-if="previewImage"
-        :src="previewImage"
-        class="max-h-[80dvh] w-full rounded-md object-contain"
-        alt="preview"
-      />
-    </DialogContent>
+  <Dialog :open="!!previewImage" :modal="false" @update:open="emit('update:previewImage', null)">
+    <ImagePreviewContent v-if="previewImage" :src="previewImage" :alt="$t('chat.previewImage')" />
   </Dialog>
 </template>

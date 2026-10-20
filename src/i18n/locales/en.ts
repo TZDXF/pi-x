@@ -252,8 +252,6 @@ export default {
     extension: "Extension",
     prompt: "Prompt",
     skill: "Skill",
-    unsupported:
-      "Unsupported command /{name}. Type / to see available commands; use the UI for terminal-only commands.",
   },
   skillsConfig: {
     title: "Skills",
@@ -682,6 +680,7 @@ export default {
   },
 
   sidebar: {
+    expandSessions: "Show more",
     ariaLabel: "Projects and sessions",
     collapse: "Collapse sidebar",
     resizeWidth: "Resize sidebar",
@@ -796,6 +795,8 @@ export default {
     cycleNoOtherModel: "No other model available",
     cycleThinkingUnsupported: "The current model does not support thinking levels",
     removeAttachment: "Remove",
+    attachmentReadFailed:
+      "Could not read the attachment. Your message was not sent. Please add the attachment again and retry.",
     previewImage: "Preview image",
     attachment: "Attachment",
     noMatchingFiles: "No matching files.",
@@ -838,7 +839,6 @@ export default {
     forkEmpty: "No user messages available yet.",
     toastForkCancelled: "Fork cancelled by an extension",
     toastForked: "Forked from earlier prompt",
-    toastForkNoLater: "No prompt after this answer - nothing to branch off",
     forkFailed: "Fork failed",
     forkFailedList: "Failed to load fork messages",
     toastExported: "Session exported",

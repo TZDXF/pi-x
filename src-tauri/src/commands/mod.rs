@@ -5,6 +5,7 @@
 //! - [`models`]: pi `models.json` management and the provider `/models` fetcher.
 //! - [`workspace`]: workspace-group manifest handed to the pix-workspace
 //!   extension.
+//! - [`workspace_state`]: shared, persistent sidebar projects and ordering metadata.
 //! - [`pi`]: pi detection and trust, RPC spawn/passthrough, pi settings and
 //!   diagnostics logging.
 //! - [`files`]: project file browsing/preview, stored-session listing/export
@@ -20,6 +21,7 @@ pub(crate) mod pi;
 pub(crate) mod prompts;
 pub(crate) mod ssh;
 pub(crate) mod workspace;
+pub(crate) mod workspace_state;
 
 // 再导出保持拆分前 `crate::commands::*` 的对外路径；部分调用方位于
 // remote-access feature 之后，默认构建下这些再导出会显示为未使用。

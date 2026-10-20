@@ -69,6 +69,7 @@ function onProcessToggle(event: Event) {
       </details>
       <AssistantBlocks
         :animate="animate"
+        :streaming="!entry.complete"
         :blocks="showProcess ? entry.summary : entry.blocks"
         :key-offset="showProcess ? entry.blocks.length - entry.summary.length : 0"
         :runs="session.runs"

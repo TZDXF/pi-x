@@ -200,6 +200,17 @@ test("timeline without a snapshot keeps compaction nodes from entries", () => {
 })
 
 // NOTE: 源码正则断言，不验证运行时行为（项目未引入组件挂载依赖）。
+test("timeline preview contains long text instead of inheriting the tooltip flex layout", () => {
+  const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
+  const preview = component.match(/\.timeline-preview \{([^}]+)\}/)?.[1]
+  // 块级布局使内容宽度受预览框约束，避免 flex 子项的最小内容宽度撑出边界。
+  expect(preview).toMatch(/display: block;/)
+  expect(preview).toMatch(/width: min\(280px, calc\(100vw - 64px\)\);/)
+  expect(preview).toMatch(/overflow-wrap: anywhere;/)
+  expect(component).toContain('class="line-clamp-1 font-medium leading-snug"')
+  expect(component).toContain('class="line-clamp-3 leading-snug opacity-80"')
+})
+
 test("timeline tracks the scroll position and reveals only the current number", () => {
   const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
   // 组件在 Conversation overlay 内自行定位 reka-ui 滚动视口并监听滚动。

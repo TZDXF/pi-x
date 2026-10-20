@@ -129,7 +129,7 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// List the most recent sessions whose `cwd` matches `project`.
+/// List sessions whose `cwd` matches `project`, newest creation time first.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -144,49 +144,78 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
         normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
-        let sessions_root = agent_dir().join("sessions");
-        let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
-
-        let dirs = match std::fs::read_dir(&sessions_root) {
-            Ok(d) => d,
-            Err(_) => return Ok(Vec::new()), // no sessions yet
-        };
-        for dir in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(dir.path()) else {
-                continue;
-            };
-            for f in files.flatten() {
-                let p = f.path();
-                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                candidates.push((p.clone(), mtime_ms(&p)));
-            }
-        }
-
-        // newest first, then parse headers until we have enough matches
-        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
-
-        let mut out = Vec::new();
-        for (path, mtime) in candidates {
-            if out.len() >= MAX_SESSIONS {
-                break;
-            }
-            // Skip unreadable/partial/corrupt files instead of failing the
-            // whole listing (one bad file must not empty the sidebar).
-            let Ok(meta) = read_session_meta(&path, mtime) else {
-                continue;
-            };
-            let cwd_norm = normalize(Path::new(&meta.cwd)).unwrap_or_else(|| meta.cwd.clone());
-            if cwd_norm != project_norm {
-                continue;
-            }
-            out.push(meta);
-        }
-        Ok(out)
+        list_project_sessions(&agent_dir().join("sessions"), &project_norm)
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+fn creation_time(timestamp: Option<&str>) -> i64 {
+    timestamp
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn list_project_sessions(
+    sessions_root: &Path,
+    project_norm: &str,
+) -> Result<Vec<SessionMeta>, String> {
+    let mut candidates = Vec::new();
+    let dirs = match std::fs::read_dir(sessions_root) {
+        Ok(d) => d,
+        Err(_) => return Ok(Vec::new()), // no sessions yet
+    };
+    for dir in dirs.flatten() {
+        let Ok(files) = std::fs::read_dir(dir.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let mtime = mtime_ms(&path);
+            // Inspect only the header until the creation order and limit are
+            // known; avoid scanning every session's transcript for its title.
+            let (cwd, created) = if let Some(meta) = cached_meta(&path, mtime) {
+                (meta.cwd, creation_time(meta.timestamp.as_deref()))
+            } else {
+                let Some(header) =
+                    first_line(&path).and_then(|line| serde_json::from_str::<Value>(&line).ok())
+                else {
+                    continue;
+                };
+                if header.get("type").and_then(Value::as_str) != Some("session") {
+                    continue;
+                }
+                (
+                    header
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    creation_time(header.get("timestamp").and_then(Value::as_str)),
+                )
+            };
+            if normalize(Path::new(&cwd)).unwrap_or(cwd) != project_norm {
+                continue;
+            }
+            candidates.push((path, mtime, created));
+        }
+    }
+    candidates.sort_by(|a, b| b.2.cmp(&a.2).then(b.0.cmp(&a.0)));
+    let mut out = Vec::new();
+    for (path, mtime, _) in candidates {
+        if out.len() >= MAX_SESSIONS {
+            break;
+        }
+        // One unreadable/partial/corrupt file must not empty the sidebar.
+        if let Ok(meta) = read_session_meta(&path, mtime) {
+            out.push(meta);
+        }
+    }
+    Ok(out)
 }
 
 /// Build `SessionMeta` for one session file (header + preview + presentation).
@@ -686,6 +715,59 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn project_listing_limits_by_creation_time_and_ignores_later_writes() {
+        let root = std::env::temp_dir().join(format!("pix-list-created-{}", uuid::Uuid::new_v4()));
+        let sessions = root.join("sessions");
+        let folder = sessions.join("encoded-project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let project_norm = normalize(&root).unwrap();
+        let base = chrono::DateTime::parse_from_rfc3339("2026-10-20T00:00:00Z").unwrap();
+        for index in 0..MAX_SESSIONS + 2 {
+            let header = serde_json::json!({
+                "type": "session",
+                "id": index.to_string(),
+                "cwd": root.to_string_lossy(),
+                "timestamp": (base + chrono::Duration::minutes(index as i64)).to_rfc3339(),
+            });
+            let path = folder.join(format!("session-{index:03}.jsonl"));
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            let modified = UNIX_EPOCH + std::time::Duration::from_secs(10_000 - index as u64);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        }
+        std::fs::write(folder.join("corrupt.jsonl"), "incomplete header\n").unwrap();
+        let other = serde_json::json!({
+            "type": "session",
+            "cwd": folder.to_string_lossy(),
+            "timestamp": "2026-10-21T00:00:00Z",
+        });
+        std::fs::write(folder.join("other.jsonl"), format!("{other}\n")).unwrap();
+
+        let expected: Vec<String> = (2..MAX_SESSIONS + 2).rev().map(|i| i.to_string()).collect();
+        for _ in 0..2 {
+            let rows = list_project_sessions(&sessions, &project_norm).unwrap();
+            assert_eq!(
+                rows.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>(),
+                expected
+            );
+            // An older session becoming the most recently modified must not
+            // displace any of the newest-created 50, even with cached metadata.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(folder.join("session-000.jsonl"))
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+                .unwrap();
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[tokio::test]
     async fn missing_project_has_specific_error_code() {
         let path =

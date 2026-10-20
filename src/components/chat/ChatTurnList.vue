@@ -28,7 +28,7 @@ import { useTurnChanges } from "@/composables/useTurnChanges"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
-import type { useChatTurnList } from "@/composables/useChatTurnList"
+import { isWaitingForReply, type useChatTurnList } from "@/composables/useChatTurnList"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import type { usePromptEdit, PromptEditTextarea } from "@/composables/usePromptEdit"
@@ -97,11 +97,12 @@ defineExpose({
 })
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
 const waitingSeconds = ref(0)
+const waitingForReply = computed(() => isWaitingForReply(props.session))
 /** 会话是否已有用户消息：决定消息列的缩进布局（模板内联计算提为 computed）。 */
 const hasUserEntries = computed(() => props.session.entries.some(entry => entry.kind === "user"))
 let waitingClock: ReturnType<typeof setInterval> | undefined
 watch(
-  () => props.session.isStreaming && !props.session.partialBlocks,
+  waitingForReply,
   waiting => {
     if (waiting && waitingClock === undefined) {
       waitingSeconds.value = 0
@@ -202,22 +203,22 @@ onBeforeUnmount(() => {
       <template v-if="ui.pendingUserMessage">
         <Message from="user">
           <div class="relative flex min-w-0 flex-col items-end">
+            <div v-if="ui.pendingUserMessage.images.length" class="mb-2 flex max-w-full flex-wrap justify-end gap-2">
+              <button
+                v-for="(im, i) in ui.pendingUserMessage.images"
+                :key="i"
+                type="button"
+                class="border-border bg-muted relative size-16 shrink-0 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+                :title="t('chat.previewImage')"
+                :aria-label="t('chat.previewImage')"
+                @click="emit('previewImage', im.url)"
+              >
+                <img :src="im.url" class="size-full object-cover" alt="" />
+              </button>
+            </div>
             <MessageContent>
               <div class="text-sm">
                 <ComposerText :text="ui.pendingUserMessage.text" />
-                <div v-if="ui.pendingUserMessage.images.length" class="mt-1.5 flex flex-wrap gap-2">
-                  <button
-                    v-for="(im, i) in ui.pendingUserMessage.images"
-                    :key="i"
-                    type="button"
-                    class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
-                    :title="t('chat.previewImage')"
-                    :aria-label="t('chat.previewImage')"
-                    @click="emit('previewImage', im.url)"
-                  >
-                    <img :src="im.url" class="size-full object-cover" alt="" />
-                  </button>
-                </div>
               </div>
             </MessageContent>
           </div>
@@ -235,7 +236,7 @@ onBeforeUnmount(() => {
       <!-- waiting indicator before any content arrives: icon on the left,
                loading status (with elapsed seconds) on the right -->
       <div
-        v-if="session.isStreaming && !session.partialBlocks"
+        v-if="waitingForReply"
         class="text-muted-foreground flex items-center gap-2 text-sm"
         role="status"
       >

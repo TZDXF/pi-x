@@ -126,6 +126,38 @@ test("a cancelled new_session leaves the current run untouched", async () => {
   expect(h.store.entries.map(entry => entry.text)).toEqual(["original"])
 })
 
+test("agent_settled clears transient tool/thinking blocks when message_end is missing", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  h.store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "final answer" }] },
+  })
+  h.store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  for (const assistantMessageEvent of [
+    { type: "toolcall_end", contentIndex: 0, toolCall: { id: "old-tool", name: "bash", arguments: {} } },
+    { type: "thinking_start", contentIndex: 1 },
+  ])
+    h.store.handleEvent({ type: "message_update", assistantMessageEvent })
+  expect(h.store.partialBlocks).toHaveLength(2)
+  expect(h.store.streamingTurnId).not.toBe(null)
+  // agent_end can be followed by retries: only settled may discard the stream.
+  h.store.handleEvent({ type: "agent_end" })
+  expect(h.store.partialBlocks).toHaveLength(2)
+  h.store.handleEvent({ type: "agent_settled" })
+  expect(h.store.isStreaming).toBe(false)
+  expect(h.store.partialBlocks).toBe(null)
+  expect(h.store.streamingTurnId).toBe(null)
+  expect(h.store.entries.at(-1).blocks).toEqual([{ type: "text", text: "final answer" }])
+  // Delayed deltas cannot recreate a partial after the terminal boundary.
+  h.store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "late" },
+  })
+  expect(h.store.partialBlocks).toBe(null)
+})
+
 test("a failed resend releases the queue so delayed prompts still dispatch", async () => {
   const h = await harness({
     clear_queue: async () => ({ success: true, data: { steering: [], followUp: [] } }),
