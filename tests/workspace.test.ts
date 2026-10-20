@@ -186,18 +186,68 @@ test("removed projects stay removed until they are explicitly re-added", async (
   reopened.store.remember("C:/one")
   expect(Array.from(reopened.store.projects)).toEqual(["C:/one"])
 })
-test("refresh sorts by time and ignores stale responses", async () => {
+test("refresh sorts by creation time, ignores stale responses, and stays stable after file writes", async () => {
   const h = await harness()
   const a = h.store.refresh("project"),
     b = h.store.refresh("project")
   h.requests[1].resolve([
-    { file: "new", mtimeMs: 20 },
-    { file: "old", mtimeMs: 10 },
+    { file: "old", timestamp: "2026-10-19T12:00:00Z", mtimeMs: 20 },
+    { file: "new", timestamp: "2026-10-20T12:00:00Z", mtimeMs: 10 },
   ])
   await b
   h.requests[0].resolve([{ file: "stale", mtimeMs: 30 }])
   await a
-  expect(h.store.histories.project[0].file).toBe("new")
+  expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["new", "old"])
+  const refresh = h.store.refresh("project")
+  h.requests[2].resolve([
+    { file: "old", timestamp: "2026-10-19T12:00:00Z", mtimeMs: 100 },
+    { file: "new", timestamp: "2026-10-20T12:00:00Z", mtimeMs: 10 },
+  ])
+  await refresh
+  expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["new", "old"])
+})
+
+test("equal or missing creation times use a stable file order regardless of mtime or response order", async () => {
+  const h = await harness()
+  const rows = [
+    { file: "a", timestamp: "2026-10-20T12:00:00Z", mtimeMs: 100 },
+    { file: "b", timestamp: "2026-10-20T20:00:00+08:00", mtimeMs: 1 },
+    { file: "c", mtimeMs: 300 },
+    { file: "d", timestamp: "invalid", mtimeMs: 2 },
+  ]
+  for (const response of [rows, [...rows].reverse()]) {
+    const refresh = h.store.refresh("project")
+    h.requests.at(-1).resolve(response)
+    await refresh
+    expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["b", "a", "d", "c"])
+  }
+})
+
+test("new previews respect manual order immediately and keep it when persisted or refreshed", async () => {
+  const h = await harness()
+  h.store.histories.project = [
+    { file: "a", timestamp: "2026-10-19T12:00:00Z", mtimeMs: 20 },
+    { file: "b", timestamp: "2026-10-18T12:00:00Z", mtimeMs: 30 },
+  ]
+  h.store.reorderSessions("project", ["b", "a"])
+  await h.store.flushPersistence()
+  const preview = {
+    file: "new",
+    cwd: "project",
+    timestamp: "2026-10-20T12:00:00Z",
+    mtimeMs: 10,
+  }
+  h.store.preview(preview)
+  expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["b", "a", "new"])
+  for (const persisted of [false, true]) {
+    const refresh = h.store.refresh("project")
+    h.requests
+      .at(-1)
+      .resolve([...h.store.histories.project.filter(row => row.file !== "new"), ...(persisted ? [preview] : [])])
+    await refresh
+    expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["b", "a", "new"])
+  }
+  expect(h.store.histories.project.filter(row => row.file === "new")).toHaveLength(1)
 })
 test("rename and archive persist and update shared state; restore keeps title", async () => {
   const h = await harness()
@@ -312,17 +362,17 @@ test("drag order spans every folder in a grouped project and survives refresh", 
   const h = await harness()
   h.store.createProject({ name: "Group", folders: ["front", "back"], primary: "front" })
   h.store.histories.front = [
-    { file: "a", mtimeMs: 30 },
-    { file: "c", mtimeMs: 10, archived: true },
+    { file: "a", timestamp: "2026-10-20T12:00:00Z", mtimeMs: 10 },
+    { file: "c", timestamp: "2026-10-18T12:00:00Z", mtimeMs: 30, archived: true },
   ]
-  h.store.histories.back = [{ file: "b", mtimeMs: 20 }]
+  h.store.histories.back = [{ file: "b", timestamp: "2026-10-19T12:00:00Z", mtimeMs: 20 }]
   expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["a", "b", "c"])
   h.store.reorderSessions("front", ["b", "a"])
   expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])
   const refresh = h.store.refresh("front")
   h.requests[0].resolve([
-    { file: "a", mtimeMs: 30 },
-    { file: "c", mtimeMs: 10, archived: true },
+    { file: "a", timestamp: "2026-10-20T12:00:00Z", mtimeMs: 10 },
+    { file: "c", timestamp: "2026-10-18T12:00:00Z", mtimeMs: 300, archived: true },
   ])
   await refresh
   expect(Array.from(h.store.orderedSessions("front"), r => r.file)).toEqual(["b", "a", "c"])

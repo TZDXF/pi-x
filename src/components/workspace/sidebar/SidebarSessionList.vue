@@ -44,9 +44,13 @@ const { t } = useI18n()
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
 const expanded = ref(false)
-const hiddenCount = computed(() => Math.max(0, props.rows.length + props.pending.length + Number(props.showDraft) - 5))
-const canCollapse = computed(() => !props.projectless && !props.query && hiddenCount.value > 0)
-const limited = computed(() => canCollapse.value && !expanded.value)
+const limited = computed(
+  () =>
+    !props.projectless &&
+    !props.query &&
+    !expanded.value &&
+    props.rows.length + props.pending.length + Number(props.showDraft) > 5,
+)
 const visiblePending = computed(() =>
   limited.value ? props.pending.slice(0, 5 - Number(props.showDraft)) : props.pending,
 )
@@ -120,13 +124,13 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
       />
     </VueDraggable>
     <Button
-      v-if="canCollapse"
+      v-if="limited"
       variant="quiet"
       size="content"
       class="session-list-toggle w-full justify-start py-1.5 pl-7 pr-2 text-xs text-muted-foreground"
       :aria-expanded="expanded"
-      @click="expanded = !expanded"
-      >{{ expanded ? t("sidebar.collapseSessions") : t("sidebar.expandSessions", { count: hiddenCount }) }}</Button
+      @click="expanded = true"
+      >{{ t("sidebar.expandSessions") }}</Button
     >
     <Button
       v-if="projectless ? !!error : error === 'failed'"

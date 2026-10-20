@@ -170,10 +170,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function sortSessions(rows: SessionMeta[], order: string[]) {
     const index = new Map(order.map((f, i) => [f, i]))
+    const createdAt = (row: SessionMeta) => Date.parse(row.timestamp || "") || 0
     return [...rows].sort((a, b) => {
       const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
       const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
-      return ia - ib || b.mtimeMs - a.mtimeMs
+      return ia - ib || createdAt(b) - createdAt(a) || b.file.localeCompare(a.file)
     })
   }
   /** A project can span several folders; its sidebar order belongs to the project. */
@@ -392,7 +393,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
       const previews = [...pending.values()].filter(row => samePath(row.cwd, path))
-      histories.value[path] = [...rows, ...previews].sort((a, b) => b.mtimeMs - a.mtimeMs)
+      histories.value[path] = [...rows, ...previews]
       applySessionOrder(path)
     }
   }
@@ -403,6 +404,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (rows.some(s => s.file === row.file)) return
     pending.set(row.file, row)
     histories.value[path] = [row, ...rows]
+    applySessionOrder(path)
   }
   function generatedTitle(file: string, title: string) {
     for (const rows of Object.values(histories.value)) {

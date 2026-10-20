@@ -59,6 +59,7 @@ const draggable = {
       ),
 }
 const cache = new Map()
+const translate = vi.fn((key: string) => key)
 function loadComponent(filename: string) {
   const file = path.resolve(directory, filename)
   if (cache.has(file)) return cache.get(file)
@@ -71,7 +72,7 @@ function loadComponent(filename: string) {
   const module = { exports: {} as any }
   const require = (id: string) => {
     if (id === "vue") return vue
-    if (id === "vue-i18n") return { useI18n: () => ({ t: key => key }) }
+    if (id === "vue-i18n") return { useI18n: () => ({ t: translate }) }
     if (id === "@lucide/vue")
       return new Proxy({}, { get: (_, name) => ({ render: () => vue.h("svg", { icon: name }) }) })
     if (id === "vue-draggable-plus") return { VueDraggable: draggable }
@@ -252,7 +253,7 @@ test("projectless rows use the same saved/pending components without project wor
   expect(byClass(root, "session-running")).toHaveLength(1)
 })
 
-test("project sessions default to five including draft and pending, and toggle independently", async () => {
+test("project sessions expand independently from five rows and hide the toggle afterwards", async () => {
   const rows = Array.from({ length: 7 }, (_, index) => ({ ...saved, file: `${index}.jsonl` }))
   const props = { ...listProps, rows, orderedFiles: rows.map(row => row.file) }
   const root = mount("SidebarSessionList.vue", props)
@@ -260,13 +261,13 @@ test("project sessions default to five including draft and pending, and toggle i
   expect(byClass(root, "session-row")).toHaveLength(5)
   const toggle = byClass(root, "session-list-toggle")[0]
   expect(toggle.props["aria-expanded"]).toBe(false)
+  expect(toggle.children.some(child => child.text === "sidebar.expandSessions")).toBe(true)
+  expect(translate).toHaveBeenCalledWith("sidebar.expandSessions")
   toggle.props.onClick()
   await vue.nextTick()
   expect(byClass(root, "session-row")).toHaveLength(9)
+  expect(byClass(root, "session-list-toggle")).toHaveLength(0)
   expect(byClass(other, "session-row")).toHaveLength(5)
-  toggle.props.onClick()
-  await vue.nextTick()
-  expect(byClass(root, "session-row")).toHaveLength(5)
   for (const overrides of [{ query: "saved" }, { projectless: true }]) {
     const unlimited = mount("SidebarSessionList.vue", { ...props, ...overrides })
     expect(byClass(unlimited, "session-row")).toHaveLength(9)

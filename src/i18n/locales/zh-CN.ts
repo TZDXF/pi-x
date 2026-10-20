@@ -579,8 +579,7 @@ export default {
   },
 
   sidebar: {
-    expandSessions: "展开更多（{count}）",
-    collapseSessions: "收起会话",
+    expandSessions: "展开更多",
     ariaLabel: "项目与会话",
     collapse: "收起侧栏",
     resizeWidth: "调整侧栏宽度",
