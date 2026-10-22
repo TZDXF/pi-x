@@ -43,7 +43,6 @@ function edit(id: string) {
   emit("edit", id)
 }
 function remove(id: string) {
-  open.value = false
   emit("remove", id)
 }
 // 列表固定宽 320px（w-80），默认在触发按钮上方展开，空间不足翻到下方。
@@ -77,7 +76,7 @@ const style = computed(() => {
   <Teleport to="body">
     <div
       v-if="open && style"
-      class="fixed z-50 max-h-72 w-80 overflow-auto rounded-lg border bg-background p-1 shadow-md"
+      class="selection-summary-scroll fixed z-50 max-h-72 w-80 overflow-auto rounded-lg border bg-background p-1 shadow-md"
       :style="style"
       @mouseenter="openList"
       @mouseleave="scheduleClose"
@@ -89,8 +88,8 @@ const style = computed(() => {
       >
         <span class="selection-anchor-badge" aria-hidden="true">{{ index + 1 }}</span>
         <button type="button" class="min-w-0 flex-1 text-left" :title="item.text" @click="locate(item.id)">
-          <span class="block text-[10px] text-muted-foreground">{{
-            item.source === "user" ? t("chat.selectionFromUser") : t("chat.selectionFromAssistant")
+          <span v-if="item.source === 'user'" class="block text-[10px] text-muted-foreground">{{
+            t("chat.selectionFromUser")
           }}</span>
           <span class="block truncate text-xs">{{ item.text }}</span>
           <span v-if="item.comment" class="block truncate text-xs text-muted-foreground">{{ item.comment }}</span>
@@ -119,3 +118,28 @@ const style = computed(() => {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+/* 与会话中的其他原生滚动区域保持一致。 */
+.selection-summary-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.selection-summary-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.selection-summary-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.selection-summary-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+.selection-summary-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--input);
+  background-clip: content-box;
+}
+</style>

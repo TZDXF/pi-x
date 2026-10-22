@@ -54,36 +54,33 @@ function mountActions(overrides: Partial<Parameters<typeof useSidebarSessionActi
   return { actions, options, app }
 }
 
-test("one shared timer opens only the last clicked session, and double click renames without opening", () => {
+test("single clicks open immediately without waiting for a double-click timer", () => {
   vi.useFakeTimers()
   const { actions, options } = mountActions()
   actions.openSession(saved("project"))
+  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved("project"))
   actions.openSession(saved("projectless"))
-  vi.advanceTimersByTime(249)
-  expect(options.resume).not.toHaveBeenCalled()
-  vi.advanceTimersByTime(1)
-  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved("projectless"))
-  actions.openSession(saved())
+  expect(options.resume).toHaveBeenLastCalledWith(saved("projectless"))
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+test("double click renames the opened session without scheduling another open", () => {
+  vi.useFakeTimers()
+  const { actions, options } = mountActions()
   actions.openSession(saved())
   actions.renameOnDoubleClick(saved())
-  vi.advanceTimersByTime(300)
-  expect(options.resume).toHaveBeenCalledTimes(1)
+  vi.runAllTimers()
+  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved())
   expect(actions.renaming.value).toEqual(saved())
   expect(actions.title.value).toBe("one")
 })
 
-test("double click cancels opening when navigation is busy; unmount clears a pending click", () => {
-  vi.useFakeTimers()
-  const { actions, options, app } = mountActions({ navigationDisabled: () => true })
+test("navigation protection blocks both opening and double-click renaming", () => {
+  const { actions, options } = mountActions({ navigationDisabled: () => true })
   actions.openSession(saved())
   actions.renameOnDoubleClick(saved())
-  vi.advanceTimersByTime(300)
   expect(options.resume).not.toHaveBeenCalled()
   expect(actions.renaming.value).toBeNull()
-  actions.openSession(saved())
-  app.unmount()
-  vi.advanceTimersByTime(300)
-  expect(options.resume).not.toHaveBeenCalled()
 })
 
 test("optimistic archive hides immediately, blocks duplicate requests and rolls back on failure", async () => {

@@ -37,7 +37,7 @@ export function useSelectionQuotes(deps: {
       else ui.pushToast(t("chat.selectionLimitSingle"), "error")
     } else if (result.duplicate) ui.pushToast(t("chat.selectionDuplicate"))
   }
-  // 点击"引用到输入框"立即入库：批注可选，稍后通过索引标记或摘要列表补充。
+  // 点击"引用到输入框"立即入库，并在当前选区末尾打开批注输入框。
   function onSelectionQuote(payload: {
     text: string
     source: ConversationSelectionSource
@@ -45,9 +45,23 @@ export function useSelectionQuotes(deps: {
     startOffset: number
     endOffset: number
   }) {
+    const selection = window.getSelection()
+    const rect = selection?.rangeCount ? selectionEndRect(selection.getRangeAt(0)) : null
     const result = selectionStore.add(selectionScope.value, { ...payload })
     pushSelectionToast(result)
-    window.getSelection()?.removeAllRanges()
+    selection?.removeAllRanges()
+    if (result.ok && !result.duplicate) {
+      const item = selectionStore.items[selectionStore.items.length - 1]!
+      if (rect) {
+        selectionPopup.value = {
+          id: item.id,
+          comment: "",
+          anchor: { left: rect.right, top: rect.top, bottom: rect.bottom },
+        }
+      } else {
+        void editSelection(item.id)
+      }
+    }
   }
   function onSelectionSave(comment: string) {
     const id = selectionPopup.value?.id

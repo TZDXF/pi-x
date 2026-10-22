@@ -130,6 +130,7 @@ test("textarea mousedown remains native while save/remove alone prevent selectio
   const h = await harness()
   expect(h.input().focus).toHaveBeenCalledOnce()
   expect(h.input().props.value).toBe("initial comment")
+  expect(h.input().props.class).toContain("selection-comment-scroll")
   expect(h.mousedown(h.input()).preventDefault).not.toHaveBeenCalled()
   expect(h.mousedown(h.root.children[0]).preventDefault).not.toHaveBeenCalled()
   for (const button of h.buttons()) {

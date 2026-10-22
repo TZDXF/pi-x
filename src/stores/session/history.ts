@@ -61,8 +61,8 @@ export function createSessionHistory(context: HistoryContext) {
   }
 
   /** Materialize only one page, yielding during large tool-heavy histories. */
-  async function loadOlderHistory() {
-    if (olderHistoryLoading.value || !historyCursor.value) return
+  async function materializeHistoryPage(replace = false) {
+    if (olderHistoryLoading.value || (!replace && !historyCursor.value)) return
     const version = historyVersion
     const source = historyMessages.value
     const end = historyCursor.value
@@ -167,14 +167,25 @@ export function createSessionHistory(context: HistoryContext) {
         if ((i - start + 1) % 20 === 0) await yieldHistory()
       }
       if (version !== historyVersion) return
-      // Keep newer/live results authoritative when prepending an older page.
-      runs.value = { ...pageRuns, ...runs.value }
-      entries.value = [...page, ...entries.value]
+      // Refreshes keep the old transcript mounted across every async yield.
+      // Publish the prepared first page together; ordinary paging still prepends.
+      runs.value = replace ? pageRuns : { ...pageRuns, ...runs.value }
+      entries.value = replace ? page : [...page, ...entries.value]
+      if (replace) {
+        partialBlocks.value = null
+        streamingTurnId.value = null
+      }
       historyCursor.value = start
       if (!start) historyMessages.value = []
     } finally {
       if (version === historyVersion) olderHistoryLoading.value = false
     }
+  }
+
+  async function loadOlderHistory() {
+    // Do not prepend a page from the incoming snapshot to the old transcript.
+    if (historyLoading.value) return
+    await materializeHistoryPage()
   }
 
   /** Append the file-recorded stop reason after the loaded conversation. */
@@ -233,13 +244,15 @@ export function createSessionHistory(context: HistoryContext) {
   async function loadMessages(msgs: any[]) {
     invalidateConversation()
     invalidateHistory()
-    entries.value = []
-    runs.value = {}
-    partialBlocks.value = null
-    streamingTurnId.value = null
+    historyLoading.value = true
+    const version = historyVersion
     historyMessages.value = msgs
     historyCursor.value = msgs.length
-    await loadOlderHistory()
+    try {
+      await materializeHistoryPage(true)
+    } finally {
+      if (version === historyVersion) historyLoading.value = false
+    }
   }
 
   /** Fetch asynchronously; stale responses must never replace another session. */
@@ -270,16 +283,14 @@ export function createSessionHistory(context: HistoryContext) {
       void refreshFileRewindState(file)
       // History markers only know tokensBefore; estimate the after size.
       annotateCompactionEstimates(msgs)
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
       historyMessages.value = msgs
       historyCursor.value = msgs.length
       // Fetch before paging: loadOlderHistory releases historyMessages once the
       // oldest page is reached, and the final-turn check needs the full list.
       await fetchLastSessionError(version)
-      await loadOlderHistory()
+      if (version !== historyVersion) return
+      await materializeHistoryPage(true)
+      if (version !== historyVersion) return
       placePendingHistoryError()
       void syncSessionFile()
     } finally {

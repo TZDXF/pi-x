@@ -119,8 +119,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- conversation: loading (session start / history load) is kept silent;
-         the area renders immediately and history appears once ready -->
+  <!-- Keep the new conversation visible while its worker/history is loading. -->
   <Conversation
     ref="conversation"
     :key="session.sessionFile ?? project"
@@ -140,6 +139,13 @@ onBeforeUnmount(() => {
       >
         <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t("chat.historyLoading") }}</template>
       </div>
+      <div
+        v-if="session.entries.length === 0 && (session.historyLoading || (connecting && !selectingProject))"
+        class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm"
+        role="status"
+      >
+        <Loader :size="16" /> {{ t("chat.historyLoading") }}
+      </div>
       <ConversationEmptyState
         class="chat-empty flex-1 min-h-60"
         v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
@@ -154,7 +160,7 @@ onBeforeUnmount(() => {
         v-for="(entry, entryIndex) in renderedEntries"
         :key="entry.id"
         :data-message-id="entry.id"
-        :enabled="renderedEntries.length > 40"
+        :enabled="true"
         :pinned="entryIndex >= renderedEntries.length - 4"
         :live="entry.kind === 'assistant' && !entry.complete"
         v-slot="{ animate }"

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
+import { watch } from "vue"
 
 const controls = vi.hoisted(() => {
   const state = {}
@@ -212,4 +213,105 @@ test("compaction summaries materialize as in-position markers", async () => {
   expect(marker.summary).toBe("collapsed history")
   expect(marker.tokensBefore).toBe(120000)
   expect(marker.timestamp).toBe(42)
+})
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+test("worker rebuild reset preserves the visible transcript and identity; normal clear still drops them", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  store.sessionFile = "saved.jsonl"
+  const entries = store.entries
+  const runs = store.runs
+  store.clear({ preserveHistory: true })
+  expect(store.entries).toBe(entries)
+  expect(store.runs).toBe(runs)
+  expect(store.sessionFile).toBe("saved.jsonl")
+  store.clear()
+  expect(store.entries).toEqual([])
+  expect(store.sessionFile).toBeNull()
+})
+
+test("refresh keeps the transcript through error lookup and paging yields, then replaces without a blank frame", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  store.sessionFile = "saved.jsonl"
+  const previous = store.entries
+  const error = deferred()
+  const requested = deferred()
+  controls.state.sessionHistory = async () => messages(75)
+  controls.state.sessionLastError = () => {
+    requested.resolve()
+    return error.promise
+  }
+  const sizes = []
+  const stop = watch(
+    () => store.entries.length,
+    size => sizes.push(size),
+    { flush: "sync" },
+  )
+  try {
+    const loading = store.loadHistory()
+    await requested.promise
+    expect(store.entries).toBe(previous)
+    await store.loadOlderHistory()
+    expect(store.entries).toBe(previous)
+    error.resolve(null)
+    await loading
+    expect(sizes).toEqual([30])
+    expect(store.entries[0].text).toBe("message 45")
+    expect(store.historyLoading).toBe(false)
+    await store.loadOlderHistory()
+    expect(store.entries).toHaveLength(60)
+  } finally {
+    stop()
+  }
+})
+
+test("failed refresh retains the visible transcript", async () => {
+  const { store, requests } = await harness()
+  await store.loadMessages(messages(2))
+  const previous = store.entries
+  const loading = store.loadHistory()
+  requests[0]({ success: false, error: "unavailable" })
+  await expect(loading).rejects.toThrow("unavailable")
+  expect(store.entries).toBe(previous)
+  expect(store.historyLoading).toBe(false)
+})
+
+test("a superseded error lookup cannot replace newer history or append its error", async () => {
+  const { store } = await harness()
+  store.sessionFile = "saved.jsonl"
+  const error = deferred()
+  const requested = deferred()
+  controls.state.sessionHistory = async () => messages(40)
+  controls.state.sessionLastError = () => {
+    requested.resolve()
+    return error.promise
+  }
+  const stale = store.loadHistory()
+  await requested.promise
+  await store.loadMessages([{ role: "user", content: "new snapshot" }])
+  error.resolve({ timestamp: 100, errorMessage: "stale error" })
+  await stale
+  expect(store.entries).toHaveLength(1)
+  expect(store.entries[0].text).toBe("new snapshot")
+})
+
+test("an empty replacement clears old content only when committed", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  const previous = store.entries
+  const loading = store.loadMessages([])
+  expect(store.entries).toBe(previous)
+  await loading
+  expect(store.entries).toEqual([])
+  expect(store.runs).toEqual({})
 })

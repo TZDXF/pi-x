@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from "vue"
+import { ref } from "vue"
 import type { SessionMeta } from "@/api/piClient"
 
 interface SidebarSessionActions {
@@ -10,31 +10,24 @@ interface SidebarSessionActions {
   onError: (error: unknown) => void
 }
 
-/** One click timer across all groups, and optimistic archive state shared by both lists. */
+/** Immediate navigation and optimistic archive state shared by both lists. */
 export function useSidebarSessionActions(options: SidebarSessionActions) {
   const renaming = ref<SessionMeta | null>(null)
   const title = ref("")
   const saving = ref(false)
   const archiving = ref<Record<string, boolean>>({})
-  let openTimer: ReturnType<typeof setTimeout> | undefined
 
   function rename(session: SessionMeta) {
     renaming.value = session
     title.value = options.label(session)
   }
   function openSession(session: SessionMeta) {
-    clearTimeout(openTimer)
-    openTimer = setTimeout(() => {
-      options.resume(session)
-      openTimer = undefined
-    }, 250)
+    if (!options.navigationDisabled()) options.resume(session)
   }
   function renameOnDoubleClick(session: SessionMeta) {
-    clearTimeout(openTimer)
-    openTimer = undefined
+    // Opening on the first click must not wait for the double-click window.
     if (!options.navigationDisabled()) rename(session)
   }
-  onBeforeUnmount(() => clearTimeout(openTimer))
 
   async function saveTitle() {
     if (!renaming.value || !title.value.trim() || saving.value) return

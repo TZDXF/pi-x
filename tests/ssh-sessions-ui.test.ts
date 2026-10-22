@@ -362,8 +362,13 @@ test("远程会话行右键菜单仅保留“打开”，本地操作入口隐�
   // 归档悬浮按钮隐藏；打开仍可用
   expect(find(root, item => String(item.props.class || "").includes("session-archive"))).toHaveLength(0)
   const link = find(root, item => String(item.props.class || "").includes("session-link"))[0]
-  link.props.onClick()
+  link.props.onClick({ detail: 1 })
   expect(open).toHaveBeenCalledWith(saved)
+  link.props.onClick({ detail: 2 })
+  expect(open).toHaveBeenCalledTimes(1)
+  // Keyboard activation has no pointer click count.
+  link.props.onClick({ detail: 0 })
+  expect(open).toHaveBeenCalledTimes(2)
   // 双击重命名禁用
   link.props.onDblclick({ stopPropagation() {} })
   expect(rename).not.toHaveBeenCalled()
@@ -376,7 +381,7 @@ test("远程会话行右键菜单仅保留“打开”，本地操作入口隐�
   const openItems = byText(root, "workspace.open")
   expect(openItems).toHaveLength(1)
   openItems[0].props.onClick()
-  expect(open).toHaveBeenCalledTimes(2)
+  expect(open).toHaveBeenCalledTimes(3)
   expect(archive).not.toHaveBeenCalled()
   expect(duplicate).not.toHaveBeenCalled()
   expect(copyLink).not.toHaveBeenCalled()

@@ -1,4 +1,4 @@
-import { computed, ref, watch, type Ref } from "vue"
+import { computed, onScopeDispose, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getConfig, type WorkspaceSelection } from "@/api/piClient"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
@@ -95,8 +95,33 @@ export function useChatSendControl(deps: {
     if (error.code === "attachment_read_error") ui.pushToast(t("chat.attachmentReadFailed"), "error")
   }
 
+  // Navigation owns connecting globally. Keep the editor usable, but wait before
+  // dispatching to this composer's session; unmounting cancels pending submits.
+  const pendingSubmits = new Set<() => void>()
+  onScopeDispose(() => {
+    for (const cancel of pendingSubmits) cancel()
+  })
+
+  function waitForConnection(): Promise<boolean> {
+    if (!deps.connecting()) return Promise.resolve(true)
+    return new Promise(resolve => {
+      const finish = (ready: boolean) => {
+        stop()
+        pendingSubmits.delete(cancel)
+        resolve(ready)
+      }
+      const cancel = () => finish(false)
+      const stop = watch(deps.connecting, connecting => {
+        if (!connecting) finish(true)
+      })
+      pendingSubmits.add(cancel)
+    })
+  }
+
   async function onSubmit(message: { text?: string; files?: { url?: string }[] }) {
-    if (workspace.gitBusy || deps.connecting() || deps.editBusy()) return
+    if (workspace.gitBusy || deps.editBusy()) return
+    if (!(await waitForConnection())) return
+    if (workspace.gitBusy || deps.editBusy()) return
     const text = (message.text ?? "").trim()
     const images = (message.files ?? [])
       .map(f => f.url)

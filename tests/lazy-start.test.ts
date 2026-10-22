@@ -246,7 +246,7 @@ test("a grouped project passes every root to Pi and refreshes context on the nex
   expect(calls).toEqual(["spawn", "init", "spawn", "init"])
 })
 
-test("cross-project drafts stay visible during checks while sending remains blocked", async () => {
+test("cross-project drafts stay visible and the send button stays enabled during checks", async () => {
   const { context, calls } = await harness()
   await context.mount()
   let resolveTrust
@@ -272,7 +272,7 @@ test("cross-project drafts stay visible during checks while sending remains bloc
   const view = composerSources() + turnSources()
   expect(view.split("(!connecting || selectingProject)").length - 1).toBe(1)
   expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| gitBusy\)/)
-  expect(view).toMatch(/:disabled="editBusy \|\| gitBusy \|\| connecting"/)
+  expect(view).toMatch(/:disabled="editBusy \|\| gitBusy"/)
 })
 
 test("selecting a project without a saved trust decision asks even before .pi resources exist", async () => {
@@ -329,7 +329,7 @@ test("project selection keeps the editor enabled without bypassing other edit gu
   }
   const disabled = values => new Function(...Object.keys(values), `return (${expression})`)(...Object.values(values))
   expect(disabled(state)).toBe(false)
-  expect(disabled({ ...state, selectingProject: false })).toBe(true)
+  expect(disabled({ ...state, selectingProject: false })).toBe(false)
   expect(disabled({ ...state, editBusy: true })).toBe(true)
   expect(disabled({ ...state, gitBusy: true })).toBe(true)
 })

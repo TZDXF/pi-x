@@ -538,7 +538,7 @@ export const createSessionStore = (runtimeId = "default") =>
      *  rejected against a bumped conversationVersion). Shared by newSession()
      *  and clear(); teardown specific to dropping the conversation (session
      *  file, commands, offline models, auto-retry) stays with clear(). */
-    function resetRunFlow() {
+    function resetRunFlow(preserveHistory = false) {
       ++conversationVersion
       invalidateHistory()
       pendingModelChange.value = null
@@ -561,10 +561,12 @@ export const createSessionStore = (runtimeId = "default") =>
       dispositionNotice.value = null
       steering.value = []
       followUp.value = []
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
+      if (!preserveHistory) {
+        entries.value = []
+        runs.value = {}
+        partialBlocks.value = null
+        streamingTurnId.value = null
+      }
       stats.value = null
       lastUsage.value = null
     }
@@ -744,11 +746,12 @@ export const createSessionStore = (runtimeId = "default") =>
       pixLog(`[perf] init end ${Math.round(nowMs() - start)}ms`, runtimeId)
     }
 
-    function clear() {
-      resetRunFlow()
+    function clear({ preserveHistory = false }: { preserveHistory?: boolean } = {}) {
+      resetRunFlow(preserveHistory)
       autoRetry.value = null
       followUpMode.value = null
-      sessionFile.value = null
+      // A same-session worker rebuild must not remount the keyed conversation.
+      if (!preserveHistory) sessionFile.value = null
       syncedSessionMtime.value = null
       ++mtimeSyncSeq
       invalidateOfflineModels()

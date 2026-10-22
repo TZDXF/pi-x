@@ -152,6 +152,7 @@ test("rebuild keeps an existing navigation lock and restores the session identit
   expect(context.connecting.value).toBe(true)
   expect(owner.sessionFile).toBe("s.jsonl")
   expect(owner.started).toBe(true)
+  expect(owner.clear).toHaveBeenCalledWith({ preserveHistory: true })
   expect(context.api.killPi).toHaveBeenCalledWith("active")
   expect(context.spawnWorkspacePi).toHaveBeenCalledWith("/project", "s.jsonl", "active")
 })

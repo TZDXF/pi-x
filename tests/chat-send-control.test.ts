@@ -298,15 +298,12 @@ test.each(["/szls", "/szls 这只是消息开头", "/some/path 请检查这个�
   },
 )
 
-test("edit, connection and git guards do not dispatch or prepare a send", async () => {
+test("edit and git guards do not dispatch or prepare a send", async () => {
   const h = harness()
   try {
     h.flags.editing = true
     await h.controls.onSubmit({ text: "blocked" })
     h.flags.editing = false
-    h.flags.connecting = true
-    await h.controls.onSubmit({ text: "blocked" })
-    h.flags.connecting = false
     h.workspace.gitBusy = true
     await h.controls.onSubmit({ text: "blocked" })
     expect(h.ensureStarted).not.toHaveBeenCalled()
@@ -456,4 +453,34 @@ test("attachment read failures show a localized error without duplicating other 
   } finally {
     h.scope.stop()
   }
+})
+
+test("submitting during navigation waits for the connection instead of dropping the message", async () => {
+  const h = harness()
+  try {
+    h.flags.connecting = true
+    const sending = h.controls.onSubmit({ text: "during switch" })
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+    h.flags.connecting = false
+    await sending
+    expect(h.session.send).toHaveBeenCalledWith("during switch", undefined, "during switch", "steer")
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("unmounting cancels a submit waiting for navigation", async () => {
+  const h = harness()
+  h.flags.connecting = true
+  const sending = h.controls.onSubmit({ text: "cancelled" })
+  h.scope.stop()
+  await sending
+  expect(h.ensureStarted).not.toHaveBeenCalled()
+  expect(h.session.send).not.toHaveBeenCalled()
+})
+
+test("navigation does not disable the editor or submit button", () => {
+  const composer = chatSource("components/chat/ChatComposer.vue")
+  expect(composer).not.toContain(':disabled="editBusy || gitBusy ||')
+  expect(composer.match(/:disabled="editBusy \|\| gitBusy"/g)).toHaveLength(2)
 })

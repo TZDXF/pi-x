@@ -73,7 +73,7 @@ const queue = computed(() => findConversation(props.s.file, props.path)?.promptQ
           :aria-current="active ? 'page' : undefined"
           :disabled="navigationDisabled"
           :title="label"
-          @click="emit('open', s)"
+          @click="($event?.detail ?? 0) < 2 && emit('open', s)"
           @dblclick.stop="!remote && emit('renameOnDoubleClick', s)"
           >{{ label }}</Button
         >

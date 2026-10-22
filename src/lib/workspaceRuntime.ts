@@ -243,7 +243,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
       await killPi(owner.runtimeId)
       await spawnWorkspacePi(dir, file, owner.runtimeId)
       owner.started = true
-      owner.clear()
+      owner.clear({ preserveHistory: true })
       owner.sessionFile = file
       await Promise.all([owner.init(dir), owner.loadHistory()])
     } catch (e) {

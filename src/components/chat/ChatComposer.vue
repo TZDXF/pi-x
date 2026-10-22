@@ -187,7 +187,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
         @compositionend="completion?.onEditorEvent($event)"
         @keydown.capture="completion?.onKeydown($event)"
         :placeholder="t('chat.inputPlaceholder')"
-        :disabled="editBusy || gitBusy || (connecting && !selectingProject && !completion?.initiating)"
+        :disabled="editBusy || gitBusy"
         class="min-h-14"
       />
       <div
@@ -265,7 +265,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
             :type="showStopButton ? 'button' : 'submit'"
             :title="showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : undefined"
             :aria-label="showStopButton ? t('chat.stop') : delayedSend ? t('chat.delayedSend') : t('chat.sendMessage')"
-            :disabled="editBusy || gitBusy || connecting"
+            :disabled="editBusy || gitBusy"
             @click="showStopButton && abort()"
           />
         </div>
