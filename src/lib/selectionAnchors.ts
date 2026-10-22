@@ -2,7 +2,7 @@
  * 划词引用锚点的 DOM 工具：把 DOM 选区换算为相对消息正文根节点的字符区间，
  * 并支持从字符区间还原页面选区、求任意偏移处的边界矩形。
  * 索引数字标记由 Vue 以覆盖层渲染，这里不做任何 DOM 写操作，避免与虚拟 DOM 冲突；
- * 依赖真实 document/window，不进入单元测试。
+ * 依赖真实 document/window；单元测试通过模拟 DOM 几何数据覆盖定位分支。
  */
 
 /** (node, offset) 边界相对 root 的前缀文本长度；node 越界或无效时返回 null。 */
@@ -70,9 +70,19 @@ export function restoreSelection(root: Element, start: number, end: number): boo
   return true
 }
 
-/** 字符偏移处的边界矩形（视口坐标），用于索引标记定位与弹窗锚定。 */
+/** 字符偏移前的末字符矩形（视口坐标），用于把索引标记固定在已选文本末行。 */
 export function boundaryRect(root: Element, offset: number): DOMRect | null {
   const range = document.createRange()
+  // 折行边界的折叠 Range 可能落在下一行行首，优先读取已选末字符的矩形。
+  if (offset > 0) {
+    locateBoundary(root, offset - 1, range, "start")
+    locateBoundary(root, offset, range, "end")
+    const rects = range.getClientRects()
+    for (let i = rects.length - 1; i >= 0; i--) {
+      const rect = rects[i]!
+      if (rect.width > 0 && rect.height > 0) return rect
+    }
+  }
   if (!locateBoundary(root, offset, range, "start")) return null
   range.collapse(true)
   const rects = range.getClientRects()
