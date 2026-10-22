@@ -73,6 +73,8 @@ mod windows {
         if let Err(e) = Toast::new(&app.config().identifier)
             .title(title)
             .text1(body)
+            // 提示音由前端统一播放,禁用 Windows 默认声音以免叠加。
+            .sound(None)
             .on_activated(move |_| {
                 if let Some(window) = handle.get_webview_window("main") {
                     let _ = window.unminimize();
