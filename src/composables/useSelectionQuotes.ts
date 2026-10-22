@@ -88,7 +88,8 @@ export function useSelectionQuotes(deps: {
         map.set(item.messageId, list)
       })
     }
-    anchorOverlays.value = map
+    // DOM 观察也会收到徽标自身的更新；相同坐标不再写回，避免反馈循环。
+    if (JSON.stringify([...anchorOverlays.value]) !== JSON.stringify([...map])) anchorOverlays.value = map
   }
   /** 划词引用存在时才随布局变化重算锚点。深度监听 renderedEntries 会在流式
    *  回复的每个 chunk 上触发对整个列表的深遍历；没有引用时零开销，因此仅在
@@ -120,6 +121,29 @@ export function useSelectionQuotes(deps: {
     },
     { immediate: true },
   )
+  // 虚拟正文挂载、Markdown 异步渲染不会改变 renderedEntries。
+  // 仅有待发送引用时观察 DOM，并在根节点更换时重新绑定。
+  watch(
+    [selectionRoot, () => pendingSelections.value.length],
+    ([root, count], _, onCleanup) => {
+      if (!root || !count) return
+      let frame: number | undefined
+      const observer = new MutationObserver(() => {
+        if (frame !== undefined) return
+        frame = requestAnimationFrame(() => {
+          frame = undefined
+          void recomputeAnchors()
+        })
+      })
+      observer.observe(root, { childList: true, subtree: true, characterData: true })
+      void nextTick(recomputeAnchors)
+      onCleanup(() => {
+        observer.disconnect()
+        if (frame !== undefined) cancelAnimationFrame(frame)
+      })
+    },
+    { flush: "post", immediate: true },
+  )
   onMounted(() => {
     window.addEventListener("resize", recomputeAnchors)
   })
@@ -127,7 +151,7 @@ export function useSelectionQuotes(deps: {
     window.removeEventListener("resize", recomputeAnchors)
   })
   // ---- 摘要列表动作：定位（滚动到索引标记）与编辑（回显划选后打开弹窗） ----
-  function locateSelection(id: string) {
+  async function locateSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
     const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
@@ -135,13 +159,21 @@ export function useSelectionQuotes(deps: {
       badge.scrollIntoView({ block: "center", behavior: "smooth" })
       return
     }
-    conversation.value?.scrollToMessage(item.messageId)
-    void nextTick(recomputeAnchors)
+    const scope = selectionScope.value
+    const root = selectionRoot.value
+    await conversation.value?.scrollToMessage(item.messageId)
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    if (scope !== selectionScope.value || root !== selectionRoot.value) return
+    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    await recomputeAnchors()
+    await nextTick()
+    root?.querySelector(`[data-selection-anchor="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })
   }
   async function editSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
-    locateSelection(id)
+    await locateSelection(id)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
     const root = selectionRoot.value
