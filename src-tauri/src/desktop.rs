@@ -9,7 +9,7 @@ pub struct TrayLabels {
     quit: MenuItem<tauri::Wry>,
 }
 
-fn restore(app: &AppHandle) {
+pub fn restore(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

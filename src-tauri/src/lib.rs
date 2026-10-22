@@ -43,6 +43,10 @@ use tauri_plugin_opener::OpenerExt;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Keep this first so duplicate launches exit before other plugins or services start.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            desktop::restore(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
