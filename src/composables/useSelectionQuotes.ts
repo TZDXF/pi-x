@@ -3,7 +3,7 @@ import { useI18n } from "vue-i18n"
 import type { Conversation } from "@/components/ai-elements/conversation"
 import type { SelectionPopupState } from "@/components/chat/ConversationSelectionPopup.vue"
 import { CONVERSATION_SELECTION_MAX_COUNT, type ConversationSelectionSource } from "@/lib/conversationSelections"
-import { boundaryRect, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
+import { boundaryRect, flashSelection, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
 import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
@@ -151,12 +151,29 @@ export function useSelectionQuotes(deps: {
     window.removeEventListener("resize", recomputeAnchors)
   })
   // ---- 摘要列表动作：定位（滚动到索引标记）与编辑（回显划选后打开弹窗） ----
+  let clearFlash: (() => void) | undefined
+  let locateRequest = 0
+  function resetFlash() {
+    locateRequest++
+    clearFlash?.()
+    clearFlash = undefined
+  }
+  watch([selectionScope, selectionRoot, pendingSelections], resetFlash)
+  onBeforeUnmount(resetFlash)
+  function flashLocatedSelection(item: (typeof pendingSelections.value)[number]) {
+    clearFlash?.()
+    const wrapper = selectionRoot.value?.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
+    if (wrapper) clearFlash = flashSelection(wrapper, item.startOffset, item.endOffset)
+  }
   async function locateSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
+    resetFlash()
+    const request = locateRequest
     const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
     if (badge) {
       badge.scrollIntoView({ block: "center", behavior: "smooth" })
+      flashLocatedSelection(item)
       return
     }
     const scope = selectionScope.value
@@ -164,11 +181,13 @@ export function useSelectionQuotes(deps: {
     await conversation.value?.scrollToMessage(item.messageId)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
-    if (scope !== selectionScope.value || root !== selectionRoot.value) return
+    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
     if (!pendingSelections.value.some(entry => entry.id === id)) return
     await recomputeAnchors()
     await nextTick()
+    if (request !== locateRequest) return
     root?.querySelector(`[data-selection-anchor="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })
+    flashLocatedSelection(item)
   }
   async function editSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)

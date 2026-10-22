@@ -12,6 +12,7 @@ vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock("@/lib/selectionAnchors", () => ({
   selectionEndRect: () => ({ right: 120, top: 40, bottom: 60 }),
   boundaryRect: vi.fn(),
+  flashSelection: vi.fn(() => vi.fn()),
   restoreSelection: vi.fn(),
 }))
 

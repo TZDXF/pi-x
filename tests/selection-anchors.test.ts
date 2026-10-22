@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
-import { boundaryRect } from "@/lib/selectionAnchors"
+import { boundaryRect, flashSelection } from "@/lib/selectionAnchors"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -57,4 +57,35 @@ test("characters without geometry fall back to the caret", () => {
 test("empty content without geometry has no annotation anchor", () => {
   const { root } = setup([], [], [])
   expect(boundaryRect(root, 0)).toBeNull()
+})
+
+test("locating highlights the exact range, fades once, and removes overlays", () => {
+  vi.useFakeTimers()
+  try {
+    const { root, range, nodes } = setup(["abcdef"], [lineEnd, nextLine], [])
+    const overlay = { style: {}, setAttribute: vi.fn(), animate: vi.fn(), remove: vi.fn() }
+    Object.assign(document, { createElement: () => overlay })
+    Object.assign(root, {
+      getBoundingClientRect: () => ({ left: 10, top: 5 }),
+      scrollLeft: 0,
+      scrollTop: 0,
+      appendChild: vi.fn(),
+    })
+    const cleanup = flashSelection(root, 1, 4)
+    expect(range.setStart).toHaveBeenCalledWith(nodes[0], 1)
+    expect(range.setEnd).toHaveBeenCalledWith(nodes[0], 4)
+    expect(root.appendChild).toHaveBeenCalledTimes(1)
+    expect(overlay.style).toMatchObject({ left: "180px", top: "15px", pointerEvents: "none" })
+    expect(overlay.animate).toHaveBeenCalledWith([{ opacity: 1 }, { opacity: 1, offset: 0.4 }, { opacity: 0 }], {
+      duration: 1500,
+      easing: "ease-out",
+      fill: "forwards",
+    })
+    vi.advanceTimersByTime(1500)
+    expect(overlay.remove).toHaveBeenCalledOnce()
+    cleanup()
+    expect(vi.getTimerCount()).toBe(0)
+  } finally {
+    vi.useRealTimers()
+  }
 })

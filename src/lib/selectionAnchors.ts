@@ -1,7 +1,7 @@
 /**
  * 划词引用锚点的 DOM 工具：把 DOM 选区换算为相对消息正文根节点的字符区间，
  * 并支持从字符区间还原页面选区、求任意偏移处的边界矩形。
- * 索引数字标记由 Vue 以覆盖层渲染，这里不做任何 DOM 写操作，避免与虚拟 DOM 冲突；
+ * 索引数字标记由 Vue 以覆盖层渲染，闪亮高亮仅追加无文本覆盖层，避免改写正文与虚拟 DOM 冲突；
  * 依赖真实 document/window；单元测试通过模拟 DOM 几何数据覆盖定位分支。
  */
 
@@ -99,4 +99,41 @@ export function selectionEndRect(range: Range): DOMRect | null {
   const rect = range.getBoundingClientRect()
   if (rect.width || rect.height || rect.top || rect.left) return rect
   return null
+}
+
+/** 用无文本覆盖层闪亮原文，不改动正文节点或浏览器选区；返回提前清理函数。 */
+export function flashSelection(root: Element, start: number, end: number): () => void {
+  const range = document.createRange()
+  locateBoundary(root, start, range, "start")
+  locateBoundary(root, end, range, "end")
+  const origin = root.getBoundingClientRect()
+  const overlays: HTMLElement[] = []
+  for (const rect of Array.from(range.getClientRects())) {
+    if (!rect.width || !rect.height) continue
+    const overlay = document.createElement("span")
+    overlay.setAttribute("aria-hidden", "true")
+    Object.assign(overlay.style, {
+      position: "absolute",
+      pointerEvents: "none",
+      left: `${rect.left - origin.left + root.scrollLeft}px`,
+      top: `${rect.top - origin.top + root.scrollTop}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      borderRadius: "2px",
+      background: "color-mix(in srgb, var(--primary) 28%, transparent)",
+    })
+    root.appendChild(overlay)
+    overlay.animate([{ opacity: 1 }, { opacity: 1, offset: 0.4 }, { opacity: 0 }], {
+      duration: 1500,
+      easing: "ease-out",
+      fill: "forwards",
+    })
+    overlays.push(overlay)
+  }
+  const timer = setTimeout(cleanup, 1500)
+  function cleanup() {
+    clearTimeout(timer)
+    overlays.forEach(overlay => overlay.remove())
+  }
+  return cleanup
 }
