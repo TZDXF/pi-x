@@ -69,3 +69,16 @@ test("project directory is available locally and remotely with containment check
   expect(read("../src-tauri/src/lib.rs")).toMatch(/commands::files::list_project_directory/)
   expect(read("../src-tauri/src/remote/dispatch/app.rs")).toMatch(/"list_project_directory" =>/)
 })
+
+test("closing the last sidebar tab also closes the sidebar for clicks and shortcuts", () => {
+  const chat = read("../src/components/ChatView.vue")
+  const close = chat.match(/function closeSidebarTab\(id: number\) \{([\s\S]*?)\n\}/)?.[1]
+  expect(close).toBeDefined()
+  expect(close).toMatch(/if \(index < 0\) return/)
+  expect(close).toMatch(/sidebarTabs\.value\.splice\(index, 1\)/)
+  expect(close).toMatch(/if \(!sidebarTabs\.value\.length\) sidebarOpen\.value = false/)
+  expect(chat).toMatch(/@close-tab="closeSidebarTab"/)
+  expect(chat).toMatch(
+    /registerShortcutHandler\("sidebar.closeTab", \(\) => \{\s*if \(activeTabId.value !== null\) closeSidebarTab\(activeTabId.value\)/,
+  )
+})

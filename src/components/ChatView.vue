@@ -66,6 +66,7 @@ function closeSidebarTab(id: number) {
   sidebarTabs.value.splice(index, 1)
   if (activeTabId.value === id)
     activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
+  if (!sidebarTabs.value.length) sidebarOpen.value = false
 }
 function reorderSidebarTab(tabs: SidebarTabItem[]) {
   sidebarTabs.value = tabs
