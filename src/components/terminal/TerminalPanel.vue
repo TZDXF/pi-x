@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { invoke, listen } from "@/api/transport"
 import { createTerminalOutputRouter, type TerminalOutput } from "@/lib/terminalOutput"
+import { terminalConnectionId } from "@/lib/sshTrust"
+import { sshConnectionList } from "@/api/piClient"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { terminalTheme } from "@/lib/terminalTheme"
 import { useI18n } from "vue-i18n"
+import { tBackendError } from "@/i18n"
+import { useUiStore } from "@/stores/conversations"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
@@ -23,6 +27,7 @@ interface TermTab {
 const props = defineProps<{ project: string; visible: boolean; embedded?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
+const ui = useUiStore()
 
 const tabs = ref<TermTab[]>([])
 const activeId = ref<number | null>(null)
@@ -166,11 +171,14 @@ async function openTerminal() {
       outputRouter.cancel(owner)
       return
     }
+    // 远程项目传连接 id 走 ssh -tt 分支；本地项目恒为 undefined（契约 §3.4）。
+    const sshConnectionId = await terminalConnectionId(props.project, sshConnectionList)
     const id = await invoke<number>("term_create", {
       cwd: props.project,
       cols: 80,
       rows: 24,
       owner,
+      sshConnectionId,
     })
     // The panel may have unmounted or switched projects while creation was pending.
     if (!outputRouter.bind(owner, id)) {
@@ -187,7 +195,8 @@ async function openTerminal() {
       if (tabs.value.some(tab => tab.id === id)) await closeTab(id)
       else void invoke("term_kill", { id }).catch(() => {})
     }
-    console.error("term_create failed", e)
+    // 创建失败（含 coded error）toast 展示，不再只进 console（契约 §3.4）。
+    ui.pushToast(tBackendError(e), "error")
   }
 }
 

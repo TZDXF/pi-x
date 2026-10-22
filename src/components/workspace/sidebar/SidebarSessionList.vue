@@ -2,7 +2,7 @@
 import { computed, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
-import { Layers } from "@lucide/vue"
+import { Layers, RefreshCw } from "@lucide/vue"
 import type { SessionMeta } from "@/api/piClient"
 import type { QueuedPrompt } from "@/stores/session"
 import { activeRuntimeId, findConversation, useSessionStore } from "@/stores/conversations"
@@ -10,6 +10,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import { Button } from "@/components/ui/button"
 import SidebarPendingSessionRow from "./SidebarPendingSessionRow.vue"
 import SidebarSavedSessionRow from "./SidebarSavedSessionRow.vue"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
 import { setSidebarSessionDragData } from "./useSidebarSessionOrdering"
 
 const props = defineProps<{
@@ -27,6 +28,8 @@ const props = defineProps<{
   error?: string
   loading?: boolean
   hasHistory: boolean
+  /** 远程项目：列表来自 ssh_sessions，展示专属空态与按需刷新按钮（契约 §2.4）。 */
+  remote?: boolean
 }>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string]
@@ -63,12 +66,28 @@ function reorder(files: string[]) {
   emit("reorder", limited.value ? [...files, ...props.orderedFiles.filter(file => !visible.has(file))] : files)
 }
 function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
-  setSidebarSessionDragData(transfer, item, file => findConversation(file)?.runtimeId)
+  setSidebarSessionDragData(transfer, item, (file, path) => findConversation(file, path)?.runtimeId)
 }
 </script>
 
 <template>
   <div class="session-list min-h-0 p-0 overflow-visible">
+    <!-- 远程项目历史区头部：按需刷新（无 inotify，契约 §2.4） -->
+    <div v-if="remote" class="flex justify-end pr-1">
+      <Button
+        variant="quiet"
+        size="toolbar"
+        class="text-muted-foreground"
+        :disabled="workspace.remoteSessionsLoading[path]"
+        :title="t('ssh.sessionsRefresh')"
+        :aria-label="t('ssh.sessionsRefresh')"
+        @click="emit('refresh')"
+        ><RefreshCw
+          :size="13"
+          class="size-auto shrink-0"
+          :class="{ 'animate-spin': workspace.remoteSessionsLoading[path] }"
+      /></Button>
+    </div>
     <div
       v-if="showDraft"
       class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9"
@@ -108,12 +127,13 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
         :key="row.file"
         :s="row"
         :path="path"
-        :active="row.file === session.sessionFile"
+        :active="sameSessionIdentity(session.sessionFile, session.cwd, row.file, path)"
         :disabled="disabled"
         :navigation-disabled="navigationDisabled"
         :query="query"
         :queue-now="queueNow"
         :worktree="!projectless && workspace.isWorktree(row.cwd)"
+        :remote="remote"
         @open="emit('open', $event)"
         @rename-on-double-click="emit('renameOnDoubleClick', $event)"
         @rename="emit('rename', $event)"
@@ -141,6 +161,12 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
     >
     <p v-else-if="loading && !hasHistory" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">
       {{ t("sidebar.loading") }}
+    </p>
+    <p
+      v-else-if="remote && !rows.length && !pending.length"
+      class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto"
+    >
+      {{ t("ssh.remoteSessionsEmpty") }}
     </p>
     <p v-else-if="!rows.length && query" class="sidebar-empty p-3 text-xs leading-[1.8] text-muted-foreground h-auto">
       {{ t("sidebar.noMatch") }}

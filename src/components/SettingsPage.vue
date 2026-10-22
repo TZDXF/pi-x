@@ -114,6 +114,9 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "remote", labelKey: "settings.remotePort" },
   { tab: "remote", labelKey: "settings.remotePassword" },
   { tab: "remote", labelKey: "settings.remoteLinks" },
+  { tab: "ssh", labelKey: "ssh.nav" },
+  { tab: "ssh", labelKey: "ssh.addConnection" },
+  { tab: "ssh", labelKey: "ssh.testConnection" },
   { tab: "packages", labelKey: "packages.market" },
   { tab: "packages", labelKey: "packages.installed" },
   { tab: "packages", labelKey: "packages.customTitle" },
@@ -179,6 +182,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.remotePassword",
     "settings.remoteLinks",
   ],
+  ssh: ["ssh.desc", "ssh.connectionsHint", "ssh.addConnection", "ssh.testConnection", "ssh.host", "ssh.keyPath"],
   packages: ["packages"],
   "package-resources": ["packages"],
   models: [

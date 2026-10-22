@@ -19,6 +19,7 @@ import {
   getConfig,
   killPi,
   onPiEvent,
+  onSshPathBound,
   pixLog,
   onPiExit,
   onPiStderr,
@@ -30,6 +31,8 @@ import {
   setTrayLabels,
   toggleDevtools,
   spawnPi,
+  sshTrustSave,
+  sshTrustStatus,
   trustSave,
   trustStatus,
 } from "@/api/piClient"
@@ -76,6 +79,7 @@ import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionR
 import { developerModeEnabled } from "@/lib/developerMode"
 import { isDesktop } from "@/api/transport"
 import { tBackendError } from "@/i18n"
+import { saveTrustDecision } from "@/lib/sshTrust"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
 const route = useRoute()
@@ -140,14 +144,25 @@ watch(
     )
       return null
     const file = session.sessionFile
-    const status = file ? sessionRunStatus(file) : undefined
-    return status === "completed" || status === "error" ? file : null
+    const status = file ? sessionRunStatus(file, session.cwd) : undefined
+    return status === "completed" || status === "error" ? { file, project: session.cwd } : null
   },
-  file => acknowledgeSessionRunStatus(file),
+  identity => identity && acknowledgeSessionRunStatus(identity.file, identity.project),
   { immediate: true },
 )
 const startup = createWorkspaceStartup({
-  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog },
+  api: {
+    prepareWorkspaceGit,
+    workspaceGitInfo,
+    killPi,
+    spawnPi,
+    trustStatus,
+    trustSave,
+    sshTrustStatus,
+    sshTrustSave,
+    saveConfig,
+    pixLog,
+  },
   conversations: { sessionFor, uiFor, activeRuntimeId },
   workspace,
   phase,
@@ -182,6 +197,7 @@ const runtimeLifecycle = createWorkspaceRuntime({
     onPiEvent,
     onPiExit,
     onPiStderr,
+    onSshPathBound,
     onReconnected,
     onWorkspaceStateChanged,
     onSessionsChanged,
@@ -262,7 +278,7 @@ const sessionOpening = useSessionOpening({
   ui,
   t,
   translateError: tBackendError,
-  api: { saveConfig, trustStatus, exportSessionFileHtml },
+  api: { saveConfig, trustStatus, sshTrustStatus, exportSessionFileHtml },
   conversations: { sessionFor, findConversation, activateSession, createConversation, pruneDormantConversations },
   session,
   conversationLoader,
@@ -352,7 +368,23 @@ function newSessionFromChat() {
 }
 
 async function onTrustDecision(trusted: boolean, trustParent: boolean) {
-  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
+  if (trustInfo.value) {
+    // 恢复会话的信任决策（契约 §4.3）：远程项目经 ssh_trust_save 落到远端；
+    // 恢复流程在暂停前已把 project 置为目标 URI。
+    try {
+      await saveTrustDecision(
+        project.value,
+        trustInfo.value.projectPath,
+        trusted,
+        trustParent,
+        config.value.sshConnections ?? [],
+        { trustSave, sshTrustSave },
+      )
+    } catch (e) {
+      ui.pushToast(tBackendError(e), "error")
+      return
+    }
+  }
   if (trusted) {
     phase.value = "chat"
     trustActivationBackup.value = null

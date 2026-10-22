@@ -2,12 +2,15 @@
 //! pool, pi settings and frontend diagnostics logging.
 
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::errors::{pix_error, pix_error_detail};
-use crate::{pi_locate, rpc, trust};
+use crate::ssh::transport::SshErrorKind;
+use crate::{pi_locate, rpc, ssh, trust};
 
 use super::config::app_config_get;
+use super::ssh::{connection_matches_remote, remote_error_coded};
 use super::workspace::{workspace_manifest_for, WorkspaceContext};
 
 #[tauri::command]
@@ -38,9 +41,11 @@ pub(crate) fn validate_project_dir(project: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Spawn `pi --mode rpc` for `project`, resolving the pi executable from app
-/// config (falling back to auto-detection). `session_file` optionally resumes
-/// a stored session via `--session <path>`.
+/// Spawn `pi --mode rpc` for `project`. A local project resolves the pi
+/// executable from app config (falling back to auto-detection); a remote
+/// project URI (`ssh://` / `wsl://` / `docker://`) routes to the remote branch
+/// (契约 §3.1 与多后端契约 §5.1). `session_file` optionally resumes a stored
+/// session via `--session <path>`.
 #[tauri::command]
 pub async fn rpc_spawn(
     app: AppHandle,
@@ -49,32 +54,123 @@ pub async fn rpc_spawn(
     session_file: Option<String>,
     runtime_id: Option<String>,
     workspace: Option<WorkspaceContext>,
+    ssh_connection_id: Option<String>,
 ) -> Result<(), String> {
-    validate_project_dir(&project)?;
-    let cfg = app_config_get(app.clone())?;
-    let workspace_manifest = workspace_manifest_for(
-        &project,
-        workspace,
-        cfg.workspace_groups.unwrap_or(true),
-    )?;
-    let info = pi_locate::detect(cfg.pi_path).await;
-    if !info.found {
-        return Err(pix_error(
-            "piNotFound",
-            "未找到 pi。请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
-        ));
-    }
-    rpc::spawn(
+    // 分流判据：parse 成功即远程分支；本地路径（含 C:/code 等盘符路径）照旧。
+    let Some(target) = ssh::parse_remote_uri(&project) else {
+        validate_project_dir(&project)?;
+        let cfg = app_config_get(app.clone())?;
+        let workspace_manifest = workspace_manifest_for(
+            &project,
+            workspace,
+            cfg.workspace_groups.unwrap_or(true),
+        )?;
+        let info = pi_locate::detect(cfg.pi_path).await;
+        if !info.found {
+            return Err(pix_error(
+                "piNotFound",
+                "未找到 pi。请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+            ));
+        }
+        return rpc::spawn(
+            app,
+            &state,
+            &rpc::SpawnProgram::LocalPi(info),
+            &project,
+            session_file,
+            Vec::new(),
+            workspace_manifest,
+            runtime_id,
+        )
+        .await;
+    };
+    spawn_remote(
         app,
         &state,
-        &info,
         &project,
+        &target,
         session_file,
-        Vec::new(),
-        workspace_manifest,
+        workspace.is_some(),
+        ssh_connection_id,
         runtime_id,
     )
     .await
+}
+
+/// 远程分支（契约 §3.1 与多后端契约 §5.1）：跳过本地目录校验与
+/// pi_locate::detect，先做连接一致性校验与远程目录检查，再经
+/// remote_exec_stream 启动远端 `pi --mode rpc`。
+async fn spawn_remote(
+    app: AppHandle,
+    state: &rpc::RpcState,
+    project: &str,
+    target: &ssh::RemoteTarget,
+    session_file: Option<String>,
+    has_workspace: bool,
+    ssh_connection_id: Option<String>,
+    runtime_id: Option<String>,
+) -> Result<(), String> {
+    let Some(connection_id) = ssh_connection_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+    else {
+        return Err(pix_error("sshConnectionMissing", "远程项目没有匹配的 SSH 连接"));
+    };
+    let connection = ssh::config::find_connection(&connection_id)?.ok_or_else(|| {
+        pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除")
+    })?;
+    // 连接 kind 与 URI 解析结果的 kind 必须一致，再按 kind 比对应字段
+    //（ssh: host/port/user；wsl: distro/user；docker: container），
+    // 两层冗余防止前端错配（多后端契约 §5.1 第 3 条）。
+    if !connection_matches_remote(&connection, target) {
+        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
+    }
+    // 远程项目 P1 不支持多目录组（前端保证传 null，这里防御性兜底）。
+    if has_workspace {
+        return Err(pix_error("sshWorkspaceUnsupported", "SSH 远程项目暂不支持多目录工作区"));
+    }
+    let endpoint = connection.to_remote_endpoint();
+    // 远程目录校验：三后端同一脚本，一次 exec `test -d`；exit 1 →
+    // projectDirMissing（复用现有键与文案），其余失败按端点 kind 归类
+    //（多后端契约 §5.1 第 5 条；wsl/docker 的退出码传播已实测 V4）。
+    let script = format!("test -d {}", ssh::posix_quote(target.path()));
+    if let Err(e) = ssh::remote_exec(&endpoint, &script, Duration::from_secs(15)).await {
+        if e.kind == SshErrorKind::Remote && e.exit_code == Some(1) {
+            return Err(pix_error("projectDirMissing", "项目目录不存在"));
+        }
+        return Err(remote_error_coded(&endpoint, &e));
+    }
+    // 远程环境引导（P4）：确保远端 pi 可用。PATH pi 优先；缺失时自动部署
+    // 本地 pi bundle 到 ~/.pix/pi/（幂等 + 原子锁）。部署失败返回 coded error。
+    // 进度通过 Tauri 事件推送到前端（对齐 ZCode RemoteConnectionConnectingStep）。
+    ssh::ensure_pi_available(&connection_id, &endpoint, Some(std::sync::Arc::new({
+        let app = app.clone();
+        move |p: ssh::DeployProgress| {
+            let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
+        }
+    })))
+    .await?;
+    let spec = rpc::RemoteSpawnSpec {
+        endpoint: endpoint.clone(),
+        remote_path: target.path().to_string(),
+    };
+    // P1 远程 extra_args 恒为空（builtin extensions 不上传），workspace 不设。
+    rpc::spawn(
+        app,
+        state,
+        &rpc::SpawnProgram::Remote(spec),
+        project,
+        session_file,
+        Vec::new(),
+        None,
+        runtime_id,
+    )
+    .await?;
+    // 成功 spawn 记 lastUsedAt；写回失败不影响会话。
+    let _ = ssh::config::touch_connection(&connection_id);
+    Ok(())
 }
 
 #[tauri::command]

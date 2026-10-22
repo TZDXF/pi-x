@@ -1,6 +1,7 @@
 import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
 import { invoke, isDesktop } from "../transport"
 import type { UpdateChannel } from "./updates"
+import type { SshConnection } from "./ssh"
 
 export interface TrustStatus {
   projectPath: string
@@ -40,6 +41,8 @@ export interface AppConfig {
   builtinDelayedSend?: boolean
   /** 多目录项目组；缺省为启用，关闭后「添加项目」直接选择单目录且会话不注入工作区清单。 */
   workspaceGroups?: boolean
+  /** SSH 远程连接配置（契约 §2.1）；凭据不落盘。 */
+  sshConnections?: SshConnection[]
 }
 
 export interface PiSettings {
@@ -113,3 +116,11 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
+
+/** 远程信任状态（契约 §4.2）；返回形状与本地 trust_status 一致。放在 config 以避免 ssh↔config 依赖环。 */
+export const sshTrustStatus = (project: string, sshConnectionId: string) =>
+  invoke<TrustStatus>("ssh_trust_status", { project, sshConnectionId })
+
+/** 保存远程信任决策；返回决策后的状态。 */
+export const sshTrustSave = (project: string, sshConnectionId: string, trusted: boolean, trustParent: boolean) =>
+  invoke<TrustStatus>("ssh_trust_save", { project, sshConnectionId, trusted, trustParent })

@@ -38,6 +38,7 @@ export const SETTINGS_TABS = [
   "archives",
   "notifications",
   "remote",
+  "ssh",
   "models",
   "model-config",
   "shortcuts",

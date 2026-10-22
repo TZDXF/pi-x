@@ -119,6 +119,7 @@ async function harness(group = null) {
       pixLog: () => {},
       onPiExit: async () => () => {},
       onPiStderr: async () => () => {},
+      onSshPathBound: async () => () => {},
       onReconnected: async () => () => {},
       onWorkspaceStateChanged: async () => () => {},
       onSessionsChanged: async () => () => {},

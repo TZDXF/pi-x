@@ -2,6 +2,7 @@
 import type { DialogContentEmits, DialogContentProps } from 'reka-ui'
 
 import type { HTMLAttributes } from 'vue'
+import { computed } from 'vue'
 import { XIcon } from '@lucide/vue'
 import { reactiveOmit } from '@vueuse/core'
 import {
@@ -31,10 +32,10 @@ function preventPointerDownOutside(event: PointerDownOutsideEvent) {
   emits('pointerDownOutside', event)
 }
 
-const guardedForwarded = {
-  ...forwarded,
+const guardedForwarded = computed(() => ({
+  ...forwarded.value,
   onPointerDownOutside: preventPointerDownOutside,
-}
+}))
 </script>
 
 <template>

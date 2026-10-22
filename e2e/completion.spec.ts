@@ -267,7 +267,10 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await expectEditorText(editor, pasted)
   await editor.press("Enter")
   await expect
-    .poll(() => calls.filter(call => call.args.command?.type === "prompt").at(-1)?.args.command?.message)
+    .poll(() => {
+      const prompts = calls.filter(call => call.args.command?.type === "prompt")
+      return prompts[prompts.length - 1]?.args.command?.message
+    })
     .toBe(pasted.trim())
 
   await editor.fill("/new ")

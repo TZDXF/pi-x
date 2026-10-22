@@ -56,6 +56,14 @@ export function onPiStderr(handler: (line: string, runtimeId?: string) => void):
   return listen<{ line: string; runtimeId?: string }>("pi://stderr", e => handler(e.payload.line, e.payload.runtimeId))
 }
 
+/** SSH 重连 realpath 回绑（契约 §3.8）：后端把符号链接别名归一化后的路径
+ *  重建为 `ssh://` 展示 URI 回报，前端据此更新项目展示（失败后端不发此事件）。 */
+export function onSshPathBound(
+  handler: (payload: { runtimeId?: string; project: string; path: string }) => void,
+): Promise<() => void> {
+  return listen<{ runtimeId?: string; project: string; path: string }>("pi://sshPathBound", e => handler(e.payload))
+}
+
 /** Remote transport re-established after an unexpected drop (never fired on
  *  desktop). Events during the gap are lost; handlers should re-sync state. */
 export function onReconnected(handler: () => void): Promise<() => void> {

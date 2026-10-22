@@ -2,8 +2,21 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
-import { listSessions, pixLog, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
-import { getWorkspaceState, updateWorkspaceState, workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
+import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
+import { requireSshConnectionId } from "@/lib/sshTrust"
+import {
+  listSessions,
+  pixLog,
+  resolveProjectlessDir,
+  updateSession,
+  sshConnectionList,
+  sshSessions,
+  getWorkspaceState,
+  updateWorkspaceState,
+  workspaceGitInfo,
+  type SessionMeta,
+  type WorkspaceGitInfo,
+} from "@/api/piClient"
 import {
   applyWorkspaceStatePatch,
   diffWorkspaceState,
@@ -36,6 +49,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
+  /** 远程项目会话列表的加载状态（契约 §2.4），驱动侧栏刷新按钮 spinner。 */
+  const remoteSessionsLoading = ref<Record<string, boolean>>({})
   /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
   const projectless = ref("")
   const projectlessDefault = ref("")
@@ -321,6 +336,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function removeProject(path: string) {
     path = projectRoot(path)
+    if (isRemoteProject(path)) forgetSshProjectConnection(path)
     if (!isRemovedProject(path)) {
       removedProjects.value = [path, ...removedProjects.value]
     }
@@ -370,6 +386,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
+    // 远程项目跳过本地 git 查询（契约 §5），直接进项目列表。
+    if (isRemoteProject(path)) {
+      remember(path)
+      return
+    }
     try {
       registerWorktrees(knownInfo ?? (await workspaceGitInfo(path)))
     } catch {
@@ -389,6 +410,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
+    // 远程项目走 ssh_sessions 远程列表（契约 §2.4）；失败置空并上抛由调用方 toast。
+    if (isRemoteProject(path)) {
+      const version = (versions[path] = (versions[path] || 0) + 1)
+      remoteSessionsLoading.value[path] = true
+      try {
+        const connectionId = requireSshConnectionId(path, await sshConnectionList())
+        const rows = await sshSessions(path, connectionId)
+        if (versions[path] === version) {
+          histories.value[path] = rows
+          applySessionOrder(path)
+        }
+      } catch (error) {
+        if (versions[path] === version) histories.value[path] = []
+        throw error
+      } finally {
+        remoteSessionsLoading.value[path] = false
+      }
+      return
+    }
     const version = (versions[path] = (versions[path] || 0) + 1)
     const start = nowMs()
     const rows = await listSessions(path)
@@ -483,6 +523,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     isRemovedProject,
     unremoveProject,
     histories,
+    remoteSessionsLoading,
     reorderSessions,
     remember,
     refresh,

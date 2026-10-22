@@ -19,6 +19,7 @@ pub(crate) mod files;
 pub(crate) mod models;
 pub(crate) mod pi;
 pub(crate) mod prompts;
+pub(crate) mod ssh;
 pub(crate) mod workspace;
 pub(crate) mod workspace_state;
 
@@ -43,6 +44,11 @@ pub use pi::{
 };
 #[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
+#[allow(unused_imports)]
+pub use ssh::{
+    docker_container_list, ssh_connection_delete, ssh_connection_list, ssh_connection_probe,
+    ssh_connection_save, ssh_probe_target, ssh_trust_save, ssh_trust_status, wsl_distro_list,
+};
 #[allow(unused_imports)]
 pub use workspace::WorkspaceContext;
 

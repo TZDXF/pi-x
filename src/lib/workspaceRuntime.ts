@@ -1,4 +1,5 @@
 import type { Ref } from "vue"
+import { copySshProjectConnection } from "@/lib/ssh"
 import type { AppConfig, RunningSession } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
 
@@ -13,6 +14,7 @@ interface RuntimeContext {
     | "onPiEvent"
     | "onPiExit"
     | "onPiStderr"
+    | "onSshPathBound"
     | "onReconnected"
     | "onWorkspaceStateChanged"
     | "onSessionsChanged"
@@ -57,6 +59,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
     onPiEvent,
     onPiExit,
     onPiStderr,
+    onSshPathBound,
     onReconnected,
     onWorkspaceStateChanged,
     onSessionsChanged,
@@ -116,6 +119,22 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
             if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
           }),
           onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(tBackendError(line))),
+          onSshPathBound(({ runtimeId, project: rebound }) => {
+            // 重连 realpath 回绑（契约 §3.8）：符号链接别名归一化后与原 URI path
+            // 不同时，后端回报回绑后的展示 URI。仅更新展示与项目归属，
+            // 不中断会话；失败场景后端不发该事件。
+            const owner = sessionFor(runtimeId ?? activeRuntimeId.value)
+            const previous = owner.cwd
+            if (!previous || previous === rebound) return
+            pixLog(`ssh path rebound: ${previous} -> ${rebound}`, owner.runtimeId)
+            copySshProjectConnection(previous, rebound, config.value.sshConnections ?? [])
+            owner.cwd = rebound
+            workspace.remember(rebound)
+            if (project.value === previous) {
+              project.value = rebound
+              config.value.lastProject = rebound
+            }
+          }),
           onReconnected(() => {
             if (isDisposed()) return
             // Recover metadata before reattachment so newly removed projects cannot auto-activate.

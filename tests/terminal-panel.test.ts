@@ -4,6 +4,7 @@ import vm from "node:vm"
 import ts from "typescript"
 import * as vue from "vue"
 import { createTerminalOutputRouter, type TerminalOutput } from "@/lib/terminalOutput"
+import { terminalConnectionId } from "@/lib/sshTrust"
 
 const scopes: vue.EffectScope[] = []
 afterEach(() => scopes.splice(0).forEach(scope => scope.stop()))
@@ -38,6 +39,10 @@ function harness(create = async (_args: Record<string, any>) => 12) {
   const context = vm.createContext({
     ...vue,
     createTerminalOutputRouter,
+    terminalConnectionId,
+    sshConnectionList: async () => [],
+    tBackendError: (error: unknown) => String(error),
+    useUiStore: () => ({ pushToast: vi.fn() }),
     defineProps: () => ({ project: "repo", visible: false, embedded: true }),
     defineEmits: () => vi.fn(),
     defineExpose: () => {},

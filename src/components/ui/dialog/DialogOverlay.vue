@@ -4,6 +4,7 @@ import type { HTMLAttributes } from 'vue'
 import { reactiveOmit } from '@vueuse/core'
 import { DialogOverlay, injectDialogRootContext } from 'reka-ui'
 import { cn } from '@/lib/utils'
+import { isTopmostDialogLayer } from '@/lib/dialogLayers'
 
 const props = defineProps<DialogOverlayProps & { class?: HTMLAttributes['class'] }>()
 
@@ -12,7 +13,8 @@ const delegatedProps = reactiveOmit(props, 'class')
 const rootContext = injectDialogRootContext()
 
 function closeOnPointerDown(event: PointerEvent) {
-  if (event.button === 0) rootContext.onOpenChange(false)
+  if (event.button !== 0 || !isTopmostDialogLayer(rootContext.contentElement.value)) return
+  rootContext.onOpenChange(false)
 }
 </script>
 

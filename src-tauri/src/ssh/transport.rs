@@ -1,0 +1,882 @@
+//! 远程传输实现（契约 §3.2–§3.3 与多后端契约 §1.3）。
+//!
+//! 通过 `tokio::process::Command` 以独立参数数组调用本地传输程序（ssh /
+//! wsl.exe / docker），本地不经任何 shell；远端命令经 payload 模块包装为
+//! 单元素 argv（SSH）或最后的 `-c` 参数（WSL/Docker），由 `backend.rs`
+//! 按 [`RemoteEndpoint`] 分流。函数名用 `remote_*` 中性名；`SshError`/
+//! `SshErrorKind`/`ExecOutput` 结构名不改（`SshError` 语义即"远程传输错误"）。
+//! `PIX_SSH_COMMAND` / `PIX_WSL_COMMAND` / `PIX_DOCKER_COMMAND` 环境变量可
+//! 整体替换传输程序（`program` 或 `program arg1 arg2 …`，ASCII 空白切分），
+//! 供测试注入 mock，绝不发起真实远程连接。
+//!
+//! host key 校验交给用户 known_hosts 默认（不覆盖 StrictHostKeyChecking）；
+//! `BatchMode=yes` 防挂在交互提示上；`ServerAliveInterval=15 × 3` 判定死链。
+//! keepalive / 断连语义（多后端契约 §1.4）：SSH 客户端可主动判定死链；
+//! WSL/Docker 无保活——本地子进程存活即"连接"，子进程退出 → stdout EOF →
+//! 现有 `pi://exit` 链路，三后端一致。
+
+use std::future::Future;
+use std::process::ExitStatus;
+use std::time::Duration;
+
+use std::process::Stdio;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, Command};
+
+use super::backend::{build_remote_command, RemoteEndpoint};
+use super::payload::{wrap_payload, PROBE_SCRIPT};
+
+/// probe 的整体超时（契约 §2.4：30s 内未见 `PIX_PROBE_DONE` 判 `timeout`）。
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Windows 下隐藏传输客户端（ssh/wsl.exe/docker.exe）控制台窗口。
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub user: Option<String>,
+    pub key_path: Option<String>,
+    /// 认证方式："key"（默认）或 "password"。密码通过 SSH_ASKPASS 机制传递，不落盘。
+    pub auth_method: AuthMethod,
+    /// 密码（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
+    pub password: Option<String>,
+    /// 密钥口令（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
+    pub key_passphrase: Option<String>,
+}
+
+/// SSH 认证方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthMethod {
+    #[default]
+    Key,
+    Password,
+}
+
+/// 一次性命令输出。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+/// SSH 失败归一化（契约 §2.4）。coded error 的映射由上层完成，
+/// 这里保留退出码与 stderr 摘要以保证信息不丢失（如 `test -d` 的 exit 1）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshError {
+    pub kind: SshErrorKind,
+    /// 远端/客户端退出码；spawn 失败或超时为 `None`。
+    pub exit_code: Option<i32>,
+    /// stderr 摘要或本地错误说明，供日志与 coded error 参数使用。
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SshErrorKind {
+    /// 本机 spawn ssh 失败（未安装 ssh 客户端；Windows 为可选功能）。
+    SshMissing,
+    /// 主机指纹校验失败（known_hosts 无记录或指纹变更），认证的细分
+    /// （契约 P2 §5.1）；coded error 由上层凭 stderr 关键词进一步二分。
+    HostKey,
+    /// 认证失败。
+    Auth,
+    /// 主机解析或网络连接失败。
+    Network,
+    /// 整体超时。
+    Timeout,
+    /// 其余失败（非零退出、脚本中止等）。
+    Remote,
+}
+
+impl SshError {
+    pub fn new(kind: SshErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            exit_code: None,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// probe 结果（契约 §2.3 标签行协议解析产物）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemoteProbe {
+    pub uname: Option<String>,
+    pub arch: Option<String>,
+    pub node_version: Option<String>,
+    pub pi_version: Option<String>,
+    /// `NODE_V` 行出现即视为 node 存在。
+    pub node_found: bool,
+    /// `PI_BIN` 非空即视为 pi 存在。
+    pub pi_found: bool,
+}
+
+/// 读取 `PIX_SSH_COMMAND`（整体替换 ssh 程序），缺省 `ssh`。
+pub fn ssh_program() -> String {
+    std::env::var("PIX_SSH_COMMAND").unwrap_or_else(|_| "ssh".to_string())
+}
+
+/// 按 ASCII 空白切分程序说明；首段为程序路径，其余为前置参数。
+/// 空值回退为系统 `ssh`。
+pub fn split_program_spec(spec: &str) -> Vec<String> {
+    let parts: Vec<String> = spec.split_ascii_whitespace().map(str::to_string).collect();
+    if parts.is_empty() {
+        vec!["ssh".to_string()]
+    } else {
+        parts
+    }
+}
+
+/// 当前生效的 ssh 程序与前置参数（`PIX_SSH_COMMAND` 注入点）。
+pub fn ssh_program_parts() -> Vec<String> {
+    split_program_spec(&ssh_program())
+}
+
+/// 纯函数：ssh 客户端参数数组（不含程序本体与 `PIX_SSH_COMMAND` 前置参数）。
+/// `-p` 恒定传递（含 22），保证参数序列确定、可测。
+/// 密码认证或密钥口令认证时移除 `BatchMode=yes`（允许密码/口令提示），仅普通密钥认证时保留。
+pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    // BatchMode=yes 禁用密码/口令提示，仅普通密钥认证时启用
+    let need_batch_mode = endpoint.auth_method == AuthMethod::Key && endpoint.key_passphrase.is_none();
+    if need_batch_mode {
+        args.push("-o".to_string());
+        args.push("BatchMode=yes".to_string());
+    }
+    args.push("-o".to_string());
+    args.push("StrictHostKeyChecking=yes".to_string());
+    args.push("-o".to_string());
+    args.push("ServerAliveInterval=15".to_string());
+    args.push("-o".to_string());
+    args.push("ServerAliveCountMax=3".to_string());
+    args.push("-o".to_string());
+    args.push("ConnectTimeout=10".to_string());
+    args.push("-p".to_string());
+    args.push(endpoint.port.to_string());
+    if let Some(key_path) = &endpoint.key_path {
+        args.push("-i".to_string());
+        args.push(key_path.clone());
+    }
+    match &endpoint.user {
+        Some(user) => args.push(format!("{user}@{}", endpoint.host)),
+        None => args.push(endpoint.host.clone()),
+    }
+    args
+}
+
+/// 纯函数：交互终端（`ssh -tt`）的参数数组（契约 P2 §3.3，由终端 agent 消费）。
+/// 与 [`build_ssh_args`] 的差别仅两处：去掉 `-o BatchMode=yes`（交互终端允许
+/// 密码 / host key 提示浮出）、在选项组后追加 `-tt`（强制分配远端 PTY，
+/// 本地 SIGWINCH 经 ssh 转发为远端 PTY 尺寸变更）。其余选项与目的地构造照旧。
+pub fn build_ssh_args_interactive(endpoint: &SshEndpoint) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ConnectTimeout=10",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    args.push("-tt".to_string());
+    args.push("-p".to_string());
+    args.push(endpoint.port.to_string());
+    if let Some(key_path) = &endpoint.key_path {
+        args.push("-i".to_string());
+        args.push(key_path.clone());
+    }
+    match &endpoint.user {
+        Some(user) => args.push(format!("{user}@{}", endpoint.host)),
+        None => args.push(endpoint.host.clone()),
+    }
+    args
+}
+
+/// 纯函数：完整本地命令 `(程序, 参数数组)`。
+/// 远端命令恒为最后一个 argv 元素（单元素，内部含引号是刻意设计）。
+pub fn build_ssh_command(endpoint: &SshEndpoint, remote_command: &str) -> (String, Vec<String>) {
+    let parts = ssh_program_parts();
+    let mut args = Vec::with_capacity(parts.len() - 1 + 9 + 1);
+    args.extend(parts[1..].iter().cloned());
+    args.extend(build_ssh_args(endpoint));
+    args.push(remote_command.to_string());
+    (parts[0].clone(), args)
+}
+
+/// 按契约 §2.4 / P2 §5.1 把退出码 + stderr 归一化为 errorKind。
+/// host key 两类错误在 auth 关键词之前判定（任意退出码 + stderr 小写匹配）。
+pub fn classify_failure(exit_code: i32, stderr: &str) -> SshErrorKind {
+    let lower = stderr.to_lowercase();
+    // 指纹变更：known_hosts 中的记录与远端不一致（主机重装或中间人）。
+    if lower.contains("remote host identification has changed") {
+        return SshErrorKind::HostKey;
+    }
+    // BatchMode 下 known_hosts 无记录时的报错。
+    if lower.contains("host key verification failed") {
+        return SshErrorKind::HostKey;
+    }
+    if exit_code == 255
+        && ["permission denied", "publickey"]
+            .iter()
+            .any(|keyword| lower.contains(keyword))
+    {
+        return SshErrorKind::Auth;
+    }
+    if [
+        "could not resolve hostname",
+        "connection refused",
+        "connection timed out",
+    ]
+    .iter()
+    .any(|keyword| lower.contains(keyword))
+    {
+        return SshErrorKind::Network;
+    }
+    SshErrorKind::Remote
+}
+
+/// 解析 probe 输出：stdout 逐行匹配 `^([A-Z_]+)=(.*)$`，非标签行
+/// （SSH banner/motd）静默忽略；未读到 `PIX_PROBE_DONE` 返回 `None`。
+pub fn parse_probe_output(stdout: &str) -> Option<RemoteProbe> {
+    let mut probe = RemoteProbe::default();
+    let mut done = false;
+    for line in stdout.lines() {
+        // 完成标记行不含 '='，需在标签行匹配前识别。
+        if line.trim_end() == "PIX_PROBE_DONE" {
+            done = true;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let is_label = !key.is_empty()
+            && key
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b == b'_');
+        if !is_label {
+            continue;
+        }
+        let value = value.trim();
+        let non_empty = (!value.is_empty()).then(|| value.to_string());
+        match key {
+            "UNAME_S" => probe.uname = non_empty,
+            "UNAME_M" => probe.arch = non_empty,
+            "NODE_V" => {
+                probe.node_found = true;
+                probe.node_version = non_empty;
+            }
+            "PI_BIN" => probe.pi_found = !value.is_empty(),
+            "PI_V" => probe.pi_version = non_empty,
+            "PIX_PROBE_DONE" => done = true,
+            _ => {}
+        }
+    }
+    done.then_some(probe)
+}
+
+/// 单次 exec：本地传输进程以独立参数数组运行，输出整体收取；
+/// 超时或 spawn 失败返回 `Err`，非零退出按 §2.4 归类为 `Err`（保留退出码与 stderr）。
+pub async fn remote_exec(
+    endpoint: &RemoteEndpoint,
+    script: &str,
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
+    exec_remote(endpoint, script, None, timeout).await
+}
+
+/// 带 stdin 数据的一次性 exec（上传 pi_data.mjs / 投递信任请求 JSON，
+/// 契约 P2 §4.1）：写完即 shutdown（EOF 结束远端 `cat`），输出收取同 [`remote_exec`]。
+pub async fn remote_exec_with_stdin(
+    endpoint: &RemoteEndpoint,
+    script: &str,
+    stdin_data: &[u8],
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
+    exec_remote(endpoint, script, Some(stdin_data.to_vec()), timeout).await
+}
+
+/// `remote_exec` / `remote_exec_with_stdin` 的共用实现：`stdin_data` 存在时写入
+/// child stdin 后 EOF；写失败（远端提前退出断开管道）不致命，结果由
+/// 退出码 + stderr 判定。
+async fn exec_remote(
+    endpoint: &RemoteEndpoint,
+    script: &str,
+    stdin_data: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
+    let remote_command = wrap_payload(script);
+    let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
+    let mut child = command.spawn().map_err(spawn_error)?;
+    let mut stdin = child.stdin.take().expect("remote transport stdin is piped");
+    let mut stdout = child.stdout.take().expect("remote transport stdout is piped");
+    let mut stderr = child.stderr.take().expect("remote transport stderr is piped");
+    // 超时后 future 被 drop，kill_on_drop 负责杀掉本地传输子进程。
+    let waited = tokio::time::timeout(timeout, async move {
+        let mut out_buf = Vec::new();
+        let mut err_buf = Vec::new();
+        let stdin_write = async {
+            if let Some(data) = stdin_data {
+                // 写失败仅标记，远端失败经由退出码/stderr 归类。
+                let _ = stdin.write_all(&data).await;
+            }
+            // 必须显式 drop：tokio 进程管道的 shutdown 只 flush 不 half-close，
+            // 远端 `cat` 依赖管道写端关闭（EOF）结束。
+            drop(stdin);
+        };
+        let (out_result, err_result, wait_result) = tokio::join!(
+            async { stdin_write.await; stdout.read_to_end(&mut out_buf).await },
+            stderr.read_to_end(&mut err_buf),
+            child.wait(),
+        );
+        out_result?;
+        err_result?;
+        let status = wait_result?;
+        Ok::<(Vec<u8>, Vec<u8>, ExitStatus), std::io::Error>((out_buf, err_buf, status))
+    })
+    .await;
+    match waited {
+        Err(_elapsed) => Err(SshError::new(
+            SshErrorKind::Timeout,
+            format!("远程执行超时（{} 秒）", timeout.as_secs()),
+        )),
+        Ok(Err(e)) => Err(SshError::new(
+            SshErrorKind::Remote,
+            format!("读取远程输出失败: {e}"),
+        )),
+        Ok(Ok((out_buf, err_buf, status))) => {
+            let stdout_text = String::from_utf8_lossy(&out_buf).into_owned();
+            let stderr_text = String::from_utf8_lossy(&err_buf).into_owned();
+            // 信号终止时没有退出码，记 -1；仅用于归类，不会与远端约定码 90/92/93 混淆。
+            let exit_code = status.code().unwrap_or(-1);
+            if exit_code == 0 {
+                return Ok(ExecOutput {
+                    stdout: stdout_text,
+                    stderr: stderr_text,
+                    exit_code,
+                });
+            }
+            Err(SshError {
+                kind: classify_failure(exit_code, &stderr_text),
+                exit_code: Some(exit_code),
+                detail: summarize_failure(exit_code, &stderr_text),
+            })
+        }
+    }
+}
+
+/// 长驻流：返回已 stdio-piped 的本地传输子进程（`kill_on_drop(true)`），
+/// stdout 即远端进程输出；不设 `current_dir`。
+pub async fn remote_exec_stream(endpoint: &RemoteEndpoint, script: &str) -> Result<Child, SshError> {
+    let remote_command = wrap_payload(script);
+    let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
+    command.spawn().map_err(spawn_error)
+}
+
+fn build_command(endpoint: &RemoteEndpoint, remote_command: &str) -> std::io::Result<Command> {
+    let (program, args) = build_remote_command(endpoint, remote_command);
+    let mut command = Command::new(program);
+    command.args(&args);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    // The app itself is the askpass executable. Credentials never enter a file or
+    // shell source; only this child receives the environment variables.
+    if let RemoteEndpoint::Ssh(ep) = endpoint {
+        let secret = if ep.auth_method == AuthMethod::Password {
+            Some(ep.password.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "SSH password required; edit the connection to enter it again",
+                )
+            })?)
+        } else {
+            ep.key_passphrase.as_deref()
+        };
+        if let Some(secret) = secret {
+            let helper = std::env::current_exe()?;
+            #[cfg(test)]
+            let helper = std::env::var_os("PIX_SSH_TEST_ASKPASS_PROGRAM")
+                .map(std::path::PathBuf::from)
+                .unwrap_or(helper);
+            command.env("SSH_ASKPASS", helper);
+            command.env("SSH_ASKPASS_REQUIRE", "force");
+            command.env("DISPLAY", ":0");
+            command.env("PIX_SSH_ASKPASS_SECRET", secret);
+            command.env("PIX_SSH_ASKPASS_HELPER", "1");
+        }
+    }
+    Ok(command)
+}
+
+/// Must run before Tauri/logging initialization, including in Windows GUI builds.
+/// OpenSSH supplies its prompt as argv[1]; host-key confirmation is never accepted.
+pub fn answer_askpass() -> bool {
+    if std::env::var_os("PIX_SSH_ASKPASS_HELPER").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return false;
+    }
+    if std::env::var("SSH_ASKPASS_PROMPT").as_deref() == Ok("confirm") {
+        return true;
+    }
+    if let Ok(secret) = std::env::var("PIX_SSH_ASKPASS_SECRET") {
+        use std::io::Write;
+        let _ = writeln!(std::io::stdout().lock(), "{secret}");
+    }
+    true
+}
+
+fn spawn_error(e: std::io::Error) -> SshError {
+    SshError::new(
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            SshErrorKind::Auth
+        } else {
+            SshErrorKind::SshMissing
+        },
+        format!("无法启动本机远程传输程序: {e}"),
+    )
+}
+
+fn summarize_failure(exit_code: i32, stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        format!("远程命令退出码 {exit_code}")
+    } else {
+        format!("远程命令退出码 {exit_code}: {trimmed}")
+    }
+}
+
+/// probe（契约 §2.3）：三后端同一 `PROBE_SCRIPT` 经一次 exec 投递，
+/// 标签行解析零改动。
+pub async fn remote_probe(endpoint: &RemoteEndpoint) -> Result<RemoteProbe, SshError> {
+    let output = remote_exec(endpoint, PROBE_SCRIPT, PROBE_TIMEOUT).await?;
+    parse_probe_output(&output.stdout).ok_or_else(|| {
+        SshError::new(
+            SshErrorKind::Timeout,
+            "probe 输出缺少完成标记 PIX_PROBE_DONE",
+        )
+    })
+}
+
+/// SSH 传输抽象：本地系统 ssh 是 P1 后端；russh 等后续后端按此 trait 接入。
+pub trait SshTransport: Send + Sync {
+    /// 探测远端平台与 node/pi 安装情况（单次 exec，30s 超时）。
+    /// 契约 P1 §1.4 冻结 API；生产调用方改用自由函数 `remote_probe`
+    ///（多后端统一），保留 trait 方法供 P4 russh 后端接入。
+    #[allow(dead_code)]
+    fn probe(&self) -> impl Future<Output = Result<RemoteProbe, SshError>> + Send;
+    /// 一次性远端命令。契约 P1 §1.4 冻结 API，P4 russh 后端启用
+    /// （调用方继续用自由函数 `remote_exec`/`remote_exec_with_stdin`）。
+    #[allow(dead_code)]
+    fn exec(
+        &self,
+        script: &str,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
+    /// 长驻流（`pi --mode rpc`），返回本地 ssh 子进程。
+    /// 契约 P1 §1.4 冻结 API，P4 russh 后端启用（调用方用自由函数
+    /// `remote_exec_stream`）。
+    #[allow(dead_code)]
+    fn exec_stream(&self, script: &str)
+        -> impl Future<Output = Result<Child, SshError>> + Send;
+}
+
+/// 系统 ssh 实现。
+pub struct SystemSsh {
+    endpoint: SshEndpoint,
+}
+
+impl SystemSsh {
+    /// 契约 P1 §1.4 冻结 API；生产调用方改用 `RemoteEndpoint::Ssh` 装配 +
+    /// 自由函数（多后端契约 §1.3）。
+    #[allow(dead_code)]
+    pub fn new(endpoint: SshEndpoint) -> Self {
+        Self { endpoint }
+    }
+}
+
+impl SshTransport for SystemSsh {
+    async fn probe(&self) -> Result<RemoteProbe, SshError> {
+        remote_probe(&RemoteEndpoint::Ssh(self.endpoint.clone())).await
+    }
+
+    async fn exec(&self, script: &str, timeout: Duration) -> Result<ExecOutput, SshError> {
+        remote_exec(&RemoteEndpoint::Ssh(self.endpoint.clone()), script, timeout).await
+    }
+
+    async fn exec_stream(&self, script: &str) -> Result<Child, SshError> {
+        remote_exec_stream(&RemoteEndpoint::Ssh(self.endpoint.clone()), script).await
+    }
+}
+
+/// 测试辅助：沿 PATH 查找可执行文件（找不到返回 None，调用方跳过测试）。
+#[cfg(test)]
+pub(crate) fn find_test_program(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let suffixes: &[String] = if cfg!(windows) {
+        &[format!("{name}.exe"), name.to_string()]
+    } else {
+        &[name.to_string()]
+    };
+    for dir in std::env::split_paths(&path) {
+        for suffix in suffixes {
+            let candidate = dir.join(suffix);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// 环境变量是进程全局的，涉及 `PIX_SSH_COMMAND` 的测试（含跨模块，
+/// 如 child.rs 的 mock spawn 链路）共用一把锁串行执行。
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 实机测试（过滤器 `ssh_real`）的进程内串行锁：WSL 测试环境是单 sshd +
+/// WSL2 localhost 转发，9 个用例并发开连接时实测会触发 `banner exchange:
+/// Connection refused`（sshd 默认 MaxStartups=10 丢弃超量未认证连接），
+/// 且信任组用例共享远端 `~/.pix/pi_data.mjs` 与固定临时名，并发上传会破坏
+/// S-R5 的 mtime 断言与上传脚本的 cat→mv 原子序列。实机用例统一先取此锁。
+#[cfg(test)]
+pub(crate) fn ssh_real_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::payload::wrap_payload;
+    use super::*;
+    use std::path::PathBuf;
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        env_lock()
+    }
+
+    fn endpoint() -> SshEndpoint {
+        SshEndpoint {
+            host: "host.example.com".to_string(),
+            port: 2222,
+            user: Some("dev".to_string()),
+            key_path: None,
+            auth_method: AuthMethod::Key,
+            key_passphrase: None,
+            password: None,
+        }
+    }
+
+    #[test]
+    fn askpass_keeps_secret_out_of_args_and_files() {
+        let endpoint = RemoteEndpoint::Ssh(SshEndpoint {
+            host: "host.example.com".into(),
+            port: 22,
+            user: None,
+            key_path: None,
+            auth_method: AuthMethod::Password,
+            password: Some(" secret & % ! ' ".into()),
+            key_passphrase: None,
+        });
+        let command = build_command(&endpoint, "true").unwrap();
+        let command = command.as_std();
+        assert!(!command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains("secret")));
+        let env: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("PIX_SSH_ASKPASS_SECRET"))
+                .unwrap()
+                .unwrap(),
+            " secret & % ! ' "
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("SSH_ASKPASS_REQUIRE"))
+                .unwrap()
+                .unwrap(),
+            "force"
+        );
+    }
+
+    #[test]
+    fn build_ssh_args_follows_contract_order() {
+        let mut endpoint = endpoint();
+        endpoint.key_path = Some("/home/dev/id_ed25519".to_string());
+        assert_eq!(
+            build_ssh_args(&endpoint),
+            vec![
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "ConnectTimeout=10",
+                "-p",
+                "2222",
+                "-i",
+                "/home/dev/id_ed25519",
+                "dev@host.example.com",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_ssh_args_defaults_and_constant_port() {
+        let endpoint = SshEndpoint {
+            host: "host".to_string(),
+            port: 22,
+            user: None,
+            key_path: None,
+            auth_method: AuthMethod::Key,
+            key_passphrase: None,
+            password: None,
+        };
+        let args = build_ssh_args(&endpoint);
+        // -p 恒定传递（含 22）；未配置 keyPath 时不出现 -i；目的地无 user 前缀。
+        assert!(args.windows(2).any(|pair| pair == ["-p", "22"]));
+        assert!(!args.iter().any(|arg| arg == "-i"));
+        assert_eq!(args.last().map(String::as_str), Some("host"));
+    }
+
+    #[test]
+    fn ssh_program_defaults_to_system_ssh() {
+        let _guard = lock_env();
+        std::env::remove_var("PIX_SSH_COMMAND");
+        assert_eq!(ssh_program(), "ssh");
+        assert_eq!(ssh_program_parts(), vec!["ssh".to_string()]);
+    }
+
+    #[test]
+    fn pix_ssh_command_splits_program_and_prefix_args() {
+        let _guard = lock_env();
+        std::env::set_var("PIX_SSH_COMMAND", "mock-ssh   -F /tmp/ssh-config\t-vv");
+        assert_eq!(
+            ssh_program_parts(),
+            vec![
+                "mock-ssh".to_string(),
+                "-F".to_string(),
+                "/tmp/ssh-config".to_string(),
+                "-vv".to_string(),
+            ]
+        );
+        // 前置参数插入最前，远端命令是最后一个单元素 argv。
+        let (program, args) = build_ssh_command(&endpoint(), "/bin/sh -c 'echo AB | base64 -d | /bin/sh'");
+        assert_eq!(program, "mock-ssh");
+        assert_eq!(args.first().map(String::as_str), Some("-F"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("/bin/sh -c 'echo AB | base64 -d | /bin/sh'")
+        );
+        assert!(args.contains(&"dev@host.example.com".to_string()));
+        std::env::remove_var("PIX_SSH_COMMAND");
+    }
+
+    #[test]
+    fn classify_failure_maps_stderr_to_error_kinds() {
+        assert_eq!(
+            classify_failure(255, "dev@host: Permission denied (publickey)."),
+            SshErrorKind::Auth
+        );
+        assert_eq!(
+            classify_failure(255, "ssh: Could not resolve hostname host: Name or service not known"),
+            SshErrorKind::Network
+        );
+        assert_eq!(
+            classify_failure(255, "connect to host 10.0.0.1 port 22: Connection refused"),
+            SshErrorKind::Network
+        );
+        assert_eq!(
+            classify_failure(1, "cd: /no/such/dir: No such file or directory"),
+            SshErrorKind::Remote
+        );
+        assert_eq!(classify_failure(90, ""), SshErrorKind::Remote);
+    }
+
+    #[test]
+    fn classify_failure_maps_host_key_errors_before_auth() {
+        // 契约 P2 §5.1：两段真实 stderr 文本（wsl-test-env.md 实机发现）。
+        assert_eq!(
+            classify_failure(255, "Host key verification failed."),
+            SshErrorKind::HostKey
+        );
+        let changed = concat!(
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+            "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\r\n",
+            "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n",
+            "IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\r\n"
+        );
+        assert_eq!(classify_failure(255, changed), SshErrorKind::HostKey);
+        // 任意退出码 + stderr 小写匹配同样命中（契约 P2 §5.1 第 2 条）。
+        assert_eq!(classify_failure(1, changed), SshErrorKind::HostKey);
+        // auth 关键词不再吞掉 host key 场景。
+        assert_ne!(
+            classify_failure(255, "Host key verification failed."),
+            SshErrorKind::Auth
+        );
+    }
+
+    #[test]
+    fn build_ssh_args_interactive_differs_only_by_batch_mode_and_tty() {
+        let mut endpoint = endpoint();
+        endpoint.key_path = Some("/home/dev/id_ed25519".to_string());
+        assert_eq!(
+            build_ssh_args_interactive(&endpoint),
+            vec![
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "ConnectTimeout=10",
+                "-tt",
+                "-p",
+                "2222",
+                "-i",
+                "/home/dev/id_ed25519",
+                "dev@host.example.com",
+            ]
+        );
+        // 交互分支不使用 BatchMode（密码/host key 提示必须能浮出）。
+        assert!(!build_ssh_args_interactive(&endpoint).contains(&"BatchMode=yes".to_string()));
+        assert!(build_ssh_args(&endpoint).contains(&"BatchMode=yes".to_string()));
+    }
+
+    #[test]
+    fn parse_probe_output_extracts_labels_and_ignores_banner() {
+        let stdout = "Welcome to Ubuntu 24.04 LTS\nLast login: Fri Oct  3 09:00:00 2026\n\
+                      UNAME_S=Linux\nUNAME_M=x86_64\nNODE_V=v22.10.0\n\
+                      PI_BIN=/usr/local/bin/pi\nPI_V=0.9.3\nPIX_PROBE_DONE\n";
+        let probe = parse_probe_output(stdout).expect("读到 PIX_PROBE_DONE 应解析成功");
+        assert_eq!(probe.uname.as_deref(), Some("Linux"));
+        assert_eq!(probe.arch.as_deref(), Some("x86_64"));
+        assert!(probe.node_found);
+        assert_eq!(probe.node_version.as_deref(), Some("v22.10.0"));
+        assert!(probe.pi_found);
+        assert_eq!(probe.pi_version.as_deref(), Some("0.9.3"));
+    }
+
+    #[test]
+    fn parse_probe_output_requires_done_marker() {
+        // 未读到完成标记（超时/截断）→ None。
+        assert!(parse_probe_output("UNAME_S=Linux\nUNAME_M=x86_64\n").is_none());
+        assert!(parse_probe_output("").is_none());
+    }
+
+    #[test]
+    fn parse_probe_output_handles_missing_node_and_pi() {
+        let probe = parse_probe_output("UNAME_S=Darwin\nUNAME_M=arm64\nPI_BIN=\nPIX_PROBE_DONE\n")
+            .expect("应解析成功");
+        assert!(!probe.node_found);
+        assert!(!probe.pi_found);
+        assert!(probe.node_version.is_none());
+        assert!(probe.pi_version.is_none());
+        assert_eq!(probe.uname.as_deref(), Some("Darwin"));
+        assert_eq!(probe.arch.as_deref(), Some("arm64"));
+    }
+
+    /// 沿 PATH 查找可执行文件（找不到则跳过对应测试）。
+    fn find_program(name: &str) -> Option<PathBuf> {
+        find_test_program(name)
+    }
+
+    #[tokio::test]
+    async fn ssh_exec_runs_injected_mock_program_without_real_ssh() {
+        // 端到端验证参数与单元素 argv 传递：注入 node 作为 mock ssh，
+        // 打印收到的最后一个 argv（远端命令）。要求开发环境 Node >= 22。
+        let Some(node) = find_program("node") else {
+            eprintln!("跳过：开发环境未找到 node");
+            return;
+        };
+        if node.to_string_lossy().contains(' ') {
+            eprintln!("跳过：node 路径含空白，无法经 PIX_SSH_COMMAND 注入");
+            return;
+        }
+        let _guard = lock_env();
+        std::env::set_var(
+            "PIX_SSH_COMMAND",
+            format!("{} -e console.log(process.argv.at(-1)) --", node.display()),
+        );
+        let result = remote_exec(&RemoteEndpoint::Ssh(endpoint()), "echo hi", Duration::from_secs(30)).await;
+        std::env::remove_var("PIX_SSH_COMMAND");
+        let output = result.expect("mock ssh exec 应成功");
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim_end(), wrap_payload("echo hi"));
+        assert_eq!(output.stderr, "");
+    }
+
+    #[tokio::test]
+    async fn ssh_exec_with_stdin_carries_stdin_without_real_ssh() {
+        // 端到端验证 stdin 通道：注入 node 作为 mock ssh，把 stdin 原样
+        // 转发到 stdout（模拟远端 `cat > file`）。
+        let Some(node) = find_program("node") else {
+            eprintln!("跳过：开发环境未找到 node");
+            return;
+        };
+        if node.to_string_lossy().contains(' ') {
+            eprintln!("跳过：node 路径含空白，无法经 PIX_SSH_COMMAND 注入");
+            return;
+        }
+        let _guard = lock_env();
+        std::env::set_var(
+            "PIX_SSH_COMMAND",
+            format!("{} -e process.stdin.pipe(process.stdout) --", node.display()),
+        );
+        let result = remote_exec_with_stdin(
+            &RemoteEndpoint::Ssh(endpoint()),
+            "cat > out",
+            b"mjs-bytes-123",
+            Duration::from_secs(30),
+        )
+        .await;
+        std::env::remove_var("PIX_SSH_COMMAND");
+        let output = result.expect("mock ssh exec_with_stdin 应成功");
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout, "mjs-bytes-123");
+    }
+
+    #[tokio::test]
+    async fn system_ssh_probe_parses_mock_probe_output() {
+        let Some(node) = find_program("node") else {
+            eprintln!("跳过：开发环境未找到 node");
+            return;
+        };
+        if node.to_string_lossy().contains(' ') {
+            eprintln!("跳过：node 路径含空白，无法经 PIX_SSH_COMMAND 注入");
+            return;
+        }
+        let _guard = lock_env();
+        std::env::set_var(
+            "PIX_SSH_COMMAND",
+            format!(
+                "{} -e console.log('UNAME_S=Linux\\nUNAME_M=x86_64\\nPIX_PROBE_DONE') --",
+                node.display()
+            ),
+        );
+        let transport = SystemSsh::new(endpoint());
+        let probe = transport.probe().await;
+        std::env::remove_var("PIX_SSH_COMMAND");
+        let probe = probe.expect("mock probe 应成功");
+        assert_eq!(probe.uname.as_deref(), Some("Linux"));
+        assert_eq!(probe.arch.as_deref(), Some("x86_64"));
+        assert!(!probe.node_found);
+        assert!(!probe.pi_found);
+    }
+}

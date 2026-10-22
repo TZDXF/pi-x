@@ -373,7 +373,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
         rpc::spawn(
             app.clone(),
             &state,
-            &pi,
+            &rpc::SpawnProgram::LocalPi(pi.clone()),
             &input.project,
             None,
             args,

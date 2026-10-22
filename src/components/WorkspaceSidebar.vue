@@ -4,7 +4,9 @@ import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
 import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
+import { tBackendError } from "@/i18n"
 import { normalizeProjectPath } from "@/lib/paths"
+import { isRemoteProject } from "@/lib/ssh"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
@@ -104,8 +106,14 @@ async function refresh(path: string) {
   try {
     await workspace.refresh(path)
   } catch (error) {
-    const code = parseCodedError(String(error).replace(/^Error: /, ""))?.code
-    errors.value[path] = code === "projectDirMissing" ? "missing" : "failed"
+    if (isRemoteProject(path)) {
+      // 远程会话列表失败走 toast（translateError 渲染 coded error，契约 §2.4）；
+      // 刷新按钮由 remote 驱动，不走本地 loadFailed 行。
+      ui.pushToast(tBackendError(error), "error")
+    } else {
+      const code = parseCodedError(String(error).replace(/^Error: /, ""))?.code
+      errors.value[path] = code === "projectDirMissing" ? "missing" : "failed"
+    }
   } finally {
     loading.value[path] = false
   }
@@ -136,6 +144,8 @@ function groupState(path: string) {
     hidden: folders.length > 0 && folders.every(folder => errors.value[folder] === "missing"),
     loading: folders.some(folder => loading.value[folder]),
     hasHistory: folders.some(folder => !!workspace.histories[folder]),
+    // 远程项目会话历史来自 ssh_sessions（契约 §2.4），不再是不可用态。
+    remote: isRemoteProject(path),
   }
 }
 async function refreshGroup(path: string) {
@@ -264,6 +274,7 @@ watch(
               :error="projectStates[path]?.listError"
               :loading="projectStates[path]?.loading"
               :has-history="projectStates[path]?.hasHistory"
+              :remote="projectStates[path]?.remote"
               :show-draft="path === workspace.projectRoot(project) && showDraft"
               :draft-worktree="workspace.isWorktree(project)"
               v-on="sessionActions"

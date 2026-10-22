@@ -1,4 +1,6 @@
 import { normalizeProjectPath } from "@/lib/paths"
+import { isRemoteProject } from "@/lib/ssh"
+import { loadTrustStatusLenient } from "@/lib/sshTrust"
 import { createUuid } from "@/lib/uuid"
 import { splitAtEdge, isMember, leafByRuntime, firstLeafRuntime, closePane, splitView } from "@/stores/splitView"
 import type { Ref } from "vue"
@@ -10,9 +12,7 @@ type UiStore = ReturnType<typeof import("@/stores/conversations").useUiStore>
 type PiClient = typeof import("@/api/piClient")
 type Conversations = typeof import("@/stores/conversations")
 type SessionStore = ReturnType<Conversations["sessionFor"]>
-type ConversationLoader = ReturnType<
-  typeof import("@/lib/conversationLoader").createConversationLoader<SessionStore>
->
+type ConversationLoader = ReturnType<typeof import("@/lib/conversationLoader").createConversationLoader<SessionStore>>
 
 /** Active conversation before resumeSession paused on a trust decision; the
  *  user rejecting trust must not leave the untrusted session activated. */
@@ -38,14 +38,14 @@ interface UseSessionOpeningContext {
   ui: UiStore
   t(key: string): string
   translateError(error: unknown): string
-  api: Pick<PiClient, "saveConfig" | "trustStatus" | "exportSessionFileHtml">
+  api: Pick<PiClient, "saveConfig" | "trustStatus" | "sshTrustStatus" | "exportSessionFileHtml">
   conversations: Pick<
     Conversations,
     "sessionFor" | "findConversation" | "activateSession" | "createConversation" | "pruneDormantConversations"
   >
   session: ReturnType<Conversations["useSessionStore"]>
   conversationLoader: ConversationLoader
-  requestWorkspaceTrust(info: TrustStatus): Promise<boolean>
+  requestWorkspaceTrust(info: TrustStatus, sshProject?: string | null): Promise<boolean>
   selectProject(dir: string): Promise<void>
 }
 
@@ -67,13 +67,20 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
     ui,
     t,
     translateError: tBackendError,
-    api: { saveConfig, trustStatus, exportSessionFileHtml },
+    api: { saveConfig, trustStatus, sshTrustStatus, exportSessionFileHtml },
     conversations: { sessionFor, findConversation, activateSession, createConversation, pruneDormantConversations },
     session,
     conversationLoader,
     requestWorkspaceTrust,
     selectProject,
   } = context
+
+  /** 信任状态查询（契约 §4.3）：本地照旧；远程调 ssh_trust_status，连接缺失降级 null 并 toast。 */
+  async function trustStatusFor(dir: string): Promise<TrustStatus | null> {
+    return loadTrustStatusLenient(dir, config.value.sshConnections ?? [], { trustStatus, sshTrustStatus }, error =>
+      ui.pushToast(tBackendError(error), "error"),
+    )
+  }
 
   /** Activate a saved conversation, reusing or spawning its independent worker. */
   async function resumeSession(file: string, targetProject?: string) {
@@ -84,7 +91,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
     const prevActive = activeRuntimeId.value
     const prevProject = project.value
     const prevLastProject = config.value.lastProject
-    const existing = findConversation(file)
+    const existing = findConversation(file, targetProject || project.value)
     const prevOwnerFile = existing?.sessionFile ?? null
     phase.value = "chat"
     connecting.value = true
@@ -102,8 +109,9 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
           config.value.lastProject = dir
           await saveConfig({ ...config.value })
         }
-        const status = await trustStatus(dir)
-        if (status.needsDecision) {
+        // 远程项目走远程信任命令（契约 §4.3）；连接缺失时降级为 null 继续。
+        const status = await trustStatusFor(dir)
+        if (status?.needsDecision) {
           trustInfo.value = status
           pendingResume.value = file
           trustActivationBackup.value = {
@@ -141,7 +149,7 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
   async function ensureSessionForSplit(file: string, targetProject?: string): Promise<string | null> {
     if (workspace.gitBusy || navigating.value || connecting.value) return null
     connecting.value = true
-    let owner = findConversation(file)
+    let owner = findConversation(file, targetProject || project.value)
     try {
       const dir = normalizeProjectPath(targetProject || owner?.cwd || project.value)
       if (!owner) {
@@ -151,9 +159,10 @@ export function useSessionOpening(context: UseSessionOpeningContext) {
       }
       owner.sessionFile = file
       if (!owner.started) {
-        const status = await trustStatus(dir)
-        if (status.needsDecision) {
-          const allowed = await requestWorkspaceTrust(status)
+        // 远程项目走远程信任命令（契约 §4.3）；本地照旧。
+        const status = await trustStatusFor(dir)
+        if (status?.needsDecision) {
+          const allowed = await requestWorkspaceTrust(status, isRemoteProject(dir) ? dir : null)
           if (!allowed) return null
         }
       }

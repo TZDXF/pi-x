@@ -30,6 +30,8 @@ mod session_file_rewind;
 mod session_watch;
 mod sessions;
 mod skills;
+mod ssh;
+mod ssh_sessions;
 mod terminal;
 mod terminal_open;
 mod title_generation;
@@ -42,6 +44,9 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if ssh::transport::answer_askpass() {
+        return;
+    }
     tauri::Builder::default()
         // Keep this first so duplicate launches exit before other plugins or services start.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -125,6 +130,18 @@ pub fn run() {
             commands::pi::pix_log,
             commands::pi::rpc_running,
             commands::pi::rpc_sessions,
+            commands::ssh::ssh_connection_list,
+            commands::ssh::ssh_connection_save,
+            commands::ssh::ssh_connection_delete,
+            commands::ssh::ssh_connection_probe,
+            commands::ssh::ssh_probe_target,
+            commands::ssh::ssh_deploy_status,
+            commands::ssh::ssh_deploy_pi,
+            commands::ssh::ssh_trust_status,
+            commands::ssh::ssh_trust_save,
+            commands::ssh::wsl_distro_list,
+            commands::ssh::docker_container_list,
+            ssh_sessions::ssh_sessions,
             commands::files::session_list,
             sessions::session_mtime,
             sessions::session_history,

@@ -173,7 +173,9 @@ test("native drag writes both PiX payloads and plain text, including runtime ide
   const setData = vi.fn()
   const transfer = { setData, effectAllowed: "none" } as unknown as DataTransfer
   const item = { dataset: { file: "session.jsonl", path: "project-root" } } as unknown as HTMLElement
-  setSidebarSessionDragData(transfer, item, () => "runtime-1")
+  const resolveRuntime = vi.fn(() => "runtime-1")
+  setSidebarSessionDragData(transfer, item, resolveRuntime)
+  expect(resolveRuntime).toHaveBeenCalledWith("session.jsonl", "project-root")
   expect(transfer.effectAllowed).toBe("copyMove")
   expect(setData.mock.calls).toEqual([
     ["application/x-pix-session", "session.jsonl"],

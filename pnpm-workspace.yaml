@@ -1,5 +1,8 @@
 allowBuilds:
   vue-demi: true
 
+minimumReleaseAgeExclude:
+  - reka-ui@2.11.0
+
 overrides:
   "ignore@^7.0.0": 7.0.9

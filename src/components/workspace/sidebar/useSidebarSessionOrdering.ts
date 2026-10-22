@@ -19,12 +19,12 @@ export function sidebarSessionRows(
 export function setSidebarSessionDragData(
   transfer: DataTransfer,
   item: HTMLElement,
-  runtimeId: (file: string) => string | undefined,
+  runtimeId: (file: string, path: string) => string | undefined,
 ) {
   const { file, path } = item.dataset
   if (!file || !path) return
   transfer.effectAllowed = "copyMove"
   transfer.setData("application/x-pix-session", file)
   transfer.setData("text/plain", file)
-  transfer.setData("application/x-pix-session-drag", JSON.stringify({ file, path, runtimeId: runtimeId(file) }))
+  transfer.setData("application/x-pix-session-drag", JSON.stringify({ file, path, runtimeId: runtimeId(file, path) }))
 }

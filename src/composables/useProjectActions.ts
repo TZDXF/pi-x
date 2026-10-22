@@ -1,5 +1,6 @@
 import { normalizeProjectPath } from "@/lib/paths"
 import { shouldAskProjectTrust } from "@/lib/trust"
+import { isRemoteProject } from "@/lib/ssh"
 import type { Ref } from "vue"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
@@ -81,6 +82,12 @@ export function useProjectActions(context: UseProjectActionsContext) {
         config.value.lastProject = dir
         // Await so quick successive selections cannot persist out of order.
         await saveConfig({ ...config.value })
+      }
+      // 远程项目 P1 跳过信任决策，直接进入会话（契约 §4.2）。
+      if (isRemoteProject(dir)) {
+        phase.value = "chat"
+        if (!started.value) void session.loadOfflineModels()
+        return
       }
       const status = await trustStatus(dir)
       // 首次进入的项目（尚无任何信任决定）即使没有 .pi 资源也提前询问，

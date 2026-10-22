@@ -1,6 +1,6 @@
 import { reactive } from "vue"
 import { createUuid } from "../lib/uuid"
-import { normalizeSlashes } from "../lib/paths"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
 import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
 import { isMember } from "./splitView"
@@ -64,20 +64,16 @@ export function pruneDormantConversations() {
     pinia?._s?.delete(`ui:${id}`)
   }
 }
-const normalized = normalizeSlashes
-export function findConversation(file: string) {
-  return [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(file))
+export function findConversation(file: string, project?: string) {
+  return [...sessions.values()].find(store => sameSessionIdentity(store.sessionFile, store.cwd, file, project))
 }
 /** Resolve a history-route id (runtime id map key or session file) to an
  *  in-memory conversation without creating a store as a side effect. */
-export function peekConversation(id: string): Session | undefined {
-  return (
-    sessions.get(id) ??
-    [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(id))
-  )
+export function peekConversation(id: string, project?: string): Session | undefined {
+  return sessions.get(id) ?? findConversation(id, project)
 }
-export function isSessionRunning(file: string) {
-  return !!findConversation(file)?.isStreaming
+export function isSessionRunning(file: string, project?: string) {
+  return !!findConversation(file, project)?.isStreaming
 }
 export function allConversations() {
   return [...sessions.values()]

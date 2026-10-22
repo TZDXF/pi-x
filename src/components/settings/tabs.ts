@@ -58,6 +58,14 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./RemoteSettings.vue")),
   },
   {
+    id: "ssh",
+    nav: "ssh.nav",
+    title: "ssh.title",
+    desc: "ssh.desc",
+    desktopOnly: true,
+    component: defineAsyncComponent(() => import("./SshSettings.vue")),
+  },
+  {
     id: "models",
     nav: "settings.providersModels",
     title: "settings.providersModelsTitle",
@@ -142,7 +150,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "general",
     labelKey: "settings.groups.general",
-    tabIds: ["general", "appearance", "models", "shortcuts", "notifications", "remote"],
+    tabIds: ["general", "appearance", "models", "shortcuts", "notifications", "remote", "ssh"],
   },
   {
     id: "capabilities",

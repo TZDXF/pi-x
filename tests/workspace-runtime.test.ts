@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { ref } from "vue"
+import { rememberSshProjectConnection, resolveSshConnectionId } from "@/lib/ssh"
 import { createWorkspaceRuntime } from "@/lib/workspaceRuntime"
 
 function harness() {
@@ -37,6 +38,7 @@ function harness() {
     onPiEvent: subscribe("event"),
     onPiExit: subscribe("exit"),
     onPiStderr: subscribe("stderr"),
+    onSshPathBound: subscribe("sshPathBound"),
     onReconnected: subscribe("reconnected"),
     onWorkspaceStateChanged: subscribe("workspace"),
     onSessionsChanged: subscribe("changed"),
@@ -59,6 +61,7 @@ function harness() {
       histories: {},
       refresh: vi.fn(async () => {}),
       isRemovedProject: path => path === "/removed",
+      remember: vi.fn(),
       applyState: vi.fn(),
       syncState: vi.fn(async () => {}),
     },
@@ -78,12 +81,13 @@ function harness() {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 test("subscriptions are disposed exactly once and metadata synchronization is registered", async () => {
   const { runtime, context, off } = harness()
   await runtime.listen()
-  expect(off).toHaveLength(6)
+  expect(off).toHaveLength(7)
   expect(context.registerSessionMtimeSync).toHaveBeenCalledOnce()
   runtime.dispose()
   runtime.dispose()
@@ -176,6 +180,64 @@ test("reattachment restores streaming before loading history and does not activa
   expect(restored.runtimeId).toBe("restored")
   expect(context.conversations.activateSession).toHaveBeenCalledWith("restored")
   expect(owner.markRunning).toHaveBeenCalledOnce()
+})
+
+test("ssh path rebinding updates the owner, project list and current display (contract §3.8)", async () => {
+  const { runtime, context, callbacks, owners } = harness()
+  await runtime.listen()
+  const rebound = { runtimeId: "active", project: "ssh://host/resolved", path: "/resolved" }
+  await callbacks.sshPathBound(rebound)
+  const owner = owners.get("active")
+  expect(owner.cwd).toBe("ssh://host/resolved")
+  expect(context.workspace.remember).toHaveBeenCalledWith("ssh://host/resolved")
+  // 当前展示与最近项目跟随回绑（原 path 与回绑前一致时）。
+  expect(context.project.value).toBe("ssh://host/resolved")
+  expect(context.config.value.lastProject).toBe("ssh://host/resolved")
+
+  // 原路径不同的其它 runtime 只回绑自身，不影响当前展示。
+  context.workspace.remember.mockClear()
+  await callbacks.sshPathBound({ runtimeId: "other", project: "ssh://host/other", path: "/other" })
+  expect(owners.get("other").cwd).toBe("ssh://host/other")
+  expect(context.workspace.remember).toHaveBeenCalledWith("ssh://host/other")
+  expect(context.project.value).toBe("ssh://host/resolved")
+
+  // 相同路径（含空 cwd）不发事件语义：直接忽略。
+  context.workspace.remember.mockClear()
+  await callbacks.sshPathBound({ runtimeId: "active", project: "ssh://host/resolved", path: "/resolved" })
+  expect(context.workspace.remember).not.toHaveBeenCalled()
+})
+
+test("ssh 回绑使用事件所属 runtime 的连接选择，保留旧 URI 绑定", async () => {
+  const values = new Map()
+  vi.stubGlobal("localStorage", {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  })
+  const { runtime, context, callbacks } = harness()
+  const connections = [
+    { id: "first", host: "host", keyPath: "/keys/first" },
+    { id: "selected", host: "host", keyPath: "/keys/selected" },
+  ]
+  context.config.value.sshConnections = connections
+  const previous = "ssh://host/alias"
+  const rebound = "ssh://host/real"
+  const active = "ssh://host/active"
+  context.project.value = active
+  context.config.value.lastProject = active
+  context.conversations.sessionFor("active").cwd = active
+  context.conversations.sessionFor("background").cwd = previous
+  rememberSshProjectConnection(active, "first")
+  rememberSshProjectConnection(rebound, "first")
+  rememberSshProjectConnection(previous, "selected")
+  await runtime.listen()
+  await callbacks.sshPathBound({ runtimeId: "background", project: rebound, path: "/real" })
+  expect(context.conversations.sessionFor("background").cwd).toBe(rebound)
+  expect(resolveSshConnectionId(rebound, connections)).toBe("selected")
+  expect(resolveSshConnectionId(previous, connections)).toBe("selected")
+  expect(resolveSshConnectionId(active, connections)).toBe("first")
+  expect(context.project.value).toBe(active)
+  expect(context.config.value.lastProject).toBe(active)
+  runtime.dispose()
 })
 
 test("workspace change events apply shared metadata without saving it again", async () => {
