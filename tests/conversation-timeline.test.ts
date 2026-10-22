@@ -211,14 +211,14 @@ test("timeline preview contains long text instead of inheriting the tooltip flex
   expect(component).toContain('class="line-clamp-3 leading-snug opacity-80"')
 })
 
-test("timeline tracks the scroll position and reveals only the current number", () => {
+test("timeline tracks the scroll position and reveals visible turn numbers", () => {
   const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
   // 组件在 Conversation overlay 内自行定位 reka-ui 滚动视口并监听滚动。
   expect(component).toMatch(/parentElement\?\.querySelector<HTMLElement>\("\[data-reka-scroll-area-viewport\]"\)/)
   expect(component).toMatch(/addEventListener\("scroll", onViewportScroll/)
-  // 当前轮次 = 视口顶部越过的最后一个问题，依据 data-message-id 锚点判定。
+  // 依据 data-message-id 锚点标记所有可见轮次。
   expect(component).toMatch(/querySelector<HTMLElement>\(`\[data-message-id="\$\{turn\.entryId\}"\]`\)/)
-  expect(component).toMatch(/'is-current': currentId === turn\.id/)
+  expect(component).toMatch(/'is-current': currentIds\.has\(turn\.id\)/)
   // 当前位置只露出数字：不显示圆点，也不新增高亮样式。
   expect(component).toMatch(/\.timeline-node\.is-current \.timeline-number \{\n  opacity: 1;\n\}/)
   expect(component).toMatch(/\.timeline-node\.is-current \.timeline-dot \{\n  opacity: 0;\n\}/)

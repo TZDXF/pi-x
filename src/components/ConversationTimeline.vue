@@ -40,10 +40,14 @@ function updateNodeHeight() {
 }
 let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
-  resizeObserver = new ResizeObserver(updateNodeHeight)
+  resizeObserver = new ResizeObserver(() => {
+    updateNodeHeight()
+    onViewportScroll()
+  })
   if (navRef.value) resizeObserver.observe(navRef.value)
   updateNodeHeight()
   viewportEl = navRef.value?.parentElement?.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]") ?? null
+  if (viewportEl) resizeObserver.observe(viewportEl)
   viewportEl?.addEventListener("scroll", onViewportScroll, { passive: true })
   onViewportScroll()
 })
@@ -59,26 +63,33 @@ function navigate(turn: TimelineTurn) {
   selected.value = turn.id
   emit("navigate", turn)
 }
-// 跟随会话滚动条指示当前位置：视口顶部越过的最后一个问题即为当前轮次，
-// 该节点按 hover 样式显示数字（不额外高亮）。时间线位于 Conversation 的
-// overlay 内，滚动视口是其父级 ScrollAreaRoot 下的 reka-ui viewport。
-const currentId = ref<number | null>(null)
+// 标记与视口相交的所有问答轮次；问题滚出顶部但回答仍可见时也保留标记。
+// 使用下一个问题的位置作为当前轮次的结束位置，不要求短回答滚到顶部。
+const currentIds = ref<Set<number>>(new Set())
 let viewportEl: HTMLElement | null = null
 let scrollFrame = 0
 function updateCurrent() {
   const viewport = viewportEl
   if (!viewport) return
-  const threshold = viewport.getBoundingClientRect().top + Math.min(80, viewport.clientHeight / 3)
-  let current: number | null = null
+  const top = viewport.getBoundingClientRect().top
+  const bottom = top + viewport.clientHeight
+  const anchors: { id: number; top: number }[] = []
   for (const turn of turns.value) {
     if (turn.compaction || turn.entryId == null) continue
     const el = viewport.querySelector<HTMLElement>(`[data-message-id="${turn.entryId}"]`)
-    // 未物化的轮次没有 DOM 锚点，跳过；消息自上而下排列，越过阈值即可停止。
+    // 未物化的轮次没有 DOM 锚点，跳过。
     if (!el) continue
-    if (el.getBoundingClientRect().top > threshold) break
-    current = turn.id
+    const anchorTop = el.getBoundingClientRect().top
+    anchors.push({ id: turn.id, top: anchorTop })
+    if (anchorTop >= bottom) break
   }
-  currentId.value = current
+  const visible = new Set<number>()
+  for (let i = 0; i < anchors.length; i++) {
+    const start = anchors[i]!
+    const end = anchors[i + 1]?.top ?? Infinity
+    if (start.top < bottom && end > top) visible.add(start.id)
+  }
+  currentIds.value = visible
 }
 function onViewportScroll() {
   if (scrollFrame) return
@@ -108,7 +119,7 @@ function onViewportScroll() {
                 :class="{
                   'is-selected': selected === turn.id,
                   'is-compaction': !!turn.compaction,
-                  'is-current': currentId === turn.id,
+                  'is-current': currentIds.has(turn.id),
                 }"
                 :aria-label="
                   turn.compaction

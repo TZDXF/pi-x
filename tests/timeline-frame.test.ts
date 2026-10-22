@@ -18,10 +18,15 @@ test("stream updates and scrolling share a frame, and unmount cancels pending la
   const frames = new Map()
   let sequence = 0
   const bounds = vi.fn(() => ({ top: 0 }))
+  let positions = [10]
   const viewport = {
     clientHeight: 600,
     getBoundingClientRect: bounds,
-    querySelector: () => ({ getBoundingClientRect: () => ({ top: 10 }) }),
+    querySelector: selector => {
+      const id = Number(selector.match(/"(\d+)"/)[1])
+      const top = positions[id - 1]
+      return top == null ? null : { getBoundingClientRect: () => ({ top }) }
+    },
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }
@@ -47,7 +52,7 @@ test("stream updates and scrolling share a frame, and unmount cancels pending la
   }
   scope.run(() =>
     vm.runInNewContext(
-      ts.transpile(script + "\nglobalThis.api = { navRef, onViewportScroll, currentId }", {
+      ts.transpile(script + "\nglobalThis.api = { navRef, onViewportScroll, currentIds }", {
         target: ts.ScriptTarget.ES2022,
       }),
       context,
@@ -65,7 +70,27 @@ test("stream updates and scrolling share a frame, and unmount cancels pending la
     frames.clear()
     pending.forEach(fn => fn())
     expect(bounds).toHaveBeenCalledOnce()
-    expect(context.api.currentId.value).toBe(1)
+    expect([...context.api.currentIds.value]).toEqual([1])
+    const checkVisible = async (tops, expected) => {
+      positions = tops
+      props.turns = tops.map((_, index) => ({ id: index + 1, entryId: index + 1, question: "q", answer: "" }))
+      await nextTick()
+      context.api.onViewportScroll()
+      const callbacks = [...frames.values()]
+      frames.clear()
+      callbacks.forEach(fn => fn())
+      expect([...context.api.currentIds.value]).toEqual(expected)
+    }
+    // Multiple questions in one viewport, including a short final answer at the bottom.
+    await checkVisible([-200, 150, 500], [1, 2, 3])
+    // A long answer remains visible even after its question leaves the viewport.
+    await checkVisible([-900, 700], [1])
+    // Exact viewport boundaries do not mark the previous or next offscreen turn.
+    await checkVisible([-200, 0, 600], [2])
+    // Scrolling back up removes the last turn's marker.
+    await checkVisible([10, 650, 900], [1])
+    // Unmaterialized anchors are safely skipped.
+    await checkVisible([null, -100, 450], [2, 3])
     context.api.onViewportScroll()
     expect(frames.size).toBe(1)
   } finally {
