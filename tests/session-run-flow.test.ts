@@ -10,6 +10,7 @@ const controls = vi.hoisted(() => {
   return {
     state,
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),

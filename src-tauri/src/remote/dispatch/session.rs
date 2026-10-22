@@ -125,6 +125,10 @@ pub(super) async fn handle(
             "session_duplicate" => Ok(Value::String(
                 crate::sessions::session_duplicate(text(a, "file")?).await?,
             )),
+            "session_adopt" => {
+                crate::sessions::session_adopt(text(a, "file")?).await?;
+                Ok(Value::Null)
+            }
             "session_last_error" => Ok(to_json(
                 crate::sessions::session_last_error(text(a, "file")?).await?,
             )?),

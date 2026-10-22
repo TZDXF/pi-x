@@ -117,6 +117,10 @@ export const listArchivedSessions = () => invoke<SessionMeta[]>("session_list_ar
 /** Permanently delete a session file (and its PiX metadata sidecar). */
 export const deleteSession = (file: string) => invoke<void>("session_delete", { file })
 
+/** Mark a session as PiX-managed so it appears in the PiX-only session
+ *  listing; idempotent and cheap (no-op once the sidecar exists). */
+export const adoptSession = (file: string) => invoke<void>("session_adopt", { file })
+
 /** Independent, tool-free title generation; never changes the active RPC model.
  *  `overwrite` replaces an existing session name (first-question edits). */
 export const generateSessionTitle = (file: string, message: string, overwrite = false) =>

@@ -6,6 +6,7 @@ const controls = vi.hoisted(() => {
   return {
     state,
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),
@@ -215,12 +216,12 @@ test("steering goes to the running agent without draining the queue", async () =
   expect(h.store.promptQueue.map(item => item.text)).toEqual(["later"])
 })
 
-test("steering disposition is surfaced as a notice", async () => {
+test("steering queued disposition does not show a notice", async () => {
   const h = await sessionHarness({ prompt: () => ({ success: true, data: { disposition: "queued" } }) })
   h.store.isStreaming = true
   await h.store.send("change direction", undefined, undefined, "steer")
   await tick()
-  expect(h.store.dispositionNotice?.message).toBe("chat.steerQueued")
+  expect(h.store.dispositionNotice).toBeNull()
 })
 
 test("a prompt consumed by an extension reports the handled disposition", async () => {

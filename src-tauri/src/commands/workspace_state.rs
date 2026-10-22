@@ -224,6 +224,21 @@ pub fn workspace_state_get() -> Result<WorkspaceState, String> {
     let _guard = STATE_LOCK.lock().map_err(|e| e.to_string())?;
     read(&crate::data_dir::root().join("workspace.json"))
 }
+
+/// 侧栏曾经展示过的全部会话文件：会话列表过滤改为仅 PiX 纳管会话之前的
+/// 历史记录，供启动时一次性迁移（补写 sidecar）使用。
+pub fn known_session_files() -> Vec<std::path::PathBuf> {
+    workspace_state_get()
+        .map(|state| {
+            state
+                .session_order
+                .into_values()
+                .flatten()
+                .map(std::path::PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 #[tauri::command]
 pub fn workspace_state_update(
     app: AppHandle,

@@ -6,6 +6,7 @@ const controls = vi.hoisted(() => {
   return {
     state,
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       getModelsConfig: (...args) => state.getModelsConfig(...args),

@@ -1,10 +1,11 @@
 import { clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { i18n, tBackendError } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import {
+  adoptSession,
   generateSessionTitle,
   getPiSettings,
   pixLog,
@@ -97,6 +98,12 @@ export const createSessionStore = (runtimeId = "default") =>
     const followUpMode = ref<QueueDeliveryMode | null>(null)
     /** File path of the active pi session (null until persisted). */
     const sessionFile = ref<string | null>(null)
+    // 会话文件一旦确定（新会话首轮持久化、恢复既有会话）即纳入 PiX 管理：
+    // 项目会话列表只展示带 sidecar 的 PiX 会话。失败无碍，标题生成、归档等
+    // 后续操作也会补写 sidecar。
+    watch(sessionFile, file => {
+      if (file) void adoptSession(file).catch(() => {})
+    })
     /** Runtime auto-retry switch (set_auto_retry). pi reports no getter for it;
      *  the client tracks it, seeded from settings.json `retry.enabled` on init. */
     const autoRetry = ref<boolean | null>(null)
@@ -256,15 +263,14 @@ export const createSessionStore = (runtimeId = "default") =>
 
     // ---- actions ----
 
-    /** Surface a response `data.disposition` (rpc-commands.md) as a diagnostic
-     *  log plus a notice whenever the message did NOT simply start a run: an
-     *  extension consumed it ("handled") or pi queued it ("queued"). */
+    /** Log response dispositions and notify for extension handling or follow-up
+     *  queuing. Steering is normally queued, so it needs no notice. */
     function reportDisposition(command: string, data: unknown, queuedKey: string) {
       const disposition = (data as { disposition?: string } | undefined)?.disposition
       pixLog(`${command} disposition=${disposition ?? "unknown"}`, runtimeId)
       if (disposition === "handled")
         dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t("chat.dispositionHandled") }
-      else if (disposition === "queued")
+      else if (disposition === "queued" && queuedKey !== "chat.steerQueued")
         dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t(queuedKey) }
     }
 
@@ -363,8 +369,7 @@ export const createSessionStore = (runtimeId = "default") =>
       rpcRequest(command)
         .then(async res => {
           if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
-          // While steering, pi queues the message instead of starting a run;
-          // make that (and extension consumption) visible either way.
+          // Record queued steering silently; keep other disposition notices.
           reportDisposition("prompt", res.data, wasStreaming ? "chat.steerQueued" : "chat.followUpQueued")
         })
         .catch(e => {

@@ -9,6 +9,7 @@ const controls = vi.hoisted(() => {
     statuses: new Map(),
     notifications: [],
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),

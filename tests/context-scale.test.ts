@@ -6,6 +6,7 @@ import { buildTimelineTurns } from "@/lib/conversationTimeline"
 import { createSessionHistory } from "@/stores/session/history"
 
 vi.mock("@/api/piClient", () => ({
+  adoptSession: async () => {},
   sessionHistory: async () => [],
   sessionLastError: async () => null,
   rpcRequest: async () => ({ success: false }),

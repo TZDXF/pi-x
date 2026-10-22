@@ -201,6 +201,11 @@ fn list_project_sessions(
             if normalize(Path::new(&cwd)).unwrap_or(cwd) != project_norm {
                 continue;
             }
+            // 只展示 PiX 纳管的会话（带 .pix.json sidecar）；pi CLI 等其他
+            // 入口直接创建的会话没有 sidecar，不出现在项目会话列表里。
+            if !has_sidecar(&path) {
+                continue;
+            }
             candidates.push((path, mtime, created));
         }
     }
@@ -419,6 +424,50 @@ pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Re
     std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
 }
+/// PiX 纳管会话的标记：会话的 .pix.json sidecar 存在。
+fn has_sidecar(path: &Path) -> bool {
+    path.with_extension("pix.json").is_file()
+}
+
+/// 将会话纳入 PiX 管理：sidecar 缺失时写入默认值。幂等；
+/// 与 session_update 一样拒绝符号链接的 sidecar 路径。
+pub fn adopt(file: &Path) -> Result<(), String> {
+    let sidecar = file.with_extension("pix.json");
+    if std::fs::symlink_metadata(&sidecar).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
+    }
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    // 锁内复查：其他客户端可能同时纳管同一会话。
+    if sidecar.exists() {
+        return Ok(());
+    }
+    write_presentation(file, &Presentation::default())
+}
+
+/// Adopt a session into PiX so it appears in the PiX-only session listing.
+#[tauri::command]
+pub async fn session_adopt(file: String) -> Result<(), String> {
+    let path = validate_session_path(&file)?;
+    tokio::task::spawn_blocking(move || adopt(&path))
+        .await
+        .map_err(|e| format!("session adopt failed: {e}"))?
+}
+
+/// 一次性迁移：PiX 专属列表过滤引入前，侧栏已展示过的会话可能缺少
+/// sidecar；为它们补写，避免升级后用户已管理的会话从侧栏消失。
+pub fn adopt_known_sessions(files: Vec<PathBuf>) {
+    for file in files {
+        if file.extension().and_then(|s| s.to_str()) == Some("jsonl") && file.is_file() {
+            if let Err(error) = adopt(&file) {
+                crate::logs::write(
+                    "sessions",
+                    &format!("adopt {} failed: {error}", file.display()),
+                );
+            }
+        }
+    }
+}
+
 /// Error details of the last failed assistant message recorded in a session
 /// file. pi drops most retry failures from the RPC message projection via
 /// `context_edit`, so clients read the file to surface the final failure.
@@ -684,6 +733,8 @@ pub async fn session_duplicate(file: String) -> Result<String, String> {
         let name = format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-"));
         let target = source.parent().ok_or("invalid session path")?.join(name);
         std::fs::write(&target, content).map_err(|e| e.to_string())?;
+        // 复制出的会话同样是 PiX 纳管会话，缺 sidecar 会从列表里消失。
+        adopt(&target)?;
         Ok(target.to_string_lossy().to_string())
     })
     .await
@@ -733,6 +784,7 @@ mod presentation_tests {
             });
             let path = folder.join(format!("session-{index:03}.jsonl"));
             std::fs::write(&path, format!("{header}\n")).unwrap();
+            adopt(&path).unwrap();
             let modified = UNIX_EPOCH + std::time::Duration::from_secs(10_000 - index as u64);
             std::fs::OpenOptions::new()
                 .write(true)
@@ -766,6 +818,54 @@ mod presentation_tests {
                 .unwrap();
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn project_listing_shows_only_adopted_sessions() {
+        let root = std::env::temp_dir().join(format!("pix-list-adopted-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions").join("encoded-project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let project_norm = normalize(&root).unwrap();
+        for name in ["pix-owned", "cli-created"] {
+            let header = serde_json::json!({
+                "type": "session",
+                "id": name,
+                "cwd": root.to_string_lossy(),
+                "timestamp": "2026-10-22T00:00:00Z",
+            });
+            std::fs::write(folder.join(format!("{name}.jsonl")), format!("{header}\n")).unwrap();
+        }
+        // pi CLI 直接创建的会话没有 sidecar，不出现在 PiX 的列表里。
+        adopt(&folder.join("pix-owned.jsonl")).unwrap();
+
+        let rows = list_project_sessions(&root.join("sessions"), &project_norm).unwrap();
+        assert_eq!(
+            rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(),
+            ["pix-owned"]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn adopt_creates_sidecar_once_and_preserves_existing_metadata() {
+        let file = std::env::temp_dir().join(format!("pix-adopt-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "{\"type\":\"session\",\"id\":\"s\"}\n").unwrap();
+        adopt(&file).unwrap();
+        assert!(file.with_extension("pix.json").is_file());
+
+        // 再次纳管不得覆盖已有元数据（例如归档状态）。
+        write_presentation(
+            &file,
+            &Presentation {
+                archived: true,
+                title_generation_attempted: false,
+            },
+        )
+        .unwrap();
+        adopt(&file).unwrap();
+        assert!(read_presentation(&file).unwrap().archived);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
     }
 
     #[tokio::test]

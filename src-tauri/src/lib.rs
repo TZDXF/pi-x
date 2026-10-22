@@ -57,6 +57,9 @@ pub fn run() {
         .setup(|app| {
             data_dir::initialize()?;
             logs::initialize();
+            // 一次性迁移：为侧栏历史里缺 sidecar 的会话补写纳管标记，
+            // 避免列表改为仅展示 PiX 会话后既有历史消失。
+            sessions::adopt_known_sessions(commands::workspace_state::known_session_files());
             schedules::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
@@ -129,6 +132,7 @@ pub fn run() {
             sessions::session_update,
             sessions::session_delete,
             sessions::session_duplicate,
+            sessions::session_adopt,
             sessions::session_list_archived,
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,
