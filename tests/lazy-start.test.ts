@@ -274,6 +274,47 @@ test("cross-project drafts stay visible during checks while sending remains bloc
   expect(view).toMatch(/:disabled="editBusy \|\| gitBusy \|\| connecting"/)
 })
 
+test("selecting a project without a saved trust decision asks even before .pi resources exist", async () => {
+  const { context } = await harness()
+  await context.mount()
+  context.trustStatus = async () => ({
+    needsDecision: false,
+    decision: null,
+    policy: "ask",
+    hasTrustRequiringResources: false,
+  })
+  await context.actions.selectProject("fresh")
+  expect(context.actions.phase.value).toBe("trust")
+})
+
+test("a saved trust decision or a non-ask policy skips the upfront prompt", async () => {
+  for (const status of [
+    { needsDecision: false, decision: true, policy: "ask", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: false, policy: "ask", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: null, policy: "always", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: null, policy: "never", hasTrustRequiringResources: false },
+  ]) {
+    const { context } = await harness()
+    await context.mount()
+    context.trustStatus = async () => status
+    await context.actions.selectProject("settled")
+    expect(context.actions.phase.value, JSON.stringify(status)).toBe("chat")
+  }
+})
+
+test("the projectless workspace never prompts for trust", async () => {
+  const { context, workspace } = await harness()
+  await context.mount()
+  workspace.isProjectless = () => true
+  context.trustStatus = async () => ({
+    needsDecision: false,
+    decision: null,
+    policy: "ask",
+    hasTrustRequiringResources: false,
+  })
+  await context.actions.selectProject("projectless-dir")
+  expect(context.actions.phase.value).toBe("chat")
+})
 test("project selection keeps the editor enabled without bypassing other edit guards", () => {
   const view = composerSources() + turnSources()
   const editor = view.split("<ComposerRichEditor")[1].split("/>")[0]

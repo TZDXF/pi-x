@@ -7,6 +7,8 @@ export interface TrustStatus {
   parentPath: string | null
   hasTrustRequiringResources: boolean
   decision: boolean | null
+  /** pi 的 defaultProjectTrust 策略；旧后端不返回时按 "ask" 处理。 */
+  policy?: string
   needsDecision: boolean
 }
 

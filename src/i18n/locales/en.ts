@@ -586,8 +586,12 @@ export default {
     title: "Trust this project?",
     desc: "contains project-local pi resources",
     descDetail: "(.pi settings, extensions, skills, prompts or themes).",
+    descEmpty:
+      "currently has no project-local pi resources. The decision is saved and applies to any future .pi resources (settings, MCP config, extensions, etc.).",
     warning:
       "Trusting allows pi to load these resources and execute project extensions when it starts. Only trust projects you own or have reviewed.",
+    warningEmpty:
+      "Trusting allows pi to load future project-local resources and execute project extensions for this project. Only trust projects you own or have reviewed.",
     trustFolder: "Trust this folder",
     trustParent: "Trust parent folder",
     dontTrust: "Don't trust",

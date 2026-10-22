@@ -570,7 +570,10 @@ export default {
     title: "信任此项目？",
     desc: "包含项目本地的 pi 资源",
     descDetail: "（.pi 设置、扩展、技能、提示词或主题）。",
+    descEmpty:
+      "当前没有项目本地的 pi 资源。现在做出的决定会保存下来，今后出现 .pi 资源（设置、MCP 配置、扩展等）时自动生效。",
     warning: "信任后，pi 在启动时将加载这些资源并执行项目扩展。请仅信任你自己拥有或已审查过的项目。",
+    warningEmpty: "信任后，pi 将为该项目加载今后出现的本地资源并执行项目扩展。请仅信任你自己拥有或已审查过的项目。",
     trustFolder: "信任此文件夹",
     trustParent: "信任上级文件夹",
     dontTrust: "不信任",

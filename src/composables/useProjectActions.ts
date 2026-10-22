@@ -1,4 +1,5 @@
 import { normalizeProjectPath } from "@/lib/paths"
+import { shouldAskProjectTrust } from "@/lib/trust"
 import type { Ref } from "vue"
 import type { AppConfig, TrustStatus } from "@/api/piClient"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
@@ -82,7 +83,9 @@ export function useProjectActions(context: UseProjectActionsContext) {
         await saveConfig({ ...config.value })
       }
       const status = await trustStatus(dir)
-      if (status.needsDecision) {
+      // 首次进入的项目（尚无任何信任决定）即使没有 .pi 资源也提前询问，
+      // 决定保存后今后出现的资源自动沿用；无项目会话目录是 PiX 自管的，不询问。
+      if (!workspace.isProjectless(dir) && shouldAskProjectTrust(status)) {
         trustInfo.value = status
         phase.value = "trust"
         return
@@ -208,5 +211,13 @@ export function useProjectActions(context: UseProjectActionsContext) {
     }
   }
 
-  return { selectProject, switchProject, openProjectless, openProjectlessFromSidebar, editProject, saveProject, removeProject }
+  return {
+    selectProject,
+    switchProject,
+    openProjectless,
+    openProjectlessFromSidebar,
+    editProject,
+    saveProject,
+    removeProject,
+  }
 }
