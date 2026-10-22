@@ -48,13 +48,19 @@ export function useChatTurnList(deps: {
   conversation: Ref<ChatHistoryHandle | null>
 }) {
   const { session, ui, conversation } = deps
+  // Keep committed history independent of partial deltas. Rebuilding it for
+  // every chunk also changes every assistant prop's identity in both panes.
+  const committedTurns = computed(() => responseTurns(session.entries, session.isStreaming))
   const renderedEntries = computed(() => {
     // Transient blocks cannot reopen a turn once its run has settled.
     const streaming = session.isStreaming
     // Context-edit markers stay in the session data but never surface here:
     // responseTurns already skips them so they cannot split a turn.
-    const turns = responseTurns(session.entries, streaming)
+    const committed = committedTurns.value
     const partial = streaming ? session.partialBlocks : null
+    if (!partial?.length) return committed
+    // Only the live tail is replaced; never mutate the cached projection.
+    const turns = [...committed]
     if (partial?.length) {
       const last = turns[turns.length - 1]
       if (last?.kind === "assistant") {

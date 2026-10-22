@@ -13,6 +13,7 @@ import ChatTurnList from "@/components/chat/ChatTurnList.vue"
 import { useChatSendControl } from "@/composables/useChatSendControl"
 import { useChatTurnList, blocksText } from "@/composables/useChatTurnList"
 import { useChatContextBreakdown } from "@/composables/useChatContextBreakdown"
+import { useVisibleSnapshot } from "@/composables/useVisibleSnapshot"
 import { useComposerDraftSync } from "@/composables/useComposerDraftSync"
 import { useConversationModel } from "@/composables/useConversationModel"
 import {
@@ -102,6 +103,11 @@ const props = defineProps<{
 const runtimeId = props.sessionId ?? activeRuntimeId.value
 const session = sessionFor(runtimeId)
 const ui = uiFor(runtimeId)
+const sidebarChanges = useVisibleSnapshot(
+  () => sidebarVisible.value && sidebarTabs.value.some(tab => tab.id === activeTabId.value && tab.type === "review"),
+  () => session.fileChanges,
+  [],
+)
 const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const emit = defineEmits<{
   "update:rightSidebarOpen": [open: boolean]
@@ -450,7 +456,7 @@ onBeforeUnmount(() => {
         :open="sidebarVisible"
         :tabs="sidebarTabs"
         :active-id="activeTabId"
-        :changes="session.fileChanges"
+        :changes="sidebarChanges"
         :project="session.cwd || project"
         :focus="reviewFocus"
         @update:active-id="activeTabId = $event"

@@ -74,6 +74,31 @@ test("partial deltas append without mutating committed blocks and context edits 
   expect(h.session.entries[2].blocks).toHaveLength(1)
 })
 
+test("streaming chunks reuse historical turns and do not accumulate in the cached tail", () => {
+  const h = harness()
+  h.session.entries.push(
+    { kind: "user", id: 1, text: "old question" },
+    { kind: "assistant", id: 2, blocks: [{ type: "text", text: "old answer" }] },
+    { kind: "user", id: 3, text: "new question" },
+    { kind: "assistant", id: 4, blocks: [{ type: "text", text: "committed" }] },
+  )
+  h.session.isStreaming = true
+  const original = h.controls.renderedEntries.value
+  for (const text of ["one", "one two", "one two three"]) {
+    h.session.partialBlocks = [{ type: "text", text }]
+    const next = h.controls.renderedEntries.value
+    expect(next[1]).toBe(original[1])
+    expect(next[3]).not.toBe(original[3])
+    expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe(`committed\n\n${text}`)
+  }
+  h.session.partialBlocks = null
+  expect(h.controls.renderedEntries.value).toBe(original)
+  h.session.entries[3].blocks.push({ type: "text", text: "saved" })
+  expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe("committed\n\nsaved")
+  h.session.isStreaming = false
+  expect(h.controls.lastAssistantTurn().complete).toBe(true)
+})
+
 test("idle turns ignore stale tool and thinking deltas after the final answer", () => {
   const h = harness()
   h.session.entries.push(

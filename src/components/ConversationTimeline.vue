@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import type { Block } from "@/stores/conversations"
 import { appendPartial, type TimelineTurn } from "@/lib/conversationTimeline"
@@ -45,7 +45,7 @@ onMounted(() => {
   updateNodeHeight()
   viewportEl = navRef.value?.parentElement?.querySelector<HTMLElement>("[data-reka-scroll-area-viewport]") ?? null
   viewportEl?.addEventListener("scroll", onViewportScroll, { passive: true })
-  nextTick(updateCurrent)
+  onViewportScroll()
 })
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
@@ -53,7 +53,8 @@ onBeforeUnmount(() => {
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
 })
 watch(() => turns.value.length, updateNodeHeight)
-watch(turns, () => nextTick(updateCurrent))
+// Content changes and scroll events share one layout read per frame.
+watch(turns, onViewportScroll, { flush: "post" })
 function navigate(turn: TimelineTurn) {
   selected.value = turn.id
   emit("navigate", turn)

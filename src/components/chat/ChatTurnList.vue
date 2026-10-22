@@ -101,21 +101,18 @@ const waitingForReply = computed(() => isWaitingForReply(props.session))
 /** 会话是否已有用户消息：决定消息列的缩进布局（模板内联计算提为 computed）。 */
 const hasUserEntries = computed(() => props.session.entries.some(entry => entry.kind === "user"))
 let waitingClock: ReturnType<typeof setInterval> | undefined
-watch(
-  waitingForReply,
-  waiting => {
-    if (waiting && waitingClock === undefined) {
-      waitingSeconds.value = 0
-      const since = Date.now()
-      waitingClock = setInterval(() => {
-        waitingSeconds.value = Math.floor((Date.now() - since) / 1000)
-      }, 1000)
-    } else if (!waiting && waitingClock !== undefined) {
-      clearInterval(waitingClock)
-      waitingClock = undefined
-    }
-  },
-)
+watch(waitingForReply, waiting => {
+  if (waiting && waitingClock === undefined) {
+    waitingSeconds.value = 0
+    const since = Date.now()
+    waitingClock = setInterval(() => {
+      waitingSeconds.value = Math.floor((Date.now() - since) / 1000)
+    }, 1000)
+  } else if (!waiting && waitingClock !== undefined) {
+    clearInterval(waitingClock)
+    waitingClock = undefined
+  }
+})
 onBeforeUnmount(() => {
   if (waitingClock !== undefined) clearInterval(waitingClock)
 })
@@ -235,11 +232,7 @@ onBeforeUnmount(() => {
 
       <!-- waiting indicator before any content arrives: icon on the left,
                loading status (with elapsed seconds) on the right -->
-      <div
-        v-if="waitingForReply"
-        class="text-muted-foreground flex items-center gap-2 text-sm"
-        role="status"
-      >
+      <div v-if="waitingForReply" class="text-muted-foreground flex items-center gap-2 text-sm" role="status">
         <Loader :size="14" />
         <span class="tabular-nums">{{
           waitingSeconds > 0 ? t("chat.thinkingSeconds", { seconds: waitingSeconds }) : t("chat.thinking")
