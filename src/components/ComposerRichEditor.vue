@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { usePromptInput } from "@/components/ai-elements/prompt-input/context"
 import { useSessionLabels } from "@/composables/useSessionLabels"
+import { revealEditorCaret } from "@/lib/composerCaret"
 import { desktopCommands } from "@/lib/completion"
 import {
   composerChipClass,
@@ -21,6 +22,12 @@ const commandNames = computed(
 )
 const editor = ref<HTMLElement | null>(null)
 const composing = ref(false)
+
+function scheduleCaretReveal() {
+  nextTick(() => {
+    if (editor.value) revealEditorCaret(editor.value)
+  })
+}
 
 function appendText(root: HTMLElement, raw: string) {
   raw.split("\n").forEach((line, index) => {
@@ -55,7 +62,10 @@ function render(value: string, caret?: number) {
     caretBreak.dataset.editorCaret = ""
     root.append(caretBreak)
   }
-  if (caret !== undefined) setEditorCaret(root, caret)
+  if (caret !== undefined) {
+    setEditorCaret(root, caret)
+    scheduleCaretReveal()
+  }
 }
 
 function editorRequiresRender(root: HTMLElement, value: string): boolean {
@@ -87,9 +97,11 @@ function onInput() {
   setTextInput(value)
   // Native edits keep their undo history; only normalize when chips or DOM structure changed.
   if (editorRequiresRender(editor.value, value)) render(value, caret)
+  scheduleCaretReveal()
 }
 
 function insertAtSelection(value: string, lineBreak = false): boolean {
+  scheduleCaretReveal()
   if (lineBreak) return document.execCommand("insertLineBreak")
   if (!value) return true
   value = value.replace(/\r\n?/g, "\n")
@@ -192,3 +204,22 @@ function onCompositionEnd() {
     @compositionend="onCompositionEnd"
   />
 </template>
+
+<style scoped>
+.composer-rich-editor {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.composer-rich-editor::-webkit-scrollbar {
+  width: 10px;
+}
+.composer-rich-editor::-webkit-scrollbar-track {
+  background: transparent;
+}
+.composer-rich-editor::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+</style>
