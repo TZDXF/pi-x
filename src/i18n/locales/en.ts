@@ -684,6 +684,7 @@ export default {
   },
 
   sidebar: {
+    taskList: "Task list",
     expandSessions: "Show more",
     ariaLabel: "Projects and sessions",
     collapse: "Collapse sidebar",
@@ -1176,6 +1177,7 @@ export default {
       sidebar: "Sidebar",
     },
     actions: {
+      searchTasks: "Search tasks",
       newSession: "New session",
       focusComposer: "Focus composer",
       toggleSidebar: "Toggle project sidebar",

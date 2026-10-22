@@ -162,3 +162,21 @@ test("formatComboParts renders human-readable key segments", () => {
   expect([...api.formatComboParts("escape")]).toEqual(["Esc"])
   expect([...api.formatComboParts("ctrl+,")]).toEqual(["Ctrl", ","])
 })
+
+test("task search supports Ctrl+K, rebinding, modal suppression and cleanup", () => {
+  const { api } = harness(null)
+  let calls = 0
+  const off = api.registerShortcutHandler("app.searchTasks", () => calls++)
+  expect(api.shortcutCombo("app.searchTasks")).toBe("ctrl+k")
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }, editable))).toBe(true)
+  expect(calls).toBe(1)
+  api.setShortcutsSuppressed("task-search", true)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(false)
+  api.setShortcutsSuppressed("task-search", false)
+  api.setShortcutOverride("app.searchTasks", "ctrl+shift+k")
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(false)
+  expect(api.dispatchShortcut(keyEvent("K", { ctrl: true, shift: true }))).toBe(true)
+  expect(calls).toBe(2)
+  off()
+  expect(api.dispatchShortcut(keyEvent("K", { ctrl: true, shift: true }))).toBe(false)
+})

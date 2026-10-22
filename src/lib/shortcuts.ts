@@ -20,6 +20,7 @@ export interface ShortcutActionDef {
 }
 
 export const SHORTCUT_ACTION_DEFS = {
+  "app.searchTasks": { scope: "global", labelKey: "shortcuts.actions.searchTasks", default: "ctrl+k" },
   "app.newSession": { scope: "global", labelKey: "shortcuts.actions.newSession", default: "ctrl+n" },
   "app.focusComposer": { scope: "global", labelKey: "shortcuts.actions.focusComposer", default: "ctrl+i" },
   "app.toggleSidebar": { scope: "global", labelKey: "shortcuts.actions.toggleSidebar", default: "ctrl+b" },

@@ -28,3 +28,9 @@ export function setSidebarSessionDragData(
   transfer.setData("text/plain", file)
   transfer.setData("application/x-pix-session-drag", JSON.stringify({ file, path, runtimeId: runtimeId(file, path) }))
 }
+
+/** Empty search shows only the five most recently updated sessions across all groups. */
+export function defaultSearchResults<T extends { session: SessionMeta }>(results: T[], query: string): T[] {
+  if (query.trim()) return results
+  return [...results].sort((a, b) => b.session.mtimeMs - a.session.mtimeMs).slice(0, 5)
+}

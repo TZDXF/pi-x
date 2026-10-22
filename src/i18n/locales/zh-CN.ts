@@ -664,6 +664,7 @@ export default {
   },
 
   sidebar: {
+    taskList: "任务列表",
     expandSessions: "展开更多",
     ariaLabel: "项目与会话",
     collapse: "收起侧栏",
@@ -1137,6 +1138,7 @@ export default {
       sidebar: "侧边栏",
     },
     actions: {
+      searchTasks: "搜索任务",
       newSession: "新建会话",
       focusComposer: "聚焦输入框",
       toggleSidebar: "切换项目侧栏",

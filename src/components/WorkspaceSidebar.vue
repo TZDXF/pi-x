@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, onUnmounted, ref, watch } from "vue"
+import {
+  DialogRoot,
+  DialogPortal,
+  DialogOverlay,
+  DialogContent as SearchDialogContent,
+  DialogClose,
+  ComboboxRoot,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxViewport,
+  ComboboxItem,
+} from "reka-ui"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
-import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
+import { Clock, FolderPlus, Plus, Search, X } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
 import { normalizeProjectPath } from "@/lib/paths"
@@ -17,12 +29,13 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import SidebarProjectGroup from "@/components/workspace/sidebar/SidebarProjectGroup.vue"
 import SidebarSessionList from "@/components/workspace/sidebar/SidebarSessionList.vue"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
-import { sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
+import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { useRoute } from "@/lib/router"
+import { formatComboParts, registerShortcutHandler, setShortcutsSuppressed, shortcutCombo } from "@/lib/shortcuts"
 const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string]
@@ -42,6 +55,23 @@ const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const route = useRoute()
 const query = ref("")
+const searchOpen = ref(false)
+watch(
+  searchOpen,
+  open => {
+    query.value = ""
+    setShortcutsSuppressed("task-search", open)
+  },
+  { flush: "sync" },
+)
+const searchShortcutLabel = computed(() => formatComboParts(shortcutCombo("app.searchTasks")).join("+"))
+const unregisterSearchShortcut = registerShortcutHandler("app.searchTasks", () => {
+  searchOpen.value = true
+})
+onUnmounted(() => {
+  unregisterSearchShortcut()
+  setShortcutsSuppressed("task-search", false)
+})
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
@@ -71,7 +101,7 @@ const sessionActions = {
   selectConversation: (runtimeId: string) => emit("selectConversation", runtimeId),
 }
 function rows(path: string) {
-  return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, query.value, label)
+  return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label)
 }
 /** The sortable model is never query-filtered. */
 function orderedSessionFiles(path: string) {
@@ -79,21 +109,33 @@ function orderedSessionFiles(path: string) {
 }
 const showDraft = computed(
   () =>
-    props.ready &&
-    !session.sessionFile &&
-    !session.promptQueue.length &&
-    !!(session.started || session.entries.length) &&
-    !query.value,
+    props.ready && !session.sessionFile && !session.promptQueue.length && !!(session.started || session.entries.length),
 )
 function pendingRows(path: string) {
   return pendingConversations(
     allConversations(),
     workspace.projectFolders(path),
     workspace.orderedSessions(path).map(row => row.file),
-    query.value,
+    "",
   )
 }
 const taskPath = computed(() => workspace.projectless)
+const searchResults = computed(() => {
+  const paths = [...new Set([...workspace.orderedProjects(), taskPath.value].filter(Boolean))]
+  const results = paths.flatMap(path =>
+    sidebarSessionRows(workspace.orderedSessions(path), archiving.value, query.value.trim(), label).map(session => ({
+      session,
+      path,
+    })),
+  )
+  return defaultSearchResults(results, query.value)
+})
+function selectSearchResult(result: SessionMeta) {
+  if (navigationDisabled.value) return
+  openSession(result)
+  searchOpen.value = false
+}
+
 const visibleProjects = computed(() =>
   projectsCollapsed.value ? [] : workspace.orderedProjects().filter(p => !workspace.isProjectless(p)),
 )
@@ -206,13 +248,18 @@ watch(
       @click="emit('schedules')"
       ><Clock :size="17" class="size-auto shrink-0" />{{ t("schedules.title") }}</Button
     >
-    <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"
-      ><Search :size="15" class="size-auto shrink-0" /><Input
-        v-model="query"
-        :placeholder="t('sidebar.search')"
+    <div class="flex items-center justify-between gap-2 px-2.5 pt-4 pb-2 shrink-0">
+      <h2 class="text-sm font-semibold">{{ t("sidebar.taskList") }}</h2>
+      <Button
+        variant="quiet"
+        size="toolbar"
+        :title="`${t('sidebar.search')} (${searchShortcutLabel})`"
         :aria-label="t('sidebar.search')"
-        class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-    /></label>
+        @click="searchOpen = true"
+      >
+        <Search :size="16" />
+      </Button>
+    </div>
     <ScrollArea class="project-groups flex-1 min-h-0 min-w-0 -mr-[7px]" viewportClass="pr-[7px]">
       <section class="project-section mb-1.5 min-w-0 max-w-full">
         <div class="sidebar-section-label flex items-center justify-between gap-1 py-[2px] pl-1 pr-1 shrink-0">
@@ -267,7 +314,7 @@ watch(
               :rows="rows(path)"
               :ordered-files="orderedSessionFiles(path)"
               :pending="pendingRows(path)"
-              :query="query"
+              :query="''"
               :disabled="disabled"
               :navigation-disabled="navigationDisabled"
               :queue-now="queueNow"
@@ -310,7 +357,7 @@ watch(
           :rows="rows(taskPath)"
           :ordered-files="orderedSessionFiles(taskPath)"
           :pending="pendingRows(taskPath)"
-          :query="query"
+          :query="''"
           :disabled="disabled"
           :navigation-disabled="navigationDisabled"
           :queue-now="queueNow"
@@ -326,6 +373,59 @@ watch(
         />
       </section>
     </ScrollArea>
+    <DialogRoot v-model:open="searchOpen">
+      <DialogPortal>
+        <!-- Keep both the backdrop and its content below the 36px desktop title bar. -->
+        <DialogOverlay
+          class="task-search-overlay fixed inset-x-0 bottom-0 top-9 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-[min(12vh,5rem)] backdrop-blur-sm"
+          @pointerdown.self="searchOpen = false"
+        >
+          <SearchDialogContent
+            class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl outline-none"
+            :aria-describedby="undefined"
+          >
+            <div class="flex shrink-0 items-center justify-between px-4 py-3">
+              <DialogTitle class="text-sm font-semibold">{{ t("sidebar.search") }}</DialogTitle>
+              <DialogClose as-child>
+                <Button variant="quiet" size="toolbar" :aria-label="t('workspace.cancel')"><X :size="16" /></Button>
+              </DialogClose>
+            </div>
+            <ComboboxRoot :open="true" model-value="" ignore-filter class="flex min-h-0 flex-col">
+              <div class="flex shrink-0 items-center gap-2 border-y border-border px-4">
+                <Search :size="16" class="shrink-0 text-muted-foreground" />
+                <ComboboxInput
+                  v-model="query"
+                  auto-focus
+                  :placeholder="t('sidebar.search')"
+                  :aria-label="t('sidebar.search')"
+                  class="h-12 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                />
+              </div>
+              <ComboboxContent class="min-h-0 overflow-y-auto p-2" @escape-key-down="searchOpen = false">
+                <ComboboxViewport>
+                  <ComboboxItem
+                    v-for="result in searchResults"
+                    :key="`${result.path}:${result.session.file}`"
+                    :value="`${result.path}:${result.session.file}`"
+                    :disabled="navigationDisabled"
+                    class="flex cursor-pointer flex-col items-start gap-1 rounded-lg px-3 py-3 outline-none data-highlighted:bg-accent data-disabled:pointer-events-none data-disabled:opacity-50"
+                    @select="selectSearchResult(result.session)"
+                  >
+                    <span class="w-full truncate text-sm">{{ label(result.session) }}</span>
+                    <span class="w-full truncate text-xs text-muted-foreground">{{
+                      workspace.isProjectless(result.path) ? t("sidebar.tasks") : workspace.projectName(result.path)
+                    }}</span>
+                  </ComboboxItem>
+                  <p v-if="!searchResults.length" class="py-12 text-center text-sm text-muted-foreground">
+                    {{ t("sidebar.noMatch") }}
+                  </p>
+                </ComboboxViewport>
+              </ComboboxContent>
+            </ComboboxRoot>
+          </SearchDialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </DialogRoot>
     <Dialog
       :open="!!renaming"
       @update:open="
