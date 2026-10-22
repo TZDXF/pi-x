@@ -223,7 +223,7 @@ test("equal or missing creation times use a stable file order regardless of mtim
   }
 })
 
-test("new previews respect manual order immediately and keep it when persisted or refreshed", async () => {
+test("new previews precede manual order and stay first when persisted or refreshed", async () => {
   const h = await harness()
   h.store.histories.project = [
     { file: "a", timestamp: "2026-10-19T12:00:00Z", mtimeMs: 20 },
@@ -238,16 +238,40 @@ test("new previews respect manual order immediately and keep it when persisted o
     mtimeMs: 10,
   }
   h.store.preview(preview)
-  expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["b", "a", "new"])
+  expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["new", "b", "a"])
   for (const persisted of [false, true]) {
     const refresh = h.store.refresh("project")
     h.requests
       .at(-1)
       .resolve([...h.store.histories.project.filter(row => row.file !== "new"), ...(persisted ? [preview] : [])])
     await refresh
-    expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["b", "a", "new"])
+    expect(h.store.orderedSessions("project").map(row => row.file)).toEqual(["new", "b", "a"])
   }
   expect(h.store.histories.project.filter(row => row.file === "new")).toHaveLength(1)
+})
+
+test("new sessions discovered on refresh precede saved order across project folders and reloads", async () => {
+  const h = await harness()
+  h.store.createProject({ name: "Group", folders: ["front", "back"], primary: "front" })
+  h.store.reorderSessions("front", ["b", "a"])
+  await h.store.flushPersistence()
+  const reopened = await harness(h.backend)
+  const front = reopened.store.refresh("front")
+  reopened.requests.at(-1).resolve([
+    { file: "a", timestamp: "2026-10-18T12:00:00Z" },
+    { file: "newer", timestamp: "2026-10-21T12:00:00Z" },
+  ])
+  await front
+  const back = reopened.store.refresh("back")
+  reopened.requests.at(-1).resolve([
+    { file: "b", timestamp: "2026-10-19T12:00:00Z" },
+    { file: "new", timestamp: "2026-10-20T12:00:00Z" },
+  ])
+  await back
+  expect(reopened.store.orderedSessions("front").map(row => row.file)).toEqual(["newer", "new", "b", "a"])
+  reopened.store.reorderSessions("front", ["b", "new", "a", "newer"])
+  await reopened.store.flushPersistence()
+  expect(reopened.store.orderedSessions("front").map(row => row.file)).toEqual(["b", "new", "a", "newer"])
 })
 test("rename and archive persist and update shared state; restore keeps title", async () => {
   const h = await harness()
@@ -419,7 +443,7 @@ test("worktrees merge into their main project without losing sessions, pins or o
   expect(h.store.projectRoot("C:\\trees\\pi-x")).toBe("C:/code/pi-x")
   expect(h.store.isWorktree("C:/trees/pi-x")).toBe(true)
   expect(h.store.isWorktree("C:/code/pi-x")).toBe(false)
-  expect(Array.from(h.store.orderedSessions("C:/code/pi-x"), s => s.file)).toEqual(["tree-session", "main-session"])
+  expect(Array.from(h.store.orderedSessions("C:/code/pi-x"), s => s.file)).toEqual(["main-session", "tree-session"])
   await h.store.flushPersistence()
   expect(h.backend.state.pinnedProjects).toEqual(["C:/code/pi-x"])
   h.store.remember("C:/trees/pi-x")

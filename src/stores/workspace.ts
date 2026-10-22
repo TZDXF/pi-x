@@ -171,9 +171,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function sortSessions(rows: SessionMeta[], order: string[]) {
     const index = new Map(order.map((f, i) => [f, i]))
     const createdAt = (row: SessionMeta) => Date.parse(row.timestamp || "") || 0
+    // New sessions precede the saved drag order; archived rows are not in the sidebar's drag list.
+    const position = (row: SessionMeta) =>
+      index.get(row.file) ?? (order.length && row.archived ? Number.MAX_SAFE_INTEGER : -1)
     return [...rows].sort((a, b) => {
-      const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
-      const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
+      const ia = position(a)
+      const ib = position(b)
       return ia - ib || createdAt(b) - createdAt(a) || b.file.localeCompare(a.file)
     })
   }
