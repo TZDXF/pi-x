@@ -227,9 +227,10 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await editor.fill("/unsupported")
   await editor.press("Escape")
   await editor.press("Enter")
-  await page.waitForTimeout(100)
-  await expectEditorText(editor, "/unsupported")
-  expect(calls.filter(call => call.args.command?.type === "prompt")).toHaveLength(1)
+  await expectEditorText(editor, "")
+  await expect
+    .poll(() => calls.filter(call => call.args.command?.type === "prompt").map(call => call.args.command?.message))
+    .toEqual(['检查 @"src/中文 file.ts"', "/unsupported"])
 
   await editor.fill("/review explain")
   await editor.press("Enter")

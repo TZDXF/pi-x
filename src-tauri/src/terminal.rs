@@ -633,7 +633,7 @@ mod tests {
     }
 
     /// 全链路 mock 单测：`PIX_SSH_COMMAND` 注入 node 回显程序替代 ssh，
-    /// 走完整的 PTY spawn → `term://output` base64 帧 → ConPTY CPR 握手 →
+    /// 走完整的 PTY spawn → `term://output` base64 帧（Windows 应答 ConPTY CPR）→
     /// term_write → kill → `term://exit` 链路，不发起真实 SSH。
     #[test]
     fn mock_ssh_terminal_roundtrips_frames_and_kill() {
@@ -645,8 +645,9 @@ mod tests {
             eprintln!("跳过：node 路径含空白，无法经 PIX_SSH_COMMAND 注入");
             return;
         }
-        // 回显 bot：stdin 数据原样写回 stdout（无空白，满足注入格式约束）。
-        let bot = "process.stdin.resume();process.stdin.on('data',d=>process.stdout.write(d))";
+        // 主动报告就绪；为回显加前缀，避免把 Unix PTY 的本地 echo 误当成子进程输出。
+        // 脚本无空白，满足 PIX_SSH_COMMAND 的注入格式约束。
+        let bot = "process.stdin.on('data',d=>process.stdout.write('PIX_TEST_REPLY:'+d));process.stdout.write('PIX_TEST_READY\\n')";
         assert_eq!(bot.split_ascii_whitespace().count(), 1);
 
         let _guard = env_lock();
@@ -663,29 +664,29 @@ mod tests {
         let sink: Arc<dyn TermSink> = Arc::new(ChannelSink(tx));
         let id = spawn_terminal(&sink, &state, cmd, None, 80, 24).expect("mock 终端应创建成功");
 
-        // 先等 ConPTY DSR（新版 Windows 渲染门控）并应答；xterm.js 在生产里
-        // 做同样的事。之后行结束用 \r（Enter，与 xterm.js 一致）。
+        // 所有平台都等待子进程就绪；collect_frames 在 Windows 上同时处理
+        // ConPTY 握手。Unix PTY 不会主动发 DSR，不能用它判断就绪。
         let decoded = collect_frames(
             &state,
             id,
             &rx,
             std::time::Instant::now() + Duration::from_secs(15),
-            &|decoded| decoded.as_bytes().windows(4).any(|w| w == CONPTY_DSR),
+            &|decoded| decoded.contains("PIX_TEST_READY"),
         );
-        assert!(!decoded.is_empty(), "应收到非空 term://output 帧");
-        std::thread::sleep(Duration::from_millis(500));
+        assert!(decoded.contains("PIX_TEST_READY"), "应收到子进程就绪帧: {decoded:?}");
 
-        // 回显命令文本：输出帧（base64 解码）必须含它。
+        // 行结束用 \r（Enter，与 xterm.js 一致）；必须收到子进程加前缀的回显。
         let marker = "PIX_TEST_ECHO_OK";
-        write_session(&state, id, &format!("echo {marker}\r")).unwrap();
+        let reply = format!("PIX_TEST_REPLY:{marker}");
+        write_session(&state, id, &format!("{marker}\r")).unwrap();
         let decoded = collect_frames(
             &state,
             id,
             &rx,
             std::time::Instant::now() + Duration::from_secs(15),
-            &|decoded| decoded.contains(marker),
+            &|decoded| decoded.contains(&reply),
         );
-        assert!(decoded.contains(marker), "回显应出现于解码输出: {decoded:?}");
+        assert!(decoded.contains(&reply), "子进程回显应出现于解码输出: {decoded:?}");
 
         // kill 后本地子进程退出，term://exit 到达。
         kill_session(&state, id);

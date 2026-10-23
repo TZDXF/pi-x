@@ -7,6 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
+import { shouldReleaseBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
 interface Props {
@@ -53,6 +54,13 @@ const { scrollRef, contentRef } = context
 const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
 watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
+function handleWheel(event: WheelEvent) {
+  const scroll = scrollRef.value
+  if (!scroll || event.ctrlKey || event.defaultPrevented || !(event.target instanceof Element)) return
+  // Reka uses overflow: hidden scroll, which the library's shorthand overflow
+  // check misses. Release before virtual row resizing can pin us back down.
+  if (shouldReleaseBottomLock(scroll, event.target, event.deltaY)) context.stopScroll()
+}
 // With resize="instant", pin scrollTop synchronously in the ResizeObserver
 // callback (after layout, before paint). The library defers its correction to
 // the next animation frame, which paints one frame per streaming chunk with a
@@ -76,7 +84,7 @@ onMounted(() => {
 <template>
   <ScrollAreaRoot :class="cn('relative min-h-0 min-w-0 flex-1 overflow-hidden', props.class)">
     <ScrollAreaViewport ref="viewport" class="size-full [&>div]:!block [&>div]:min-h-full [&>div]:min-w-0"
-      :style="{ overflowAnchor: props.anchor }" @scroll="emit('scroll', $event)" role="log" :aria-label="props.ariaLabel" tabindex="0">
+      :style="{ overflowAnchor: props.anchor }" @scroll="emit('scroll', $event)" @wheel.passive="handleWheel" role="log" :aria-label="props.ariaLabel" tabindex="0">
       <div :ref="el => { contentRef = el as HTMLElement | null }"><slot /></div>
     </ScrollAreaViewport>
     <ScrollBar />
