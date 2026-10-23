@@ -594,6 +594,7 @@ onUnmounted(() => {
                     @select-project="selectProjectFromRoute"
                     @open-project="requestNavigation(switchProject)"
                     @new-session="newSessionFromChat"
+                    @resume-session="resumeSessionFromRoute"
                     @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
                   />
                 </template>
@@ -612,6 +613,7 @@ onUnmounted(() => {
                 @select-project="selectProjectFromRoute"
                 @open-project="requestNavigation(switchProject)"
                 @new-session="newSessionFromChat"
+                @resume-session="resumeSessionFromRoute"
                 @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
               />
             </template>

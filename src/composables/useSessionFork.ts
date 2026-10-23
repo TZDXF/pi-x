@@ -13,10 +13,12 @@ export function useSessionFork(
   session: SessionStore,
   ui: UiStore,
   rpcRequest: <T = unknown>(command: Record<string, unknown>) => Promise<RpcResponse<T>>,
+  openSession: (file: string, project: string) => void,
 ) {
   const { t } = useI18n()
   const forkOpen = ref(false)
   const forkMessages = ref<{ entryId: string; text: string }[]>([])
+  let forking = false
 
   async function openFork() {
     try {
@@ -34,10 +36,12 @@ export function useSessionFork(
   /**
    * Branch right AFTER the answer at entryIndex: the new branch keeps this
    * answer and drops the questions (and everything else) that follow it.
-   * pi forks *before* a user message, so we fork at the next question.
-   * Without a later question, duplicate the session and switch to the copy.
+   * Copy the branch before the next question, then open it in its own worker.
+   * Without a later question, duplicate the whole saved session.
    */
   async function forkFromAnswer(entryIndex: number) {
+    if (forking) return
+    forking = true
     const list = session.entries
     let questionText: string | null = null
     let questionIndex = -1
@@ -51,10 +55,7 @@ export function useSessionFork(
     }
     try {
       if (questionText === null) {
-        const file = session.sessionFile
-        if (!file) throw new Error(t("chat.forkFailed"))
-        const sessionPath = await duplicateSessionFile(file)
-        await navigateFork({ type: "switch_session", sessionPath })
+        await createFork()
         return
       }
       const res = await rpcRequest<{
@@ -71,33 +72,35 @@ export function useSessionFork(
       }
       const matches = chronological.filter(m => m.text === questionText)
       const target = matches[rank - 1] ?? matches[matches.length - 1]
-      if (target) await doFork(target.entryId)
+      if (target) await createFork(target.entryId)
       else await openFork() // fall back to the prompt picker
     } catch (e) {
       ui.pushToast(String(e), "error")
+    } finally {
+      forking = false
     }
   }
 
   async function doFork(entryId: string) {
-    await navigateFork({ type: "fork", entryId })
-  }
-
-  async function navigateFork(command: Record<string, unknown>) {
-    forkOpen.value = false
+    if (forking) return
+    forking = true
     try {
-      const res = await rpcRequest<{ text?: string; cancelled?: boolean }>(command)
-      if (!res.success) throw new Error(res.error ?? t("chat.forkFailed"))
-      if (res.data?.cancelled) {
-        ui.pushToast(t("chat.toastForkCancelled"), "info")
-        return
-      }
-      session.clear()
-      await session.refreshState()
-      await session.loadHistory()
-      ui.pushToast(t("chat.toastForked"), "info")
+      await createFork(entryId)
     } catch (e) {
       ui.pushToast(String(e), "error")
+    } finally {
+      forking = false
     }
+  }
+
+  async function createFork(beforeEntryId?: string) {
+    const file = session.sessionFile
+    const project = session.cwd
+    if (!file) throw new Error(t("chat.forkFailed"))
+    const copy = await duplicateSessionFile(file, beforeEntryId, session.runtimeId)
+    forkOpen.value = false
+    ui.pushToast(t("chat.toastForked"), "info")
+    openSession(copy, project)
   }
 
   return { forkOpen, forkMessages, openFork, forkFromAnswer, doFork }

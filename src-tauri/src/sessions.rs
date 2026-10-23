@@ -721,10 +721,24 @@ fn duplicate_content(content: &str, timestamp: &str, id: &str) -> Result<String,
 
 /// Copy a session file with a fresh id and timestamp; returns the new path.
 #[tauri::command]
-pub async fn session_duplicate(file: String) -> Result<String, String> {
+pub async fn session_duplicate(
+    state: tauri::State<'_, crate::rpc::RpcState>,
+    file: String,
+    before_entry_id: Option<String>,
+    runtime_id: Option<String>,
+) -> Result<String, String> {
+    if let Some(runtime_id) = runtime_id {
+        if let Some(endpoint) = crate::rpc::session_endpoint(&state, &runtime_id).await? {
+            return duplicate_remote_session(&endpoint, &file, before_entry_id.as_deref()).await;
+        }
+    }
     tokio::task::spawn_blocking(move || {
         let source = validate_session_path(&file)?;
         let content = std::fs::read_to_string(&source).map_err(|e| e.to_string())?;
+        let content = match before_entry_id {
+            Some(entry_id) => branch_before_entry(&content, &entry_id)?,
+            None => content,
+        };
         let timestamp = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
@@ -739,6 +753,106 @@ pub async fn session_duplicate(file: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("session duplicate failed: {e}"))?
+}
+
+async fn duplicate_remote_session(
+    endpoint: &crate::ssh::RemoteEndpoint,
+    file: &str,
+    before_entry_id: Option<&str>,
+) -> Result<String, String> {
+    let snapshot =
+        remote_session_snapshot(endpoint, serde_json::json!({"op": "read", "file": file})).await?;
+    let content = snapshot["content"]
+        .as_str()
+        .ok_or("Missing session snapshot")?;
+    let branch = before_entry_id
+        .map(|id| branch_before_entry(content, id))
+        .transpose()?;
+    let timestamp = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let id = uuid::Uuid::new_v4().to_string();
+    let content = duplicate_content(branch.as_deref().unwrap_or(content), &timestamp, &id)?;
+    let result = remote_session_snapshot(
+        endpoint,
+        serde_json::json!({
+            "op": "write", "file": file, "content": content,
+            "name": format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-")),
+        }),
+    )
+    .await?;
+    result["file"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or("Missing copied session path".into())
+}
+
+async fn remote_session_snapshot(
+    endpoint: &crate::ssh::RemoteEndpoint,
+    request: Value,
+) -> Result<Value, String> {
+    let script = crate::ssh::payload::build_session_snapshot_script();
+    let output = crate::ssh::remote_exec_with_stdin(
+        endpoint,
+        &script,
+        request.to_string().as_bytes(),
+        std::time::Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| crate::commands::ssh::remote_error_coded(endpoint, &e))?;
+    let json = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("PIX_SESSION_SNAPSHOT="))
+        .ok_or("Missing remote session snapshot response")?;
+    serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+/// Select the target's ancestors without navigating or modifying the live worker.
+/// Stop reading at the target so an in-progress append after it is irrelevant.
+fn branch_before_entry(content: &str, target: &str) -> Result<String, String> {
+    let mut lines = content.lines();
+    let header = lines.next().ok_or("empty session file")?;
+    let mut entries = Vec::new();
+    let mut parents = HashMap::new();
+    let mut leaf = None;
+    let mut found = false;
+    for line in lines.filter(|line| !line.trim().is_empty()) {
+        let entry: Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        if entry["id"].as_str() == Some(target) {
+            if entry["type"] != "message" || entry["message"]["role"] != "user" {
+                return Err("Fork target is not a user question".into());
+            }
+            leaf = entry["parentId"].as_str().map(str::to_owned);
+            found = true;
+            break;
+        }
+        if let Some(id) = entry["id"].as_str() {
+            parents.insert(id.to_owned(), entry["parentId"].as_str().map(str::to_owned));
+        }
+        entries.push((line, entry));
+    }
+    if !found {
+        return Err("Question no longer exists in the session".into());
+    }
+    let mut branch = std::collections::HashSet::new();
+    while let Some(id) = leaf {
+        if !branch.insert(id.clone()) {
+            return Err("Invalid session branch: cyclic parent".into());
+        }
+        leaf = parents
+            .get(&id)
+            .ok_or("Missing session branch parent")?
+            .clone();
+    }
+    let mut output = format!("{header}\n");
+    for (line, entry) in entries {
+        if entry["id"].as_str().is_some_and(|id| branch.contains(id)) {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    Ok(output)
 }
 
 /// Permanently delete a session file and its PiX presentation metadata.
@@ -920,6 +1034,70 @@ mod presentation_tests {
         assert!(copy.ends_with('\n'));
         assert!(duplicate_content("{\"type\":\"message\"}\n", "t", "i").is_err());
         assert!(duplicate_content("", "t", "i").is_err());
+    }
+
+    #[test]
+    fn branch_copy_keeps_ancestors_and_excludes_later_turns_and_other_branches() {
+        let lines = [
+            serde_json::json!({"type": "session", "id": "original", "version": 3, "cwd": "/tmp"}),
+            serde_json::json!({"type": "model_change", "id": "model", "parentId": null}),
+            serde_json::json!({"type": "message", "id": "q1", "parentId": "model", "message": {"role": "user", "content": "repeat"}}),
+            serde_json::json!({"type": "message", "id": "a1", "parentId": "q1", "message": {"role": "assistant", "content": []}}),
+            serde_json::json!({"type": "message", "id": "abandoned", "parentId": "q1", "message": {"role": "assistant", "content": []}}),
+            serde_json::json!({"type": "compaction", "id": "compact", "parentId": "a1", "summary": "summary", "firstKeptEntryId": "q1"}),
+            serde_json::json!({"type": "message", "id": "q2", "parentId": "compact", "message": {"role": "user", "content": "repeat"}}),
+            serde_json::json!({"type": "message", "id": "a2", "parentId": "q2", "message": {"role": "assistant", "content": []}}),
+        ];
+        let original = lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        // A live worker can be appending a partial JSON record after the target.
+        let original = format!("{original}\n{{\"type\":");
+        let branch = branch_before_entry(&original, "q2").unwrap();
+        let copy = duplicate_content(&branch, "now", "copy").unwrap();
+        let entries: Vec<Value> = copy
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(entries[0]["id"], "copy");
+        assert_eq!(
+            entries[1..],
+            [
+                lines[1].clone(),
+                lines[2].clone(),
+                lines[3].clone(),
+                lines[5].clone()
+            ]
+        );
+        assert!(original.contains("abandoned"));
+        assert!(original.contains("a2"));
+    }
+
+    #[test]
+    fn branch_copy_before_first_question_preserves_setup_entries() {
+        let original = concat!(
+            "{\"type\":\"session\",\"id\":\"old\"}\n",
+            "{\"type\":\"thinking_level_change\",\"id\":\"setup\",\"parentId\":null}\n",
+            "{\"type\":\"message\",\"id\":\"q\",\"parentId\":\"setup\",\"message\":{\"role\":\"user\"}}\n",
+        );
+        assert_eq!(
+            branch_before_entry(original, "q").unwrap(),
+            original.lines().take(2).collect::<Vec<_>>().join("\n") + "\n"
+        );
+    }
+
+    #[test]
+    fn branch_copy_rejects_missing_or_non_user_targets_and_broken_ancestry() {
+        let header = "{\"type\":\"session\",\"id\":\"old\"}\n";
+        assert!(branch_before_entry(header, "missing").is_err());
+        let assistant = format!("{header}{{\"type\":\"message\",\"id\":\"a\",\"parentId\":null,\"message\":{{\"role\":\"assistant\"}}}}\n");
+        assert!(branch_before_entry(&assistant, "a").is_err());
+        for parent in ["missing", "cycle"] {
+            let original = format!("{header}{{\"type\":\"custom\",\"id\":\"cycle\",\"parentId\":\"{parent}\"}}\n{{\"type\":\"message\",\"id\":\"q\",\"parentId\":\"cycle\",\"message\":{{\"role\":\"user\"}}}}\n");
+            assert!(branch_before_entry(&original, "q").is_err());
+        }
     }
     #[test]
     fn native_session_names_use_latest_entry_and_support_clearing() {

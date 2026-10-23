@@ -342,6 +342,18 @@ pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
         Err(_) => false,
     }
 }
+
+/// Snapshot the owning endpoint for session-file operations without navigating pi.
+pub(crate) async fn session_endpoint(
+    state: &RpcState,
+    runtime_id: &str,
+) -> Result<Option<crate::ssh::RemoteEndpoint>, String> {
+    let process = state.process(Some(runtime_id)).await?;
+    let guard = process.inner.lock().await;
+    let inner = guard.as_ref().ok_or("pi is not running")?;
+    Ok(inner.remote.as_ref().map(|remote| remote.endpoint.clone()))
+}
+
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
     let process = state
         .processes

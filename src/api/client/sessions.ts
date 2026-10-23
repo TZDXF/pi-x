@@ -41,8 +41,9 @@ export interface SessionLastError {
  */
 export const sessionLastError = (file: string) => invoke<SessionLastError | null>("session_last_error", { file })
 
-/** Duplicate a saved session file with a fresh id; returns the new file path. */
-export const duplicateSessionFile = (file: string) => invoke<string>("session_duplicate", { file })
+/** Duplicate a saved session, optionally keeping only the branch before a user entry. */
+export const duplicateSessionFile = (file: string, beforeEntryId?: string, runtimeId?: string) =>
+  invoke<string>("session_duplicate", { file, beforeEntryId, runtimeId })
 
 /** Session files under ~/.pi/agent/sessions changed on disk (possibly externally). */
 export function onSessionsChanged(handler: (files: string[]) => void): Promise<() => void> {

@@ -130,6 +130,7 @@ const emit = defineEmits<{
   selectProject: [path: string]
   openProject: []
   newSession: []
+  resumeSession: [file: string, project: string]
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
@@ -191,7 +192,9 @@ const { renderedEntries, navigateToQuestion, onHistoryScroll, lastAssistantTurn,
 const previewImage = ref<string | null>(null)
 
 // ---- fork (restart from a previous prompt) ----
-const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest)
+const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest, (file, project) =>
+  emit("resumeSession", file, project),
+)
 
 // Resend the edited question in this session, interrupting the current answer first.
 const editTextarea = ref<PromptEditTextarea | null>(null)

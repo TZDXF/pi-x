@@ -196,6 +196,14 @@ pub fn build_sessions_script(project_path: &str) -> String {
         .replace("'<PROJECT>'", &posix_quote(project_path))
 }
 
+/// Session data travels over stdin, never through shell interpolation.
+pub(crate) fn build_session_snapshot_script() -> String {
+    format!(
+        "node -e {}",
+        posix_quote(include_str!("../../resources/session_snapshot.cjs"))
+    )
+}
+
 /// 远程 spawn payload（契约 §3.5 精确文本）：
 /// `$$` 在 `exec` 前取 shell pid，`exec` 后即 pi 的 pid，写 stderr；
 /// `--session` 与 extra args 逐项单引号包裹（P1 远程 extra args 恒为空）。

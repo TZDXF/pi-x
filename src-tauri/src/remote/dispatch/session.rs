@@ -124,7 +124,13 @@ pub(super) async fn handle(
                 Ok(Value::Null)
             }
             "session_duplicate" => Ok(Value::String(
-                crate::sessions::session_duplicate(text(a, "file")?).await?,
+                crate::sessions::session_duplicate(
+                    state.clone(),
+                    text(a, "file")?,
+                    a["beforeEntryId"].as_str().map(str::to_owned),
+                    a["runtimeId"].as_str().map(str::to_owned),
+                )
+                .await?,
             )),
             "session_adopt" => {
                 crate::sessions::session_adopt(text(a, "file")?).await?;
