@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
 
 jobs:
@@ -35,10 +35,33 @@ jobs:
         run: pnpm run test:web:all
 
   rust:
-    name: Rust (check / tests)
+    name: Rust (${{ matrix.config }} / check / tests)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: default
+            args: ""
+          - config: remote-access
+            args: --features remote-access
     steps:
       - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        if: matrix.config == 'remote-access'
+
+      - uses: actions/setup-node@v7
+        if: matrix.config == 'remote-access'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build embedded frontend
+        if: matrix.config == 'remote-access'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -52,10 +75,10 @@ jobs:
           workspaces: src-tauri
 
       - name: Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --manifest-path src-tauri/Cargo.toml ${{ matrix.args }}
 
       - name: Unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml ${{ matrix.args }}
 
   e2e:
     name: E2E (Playwright)

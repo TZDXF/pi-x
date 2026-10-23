@@ -13,7 +13,7 @@
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "check": "npm run lint && npm run typecheck && npm run build && cd src-tauri && cargo check",
+    "check": "npm run lint && npm run typecheck && npm run build && cd src-tauri && cargo check && cargo check --features remote-access",
     "clean": "cd src-tauri && cargo clean",
     "tauri": "tauri",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",

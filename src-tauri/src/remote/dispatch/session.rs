@@ -23,6 +23,7 @@ pub(super) async fn handle(
                     a["sessionFile"].as_str().map(str::to_owned),
                     a["runtimeId"].as_str().map(str::to_owned),
                     serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
                 )
                 .await?;
                 Ok(Value::Null)

@@ -25,6 +25,7 @@ pub(super) async fn handle(
                     cols,
                     rows,
                     a["owner"].as_str().map(str::to_owned),
+                    a["sshConnectionId"].as_str().map(str::to_owned),
                 )?;
                 Ok(json!(id))
             }
