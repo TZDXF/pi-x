@@ -24,7 +24,7 @@ const { startEditPrompt, cancelEditedPrompt, resendEditedPrompt } = props.edit
 function bindEditTextarea(value: Element | ComponentPublicInstance | null) {
   emit("editTextarea", value as PromptEditTextarea | null)
 }
-// 持久化消息的正文带 "# userselect:" / "# Code comments:" 尾块；重载历史时解析回附件，
+// 持久化消息带会话引用附加段及 "# userselect:" / "# Code comments:" 尾块；重载历史时解析回附件，
 // 气泡只显示用户原文（同 ZCode ConversationRowView 的 parseComposerPromptContexts）。
 const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text))
 </script>

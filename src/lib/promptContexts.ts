@@ -1,10 +1,11 @@
 /**
  * composer 上下文契约的组合层（对齐 ZCode composerPromptContexts）：
  * 各类 context parser 都只识别 prompt 尾块，因此序列化顺序与解析顺序必须严格相反。
- * 当前包含两类：对话划词引用（userselect）与代码批注（Code comments）。
+ * 会话引用附加段位于最内层，其后依次为对话划词引用（userselect）与代码批注（Code comments）。
  */
 
 import { buildPromptWithCodeComments, parsePromptCodeComments, type ParsedCodeComment } from "./codeComments"
+import { stripSessionReferenceContext } from "./completion"
 import {
   buildPromptWithConversationSelections,
   parsePromptConversationSelections,
@@ -27,7 +28,7 @@ export function serializeComposerPromptContexts(
   return buildPromptWithCodeComments(withSelections, contexts.comments)
 }
 
-/** 解析与序列化相反：先剥 Code comments 尾块，再从剩余正文剥 userselect 尾块。 */
+/** 解析与序列化相反：依次剥 Code comments、userselect 与会话引用附加段，保留正文中的 @session 标记。 */
 export function parseComposerPromptContexts(content: string): {
   visibleContent: string
   comments: ParsedCodeComment[]
@@ -36,7 +37,7 @@ export function parseComposerPromptContexts(content: string): {
   const code = parsePromptCodeComments(content)
   const selections = parsePromptConversationSelections(code.visibleContent)
   return {
-    visibleContent: selections.visibleContent,
+    visibleContent: stripSessionReferenceContext(selections.visibleContent),
     comments: code.comments,
     selections: selections.selections,
   }
