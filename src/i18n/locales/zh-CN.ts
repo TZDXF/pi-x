@@ -770,7 +770,6 @@ export default {
     responseProcess: "思考过程",
     thinking: "思考中…",
     thinkingSeconds: "思考中 · {seconds} 秒",
-    startingSession: "正在启动会话…",
     retrying: "请求失败，正在重试",
     retryAttempt: "第 {attempt}/{maxAttempts} 次",
     retryUnknownError: "未知错误",
