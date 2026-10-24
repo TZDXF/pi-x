@@ -72,10 +72,11 @@ export function setTrayLabels(show: string, quit: string): Promise<void> {
   return invoke<void>("set_tray_labels", { showLabel: show, quitLabel: quit })
 }
 
-/** 切换主窗口 devtools；仅桌面端可用，返回切换后的打开状态。 */
+/** 切换主窗口 devtools；仅桌面端可用，返回切换后的打开状态。
+ *  默认 release 产物不含 devtools，后端报错时按未打开处理。 */
 export function toggleDevtools(): Promise<boolean> {
   if (!isDesktop) return Promise.resolve(false)
-  return invoke<boolean>("devtools_toggle")
+  return invoke<boolean>("devtools_toggle").catch(() => false)
 }
 
 export const getConfig = () => invoke<AppConfig>("app_config_get")

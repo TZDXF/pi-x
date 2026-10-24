@@ -1029,7 +1029,7 @@ export default {
       "When enabled, adding a project can group several directories and sessions receive a workspace manifest; when off, adding a project simply picks a single directory and no manifest is injected.",
     developerMode: "Developer mode",
     developerModeDesc:
-      "When enabled, DevTools can be opened in packaged builds and element-source is loaded at startup (takes effect after restart). Shortcuts: ",
+      "When enabled, DevTools can be opened and element-source is loaded at startup (takes effect after restart). Debug builds include DevTools; packaged builds need to be compiled with --features devtools. Shortcuts: ",
     developerModeDescKeys: "or",
     openDevtools: "Open DevTools",
     shortcutsTitle: "Keyboard shortcuts",
@@ -1397,6 +1397,7 @@ export default {
     disableLanBeforePasswordChange: "Turn off LAN access before changing the password.",
     passwordLengthInvalid: "Password must be at least 8 characters and at most 128 bytes.",
     configDirCreateFailed: "Failed to create configuration directory: {detail}",
+    devtoolsUnavailable: "This build does not include DevTools; repackage with --features devtools.",
     builtinExtensionDirCreateFailed: "Failed to create the built-in plugin directory: {detail}",
     builtinExtensionWriteFailed: "Failed to write the built-in plugin: {detail}",
     missingArtifacts: "Missing file change records: {detail}",

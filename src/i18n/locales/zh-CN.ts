@@ -999,7 +999,7 @@ export default {
     projectGroupDesc:
       "开启后「添加项目」可将多个目录组成项目组，并向会话注入工作区清单；关闭后直接选择单个目录，且不再注入清单。",
     developerMode: "开发者模式",
-    developerModeDesc: "开启后可在打包版本中打开开发者工具，并在启动时加载 element-source（重启后生效）。快捷键：",
+    developerModeDesc: "开启后可打开开发者工具，并在启动时加载 element-source（重启后生效）。debug 构建自带开发者工具，打包版本需以 --features devtools 编译。快捷键：",
     developerModeDescKeys: "或",
     openDevtools: "打开开发者工具",
     shortcutsTitle: "键盘快捷操作",
@@ -1352,6 +1352,7 @@ export default {
     disableLanBeforePasswordChange: "请先关闭局域网访问，再修改密码",
     passwordLengthInvalid: "密码至少 8 个字符，且不超过 128 字节",
     configDirCreateFailed: "无法创建配置目录: {detail}",
+    devtoolsUnavailable: "当前构建未包含开发者工具，请使用 --features devtools 重新打包",
     builtinExtensionDirCreateFailed: "无法创建内置插件目录: {detail}",
     builtinExtensionWriteFailed: "无法写入内置插件: {detail}",
     missingArtifacts: "缺少文件变更记录: {detail}",
