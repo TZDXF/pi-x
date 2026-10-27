@@ -18,7 +18,17 @@ export interface SessionMeta {
   preview?: string | null
 }
 
+export interface SessionSearchHit {
+  session: SessionMeta
+  role?: "user" | "assistant" | null
+  snippet?: string | null
+  matchCount: number
+}
+
 export const listSessions = (project: string) => invoke<SessionMeta[]>("session_list", { project })
+
+/** Search titles, ids and user/assistant text across every local session file. */
+export const searchSessions = (query: string) => invoke<SessionSearchHit[]>("session_search", { query })
 
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })

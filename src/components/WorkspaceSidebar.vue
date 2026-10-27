@@ -14,12 +14,12 @@ import {
 } from "reka-ui"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
-import { Clock, FolderPlus, Plus, Search, X } from "@lucide/vue"
+import { Clock, FolderPlus, LoaderCircle, Plus, Search, X } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
 import { normalizeProjectPath } from "@/lib/paths"
 import { isRemoteProject } from "@/lib/ssh"
-import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
+import { duplicateSessionFile, type SessionMeta, type SessionSearchHit } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
 import { copyWithToast } from "@/lib/clipboard"
@@ -30,6 +30,7 @@ import SidebarProjectGroup from "@/components/workspace/sidebar/SidebarProjectGr
 import SidebarSessionList from "@/components/workspace/sidebar/SidebarSessionList.vue"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
 import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
+import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -120,19 +121,33 @@ function pendingRows(path: string) {
   )
 }
 const taskPath = computed(() => workspace.projectless)
-const searchResults = computed(() => {
+type SidebarSearchResult = {
+  session: SessionMeta
+  path: string
+  role?: SessionSearchHit["role"]
+  snippet?: string | null
+}
+const {
+  results: globalSearchResults,
+  searching: globalSearching,
+  failed: globalSearchFailed,
+} = useGlobalSessionSearch(query, searchOpen, () => workspace.orderedProjects())
+const searchResults = computed<SidebarSearchResult[]>(() => {
+  if (query.value.trim()) return globalSearchResults.value
   const paths = [...new Set([...workspace.orderedProjects(), taskPath.value].filter(Boolean))]
   const results = paths.flatMap(path =>
-    sidebarSessionRows(workspace.orderedSessions(path), archiving.value, query.value.trim(), label).map(session => ({
+    sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label).map(session => ({
       session,
       path,
     })),
   )
   return defaultSearchResults(results, query.value)
 })
-function selectSearchResult(result: SessionMeta) {
+function selectSearchResult(result: SidebarSearchResult) {
   if (navigationDisabled.value) return
-  openSession(result)
+  // Remote search hits carry a raw POSIX cwd; use the display URI to retain
+  // the backend and connection when resuming them.
+  emit("resumeSession", result.session.file, result.path)
   searchOpen.value = false
 }
 
@@ -392,11 +407,13 @@ watch(
             </div>
             <ComboboxRoot :open="true" model-value="" ignore-filter class="flex min-h-0 flex-col">
               <div class="flex shrink-0 items-center gap-2 border-y border-border px-4">
-                <Search :size="16" class="shrink-0 text-muted-foreground" />
+                <LoaderCircle v-if="globalSearching" :size="16" class="shrink-0 animate-spin text-muted-foreground" />
+                <Search v-else :size="16" class="shrink-0 text-muted-foreground" />
                 <ComboboxInput
                   v-model="query"
                   auto-focus
-                  :placeholder="t('sidebar.search')"
+                  maxlength="200"
+                  :placeholder="t('sidebar.searchPlaceholder')"
                   :aria-label="t('sidebar.search')"
                   class="h-12 min-w-0 flex-1 bg-transparent text-sm outline-none"
                 />
@@ -409,14 +426,32 @@ watch(
                     :value="`${result.path}:${result.session.file}`"
                     :disabled="navigationDisabled"
                     class="flex cursor-pointer flex-col items-start gap-1 rounded-lg px-3 py-3 outline-none data-highlighted:bg-accent data-disabled:pointer-events-none data-disabled:opacity-50"
-                    @select="selectSearchResult(result.session)"
+                    @select="selectSearchResult(result)"
                   >
                     <span class="w-full truncate text-sm">{{ label(result.session) }}</span>
                     <span class="w-full truncate text-xs text-muted-foreground">{{
                       workspace.isProjectless(result.path) ? t("sidebar.tasks") : workspace.projectName(result.path)
                     }}</span>
+                    <span v-if="result.snippet" class="line-clamp-2 w-full text-xs leading-5 text-muted-foreground">
+                      <span v-if="result.role" class="text-foreground/70">{{
+                        t(result.role === "user" ? "sidebar.searchUser" : "sidebar.searchAssistant")
+                      }}</span>
+                      {{ result.snippet }}
+                    </span>
                   </ComboboxItem>
-                  <p v-if="!searchResults.length" class="py-12 text-center text-sm text-muted-foreground">
+                  <p v-if="globalSearchFailed" class="px-3 py-6 text-center text-sm text-muted-foreground">
+                    {{ t(searchResults.length ? "sidebar.searchPartialFailed" : "sidebar.searchFailed") }}
+                  </p>
+                  <p
+                    v-if="!searchResults.length && globalSearching"
+                    class="py-12 text-center text-sm text-muted-foreground"
+                  >
+                    {{ t("sidebar.searching") }}
+                  </p>
+                  <p
+                    v-if="!searchResults.length && !globalSearching && !globalSearchFailed"
+                    class="py-12 text-center text-sm text-muted-foreground"
+                  >
                     {{ t("sidebar.noMatch") }}
                   </p>
                 </ComboboxViewport>

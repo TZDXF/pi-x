@@ -1,6 +1,6 @@
 import { invoke } from "../transport"
 import type { RemoteKind } from "@/lib/ssh"
-import type { SessionMeta } from "./sessions"
+import type { SessionMeta, SessionSearchHit } from "./sessions"
 
 /** SSH 连接的最近一次探测缓存；仅 UI 展示与错误指引，spawn 不读缓存（契约 §2.3）。 */
 export interface SshProbeInfo {
@@ -104,6 +104,10 @@ export const sshConnectionProbe = (id: string) => invoke<SshProbeResult>("ssh_co
 /** 远程项目会话列表（契约 §2.1）。project 为远程展示 URI，连接 id 与 rpc_spawn 同源。 */
 export const sshSessions = (project: string, sshConnectionId: string) =>
   invoke<SessionMeta[]>("ssh_sessions", { project, sshConnectionId })
+
+/** Search all sessions on the remote endpoint resolved through this project. */
+export const sshSessionSearch = (project: string, sshConnectionId: string, query: string) =>
+  invoke<SessionSearchHit[]>("ssh_session_search", { project, sshConnectionId, query })
 
 // ---- WSL / Docker 枚举（多后端契约 §4.1）。不可用时不返回 Err，而是
 // available=false + errorKind 的结构化结果，前端呈现不可用态而非报错 toast。----

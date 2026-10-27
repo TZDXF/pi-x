@@ -8,7 +8,7 @@
 use crate::errors::{pix_error, pix_error_detail};
 use crate::trust::agent_dir;
 use dunce::canonicalize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
@@ -25,7 +25,7 @@ const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub file: String,
@@ -224,7 +224,7 @@ fn list_project_sessions(
 }
 
 /// Build `SessionMeta` for one session file (header + preview + presentation).
-fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
     if let Some(cached) = cached_meta(path, mtime) {
         return Ok(cached);
     }

@@ -12,12 +12,14 @@ use serde_json::Value;
 
 use crate::errors::pix_error_detail;
 use crate::sessions::SessionMeta;
+use crate::session_search::SessionSearchHit;
 use crate::ssh::backend::RemoteEndpoint;
 use crate::ssh::payload;
 use crate::ssh::transport::{remote_exec, AuthMethod};
 
 /// exec 超时（契约 P2 §2.1：20s）。
 const SESSIONS_EXEC_TIMEOUT: Duration = Duration::from_secs(20);
+const SESSION_SEARCH_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 /// 返回条数上限（对齐本地 `sessions::MAX_SESSIONS`）。
 const MAX_SESSIONS: usize = 50;
 
@@ -33,6 +35,67 @@ pub async fn ssh_sessions(
     let (target, connection) =
         crate::commands::ssh::resolve_ssh_connection(&project, &ssh_connection_id)?;
     scan_remote_sessions(&connection.to_remote_endpoint(), target.path()).await
+}
+
+/// Search every session on the remote endpoint, not only the recent sessions
+/// loaded for the project used to resolve the connection.
+#[tauri::command]
+pub async fn ssh_session_search(
+    project: String,
+    ssh_connection_id: String,
+    query: String,
+) -> Result<Vec<SessionSearchHit>, String> {
+    let (_, connection) =
+        crate::commands::ssh::resolve_ssh_connection(&project, &ssh_connection_id)?;
+    scan_remote_session_search(&connection.to_remote_endpoint(), &query).await
+}
+
+pub(crate) async fn scan_remote_session_search(
+    endpoint: &RemoteEndpoint,
+    query: &str,
+) -> Result<Vec<SessionSearchHit>, String> {
+    let output = remote_exec(
+        endpoint,
+        &payload::build_session_search_script(query),
+        SESSION_SEARCH_EXEC_TIMEOUT,
+    )
+    .await
+    .map_err(|e| crate::commands::ssh::remote_error_coded(endpoint, &e))?;
+    if let Some(detail) = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("PIX_SESSION_SEARCH_ERROR="))
+    {
+        return Err(pix_error_detail(
+            "sshRemoteFailed",
+            "远程操作失败: {detail}",
+            detail,
+        ));
+    }
+    parse_session_search_output(&output.stdout).ok_or_else(|| {
+        pix_error_detail(
+            "sshRemoteFailed",
+            "远程操作失败: {detail}",
+            "搜索输出缺少完成标记 PIX_SESSION_SEARCH_DONE",
+        )
+    })
+}
+
+fn parse_session_search_output(stdout: &str) -> Option<Vec<SessionSearchHit>> {
+    if !stdout
+        .lines()
+        .any(|line| line.trim_end() == "PIX_SESSION_SEARCH_DONE")
+    {
+        return None;
+    }
+    Some(
+        stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("PIX_SESSION_SEARCH="))
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .take(crate::session_search::MAX_SESSION_SEARCH_RESULTS)
+            .collect(),
+    )
 }
 
 /// 扫描 + 解析：命令实现与实机集成测试（S-R2）共用的入口。
@@ -196,6 +259,35 @@ fn record_to_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_search_parser_ignores_banner_and_bad_rows_but_requires_done() {
+        let hit = serde_json::json!({
+            "session": {
+                "file": "/home/u/.pi/agent/sessions/a.jsonl",
+                "id": "a",
+                "cwd": "/work",
+                "timestamp": null,
+                "mtimeMs": 1234,
+                "title": "Title",
+                "archived": false,
+                "preview": "Preview"
+            },
+            "role": "assistant",
+            "snippet": "a match",
+            "matchCount": 2
+        });
+        let stdout = format!(
+            "banner\nPIX_SESSION_SEARCH=not json\nPIX_SESSION_SEARCH={hit}\nPIX_SESSION_SEARCH_DONE\n"
+        );
+        let hits = parse_session_search_output(&stdout).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session.id, "a");
+        assert_eq!(hits[0].session.mtime_ms, 1234);
+        assert_eq!(hits[0].role.as_deref(), Some("assistant"));
+        assert_eq!(hits[0].match_count, 2);
+        assert!(parse_session_search_output("PIX_SESSION_SEARCH={hit}\n").is_none());
+    }
 
     fn scan_output(cwd: &str, records: &[(&str, u64, &str, Option<&str>)]) -> String {
         let mut out = format!("PIX_SESSION_CWD={cwd}\n");

@@ -30,6 +30,7 @@ mod rpc;
 mod schedules;
 mod secrets;
 mod session_file_rewind;
+mod session_search;
 mod session_watch;
 mod sessions;
 mod skills;
@@ -145,7 +146,9 @@ pub fn run() {
             commands::ssh::wsl_distro_list,
             commands::ssh::docker_container_list,
             ssh_sessions::ssh_sessions,
+            ssh_sessions::ssh_session_search,
             commands::files::session_list,
+            session_search::session_search,
             sessions::session_mtime,
             sessions::session_history,
             sessions::session_last_error,

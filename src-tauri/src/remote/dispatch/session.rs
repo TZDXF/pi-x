@@ -143,6 +143,17 @@ pub(super) async fn handle(
                 crate::sessions::session_history(text(a, "file")?).await?,
             )),
             "session_list" => Ok(to_json(crate::commands::session_list(text(a, "project")?).await?)?),
+            "session_search" => Ok(to_json(
+                crate::session_search::session_search(text(a, "query")?).await?,
+            )?),
+            "ssh_session_search" => Ok(to_json(
+                crate::ssh_sessions::ssh_session_search(
+                    text(a, "project")?,
+                    text(a, "sshConnectionId")?,
+                    text(a, "query")?,
+                )
+                .await?,
+            )?),
             "session_list_archived" => {
                 Ok(to_json(crate::sessions::session_list_archived().await?)?)
             }

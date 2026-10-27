@@ -196,6 +196,16 @@ pub fn build_sessions_script(project_path: &str) -> String {
         .replace("'<PROJECT>'", &posix_quote(project_path))
 }
 
+/// Full-text search is global for the remote endpoint; the frontend maps each
+/// result's cwd back to a remote project URI. Query travels only as an argv.
+pub fn build_session_search_script(query: &str) -> String {
+    format!(
+        "command -v node >/dev/null 2>&1 || {{ echo 'PIX_SESSION_SEARCH_ERROR=远端未安装 Node.js，无法搜索会话'; exit 0; }}\nnode -e {} -- {}",
+        posix_quote(include_str!("../../resources/session_search.cjs")),
+        posix_quote(query)
+    )
+}
+
 /// Session data travels over stdin, never through shell interpolation.
 pub(crate) fn build_session_snapshot_script() -> String {
     format!(
