@@ -81,10 +81,18 @@ pub(super) async fn handle(
                 Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) }))
             }
             "list_project_directory" => Ok(to_json(
-                crate::commands::list_project_directory(text(a, "project")?, text(a, "path")?).await?,
+                crate::commands::list_project_directory(
+                    text(a, "project")?,
+                    text(a, "path")?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                ).await?,
             )?),
             "read_file_preview" => Ok(to_json(
-                crate::commands::read_file_preview(text(a, "project")?, text(a, "path")?).await?,
+                crate::commands::read_file_preview(
+                    text(a, "project")?,
+                    text(a, "path")?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                ).await?,
             )?),
             "search_files" => Ok(to_json(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,

@@ -12,7 +12,6 @@ import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
-import { isRemoteProject } from "@/lib/ssh"
 import type { FileChange } from "@/lib/sessionChanges"
 import { usePointerDrag } from "@/composables/usePointerDrag"
 
@@ -41,8 +40,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const addOpen = ref(false)
-// 远程项目不支持本地文件浏览（契约 §5）；终端自 P2 起经 ssh -tt 开放（契约 §3.4）。
-const filesAvailable = computed(() => !isRemoteProject(props.project))
 function iconFor(type: SidebarTabType) {
   return type === "review" ? FileCode : type === "files" ? FolderTree : type === "browser" ? Globe : SquareTerminal
 }
@@ -285,7 +282,6 @@ onBeforeUnmount(() => {
                 <FileCode class="size-4 shrink-0" />{{ t("sidebarTabs.newReview") }}
               </Button>
               <Button
-                v-if="filesAvailable"
                 type="button"
                 variant="ghost"
                 size="sm"
@@ -354,14 +350,7 @@ onBeforeUnmount(() => {
           >
             <FileCode class="size-6 shrink-0" />{{ t("sidebarTabs.newReview") }}
           </Button>
-          <Button
-            v-if="filesAvailable"
-            type="button"
-            variant="outline"
-            size="lg"
-            class="h-auto flex-col gap-2 py-4"
-            @click="addTab('files')"
-          >
+          <Button type="button" variant="outline" size="lg" class="h-auto flex-col gap-2 py-4" @click="addTab('files')">
             <FolderTree class="size-6 shrink-0" />{{ t("sidebarTabs.newFiles") }}
           </Button>
           <Button

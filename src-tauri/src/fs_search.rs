@@ -53,7 +53,7 @@ fn score(path_lower: &str, name_lower: &str, q: &str) -> Option<u8> {
 
 /// One directory at a time for the project-files sidebar. Never follow links or
 /// allow a relative path to escape the selected workspace.
-#[derive(Serialize)]
+#[derive(serde::Deserialize, Serialize)]
 pub struct ProjectEntry {
     pub name: String,
     pub path: String,

@@ -371,3 +371,12 @@ mod tests {
         }
     }
 }
+
+/// File arguments are JSON encoded and shell quoted, never interpolated into JavaScript.
+pub fn build_files_script(project: &str, path: &str, op: &str) -> String {
+    format!(
+        "node --input-type=module --eval {} -- {}",
+        posix_quote(include_str!("../../resources/remote_files.mjs")),
+        posix_quote(&serde_json::json!({ "project": project, "path": path, "op": op }).to_string())
+    )
+}

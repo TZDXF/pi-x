@@ -5,7 +5,8 @@ import { ChevronDown, ChevronRight, Folder, Layers, RefreshCw } from "@lucide/vu
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
-import { invoke } from "@/api/transport"
+import { invokeProjectFile } from "@/api/client/projectFiles"
+import { formatCodedError } from "@/lib/backendError"
 import { baseName, samePath } from "@/lib/paths"
 import { fileDirectoryEntries, initialFilePath, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -51,7 +52,7 @@ async function load(path: string) {
   loading.value = new Set([...loading.value, path])
   const current = generation
   try {
-    const entries = await invoke<Entry[]>("list_project_directory", { project: activeRoot.value, path })
+    const entries = await invokeProjectFile<Entry[]>("list_project_directory", activeRoot.value, path)
     if (current === generation) {
       children.value = { ...children.value, [path]: entries }
       const next = { ...errors.value }
@@ -59,7 +60,7 @@ async function load(path: string) {
       errors.value = next
     }
   } catch (error) {
-    if (current === generation) errors.value = { ...errors.value, [path]: String(error) }
+    if (current === generation) errors.value = { ...errors.value, [path]: formatCodedError(t, error) }
   } finally {
     if (current === generation) {
       const next = new Set(loading.value)

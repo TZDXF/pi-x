@@ -10,8 +10,8 @@ import { parseCodedError } from "@/lib/backendError"
 
 /**
  * 终端入口守卫解除（契约 §3.4）：
- * - ChatView 的终端快捷键守卫移除（files 守卫保留）
- * - RightSidebar 终端入口对远程项目开放（files 仍本地专属）
+ * - ChatView 的终端快捷键守卫移除（files 也对远程项目开放）
+ * - RightSidebar 终端入口对远程项目开放（files 也对远程项目开放）
  * - TerminalPanel 的 term_create：远程项目带 sshConnectionId，本地恒 undefined；
  *   连接缺失或创建失败时经 translateError toast 展示
  */
@@ -19,27 +19,21 @@ import { parseCodedError } from "@/lib/backendError"
 const chatViewSource = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
 const rightSidebarSource = readFileSync(new URL("../src/components/RightSidebar.vue", import.meta.url), "utf8")
 
-test("ChatView 终端快捷键不再受远程守卫，files 守卫保留", () => {
+test("ChatView 终端和文件快捷键均支持远程项目", () => {
   expect(chatViewSource).toMatch(/registerShortcutHandler\("sidebar\.terminal", \(\) => addSidebarTab\("terminal"\)\)/)
-  // 守卫入口按多后端契约 §2.3 统一为 isRemoteProject（SSH/WSL/Docker 一视同仁）。
-  expect(chatViewSource).toMatch(
-    /registerShortcutHandler\("sidebar\.files", \(\) => \{\s*\n\s*if \(!isRemoteProject\(props\.project\)\) addSidebarTab\("files"\)/,
-  )
-  // 切换到远程项目时仍关闭 files tab，但不再关闭终端 tab
-  expect(chatViewSource).toMatch(/if \(tab\.type === "files"\) closeSidebarTab\(tab\.id\)/)
-  expect(chatViewSource).not.toMatch(/tab\.type === "files" \|\| tab\.type === "terminal"/)
+  expect(chatViewSource).toMatch(/registerShortcutHandler\("sidebar\.files", \(\) => \{\s*addSidebarTab\("files"\)/)
+  expect(chatViewSource).not.toMatch(/if \(tab\.type === "files"\) closeSidebarTab\(tab\.id\)/)
 })
 
-test("RightSidebar 终端入口对远程项目开放，files 入口保持本地专属", () => {
-  expect(rightSidebarSource).toContain("filesAvailable")
+test("RightSidebar 终端和文件入口均对远程项目开放", () => {
+  expect(rightSidebarSource).not.toContain("filesAvailable")
   expect(rightSidebarSource).not.toContain("localOnlyAvailable")
-  // 两个 add-tab 模块（下拉菜单 + 空态宫格）里：files 各带 v-if，terminal 不带
   const [addMenu, tabsBody] = rightSidebarSource.split("<TabsContent")
   const emptyGrid = tabsBody.split("</TabsContent")[1] ?? ""
-  expect(addMenu.match(/v-if="filesAvailable"/g)).toHaveLength(1)
-  expect(addMenu.match(/@click="addTab\('terminal'\)"/g)).toHaveLength(1)
-  expect(emptyGrid.match(/v-if="filesAvailable"/g)).toHaveLength(1)
-  expect(emptyGrid.match(/@click="addTab\('terminal'\)"/g)).toHaveLength(1)
+  for (const section of [addMenu, emptyGrid]) {
+    expect(section.match(/@click="addTab\('files'\)"/g)).toHaveLength(1)
+    expect(section.match(/@click="addTab\('terminal'\)"/g)).toHaveLength(1)
+  }
 })
 
 // ---- TerminalPanel 行为：复用 terminal-panel.test.ts 的 VM harness ----

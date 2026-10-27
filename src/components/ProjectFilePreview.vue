@@ -4,7 +4,8 @@ import { useI18n } from "vue-i18n"
 import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { invoke } from "@/api/transport"
+import { invokeProjectFile } from "@/api/client/projectFiles"
+import { isRemoteProject } from "@/lib/ssh"
 import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
@@ -81,7 +82,7 @@ async function load() {
   try {
     const result = props.readFile
       ? await props.readFile(props.path)
-      : await invoke<FilePreview>("read_file_preview", { project: props.project, path: props.path })
+      : await invokeProjectFile<FilePreview>("read_file_preview", props.project, props.path)
     if (current !== seq) return
     preview.value = result
     if (result.kind === "text" && result.text) {
@@ -292,7 +293,7 @@ onBeforeUnmount(() => {
         ><WrapText
       /></Button>
       <Button
-        v-if="isDesktop && !readFile"
+        v-if="isDesktop && !readFile && !isRemoteProject(project)"
         variant="ghost"
         size="icon-xs"
         :disabled="opening"

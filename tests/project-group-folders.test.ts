@@ -89,7 +89,7 @@ test("new sessions keep defaulting to the project primary directory", () => {
 test("the project file tree switches roots across the group folders", () => {
   expect(files).toMatch(/v-if="roots\.length > 1"/)
   expect(files).toMatch(/@select="activeRoot = root"/)
-  expect(files).toMatch(/invoke<Entry\[\]>\("list_project_directory", \{ project: activeRoot\.value, path \}\)/)
+  expect(files).toMatch(/invokeProjectFile<Entry\[\]>\("list_project_directory", activeRoot\.value, path\)/)
   // 切换目录后预览与批注归属跟随所选目录，批注 key 仍是会话目录。
   expect(files).toMatch(/:project="activeRoot"/)
   expect(files).toMatch(/:comment-project="props\.project"/)
