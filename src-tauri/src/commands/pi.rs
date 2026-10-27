@@ -10,7 +10,7 @@ use crate::ssh::transport::SshErrorKind;
 use crate::{pi_locate, rpc, ssh, trust};
 
 use super::config::app_config_get;
-use super::ssh::{connection_matches_remote, remote_error_coded};
+use super::ssh::remote_error_coded;
 use super::workspace::{workspace_manifest_for, WorkspaceContext};
 
 #[tauri::command]
@@ -60,11 +60,8 @@ pub async fn rpc_spawn(
     let Some(target) = ssh::parse_remote_uri(&project) else {
         validate_project_dir(&project)?;
         let cfg = app_config_get(app.clone())?;
-        let workspace_manifest = workspace_manifest_for(
-            &project,
-            workspace,
-            cfg.workspace_groups.unwrap_or(true),
-        )?;
+        let workspace_manifest =
+            workspace_manifest_for(&project, workspace, cfg.workspace_groups.unwrap_or(true))?;
         let info = pi_locate::detect(cfg.pi_path).await;
         if !info.found {
             return Err(pix_error(
@@ -110,26 +107,13 @@ async fn spawn_remote(
     ssh_connection_id: Option<String>,
     runtime_id: Option<String>,
 ) -> Result<(), String> {
-    let Some(connection_id) = ssh_connection_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-    else {
-        return Err(pix_error("sshConnectionMissing", "远程项目没有匹配的 SSH 连接"));
-    };
-    let connection = ssh::config::find_connection(&connection_id)?.ok_or_else(|| {
-        pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除")
-    })?;
-    // 连接 kind 与 URI 解析结果的 kind 必须一致，再按 kind 比对应字段
-    //（ssh: host/port/user；wsl: distro/user；docker: container），
-    // 两层冗余防止前端错配（多后端契约 §5.1 第 3 条）。
-    if !connection_matches_remote(&connection, target) {
-        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
-    }
+    let connection = ssh::config::resolve_connection_for_target(target, ssh_connection_id.as_deref())?;
     // 远程项目 P1 不支持多目录组（前端保证传 null，这里防御性兜底）。
     if has_workspace {
-        return Err(pix_error("sshWorkspaceUnsupported", "SSH 远程项目暂不支持多目录工作区"));
+        return Err(pix_error(
+            "sshWorkspaceUnsupported",
+            "SSH 远程项目暂不支持多目录工作区",
+        ));
     }
     let endpoint = connection.to_remote_endpoint();
     // 远程目录校验：三后端同一脚本，一次 exec `test -d`；exit 1 →
@@ -145,12 +129,16 @@ async fn spawn_remote(
     // 远程环境引导（P4）：确保远端 pi 可用。PATH pi 优先；缺失时自动部署
     // 本地 pi bundle 到 ~/.pix/pi/（幂等 + 原子锁）。部署失败返回 coded error。
     // 进度通过 Tauri 事件推送到前端（对齐 ZCode RemoteConnectionConnectingStep）。
-    ssh::ensure_pi_available(&connection_id, &endpoint, Some(std::sync::Arc::new({
-        let app = app.clone();
-        move |p: ssh::DeployProgress| {
-            let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
-        }
-    })))
+    ssh::ensure_pi_available(
+        &connection.id,
+        &endpoint,
+        Some(std::sync::Arc::new({
+            let app = app.clone();
+            move |p: ssh::DeployProgress| {
+                let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
+            }
+        })),
+    )
     .await?;
     let spec = rpc::RemoteSpawnSpec {
         endpoint: endpoint.clone(),
@@ -169,7 +157,7 @@ async fn spawn_remote(
     )
     .await?;
     // 成功 spawn 记 lastUsedAt；写回失败不影响会话。
-    let _ = ssh::config::touch_connection(&connection_id);
+    let _ = ssh::config::touch_connection(&connection.id);
     Ok(())
 }
 

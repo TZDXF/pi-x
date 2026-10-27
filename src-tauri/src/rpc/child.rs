@@ -3,11 +3,12 @@
 //! tree. Pool management stays in the parent [`super`] module.
 
 use super::{
-    emit_process_event, write_line, ProcessState, CREATE_NO_WINDOW, EVENT, EXIT_EVENT,
+    emit_process_event, write_line, ProcessState, EVENT, EXIT_EVENT,
     SSH_PATH_BOUND_EVENT, STDERR_EVENT,
 };
 use crate::errors::pix_error;
-use crate::pi_locate::{is_windows_script, Launcher, PiInfo};
+use crate::pi_locate::{self, PiInfo};
+use crate::process::CREATE_NO_WINDOW;
 use crate::ssh::backend::RemoteEndpoint;
 use crate::ssh::transport::{AuthMethod, classify_failure, SshError, SshErrorKind};
 use serde_json::{json, Value};
@@ -219,30 +220,8 @@ async fn process_spawn_impl(
 
             // Prefer the resolved launcher (node + cli.js); never route npm .cmd
             // shims through cmd.exe — its shim trick can exit silently under pipes.
-            let mut cmd = match &pi.launcher {
-                Some(Launcher::Node { node, script }) => {
-                    let mut c = Command::new(node);
-                    c.arg(script).args(&args);
-                    c
-                }
-                Some(Launcher::Binary { path }) => {
-                    let mut c = Command::new(path);
-                    c.args(&args);
-                    c
-                }
-                None => {
-                    let path = pi.path.clone().ok_or("pi path not resolved")?;
-                    if cfg!(windows) && is_windows_script(&path) {
-                        let mut c = Command::new("cmd");
-                        c.arg("/C").arg(&path).args(&args);
-                        c
-                    } else {
-                        let mut c = Command::new(&path);
-                        c.args(&args);
-                        c
-                    }
-                }
-            };
+            let mut cmd = pi_locate::command_for(pi)?;
+            cmd.args(&args);
 
             cmd.current_dir(project);
             // Consumed by the pix-workspace extension to render the
@@ -257,8 +236,6 @@ async fn process_spawn_impl(
             // the readers are wired up; tokio does not kill on drop by default,
             // so make sure the pi process never leaks as an orphan.
             cmd.kill_on_drop(true);
-            #[cfg(windows)]
-            cmd.creation_flags(CREATE_NO_WINDOW);
             cmd.spawn().map_err(|e| format!("failed to spawn pi: {e}"))?
         }
         SpawnProgram::Remote(spec) => {

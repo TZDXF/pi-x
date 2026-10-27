@@ -39,7 +39,6 @@ fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: V
     crate::remote::emit(app, event, payload);
 }
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const EVENT: &str = "pi://event";
 const STDERR_EVENT: &str = "pi://stderr";
 const EXIT_EVENT: &str = "pi://exit";

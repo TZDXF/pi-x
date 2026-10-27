@@ -6,6 +6,7 @@ import * as vue from "vue"
 import { isMarkdownExt } from "@/lib/fileKind"
 import { normalizeSlashes } from "@/lib/paths"
 import { useContentTranslation } from "@/composables/useContentTranslation"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -34,6 +35,7 @@ function setup(component: string, props: Record<string, unknown>, fields: string
     isMarkdownExt,
     normalizeSlashes,
     useContentTranslation,
+    usePointerDrag,
     defineProps: () => props,
     withDefaults: value => value,
     defineEmits: () => vi.fn(),

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
+import { modelKey as formatModelKey } from "@/lib/modelKey"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { useSessionStore } from "@/stores/conversations"
 import { getModelsConfig } from "@/api/piClient"
@@ -84,7 +85,7 @@ const models = computed(() => {
 const levels = computed(
   () =>
     modelLevels.value[modelKey.value] ??
-    supportedThinkingLevels(session.models.find(m => `${m.provider}/${m.id}` === modelKey.value) ?? {}),
+    supportedThinkingLevels(session.models.find(m => formatModelKey(m) === modelKey.value) ?? {}),
 )
 watch(levels, values => {
   if (!values.includes(draft.value.thinking))
@@ -112,12 +113,13 @@ async function initialize() {
     const config = await getModelsConfig()
     const mapping: Record<string, ThinkingLevel[]> = {}
     for (const [provider, entry] of Object.entries(config.providers ?? {})) {
-      for (const model of entry.models ?? []) mapping[`${provider}/${model.id}`] = supportedThinkingLevels(model)
+      for (const model of entry.models ?? [])
+        mapping[formatModelKey({ provider, id: model.id })] = supportedThinkingLevels(model)
     }
     if (own !== generation) return
     if (session.currentModel) {
       const current = session.currentModel
-      mapping[`${current.provider}/${current.id}`] = session.availableThinking
+      mapping[formatModelKey(current)] = session.availableThinking
     }
     modelLevels.value = mapping
     timer = setInterval(() => {
@@ -163,7 +165,7 @@ function edit(task?: ScheduledTask) {
   const model = task
     ? models.value.find(m => m.provider === task.provider && m.id === task.model)
     : (session.currentModel ?? models.value[0])
-  modelKey.value = model ? `${model.provider}/${model.id}` : ""
+  modelKey.value = model ? formatModelKey(model) : ""
   editing.value = true
 }
 async function action(work: () => Promise<unknown>) {
@@ -181,7 +183,7 @@ async function action(work: () => Promise<unknown>) {
 }
 async function save() {
   await action(async () => {
-    const model = models.value.find(m => `${m.provider}/${m.id}` === modelKey.value)
+    const model = models.value.find(m => formatModelKey(m) === modelKey.value)
     if (!model) throw new Error(t("schedules.modelRequired"))
     await saveScheduledTask({
       ...draft.value,

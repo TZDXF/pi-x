@@ -134,97 +134,46 @@ pub async fn search(project: String, query: String) -> Result<Vec<FileHit>, Stri
         let q = q.trim_start_matches('/').to_string();
 
         let mut hits: Vec<(u8, String, String, String)> = Vec::new();
-        let mut visited = 0usize;
-        let mut stack = vec![root.clone()];
-
-        while let Some(dir) = stack.pop() {
-            if visited >= MAX_WALK_ENTRIES || hits.len() >= MAX_HITS * 8 {
-                break;
-            }
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(e) if dir == root => return Err(format!("cannot search project: {e}")),
-                Err(_) => continue,
-            };
-            let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_key(|entry| entry.file_name());
-            // deterministic-ish order: push entries so files get visited before
-            // descending (order within a dir doesn't matter much, scoring does)
-            let mut subdirs: Vec<PathBuf> = Vec::new();
-            for entry in entries {
-                visited += 1;
-                if visited >= MAX_WALK_ENTRIES {
-                    break;
+        use crate::fs_walk::{fs_walk, WalkControl, WalkOptions};
+        fs_walk(
+            &root,
+            WalkOptions {
+                sort_entries: true,
+                ignore_read_errors: true,
+                max_entries: Some(MAX_WALK_ENTRIES),
+                ..WalkOptions::default()
+            },
+            |entry| {
+                if entry.is_dir {
+                    return Ok(if SKIP_DIRS.contains(&entry.name.as_str()) || entry.name.starts_with('.') {
+                        WalkControl::Skip
+                    } else {
+                        WalkControl::Continue
+                    });
                 }
-                let p = entry.path();
-                let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
-                    continue;
+                if q.is_empty() && hits.len() >= MAX_HITS {
+                    return Ok(WalkControl::Continue);
+                }
+                let rel = match entry.path.strip_prefix(&root) {
+                    Ok(path) => path.to_string_lossy().replace('\\', "/"),
+                    Err(_) => return Ok(WalkControl::Continue),
                 };
-                // Do not traverse symlinks/junctions or suggest files outside the project.
-                let Ok(kind) = entry.file_type() else {
-                    continue;
-                };
-                if kind.is_symlink() {
-                    continue;
-                }
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    let Ok(metadata) = entry.metadata() else {
-                        continue;
-                    };
-                    if metadata.file_attributes() & 0x400 != 0 {
-                        continue;
-                    }
-                }
-                let is_dir = kind.is_dir();
-                if !is_dir && !kind.is_file() {
-                    continue;
-                }
-                if is_dir {
-                    if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
-                        continue;
-                    }
-                    subdirs.push(p);
-                    continue;
-                }
-                if q.is_empty() {
-                    // no query: only suggest top-level-ish entries to keep the list sane
-                    if hits.len() < MAX_HITS {
-                        let rel = match p.strip_prefix(&root) {
-                            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-                            Err(_) => continue,
-                        };
-                        let name_l = name.to_lowercase();
-                        if let Some(s) = score(&rel.to_lowercase(), &name_l, "") {
-                            let dir_part = Path::new(&rel)
-                                .parent()
-                                .map(|d| d.to_string_lossy().replace('\\', "/"))
-                                .unwrap_or_default();
-                            hits.push((s, rel, name, dir_part));
-                        }
-                    }
-                    continue;
-                }
-                let rel = match p.strip_prefix(&root) {
-                    Ok(r) => r.to_string_lossy().replace('\\', "/"),
-                    Err(_) => continue,
-                };
-                let name_l = name.to_lowercase();
+                let name_l = entry.name.to_lowercase();
                 if let Some(s) = score(&rel.to_lowercase(), &name_l, &q) {
                     let dir_part = Path::new(&rel)
                         .parent()
                         .map(|d| d.to_string_lossy().replace('\\', "/"))
                         .unwrap_or_default();
-                    hits.push((s, rel, name, dir_part));
+                    hits.push((s, rel, entry.name, dir_part));
                 }
-            }
-            // push dirs in reverse so traversal is roughly alphabetical
-            subdirs.sort_by(|a, b| b.cmp(a));
-            for d in subdirs {
-                stack.push(d);
-            }
-        }
+                Ok(if hits.len() >= MAX_HITS * 8 {
+                    WalkControl::Stop
+                } else {
+                    WalkControl::Continue
+                })
+            },
+        )
+        .map_err(|e| format!("cannot search project: {e}"))?;
 
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         hits.truncate(MAX_HITS);

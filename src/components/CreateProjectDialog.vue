@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n"
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog"
 import { FolderPlus, LoaderCircle, PlugZap, Plus, X } from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
-import { sshConnectionList, sshConnectionProbe, sshDeployPi, sshDeployStatus, type SshConnection, type SshProbeResult } from "@/api/piClient"
+import { sshConnectionList, sshConnectionProbe, type SshConnection, type SshProbeResult } from "@/api/piClient"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import SshSettings from "@/components/settings/SshSettings.vue"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import {
   buildSshUri,
   buildWslUri,
   connectionKind,
+  connectionLabel,
   isRemoteProject,
   normalizeSshPath,
   parseRemoteUri,
@@ -25,7 +26,8 @@ import {
   resolveSshConnectionId,
 } from "@/lib/ssh"
 import { tBackendError } from "@/i18n"
-import { useSshDeployProgress } from "@/composables/useSshDeployProgress"
+import { useSshDeploy } from "@/composables/useSshDeploy"
+import SshDeployStatus from "@/components/SshDeployStatus.vue"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
@@ -48,9 +50,18 @@ const connectionId = ref("")
 const remotePath = ref("")
 const probing = ref(false)
 const probeResult = ref<SshProbeResult | null>(null)
-const deployStatus = ref<{ piFound: boolean; deployed: boolean; version: string | null } | null>(null)
-const deploying = ref(false)
-const deployProgress = useSshDeployProgress()
+const {
+  statuses: deployStatuses,
+  deployingIds,
+  progress: deployProgress,
+  loadStatus: loadDeployStatus,
+  deploy,
+} = useSshDeploy({
+  onSuccess: () => ui.pushToast(t("ssh.deploySuccess"), "info"),
+  onError: e => (error.value = tBackendError(e)),
+})
+const deployStatus = computed(() => (connectionId.value ? deployStatuses.value[connectionId.value] : null))
+const deploying = computed(() => deployingIds.value.has(connectionId.value))
 const showConnectionDialog = ref(false)
 
 const selectedConnection = computed(
@@ -90,17 +101,6 @@ function openConnectionDialog() {
 function onConnectionCreated() {
   showConnectionDialog.value = false
   void loadConnections()
-}
-
-/** 连接下拉项的描述（per-kind）：ssh 显示 user@host:port，wsl 显示 user@distro，docker 显示容器名。 */
-function connectionLabel(connection: SshConnection): string {
-  const kind = connectionKind(connection)
-  if (kind === "wsl") {
-    return connection.user ? `${connection.user}@${connection.distro ?? ""}` : connection.distro ?? ""
-  }
-  if (kind === "docker") return connection.container ?? ""
-  const authority = connection.user ? `${connection.user}@${connection.host}` : connection.host
-  return connection.port === 22 ? authority : `${authority}:${connection.port}`
 }
 
 watch(
@@ -144,7 +144,7 @@ async function testConnection() {
   if (!connection || probing.value) return
   probing.value = true
   probeResult.value = null
-  deployStatus.value = null
+  delete deployStatuses.value[connection.id]
   try {
     probeResult.value = await sshConnectionProbe(connection.id)
     // probe 成功后异步获取部署状态
@@ -156,34 +156,9 @@ async function testConnection() {
   }
 }
 
-async function loadDeployStatus(connection: SshConnection) {
-  try {
-    const status = await sshDeployStatus(connection.id)
-    deployStatus.value = status
-  } catch {
-    // 部署状态获取失败静默忽略
-  }
-}
-
 async function deployPi() {
   const connection = selectedConnection.value
-  if (!connection || deploying.value) return
-  deploying.value = true
-  try {
-    const result = await sshDeployPi(connection.id)
-    deployStatus.value = {
-      piFound: true,
-      deployed: result.deployed,
-      version: result.version,
-    }
-    ui.pushToast(t("ssh.deploySuccess"), "info")
-    deployProgress.value = null
-  } catch (e) {
-    error.value = tBackendError(e)
-    deployProgress.value = null
-  } finally {
-    deploying.value = false
-  }
+  if (connection) await deploy(connection)
 }
 
 /** 按连接的 kind 构造展示 URI（唯一入口 build*Uri，禁止手拼；多后端契约 §5.4）。 */
@@ -283,9 +258,7 @@ function submit() {
   >
     <DialogContent class="sm:max-w-lg" aria-describedby="project-dialog-description">
       <DialogHeader>
-        <DialogTitle>{{
-          t(props.editPath ? "projectDialog.editTitle" : "projectDialog.title")
-        }}</DialogTitle>
+        <DialogTitle>{{ t(props.editPath ? "projectDialog.editTitle" : "projectDialog.title") }}</DialogTitle>
         <DialogDescription id="project-dialog-description">
           {{ t("projectDialog.description") }}
         </DialogDescription>
@@ -361,53 +334,12 @@ function submit() {
             </span>
             <span v-else class="text-destructive">{{ tBackendError(probeResult.error) }}</span>
           </p>
-          <!-- 部署状态显示（P4） -->
-          <div
-            v-if="deployStatus"
-            class="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"
-          >
-            <span class="text-muted-foreground">{{ t("ssh.deployStatus") }}:</span>
-            <span
-              :class="
-                deployStatus.piFound
-                  ? 'text-green-700 dark:text-green-400'
-                  : 'text-amber-700 dark:text-amber-400'
-              "
-            >
-              {{ deployStatus.piFound ? (deployStatus.deployed ? t("ssh.piDeployed") : t("ssh.piInPATH")) : t("ssh.piNotDeployed") }}
-            </span>
-            <span v-if="deployStatus.version" class="text-muted-foreground">
-              {{ deployStatus.version }}
-            </span>
-            <Button
-              v-if="!deployStatus.piFound"
-              variant="ghost"
-              size="sm"
-              class="ms-auto h-6 px-2 text-xs"
-              :disabled="deploying"
-              @click="deployPi"
-            >
-              <LoaderCircle v-if="deploying" :size="12" class="animate-spin" />
-              {{ t("ssh.deploy") }}
-            </Button>
-          </div>
-          <!-- 部署进度条（对齐 ZCode RemoteConnectionConnectingStep） -->
-          <div
-            v-if="deploying && deployProgress"
-            class="rounded-md border border-border px-2 py-2 text-xs"
-          >
-            <div class="flex items-center gap-2">
-              <LoaderCircle :size="12" class="animate-spin text-muted-foreground" />
-              <span class="text-muted-foreground">{{ deployProgress.message }}</span>
-              <span class="ms-auto text-muted-foreground">{{ deployProgress.percent }}%</span>
-            </div>
-            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
-              <div
-                class="h-full rounded-full bg-blue-500 transition-all duration-300"
-                :style="{ width: `${deployProgress.percent}%` }"
-              />
-            </div>
-          </div>
+          <SshDeployStatus
+            :status="deployStatus"
+            :deploying="deploying"
+            :progress="deployProgress"
+            @deploy="deployPi"
+          />
           <label class="block space-y-2 text-sm font-medium" for="project-name-ssh">
             {{ t("projectDialog.name") }}
             <Input

@@ -8,6 +8,10 @@ const source = readFileSync(new URL("../src/lib/theme.ts", import.meta.url), "ut
   .replace(/if \(import\.meta\.hot\) \{[\s\S]*$/, "")
   .replace(/export /g, "")
 const readThemeCss = (file: string) => readFileSync(new URL(`../src/styles/theme/${file}`, import.meta.url), "utf8")
+const preferenceSource = readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8")
+  .replace(/^import .*$/gm, "")
+  .replace(/if \(import\.meta\.hot\).*$/gm, "")
+  .replace(/export /g, "")
 
 function harness(stored: string | null, storageFails = false) {
   const classes = new Set<string>()
@@ -44,7 +48,7 @@ function harness(stored: string | null, storageFails = false) {
     },
   })
   vm.runInContext(
-    ts.transpile(source + "\nglobalThis.api = { theme, setTheme };", {
+    ts.transpile(preferenceSource + source + "\nglobalThis.api = { theme, setTheme };", {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.None,
     }),

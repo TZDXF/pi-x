@@ -8,7 +8,12 @@ const run = (code, context) =>
   vm.runInContext(ts.transpile(code, { target: ts.ScriptTarget.ES2022 }), vm.createContext(context))
 
 function harness(storage) {
+  const preference = source("../src/lib/localPreference.ts")
+    .replace(/^import .*$/gm, "")
+    .replace(/if \(import\.meta\.hot\).*$/gm, "")
+    .replace(/^export /gm, "")
   const code =
+    preference +
     source("../src/lib/processDetail.ts")
       .replace(/^import .*$/gm, "")
       .replace(/^export /gm, "")

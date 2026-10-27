@@ -35,6 +35,15 @@ function harness(createOnly = false) {
     "@/lib/ssh": { isWslPlatform: () => true, connectionKind: connection => connection.kind ?? "ssh" },
     "@/lib/remoteBackends": { remoteKindOptions: () => [], remoteFormFields: () => [] },
     "@/composables/useSshDeployProgress": { useSshDeployProgress: () => vue.ref(null) },
+    "@/composables/useSshDeploy": {
+      useSshDeploy: () => ({
+        statuses: vue.ref({}),
+        deployingIds: vue.ref(new Set()),
+        progress: vue.ref(null),
+        loadStatus: vi.fn(),
+        deploy: vi.fn(),
+      }),
+    },
   }
   const module = { exports: {} as any }
   new Function("exports", "require", code)(module.exports, id => imports[id] ?? {})
@@ -136,7 +145,9 @@ test("远程连接表单关闭自动补全，不提供历史输入建议", () =>
   expect(forms[0].props.some(prop => prop.name === "autocomplete" && prop.value?.content === "off")).toBe(true)
   expect(elements(template, "datalist")).toHaveLength(0)
   for (const input of elements(forms[0], "Input")) {
-    expect(input.props.some(prop => prop.name === "list" || (prop.name === "bind" && prop.arg?.content === "list"))).toBe(false)
+    expect(
+      input.props.some(prop => prop.name === "list" || (prop.name === "bind" && prop.arg?.content === "list")),
+    ).toBe(false)
   }
 })
 
@@ -146,7 +157,9 @@ test("主机和私钥路径不显示占位文字，移除私钥存储说明", ()
     const input = inputs.find(element => element.props.some(prop => prop.name === "id" && prop.value?.content === id))
     expect(input).toBeDefined()
     expect(
-      input.props.some(prop => prop.name === "placeholder" || (prop.name === "bind" && prop.arg?.content === "placeholder")),
+      input.props.some(
+        prop => prop.name === "placeholder" || (prop.name === "bind" && prop.arg?.content === "placeholder"),
+      ),
     ).toBe(false)
   }
   expect(descriptor.template!.content).not.toContain("ssh.keyPathHint")

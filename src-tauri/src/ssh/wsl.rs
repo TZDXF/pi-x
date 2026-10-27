@@ -188,7 +188,7 @@ pub fn wsl_exec_error(e: &SshError) -> String {
             "wslNotInstalled",
             "未找到 wsl.exe 或 WSL 未安装。请在「启用或关闭 Windows 功能」中启用「适用于 Linux 的 Windows 子系统」。",
         ),
-        "timeout" => pix_error("sshTimeout", "连接超时，网络过慢或主机无响应。"),
+        "timeout" => super::errors::timeout_error(),
         "wslDistroNotFound" => pix_error(
             "wslDistroNotFound",
             "WSL 发行版不存在或已被注销。请确认发行版名称。",

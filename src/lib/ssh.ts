@@ -401,6 +401,18 @@ export function connectionKind(connection: SshConnectionRef): RemoteKind {
   return connection.kind ?? "ssh"
 }
 
+/** Compact per-backend endpoint label used by connection pickers and settings. */
+export function connectionLabel(connection: SshConnectionRef): string {
+  const kind = connectionKind(connection)
+  if (kind === "wsl") {
+    const distro = connection.distro ?? ""
+    return connection.user ? `${connection.user}@${distro}` : distro
+  }
+  if (kind === "docker") return connection.container ?? ""
+  const authority = connection.user ? `${connection.user}@${connection.host}` : connection.host
+  return (connection.port ?? DEFAULT_PORT) === DEFAULT_PORT ? authority : `${authority}:${connection.port}`
+}
+
 /**
  * 连接与项目 URI 的 per-kind 匹配（契约 §3.1）：kind 不匹配直接 false；
  * ssh 比 host/port/user，wsl 比 distro/user，docker 比 container。

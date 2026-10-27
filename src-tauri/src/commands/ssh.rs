@@ -15,9 +15,13 @@ use tauri::{AppHandle, Emitter};
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::ssh::transport::{
-    remote_exec, remote_exec_with_stdin, remote_probe, AuthMethod, SshEndpoint, SshError, SshErrorKind,
+    remote_exec, remote_exec_with_stdin, remote_probe, AuthMethod, SshEndpoint, SshError,
+    SshErrorKind,
 };
 use crate::ssh::{backend, config, deploy, docker, identity, payload, wsl};
+#[allow(unused_imports)]
+pub(crate) use crate::ssh::config::connection_matches_remote;
+pub(crate) use crate::ssh::errors::{remote_error_coded, ssh_error_coded};
 
 /// probe 结果（契约 §2.1 的 `SshProbeResult`）：成功时填远端信息，
 /// 失败时 `errorKind`/`error` 分别给 errorKind 归类与 coded error。
@@ -58,54 +62,6 @@ pub struct DockerContainerListResult {
 
 /// SSH 失败统一归一化为 coded error（契约 §2.4 / P2 §5）。
 /// `Remote` 类携带 stderr 摘要（含退出码），供 i18n 的 `{detail}` 插值。
-pub(crate) fn ssh_error_coded(e: &SshError) -> String {
-    match &e.kind {
-        SshErrorKind::SshMissing => pix_error(
-            "sshMissing",
-            "未找到本机 ssh 客户端。Windows 可在「设置 → 应用 → 可选功能」中安装 OpenSSH 客户端。",
-        ),
-        SshErrorKind::HostKey => host_key_error(e),
-        SshErrorKind::Auth => pix_error(
-            "sshAuthFailed",
-            "SSH 认证失败。请检查密码、密钥或 agent；应用重启后请重新填写密码或密钥口令。",
-        ),
-        SshErrorKind::Network => pix_error(
-            "sshConnectFailed",
-            "无法连接到远程主机，请检查主机、端口与网络。",
-        ),
-        SshErrorKind::Timeout => pix_error("sshTimeout", "连接超时，网络过慢或主机无响应。"),
-        SshErrorKind::Remote => {
-            pix_error_detail("sshProbeFailed", "远程操作失败: {detail}", &e.detail)
-        }
-    }
-}
-
-/// 三后端统一 coded error 归类（多后端契约 §1.3/§4.4）：按端点 kind 分发到
-/// ssh / wsl / docker 的归类函数。
-pub(crate) fn remote_error_coded(endpoint: &backend::RemoteEndpoint, e: &SshError) -> String {
-    match endpoint {
-        backend::RemoteEndpoint::Ssh(_) => ssh_error_coded(e),
-        backend::RemoteEndpoint::Wsl(_) => wsl::wsl_exec_error(e),
-        backend::RemoteEndpoint::Docker(_) => docker::docker_exec_error(e),
-    }
-}
-
-/// HostKey 细分的 coded error（契约 P2 §5.2）：单一 `SshErrorKind::HostKey`
-/// 变体承载两种场景，凭 stderr 摘要关键词二分。
-fn host_key_error(e: &SshError) -> String {
-    if e.detail.to_lowercase().contains("remote host identification has changed") {
-        pix_error(
-            "sshHostKeyChanged",
-            "远程主机指纹与 known_hosts 记录不一致，可能是主机重装或中间人攻击。核实后在 ~/.ssh/known_hosts 中删除该主机条目再重试。",
-        )
-    } else {
-        pix_error(
-            "sshHostKeyUnverified",
-            "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
-        )
-    }
-}
-
 fn error_kind_label(kind: &SshErrorKind) -> &'static str {
     match kind {
         SshErrorKind::SshMissing => "sshMissing",
@@ -170,7 +126,10 @@ fn endpoint_for_target(
     })?;
     let port = port.unwrap_or(identity::DEFAULT_PORT);
     if port == 0 {
-        return Err(pix_error("sshConnectionInvalid", "SSH 端口必须在 1-65535 之间"));
+        return Err(pix_error(
+            "sshConnectionInvalid",
+            "SSH 端口必须在 1-65535 之间",
+        ));
     }
     let user = match user.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
         Some(user) => {
@@ -190,7 +149,9 @@ fn endpoint_for_target(
         .map(str::trim)
         .filter(|k| !k.is_empty())
         .map(|k| match dirs::home_dir() {
-            Some(home) => crate::data_dir::expand_home(k, &home).to_string_lossy().into_owned(),
+            Some(home) => crate::data_dir::expand_home(k, &home)
+                .to_string_lossy()
+                .into_owned(),
             None => k.to_string(),
         });
     Ok(SshEndpoint {
@@ -199,7 +160,7 @@ fn endpoint_for_target(
         user,
         key_path,
         auth_method: AuthMethod::Key,
-            key_passphrase: None,
+        key_passphrase: None,
         password: None,
     })
 }
@@ -380,24 +341,6 @@ pub async fn docker_container_list() -> Result<DockerContainerListResult, String
 
 /// 连接与项目 URI 的 per-kind 一致性比较（多后端契约 §3.1/§5.1 第 3 条）：
 /// kind 不匹配直接 false（`wsl://` URI 不会匹配到 ssh 连接）。
-pub(crate) fn connection_matches_remote(
-    connection: &config::SshConnection,
-    target: &identity::RemoteTarget,
-) -> bool {
-    match (&connection.kind, target) {
-        (config::ConnectionKind::Ssh, identity::RemoteTarget::Ssh(t)) => {
-            connection.host == t.host && connection.port == t.port && connection.user == t.user
-        }
-        (config::ConnectionKind::Wsl, identity::RemoteTarget::Wsl(t)) => {
-            connection.distro.as_deref() == Some(t.distro.as_str()) && connection.user == t.user
-        }
-        (config::ConnectionKind::Docker, identity::RemoteTarget::Docker(t)) => {
-            connection.container.as_deref() == Some(t.container.as_str())
-        }
-        _ => false,
-    }
-}
-
 /// 远程命令（会话列表 / 信任）共享的校验链（对齐 `spawn_remote`，
 /// `commands/pi.rs`；契约 P2 §2.1/§4.2 与多后端契约 §5.1/§5.2）：
 /// `parse_remote_uri` 失败 → `sshConnectionInvalid`；连接 id 空 →
@@ -407,19 +350,9 @@ pub(crate) fn resolve_ssh_connection(
     project: &str,
     ssh_connection_id: &str,
 ) -> Result<(identity::RemoteTarget, config::SshConnection), String> {
-    let target = identity::parse_remote_uri(project).ok_or_else(|| {
-        pix_error("sshConnectionInvalid", "SSH 连接配置与项目地址不一致")
-    })?;
-    let connection_id = ssh_connection_id.trim();
-    if connection_id.is_empty() {
-        return Err(pix_error("sshConnectionMissing", "远程项目没有匹配的 SSH 连接"));
-    }
-    let connection = config::find_connection(connection_id)?.ok_or_else(|| {
-        pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除")
-    })?;
-    if !connection_matches_remote(&connection, &target) {
-        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
-    }
+    let target = identity::parse_remote_uri(project)
+        .ok_or_else(|| pix_error("sshConnectionInvalid", "SSH 连接配置与项目地址不一致"))?;
+    let connection = config::resolve_connection_for_target(&target, Some(ssh_connection_id))?;
     Ok((target, connection))
 }
 
@@ -504,8 +437,12 @@ pub async fn ssh_deploy_status(
                 )
             })?;
             (
-                info.get("version").and_then(|v| v.as_str()).map(String::from),
-                info.get("contentHash").and_then(|v| v.as_str()).map(String::from),
+                info.get("version")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                info.get("contentHash")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             )
         } else {
             (None, None)
@@ -532,12 +469,16 @@ pub async fn ssh_deploy_pi(
     let connection = config::find_connection(&ssh_connection_id)?
         .ok_or_else(|| pix_error("sshConnectionNotFound", "SSH 连接不存在"))?;
     let endpoint = connection.to_remote_endpoint();
-    deploy::ensure_pi_available(&ssh_connection_id, &endpoint, Some(std::sync::Arc::new({
-        let app = app.clone();
-        move |p: deploy::DeployProgress| {
-            let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
-        }
-    })))
+    deploy::ensure_pi_available(
+        &ssh_connection_id,
+        &endpoint,
+        Some(std::sync::Arc::new({
+            let app = app.clone();
+            move |p: deploy::DeployProgress| {
+                let _ = app.emit("ssh_deploy_progress", serde_json::json!(p));
+            }
+        })),
+    )
     .await
 }
 
@@ -673,13 +614,15 @@ async fn remote_trust_call(
 /// 远程项目信任状态（契约 P1 §4.1 冻结名、P2 §4.2 落地）：返回形状与本地
 /// `trust_status` 逐字段一致，前端 `TrustStatus` 类型零改动消费。
 #[tauri::command]
-pub async fn ssh_trust_status(
-    ssh_connection_id: String,
-    project: String,
-) -> Result<Value, String> {
+pub async fn ssh_trust_status(ssh_connection_id: String, project: String) -> Result<Value, String> {
     let (target, connection) = resolve_ssh_connection(&project, &ssh_connection_id)?;
     let request = json!({ "op": "trust_status", "project": target.path() });
-    remote_trust_call(&connection.to_remote_endpoint(), &ssh_connection_id.trim(), request).await
+    remote_trust_call(
+        &connection.to_remote_endpoint(),
+        &ssh_connection_id.trim(),
+        request,
+    )
+    .await
 }
 
 /// 远程项目信任决策持久化（契约 P1 §4.1 冻结名、P2 §4.2 落地）：返回决策后
@@ -698,7 +641,12 @@ pub async fn ssh_trust_save(
         "trusted": trusted,
         "trustParent": trust_parent,
     });
-    remote_trust_call(&connection.to_remote_endpoint(), &ssh_connection_id.trim(), request).await
+    remote_trust_call(
+        &connection.to_remote_endpoint(),
+        &ssh_connection_id.trim(),
+        request,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -884,15 +832,40 @@ mod tests {
         assert_eq!(key(&base.clone()), key(&base));
         // 任一端点要素变化 → 换键。
         for changed in [
-            backend::RemoteEndpoint::Ssh(SshEndpoint { host: "other.test".into(), ..endpoint_of(&base) }),
-            backend::RemoteEndpoint::Ssh(SshEndpoint { port: 2222, ..endpoint_of(&base) }),
-            backend::RemoteEndpoint::Ssh(SshEndpoint { user: Some("root".into()), ..endpoint_of(&base) }),
-            backend::RemoteEndpoint::Ssh(SshEndpoint { user: None, ..endpoint_of(&base) }),
-            backend::RemoteEndpoint::Ssh(SshEndpoint { key_path: Some("k2".into()), ..endpoint_of(&base) }),
-            backend::RemoteEndpoint::Wsl(backend::WslEndpoint { distro: "Ubuntu".into(), user: None }),
-            backend::RemoteEndpoint::Wsl(backend::WslEndpoint { distro: "Debian".into(), user: None }),
-            backend::RemoteEndpoint::Docker(backend::DockerEndpoint { container: "a".into() }),
-            backend::RemoteEndpoint::Docker(backend::DockerEndpoint { container: "b".into() }),
+            backend::RemoteEndpoint::Ssh(SshEndpoint {
+                host: "other.test".into(),
+                ..endpoint_of(&base)
+            }),
+            backend::RemoteEndpoint::Ssh(SshEndpoint {
+                port: 2222,
+                ..endpoint_of(&base)
+            }),
+            backend::RemoteEndpoint::Ssh(SshEndpoint {
+                user: Some("root".into()),
+                ..endpoint_of(&base)
+            }),
+            backend::RemoteEndpoint::Ssh(SshEndpoint {
+                user: None,
+                ..endpoint_of(&base)
+            }),
+            backend::RemoteEndpoint::Ssh(SshEndpoint {
+                key_path: Some("k2".into()),
+                ..endpoint_of(&base)
+            }),
+            backend::RemoteEndpoint::Wsl(backend::WslEndpoint {
+                distro: "Ubuntu".into(),
+                user: None,
+            }),
+            backend::RemoteEndpoint::Wsl(backend::WslEndpoint {
+                distro: "Debian".into(),
+                user: None,
+            }),
+            backend::RemoteEndpoint::Docker(backend::DockerEndpoint {
+                container: "a".into(),
+            }),
+            backend::RemoteEndpoint::Docker(backend::DockerEndpoint {
+                container: "b".into(),
+            }),
         ] {
             assert_ne!(key(&base), key(&changed), "端点变化应换缓存键: {changed:?}");
         }
@@ -985,7 +958,17 @@ mod tests {
             pi_found: true,
         };
         let raw = serde_json::to_value(probe_ok(&probe)).unwrap();
-        for key in ["ok", "uname", "arch", "nodeVersion", "piVersion", "nodeFound", "piFound", "errorKind", "error"] {
+        for key in [
+            "ok",
+            "uname",
+            "arch",
+            "nodeVersion",
+            "piVersion",
+            "nodeFound",
+            "piFound",
+            "errorKind",
+            "error",
+        ] {
             assert!(raw.get(key).is_some(), "missing field {key}");
         }
         let failed = probe_failed(&SshError::new(SshErrorKind::Auth, "denied"));
@@ -1010,7 +993,9 @@ mod tests {
         assert!(err.starts_with("PIXERR:"));
 
         // 空 user / 空 keyPath 视为未提供；keyPath 仅在使用时展开，未提供保持 None。
-        let endpoint = endpoint_for_target("host.test", Some(2222), Some("  ".into()), Some("".into())).unwrap();
+        let endpoint =
+            endpoint_for_target("host.test", Some(2222), Some("  ".into()), Some("".into()))
+                .unwrap();
         assert_eq!(endpoint.user, None);
         assert_eq!(endpoint.key_path, None);
     }
@@ -1066,8 +1051,8 @@ mod tests {
 #[cfg(test)]
 mod ssh_real_tests {
     use super::*;
-    use crate::ssh::transport::remote_exec;
     use crate::ssh::backend::RemoteEndpoint;
+    use crate::ssh::transport::remote_exec;
 
     struct RealEnv {
         endpoint: SshEndpoint,
@@ -1105,7 +1090,7 @@ mod ssh_real_tests {
                 user: Some(user),
                 key_path: Some(key_path),
                 auth_method: AuthMethod::Key,
-            key_passphrase: None,
+                key_passphrase: None,
                 password: None,
             },
             project,
@@ -1141,8 +1126,13 @@ mod ssh_real_tests {
         ] {
             assert!(status.get(field).is_some(), "缺少字段 {field}: {status}");
         }
-        let project_path = status["projectPath"].as_str().expect("projectPath 应为字符串");
-        assert!(project_path.starts_with('/'), "projectPath 应为远端绝对路径: {project_path}");
+        let project_path = status["projectPath"]
+            .as_str()
+            .expect("projectPath 应为字符串");
+        assert!(
+            project_path.starts_with('/'),
+            "projectPath 应为远端绝对路径: {project_path}"
+        );
     }
 
     /// S-R4：`ssh_trust_save` 往返 save(true) → status=true → save(false) →
@@ -1169,7 +1159,8 @@ mod ssh_real_tests {
         let backed_up = backup.stdout.contains("PIX_TEST_BACKED_UP");
         let restore = |backed_up: bool, endpoint: RemoteEndpoint| {
             let script = if backed_up {
-                "mv \"$HOME/.pi/agent/trust.json.pix-test-bak\" \"$HOME/.pi/agent/trust.json\"\n".to_string()
+                "mv \"$HOME/.pi/agent/trust.json.pix-test-bak\" \"$HOME/.pi/agent/trust.json\"\n"
+                    .to_string()
             } else {
                 "rm -f \"$HOME/.pi/agent/trust.json\"\n".to_string()
             };
@@ -1197,7 +1188,10 @@ mod ssh_real_tests {
                 panic!("trust_save(true) 应成功: {err}");
             }
         };
-        assert_eq!(saved_true["decision"], true, "save(true) 后 decision 应为 true");
+        assert_eq!(
+            saved_true["decision"], true,
+            "save(true) 后 decision 应为 true"
+        );
 
         let status = remote_trust_call(
             &endpoint,
@@ -1266,7 +1260,10 @@ mod ssh_real_tests {
         )
         .await
         .expect("内容比对应成功");
-        assert!(cmp.stdout.contains("PIX_TEST_MATCH"), "远端 mjs 应与本地字节一致");
+        assert!(
+            cmp.stdout.contains("PIX_TEST_MATCH"),
+            "远端 mjs 应与本地字节一致"
+        );
 
         // 第二次调用命中进程内集合，不重复上传 → mtime 不变。
         ensure_mjs_uploaded(UPLOAD_CONNECTION_ID, &endpoint)

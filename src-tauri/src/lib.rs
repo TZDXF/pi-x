@@ -9,6 +9,7 @@ mod editor_icon;
 mod errors;
 mod file_preview;
 mod fs_search;
+mod fs_walk;
 mod logs;
 mod mcp;
 mod notifications;
@@ -16,8 +17,10 @@ mod packages;
 mod pi_data;
 mod pi_locate;
 mod pi_update;
+mod paths;
 mod preview_guard;
 mod preview_proxy;
+mod process;
 #[cfg(feature = "remote-access")]
 mod remote;
 #[cfg(not(feature = "remote-access"))]

@@ -1,7 +1,7 @@
 //! Generate a session label in an isolated, tool-free pi process.
 use crate::{
     commands,
-    pi_locate::{self, Launcher},
+    pi_locate,
     sessions, trust,
 };
 use serde_json::Value;
@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 use tauri::AppHandle;
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
 
 // pi allocates the path before persisting the log after its first response.
 // Validate the existing parent, and reject traversal/symlinks outside sessions.
@@ -162,15 +162,7 @@ pub async fn session_generate_title(
         sessions::write_presentation(&path, &metadata)?;
     }
     let pi = pi_locate::detect(config.pi_path).await;
-    let mut cmd = match pi.launcher {
-        Some(Launcher::Node { node, script }) => {
-            let mut c = Command::new(node);
-            c.arg(script);
-            c
-        }
-        Some(Launcher::Binary { path }) => Command::new(path),
-        None => return Err("No usable pi launcher for title generation".into()),
-    };
+    let mut cmd = pi_locate::command_for(&pi)?;
     cmd.args(["--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
         "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
         "--provider", model.provider.trim(), "--model", model.model_id.trim(),
@@ -185,8 +177,6 @@ pub async fn session_generate_title(
         ))
         .current_dir(trust::agent_dir())
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000);
     let output = tokio::time::timeout(Duration::from_secs(90), async {
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let mut stdin = child.stdin.take().ok_or("Missing title input")?;

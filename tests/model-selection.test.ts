@@ -4,6 +4,7 @@ import vm from "node:vm"
 import ts from "typescript"
 import { computed, reactive } from "vue"
 import { groupModelsByProvider } from "@/lib/modelSelection"
+import { modelKey } from "@/lib/modelKey"
 
 test("provider groups retain first-seen order, model order, and model metadata", () => {
   const models = Object.freeze([
@@ -47,6 +48,7 @@ test("the conversation select keeps reactive grouping and provider/model key mat
   const context = vm.createContext({
     computed,
     groupModelsByProvider,
+    modelKey,
     defineProps: () => props,
     withDefaults: value => value,
     defineEmits: () => () => {},

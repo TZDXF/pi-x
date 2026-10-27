@@ -27,7 +27,7 @@ pub fn call(request: Value) -> Result<Value, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
+        command.creation_flags(crate::process::CREATE_NO_WINDOW);
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     child

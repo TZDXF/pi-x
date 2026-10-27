@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::backend::{DockerEndpoint, RemoteEndpoint, WslEndpoint};
-use super::identity;
+use super::identity::{self, RemoteTarget};
 use super::transport::AuthMethod;
 use crate::data_dir;
 use crate::errors::{pix_error, pix_error_detail, pix_error_with};
@@ -249,6 +249,48 @@ pub fn find_connection_in(path: &Path, id: &str) -> Result<Option<SshConnection>
         .map(|c| hydrate(path, c)))
 }
 
+/// 连接与项目 URI 的 per-kind 一致性比较。连接 kind 和 URI kind 必须一致，
+/// 再比较该后端用于定位远程资源的全部身份字段。
+pub fn connection_matches_remote(connection: &SshConnection, target: &RemoteTarget) -> bool {
+    match (&connection.kind, target) {
+        (ConnectionKind::Ssh, RemoteTarget::Ssh(t)) => {
+            connection.host == t.host && connection.port == t.port && connection.user == t.user
+        }
+        (ConnectionKind::Wsl, RemoteTarget::Wsl(t)) => {
+            connection.distro.as_deref() == Some(t.distro.as_str()) && connection.user == t.user
+        }
+        (ConnectionKind::Docker, RemoteTarget::Docker(t)) => {
+            connection.container.as_deref() == Some(t.container.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// 解析并校验远程调用声明的连接，统一空 id、连接不存在及端点错配的错误。
+pub fn resolve_connection_for_target(
+    target: &RemoteTarget,
+    ssh_connection_id: Option<&str>,
+) -> Result<SshConnection, String> {
+    resolve_connection_for_target_in(&config_path(), target, ssh_connection_id)
+}
+
+pub fn resolve_connection_for_target_in(
+    path: &Path,
+    target: &RemoteTarget,
+    ssh_connection_id: Option<&str>,
+) -> Result<SshConnection, String> {
+    let connection_id = ssh_connection_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| pix_error("sshConnectionMissing", "远程项目没有匹配的 SSH 连接"))?;
+    let connection = find_connection_in(path, connection_id)?
+        .ok_or_else(|| pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除"))?;
+    if !connection_matches_remote(&connection, target) {
+        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
+    }
+    Ok(connection)
+}
+
 /// 按 `id` upsert 连接配置：校验 name/host/port/user（host 走 identity 归一化规则），
 /// 新增补 `createdAt`；更新保留 `createdAt`/`lastUsedAt`/`lastProbe`。
 pub fn save_connection(input: SshConnectionInput) -> Result<SshConnection, String> {
@@ -262,7 +304,11 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
     }
     let kind = input.kind;
     let invalid = |detail: String| {
-        pix_error_with("sshConnectionInvalid", "SSH 连接配置无效: {detail}", json!({ "detail": detail }))
+        pix_error_with(
+            "sshConnectionInvalid",
+            "SSH 连接配置无效: {detail}",
+            json!({ "detail": detail }),
+        )
     };
     // per-kind 字段校验与裁剪（多后端契约 §3.1 表）。
     let (host, port, user, key_path, distro, container) = match kind {
@@ -299,7 +345,14 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
                 .filter(|c| !c.is_empty())
                 .ok_or_else(|| invalid("Docker 容器名不能为空".to_string()))?;
             identity::validate_docker_container(container).map_err(invalid)?;
-            (String::new(), 0, None, None, None, Some(container.to_string()))
+            (
+                String::new(),
+                0,
+                None,
+                None,
+                None,
+                Some(container.to_string()),
+            )
         }
     };
 
@@ -311,7 +364,9 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
 
     // 密钥口令（不落盘，仅内存中）
     let key_passphrase = match kind {
-        ConnectionKind::Ssh if auth_method == AuthMethod::Key => input.key_passphrase.clone().filter(|s| !s.is_empty()),
+        ConnectionKind::Ssh if auth_method == AuthMethod::Key => {
+            input.key_passphrase.clone().filter(|s| !s.is_empty())
+        }
         _ => None,
     };
 
@@ -342,9 +397,11 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
         existing.auth_method = auth_method;
         // Do not forward a cached credential after changing the destination/key.
         let same_target = credential_target(existing) == credential_target(&previous);
-        existing.password = password.clone()
+        existing.password = password
+            .clone()
             .or_else(|| same_target.then_some(previous.password).flatten());
-        existing.key_passphrase = key_passphrase.clone()
+        existing.key_passphrase = key_passphrase
+            .clone()
             .or_else(|| same_target.then_some(previous.key_passphrase).flatten());
         existing.distro = distro;
         existing.container = container;
@@ -377,7 +434,10 @@ pub fn save_connection_in(path: &Path, input: SshConnectionInput) -> Result<SshC
 }
 
 fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn validate_optional_user(user: Option<&str>) -> Result<Option<String>, String> {
@@ -406,7 +466,9 @@ pub fn delete_connection_in(path: &Path, id: &str) -> Result<(), String> {
     let Some(list) = view.ssh_connections.as_mut() else {
         return Ok(());
     };
-    credentials().lock().unwrap_or_else(|e| e.into_inner())
+    credentials()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&(path.to_path_buf(), id.to_string()));
     let before = list.len();
     list.retain(|c| c.id != id);
@@ -549,7 +611,11 @@ mod tests {
         changed.id = Some(saved.id.clone());
         changed.auth_method = AuthMethod::Password;
         save_connection_in(&path, changed).unwrap();
-        assert!(find_connection_in(&path, &saved.id).unwrap().unwrap().password.is_none());
+        assert!(find_connection_in(&path, &saved.id)
+            .unwrap()
+            .unwrap()
+            .password
+            .is_none());
         delete_connection_in(&path, &saved.id).unwrap();
         assert!(!credentials()
             .lock()
@@ -697,7 +763,10 @@ mod tests {
         // createdAt / lastUsedAt / lastProbe 保留。
         assert_eq!(updated.created_at, created.created_at);
         assert!(updated.last_used_at.is_some());
-        assert_eq!(updated.last_probe.as_ref().unwrap().uname.as_deref(), Some("Linux"));
+        assert_eq!(
+            updated.last_probe.as_ref().unwrap().uname.as_deref(),
+            Some("Linux")
+        );
         // 未提供的可选字段被清空。
         assert_eq!(updated.user, None);
         assert_eq!(updated.key_path, None);
@@ -731,8 +800,7 @@ mod tests {
         assert_eq!(value["piPath"], "pi");
         assert!(value["sshConnections"].as_array().unwrap().len() == 1);
         // 旧配置缺 sshConnections 也能正常读取。
-        let legacy: ConfigView =
-            serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
+        let legacy: ConfigView = serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
         assert!(legacy.ssh_connections.is_none());
         std::fs::remove_file(&path).unwrap();
     }

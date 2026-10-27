@@ -2,6 +2,7 @@ import type { Ref } from "vue"
 import { copySshProjectConnection } from "@/lib/ssh"
 import type { AppConfig, RunningSession } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
+import { debounce } from "@/lib/timing"
 
 export type WorkspacePhase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
 type Api = typeof import("@/api/piClient")
@@ -198,17 +199,12 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
 
   // ---- external session changes (e.g. the session continued in a terminal) ----
 
-  let sessionsListTimer: ReturnType<typeof setTimeout> | null = null
-  function refreshVisibleHistories() {
+  const refreshVisibleHistories = debounce(() => {
     // Refresh the sidebar lists so previews/titles/timestamps follow the disk.
-    if (sessionsListTimer) clearTimeout(sessionsListTimer)
-    sessionsListTimer = setTimeout(() => {
-      sessionsListTimer = null
-      const projects = new Set<string>(Object.keys(workspace.histories))
-      if (project.value) projects.add(project.value)
-      for (const p of projects) void workspace.refresh(p).catch(console.warn)
-    }, 600)
-  }
+    const projects = new Set<string>(Object.keys(workspace.histories))
+    if (project.value) projects.add(project.value)
+    for (const p of projects) void workspace.refresh(p).catch(console.warn)
+  }, 600)
   function handleExternalSessionChanges(files: string[]) {
     for (const file of files) scheduleExternalReload(file)
     refreshVisibleHistories()
@@ -273,7 +269,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
   function dispose() {
     ++listenerVersion
     removeListeners()
-    if (sessionsListTimer) clearTimeout(sessionsListTimer)
+    refreshVisibleHistories.cancel()
     for (const timer of pendingReloads.values()) clearTimeout(timer)
     pendingReloads.clear()
   }

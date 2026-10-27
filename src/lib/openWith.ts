@@ -1,5 +1,5 @@
-import { readonly, ref } from "vue"
 import { invoke, isDesktop } from "@/api/transport"
+import { createLocalPreference } from "@/lib/localPreference"
 
 export const EDITOR_OPTIONS = [
   { id: "vscode", label: "Visual Studio Code" },
@@ -24,9 +24,9 @@ interface OpenWithPreference {
 const STORAGE_KEY = "pix.openWith"
 export const isEditorKind = (value: unknown): value is EditorKind =>
   value === "system" || value === "custom" || EDITOR_OPTIONS.some(option => option.id === value)
-function readPreference(): OpenWithPreference {
+function readPreference(raw: string | null): OpenWithPreference {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null")
+    const saved = JSON.parse(raw ?? "null")
     if (saved && isEditorKind(saved.kind))
       return { kind: saved.kind, executable: typeof saved.executable === "string" ? saved.executable : "" }
   } catch {
@@ -34,20 +34,19 @@ function readPreference(): OpenWithPreference {
   }
   return { kind: "vscode", executable: "" }
 }
-const preference = ref(readPreference())
-export const openWithPreference = readonly(preference)
-export function setOpenWith(kind: EditorKind, executable = preference.value.executable) {
+const preference = createLocalPreference<OpenWithPreference>({
+  key: STORAGE_KEY,
+  defaultValue: { kind: "vscode", executable: "" },
+  read: readPreference,
+  serialize: JSON.stringify,
+  throwOnWriteError: true,
+})
+export const openWithPreference = preference.value
+export function setOpenWith(kind: EditorKind, executable = openWithPreference.value.executable) {
   if (!isEditorKind(kind)) return
   const next = { kind, executable: executable.trim() }
-  // Do not display a saved preference when persistence failed.
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-  preference.value = next
+  preference.set(next)
 }
-function syncPreference(event: StorageEvent) {
-  if (event.key === STORAGE_KEY || event.key === null) preference.value = readPreference()
-}
-window.addEventListener("storage", syncPreference)
-if (import.meta.hot) import.meta.hot.dispose(() => window.removeEventListener("storage", syncPreference))
 
 export const detectEditors = () => invoke<Record<string, boolean>>("detect_editors")
 
@@ -61,12 +60,16 @@ export function detectIcons(): Promise<EditorIconMap> {
 }
 export async function openFileInEditor(path: string, project: string) {
   if (!isDesktop) throw new Error("Opening a local editor is available only in the desktop app")
-  const { kind, executable } = preference.value
+  const { kind, executable } = openWithPreference.value
   await invoke<void>("open_in_editor", { path, project, kind, executable: kind === "custom" ? executable : null })
 }
 
 /** 用指定 IDE 打开项目目录（kind 由标题栏下拉等调用方显式给定，而非默认偏好） */
-export async function openProjectInEditor(project: string, kind: EditorKind, executable = preference.value.executable) {
+export async function openProjectInEditor(
+  project: string,
+  kind: EditorKind,
+  executable = openWithPreference.value.executable,
+) {
   if (!isDesktop) throw new Error("Opening a local editor is available only in the desktop app")
   await invoke<void>("open_project_in_editor", { project, kind, executable: kind === "custom" ? executable : null })
 }

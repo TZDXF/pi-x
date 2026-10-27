@@ -65,17 +65,7 @@ fn normalize_path(path: &str) -> String {
 fn same_path(a: &str, b: &str) -> bool {
     let a = normalize_path(a);
     let b = normalize_path(b);
-    let windows = |s: &str| {
-        s.starts_with("//")
-            || (s.len() >= 3
-                && s.as_bytes()[0].is_ascii_alphabetic()
-                && &s.as_bytes()[1..3] == b":/")
-    };
-    if windows(&a) || windows(&b) {
-        a.to_lowercase() == b.to_lowercase()
-    } else {
-        a == b
-    }
+    crate::paths::eq_norm(&a, &b)
 }
 fn unique_paths(paths: Vec<String>) -> Vec<String> {
     let mut result = Vec::new();

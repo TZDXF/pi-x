@@ -273,7 +273,7 @@ fn bundle_package_metadata(bundle_dir: &Path) -> Result<(String, Vec<u8>), Strin
 /// 顺序差异，使同内容同哈希（幂等判断的基础）。
 fn content_hash(bundle_dir: &Path, package_json: &[u8]) -> Result<String, String> {
     let mut entries: Vec<(String, String)> = Vec::new();
-    collect_file_hashes(bundle_dir, bundle_dir, &mut entries)?;
+    collect_file_hashes(bundle_dir, &mut entries)?;
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = Sha256::new();
@@ -290,26 +290,19 @@ fn content_hash(bundle_dir: &Path, package_json: &[u8]) -> Result<String, String
     Ok(STANDARD.encode(hasher.finalize()))
 }
 
-fn collect_file_hashes(
-    root: &Path,
-    dir: &Path,
-    entries: &mut Vec<(String, String)>,
-) -> Result<(), String> {
-    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        if path.is_dir() {
-            collect_file_hashes(root, &path, entries)?;
-        } else {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+fn collect_file_hashes(root: &Path, entries: &mut Vec<(String, String)>) -> Result<(), String> {
+    use crate::fs_walk::{fs_walk, WalkControl, WalkOptions};
+    fs_walk(root, WalkOptions { follow_links: true, ..WalkOptions::default() }, |entry| {
+        if entry.is_file {
+            let rel = entry.path.strip_prefix(root).map_err(|e| e.to_string())?;
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let bytes = std::fs::read(&entry.path).map_err(|e| e.to_string())?;
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             entries.push((rel_str, STANDARD.encode(hasher.finalize())));
         }
-    }
-    Ok(())
+        Ok(WalkControl::Continue)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -369,15 +362,6 @@ pub(crate) fn parse_check_output(stdout: &str) -> Option<(String, Option<String>
 
 pub(crate) fn deploy_error(_endpoint: &RemoteEndpoint, e: &SshError) -> String {
     match e.kind {
-        SshErrorKind::Timeout => pix_error("sshTimeout", "连接超时，网络过慢或主机无响应。"),
-        SshErrorKind::Auth => pix_error("sshAuthFailed", "SSH 认证失败。请检查密钥或 agent。"),
-        SshErrorKind::Network => {
-            pix_error("sshConnectFailed", "无法连接到远程主机，请检查主机、端口与网络。")
-        }
-        SshErrorKind::HostKey => pix_error("sshHostKeyUnverified", "主机指纹尚未确认。"),
-        SshErrorKind::SshMissing => {
-            pix_error("sshMissing", "未找到本机 ssh 客户端。请安装 OpenSSH 客户端。")
-        }
         SshErrorKind::Remote => {
             if e.exit_code == Some(EXIT_CODE_NODE_MISSING) {
                 pix_error(
@@ -400,6 +384,7 @@ pub(crate) fn deploy_error(_endpoint: &RemoteEndpoint, e: &SshError) -> String {
                 pix_error_detail("sshRemoteDeployFailed", "远程部署失败: {detail}", &e.detail)
             }
         }
+        _ => super::errors::ssh_error_coded(e),
     }
 }
 

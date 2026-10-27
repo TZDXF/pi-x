@@ -1,5 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from "vue"
 import { useElementSize } from "@vueuse/core"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 import type { DiffSideRow } from "@/lib/reviewDiff"
 import {
   buildChangeBlocks,
@@ -166,7 +167,17 @@ export function useSplitDiffLayout(options: SplitDiffLayoutOptions) {
   const { width: viewerWidth, height: viewerHeight } = useElementSize(splitWrapEl)
   watch([layoutRows, splitActive, viewerWidth, viewerHeight, splitRatio], () => void syncHbarPad(), { flush: "post" })
 
-  let splitResizeCleanups: (() => void)[] = []
+  const splitResizeDrag = usePointerDrag<{ baseX: number; paneArea: number }>({
+    capture: false,
+    windowListeners: true,
+    cursor: "col-resize",
+    onMove: (start, event) => {
+      splitRatio.value = Math.min(
+        SPLIT_RATIO_MAX,
+        Math.max(SPLIT_RATIO_MIN, (event.clientX - start.baseX) / start.paneArea),
+      )
+    },
+  })
 
   function startSplitResize(event: PointerEvent) {
     event.preventDefault()
@@ -182,24 +193,11 @@ export function useSplitDiffLayout(options: SplitDiffLayoutOptions) {
       return
     }
     const baseX = wrap.getBoundingClientRect().left + leftGutter.offsetWidth + divider.offsetWidth / 2
-    const onMove = (moveEvent: PointerEvent) => {
-      splitRatio.value = Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, (moveEvent.clientX - baseX) / paneArea))
-    }
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove)
-      window.removeEventListener("pointerup", onUp)
-      splitResizeCleanups = splitResizeCleanups.filter(cleanup => cleanup !== onUp)
-    }
-    window.addEventListener("pointermove", onMove)
-    window.addEventListener("pointerup", onUp)
-    splitResizeCleanups.push(onUp)
+    splitResizeDrag.start(event, { baseX, paneArea })
   }
 
   onBeforeUnmount(() => {
-    for (const cleanup of splitResizeCleanups) {
-      cleanup()
-    }
-    splitResizeCleanups = []
+    splitResizeDrag.cancel()
     if (paneSyncFrame) {
       cancelAnimationFrame(paneSyncFrame)
     }

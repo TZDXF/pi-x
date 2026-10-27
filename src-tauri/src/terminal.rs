@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 use crate::errors::{pix_error, pix_error_detail};
 use crate::ssh::backend::RemoteEndpoint;
+#[cfg(test)]
 use crate::ssh::transport::AuthMethod;
 use crate::ssh::{self};
 use std::io::{Read, Write};
@@ -168,9 +169,8 @@ fn build_remote_shell_payload(project_path: &str) -> String {
     )
 }
 
-/// 远程终端分支的连接校验（契约 §3.2 与多后端契约 §5.1 第 3 条，对齐
-/// spawn_remote `commands/pi.rs` 的连接一致性比较；按契约在 terminal.rs
-/// 内私有实现）：连接 id 缺失 → `sshConnectionMissing`；不存在 →
+/// 远程终端分支复用统一连接校验（契约 §3.2 与多后端契约 §5.1 第 3 条）：
+/// 连接 id 缺失 → `sshConnectionMissing`；不存在 →
 /// `sshConnectionNotFound`；kind 或对应字段与 URI 不一致 →
 /// `sshConnectionMismatch`。
 fn resolve_remote_endpoint(
@@ -185,46 +185,12 @@ fn resolve_remote_endpoint_in(
     target: &ssh::RemoteTarget,
     ssh_connection_id: Option<&str>,
 ) -> Result<RemoteEndpoint, String> {
-    let Some(connection_id) = ssh_connection_id
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-    else {
-        return Err(pix_error("sshConnectionMissing", "远程项目没有匹配的 SSH 连接"));
-    };
-    let connection = ssh::config::find_connection_in(config_path, &connection_id)?.ok_or_else(
-        || pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除"),
-    )?;
-    // 连接 kind 与 URI 解析结果的 kind 必须一致，再按 kind 比对应字段
-    //（ssh: host/port/user；wsl: distro/user；docker: container），
-    // 两层冗余防止前端错配（多后端契约 §5.1 第 3 条）。
-    if !connection_matches_target(&connection, target) {
-        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
-    }
+    let connection = ssh::config::resolve_connection_for_target_in(config_path, target, ssh_connection_id)?;
     Ok(connection.to_remote_endpoint())
 }
 
 /// per-kind 一致性比较（与 `commands::ssh::connection_matches_remote` 同源语义；
 /// terminal.rs 按契约私有实现，避免跨模块依赖 commands 层）。
-fn connection_matches_target(
-    connection: &ssh::config::SshConnection,
-    target: &ssh::RemoteTarget,
-) -> bool {
-    use ssh::config::ConnectionKind;
-    match (&connection.kind, target) {
-        (ConnectionKind::Ssh, ssh::RemoteTarget::Ssh(t)) => {
-            connection.host == t.host && connection.port == t.port && connection.user == t.user
-        }
-        (ConnectionKind::Wsl, ssh::RemoteTarget::Wsl(t)) => {
-            connection.distro.as_deref() == Some(t.distro.as_str()) && connection.user == t.user
-        }
-        (ConnectionKind::Docker, ssh::RemoteTarget::Docker(t)) => {
-            connection.container.as_deref() == Some(t.container.as_str())
-        }
-        _ => false,
-    }
-}
-
 /// 共享 spawn 核心：PTY 装配、输出 base64 帧线程、exit 通知与会话登记，
 /// 本地与远程分支完全复用。
 fn spawn_terminal(

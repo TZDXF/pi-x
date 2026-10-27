@@ -14,6 +14,7 @@ import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import { isRemoteProject } from "@/lib/ssh"
 import type { FileChange } from "@/lib/sessionChanges"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 
 export type SidebarTabType = "review" | "files" | "terminal" | "browser"
 export interface SidebarTabItem {
@@ -114,10 +115,7 @@ watch(
     }, 240)
   },
 )
-let pointer: { id: number; x: number; width: number; target: HTMLElement } | null = null
 let observer: ResizeObserver | undefined
-let previousCursor = ""
-let previousSelect = ""
 function measure() {
   containerWidth.value = sidebar.value?.parentElement?.getBoundingClientRect().width ?? 0
   overlay.value = window.matchMedia("(max-width: 900px)").matches
@@ -130,36 +128,28 @@ function saveWidth() {
   }
 }
 function startResize(event: PointerEvent) {
-  if (event.button !== 0 || pointer) return
   measure()
-  const target = event.currentTarget as HTMLElement
-  target.focus()
-  target.setPointerCapture(event.pointerId)
-  pointer = { id: event.pointerId, x: event.clientX, width: width.value, target }
-  dragging.value = true
-  previousCursor = document.body.style.cursor
-  previousSelect = document.body.style.userSelect
-  document.body.style.cursor = "col-resize"
-  document.body.style.userSelect = "none"
-  event.preventDefault()
+  if (resizeDrag.start(event, { x: event.clientX, width: width.value })) {
+    ;(event.currentTarget as HTMLElement).focus()
+    dragging.value = true
+  }
 }
+const resizeDrag = usePointerDrag<{ x: number; width: number }>({
+  cursor: "col-resize",
+  onMove: (start, event) => {
+    preferredWidth.value = clampReviewWidth(start.width + start.x - event.clientX, containerWidth.value, overlay.value)
+  },
+  onEnd: () => {
+    dragging.value = false
+    saveWidth()
+  },
+  onCancel: () => (dragging.value = false),
+})
 function resize(event: PointerEvent) {
-  if (!pointer || pointer.id !== event.pointerId) return
-  preferredWidth.value = clampReviewWidth(
-    pointer.width + pointer.x - event.clientX,
-    containerWidth.value,
-    overlay.value,
-  )
+  resizeDrag.move(event)
 }
 function stopResize() {
-  if (!pointer) return
-  const active = pointer
-  pointer = null
-  dragging.value = false
-  if (active.target.hasPointerCapture(active.id)) active.target.releasePointerCapture(active.id)
-  document.body.style.cursor = previousCursor
-  document.body.style.userSelect = previousSelect
-  saveWidth()
+  resizeDrag.stop()
 }
 function resizeWithKeyboard(event: KeyboardEvent) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
@@ -184,6 +174,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   stopResize()
+  saveWidth()
   clearTimeout(animationTimer)
   observer?.disconnect()
   window.removeEventListener("resize", measure)

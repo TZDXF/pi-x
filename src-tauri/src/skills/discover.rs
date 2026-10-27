@@ -96,56 +96,45 @@ pub(super) fn collect_skill_entries(
     include_root_files: bool,
     out: &mut Vec<(PathBuf, &'static str)>,
 ) {
-    let mut visited = HashSet::new();
-    collect_skill_entries_inner(dir, include_root_files, 0, &mut visited, out);
-}
-
-/// Max recursion depth for discovery scans; guards against pathological nests.
-const MAX_SKILL_SCAN_DEPTH: usize = 16;
-
-fn collect_skill_entries_inner(
-    dir: &Path,
-    include_root_files: bool,
-    depth: usize,
-    visited: &mut HashSet<PathBuf>,
-    out: &mut Vec<(PathBuf, &'static str)>,
-) {
-    if depth >= MAX_SKILL_SCAN_DEPTH {
-        return;
-    }
-    // The recursion below follows symlinks/junctions (matching Pi's behavior),
-    // so track canonical paths to break cycles instead of recursing forever.
-    if !visited.insert(canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())) {
-        return;
-    }
     if dir.join("SKILL.md").is_file() {
         out.push((dir.to_path_buf(), "directory"));
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') || name == "node_modules" {
-            continue;
-        }
-        // `is_dir` follows symlinks/junctions, matching Pi's behavior.
-        if path.is_dir() {
-            collect_skill_entries_inner(&path, false, depth + 1, visited, out);
-        } else if include_root_files
-            && path
-                .extension()
-                .map(|e| e.to_ascii_lowercase() == "md")
-                .unwrap_or(false)
-        {
-            out.push((path, "file"));
-        }
-    }
+    use crate::fs_walk::{fs_walk, WalkControl, WalkOptions};
+    let _ = fs_walk(
+        dir,
+        WalkOptions {
+            follow_links: true,
+            ignore_read_errors: true,
+            ignore_root_errors: true,
+            max_depth: Some(MAX_SKILL_SCAN_DEPTH),
+            ..WalkOptions::default()
+        },
+        |entry| {
+            if entry.name.starts_with('.') || entry.name == "node_modules" {
+                return Ok(WalkControl::Skip);
+            }
+            if entry.is_dir {
+                if entry.depth + 1 >= MAX_SKILL_SCAN_DEPTH {
+                    return Ok(WalkControl::Skip);
+                }
+                if entry.path.join("SKILL.md").is_file() {
+                    out.push((entry.path, "directory"));
+                    return Ok(WalkControl::Skip);
+                }
+            } else if include_root_files
+                && entry.depth == 0
+                && entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+            {
+                out.push((entry.path, "file"));
+            }
+            Ok(WalkControl::Continue)
+        },
+    );
 }
+
+/// Max recursion depth for discovery scans; guards against pathological nests.
+const MAX_SKILL_SCAN_DEPTH: usize = 16;
 
 #[tauri::command]
 pub async fn skills_discovered_list() -> Result<Vec<DiscoveredSkill>, String> {
@@ -171,13 +160,7 @@ pub(super) fn add_explicit_locations(
     home: &Path,
     source: &'static str,
 ) {
-    let expanded = if raw == "~" {
-        home.to_path_buf()
-    } else if raw.starts_with("~/") || raw.starts_with("~\\") {
-        home.join(&raw[2..])
-    } else {
-        PathBuf::from(raw)
-    };
+    let expanded = crate::data_dir::expand_home(raw, home);
     let path = if expanded.is_absolute() {
         expanded
     } else {

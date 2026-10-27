@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import { groupModelsByProvider } from "@/lib/modelSelection"
+import { modelKey } from "@/lib/modelKey"
 
 const MODELS = [
   { provider: "anthropic", id: "claude", name: "Claude" },
@@ -22,6 +23,7 @@ function harness(props: {
   const emitted: Record<string, unknown[]> = {}
   const context = vm.createContext({
     groupModelsByProvider,
+    modelKey,
     computed: fn => ({
       get value() {
         return fn()

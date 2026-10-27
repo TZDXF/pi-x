@@ -24,15 +24,7 @@ pub async fn package_translate(
         return Err(pix_error("noTranslationModel", "翻译模型或内容为空"));
     }
     let pi = crate::pi_locate::detect(config.pi_path).await;
-    let mut cmd = match pi.launcher {
-        Some(crate::pi_locate::Launcher::Node { node, script }) => {
-            let mut c = tokio::process::Command::new(node);
-            c.arg(script);
-            c
-        }
-        Some(crate::pi_locate::Launcher::Binary { path }) => tokio::process::Command::new(path),
-        None => return Err(pix_error("piNotFound", "未找到 pi，无法执行翻译")),
-    };
+    let mut cmd = crate::pi_locate::command_for(&pi)?;
     cmd.args([
         "--print", "--mode", "json", "--no-session", "--no-tools", "--no-extensions",
         "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
@@ -50,8 +42,6 @@ pub async fn package_translate(
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::null())
     .kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000);
 
     let output = tokio::time::timeout(std::time::Duration::from_secs(120), async {
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;

@@ -31,7 +31,7 @@ use super::payload::{wrap_payload, PROBE_SCRIPT};
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Windows 下隐藏传输客户端（ssh/wsl.exe/docker.exe）控制台窗口。
-pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) use crate::process::CREATE_NO_WINDOW;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshEndpoint {

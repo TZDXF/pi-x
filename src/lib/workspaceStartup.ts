@@ -8,7 +8,7 @@ import { requireSshConnectionId, loadTrustStatus, saveTrustDecision } from "@/li
 import { encodeCodedError } from "@/lib/backendError"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
 
 type Api = typeof import("@/api/piClient")
 type Conversations = typeof import("@/stores/conversations")

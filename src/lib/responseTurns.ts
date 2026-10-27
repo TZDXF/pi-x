@@ -1,3 +1,4 @@
+import { modelKey } from "@/lib/modelKey"
 import type {
   ErrorBlock,
   Block,
@@ -42,7 +43,10 @@ export function responseTurns(
       if (
         hasUser &&
         target &&
-        !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)
+        !(
+          previous?.kind === "model_change" &&
+          modelKey({ provider: previous.provider, id: previous.modelId }) === target
+        )
       ) {
         const separator = target.indexOf("/")
         result.push({

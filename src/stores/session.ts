@@ -54,7 +54,8 @@ let entrySeq = 0
 const nextId = () => ++entrySeq
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
+import { modelKey as formatModelKey, parseModelKey } from "@/lib/modelKey"
 
 export const createSessionStore = (runtimeId = "default") =>
   defineStore(`session:${runtimeId}`, () => {
@@ -797,15 +798,16 @@ export const createSessionStore = (runtimeId = "default") =>
       const start = nowMs()
       // Snapshot both choices: setModel may update Pi's effective thinking level.
       const savedModel = remembered.value.model
-      const modelKey = desiredModelKey.value ?? (savedModel ? `${savedModel.provider}/${savedModel.id}` : null)
+      const modelKey = desiredModelKey.value ?? (savedModel ? formatModelKey(savedModel) : null)
       const level = desiredThinkingLevel.value ?? remembered.value.thinking
       desiredModelKey.value = null
       desiredThinkingLevel.value = null
-      if (modelKey && `${state.value?.model?.provider}/${state.value?.model?.id}` !== modelKey) {
-        const [provider, ...rest] = modelKey.split("/")
-        await setModel(provider, rest.join("/"), false).catch(e =>
-          console.warn("[pi] remembered model unavailable:", e),
-        )
+      if (modelKey && (!state.value?.model || formatModelKey(state.value.model) !== modelKey)) {
+        const model = parseModelKey(modelKey)
+        if (model)
+          await setModel(model.provider, model.id, false).catch(e =>
+            console.warn("[pi] remembered model unavailable:", e),
+          )
       }
       await refreshThinkingLevels()
       if (level) {

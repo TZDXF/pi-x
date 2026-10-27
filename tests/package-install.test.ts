@@ -2,6 +2,7 @@ import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
+import { debounce } from "@/lib/timing"
 
 function harness(currentProject = "C:/chat-project") {
   const source = readFileSync(new URL("../src/components/settings/packages/usePackages.ts", import.meta.url), "utf8")
@@ -13,6 +14,7 @@ function harness(currentProject = "C:/chat-project") {
   const calls = []
   let fail = false
   const context = vm.createContext({
+    debounce,
     ref: value => ({ value }),
     computed: getter => ({
       get value() {

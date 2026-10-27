@@ -2,6 +2,7 @@ import { computed, ref, type Ref } from "vue"
 import { getModelsConfig, getPiSettings } from "@/api/piClient"
 import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
 import { ALL_THINKING_LEVELS, supportedThinkingLevels, clampThinkingLevel } from "@/lib/thinkingLevels"
+import { modelKey } from "@/lib/modelKey"
 
 /** pi's DEFAULT_THINKING_LEVEL (core/defaults.js). */
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
@@ -53,9 +54,7 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
   const desiredModelKey = ref<string | null>(null)
   const piDefaultModelKey = ref<string | null>(null)
   const offlineDefaultModelKey = computed(() =>
-    remembered.value.model
-      ? `${remembered.value.model.provider}/${remembered.value.model.id}`
-      : piDefaultModelKey.value,
+    remembered.value.model ? modelKey(remembered.value.model) : piDefaultModelKey.value,
   )
   const offlineDefaultThinking = ref<ThinkingLevel | null>(null)
   const rpcThinkingLevels = ref<ThinkingLevel[]>(["off"])
@@ -87,8 +86,7 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
     if (state.value) return rpcThinkingLevels.value
     const key = desiredModelKey.value ?? offlineDefaultModelKey.value
     const saved = remembered.value.model
-    if (saved && key === `${saved.provider}/${saved.id}` && remembered.value.levels?.length)
-      return remembered.value.levels
+    if (saved && key === modelKey(saved) && remembered.value.levels?.length) return remembered.value.levels
     return (key && offlineThinkingLevels.value[key]) || ["off"]
   })
   const thinkingLevel = computed<ThinkingLevel>(() => {
@@ -105,7 +103,7 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
   /** Record a model choice made while pi is not running; applied on init. */
   function setDesiredModel(key: string | null) {
     desiredModelKey.value = key
-    const model = models.value.find(m => `${m.provider}/${m.id}` === key)
+    const model = models.value.find(m => modelKey(m) === key)
     if (model) remember(model, undefined, supportedThinkingLevels(model))
   }
 
@@ -137,7 +135,7 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
             maxTokens: m.maxTokens ?? 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           })
-          levels[`${provider}/${m.id}`] = supportedThinkingLevels(m)
+          levels[modelKey({ provider, id: m.id })] = supportedThinkingLevels(m)
         }
       }
       if (version !== offlineLoadVersion || state.value) return
@@ -147,9 +145,9 @@ export function createModelSelection(state: Ref<SessionState | null>, models: Re
       offlineThinkingLevels.value = levels
       piDefaultModelKey.value =
         settings.defaultProvider && settings.defaultModel
-          ? `${settings.defaultProvider}/${settings.defaultModel}`
+          ? modelKey({ provider: settings.defaultProvider, id: settings.defaultModel })
           : offline[0]
-            ? `${offline[0].provider}/${offline[0].id}`
+            ? modelKey(offline[0])
             : null
       const key = desiredModelKey.value ?? offlineDefaultModelKey.value
       offlineDefaultThinking.value =

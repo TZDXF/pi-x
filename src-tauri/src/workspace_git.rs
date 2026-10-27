@@ -9,7 +9,7 @@ async fn git(project: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(project).args(args);
     #[cfg(windows)]
-    command.creation_flags(0x08000000);
+    command.creation_flags(crate::process::CREATE_NO_WINDOW);
     let output = command
         .output()
         .await

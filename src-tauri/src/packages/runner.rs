@@ -86,11 +86,6 @@ pub(crate) async fn run_pi(
     args: &[String],
     cwd: Option<&str>,
 ) -> Result<String, String> {
-    use pi_locate::Launcher;
-    use tokio::process::Command;
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
     let cfg = commands::app_config_get(app.clone())?;
     let info = pi_locate::detect(cfg.pi_path).await;
     if !info.found {
@@ -100,29 +95,11 @@ pub(crate) async fn run_pi(
         ));
     }
 
-    let mut cmd = match info.launcher {
-        Some(Launcher::Node { node, script }) => {
-            let mut c = Command::new(node);
-            c.arg(script);
-            c
-        }
-        Some(Launcher::Binary { path }) => Command::new(path),
-        None => {
-            let path = info
-                .path
-                .clone()
-                .ok_or_else(|| pix_error("piLaunchUnknown", "无法确定 pi 启动方式"))?;
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(path);
-            c
-        }
-    };
+    let mut cmd = pi_locate::command_for(&info)?;
     cmd.args(args);
     if let Some(dir) = cwd.filter(|s| !s.trim().is_empty()) {
         cmd.current_dir(dir);
     }
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());

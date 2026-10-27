@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 import ts from "typescript"
 import * as vue from "vue"
 import { createTerminalOutputRouter } from "@/lib/terminalOutput"
@@ -75,6 +76,7 @@ function harness(options: {
   const context = vm.createContext({
     ...vue,
     createTerminalOutputRouter,
+    usePointerDrag,
     terminalConnectionId,
     sshConnectionList: async () => options.connections,
     tBackendError: (error: unknown) => String(error).replace(/^Error: /, ""),

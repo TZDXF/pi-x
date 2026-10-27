@@ -2,7 +2,18 @@ import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
 
-const source = readFileSync(new URL("../src/lib/developerMode.ts", import.meta.url), "utf8")
+const preferenceJs = ts.transpile(
+  readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8").replace(
+    'from "vue"',
+    `from "${import.meta.resolve("vue")}"`,
+  ),
+  { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+)
+const preferenceUrl = `data:text/javascript;base64,${Buffer.from(preferenceJs).toString("base64")}`
+const source = readFileSync(new URL("../src/lib/developerMode.ts", import.meta.url), "utf8").replace(
+  'from "@/lib/localPreference"',
+  `from "${preferenceUrl}"`,
+)
 const js = ts
   .transpile(source, { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 })
   .replace('from "vue"', `from "${import.meta.resolve("vue")}"`)

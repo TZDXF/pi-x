@@ -6,6 +6,7 @@ const panel = read("../src/components/browser/BrowserPanel.vue")
 const navigation = read("../src/composables/browser/useBrowserNavigation.ts")
 const bridge = read("../src/composables/browser/useBrowserBridge.ts")
 const drawers = read("../src/composables/browser/useBrowserDrawers.ts")
+const pointerDrag = read("../src/composables/usePointerDrag.ts")
 const drawerShell = read("../src/components/browser/BrowserDrawer.vue")
 
 // Structure/wiring guards only. Deterministic runtime coverage lives in
@@ -20,7 +21,7 @@ test("browser drawers wire their shared resize shell to the drawer controller", 
   }
   expect(panel).toMatch(/@resize-move="onDrawerResizeMove"/)
   expect(panel).toMatch(/@resize-end="onDrawerResizeEnd"/)
-  expect(drawers).toMatch(/setPointerCapture/)
+  expect(pointerDrag).toMatch(/setPointerCapture/)
   expect(drawers).toMatch(/DRAWER_MIN_HEIGHT/)
   expect(drawers).toMatch(/stageRef\.value\?\.clientHeight/)
   expect(drawerShell).toMatch(/cursor-row-resize touch-none/)

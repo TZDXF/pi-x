@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
-import { ref } from "vue"
+import { effectScope, ref } from "vue"
 import { useBrowserPageAnnotations } from "@/composables/browser/useBrowserPageAnnotations"
 import { useBrowserConsole } from "@/composables/browser/useBrowserConsole"
 import { useBrowserDrawers } from "@/composables/browser/useBrowserDrawers"
@@ -99,7 +99,9 @@ test("console keeps the newest 200 entries and IDs remain monotonic after clear"
 
 test("drawers toggle exclusively, capture pointer and clamp to page reserve/minimum", () => {
   const stage = ref({ clientHeight: 400 } as HTMLElement)
-  const drawers = useBrowserDrawers(stage)
+  const scope = effectScope()
+  const drawers = scope.run(() => useBrowserDrawers(stage))!
+  vi.stubGlobal("document", { body: { style: { cursor: "", userSelect: "" } } })
   drawers.toggleDrawer("annotations")
   drawers.toggleDrawer("console")
   expect(drawers.showAnnotations.value).toBe(false)
@@ -109,17 +111,19 @@ test("drawers toggle exclusively, capture pointer and clamp to page reserve/mini
   const capture = vi.fn()
   drawers.onDrawerResizeStart("annotations", {
     preventDefault: vi.fn(),
+    button: 0,
     clientY: 300,
     pointerId: 7,
-    currentTarget: { setPointerCapture: capture },
+    currentTarget: { setPointerCapture: capture, hasPointerCapture: () => false },
   } as unknown as PointerEvent)
   expect(capture).toHaveBeenCalledWith(7)
-  drawers.onDrawerResizeMove({ clientY: -100 } as PointerEvent)
+  drawers.onDrawerResizeMove({ clientY: -100, pointerId: 7 } as PointerEvent)
   expect(drawers.drawerHeights.value.annotations).toBe(304)
-  drawers.onDrawerResizeMove({ clientY: 1000 } as PointerEvent)
+  drawers.onDrawerResizeMove({ clientY: 1000, pointerId: 7 } as PointerEvent)
   expect(drawers.drawerHeights.value.annotations).toBe(96)
   drawers.onDrawerResizeEnd()
   drawers.onDrawerResizeMove({ clientY: 0 } as PointerEvent)
   expect(drawers.drawerHeights.value.annotations).toBe(96)
   expect(drawers.drawerHeights.value.console).toBe(160)
+  scope.stop()
 })

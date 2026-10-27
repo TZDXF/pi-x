@@ -5,6 +5,7 @@ import { sessionFor, activeRuntimeId } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { searchFiles, type FileHit } from "@/api/piClient"
 import { isRemoteProject } from "@/lib/ssh"
+import { debounce } from "@/lib/timing"
 import {
   completionToken,
   insertCompletion,
@@ -65,7 +66,25 @@ const active = ref(0),
 const files = ref<FileHit[]>([])
 let editor: HTMLElement | null = null
 let sequence = 0
-let timer: ReturnType<typeof setTimeout> | undefined
+const fileSearch = debounce(async (query: string, searchRoots: string[], project: string, seq: number) => {
+  try {
+    const results = await Promise.allSettled(searchRoots.map(root => searchFiles(root, query)))
+    if (seq === sequence) {
+      const hits = mergeWorkspaceFiles(
+        project,
+        searchRoots,
+        results.map(result => (result.status === "fulfilled" ? result.value : null)),
+      )
+      files.value = hits
+      if (!hits.length && results.every(result => result.status === "rejected"))
+        throw (results[0] as PromiseRejectedResult).reason
+    }
+  } catch (e) {
+    if (seq === sequence) error.value = String(e)
+  } finally {
+    if (seq === sequence) loading.value = false
+  }
+}, 150)
 const initiating = ref(false)
 const composing = ref(false)
 let starting: Promise<boolean> | null = null
@@ -159,7 +178,7 @@ watch([open, active, items, loading], () =>
 async function load(retry = false) {
   if (retry) commandsLoaded = false
   const seq = ++sequence
-  clearTimeout(timer)
+  fileSearch.cancel()
   files.value = []
   error.value = ""
   loading.value = false
@@ -175,25 +194,7 @@ async function load(retry = false) {
       loading.value = false
       return
     }
-    timer = setTimeout(async () => {
-      try {
-        const results = await Promise.allSettled(searchRoots.map(root => searchFiles(root, current.query)))
-        if (seq === sequence) {
-          const hits = mergeWorkspaceFiles(
-            project,
-            searchRoots,
-            results.map(result => (result.status === "fulfilled" ? result.value : null)),
-          )
-          files.value = hits
-          if (!hits.length && results.every(result => result.status === "rejected"))
-            throw (results[0] as PromiseRejectedResult).reason
-        }
-      } catch (e) {
-        if (seq === sequence) error.value = String(e)
-      } finally {
-        if (seq === sequence) loading.value = false
-      }
-    }, 150)
+    fileSearch(current.query, searchRoots, project, seq)
   } else {
     try {
       if (!props.connected) {
@@ -287,7 +288,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   ++sequence
-  clearTimeout(timer)
+  fileSearch.cancel()
   window.removeEventListener("resize", updatePanelPosition)
   window.removeEventListener("scroll", updatePanelPosition, true)
 })

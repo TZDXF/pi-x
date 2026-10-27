@@ -17,8 +17,9 @@ pub mod backend;
 pub mod config;
 pub mod deploy;
 pub mod docker;
+pub mod errors;
 pub mod identity;
- pub mod payload;
+pub mod payload;
 pub mod transport;
 pub mod wsl;
 
@@ -40,14 +41,16 @@ pub use deploy::{
     PI_DEPLOY_SCRIPT_TEMPLATE, REMOTE_DEPLOY_INFO, REMOTE_PI_BIN, REMOTE_PI_DIR,
 };
 #[allow(unused_imports)]
+pub use docker::{parse_docker_ps, DockerContainerInfo};
+#[allow(unused_imports)]
 pub use identity::{
     build_docker_uri, build_remote_uri, build_ssh_uri, build_wsl_uri, docker_identity_key,
     identity_key, is_remote_uri, is_ssh_uri, normalize_host, normalize_ssh_path,
     parse_docker_identity_key, parse_docker_uri, parse_identity_key, parse_remote_uri,
-    parse_ssh_uri, parse_wsl_identity_key, parse_wsl_uri, validate_docker_container,
-    validate_user, validate_wsl_distro, DockerTarget, RemoteTarget, SshTarget, WslTarget,
-    DEFAULT_PORT, DOCKER_IDENTITY_KEY_PREFIX, DOCKER_URI_PREFIX, IDENTITY_KEY_PREFIX,
-    SSH_URI_PREFIX, WSL_IDENTITY_KEY_PREFIX, WSL_URI_PREFIX,
+    parse_ssh_uri, parse_wsl_identity_key, parse_wsl_uri, validate_docker_container, validate_user,
+    validate_wsl_distro, DockerTarget, RemoteTarget, SshTarget, WslTarget, DEFAULT_PORT,
+    DOCKER_IDENTITY_KEY_PREFIX, DOCKER_URI_PREFIX, IDENTITY_KEY_PREFIX, SSH_URI_PREFIX,
+    WSL_IDENTITY_KEY_PREFIX, WSL_URI_PREFIX,
 };
 #[allow(unused_imports)]
 pub use payload::{
@@ -60,10 +63,8 @@ pub use payload::{
 pub use transport::{
     build_ssh_args, build_ssh_args_interactive, build_ssh_command, classify_failure,
     parse_probe_output, remote_exec, remote_exec_stream, remote_exec_with_stdin, remote_probe,
-    ssh_program, ssh_program_parts, split_program_spec, ExecOutput, RemoteProbe, SshEndpoint,
+    split_program_spec, ssh_program, ssh_program_parts, ExecOutput, RemoteProbe, SshEndpoint,
     SshError, SshErrorKind, SshTransport, SystemSsh, PROBE_TIMEOUT,
 };
 #[allow(unused_imports)]
 pub use wsl::{decode_wsl_output, parse_wsl_list, WslDistroInfo};
-#[allow(unused_imports)]
-pub use docker::{parse_docker_ps, DockerContainerInfo};

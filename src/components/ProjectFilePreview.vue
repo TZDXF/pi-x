@@ -8,6 +8,7 @@ import { invoke } from "@/api/transport"
 import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 import { isMarkdownExt } from "@/lib/fileKind"
 import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
@@ -160,49 +161,44 @@ function focusDraft() {
 }
 // ---- gutter 拖拽多行批注（同 ZCode 的 gutter utility）：按住拖动只实时高亮范围，
 // ---- 松手才在范围末行下方打开草稿卡；单击（原地松开）即单行批注。 ----
-let dragAnchorLine: number | null = null
 const dragRange = ref<CodeCommentRange | null>(null)
-function beginGutterDrag(line: number) {
-  dragAnchorLine = line
+const gutterDrag = usePointerDrag<number>({
+  capture: false,
+  windowListeners: true,
+  onMove: (anchor, event) => {
+    // 拖动时取指针下的 [data-line] 行，把高亮范围实时扩展为 anchor→当前行。
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-line]") as HTMLElement | null
+    if (!row || !codeRoot.value?.contains(row)) return
+    const line = Number(row.dataset.line)
+    if (!Number.isFinite(line) || line < 1) return
+    dragRange.value = { start: Math.min(anchor, line), end: Math.max(anchor, line) }
+  },
+  onEnd: () => {
+    const range = dragRange.value
+    dragRange.value = null
+    if (!range) return
+    commentOpen.value = true
+    commentRange.value = range
+    commentSelected.value = codeLines.value
+      .slice(range.start - 1, range.end)
+      .join("\n")
+      .slice(0, MAX_SELECTED_TEXT_LENGTH)
+    document.addEventListener("selectionchange", onSelectionChange)
+    focusDraft()
+  },
+  onCancel: () => (dragRange.value = null),
+})
+function beginGutterDrag(line: number, event: PointerEvent) {
   dragRange.value = { start: line, end: line }
-  document.addEventListener("mousemove", onGutterDrag)
-  document.addEventListener("mouseup", endGutterDrag)
-}
-function onGutterDrag(event: MouseEvent) {
-  if (dragAnchorLine === null) return
-  // 拖动时取指针下的 [data-line] 行，把高亮范围实时扩展为 anchor→当前行。
-  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-line]") as HTMLElement | null
-  if (!row || !codeRoot.value?.contains(row)) return
-  const line = Number(row.dataset.line)
-  if (!Number.isFinite(line) || line < 1) return
-  dragRange.value = { start: Math.min(dragAnchorLine, line), end: Math.max(dragAnchorLine, line) }
-}
-function endGutterDrag() {
-  if (dragAnchorLine === null) return
-  dragAnchorLine = null
-  document.removeEventListener("mousemove", onGutterDrag)
-  document.removeEventListener("mouseup", endGutterDrag)
-  const range = dragRange.value
-  dragRange.value = null
-  if (!range) return
-  commentOpen.value = true
-  commentRange.value = range
-  commentSelected.value = codeLines.value
-    .slice(range.start - 1, range.end)
-    .join("\n")
-    .slice(0, MAX_SELECTED_TEXT_LENGTH)
-  document.addEventListener("selectionchange", onSelectionChange)
-  focusDraft()
+  gutterDrag.start(event, line)
 }
 function closeComment() {
   commentOpen.value = false
   commentText.value = ""
   commentRange.value = null
   commentSelected.value = ""
-  dragAnchorLine = null
+  gutterDrag.cancel()
   dragRange.value = null
-  document.removeEventListener("mousemove", onGutterDrag)
-  document.removeEventListener("mouseup", endGutterDrag)
   document.removeEventListener("selectionchange", onSelectionChange)
 }
 function confirmComment() {
@@ -366,7 +362,7 @@ onBeforeUnmount(() => {
                     class="absolute top-1/2 right-1.5 flex h-4.5 w-4.5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border bg-background text-muted-foreground opacity-0 shadow-xs transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
                     :title="t('projectFiles.annotateAdd')"
                     :aria-label="t('projectFiles.annotateAdd')"
-                    @mousedown.prevent="beginGutterDrag(index + 1)"
+                    @pointerdown.prevent="beginGutterDrag(index + 1, $event)"
                   >
                     <Plus class="size-3" />
                   </button>

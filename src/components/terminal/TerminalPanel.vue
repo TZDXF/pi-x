@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { invoke, listen } from "@/api/transport"
 import { createTerminalOutputRouter, type TerminalOutput } from "@/lib/terminalOutput"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 import { terminalConnectionId } from "@/lib/sshTrust"
 import { sshConnectionList } from "@/api/piClient"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
@@ -248,22 +249,17 @@ watch(terminalTheme, t => {
 })
 
 // ---- divider drag resize ----
-let dragStart: { y: number; height: number } | null = null
-function onDividerDown(e: MouseEvent) {
-  dragStart = { y: e.clientY, height: panelHeight.value }
-  window.addEventListener("mousemove", onDividerMove)
-  window.addEventListener("mouseup", onDividerUp)
-}
-function onDividerMove(e: MouseEvent) {
-  if (!dragStart) return
-  const max = Math.round(window.innerHeight * 0.7)
-  panelHeight.value = Math.min(max, Math.max(150, dragStart.height - (e.clientY - dragStart.y)))
-}
-function onDividerUp() {
-  dragStart = null
-  window.removeEventListener("mousemove", onDividerMove)
-  window.removeEventListener("mouseup", onDividerUp)
-  fitActive()
+const dividerDrag = usePointerDrag<{ y: number; height: number }>({
+  cursor: "row-resize",
+  windowListeners: true,
+  onMove: (start, event) => {
+    const max = Math.round(window.innerHeight * 0.7)
+    panelHeight.value = Math.min(max, Math.max(150, start.height - (event.clientY - start.y)))
+  },
+  onEnd: fitActive,
+})
+function onDividerDown(event: PointerEvent) {
+  dividerDrag.start(event, { y: event.clientY, height: panelHeight.value })
 }
 
 watch(
@@ -318,8 +314,7 @@ onBeforeUnmount(() => {
   for (const id of ids) void invoke("term_kill", { id }).catch(() => {})
   unlistenExit?.()
   unlistenOutput?.()
-  window.removeEventListener("mousemove", onDividerMove)
-  window.removeEventListener("mouseup", onDividerUp)
+  dividerDrag.cancel()
 })
 
 defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
@@ -335,7 +330,7 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
     <div
       v-if="!embedded"
       class="border-border hover:bg-primary/10 relative -mt-1 h-2 shrink-0 cursor-row-resize border-t border-transparent"
-      @mousedown="onDividerDown"
+      @pointerdown="onDividerDown"
       @dblclick="onPanelDblClick"
     />
 

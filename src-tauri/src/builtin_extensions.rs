@@ -27,24 +27,7 @@ fn materialize_in(dir: &std::path::Path, name: &str, source: &str) -> Result<Pat
     let path = dir.join(name);
     let current = std::fs::read_to_string(&path).ok();
     if current.as_deref() != Some(source) {
-        let temporary = dir.join(format!("{name}.{}.tmp", uuid::Uuid::new_v4()));
-        std::fs::write(&temporary, source).map_err(|e| {
-            pix_error_detail(
-                "builtinExtensionWriteFailed",
-                "无法写入内置插件: {detail}",
-                e,
-            )
-        })?;
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| {
-                pix_error_detail(
-                    "builtinExtensionWriteFailed",
-                    "无法写入内置插件: {detail}",
-                    e,
-                )
-            })?;
-        }
-        std::fs::rename(&temporary, &path).map_err(|e| {
+        crate::atomic_write::write(&path, source.as_bytes()).map_err(|e| {
             pix_error_detail(
                 "builtinExtensionWriteFailed",
                 "无法写入内置插件: {detail}",

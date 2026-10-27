@@ -7,6 +7,10 @@ const source = readFileSync(new URL("../src/lib/terminalTheme.ts", import.meta.u
   .replace(/^import .*$/gm, "")
   .replace(/if \(import\.meta\.hot\) \{[\s\S]*$/, "")
   .replace(/export /g, "")
+const preferenceSource = readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8")
+  .replace(/^import .*$/gm, "")
+  .replace(/if \(import\.meta\.hot\).*$/gm, "")
+  .replace(/export /g, "")
 
 function harness(stored: string | null) {
   let value = stored
@@ -28,7 +32,8 @@ function harness(stored: string | null) {
   })
   vm.runInContext(
     ts.transpile(
-      source +
+      preferenceSource +
+        source +
         "\nglobalThis.api = { terminalTheme, TERMINAL_PRESETS, setTerminalPreset, setTerminalColor, resetTerminalTheme, terminalPresetLabelKey };",
       { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
     ),

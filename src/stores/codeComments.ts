@@ -1,5 +1,6 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
+import { createId } from "@/lib/uuid"
 
 /** 已确认、等待随下一条消息发出的代码批注。 */
 export interface PendingCodeComment {
@@ -15,10 +16,9 @@ export interface PendingCodeComment {
 
 const MAX_COMMENTS = 20
 
-/** 对齐 ZCode 的 attachment id 生成：优先 crypto.randomUUID，非安全上下文退回时间戳随机串。 */
+/** 使用共享 UUID 生成器，保留批注 id 前缀以便诊断。 */
 function createCodeCommentId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID()
-  return `code-comment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return createId("code-comment-")
 }
 
 /**

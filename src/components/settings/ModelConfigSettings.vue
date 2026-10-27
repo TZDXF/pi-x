@@ -8,6 +8,7 @@ import { useUiStore } from "@/stores/conversations"
 import ConversationModelSelect from "@/components/ConversationModelSelect.vue"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
+import { modelKey, parseModelKey } from "@/lib/modelKey"
 
 const { t } = useI18n()
 const ui = useUiStore()
@@ -33,19 +34,18 @@ const models = computed(() => {
 })
 const modelGroups = computed(() => groupModelsByProvider(models.value))
 function splitKey(key: string): [string, string] | null {
-  const separator = key.indexOf("/")
-  if (separator < 1 || separator === key.length - 1) return null
-  return [key.slice(0, separator), key.slice(separator + 1)]
+  const model = parseModelKey(key)
+  return model ? [model.provider, model.id] : null
 }
 function parseKey(key: string) {
   const parts = splitKey(key)
   return parts ? { provider: parts[0], modelId: parts[1] } : undefined
 }
 function joinKey(model: { provider: string; id: string }) {
-  return `${model.provider}/${model.id}`
+  return modelKey(model)
 }
 function joinRef(model: { provider: string; modelId: string }) {
-  return `${model.provider}/${model.modelId}`
+  return modelKey({ provider: model.provider, id: model.modelId })
 }
 // "off" and "default" are reserved choices; anything else is a provider/model key.
 function modelChoiceKey(choice: string) {

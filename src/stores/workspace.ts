@@ -28,7 +28,7 @@ import type { ProjectGroup } from "@/lib/workspaceState"
 export type { ProjectGroup } from "@/lib/workspaceState"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
  *  the resulting mtime; lets the session watcher tell its own writes from

@@ -4,6 +4,7 @@
  * {text}（文件来源保留 {path, text}），内部身份字段不随消息发出。
  * 本文件保持无依赖以便单元测试直接加载。
  */
+import { createId } from "@/lib/uuid"
 
 export type ConversationSelectionSource = "user" | "assistant"
 
@@ -34,10 +35,9 @@ export const CONVERSATION_SELECTION_MAX_TOTAL_LENGTH = 16_000
 
 export type ConversationSelectionLimitReason = "count" | "single" | "total"
 
-/** 对齐 ZCode 的 attachment id 生成：优先 crypto.randomUUID，非安全上下文退回时间戳随机串。 */
+/** 使用共享 UUID 生成器，保留划词引用 id 前缀以便诊断。 */
 export function createConversationSelectionId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID()
-  return `conversation-selection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return createId("conversation-selection-")
 }
 
 function dedupeKey(selection: ConversationSelectionText) {

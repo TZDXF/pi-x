@@ -122,7 +122,7 @@ pub fn docker_exec_error(e: &SshError) -> String {
             "dockerMissing",
             "未找到 docker 命令。请安装并启动 Docker Desktop。",
         ),
-        "timeout" => pix_error("sshTimeout", "连接超时，网络过慢或主机无响应。"),
+        "timeout" => super::errors::timeout_error(),
         "dockerDaemonDown" => pix_error(
             "dockerDaemonDown",
             "Docker 守护进程未响应。请确认 Docker Desktop 已启动。",

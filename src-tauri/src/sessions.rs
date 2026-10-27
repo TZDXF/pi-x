@@ -420,9 +420,7 @@ pub(crate) fn read_presentation(file: &Path) -> Result<Presentation, String> {
 // Readers always see a complete JSON document, even while another client lists sessions.
 pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Result<(), String> {
     let bytes = serde_json::to_vec(presentation).map_err(|e| e.to_string())?;
-    let temporary = file.with_extension(format!("pix.{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
+    crate::atomic_write::write(&file.with_extension("pix.json"), &bytes).map_err(|e| e.to_string())
 }
 /// PiX 纳管会话的标记：会话的 .pix.json sidecar 存在。
 fn has_sidecar(path: &Path) -> bool {

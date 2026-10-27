@@ -3,8 +3,6 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
-
 use crate::{
     errors::{pix_error, pix_error_detail},
     trust,
@@ -207,42 +205,32 @@ const IGNORED_DIRS: [&str; 4] = ["node_modules", ".git", ".pi", "dist"];
 const MAX_WALK_DEPTH: usize = 16;
 
 pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
-    let mut visited = HashSet::new();
-    walk_files_inner(dir, root, 0, &mut visited, out);
-}
-
-fn walk_files_inner(
-    dir: &std::path::Path,
-    root: &std::path::Path,
-    depth: usize,
-    visited: &mut HashSet<std::path::PathBuf>,
-    out: &mut Vec<String>,
-) {
-    if depth >= MAX_WALK_DEPTH {
-        return;
-    }
-    // `is_dir` below follows symlinks/junctions, so track canonical paths to
-    // break cycles instead of recursing forever.
-    let key = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    if !visited.insert(key) {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        let path = e.path();
-        if path.is_dir() {
-            if !IGNORED_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
-                walk_files_inner(&path, root, depth + 1, visited, out);
+    use crate::fs_walk::{fs_walk, WalkControl, WalkOptions};
+    let _ = fs_walk(
+        dir,
+        WalkOptions {
+            follow_links: true,
+            ignore_read_errors: true,
+            ignore_root_errors: true,
+            max_depth: Some(MAX_WALK_DEPTH),
+            ..WalkOptions::default()
+        },
+        |entry| {
+            if entry.is_dir {
+                return Ok(if IGNORED_DIRS.contains(&entry.name.as_str()) || entry.name.starts_with('.') {
+                    WalkControl::Skip
+                } else {
+                    WalkControl::Continue
+                });
             }
-        } else if name.starts_with('.') {
-            continue;
-        } else if let Ok(rel) = path.strip_prefix(root) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
-        }
-    }
+            if !entry.name.starts_with('.') {
+                if let Ok(rel) = entry.path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            Ok(WalkControl::Continue)
+        },
+    );
 }
 
 /// Read the `pi` manifest entry of a package's package.json, when present.
