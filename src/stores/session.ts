@@ -500,7 +500,16 @@ export const createSessionStore = (runtimeId = "default") =>
         if (!rewound.success) throw new Error(rewound.error ?? i18n.global.t("chat.editStopFailed"))
         const replaceIndex = entries.value.findIndex(entry => entry.id === original.id)
         if (replaceIndex < 0) throw new Error(i18n.global.t("chat.editSessionChanged"))
-        entries.value.splice(replaceIndex)
+        const removed = entries.value.splice(replaceIndex)
+        const removedCalls = new Set<string>()
+        for (const entry of removed) {
+          if (entry.kind !== "assistant") continue
+          for (const block of entry.blocks) if (block.type === "toolCall") removedCalls.add(block.callId)
+        }
+        for (const block of partialBlocks.value ?? []) if (block.type === "toolCall") removedCalls.add(block.callId)
+        for (const id of removedCalls) delete runs.value[id]
+        fileChangeArtifacts.value = fileChangeArtifacts.value.filter(artifact => !removedCalls.has(artifact.toolCallId))
+        revertedFileChangeCalls.value = new Set([...revertedFileChangeCalls.value].filter(id => !removedCalls.has(id)))
         // Cached history also feeds the file-change summary; omit the old turn.
         let historyEnd = historyMessages.value.length - 1
         while (historyEnd >= 0 && historyMessages.value[historyEnd]?.role !== "user") historyEnd--
@@ -720,8 +729,9 @@ export const createSessionStore = (runtimeId = "default") =>
     let stateRequestVersion = 0
     async function refreshState() {
       const version = ++stateRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<SessionState & { sessionFile?: string }>({ type: "get_state" })
-      if (version !== stateRequestVersion) return
+      if (version !== stateRequestVersion || conversation !== conversationVersion) return
       if (res.success && res.data) {
         state.value = res.data
         sessionFile.value = res.data.sessionFile ?? null
@@ -749,14 +759,19 @@ export const createSessionStore = (runtimeId = "default") =>
         .catch(e => console.warn("[pi] configured modes:", e))
     }
 
+    let statsRequestVersion = 0
     async function refreshStats() {
+      const version = ++statsRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<SessionStats>({ type: "get_session_stats" })
-      if (res.success && res.data) stats.value = res.data
+      if (version === statsRequestVersion && conversation === conversationVersion && res.success && res.data)
+        stats.value = res.data
     }
 
     let commandRequestVersion = 0
     async function refreshCommands() {
       const version = ++commandRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{
         commands: Array<
           CommandInfo & {
@@ -764,7 +779,7 @@ export const createSessionStore = (runtimeId = "default") =>
           }
         >
       }>({ type: "get_commands" })
-      if (version !== commandRequestVersion) return
+      if (version !== commandRequestVersion || conversation !== conversationVersion) return
       if (!res.success) throw new Error(res.error ?? "Failed to load commands")
       // Pi nests the resource file path in `sourceInfo` instead of a top-level
       // `path`; flatten it so the loaded-skills list and "import loaded" work.
@@ -784,14 +799,22 @@ export const createSessionStore = (runtimeId = "default") =>
       })
     }
 
+    let modelsRequestVersion = 0
     async function refreshModels() {
+      const version = ++modelsRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{ models: Model[] }>({ type: "get_available_models" })
-      if (res.success && res.data) models.value = res.data.models ?? []
+      if (version === modelsRequestVersion && conversation === conversationVersion && res.success && res.data)
+        models.value = res.data.models ?? []
     }
 
+    let thinkingRequestVersion = 0
     async function refreshThinkingLevels() {
+      const version = ++thinkingRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{ levels: ThinkingLevel[] }>({ type: "get_available_thinking_levels" })
-      if (res.success && res.data) rpcThinkingLevels.value = res.data.levels ?? ["off"]
+      if (version === thinkingRequestVersion && conversation === conversationVersion && res.success && res.data)
+        rpcThinkingLevels.value = res.data.levels ?? ["off"]
     }
 
     async function applyRememberedSelection() {

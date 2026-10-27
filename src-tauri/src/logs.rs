@@ -12,6 +12,10 @@ const RETENTION_DAYS: i64 = 7;
 static LAST_PRUNE_DAY: Mutex<Option<chrono::NaiveDate>> = Mutex::new(None);
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn dir() -> std::path::PathBuf {
     crate::data_dir::root().join("logs")
 }
@@ -49,7 +53,7 @@ pub fn write(runtime_id: &str, message: &str) {
     let now = chrono::Local::now();
     let today = now.date_naive();
     {
-        let mut last = LAST_PRUNE_DAY.lock().unwrap();
+        let mut last = lock_recover(&LAST_PRUNE_DAY);
         if *last != Some(today) {
             *last = Some(today);
             prune(today);
@@ -60,7 +64,7 @@ pub fn write(runtime_id: &str, message: &str) {
         "[{}] [{runtime_id}] {message}\n",
         now.format("%H:%M:%S%.3f")
     );
-    let _guard = WRITE_LOCK.lock();
+    let _guard = lock_recover(&WRITE_LOCK);
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -74,6 +78,18 @@ pub fn write(runtime_id: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poisoned_log_mutex_is_recovered() {
+        let mutex = std::sync::Arc::new(Mutex::new(1));
+        let other = mutex.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = other.lock().unwrap();
+            panic!("poison test mutex");
+        }).join();
+        *lock_recover(&mutex) += 1;
+        assert_eq!(*lock_recover(&mutex), 2);
+    }
 
     #[test]
     fn prune_removes_logs_older_than_seven_days() {

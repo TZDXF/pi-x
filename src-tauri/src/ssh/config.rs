@@ -108,7 +108,7 @@ pub struct SshProbeInfo {
 }
 
 /// 一条已保存的远程连接配置。
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnection {
     #[serde(default)]
@@ -148,7 +148,7 @@ pub struct SshConnection {
 }
 
 /// 保存入参：有 `id` 时 upsert，无 `id` 时后端生成 `<kind 前缀> + UUID v4`。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,6 +176,38 @@ pub struct SshConnectionInput {
     pub distro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+}
+
+impl std::fmt::Debug for SshConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnection")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("host", &self.host)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "key_passphrase",
+                &self.key_passphrase.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for SshConnectionInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConnectionInput")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("host", &self.host)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "key_passphrase",
+                &self.key_passphrase.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 /// config.json 的本模块视图：只关心 `sshConnections`，
@@ -286,7 +318,10 @@ pub fn resolve_connection_for_target_in(
     let connection = find_connection_in(path, connection_id)?
         .ok_or_else(|| pix_error("sshConnectionNotFound", "SSH 连接不存在，可能已被删除"))?;
     if !connection_matches_remote(&connection, target) {
-        return Err(pix_error("sshConnectionMismatch", "SSH 连接配置与项目地址不一致"));
+        return Err(pix_error(
+            "sshConnectionMismatch",
+            "SSH 连接配置与项目地址不一致",
+        ));
     }
     Ok(connection)
 }
@@ -560,6 +595,16 @@ mod tests {
             "pix-ssh-config-{tag}-{}.json",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    #[test]
+    fn credential_debug_is_redacted() {
+        let mut request = input("test", "host");
+        request.password = Some("private-password".into());
+        request.key_passphrase = Some("private-passphrase".into());
+        let debug = format!("{request:?}");
+        assert!(!debug.contains("private-password"));
+        assert!(!debug.contains("private-passphrase"));
     }
 
     fn input(name: &str, host: &str) -> SshConnectionInput {

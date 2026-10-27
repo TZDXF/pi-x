@@ -1,12 +1,12 @@
 //! Resource management: enable / disable individual resources per package,
 //! mirroring `pi config` (writes +/- patterns into the package's settings entry).
 
-use serde::Serialize;
-use serde_json::Value;
 use crate::{
     errors::{pix_error, pix_error_detail},
     trust,
 };
+use serde::Serialize;
+use serde_json::Value;
 
 use super::glob::{glob_match, resource_enabled, strip_pattern_marker};
 use super::runner::package_list;
@@ -54,7 +54,10 @@ fn ensure_project_trusted(project: &str) -> Result<(), String> {
         return Err(pix_error("trustDecisionRequired", "项目信任需要先做出决定"));
     }
     if status["decision"] != true {
-        return Err(pix_error("projectUntrusted", "项目未被信任，无法访问项目设置"));
+        return Err(pix_error(
+            "projectUntrusted",
+            "项目未被信任，无法访问项目设置",
+        ));
     }
     Ok(())
 }
@@ -217,11 +220,13 @@ pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mu
         },
         |entry| {
             if entry.is_dir {
-                return Ok(if IGNORED_DIRS.contains(&entry.name.as_str()) || entry.name.starts_with('.') {
-                    WalkControl::Skip
-                } else {
-                    WalkControl::Continue
-                });
+                return Ok(
+                    if IGNORED_DIRS.contains(&entry.name.as_str()) || entry.name.starts_with('.') {
+                        WalkControl::Skip
+                    } else {
+                        WalkControl::Continue
+                    },
+                );
             }
             if !entry.name.starts_with('.') {
                 if let Ok(rel) = entry.path.strip_prefix(root) {
@@ -372,7 +377,17 @@ pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath
 
 /// List an installed package's resources with their enabled state.
 #[tauri::command]
-pub fn package_resources(
+pub async fn package_resources(
+    source: String,
+    scope: String,
+    project: Option<String>,
+) -> Result<Vec<PackageResource>, String> {
+    tokio::task::spawn_blocking(move || package_resources_blocking(source, scope, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_resources_blocking(
     source: String,
     scope: String,
     project: Option<String>,
@@ -390,8 +405,7 @@ pub fn package_resources(
     })?;
 
     // Walk the package root once and reuse the file list for every resource
-    // type: this runs inside a synchronous command, and per-type walks made
-    // large packages stall the IPC thread.
+    // type; the command runs this work on the blocking pool.
     let manifest = read_pi_manifest(&root);
     let mut files = Vec::new();
     walk_files(&root, &root, &mut files);
@@ -415,7 +429,7 @@ pub fn package_resources(
 /// `+path` / `-path` pattern into the package's settings entry (same shape as
 /// `pi config` writes).
 #[tauri::command]
-pub fn package_set_resource(
+pub async fn package_set_resource(
     source: String,
     scope: String,
     project: Option<String>,
@@ -423,6 +437,24 @@ pub fn package_set_resource(
     path: String,
     enabled: bool,
 ) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        package_set_resource_blocking(source, scope, project, resource_type, path, enabled)
+    })
+    .await
+    .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_set_resource_blocking(
+    source: String,
+    scope: String,
+    project: Option<String>,
+    resource_type: String,
+    path: String,
+    enabled: bool,
+) -> Result<(), String> {
+    // Concurrent async commands must not lose each other's read-modify-write updates.
+    static RESOURCE_SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = RESOURCE_SETTINGS_LOCK.lock().map_err(|e| e.to_string())?;
     if !RESOURCE_TYPES.contains(&resource_type.as_str()) {
         return Err(pix_error_detail(
             "unknownResourceType",
@@ -499,7 +531,17 @@ pub fn package_set_resource(
 /// mirroring the walk used for resource discovery (ignores node_modules,
 /// .git, .pi, dist and dotfiles).
 #[tauri::command]
-pub fn package_list_files(
+pub async fn package_list_files(
+    source: String,
+    scope: String,
+    project: Option<String>,
+) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || package_list_files_blocking(source, scope, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_list_files_blocking(
     source: String,
     scope: String,
     project: Option<String>,
@@ -517,18 +559,30 @@ pub fn package_list_files(
     Ok(files)
 }
 
-const PACKAGE_ROOT_GUARD: crate::preview_guard::RootGuardSpec = crate::preview_guard::RootGuardSpec {
-    read_failed_label: "读取资源文件失败",
-    root_resolve_label: "解析插件目录失败",
-    root_resolve_code: "pluginInstallDirNotFound",
-    outside_message: "资源路径越界",
-};
+const PACKAGE_ROOT_GUARD: crate::preview_guard::RootGuardSpec =
+    crate::preview_guard::RootGuardSpec {
+        read_failed_label: "读取资源文件失败",
+        root_resolve_label: "解析插件目录失败",
+        root_resolve_code: "pluginInstallDirNotFound",
+        outside_message: "资源路径越界",
+    };
 
 /// Read one file inside an installed package for preview. `path` is relative
 /// to the package root with forward slashes. Text files are capped at 512 KB
 /// on a UTF-8 boundary; binary content is rejected with `resourceBinary`.
 #[tauri::command]
-pub fn package_read_file(
+pub async fn package_read_file(
+    source: String,
+    scope: String,
+    path: String,
+    project: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || package_read_file_blocking(source, scope, path, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_read_file_blocking(
     source: String,
     scope: String,
     path: String,
@@ -553,6 +607,22 @@ pub fn package_read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_resource_commands_preserve_validation_errors() {
+        let source = "missing".to_string();
+        let scope = "global".to_string();
+        let path = "../outside".to_string();
+        let expected = package_read_file_blocking(source.clone(), scope.clone(), path.clone(), None);
+        assert_eq!(package_read_file(source, scope, path, None).await, expected);
+
+        let expected = package_set_resource_blocking(
+            "missing".into(), "global".into(), None, "invalid".into(), "x".into(), true,
+        );
+        assert_eq!(package_set_resource(
+            "missing".into(), "global".into(), None, "invalid".into(), "x".into(), true,
+        ).await, expected);
+    }
 
     #[test]
     fn package_skills_include_manifest_directories_and_files_and_honor_filters() {
@@ -623,7 +693,10 @@ mod tests {
         };
         write("extensions/a.ts", "export {}");
         write("extensions/nested/b.ts", "export {}");
-        write("skills/demo/SKILL.md", "---\nname: demo\ndescription: Demo\n---\n");
+        write(
+            "skills/demo/SKILL.md",
+            "---\nname: demo\ndescription: Demo\n---\n",
+        );
         write("prompts/plan.md", "---\ndescription: Plan\n---\n");
         write("themes/dark.json", "{}");
         write(
@@ -716,7 +789,10 @@ mod tests {
             package_root_dir(&source, "global", None),
             Some(tmp.join("mypkg"))
         );
-        assert_eq!(package_root_dir("/definitely/not/a/pkg-dir", "global", None), None);
+        assert_eq!(
+            package_root_dir("/definitely/not/a/pkg-dir", "global", None),
+            None
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 

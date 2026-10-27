@@ -182,6 +182,7 @@ export default {
     annotatePlaceholder: "输入批注内容…",
     annotateConfirm: "添加批注",
     annotateCancel: "取消",
+    annotateFull: "代码批注已达上限（20 条），请先移除部分批注。",
     annotateRemove: "移除批注",
   },
   changes: {
@@ -1339,6 +1340,7 @@ export default {
     pluginInstallDirNotFound: "未找到插件安装目录（尚未安装或来源不支持）",
     unknownResourceType: "未知资源类型: {detail}",
     packagesConfigInvalid: "packages 配置无效",
+    packageSourceInvalid: "无效的软件包来源",
     modelsJsonParseFailed: "models.json 解析失败: {detail}",
     providerBaseUrlMissing: "该供应商未配置 Base URL，无法获取模型列表",
     fetchModelsHttpFailed: "获取模型列表失败 (HTTP {status}): {detail}",
@@ -1420,6 +1422,7 @@ export default {
     piEventStreamClosed: "pi 事件流已关闭",
     piExitedEarly: "pi 提前退出，任务未完成",
     trustDecisionRequired: "项目信任需要先做出决定",
+    rewindProjectUntrusted: "文件回退需要信任此项目",
     thinkingNotSupported: "所选模型不支持该思考等级",
     modelApplyFailed: "pi 未应用所选的模型或思考等级",
     piSessionNotCreated: "pi 未创建会话",

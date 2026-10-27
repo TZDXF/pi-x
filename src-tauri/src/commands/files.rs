@@ -53,7 +53,7 @@ pub async fn session_export_file(
         let target = match output_path {
             Some(path) => {
                 let path = std::path::PathBuf::from(path);
-                if !path.is_absolute() || !path.parent().is_some_and(|parent| parent.is_dir()) {
+                if !valid_export_target(&path) {
                     return Err(pix_error("exportDirInvalid", "无效的导出目录"));
                 }
                 path
@@ -75,6 +75,37 @@ pub async fn session_export_file(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Exports use HTML; never pass an arbitrary extension or an existing symlink
+/// to the SDK writer. The directory is chosen by the desktop user.
+fn valid_export_target(path: &std::path::Path) -> bool {
+    path.is_absolute()
+        && path.parent().is_some_and(|parent| parent.is_dir())
+        && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("html"))
+        && match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::valid_export_target;
+
+    #[test]
+    fn export_target_must_be_an_html_file_in_an_existing_directory() {
+        let dir = std::env::temp_dir().join(format!("pix-export-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        assert!(valid_export_target(&dir.join("session.html")));
+        assert!(valid_export_target(&dir.join("session.HTML")));
+        assert!(!valid_export_target(&dir.join("session.jsonl")));
+        assert!(!valid_export_target(&dir.join("missing").join("session.html")));
+        assert!(!valid_export_target(std::path::Path::new("session.html")));
+        std::fs::create_dir(dir.join("folder.html")).unwrap();
+        assert!(!valid_export_target(&dir.join("folder.html")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 /// Open a file or directory with the system default handler.

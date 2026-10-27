@@ -186,6 +186,7 @@ export default {
     annotatePlaceholder: "Write a comment…",
     annotateConfirm: "Add comment",
     annotateCancel: "Cancel",
+    annotateFull: "Code comments are full (max 20). Remove some comments before adding new ones.",
     annotateRemove: "Remove comment",
   },
   changes: {
@@ -1384,6 +1385,7 @@ export default {
     pluginInstallDirNotFound: "Package install directory not found (not installed yet, or unsupported source).",
     unknownResourceType: "Unknown resource type: {detail}",
     packagesConfigInvalid: "Invalid packages configuration.",
+    packageSourceInvalid: "Invalid package source.",
     modelsJsonParseFailed: "Failed to parse models.json: {detail}",
     providerBaseUrlMissing: "This provider has no Base URL configured; cannot fetch the model list.",
     fetchModelsHttpFailed: "Failed to fetch models (HTTP {status}): {detail}",
@@ -1466,6 +1468,7 @@ export default {
     piEventStreamClosed: "The pi event stream closed.",
     piExitedEarly: "Pi exited before completing the task.",
     trustDecisionRequired: "Project trust requires a decision first.",
+    rewindProjectUntrusted: "Rewinding files requires a trusted project.",
     thinkingNotSupported: "The selected model does not support the thinking level.",
     modelApplyFailed: "Pi did not apply the selected model or thinking level.",
     piSessionNotCreated: "Pi did not create a session.",

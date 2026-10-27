@@ -660,7 +660,9 @@ pub async fn session_mtime(file: String) -> Result<u64, String> {
     let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
         .await
         .map_err(|e| format!("session scan failed: {e}"))??;
-    Ok(mtime_ms(&path))
+    tokio::task::spawn_blocking(move || mtime_ms(&path))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))
 }
 
 #[tauri::command]
@@ -670,17 +672,26 @@ pub async fn session_update(
     title: Option<String>,
     archived: bool,
 ) -> Result<u64, String> {
-    let path = validate_session_path(&file)?;
-    if std::fs::symlink_metadata(path.with_extension("pix.json"))
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
-    }
+    let path = tokio::task::spawn_blocking(move || {
+        let path = validate_session_path(&file)?;
+        if std::fs::symlink_metadata(path.with_extension("pix.json"))
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
+        }
+        Ok(path)
+    })
+    .await
+    .map_err(|e| format!("session scan failed: {e}"))??;
     if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
         set_session_name(&app, &path, title.trim().chars().take(120).collect(), false).await?;
     }
-    update_presentation(&path, archived)?;
-    Ok(mtime_ms(&path))
+    tokio::task::spawn_blocking(move || {
+        update_presentation(&path, archived)?;
+        Ok(mtime_ms(&path))
+    })
+    .await
+    .map_err(|e| format!("session update failed: {e}"))?
 }
 
 fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
@@ -790,7 +801,7 @@ async fn remote_session_snapshot(
     request: Value,
 ) -> Result<Value, String> {
     let script = crate::ssh::payload::build_session_snapshot_script();
-    let output = crate::ssh::remote_exec_with_stdin(
+    let output = crate::ssh::transport::remote_exec_session_snapshot(
         endpoint,
         &script,
         request.to_string().as_bytes(),
@@ -856,17 +867,18 @@ fn branch_before_entry(content: &str, target: &str) -> Result<String, String> {
 /// Permanently delete a session file and its PiX presentation metadata.
 #[tauri::command]
 pub async fn session_delete(file: String) -> Result<(), String> {
-    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
-        .await
-        .map_err(|e| format!("session scan failed: {e}"))??;
-    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
-    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    // Presentation metadata is optional; ignore a missing sidecar.
-    let _ = std::fs::remove_file(path.with_extension("pix.json"));
-    // JSONL 已删除；用验证过的路径清理撤销状态，不能依赖前端再次校验文件存在。
-    let _ = crate::session_file_rewind::delete_state_for_session(&path);
-    invalidate_meta_cache(&path);
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let path = validate_session_path(&file)?;
+        let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        // Presentation metadata is optional; ignore a missing sidecar.
+        let _ = std::fs::remove_file(path.with_extension("pix.json"));
+        let _ = crate::session_file_rewind::delete_state_for_session(&path);
+        invalidate_meta_cache(&path);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("session delete failed: {e}"))?
 }
 
 /// List archived sessions across every project, newest first.
@@ -1032,6 +1044,57 @@ mod presentation_tests {
         assert!(copy.ends_with('\n'));
         assert!(duplicate_content("{\"type\":\"message\"}\n", "t", "i").is_err());
         assert!(duplicate_content("", "t", "i").is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_duplicate_and_branch_accept_snapshots_over_default_exec_limit() {
+        use crate::ssh::transport::{env_lock, find_test_program, AuthMethod, SshEndpoint};
+        let Some(node) = find_test_program("node") else { return };
+        let script = std::env::temp_dir().join(format!(
+            "pix-snapshot-mock-{}.cjs", uuid::Uuid::new_v4()
+        ));
+        // PIX_SSH_COMMAND uses whitespace-separated arguments, just like the other mock-ssh tests.
+        if node.to_string_lossy().contains(' ') || script.to_string_lossy().contains(' ') {
+            return;
+        }
+        std::fs::write(&script, r#"
+const fs = require('node:fs');
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (request.op === 'read') {
+  const header = JSON.stringify({type:'session',id:'old'}) + '\n';
+  const blob = JSON.stringify({type:'custom',id:'blob',parentId:null,data:'x'.repeat(16*1024*1024)}) + '\n';
+  const question = JSON.stringify({type:'message',id:'q',parentId:'blob',message:{role:'user'}}) + '\n';
+  process.stdout.write('PIX_SESSION_SNAPSHOT=' + JSON.stringify({content:header+blob+question}) + '\n');
+} else {
+  const lines = request.content.trim().split('\n');
+  const branch = request.file === '/branch.jsonl';
+  if (request.content.length <= 16*1024*1024 || lines.length !== (branch ? 2 : 3)) process.exit(1);
+  process.stdout.write('PIX_SESSION_SNAPSHOT=' + JSON.stringify({file:'/copied.jsonl'}) + '\n');
+}
+"#).unwrap();
+        let _guard = env_lock();
+        let previous = std::env::var_os("PIX_SSH_COMMAND");
+        std::env::set_var(
+            "PIX_SSH_COMMAND", format!("{} {}", node.display(), script.display())
+        );
+        let endpoint = crate::ssh::RemoteEndpoint::Ssh(SshEndpoint {
+            host: "mock".into(),
+            port: 22,
+            user: None,
+            key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
+            key_passphrase: None,
+        });
+        let duplicate = duplicate_remote_session(&endpoint, "/original.jsonl", None).await;
+        let branch = duplicate_remote_session(&endpoint, "/branch.jsonl", Some("q")).await;
+        match previous {
+            Some(value) => std::env::set_var("PIX_SSH_COMMAND", value),
+            None => std::env::remove_var("PIX_SSH_COMMAND"),
+        }
+        std::fs::remove_file(script).unwrap();
+        assert_eq!(duplicate.unwrap(), "/copied.jsonl");
+        assert_eq!(branch.unwrap(), "/copied.jsonl");
     }
 
     #[test]

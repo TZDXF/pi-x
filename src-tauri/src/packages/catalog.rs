@@ -172,7 +172,17 @@ fn catalog_request(
     package_type: &str,
     page: u32,
 ) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
-    let mut req = ureq::get(CATALOG_URL)
+    catalog_request_to(CATALOG_URL, query, sort, package_type, page)
+}
+
+fn catalog_request_to(
+    url: &str,
+    query: &str,
+    sort: &str,
+    package_type: &str,
+    page: u32,
+) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+    let mut req = ureq::get(url)
         .header("User-Agent", "pi-x desktop")
         .config()
         .timeout_global(Some(std::time::Duration::from_secs(30)))
@@ -236,6 +246,29 @@ mod tests {
             catalog_params("", "downloads", "", 0)[3],
             ("page".to_string(), "1".to_string())
         );
+    }
+
+    #[test]
+    fn catalog_query_values_cannot_inject_parameters() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/packages", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let count = stream.read(&mut buf).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            String::from_utf8_lossy(&buf[..count]).into_owned()
+        });
+        catalog_request_to(&url, "x&sort=evil#frag", "recent", "skill", 2)
+            .call()
+            .unwrap();
+        let request = server.join().unwrap();
+        let line = request.lines().next().unwrap();
+        assert!(line.contains("name=x%26sort%3Devil%23frag"), "{line}");
+        assert!(line.contains("&sort=recent&type=skill&page=2"), "{line}");
     }
 
     #[test]

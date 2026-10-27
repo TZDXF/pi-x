@@ -49,18 +49,18 @@ pub(super) async fn handle(
                 text(a, "source")?,
                 text(a, "scope")?,
                 a["project"].as_str().map(str::to_owned),
-            )?)?),
+            ).await?)?),
             "package_list_files" => Ok(json!(crate::packages::package_list_files(
                 text(a, "source")?,
                 text(a, "scope")?,
                 a["project"].as_str().map(str::to_owned),
-            )?)),
+            ).await?)),
             "package_read_file" => Ok(json!(crate::packages::package_read_file(
                 text(a, "source")?,
                 text(a, "scope")?,
                 text(a, "path")?,
                 a["project"].as_str().map(str::to_owned),
-            )?)),
+            ).await?)),
             "package_set_resource" => {
                 crate::packages::package_set_resource(
                     text(a, "source")?,
@@ -71,7 +71,7 @@ pub(super) async fn handle(
                     a["enabled"]
                         .as_bool()
                         .ok_or_else(|| crate::errors::pix_error("missingEnabled", "缺少 enabled 参数"))?,
-                )?;
+                ).await?;
                 Ok(Value::Null)
             }
             "package_translate" => Ok(json!(crate::packages::package_translate(

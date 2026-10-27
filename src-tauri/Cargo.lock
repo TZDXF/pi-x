@@ -3328,6 +3328,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-winrt-notification",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "ureq",

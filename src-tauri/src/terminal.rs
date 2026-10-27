@@ -67,7 +67,7 @@ impl TerminalInput {
 #[derive(Default)]
 pub struct TerminalState {
     next_id: AtomicU32,
-    sessions: Mutex<HashMap<u32, TerminalSession>>,
+    sessions: Arc<Mutex<HashMap<u32, TerminalSession>>>,
 }
 
 /// 终端事件出口抽象（对齐 `rpc::EventSink` 模式）：生产侧走 `AppHandle`
@@ -244,17 +244,7 @@ fn spawn_terminal(
         .await;
     });
 
-    // Notify the webview when the shell exits.
-    let sink_exit = sink.clone();
-    tauri::async_runtime::spawn(async move {
-        let status = tokio::task::spawn_blocking(move || child.wait()).await;
-        let code = match status {
-            Ok(Ok(c)) => c.exit_code(),
-            _ => 1,
-        };
-        sink_exit.emit("term://exit", json!({ "id": id, "code": code }));
-    });
-
+    // Register before starting the waiter: a short-lived child may exit immediately.
     state.sessions.lock().unwrap().insert(
         id,
         TerminalSession {
@@ -263,6 +253,20 @@ fn spawn_terminal(
             killer,
         },
     );
+
+    // Release the PTY and input channel on natural exit as well as explicit kill.
+    let sessions = Arc::clone(&state.sessions);
+    let sink_exit = sink.clone();
+    tauri::async_runtime::spawn(async move {
+        let status = tokio::task::spawn_blocking(move || child.wait()).await;
+        let code = match status {
+            Ok(Ok(c)) => c.exit_code(),
+            _ => 1,
+        };
+        let session = sessions.lock().unwrap().remove(&id);
+        drop(session);
+        sink_exit.emit("term://exit", json!({ "id": id, "code": code }));
+    });
 
     Ok(id)
 }
@@ -493,6 +497,8 @@ mod tests {
             args,
             vec![
                 "-o",
+                "StrictHostKeyChecking=ask",
+                "-o",
                 "ServerAliveInterval=15",
                 "-o",
                 "ServerAliveCountMax=3",
@@ -663,6 +669,38 @@ mod tests {
         let endpoint = resolve_remote_endpoint_in(&path, &wsl_target, Some("wsl-a")).unwrap();
         assert!(matches!(endpoint, RemoteEndpoint::Wsl(_)));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn natural_exit_removes_terminal_session() {
+        let Some(node) = find_test_program("node") else { return };
+        let mut cmd = CommandBuilder::new(node);
+        cmd.arg("-e");
+        cmd.arg("process.exit(0)");
+        let state = TerminalState::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink: Arc<dyn TermSink> = Arc::new(ChannelSink(tx));
+        let id = spawn_terminal(&sink, &state, cmd, None, 80, 24).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let mut output = Vec::new();
+        let mut handshook = false;
+        loop {
+            let (event, payload) = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+            if event == "term://exit" {
+                assert_eq!(payload["id"], id);
+                break;
+            }
+            if event == "term://output" {
+                output.extend(base64::engine::general_purpose::STANDARD.decode(payload["data"].as_str().unwrap()).unwrap());
+                if !handshook && output.windows(CONPTY_DSR.len()).any(|w| w == CONPTY_DSR) {
+                    let _ = write_session(&state, id, std::str::from_utf8(CONPTY_CPR_REPLY).unwrap());
+                    handshook = true;
+                }
+            }
+        }
+        assert!(!state.sessions.lock().unwrap().contains_key(&id));
+        assert!(write_session(&state, id, "x").unwrap_err().contains("terminalClosed"));
+        kill_session(&state, id); // A late frontend cleanup remains harmless.
     }
 
     /// 全链路 mock 单测：`PIX_SSH_COMMAND` 注入 node 回显程序替代 ssh，

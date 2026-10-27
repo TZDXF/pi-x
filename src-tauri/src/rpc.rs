@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 pub use child::{RemoteSpawnSpec, SpawnProgram};
 // 仅实机集成测试（S-R1，`#[ignore]`）消费；对齐 commands/mod.rs 的既有做法。
 #[allow(unused_imports)]
-pub(crate) use child::{PathRebind, resolve_path_rebind};
+pub(crate) use child::{resolve_path_rebind, PathRebind};
 use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
@@ -75,7 +75,11 @@ impl ProcessState {
     /// must not block other RPCs. If the session is respawned meanwhile, the
     /// stale transport's writes fail instead of hitting the wrong process.
     pub(crate) async fn transport(&self) -> Option<SessionTransport> {
-        self.inner.lock().await.as_ref().map(SessionTransport::snapshot)
+        self.inner
+            .lock()
+            .await
+            .as_ref()
+            .map(SessionTransport::snapshot)
     }
 
     /// Current session generation; stale callers detect a respawn by
@@ -203,6 +207,27 @@ impl RpcState {
     }
 }
 
+// Pi reserves a session filename before its first message creates the file.
+fn local_session_key(file: &str, project: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(file);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        PathBuf::from(project).join(path)
+    };
+    match dunce::canonicalize(&path) {
+        Ok(path) => Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or("Session path has no parent")?;
+            let name = path.file_name().ok_or("Session path has no filename")?;
+            Ok(dunce::canonicalize(parent)
+                .map_err(|e| e.to_string())?
+                .join(name))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub async fn spawn(
     app: AppHandle,
     state: &RpcState,
@@ -224,8 +249,7 @@ pub async fn spawn(
     let id = runtime_id.unwrap_or_else(|| "default".into());
     // Probe from a snapshot: each probe can take up to PROBE_TIMEOUT, so the
     // pool lock must never be held while a hung runtime is being probed.
-    let snapshot: Vec<Arc<ProcessState>> =
-        state.processes.lock().await.values().cloned().collect();
+    let snapshot: Vec<Arc<ProcessState>> = state.processes.lock().await.values().cloned().collect();
     if let Some(existing) = snapshot.iter().find(|p| p.runtime_id == id) {
         if child::process_running(existing).await {
             return Err("Runtime is already running".into());
@@ -236,9 +260,7 @@ pub async fn spawn(
     // 远端 POSIX 会话路径不做本地 canonicalize（Windows 上必失败），按原串比对。
     let session_key: Option<PathBuf> = match (&session_file, program) {
         (None, _) => None,
-        (Some(file), SpawnProgram::LocalPi(_)) => {
-            Some(dunce::canonicalize(file).map_err(|e| e.to_string())?)
-        }
+        (Some(file), SpawnProgram::LocalPi(_)) => Some(local_session_key(file, project)?),
         (Some(file), SpawnProgram::Remote(_)) => Some(PathBuf::from(file)),
     };
     if let Some(path) = &session_key {
@@ -253,11 +275,13 @@ pub async fn spawn(
                 continue;
             };
             let matched = match program {
-                SpawnProgram::LocalPi(_) => response["data"]["sessionFile"]
-                    .as_str()
-                    .and_then(|f| dunce::canonicalize(f).ok())
-                    .as_ref()
-                    == Some(path),
+                SpawnProgram::LocalPi(_) => {
+                    response["data"]["sessionFile"]
+                        .as_str()
+                        .and_then(|f| local_session_key(f, project).ok())
+                        .as_ref()
+                        == Some(path)
+                }
                 SpawnProgram::Remote(_) => response["data"]["sessionFile"]
                     .as_str()
                     .is_some_and(|f| f == path.to_string_lossy()),
@@ -410,12 +434,22 @@ pub(crate) async fn set_session_name(
             .as_str()
             .map(crate::sessions::edit::normalize_session_file);
         if active.as_deref() == Some(path) {
-            return crate::sessions::edit::process_set_session_name(&process, path, title, only_if_empty)
-                .await;
+            return crate::sessions::edit::process_set_session_name(
+                &process,
+                path,
+                title,
+                only_if_empty,
+            )
+            .await;
         }
     }
-    crate::sessions::edit::process_set_session_name(&ProcessState::default(), path, title, only_if_empty)
-        .await
+    crate::sessions::edit::process_set_session_name(
+        &ProcessState::default(),
+        path,
+        title,
+        only_if_empty,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -432,7 +466,9 @@ mod pending_cleanup_tests {
         if cfg!(windows) {
             cmd.args(["/C", "exit 0"]);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         let child = cmd.spawn().expect("spawn dummy child");
         let (stdin_tx, _stdin_rx) = mpsc::channel::<String>(8);
         *state.inner.lock().await = Some(SessionInner {
@@ -450,18 +486,21 @@ mod pending_cleanup_tests {
         let state = state_with_session().await;
         let (tx, _rx) = oneshot::channel::<Value>();
         let inner = state.inner.lock().await;
-        inner
-            .as_ref()
-            .unwrap()
-            .pending
-            .lock()
-            .await
-            .insert(7, tx);
+        inner.as_ref().unwrap().pending.lock().await.insert(7, tx);
         drop(inner);
         let generation = state.generation.load(Ordering::Relaxed);
         remove_pending_if_current(&state, 7, generation).await;
         assert!(
-            state.inner.lock().await.as_ref().unwrap().pending.lock().await.is_empty(),
+            state
+                .inner
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .pending
+                .lock()
+                .await
+                .is_empty(),
             "timed-out entry of the current session is removed"
         );
     }
@@ -471,13 +510,7 @@ mod pending_cleanup_tests {
         let state = state_with_session().await;
         let (tx, _rx) = oneshot::channel::<Value>();
         let inner = state.inner.lock().await;
-        inner
-            .as_ref()
-            .unwrap()
-            .pending
-            .lock()
-            .await
-            .insert(7, tx);
+        inner.as_ref().unwrap().pending.lock().await.insert(7, tx);
         drop(inner);
         let stale = state.generation.load(Ordering::Relaxed);
         // Simulate a respawn: ids restart at 1 and the stale cleanup must not
@@ -498,7 +531,6 @@ mod pending_cleanup_tests {
             "a stale generation must never delete the new session's pending entry"
         );
     }
-
 }
 
 #[cfg(test)]
@@ -557,5 +589,22 @@ mod export_tests {
 
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(project).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod session_key_tests {
+    use super::*;
+    #[test]
+    fn accepts_allocated_but_unwritten_session_file() {
+        let dir = std::env::temp_dir().join(format!("pix-session-key-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let project = dir.to_str().unwrap();
+        let expected = dunce::canonicalize(&dir).unwrap().join("new.jsonl");
+        assert_eq!(local_session_key("new.jsonl", project).unwrap(), expected);
+        std::fs::write(&expected, "").unwrap();
+        assert_eq!(local_session_key("new.jsonl", project).unwrap(), expected);
+        assert!(local_session_key("missing/new.jsonl", project).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

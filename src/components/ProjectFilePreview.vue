@@ -15,6 +15,7 @@ import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import { useCodeCommentsStore } from "@/stores/codeComments"
+import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
@@ -38,7 +39,12 @@ const { t } = useI18n()
 
 const preview = ref<FilePreview | null>(null)
 const loading = ref(false)
-const error = ref("")
+const errorCause = ref<unknown>(null)
+const openError = ref<unknown>(null)
+const error = computed(() => {
+  if (openError.value != null) return t("openWith.failed", { error: formatCodedError(t, openError.value) })
+  return errorCause.value == null ? "" : formatCodedError(t, errorCause.value)
+})
 const htmlLines = ref<string[] | null>(null)
 // 序号作废旧在途请求，避免切换文件时旧内容闪现到新文件。
 let seq = 0
@@ -66,7 +72,8 @@ const showCode = computed(() => preview.value?.kind === "text" && !showRenderedM
 async function load() {
   const current = ++seq
   loading.value = true
-  error.value = ""
+  errorCause.value = null
+  openError.value = null
   preview.value = null
   htmlLines.value = null
   mdRendered.value = true
@@ -82,7 +89,7 @@ async function load() {
       if (current === seq) htmlLines.value = lines
     }
   } catch (cause) {
-    if (current === seq) error.value = formatCodedError(t, cause)
+    if (current === seq) errorCause.value = cause
   } finally {
     if (current === seq) loading.value = false
   }
@@ -96,7 +103,7 @@ async function openInEditor() {
   try {
     await openFileInEditor(props.path, props.project)
   } catch (cause) {
-    error.value = t("openWith.failed", { error: String(cause) })
+    openError.value = cause
   } finally {
     opening.value = false
   }
@@ -105,6 +112,7 @@ async function openInEditor() {
 // ---- 代码批注（复刻 ZCode code-viewer）：行内草稿卡挂到选中行末行下方，
 // ---- 已提交批注以内联卡片展示并可删除，随 composer 待发送列表同步。 ----
 const codeComments = useCodeCommentsStore()
+const ui = useUiStore()
 const codeRoot = ref<HTMLElement | null>(null)
 const commentOpen = ref(false)
 const commentText = ref("")
@@ -214,7 +222,7 @@ function confirmComment() {
     comment: body,
   })
   if (!ok) {
-    alert("Code comments are full (max 20). Remove some comments before adding new ones.")
+    ui.pushToast(t("projectFiles.annotateFull"), "warning")
     return
   }
   closeComment()

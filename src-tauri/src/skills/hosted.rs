@@ -129,22 +129,22 @@ fn enabled_keys() -> Result<Vec<String>, String> {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+fn list_hosted(root: &Path, enabled: &[String]) -> Result<Vec<HostedSkill>, String> {
+    Ok(scan_root(root)?
+        .iter()
+        .filter_map(|(path, kind)| {
+            let mut skill = hosted_entry(root, path, kind).ok()?;
+            skill.enabled = enabled.contains(&norm_key(&skill.path));
+            Some(skill)
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub async fn skills_hosted_list() -> Result<Vec<HostedSkill>, String> {
-    tokio::task::spawn_blocking(|| {
-        let root = skills_root();
-        let enabled = enabled_keys()?;
-        scan_root(&root)?
-            .iter()
-            .map(|(path, kind)| {
-                let mut skill = hosted_entry(&root, path, kind)?;
-                skill.enabled = enabled.contains(&norm_key(&skill.path));
-                Ok(skill)
-            })
-            .collect()
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(|| list_hosted(&skills_root(), &enabled_keys()?))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Create and open the hosted skills directory in the system file manager.
@@ -228,6 +228,17 @@ fn remove_path(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::skills::test_util::{temp_root, SKILL_MD};
+
+    #[test]
+    fn unreadable_skill_does_not_hide_valid_skills() {
+        let root = temp_root("bad-skill");
+        std::fs::write(root.join("bad.md"), [0xff, 0xfe]).unwrap();
+        std::fs::write(root.join("good.md"), SKILL_MD).unwrap();
+        let skills = list_hosted(&root, &[]).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "my-skill");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn scans_directories_and_files() {

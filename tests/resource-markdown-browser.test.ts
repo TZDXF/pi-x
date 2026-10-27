@@ -274,3 +274,64 @@ for (const outcome of ["success", "failure"]) {
     expect(h.api.error.value).toBe("")
   })
 }
+
+
+test("file preview error text reacts to locale changes", async () => {
+  const locale = vue.ref("en")
+  const props = vue.reactive({ path: "a", project: "", readFile: async () => { throw "coded" } })
+  const h = setup("ProjectFilePreview", props, "error", {
+    useI18n: () => ({ t: key => `${locale.value}:${key}` }),
+    useCodeCommentsStore: () => ({}),
+    onBeforeUnmount: callback => vue.onScopeDispose(callback),
+    document: { removeEventListener() {} },
+    formatCodedError: t => t("backendErrors.example"),
+  })
+  await flush()
+  expect(h.api.error.value).toBe("en:backendErrors.example")
+  locale.value = "zh-CN"
+  expect(h.api.error.value).toBe("zh-CN:backendErrors.example")
+})
+
+
+test("file preview imports its toast store from the conversations module", () => {
+  const source = readFileSync(new URL("../src/components/ProjectFilePreview.vue", import.meta.url), "utf8")
+  expect(source).toMatch(/import\s*\{\s*useUiStore\s*\}\s*from\s*["']@\/stores\/conversations["']/)
+  expect(source).not.toMatch(/import\s*\{\s*useUiStore\s*\}\s*from\s*["']@\/stores\/ui["']/)
+})
+
+test("full code comment warning uses a localized toast and preserves the draft", async () => {
+  const locale = vue.ref("en")
+  const props = vue.reactive({ path: "a", project: "p", readFile: async () => ({ kind: "text", text: "a" }) })
+  const h = setup("ProjectFilePreview", props, "commentRange, commentText, confirmComment", {
+    useI18n: () => ({ t: key => `${locale.value}:${key}` }),
+    useCodeCommentsStore: () => ({ add: () => false }),
+    onBeforeUnmount: callback => vue.onScopeDispose(callback),
+    document: { removeEventListener() {} },
+    highlightFileLines: async () => [],
+  })
+  h.api.commentRange.value = { start: 1, end: 1 }
+  h.api.commentText.value = "comment"
+  h.api.confirmComment()
+  locale.value = "zh-CN"
+  h.api.confirmComment()
+  expect(h.errors.mock.calls).toEqual([["en:projectFiles.annotateFull", "warning"], ["zh-CN:projectFiles.annotateFull", "warning"]])
+  expect(h.api.commentText.value).toBe("comment")
+  expect(h.api.commentRange.value).toEqual({ start: 1, end: 1 })
+})
+
+
+test("successfully adding a code comment closes the draft without a toast", () => {
+  const props = vue.reactive({ path: "a", project: "p", readFile: async () => ({ kind: "text", text: "a" }) })
+  const h = setup("ProjectFilePreview", props, "commentRange, commentText, confirmComment", {
+    useCodeCommentsStore: () => ({ add: () => true }),
+    onBeforeUnmount: callback => vue.onScopeDispose(callback),
+    document: { removeEventListener() {} },
+    highlightFileLines: async () => [],
+  })
+  h.api.commentRange.value = { start: 1, end: 1 }
+  h.api.commentText.value = "comment"
+  h.api.confirmComment()
+  expect(h.errors).not.toHaveBeenCalled()
+  expect(h.api.commentText.value).toBe("")
+  expect(h.api.commentRange.value).toBeNull()
+})

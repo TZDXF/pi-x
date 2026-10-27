@@ -328,3 +328,38 @@ test("editing the first question regenerates the session title with overwrite", 
   await tick()
   expect(h.titles).toEqual([{ file: "current.jsonl", message: "replacement", overwrite: true }])
 })
+
+
+test("resending removes only tool runs belonging to the replaced turn", async () => {
+  const h = await harness()
+  h.store.runs = { kept: { id: "kept" }, removed: { id: "removed" }, partial: { id: "partial" } }
+  h.store.fileChangeArtifacts = [{ toolCallId: "kept" }, { toolCallId: "removed" }]
+  h.store.entries.unshift({ kind: "assistant", id: 9, blocks: [{ type: "toolCall", callId: "kept" }] })
+  h.store.entries.push({ kind: "assistant", id: 2, blocks: [{ type: "toolCall", callId: "removed" }] })
+  h.store.partialBlocks = [{ type: "toolCall", callId: "partial" }]
+  await h.store.resendPrompt("replacement")
+  expect(Object.keys(h.store.runs)).toEqual(["kept"])
+  expect(h.store.fileChangeArtifacts.map(item => item.toolCallId)).toEqual(["kept"])
+})
+
+test("old refresh responses cannot write after clearing a conversation", async () => {
+  let finish
+  const h = await harness({ get_state: () => new Promise(resolve => { finish = resolve }) })
+  const pending = h.store.refreshState()
+  h.store.clear()
+  finish({ success: true, data: { sessionFile: "old.jsonl" } })
+  await pending
+  expect(h.store.sessionFile).toBeNull()
+})
+
+test("only the newest stats refresh wins", async () => {
+  const pending = []
+  const h = await harness({ get_session_stats: () => new Promise(resolve => pending.push(resolve)) })
+  const first = h.store.refreshStats()
+  const second = h.store.refreshStats()
+  pending[1]({ success: true, data: { tokens: 2 } })
+  await second
+  pending[0]({ success: true, data: { tokens: 1 } })
+  await first
+  expect(h.store.stats.tokens).toBe(2)
+})

@@ -9,7 +9,7 @@
 //! 整体替换传输程序（`program` 或 `program arg1 arg2 …`，ASCII 空白切分），
 //! 供测试注入 mock，绝不发起真实远程连接。
 //!
-//! host key 校验交给用户 known_hosts 默认（不覆盖 StrictHostKeyChecking）；
+//! 非交互 SSH 使用 StrictHostKeyChecking=yes，交互终端使用 ask；
 //! `BatchMode=yes` 防挂在交互提示上；`ServerAliveInterval=15 × 3` 判定死链。
 //! keepalive / 断连语义（多后端契约 §1.4）：SSH 客户端可主动判定死链；
 //! WSL/Docker 无保活——本地子进程存活即"连接"，子进程退出 → stdout EOF →
@@ -33,7 +33,7 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Windows 下隐藏传输客户端（ssh/wsl.exe/docker.exe）控制台窗口。
 pub(crate) use crate::process::CREATE_NO_WINDOW;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SshEndpoint {
     pub host: String,
     pub port: u16,
@@ -45,6 +45,23 @@ pub struct SshEndpoint {
     pub password: Option<String>,
     /// 密钥口令（仅内存中，不落盘）。通过 SSH_ASKPASS 机制传递给 ssh。
     pub key_passphrase: Option<String>,
+}
+
+impl std::fmt::Debug for SshEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshEndpoint")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("key_path", &self.key_path)
+            .field("auth_method", &self.auth_method)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "key_passphrase",
+                &self.key_passphrase.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 /// SSH 认证方式。
@@ -142,7 +159,8 @@ pub fn ssh_program_parts() -> Vec<String> {
 pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     // BatchMode=yes 禁用密码/口令提示，仅普通密钥认证时启用
-    let need_batch_mode = endpoint.auth_method == AuthMethod::Key && endpoint.key_passphrase.is_none();
+    let need_batch_mode =
+        endpoint.auth_method == AuthMethod::Key && endpoint.key_passphrase.is_none();
     if need_batch_mode {
         args.push("-o".to_string());
         args.push("BatchMode=yes".to_string());
@@ -169,11 +187,13 @@ pub fn build_ssh_args(endpoint: &SshEndpoint) -> Vec<String> {
 }
 
 /// 纯函数：交互终端（`ssh -tt`）的参数数组（契约 P2 §3.3，由终端 agent 消费）。
-/// 与 [`build_ssh_args`] 的差别仅两处：去掉 `-o BatchMode=yes`（交互终端允许
-/// 密码 / host key 提示浮出）、在选项组后追加 `-tt`（强制分配远端 PTY，
+/// 与 [`build_ssh_args`] 的差别：去掉 `-o BatchMode=yes`（交互终端允许
+/// 密码提示浮出）、host key 使用 ask 允许首次交互确认，并追加 `-tt`（强制分配远端 PTY，
 /// 本地 SIGWINCH 经 ssh 转发为远端 PTY 尺寸变更）。其余选项与目的地构造照旧。
 pub fn build_ssh_args_interactive(endpoint: &SshEndpoint) -> Vec<String> {
     let mut args: Vec<String> = [
+        "-o",
+        "StrictHostKeyChecking=ask",
         "-o",
         "ServerAliveInterval=15",
         "-o",
@@ -255,10 +275,7 @@ pub fn parse_probe_output(stdout: &str) -> Option<RemoteProbe> {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        let is_label = !key.is_empty()
-            && key
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() || b == b'_');
+        let is_label = !key.is_empty() && key.bytes().all(|b| b.is_ascii_uppercase() || b == b'_');
         if !is_label {
             continue;
         }
@@ -287,7 +304,7 @@ pub async fn remote_exec(
     script: &str,
     timeout: Duration,
 ) -> Result<ExecOutput, SshError> {
-    exec_remote(endpoint, script, None, timeout).await
+    exec_remote(endpoint, script, None, timeout, MAX_EXEC_OUTPUT_BYTES).await
 }
 
 /// 带 stdin 数据的一次性 exec（上传 pi_data.mjs / 投递信任请求 JSON，
@@ -298,7 +315,48 @@ pub async fn remote_exec_with_stdin(
     stdin_data: &[u8],
     timeout: Duration,
 ) -> Result<ExecOutput, SshError> {
-    exec_remote(endpoint, script, Some(stdin_data.to_vec()), timeout).await
+    exec_remote(endpoint, script, Some(stdin_data.to_vec()), timeout, MAX_EXEC_OUTPUT_BYTES).await
+}
+
+/// Session snapshot reads return a JSON-escaped whole JSONL file. Keep a
+/// separate, bounded budget for that protocol without relaxing normal execs.
+pub(crate) const MAX_SESSION_SNAPSHOT_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
+
+pub(crate) async fn remote_exec_session_snapshot(
+    endpoint: &RemoteEndpoint,
+    script: &str,
+    stdin_data: &[u8],
+    timeout: Duration,
+) -> Result<ExecOutput, SshError> {
+    exec_remote(
+        endpoint,
+        script,
+        Some(stdin_data.to_vec()),
+        timeout,
+        MAX_SESSION_SNAPSHOT_OUTPUT_BYTES,
+    )
+    .await
+}
+
+// Bound each buffered stream separately; the streaming RPC path is unaffected.
+const MAX_EXEC_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+async fn read_exec_output<R: tokio::io::AsyncRead + Unpin>(
+    reader: R,
+    limit: usize,
+) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take((limit + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "remote output exceeds limit",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// `remote_exec` / `remote_exec_with_stdin` 的共用实现：`stdin_data` 存在时写入
@@ -309,34 +367,35 @@ async fn exec_remote(
     script: &str,
     stdin_data: Option<Vec<u8>>,
     timeout: Duration,
+    stdout_limit: usize,
 ) -> Result<ExecOutput, SshError> {
     let remote_command = wrap_payload(script);
     let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
     let mut child = command.spawn().map_err(spawn_error)?;
     let mut stdin = child.stdin.take().expect("remote transport stdin is piped");
-    let mut stdout = child.stdout.take().expect("remote transport stdout is piped");
-    let mut stderr = child.stderr.take().expect("remote transport stderr is piped");
+    let stdout = child
+        .stdout
+        .take()
+        .expect("remote transport stdout is piped");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("remote transport stderr is piped");
     // 超时后 future 被 drop，kill_on_drop 负责杀掉本地传输子进程。
     let waited = tokio::time::timeout(timeout, async move {
-        let mut out_buf = Vec::new();
-        let mut err_buf = Vec::new();
         let stdin_write = async {
             if let Some(data) = stdin_data {
-                // 写失败仅标记，远端失败经由退出码/stderr 归类。
                 let _ = stdin.write_all(&data).await;
             }
-            // 必须显式 drop：tokio 进程管道的 shutdown 只 flush 不 half-close，
-            // 远端 `cat` 依赖管道写端关闭（EOF）结束。
             drop(stdin);
+            Ok::<(), std::io::Error>(())
         };
-        let (out_result, err_result, wait_result) = tokio::join!(
-            async { stdin_write.await; stdout.read_to_end(&mut out_buf).await },
-            stderr.read_to_end(&mut err_buf),
+        let (_, out_buf, err_buf, status) = tokio::try_join!(
+            stdin_write,
+            read_exec_output(stdout, stdout_limit),
+            read_exec_output(stderr, MAX_EXEC_OUTPUT_BYTES),
             child.wait(),
-        );
-        out_result?;
-        err_result?;
-        let status = wait_result?;
+        )?;
         Ok::<(Vec<u8>, Vec<u8>, ExitStatus), std::io::Error>((out_buf, err_buf, status))
     })
     .await;
@@ -372,7 +431,10 @@ async fn exec_remote(
 
 /// 长驻流：返回已 stdio-piped 的本地传输子进程（`kill_on_drop(true)`），
 /// stdout 即远端进程输出；不设 `current_dir`。
-pub async fn remote_exec_stream(endpoint: &RemoteEndpoint, script: &str) -> Result<Child, SshError> {
+pub async fn remote_exec_stream(
+    endpoint: &RemoteEndpoint,
+    script: &str,
+) -> Result<Child, SshError> {
     let remote_command = wrap_payload(script);
     let mut command = build_command(endpoint, &remote_command).map_err(spawn_error)?;
     command.spawn().map_err(spawn_error)
@@ -486,8 +548,7 @@ pub trait SshTransport: Send + Sync {
     /// 契约 P1 §1.4 冻结 API，P4 russh 后端启用（调用方用自由函数
     /// `remote_exec_stream`）。
     #[allow(dead_code)]
-    fn exec_stream(&self, script: &str)
-        -> impl Future<Output = Result<Child, SshError>> + Send;
+    fn exec_stream(&self, script: &str) -> impl Future<Output = Result<Child, SshError>> + Send;
 }
 
 /// 系统 ssh 实现。
@@ -612,6 +673,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn exec_output_is_bounded() {
+        let data = vec![b'x'; MAX_EXEC_OUTPUT_BYTES + 1];
+        assert_eq!(
+            read_exec_output(&data[..MAX_EXEC_OUTPUT_BYTES], MAX_EXEC_OUTPUT_BYTES)
+                .await
+                .unwrap()
+                .len(),
+            MAX_EXEC_OUTPUT_BYTES
+        );
+        assert!(read_exec_output(&data[..], MAX_EXEC_OUTPUT_BYTES).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn snapshot_budget_accepts_large_output_and_rejects_above_limit() {
+        let large = vec![b'x'; MAX_EXEC_OUTPUT_BYTES + 1];
+        assert!(read_exec_output(&large[..], MAX_SESSION_SNAPSHOT_OUTPUT_BYTES).await.is_ok());
+        let oversized = tokio::io::repeat(b'x').take((MAX_SESSION_SNAPSHOT_OUTPUT_BYTES + 1) as u64);
+        assert!(read_exec_output(oversized, MAX_SESSION_SNAPSHOT_OUTPUT_BYTES).await.is_err());
+    }
+
+    #[test]
+    fn endpoint_debug_redacts_credentials() {
+        let mut ep = endpoint();
+        ep.password = Some("secret-password".into());
+        ep.key_passphrase = Some("secret-passphrase".into());
+        let debug = format!("{ep:?}");
+        assert!(!debug.contains("secret-password"));
+        assert!(!debug.contains("secret-passphrase"));
+    }
+
     #[test]
     fn build_ssh_args_follows_contract_order() {
         let mut endpoint = endpoint();
@@ -678,7 +770,8 @@ mod tests {
             ]
         );
         // 前置参数插入最前，远端命令是最后一个单元素 argv。
-        let (program, args) = build_ssh_command(&endpoint(), "/bin/sh -c 'echo AB | base64 -d | /bin/sh'");
+        let (program, args) =
+            build_ssh_command(&endpoint(), "/bin/sh -c 'echo AB | base64 -d | /bin/sh'");
         assert_eq!(program, "mock-ssh");
         assert_eq!(args.first().map(String::as_str), Some("-F"));
         assert_eq!(
@@ -696,7 +789,10 @@ mod tests {
             SshErrorKind::Auth
         );
         assert_eq!(
-            classify_failure(255, "ssh: Could not resolve hostname host: Name or service not known"),
+            classify_failure(
+                255,
+                "ssh: Could not resolve hostname host: Name or service not known"
+            ),
             SshErrorKind::Network
         );
         assert_eq!(
@@ -741,6 +837,8 @@ mod tests {
             build_ssh_args_interactive(&endpoint),
             vec![
                 "-o",
+                "StrictHostKeyChecking=ask",
+                "-o",
                 "ServerAliveInterval=15",
                 "-o",
                 "ServerAliveCountMax=3",
@@ -754,7 +852,7 @@ mod tests {
                 "dev@host.example.com",
             ]
         );
-        // 交互分支不使用 BatchMode（密码/host key 提示必须能浮出）。
+        // 交互分支不使用 BatchMode（密码提示必须能浮出）。
         assert!(!build_ssh_args_interactive(&endpoint).contains(&"BatchMode=yes".to_string()));
         assert!(build_ssh_args(&endpoint).contains(&"BatchMode=yes".to_string()));
     }
@@ -814,7 +912,12 @@ mod tests {
             "PIX_SSH_COMMAND",
             format!("{} -e console.log(process.argv.at(-1)) --", node.display()),
         );
-        let result = remote_exec(&RemoteEndpoint::Ssh(endpoint()), "echo hi", Duration::from_secs(30)).await;
+        let result = remote_exec(
+            &RemoteEndpoint::Ssh(endpoint()),
+            "echo hi",
+            Duration::from_secs(30),
+        )
+        .await;
         std::env::remove_var("PIX_SSH_COMMAND");
         let output = result.expect("mock ssh exec 应成功");
         assert_eq!(output.exit_code, 0);
@@ -837,7 +940,10 @@ mod tests {
         let _guard = lock_env();
         std::env::set_var(
             "PIX_SSH_COMMAND",
-            format!("{} -e process.stdin.pipe(process.stdout) --", node.display()),
+            format!(
+                "{} -e process.stdin.pipe(process.stdout) --",
+                node.display()
+            ),
         );
         let result = remote_exec_with_stdin(
             &RemoteEndpoint::Ssh(endpoint()),

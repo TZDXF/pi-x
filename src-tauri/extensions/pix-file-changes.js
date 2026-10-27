@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { createReadStream } from "node:fs"
+import { stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024
@@ -29,16 +30,31 @@ function isFileMutation(toolName) {
 async function snapshot(cwd, rawPath) {
   const absolutePath = isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath)
   try {
-    const bytes = await readFile(absolutePath)
-    if (bytes.byteLength > MAX_TEXT_BYTES) {
+    const metadata = await stat(absolutePath)
+    const hash = createHash("sha256")
+    const chunks = []
+    let size = 0
+    let tooLarge = metadata.size > MAX_TEXT_BYTES
+    for await (const chunk of createReadStream(absolutePath)) {
+      hash.update(chunk)
+      size += chunk.length
+      if (size > MAX_TEXT_BYTES) {
+        tooLarge = true
+        chunks.length = 0
+      }
+      if (!tooLarge) chunks.push(chunk)
+    }
+    const digest = hash.digest("hex")
+    if (tooLarge) {
       return {
         path: absolutePath,
         existed: true,
         content: null,
-        hash: hashBytes(bytes),
+        hash: digest,
         unsupportedReason: "file_too_large",
       }
     }
+    const bytes = Buffer.concat(chunks)
     let text
     try {
       text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)

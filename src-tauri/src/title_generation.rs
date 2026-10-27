@@ -1,9 +1,5 @@
 //! Generate a session label in an isolated, tool-free pi process.
-use crate::{
-    commands,
-    pi_locate,
-    sessions, trust,
-};
+use crate::{commands, pi_locate, sessions, trust};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -130,7 +126,10 @@ pub async fn session_generate_title(
     // Editing the first question must replace the existing session name.
     overwrite: Option<bool>,
 ) -> Result<Option<String>, String> {
-    let config = commands::app_config_get(app.clone())?;
+    let config_app = app.clone();
+    let config = tokio::task::spawn_blocking(move || commands::app_config_get(config_app))
+        .await
+        .map_err(|e| format!("title configuration failed: {e}"))??;
     // Follow the app's auxiliary default model when configured to do so.
     // This is PiX's own setting and is unrelated to pi's default model.
     let model = if config.title_follow_main {
@@ -147,19 +146,15 @@ pub async fn session_generate_title(
     {
         return Ok(None);
     }
-    let path = session_path(&file)?;
-    {
-        let _guard = sessions::PRESENTATION_LOCK
-            .lock()
-            .map_err(|e| e.to_string())?;
-        let mut metadata = sessions::read_presentation(&path)?;
-        let title = sessions::read_session_name(&path)?;
-        if title.is_some() || metadata.title_generation_attempted {
-            return Ok(title);
-        }
-        // Claim once across clients/restarts, including failure; no surprise repeated billing.
-        metadata.title_generation_attempted = true;
-        sessions::write_presentation(&path, &metadata)?;
+    let (path, existing_title, claimed) = tokio::task::spawn_blocking(move || {
+        let path = session_path(&file)?;
+        let (title, claimed) = claim_title_generation(&path)?;
+        Ok::<_, String>((path, title, claimed))
+    })
+    .await
+    .map_err(|e| format!("title scan failed: {e}"))??;
+    if !claimed {
+        return Ok(existing_title);
     }
     let pi = pi_locate::detect(config.pi_path).await;
     let mut cmd = pi_locate::command_for(&pi)?;
@@ -208,9 +203,53 @@ pub async fn session_generate_title(
     sessions::set_session_name(&app, &path, title, !overwrite.unwrap_or(false)).await
 }
 
+// The scan and claim must stay under the same lock so concurrent requests
+// cannot both start a model process for the same session.
+fn claim_title_generation(path: &Path) -> Result<(Option<String>, bool), String> {
+    let _guard = sessions::PRESENTATION_LOCK
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let mut metadata = sessions::read_presentation(path)?;
+    let title = sessions::read_session_name(path)?;
+    if title.is_some() || metadata.title_generation_attempted {
+        return Ok((title, false));
+    }
+    metadata.title_generation_attempted = true;
+    sessions::write_presentation(path, &metadata)?;
+    Ok((None, true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_claims_start_generation_only_once() {
+        let dir = std::env::temp_dir().join(format!("pix-title-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        std::fs::write(&path, "{\"type\":\"session\"}\n").unwrap();
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || claim_title_generation(&path).unwrap().1)
+            })
+            .collect();
+        assert_eq!(
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .filter(|claimed| *claimed)
+                .count(),
+            1
+        );
+        assert!(
+            sessions::read_presentation(&path)
+                .unwrap()
+                .title_generation_attempted
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A one-line message_end event whose assistant text block holds `text`.
     fn message_end(text: &str) -> Vec<u8> {

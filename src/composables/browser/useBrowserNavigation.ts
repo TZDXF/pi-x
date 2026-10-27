@@ -171,6 +171,7 @@ export function useBrowserNavigation(options: NavigationOptions) {
       }
     } else {
       activeSrc.value = proxyBase.value ? toProxyUrl(proxyBase.value, url) : ""
+      if (!proxyBase.value) loading.value = false
     }
   }
 
@@ -187,7 +188,7 @@ export function useBrowserNavigation(options: NavigationOptions) {
 
   function reload() {
     if (!currentUrl.value) return
-    loading.value = true
+    loading.value = directMode.value || !!proxyBase.value
     if (directMode.value) {
       // Cross-origin pages cannot be reloaded from script; swap the iframe instead.
       iframeKey.value++

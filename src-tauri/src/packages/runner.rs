@@ -144,6 +144,14 @@ fn local_project_dir(project: Option<&str>) -> Result<&str, String> {
     Ok(dir)
 }
 
+/// Sources are positional arguments, never CLI options (including catalog data).
+fn validate_package_source(source: &str) -> Result<(), String> {
+    if source.trim().is_empty() || source.trim_start().starts_with('-') {
+        return Err(pix_error("packageSourceInvalid", "无效的软件包来源"));
+    }
+    Ok(())
+}
+
 /// `pi install <source>` — scope "project" installs project-locally (`-l`).
 #[tauri::command]
 pub async fn package_install(
@@ -152,6 +160,7 @@ pub async fn package_install(
     scope: Option<String>,
     project: Option<String>,
 ) -> Result<String, String> {
+    validate_package_source(&source)?;
     let local = scope.as_deref() == Some("project");
     let mut args = vec!["install".to_string(), source];
     if local {
@@ -173,6 +182,7 @@ pub async fn package_remove(
     scope: Option<String>,
     project: Option<String>,
 ) -> Result<String, String> {
+    validate_package_source(&source)?;
     let local = scope.as_deref() == Some("project");
     let mut args = vec!["remove".to_string(), source];
     if local {
@@ -191,7 +201,10 @@ pub async fn package_remove(
 #[tauri::command]
 pub async fn package_update(app: AppHandle, source: Option<String>) -> Result<String, String> {
     let args = match source.filter(|s| !s.trim().is_empty()) {
-        Some(s) => vec!["update".to_string(), "--extension".into(), s],
+        Some(s) => {
+            validate_package_source(&s)?;
+            vec!["update".to_string(), "--extension".into(), s]
+        },
         None => vec!["update".to_string(), "--extensions".into()],
     };
     run_pi(&app, &args, None).await
@@ -200,6 +213,16 @@ pub async fn package_update(app: AppHandle, source: Option<String>) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_sources_cannot_be_cli_options() {
+        for invalid in ["", "  ", "--help", " -l", "-x"] {
+            assert!(validate_package_source(invalid).is_err());
+        }
+        for valid in ["npm:example", "git:example/repo", "./-package"] {
+            assert!(validate_package_source(valid).is_ok());
+        }
+    }
 
     #[test]
     fn project_install_requires_explicit_existing_directory() {

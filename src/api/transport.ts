@@ -51,8 +51,9 @@ export async function invoke<T>(command: string, args: Record<string, unknown> =
     clearRemoteToken()
     throw new Error(encodeCodedError("remoteUnauthorized", "访问凭据已失效，请重新登录。"))
   }
-  const result = await res.json()
-  if (!res.ok) throw new Error(result.error ?? `HTTP ${res.status}`)
+  const result = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(result?.error ?? `HTTP ${res.status}`)
+  if (!result || typeof result !== "object") throw new Error(`HTTP ${res.status}: invalid JSON response`)
   return result.data
 }
 
@@ -122,8 +123,14 @@ function connect(): Promise<void> {
       reject(new Error(encodeCodedError("remoteConnectFailed", "无法连接远程服务，请检查访问链接与桌面端开关。")))
     }
     ws.onmessage = e => {
-      const event = JSON.parse(e.data)
-      dispatch(event.event, event.payload)
+      let event: unknown
+      try {
+        event = JSON.parse(e.data)
+      } catch {
+        return
+      }
+      if (event && typeof event === "object" && "event" in event && typeof event.event === "string")
+        dispatch(event.event, "payload" in event ? event.payload : undefined)
     }
     ws.onclose = () => {
       clearTimeout(timeout)

@@ -229,3 +229,18 @@ test("invalid and rate-limited password attempts do not store a token", async ()
   expect(await h.api.loginRemote("wrong-password")).toBe("limited")
   expect(h.api.hasRemoteToken()).toBe(false)
 })
+
+
+test("non-JSON HTTP errors retain the status and malformed event frames are ignored", async () => {
+  const h = harness()
+  h.api = await loadTransport()
+  h.fetch(async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("invalid JSON") } }))
+  await expect(h.api.invoke("test")).rejects.toThrow("HTTP 502")
+  const received = []
+  const off = await h.api.listen("pi://event", e => received.push(e.payload))
+  expect(() => h.sockets[0].onmessage({ data: "not json" })).not.toThrow()
+  h.sockets[0].onmessage({ data: "null" })
+  h.sockets[0].onmessage({ data: JSON.stringify({ event: "pi://event", payload: 1 }) })
+  expect(received).toEqual([1])
+  off()
+})

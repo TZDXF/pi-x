@@ -188,3 +188,14 @@ test("slow proxy initialization cannot replace a newer direct-mode selection", a
   expect(nav.directMode.value).toBe(true)
   expect(nav.activeSrc.value).toBe("http://localhost:5173")
 })
+
+
+test("proxy initialization failure does not leave navigation loading forever", async () => {
+  vi.mocked(previewProxyInfo).mockRejectedValue(new Error("offline"))
+  const { nav } = setup()
+  nav.inputUrl.value = "localhost:5173"
+  await nav.navigate()
+  expect(nav.proxyError.value).toBe(true)
+  expect(nav.activeSrc.value).toBe("")
+  expect(nav.loading.value).toBe(false)
+})
