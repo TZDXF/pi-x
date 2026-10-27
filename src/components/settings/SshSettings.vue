@@ -24,7 +24,7 @@ import { tBackendError } from "@/i18n"
 import { useUiStore } from "@/stores/conversations"
 import { connectionKind, isWslPlatform, type RemoteKind } from "@/lib/ssh"
 import { remoteFormFields, remoteKindOptions } from "@/lib/remoteBackends"
-import { listen } from "@tauri-apps/api/event"
+import { useSshDeployProgress } from "@/composables/useSshDeployProgress"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -50,7 +50,7 @@ const busyIds = ref(new Set<string>())
 const probes = ref<Record<string, SshProbeResult>>({})
 const deployStatuses = ref<Record<string, DeployStatus>>({})
 const deployingIds = ref(new Set<string>())
-const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
+const deployProgress = useSshDeployProgress()
 
 const dialogOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -90,10 +90,6 @@ const formReady = computed(() => {
 onMounted(() => {
   if (props.createOnly) openCreate()
   else void load()
-  // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
-  listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
-    deployProgress.value = event.payload
-  })
 })
 
 async function load() {

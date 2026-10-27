@@ -271,12 +271,32 @@ async fn finish_task(
 }
 
 async fn checked_request(state: &rpc::RpcState, id: &str, command: Value) -> Result<Value, String> {
-    let response = tokio::time::timeout(
-        Duration::from_secs(60),
-        rpc::request(state, command, Some(id)),
-    )
-    .await
-    .map_err(|_| pix_error("piRequestTimedOut", "请求 pi 超时"))??;
+    checked_request_with_timeout(state, id, command, Some(Duration::from_secs(60))).await
+}
+
+/// A prompt reply arrives only after the agent run finishes, so the schedule
+/// outer one-hour schedule timeout is its sole deadline.
+async fn checked_prompt_request(
+    state: &rpc::RpcState,
+    id: &str,
+    command: Value,
+) -> Result<Value, String> {
+    checked_request_with_timeout(state, id, command, None).await
+}
+
+async fn checked_request_with_timeout(
+    state: &rpc::RpcState,
+    id: &str,
+    command: Value,
+    timeout: Option<Duration>,
+) -> Result<Value, String> {
+    let request = rpc::request(state, command, Some(id));
+    let response = match timeout {
+        Some(duration) => tokio::time::timeout(duration, request)
+            .await
+            .map_err(|_| pix_error("piRequestTimedOut", "请求 pi 超时"))??,
+        None => request.await?,
+    };
     if response["success"] != true {
         return Err(response["error"]
             .as_str()
@@ -292,7 +312,7 @@ async fn wait_for_completion(
 ) -> Result<(), String> {
     tokio::pin!(prompt);
     let mut accepted = false;
-    // Prompt replies after preflight, NOT after the agent finishes.
+    // The prompt reply arrives after the run; agent_settled determines completion.
     loop {
         let event = tokio::select! {
             response = &mut prompt, if !accepted => { response?; accepted = true; continue; }
@@ -436,7 +456,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
                 "prompt": input.prompt,
             }),
         );
-        let prompt = checked_request(
+        let prompt = checked_prompt_request(
             &state,
             &id,
             json!({"type":"prompt", "message":input.prompt}),

@@ -34,7 +34,7 @@ function harness(createOnly = false) {
     "@/stores/conversations": { useUiStore: () => ({ pushToast: vi.fn() }) },
     "@/lib/ssh": { isWslPlatform: () => true, connectionKind: connection => connection.kind ?? "ssh" },
     "@/lib/remoteBackends": { remoteKindOptions: () => [], remoteFormFields: () => [] },
-    "@tauri-apps/api/event": { listen: vi.fn(async () => () => {}) },
+    "@/composables/useSshDeployProgress": { useSshDeployProgress: () => vue.ref(null) },
   }
   const module = { exports: {} as any }
   new Function("exports", "require", code)(module.exports, id => imports[id] ?? {})

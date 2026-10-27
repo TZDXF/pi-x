@@ -52,6 +52,15 @@ export const SETTINGS_TABS = [
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number]
 
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    // Malformed shared links must not prevent the router module from loading.
+    return segment
+  }
+}
+
 function parse(): Route {
   const raw = window.location.hash.replace(/^#/, "")
   const path = raw.startsWith("/") ? raw : `/${raw}`
@@ -65,13 +74,13 @@ function parse(): Route {
       path,
       name: "session",
       params: {
-        conversation: decodeURIComponent(segments[1]),
-        project: segments[2] ? decodeURIComponent(segments[2]) : undefined,
+        conversation: decodeSegment(segments[1]),
+        project: segments[2] ? decodeSegment(segments[2]) : undefined,
       },
     }
   }
   if (segments[0] === "project" && segments[1]) {
-    return { path, name: "project", params: { project: decodeURIComponent(segments[1]) } }
+    return { path, name: "project", params: { project: decodeSegment(segments[1]) } }
   }
   // 归档页已并入设置，旧链接仍然直达设置里的归档标签。
   if (segments[0] === "archives") return { path: "/settings/archives", name: "settings", params: { tab: "archives" } }

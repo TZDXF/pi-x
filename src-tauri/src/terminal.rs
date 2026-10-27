@@ -29,9 +29,38 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
 pub struct TerminalSession {
-    writer: Box<dyn Write + Send>,
+    input: TerminalInput,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+}
+
+/// PTY writes can block when the child stops reading. Keep them off the
+/// synchronous command thread and preserve input order with one writer thread.
+#[derive(Clone)]
+struct TerminalInput(std::sync::mpsc::Sender<Vec<u8>>);
+
+impl TerminalInput {
+    fn new(mut writer: Box<dyn Write + Send>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            while let Ok(data) = receiver.recv() {
+                if writer
+                    .write_all(&data)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Self(sender)
+    }
+
+    fn send(&self, data: &str) -> Result<(), String> {
+        self.0
+            .send(data.as_bytes().to_vec())
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[derive(Default)]
@@ -223,6 +252,7 @@ fn spawn_terminal(
         .map_err(|e| pix_error_detail("shellSpawnFailed", format!("启动 shell 失败: {e}"), e))?;
     let killer = child.clone_killer();
     let writer = pair.master.take_writer().map_err(|e| format!("{e}"))?;
+    let input = TerminalInput::new(writer);
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("{e}"))?;
 
     // Stream PTY output to the frontend. The PTY read is blocking, so it runs
@@ -262,7 +292,7 @@ fn spawn_terminal(
     state.sessions.lock().unwrap().insert(
         id,
         TerminalSession {
-            writer,
+            input,
             master: pair.master,
             killer,
         },
@@ -277,15 +307,14 @@ pub fn term_write(state: State<'_, TerminalState>, id: u32, data: String) -> Res
 }
 
 fn write_session(state: &TerminalState, id: u32, data: &str) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&id)
+    let input = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|session| session.input.clone())
         .ok_or_else(|| pix_error("terminalClosed", "终端已关闭"))?;
-    session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    session.writer.flush().map_err(|e| e.to_string())
+    input.send(data)
 }
 
 #[tauri::command]
@@ -443,6 +472,44 @@ mod tests {
             }
         }
         decoded
+    }
+
+    #[test]
+    fn queued_input_does_not_wait_for_a_blocked_writer() {
+        struct BlockingWriter {
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        }
+        impl Write for BlockingWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let _ = self.entered.send(());
+                self.release.recv().unwrap();
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let input = TerminalInput::new(Box::new(BlockingWriter {
+            entered: entered_tx,
+            release: release_rx,
+        }));
+        input.send("first").unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            input.send("second").unwrap();
+            done_tx.send(()).unwrap();
+        });
+        done_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("排队输入不应等待阻塞的 PTY writer");
+        release_tx.send(()).unwrap();
+        release_tx.send(()).unwrap();
     }
 
     #[test]

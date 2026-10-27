@@ -25,7 +25,7 @@ import {
   resolveSshConnectionId,
 } from "@/lib/ssh"
 import { tBackendError } from "@/i18n"
-import { listen } from "@tauri-apps/api/event"
+import { useSshDeployProgress } from "@/composables/useSshDeployProgress"
 
 const props = defineProps<{ open: boolean; editPath?: string | null }>()
 const emit = defineEmits<{ close: []; save: [group: ProjectGroup] }>()
@@ -50,7 +50,7 @@ const probing = ref(false)
 const probeResult = ref<SshProbeResult | null>(null)
 const deployStatus = ref<{ piFound: boolean; deployed: boolean; version: string | null } | null>(null)
 const deploying = ref(false)
-const deployProgress = ref<{ step: string; message: string; percent: number } | null>(null)
+const deployProgress = useSshDeployProgress()
 const showConnectionDialog = ref(false)
 
 const selectedConnection = computed(
@@ -108,10 +108,6 @@ watch(
   ([open]) => {
     showConnectionDialog.value = false
     if (!open) return
-    // 监听部署进度事件（对齐 ZCode RemoteConnectionConnectingStep）
-    listen<{ step: string; message: string; percent: number }>("ssh_deploy_progress", event => {
-      deployProgress.value = event.payload
-    })
     const group = props.editPath ? workspace.projectGroups[props.editPath] : null
     title.value = group?.name || (props.editPath ? workspace.projectName(props.editPath) : "")
     folders.value = group ? [...group.folders] : props.editPath ? [props.editPath] : []
