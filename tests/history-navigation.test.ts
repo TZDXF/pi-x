@@ -85,9 +85,10 @@ test("history prefetches near the top, suppresses duplicates and preserves the r
 test("conversation mounts immediately with instant initial positioning; loading stays silent", () => {
   const chat = source("../src/components/chat/ChatTurnList.vue")
   expect(chat).toMatch(/<Conversation[^>]*ref="conversation"[^>]+initial="instant"/)
-  expect(chat).toMatch(
-    /v-if="session.entries.length === 0 && !session.historyLoading && \(!connecting \|\| selectingProject\)"/,
-  )
+  expect(chat).toMatch(/v-if="session.sessionFile && session.entries.length === 0 && session.historyLoading"/)
+  expect(chat).toMatch(/v-if="session.entries.length === 0 && !session.historyLoading"/)
+  expect(chat).toContain('<span>{{ t("chat.thinking") }}</span>')
+  expect(chat).not.toContain('t("chat.startingSession")')
   expect(chat).not.toMatch(/v-if="connecting \|\| session.historyLoading"/)
   expect(chat).not.toMatch(/@click="loadOlderHistory"/)
 })

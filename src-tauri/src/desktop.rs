@@ -64,19 +64,34 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// 开发者模式下由前端快捷键触发；release 构建依赖 tauri 的 `devtools` feature。
-/// 返回值表示调用后 devtools 是否处于打开状态。
+/// 开发者模式下由前端快捷键触发；返回值表示调用后 devtools 是否处于打开状态。
+///
+/// tauri 只在 `any(debug_assertions, feature = "devtools")` 下提供
+/// open_devtools 等 API：debug 构建自带 devtools，默认 release 产物不含
+/// （避免 webview 内任意 JS 执行路径经 devtools 控制台触达全部命令），
+/// 需要时以 `--features devtools` 重新编译。
 #[tauri::command]
 pub fn devtools_toggle(app: AppHandle) -> Result<bool, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    if window.is_devtools_open() {
-        window.close_devtools();
-        Ok(false)
-    } else {
-        window.open_devtools();
-        Ok(true)
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "main window not found".to_string())?;
+        if window.is_devtools_open() {
+            window.close_devtools();
+            Ok(false)
+        } else {
+            window.open_devtools();
+            Ok(true)
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "devtools")))]
+    {
+        let _ = app;
+        Err(crate::errors::pix_error(
+            "devtoolsUnavailable",
+            "当前构建未编译 devtools，需以 --features devtools 重新打包",
+        ))
     }
 }
 

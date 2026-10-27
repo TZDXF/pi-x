@@ -67,7 +67,8 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
   }
 
   function onGlobalKeydown(event: KeyboardEvent) {
-    // devtools 快捷键不受会话阶段限制，打包版本在开发者模式下同样可用。
+    // devtools 快捷键不受会话阶段限制；默认 release 产物不含 devtools，
+    // 打包版本需以 --features devtools 编译（见 developerMode.ts）。
     if (developerModeEnabled.value && isDevtoolsShortcut(event)) {
       event.preventDefault()
       void toggleDevtools()

@@ -270,7 +270,7 @@ test("cross-project drafts stay visible and the send button stays enabled during
   expect(context.actions.connecting.value).toBe(false)
   expect(calls).toEqual([])
   const view = composerSources() + turnSources()
-  expect(view.split("(!connecting || selectingProject)").length - 1).toBe(1)
+  expect(view).toContain('v-if="session.entries.length === 0 && !session.historyLoading"')
   expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| gitBusy\)/)
   expect(view).toMatch(/:disabled="editBusy \|\| gitBusy"/)
 })

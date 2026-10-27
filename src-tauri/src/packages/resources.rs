@@ -73,6 +73,38 @@ fn find_package_entry<'a>(doc: &'a Value, source: &str) -> Option<usize> {
         })
 }
 
+/// Read and parse the scope's settings.json (shared by the commands that take
+/// a caller-supplied `source`).
+fn read_settings_doc(scope: &str, project: Option<&str>) -> Result<Value, String> {
+    let settings_file = settings_path_for(scope, project)?;
+    let raw = std::fs::read_to_string(&settings_file)
+        .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))
+}
+
+/// Reject sources that are not registered in the scope's settings file.
+/// [`package_root_dir`] adopts local paths verbatim (including absolute ones,
+/// so locally developed packages keep working); without this check a
+/// caller-supplied path like `/etc` would become the root itself and turn the
+/// containment guards in `package_read_file` into no-ops (arbitrary file
+/// read). `package_resources` has always required registration; the file
+/// listing/reading commands must apply the same rule.
+fn ensure_registered_package(
+    source: &str,
+    scope: &str,
+    project: Option<&str>,
+) -> Result<(), String> {
+    let doc = read_settings_doc(scope, project)?;
+    ensure_source_registered(source, &doc)
+}
+
+fn ensure_source_registered(source: &str, doc: &Value) -> Result<(), String> {
+    find_package_entry(doc, source)
+        .map(|_| ())
+        .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))
+}
+
 /// User filter patterns for one resource type; `None` when the key is absent
 /// (load all). `Some([])` means load none.
 fn filter_patterns(entry: &Value, resource_type: &str) -> Option<Vec<String>> {
@@ -357,11 +389,7 @@ pub fn package_resources(
     scope: String,
     project: Option<String>,
 ) -> Result<Vec<PackageResource>, String> {
-    let settings_file = settings_path_for(&scope, project.as_deref())?;
-    let raw = std::fs::read_to_string(&settings_file)
-        .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
-    let doc: Value = serde_json::from_str(&raw)
-        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
+    let doc = read_settings_doc(&scope, project.as_deref())?;
     let idx = find_package_entry(&doc, &source)
         .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
     let entry = &doc["packages"][idx];
@@ -488,6 +516,7 @@ pub fn package_list_files(
     scope: String,
     project: Option<String>,
 ) -> Result<Vec<String>, String> {
+    ensure_registered_package(&source, &scope, project.as_deref())?;
     let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
         pix_error(
             "pluginInstallDirNotFound",
@@ -519,6 +548,9 @@ pub fn package_read_file(
 ) -> Result<String, String> {
     // Reject path traversal: the relative path must stay inside the package root.
     crate::preview_guard::reject_unsafe_rel_path(&path, "无效的资源路径")?;
+    // The root itself must belong to a registered package; package_root_dir
+    // would otherwise adopt any caller-supplied absolute directory.
+    ensure_registered_package(&source, &scope, project.as_deref())?;
     let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
         pix_error(
             "pluginInstallDirNotFound",
@@ -657,6 +689,47 @@ mod tests {
     fn npm_name_strips_version() {
         let dir = package_root_dir("npm:@scope/pkg@1.2.3", "__none__", None);
         assert!(dir.is_none()); // not installed, but must not panic
+    }
+
+    #[test]
+    fn unregistered_sources_are_rejected() {
+        let doc: Value = serde_json::from_str(
+            r#"{"packages":["npm:demo",{"source":"git:example.com/repo"},"../escape"]}"#,
+        )
+        .unwrap();
+        assert!(ensure_source_registered("npm:demo", &doc).is_ok());
+        assert!(ensure_source_registered("git:example.com/repo", &doc).is_ok());
+        // A relative path only works as the exact registered entry string.
+        assert!(ensure_source_registered("../escape", &doc).is_ok());
+        // Absolute paths and traversal are unusable unless an identical
+        // package entry was actually installed — this is what keeps
+        // package_root_dir's verbatim local-path branch from becoming an
+        // arbitrary-file-read root.
+        assert_eq!(
+            ensure_source_registered("/etc", &doc).unwrap_err(),
+            pix_error("pluginNotInSettings", "设置中未找到该插件")
+        );
+        assert!(ensure_source_registered("../../etc/passwd", &doc).is_err());
+        assert!(ensure_source_registered("C:\\Windows", &doc).is_err());
+        // Missing or malformed packages arrays reject everything.
+        let empty: Value = serde_json::from_str("{}").unwrap();
+        assert!(ensure_source_registered("npm:demo", &empty).is_err());
+    }
+
+    #[test]
+    fn package_root_dir_adopts_registered_local_paths_verbatim() {
+        // Documents the local-path branch: locally developed packages may be
+        // absolute directories (root adopted as-is), so containment relies on
+        // the registration check, not on root resolution.
+        let tmp = std::env::temp_dir().join(format!("pix-pkg-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("mypkg")).unwrap();
+        let source = tmp.join("mypkg").to_string_lossy().to_string();
+        assert_eq!(
+            package_root_dir(&source, "global", None),
+            Some(tmp.join("mypkg"))
+        );
+        assert_eq!(package_root_dir("/definitely/not/a/pkg-dir", "global", None), None);
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

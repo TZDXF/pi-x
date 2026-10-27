@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
         <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t("chat.historyLoading") }}</template>
       </div>
       <div
-        v-if="session.entries.length === 0 && (session.historyLoading || (connecting && !selectingProject))"
+        v-if="session.sessionFile && session.entries.length === 0 && session.historyLoading"
         class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm"
         role="status"
       >
@@ -148,7 +148,7 @@ onBeforeUnmount(() => {
       </div>
       <ConversationEmptyState
         class="chat-empty flex-1 min-h-60"
-        v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
+        v-if="session.entries.length === 0 && !session.historyLoading"
         :title="t('workspace.emptyTitle', { project: projectName })"
       >
         <template #icon>
@@ -232,7 +232,7 @@ onBeforeUnmount(() => {
           role="status"
         >
           <Loader :size="14" />
-          <span>{{ t("chat.startingSession") }}</span>
+          <span>{{ t("chat.thinking") }}</span>
         </div>
       </template>
 
