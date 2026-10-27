@@ -236,10 +236,29 @@ export const createSessionStore = (runtimeId = "default") =>
       clearQueueTimer,
     } = createPromptQueue({ promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send })
 
+    const pendingSteering = new Map<
+      number,
+      { entry: UserEntry; promptText: string; images?: { data: string; mimeType: string }[] }
+    >()
     let userTurnCount = 0
 
     const handleEvent = createEventHandler({
       runtimeId,
+      onUserMessage: (message: any) => {
+        const text =
+          typeof message.content === "string"
+            ? message.content
+            : (message.content ?? [])
+                .filter((part: any) => part.type === "text")
+                .map((part: any) => part.text)
+                .join("\n")
+        const pendingItems = [...pendingSteering.entries()]
+        // Extensions can transform the message before the user event is emitted.
+        const pending = pendingItems.find(([, item]) => item.promptText === text) ?? pendingItems[0]
+        if (!pending) return
+        pendingSteering.delete(pending[0])
+        entries.value.push({ ...pending[1].entry, timestamp: message.timestamp ?? Date.now() })
+      },
       entries,
       runs,
       partialBlocks,
@@ -354,7 +373,7 @@ export const createSessionStore = (runtimeId = "default") =>
       const modelChange = trimmed.startsWith("/") ? undefined : (pendingModelChange.value ?? undefined)
       if (modelChange) pendingModelChange.value = null
       ++userTurnCount
-      entries.value.push({
+      const userEntry: UserEntry = {
         kind: "user",
         id: replacement?.id ?? nextId(),
         timestamp: Date.now(),
@@ -362,19 +381,23 @@ export const createSessionStore = (runtimeId = "default") =>
         modelChange: modelChange ?? replacement?.modelChange,
         images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
         live: true,
-      })
+      }
+      if (wasStreaming) pendingSteering.set(userEntry.id, { entry: userEntry, promptText, images })
+      else entries.value.push(userEntry)
       const command: Record<string, unknown> = { type: "prompt", message: promptText }
       if (images?.length) command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
       if (wasStreaming) command.streamingBehavior = "steer"
       // resolves after the full run finishes; events drive the UI meanwhile
-      rpcRequest(command)
+      rpcRequest<{ disposition?: string }>(command)
         .then(async res => {
           if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
+          if (wasStreaming && res.data?.disposition === "handled") pendingSteering.delete(userEntry.id)
           // Record queued steering silently; keep other disposition notices.
           reportDisposition("prompt", res.data, wasStreaming ? "chat.steerQueued" : "chat.followUpQueued")
         })
         .catch(e => {
           if (version !== conversationVersion) return
+          pendingSteering.delete(userEntry.id)
           flow.turnFailed = true
           setSessionRunStatus(sessionFile.value, "error", cwd.value)
           if (!wasStreaming) {
@@ -456,6 +479,7 @@ export const createSessionStore = (runtimeId = "default") =>
               text,
             })),
           )
+          pendingSteering.clear()
           steering.value = []
           followUp.value = []
           const aborted = await rpcRequest({ type: "abort" })
@@ -505,6 +529,67 @@ export const createSessionStore = (runtimeId = "default") =>
       }
     }
 
+    /** Take the selected native steering message back before aborting; preserve the rest locally. */
+    async function sendSteeringNow(index: number) {
+      if (flow.stopping || isResending.value) return
+      const selectedText = steering.value[index]
+      if (selectedText === undefined) return
+      const version = conversationVersion
+      flow.stopping = true
+      flow.queuePaused = true
+      try {
+        const cleared = await rpcRequest<{ steering?: string[]; followUp?: string[] }>({ type: "clear_queue" })
+        if (version !== conversationVersion) return
+        if (!cleared.success) throw new Error(cleared.error ?? i18n.global.t("chat.editStopFailed"))
+        const all = [...(cleared.data?.steering ?? []), ...(cleared.data?.followUp ?? [])]
+        const selectedIndex = (cleared.data?.steering ?? [])[index] === selectedText ? index : -1
+        // It may have already been delivered while the click was in flight.
+        const local = [...pendingSteering.entries()]
+        const toQueue = all.map(text => {
+          const match = local.findIndex(([, item]) => item.promptText === text)
+          const found = match < 0 ? undefined : local.splice(match, 1)[0]
+          if (found) pendingSteering.delete(found[0])
+          const item = found?.[1]
+          return { id: nextId(), text: item?.entry.text ?? text, images: item?.images, expandedText: item?.promptText }
+        })
+        steering.value = []
+        followUp.value = []
+        if (selectedIndex < 0) {
+          promptQueue.value.unshift(...toQueue)
+          flow.queuePaused = false
+          return
+        }
+        const selected = toQueue.splice(selectedIndex, 1)[0]
+        promptQueue.value.unshift(...toQueue)
+        // Keep the selected prompt recoverable if abort or idle confirmation fails.
+        promptQueue.value.unshift(selected)
+        const aborted = await rpcRequest({ type: "abort" })
+        if (version !== conversationVersion) return
+        if (!aborted.success) throw new Error(aborted.error ?? i18n.global.t("chat.editStopFailed"))
+        const idle = await rpcRequest<SessionState>({ type: "get_state" })
+        if (version !== conversationVersion) return
+        if (
+          !idle.success ||
+          !idle.data ||
+          idle.data.isStreaming ||
+          idle.data.isCompacting ||
+          idle.data.pendingMessageCount > 0 ||
+          idle.data.sessionFile !== sessionFile.value
+        )
+          throw new Error(i18n.global.t("chat.editStopFailed"))
+        isStreaming.value = false
+        partialBlocks.value = null
+        streamingTurnId.value = null
+        flow.stopping = false
+        flow.queuePaused = false
+        dispatchQueuedPrompt()
+      } catch (error) {
+        if (version === conversationVersion) pushErrorEntry(error)
+      } finally {
+        if (version === conversationVersion) flow.stopping = false
+      }
+    }
+
     /** Esc: take back queued messages, then abort. Returns text to restore. */
     async function abortAndRestore(): Promise<string> {
       flow.stopping = true
@@ -513,6 +598,7 @@ export const createSessionStore = (runtimeId = "default") =>
       try {
         const res = await rpcRequest<{ steering?: string[]; followUp?: string[] }>({ type: "clear_queue" })
         restored.push(...(res.data?.steering ?? []), ...(res.data?.followUp ?? []))
+        pendingSteering.clear()
       } catch {
         // ignore
       }
@@ -549,6 +635,7 @@ export const createSessionStore = (runtimeId = "default") =>
       flow.lastErrorMessage = null
       flow.awaitingAgentStart = false
       promptQueue.value = []
+      pendingSteering.clear()
       clearQueueTimer()
       flow.stopping = false
       ++resendVersion
@@ -829,6 +916,7 @@ export const createSessionStore = (runtimeId = "default") =>
       handleEvent,
       send,
       abortAndRestore,
+      sendSteeringNow,
       resendPrompt,
       isResending,
       newSession,

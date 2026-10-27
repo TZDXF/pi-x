@@ -713,6 +713,7 @@ export default {
     addToQueue: "加入队列",
     steer: "调整方向",
     pendingSteering: "运行中插入",
+    sendSteeringNow: "立即发送",
     pendingFollowUp: "任务完成后发送",
     dispositionHandled: "请求已被扩展处理",
     steerQueued: "已加入队列：将在当前步骤结束后发送给模型",
@@ -1481,12 +1482,10 @@ export default {
     piBundleMetadataInvalid: "本地 pi 的 package.json 缺失或无效。请重新安装 npm 版 pi。",
     sshRemoteNodeMissing: "远程主机未安装 Node.js。请安装 Node.js 22 或更高版本以运行 pi。",
     sshRemoteDeployFailed: "远程 pi 部署失败: {detail}",
-    sshHostKeyUnverified:
-      "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
+    sshHostKeyUnverified: "主机指纹尚未确认。请先在终端手动 ssh 一次该主机并确认指纹，然后重试。",
     sshHostKeyChanged:
       "远程主机指纹与 known_hosts 记录不一致，可能是主机重装或中间人攻击。核实后在 ~/.ssh/known_hosts 中删除该主机条目再重试。",
-    sshSdkDistMissing:
-      "未找到远程 pi 的 SDK 安装目录，无法执行远程信任操作。请确认远程主机已完整安装 pi。",
+    sshSdkDistMissing: "未找到远程 pi 的 SDK 安装目录，无法执行远程信任操作。请确认远程主机已完整安装 pi。",
     sshTrustFailed: "远程信任操作失败: {detail}",
     sshRemoteFailed: "远程操作失败: {detail}",
     wslUnsupportedPlatform: "当前平台不支持 WSL 远程连接。",

@@ -251,7 +251,19 @@ onBeforeUnmount(() => {
       <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
         <QueueList>
           <QueueItem v-for="(s, i) in session.steering" :key="`steer-${i}`">
-            <QueueItemContent>{{ t("chat.pendingSteering") }} · {{ s }}</QueueItemContent>
+            <div class="bg-muted/50 border-border flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2">
+              <div class="min-w-0 flex-1">
+                <div class="text-muted-foreground text-xs font-medium">{{ t("chat.pendingSteering") }}</div>
+                <div class="mt-1 break-words text-sm">{{ s }}</div>
+              </div>
+              <button
+                type="button"
+                class="border-border bg-background hover:bg-accent shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors"
+                @click="session.sendSteeringNow(i)"
+              >
+                {{ t("chat.sendSteeringNow") }}
+              </button>
+            </div>
           </QueueItem>
           <QueueItem v-for="(s, i) in session.followUp" :key="`follow-up-${i}`">
             <QueueItemContent>{{ t("chat.pendingFollowUp") }} · {{ s }}</QueueItemContent>

@@ -179,6 +179,7 @@ export function uiEntryFromAppendedEntry(raw: any, id: number, timestamp: number
 /** Reactive state and store callbacks the event handler needs. */
 export interface EventContext {
   runtimeId: string
+  onUserMessage: (message: any) => void
   entries: Ref<Entry[]>
   runs: Ref<Record<string, ToolRun>>
   partialBlocks: Ref<Block[] | null>
@@ -206,6 +207,7 @@ export interface EventContext {
 export function createEventHandler(ctx: EventContext) {
   const {
     runtimeId,
+    onUserMessage,
     entries,
     runs,
     partialBlocks,
@@ -324,6 +326,7 @@ export function createEventHandler(ctx: EventContext) {
 
       case "message_start": {
         const msg = ev.message
+        if (msg?.role === "user") onUserMessage(msg)
         if (msg?.role === "assistant") {
           streamingTurnId.value ??= nextId()
           partialBlocks.value = []

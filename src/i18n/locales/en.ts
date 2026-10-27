@@ -734,6 +734,7 @@ export default {
     addToQueue: "Add to queue",
     steer: "Steer",
     pendingSteering: "Steering",
+    sendSteeringNow: "Send now",
     pendingFollowUp: "After current task",
     dispositionHandled: "Handled by an extension",
     steerQueued: "Queued: will be delivered to the model after the current step",
@@ -1539,14 +1540,13 @@ export default {
     sshRemoteFailed: "Remote operation failed: {detail}",
     wslUnsupportedPlatform: "WSL remotes are only supported on Windows.",
     wslNotInstalled:
-      "wsl.exe not found or WSL is not installed. Enable \"Windows Subsystem for Linux\" in Windows Features.",
+      'wsl.exe not found or WSL is not installed. Enable "Windows Subsystem for Linux" in Windows Features.',
     wslDistroNotFound: "The WSL distro does not exist or has been unregistered. Check the distro name.",
     wslExecFailed: "WSL command failed: {detail}",
     dockerMissing: "docker command not found. Install and start Docker Desktop.",
     dockerDaemonDown: "The Docker daemon is not responding. Make sure Docker Desktop is running.",
     dockerContainerNotFound: "The Docker container does not exist. Check the container name.",
-    dockerContainerNotRunning:
-      "The container is not running. Start it first — PiX will not start it automatically.",
+    dockerContainerNotRunning: "The container is not running. Start it first — PiX will not start it automatically.",
     dockerExecFailed: "Docker command failed: {detail}",
   },
 }

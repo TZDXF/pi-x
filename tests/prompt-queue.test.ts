@@ -445,3 +445,65 @@ test("scheduled preflight rejection releases the conversation for user continuat
   expect(h.store.isStreaming).toBe(false)
   expect(h.store.entries[1].blocks[0].text).toMatch(/Model unavailable/)
 })
+
+test("steering appears in the transcript only when the user message is delivered", async () => {
+  const h = await sessionHarness()
+  h.store.isStreaming = true
+  await h.store.send("question", [{ data: "YWJj", mimeType: "image/png" }], "expanded question", "steer")
+  expect(h.store.entries).toHaveLength(0)
+  h.store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  h.store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "previous answer" }] },
+  })
+  h.store.handleEvent({
+    type: "message_start",
+    message: { role: "user", content: [{ type: "text", text: "expanded question" }] },
+  })
+  expect(h.store.entries.map(e => e.kind)).toEqual(["assistant", "user"])
+  expect(h.store.entries[1].text).toBe("question")
+  expect(h.store.entries[1].images[0].url).toContain("YWJj")
+})
+
+test("send steering now clears the native queue, aborts and sends the selected prompt after idle", async () => {
+  const h = await sessionHarness({
+    clear_queue: () => ({ success: true, data: { steering: ["expanded first", "second"], followUp: ["later"] } }),
+    abort: () => ({ success: true }),
+    get_state: () => ({
+      success: true,
+      data: { isStreaming: false, isCompacting: false, pendingMessageCount: 0, sessionFile: "one.jsonl" },
+    }),
+  })
+  h.store.isStreaming = true
+  await h.store.send("first", [{ data: "YWJj", mimeType: "image/png" }], "expanded first", "steer")
+  await h.store.send("second", undefined, undefined, "steer")
+  h.store.handleEvent({ type: "queue_update", steering: ["expanded first", "second"], followUp: ["later"] })
+  await h.store.sendSteeringNow(0)
+  expect(
+    h.calls.filter(c => ["clear_queue", "abort", "get_state", "prompt"].includes(c.type)).map(c => c.type),
+  ).toEqual(["prompt", "prompt", "clear_queue", "abort", "get_state", "prompt"])
+  expect(h.calls.filter(c => c.type === "prompt").at(-1)).toEqual({
+    type: "prompt",
+    message: "expanded first",
+    images: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
+  })
+  expect(h.store.entries.map(e => e.text)).toEqual(["first"])
+  expect(h.store.promptQueue.map(e => e.text)).toEqual(["second", "later"])
+})
+
+test("failed abort keeps the selected steering prompt and attachments in the local queue", async () => {
+  const h = await sessionHarness({
+    clear_queue: () => ({ success: true, data: { steering: ["expanded"] } }),
+    abort: () => ({ success: false, error: "abort failed" }),
+  })
+  h.store.isStreaming = true
+  await h.store.send("original", [{ data: "YWJj", mimeType: "image/png" }], "expanded", "steer")
+  h.store.handleEvent({ type: "queue_update", steering: ["expanded"] })
+  await h.store.sendSteeringNow(0)
+  expect(h.store.promptQueue[0]).toMatchObject({
+    text: "original",
+    expandedText: "expanded",
+    images: [{ data: "YWJj" }],
+  })
+  expect(h.calls.filter(c => c.type === "prompt")).toHaveLength(1)
+})
