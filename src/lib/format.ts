@@ -49,3 +49,15 @@ export function formatRelativeTime(ms: number): string {
   if (months < 12) return rtf.format(-months, "month")
   return rtf.format(-Math.round(months / 12), "year")
 }
+
+/** Durations in compact h/m/s form ("2h 05m", "3m 12s", "45s"); unit symbols
+ *  are language-neutral, matching KB/MB style technical labels. */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h) return `${h}h ${String(m).padStart(2, "0")}m`
+  if (m) return `${m}m ${String(s).padStart(2, "0")}s`
+  return `${s}s`
+}

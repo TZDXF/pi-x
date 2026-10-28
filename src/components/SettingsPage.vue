@@ -134,6 +134,8 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "general", labelKey: "settings.language" },
   { tab: "archives", labelKey: "sessionArchive.restore" },
   { tab: "archives", labelKey: "sessionArchive.delete" },
+  { tab: "usage", labelKey: "usage.totalCost" },
+  { tab: "usage", labelKey: "usage.totalTokens" },
   { tab: "about", labelKey: "appUpdate.title" },
   { tab: "about", labelKey: "piUpdate.title" },
   { tab: "about", labelKey: "settings.dataDirectory" },
@@ -203,6 +205,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   skills: ["skillsConfig"],
   mcp: ["mcpConfig"],
   archives: ["sessionArchive"],
+  usage: ["usage"],
   about: ["settings.aboutBody", "appUpdate", "piUpdate", "settings.dataDirectory"],
 }
 

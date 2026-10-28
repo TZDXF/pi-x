@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Plus, Pencil, Trash2, Pause, Play, CirclePlay, FileText, Clock } from "@lucide/vue"
+import { Plus, Pencil, Trash2, Pause, Play, CirclePlay, FileText, Clock, ChevronRight, ChevronDown } from "@lucide/vue"
 import { TimeFieldInput, TimeFieldRoot, type TimeValue } from "reka-ui"
 import { Time } from "@internationalized/date"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -22,6 +22,7 @@ import {
   onScheduledTasksChanged,
   type ScheduledTask,
   type ScheduledTaskInput,
+  type ScheduledTaskRun,
 } from "@/api/schedules"
 import {
   scheduleExpression,
@@ -31,7 +32,7 @@ import {
   type ScheduleFrequency,
 } from "@/lib/schedules"
 import { tBackendError } from "@/i18n"
-import { formatDateTime } from "@/lib/format"
+import { formatDateTime, formatDuration } from "@/lib/format"
 import { supportedThinkingLevels } from "@/lib/thinkingLevels"
 import type { ThinkingLevel } from "@/api/protocol"
 
@@ -215,6 +216,13 @@ function describeExpression(expression: string): string {
 function openResult(task: ScheduledTask) {
   if (!task.sessionFile) return
   emit("resumeSession", task.sessionFile, task.project)
+}
+const expandedRuns = ref<string | null>(null)
+function runsOf(task: ScheduledTask): ScheduledTaskRun[] {
+  return (task.runs ?? []).slice().reverse()
+}
+function openRun(task: ScheduledTask, run: ScheduledTaskRun) {
+  if (run.sessionFile) emit("resumeSession", run.sessionFile, task.project)
 }
 </script>
 
@@ -408,6 +416,43 @@ function openResult(task: ScheduledTask) {
             ><template v-else> · {{ t("schedules.paused") }}</template>
           </p>
           <p v-if="task.error" class="text-xs text-destructive break-words">{{ tBackendError(task.error) }}</p>
+          <div v-if="runsOf(task).length" class="space-y-1.5">
+            <button
+              type="button"
+              class="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              :aria-expanded="expandedRuns === task.id"
+              @click="expandedRuns = expandedRuns === task.id ? null : task.id!"
+            >
+              <ChevronRight v-if="expandedRuns !== task.id" :size="13" /><ChevronDown v-else :size="13" />
+              {{ t("schedules.history") }} ({{ runsOf(task).length }})
+            </button>
+            <ul v-if="expandedRuns === task.id" class="ml-2 space-y-1.5 border-l pl-3">
+              <li
+                v-for="(run, index) in runsOf(task)"
+                :key="`${run.startedAt}-${index}`"
+                class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs"
+              >
+                <span :class="run.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'">{{
+                  t(`schedules.${run.status}`)
+                }}</span>
+                <span class="text-muted-foreground">{{ t(`schedules.triggers.${run.trigger}`) }}</span>
+                <span class="text-muted-foreground tabular-nums">{{ formatDateTime(run.startedAt) }}</span>
+                <span v-if="run.durationMs != null" class="text-muted-foreground tabular-nums">{{
+                  formatDuration(run.durationMs)
+                }}</span>
+                <button
+                  v-if="run.sessionFile"
+                  type="button"
+                  class="text-foreground underline-offset-2 hover:underline"
+                  :aria-label="t('schedules.result')"
+                  @click="openRun(task, run)"
+                >
+                  {{ t("schedules.result") }}
+                </button>
+                <span v-if="run.error" class="w-full text-destructive break-words">{{ tBackendError(run.error) }}</span>
+              </li>
+            </ul>
+          </div>
           <div v-if="deleting === task.id" class="flex items-center justify-end gap-2 text-sm">
             <span>{{ t("schedules.deleteConfirm") }}</span
             ><Button variant="outline" size="sm" :disabled="busy" @click="deleting = null">{{

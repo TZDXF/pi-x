@@ -40,6 +40,7 @@ mod terminal;
 mod terminal_open;
 mod title_generation;
 mod trust;
+mod usage;
 mod workspace_git;
 
 use rpc::RpcState;
@@ -149,6 +150,7 @@ pub fn run() {
             ssh_sessions::ssh_session_search,
             commands::files::session_list,
             session_search::session_search,
+            usage::usage_summary,
             sessions::session_mtime,
             sessions::session_history,
             sessions::session_last_error,

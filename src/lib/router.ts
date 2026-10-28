@@ -36,6 +36,7 @@ export const SETTINGS_TABS = [
   "appearance",
   "run-config",
   "archives",
+  "usage",
   "notifications",
   "remote",
   "ssh",

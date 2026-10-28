@@ -148,22 +148,49 @@ mod tests {
 
     #[test]
     fn does_not_wait_for_descendant_holding_inherited_output() {
+        let lifetime = tempfile::tempdir().unwrap();
+        let ready = lifetime.path().join("ready");
         let mut command = Command::new("node");
         command.args([
             "-e",
             r#"
             const { spawn } = require('node:child_process');
-            const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'],
+            const fs = require('node:fs');
+            const directory = process.argv[1];
+            const ready = require('node:path').join(directory, 'ready');
+            const child = spawn(process.execPath, ['-e', `
+              const fs = require('node:fs');
+              const directory = process.argv[1];
+              const ready = require('node:path').join(directory, 'ready');
+              process.on('exit', () => fs.rmSync(ready, { force: true }));
+              setInterval(() => {
+                if (!fs.existsSync(directory)) process.exit(0);
+              }, 50);
+              setTimeout(() => process.exit(0), 30000);
+              fs.writeFileSync(ready, '');
+            `, directory],
               { detached: true, stdio: 'inherit' });
             child.unref();
-            process.stdout.write('parent done');
+            const waiting = setInterval(() => {
+              if (fs.existsSync(ready)) {
+                clearInterval(waiting);
+                process.stdout.write('parent done');
+              }
+            }, 10);
         "#,
         ]);
-        let started = Instant::now();
-        let output = run_with_timeout(&mut command, vec![], Duration::from_secs(2)).unwrap();
+        command.arg(lifetime.path());
+        // Allow Node startup on a busy runner. The marker verifies that output
+        // is returned while the descendant still holds its inherited handles,
+        // without relying on a narrow wall-clock assertion. Dropping the temp
+        // directory releases the descendant, even if an assertion panics.
+        let output = run_with_timeout(&mut command, vec![], Duration::from_secs(10)).unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"parent done");
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            ready.exists(),
+            "waited for the descendant to release output"
+        );
     }
 
     #[test]

@@ -29,6 +29,20 @@ pub struct TaskInput {
     pub enabled: bool,
 }
 
+/// 单次运行的历史记录。`startedAt` 是 claim 时刻；完成信息由 `finish_task`
+/// 回填到对应记录上，中断（应用关闭）的记录只标记失败、不回填时长。
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRecord {
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub trigger: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub session_file: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -39,9 +53,73 @@ pub struct Task {
     pub status: String,
     pub error: Option<String>,
     pub session_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<RunRecord>,
 }
 #[derive(Default)]
 pub struct ScheduleState(Mutex<Vec<Task>>);
+
+/// 每个任务保留的运行历史上限（超过后丢弃最旧的）。
+const MAX_RUN_RECORDS: usize = 50;
+
+/// 追加一条运行记录并截断，只保留最近 `MAX_RUN_RECORDS` 条。
+fn push_run_record(task: &mut Task, record: RunRecord) {
+    task.runs.push(record);
+    let excess = task.runs.len().saturating_sub(MAX_RUN_RECORDS);
+    if excess > 0 {
+        task.runs.drain(..excess);
+    }
+}
+
+/// 收尾运行历史：把最后一条 `running` 记录回填为最终状态；找不到时兜底
+/// 追加一条（防旧数据或异常路径丢记录）。独立于持久化，便于单测。
+fn finalize_run_record(
+    task: &mut Task,
+    result: &Result<String, String>,
+    now: i64,
+    fallback_started_at: Option<i64>,
+) {
+    let (status, error, session_file) = match result {
+        Ok(file) => ("success", None, Some(file.clone())),
+        Err(e) => ("failed", Some(e.clone()), None),
+    };
+    match task.runs.iter_mut().rev().find(|r| r.status == "running") {
+        Some(record) => {
+            record.finished_at = Some(now);
+            record.duration_ms = Some((now - record.started_at).max(0));
+            record.status = status.into();
+            record.error = error;
+            // publish 阶段已回填过的会话文件保留（失败也可能已创建会话）。
+            if record.session_file.is_none() {
+                record.session_file = session_file;
+            }
+        }
+        None => push_run_record(
+            task,
+            RunRecord {
+                started_at: fallback_started_at.unwrap_or(now),
+                finished_at: Some(now),
+                trigger: "unknown".into(),
+                status: status.into(),
+                error,
+                session_file,
+                duration_ms: fallback_started_at.map(|s| (now - s).max(0)),
+            },
+        ),
+    }
+}
+
+/// 启动归一化：应用关闭时卡在 running 的任务标记为失败，运行历史中的
+/// running 记录同步收尾（无精确结束时间，不回填时长）。
+fn mark_interrupted_by_shutdown(task: &mut Task) {
+    let message = pix_error("interruptedByShutdown", "因应用关闭而中断");
+    task.status = "failed".into();
+    task.error = Some(message.clone());
+    for record in task.runs.iter_mut().filter(|r| r.status == "running") {
+        record.status = "failed".into();
+        record.error = Some(message.clone());
+    }
+}
 
 /// Schedule runtime 完成后的回收宽限期：若期间未被前端 attach（无任何请求），则 kill。
 const SCHEDULE_RUNTIME_TTL: Duration = Duration::from_secs(600);
@@ -155,12 +233,14 @@ pub async fn schedule_save(
         status: "idle".into(),
         error: None,
         session_file: None,
+        runs: Vec::new(),
     };
     if let Some(i) = existing {
         task.last_run = tasks[i].last_run;
         task.status = tasks[i].status.clone();
         task.error = tasks[i].error.clone();
         task.session_file = tasks[i].session_file.clone();
+        task.runs = tasks[i].runs.clone();
         tasks[i] = task.clone();
     } else {
         tasks.push(task.clone());
@@ -207,7 +287,20 @@ pub async fn schedule_run(
         task.status = "running".into();
         task.session_file = None;
         task.error = None;
-        task.last_run = Some(Local::now().timestamp_millis());
+        let now = Local::now().timestamp_millis();
+        task.last_run = Some(now);
+        push_run_record(
+            task,
+            RunRecord {
+                started_at: now,
+                finished_at: None,
+                trigger: "manual".into(),
+                status: "running".into(),
+                error: None,
+                session_file: None,
+                duration_ms: None,
+            },
+        );
         persist(&tasks).await?;
         *guard = tasks;
         claimed
@@ -250,8 +343,10 @@ async fn finish_task(
     let state = app.state::<ScheduleState>();
     let mut guard = state.0.lock().await;
     if let Some(current) = guard.iter_mut().find(|t| t.input.id == task.input.id) {
+        let now = Local::now().timestamp_millis();
         // 跳过任务运行期间错过的槽位（策略见 NextRunAdvance）。
-        advance_next_run(current, advance, Local::now().timestamp_millis());
+        advance_next_run(current, advance, now);
+        finalize_run_record(current, &result, now, current.last_run);
         match result {
             Ok(file) => {
                 current.status = "success".into();
@@ -442,6 +537,9 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
                 .find(|t| t.input.id == input.id)
                 .ok_or_else(|| pix_error("taskNotFound", "任务不存在，可能已被删除"))?;
             current.session_file = Some(file.clone());
+            if let Some(record) = current.runs.iter_mut().rev().find(|r| r.status == "running") {
+                record.session_file = Some(file.clone());
+            }
             persist(&updated).await?;
             *guard = updated;
         }
@@ -543,6 +641,18 @@ fn claim_due(tasks: &mut [Task], now: i64) -> (Vec<Task>, bool) {
         task.session_file = None;
         task.error = None;
         task.last_run = Some(now);
+        push_run_record(
+            task,
+            RunRecord {
+                started_at: now,
+                finished_at: None,
+                trigger: "scheduled".into(),
+                status: "running".into(),
+                error: None,
+                session_file: None,
+                duration_ms: None,
+            },
+        );
         claimed.push(task.clone());
     }
     (claimed, changed)
@@ -566,8 +676,7 @@ pub fn start(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let now = Local::now().timestamp_millis();
     for task in &mut tasks {
         if task.status == "running" {
-            task.status = "failed".into();
-            task.error = Some(pix_error("interruptedByShutdown", "因应用关闭而中断"));
+            mark_interrupted_by_shutdown(task);
         }
         match next_run(&task.input.expression, now) {
             Ok(next) => task.next_run = next,
@@ -631,6 +740,7 @@ mod tests {
             status: "idle".into(),
             error: None,
             session_file: None,
+            runs: Vec::new(),
         }
     }
     #[test]
@@ -671,6 +781,144 @@ mod tests {
         assert!(claimed.is_empty());
         assert!(!tasks[0].input.enabled);
         assert_eq!(tasks[0].status, "failed");
+    }
+    #[test]
+    fn claim_appends_a_scheduled_run_record() {
+        let now = Local::now().timestamp_millis();
+        let mut tasks = vec![fixture()];
+        let (claimed, _) = claim_due(&mut tasks, now);
+        assert_eq!(claimed.len(), 1);
+        let runs = &tasks[0].runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].started_at, now);
+        assert_eq!(runs[0].trigger, "scheduled");
+        assert_eq!(runs[0].status, "running");
+        assert_eq!(runs[0].finished_at, None);
+        assert_eq!(runs[0].session_file, None);
+    }
+    #[test]
+    fn run_records_are_capped_keeping_the_most_recent() {
+        let mut task = fixture();
+        for i in 0..(MAX_RUN_RECORDS + 10) {
+            push_run_record(
+                &mut task,
+                RunRecord {
+                    started_at: i as i64,
+                    finished_at: Some(i as i64),
+                    trigger: "scheduled".into(),
+                    status: "success".into(),
+                    error: None,
+                    session_file: None,
+                    duration_ms: Some(0),
+                },
+            );
+        }
+        assert_eq!(task.runs.len(), MAX_RUN_RECORDS);
+        assert_eq!(task.runs[0].started_at, 10);
+        assert_eq!(
+            task.runs.last().unwrap().started_at,
+            (MAX_RUN_RECORDS + 9) as i64
+        );
+    }
+    #[test]
+    fn finalize_completes_the_in_flight_record() {
+        let mut task = fixture();
+        task.runs.push(RunRecord {
+            started_at: 1_000,
+            finished_at: None,
+            trigger: "manual".into(),
+            status: "running".into(),
+            error: None,
+            session_file: Some("published.jsonl".into()),
+            duration_ms: None,
+        });
+        // 成功：时长、状态回填，publish 阶段已记录的会话文件保留。
+        finalize_run_record(&mut task, &Ok("final.jsonl".into()), 4_000, None);
+        let record = &task.runs[0];
+        assert_eq!(record.status, "success");
+        assert_eq!(record.finished_at, Some(4_000));
+        assert_eq!(record.duration_ms, Some(3_000));
+        assert_eq!(record.session_file.as_deref(), Some("published.jsonl"));
+        // 失败：错误回填，会话文件（可能已创建）保留。
+        task.runs.push(RunRecord {
+            started_at: 5_000,
+            finished_at: None,
+            trigger: "scheduled".into(),
+            status: "running".into(),
+            error: None,
+            session_file: None,
+            duration_ms: None,
+        });
+        finalize_run_record(&mut task, &Err("model unavailable".into()), 6_500, None);
+        let record = task.runs.last().unwrap();
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.error.as_deref(), Some("model unavailable"));
+        assert_eq!(record.duration_ms, Some(1_500));
+        assert_eq!(record.session_file, None);
+    }
+    #[test]
+    fn finalize_falls_back_to_appending_without_a_running_record() {
+        let mut task = fixture();
+        finalize_run_record(&mut task, &Ok("file.jsonl".into()), 4_000, Some(2_000));
+        assert_eq!(task.runs.len(), 1);
+        let record = &task.runs[0];
+        assert_eq!(record.trigger, "unknown");
+        assert_eq!(record.started_at, 2_000);
+        assert_eq!(record.duration_ms, Some(2_000));
+        assert_eq!(record.session_file.as_deref(), Some("file.jsonl"));
+    }
+    #[test]
+    fn interrupted_records_are_marked_failed_on_restart() {
+        let mut task = fixture();
+        task.status = "running".into();
+        task.runs.push(RunRecord {
+            started_at: 1_000,
+            finished_at: None,
+            trigger: "scheduled".into(),
+            status: "running".into(),
+            error: None,
+            session_file: None,
+            duration_ms: None,
+        });
+        mark_interrupted_by_shutdown(&mut task);
+        assert_eq!(task.status, "failed");
+        assert!(task.error.is_some());
+        let record = &task.runs[0];
+        assert_eq!(record.status, "failed");
+        assert_eq!(record.error, task.error);
+        assert_eq!(record.finished_at, None);
+    }
+    #[test]
+    fn run_history_round_trips_through_persistence_and_legacy_files_default_to_empty() {
+        let mut task = fixture();
+        push_run_record(
+            &mut task,
+            RunRecord {
+                started_at: 1,
+                finished_at: Some(2),
+                trigger: "manual".into(),
+                status: "success".into(),
+                error: None,
+                session_file: Some("s.jsonl".into()),
+                duration_ms: Some(1),
+            },
+        );
+        let bytes = serde_json::to_vec(&vec![task]).unwrap();
+        let loaded: Vec<Task> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(loaded[0].runs.len(), 1);
+        assert_eq!(loaded[0].runs[0].trigger, "manual");
+        // 旧版 schedules.json 没有 runs 字段：反序列化为空且不再写回空数组。
+        let legacy = serde_json::json!({
+            "id": "old", "title": "Old", "prompt": "Work", "project": "unused",
+            "provider": "test", "model": "test", "thinking": "off",
+            "expression": "* * * * *", "enabled": true,
+            "nextRun": 0, "lastRun": null, "status": "idle",
+            "error": null, "sessionFile": null,
+        });
+        let task: Task = serde_json::from_value(legacy).unwrap();
+        assert!(task.runs.is_empty());
+        let saved = serde_json::to_value(&task).unwrap();
+        assert!(saved.get("runs").is_none());
     }
     #[tokio::test]
     async fn preflight_ack_is_not_completion() {

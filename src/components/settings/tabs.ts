@@ -128,6 +128,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("@/components/ArchivedSessionsPage.vue")),
   },
   {
+    id: "usage",
+    nav: "usage.nav",
+    title: "usage.title",
+    desc: "usage.description",
+    component: defineAsyncComponent(() => import("@/components/UsageSummaryPage.vue")),
+  },
+  {
     id: "about",
     nav: "settings.about",
     title: "settings.aboutTitle",
@@ -160,7 +167,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "other",
     labelKey: "settings.groups.other",
-    tabIds: ["model-config", "archives", "about"],
+    tabIds: ["model-config", "archives", "usage", "about"],
   },
 ]
 

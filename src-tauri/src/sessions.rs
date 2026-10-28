@@ -113,7 +113,7 @@ fn first_user_preview(path: &Path) -> Option<String> {
     None
 }
 
-fn normalize(p: &Path) -> Option<String> {
+pub(crate) fn normalize(p: &Path) -> Option<String> {
     canonicalize(p)
         .ok()
         .map(|s| s.to_string_lossy().to_string())
