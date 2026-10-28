@@ -3,7 +3,8 @@ import SettingRow from "@/components/shared/SettingRow.vue"
 import SettingHeading from "@/components/shared/SettingHeading.vue"
 import SettingDescription from "@/components/shared/SettingDescription.vue"
 /** About page: app self-update (stable/preview channels) and Pi self-update controls. */
-import { onMounted, onUnmounted, ref } from "vue"
+import { onMounted, ref } from "vue"
+import { storeToRefs } from "pinia"
 import { useI18n } from "vue-i18n"
 import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
@@ -11,18 +12,15 @@ import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { GithubIcon } from "@/components/ai-elements/open-in-chat/providers/icons"
 import { Badge } from "@/components/ui/badge"
-import { listen } from "@/api/transport"
 import {
   checkPiUpdate,
   detectPi,
   executePiUpdate,
   checkAppUpdate,
   getAppVersion,
-  installAppUpdate,
   restartApp,
   getConfig,
   saveConfig,
-  APP_UPDATE_PROGRESS_EVENT,
   type PiUpdateStatus,
   type AppUpdateStatus,
   type UpdateChannel,
@@ -41,6 +39,7 @@ import {
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { AcceptableValue } from "reka-ui"
+import { useAppUpdateStore } from "@/stores/appUpdate"
 
 const { t } = useI18n()
 const isDevelopment = import.meta.env.DEV
@@ -49,24 +48,15 @@ const GITHUB_URL = "https://github.com/TZDXF/pi-x"
 
 // ---- PiX 应用自身更新 ----
 
-interface AppUpdateProgress {
-  stage: "download" | "install" | "installed"
-  chunkLength?: number
-  contentLength?: number | null
-}
-
 const appVersion = ref<string | null>(null)
 const appChannel = ref<UpdateChannel>("stable")
 const appStatus = ref<AppUpdateStatus | null>(null)
 const appChecking = ref(false)
-const appInstalling = ref(false)
-const appInstalled = ref(false)
-const appProgress = ref<number | null>(null)
+const appUpdate = useAppUpdateStore()
+const { installing: appInstalling, installed: appInstalled, progress: appProgress } = storeToRefs(appUpdate)
 const appError = ref("")
 /** 应用更新确认弹窗（应用内 Dialog 组件，替代原生确认框） */
 const installConfirmOpen = ref(false)
-let downloaded = 0
-let unlistenProgress: (() => void) | null = null
 
 async function checkApp() {
   if (appChecking.value || appInstalling.value) return
@@ -106,19 +96,11 @@ function updateApp() {
 async function installApp() {
   if (!appStatus.value?.updateAvailable || appInstalling.value || appChecking.value) return
   installConfirmOpen.value = false
-  appInstalling.value = true
-  appInstalled.value = false
-  downloaded = 0
-  appProgress.value = 0
   appError.value = ""
   try {
-    await installAppUpdate(appChannel.value)
-    appInstalled.value = true
+    await appUpdate.install(appChannel.value)
   } catch (e) {
     appError.value = formatCodedError(t, e)
-  } finally {
-    appInstalling.value = false
-    appProgress.value = null
   }
 }
 
@@ -127,18 +109,6 @@ async function restart() {
     await restartApp()
   } catch {
     /* 重启即退出进程，Promise 不会正常结算 */
-  }
-}
-
-function onProgress(e: { payload: AppUpdateProgress }) {
-  const p = e.payload
-  if (p.stage === "download") {
-    downloaded += p.chunkLength ?? 0
-    if (p.contentLength) appProgress.value = Math.min(99, Math.round((downloaded / p.contentLength) * 100))
-  } else if (p.stage === "install") {
-    appProgress.value = 100
-  } else if (p.stage === "installed") {
-    appInstalled.value = true
   }
 }
 
@@ -229,16 +199,10 @@ onMounted(() => {
     } catch {
       /* 默认正式版 */
     }
-    unlistenProgress = await listen<AppUpdateProgress>(APP_UPDATE_PROGRESS_EVENT, onProgress)
     // 打开关于页时自动获取 Pi 版本并检查更新
     void check()
     void checkApp()
   })()
-})
-
-onUnmounted(() => {
-  unlistenProgress?.()
-  unlistenProgress = null
 })
 </script>
 

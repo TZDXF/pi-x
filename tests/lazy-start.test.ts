@@ -150,7 +150,9 @@ async function harness(group = null) {
       useUiStore: () => ({ clear() {}, pushToast() {} }),
     },
     "@/stores/workspace": { useWorkspaceStore: () => workspace, registerSessionMtimeSync: () => {} },
-    "@/stores/appUpdate": { useAppUpdateStore: () => ({ autoCheck: async () => {} }) },
+    "@/stores/appUpdate": {
+      useAppUpdateStore: () => ({ autoCheck: async () => {}, startProgressListener: async () => {} }),
+    },
     "@/lib/router": {
       useRoute: () => ref({ name: "home", params: {} }),
       navigate: () => {},

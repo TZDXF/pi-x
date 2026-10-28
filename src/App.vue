@@ -422,6 +422,8 @@ watch(
 
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKeydown)
+  // 更新下载可能跨越页面切换，进度监听跟随应用生命周期。
+  void appUpdate.startProgressListener()
   // 启动后自动检查应用更新，发现新版本时标题栏会出现更新入口
   void appUpdate.autoCheck()
   try {
