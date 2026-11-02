@@ -587,6 +587,13 @@ export default {
   projectDialog: {
     title: "添加项目",
     editTitle: "编辑项目",
+    trustTitle: "项目信任",
+    trustLoading: "正在检查信任状态…",
+    trusted: "已信任",
+    untrusted: "未信任",
+    trustProject: "信任此项目",
+    trustSaving: "正在保存…",
+    trustSaved: "信任决定已立即保存。已有会话请重新启动 PiX，以加载项目资源。",
     description: "选择一个本地文件夹或远程连接作为项目工作区。",
     save: "保存项目",
     name: "项目名称",

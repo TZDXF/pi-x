@@ -7,6 +7,7 @@ import { isDesktop } from "@/api/transport"
 import { sshConnectionList, sshConnectionProbe, type SshConnection, type SshProbeResult } from "@/api/piClient"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import SshSettings from "@/components/settings/SshSettings.vue"
+import ProjectTrustControl from "@/components/ProjectTrustControl.vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -79,6 +80,18 @@ const pathLabelKey = computed(() =>
 /** 远程模式：连接与路径就绪即可提交；probe 仅做校验提示，不阻塞（目录校验由 spawn 侧兜底）。 */
 const remoteValid = computed(() => !!selectedConnection.value && normalizeSshPath(remotePath.value.trim()) !== null)
 const submitValid = computed(() => (mode.value === "remote" ? remoteValid.value : valid.value))
+const trustProjects = computed(() => {
+  if (!props.editPath) return []
+  if (mode.value === "local") return folders.value
+  const connection = selectedConnection.value
+  const path = normalizeSshPath(remotePath.value.trim())
+  if (!connection || !path) return []
+  try {
+    return [remoteUriFor(connection, path)]
+  } catch {
+    return []
+  }
+})
 
 async function loadConnections() {
   if (!isDesktop || connectionsLoading.value) return
@@ -256,7 +269,7 @@ function submit() {
       }
     "
   >
-    <DialogContent class="sm:max-w-lg" aria-describedby="project-dialog-description">
+    <DialogContent class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg" aria-describedby="project-dialog-description">
       <DialogHeader>
         <DialogTitle>{{ t(props.editPath ? "projectDialog.editTitle" : "projectDialog.title") }}</DialogTitle>
         <DialogDescription id="project-dialog-description">
@@ -285,6 +298,15 @@ function submit() {
         </button>
       </div>
       <form class="space-y-5" @submit.prevent="submit">
+        <div v-if="trustProjects.length" class="max-h-64 space-y-2 overflow-y-auto">
+          <ProjectTrustControl
+            v-for="path in trustProjects"
+            :key="path"
+            :project="path"
+            :active="props.open"
+            :connections="connections"
+          />
+        </div>
         <template v-if="mode === 'remote'">
           <div class="flex items-end gap-2">
             <label class="min-w-0 flex-1 space-y-2 text-sm font-medium" for="ssh-project-connection">

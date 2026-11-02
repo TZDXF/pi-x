@@ -603,6 +603,13 @@ export default {
   projectDialog: {
     title: "Add project",
     editTitle: "Edit project",
+    trustTitle: "Project trust",
+    trustLoading: "Checking trust…",
+    trusted: "Trusted",
+    untrusted: "Not trusted",
+    trustProject: "Trust this project",
+    trustSaving: "Saving…",
+    trustSaved: "Trust saved immediately. Restart PiX to load project resources in existing sessions.",
     description: "Choose a local folder or remote connection as the project workspace.",
     save: "Save project",
     name: "Project name",
