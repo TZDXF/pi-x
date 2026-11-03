@@ -16,6 +16,7 @@ import { BrainIcon, ChevronRight, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall } from "@/lib/sessionChanges"
 import { readToolTitle } from "@/lib/readToolTitle"
+import { toolDuration, toolInput } from "@/lib/toolRun"
 import { isSubagentTool } from "@/lib/subagents"
 import { processDetail, type ProcessDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
@@ -67,7 +68,7 @@ function isBash(block: ToolCallBlock): boolean {
 }
 
 function parsedArgs(block: ToolCallBlock): any | null {
-  const text = block.argsText || runFor(block)?.argsText
+  const text = toolInput(block, runFor(block))
   if (!text) return null
   try {
     return JSON.parse(text)
@@ -81,7 +82,7 @@ function commandOf(block: ToolCallBlock): string {
   const args = parsedArgs(block)
   const direct = args?.command ?? args?.cmd ?? args?.script
   if (typeof direct === "string") return direct
-  const match = (block.argsText || "").match(/"(?:command|cmd|script)"\s*:\s*"((?:[^"\\]|\\.)*)/)
+  const match = toolInput(block, runFor(block)).match(/"(?:command|cmd|script)"\s*:\s*"((?:[^"\\]|\\.)*)/)
   if (!match) return ""
   return match[1]!.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"')
 }
@@ -126,7 +127,7 @@ function subagentGroupAt(index: number): ToolCallBlock[] | null {
 
 /** Read preview uses the same argument fallback as the other tool specializations. */
 function readTitle(block: ToolCallBlock): string {
-  return readToolTitle(block.argsText || runFor(block)?.argsText || "")
+  return readToolTitle(toolInput(block, runFor(block)))
 }
 
 function terminalText(block: ToolCallBlock): string {
@@ -147,9 +148,7 @@ const now = useToolRunClock(() => props.blocks.some(b => b.type === "toolCall" &
 
 function elapsedMs(block: ToolCallBlock): number | null {
   const run = runFor(block)
-  // Running only: completed tools hide the duration.
-  if (!run?.startedAt || run.completedAt) return null
-  return now.value - run.startedAt
+  return toolDuration(run, now.value)
 }
 
 function elapsedText(block: ToolCallBlock): string {
@@ -162,8 +161,8 @@ function elapsedText(block: ToolCallBlock): string {
 /** Long-running tools stand out: amber past 30s, destructive past 2 minutes. */
 function elapsedClass(block: ToolCallBlock): string {
   const ms = elapsedMs(block)
-  if (ms != null && ms > 120_000) return "text-destructive"
-  if (ms != null && ms > 30_000) return "text-amber-600 dark:text-amber-400"
+  if (isRunning(block) && ms != null && ms > 120_000) return "text-destructive"
+  if (isRunning(block) && ms != null && ms > 30_000) return "text-amber-600 dark:text-amber-400"
   return "text-muted-foreground"
 }
 
@@ -178,7 +177,7 @@ interface FileCard {
 // re-run the line diff for arguments that have not changed.
 const cardCache = new Map<string, { argsText: string; card: FileCard | null }>()
 function cardFor(block: ToolCallBlock): FileCard | null {
-  const argsText = block.argsText || runFor(block)?.argsText || ""
+  const argsText = toolInput(block, runFor(block))
   const hit = cardCache.get(block.callId)
   if (hit && hit.argsText === argsText) return hit.card
   let card: FileCard | null = null
@@ -341,7 +340,9 @@ const { t } = useI18n()
       >
         <div class="flex items-center gap-2 px-3 py-2">
           <FileText class="size-4 shrink-0 text-muted-foreground" />
-          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="readTitle(block)">{{ readTitle(block) }}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="readTitle(block)">{{
+            readTitle(block)
+          }}</span>
           <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{
             elapsedText(block)
           }}</span>
@@ -372,7 +373,7 @@ const { t } = useI18n()
           {{ elapsedText(block) }}
         </div>
         <ToolContent>
-          <ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />
+          <ToolRunDetails class="p-3" :input="toolInput(block, runFor(block))" :output="runFor(block)?.outputText" />
         </ToolContent>
       </Tool>
     </template>

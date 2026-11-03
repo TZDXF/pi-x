@@ -31,6 +31,10 @@ const { t } = useI18n()
 const { changesForTurn, artifactsForTurn, onTurnReverted, onTurnRevertedAll, turnArtifactsReverted } = props.changes
 const concise = computed(() => processDetail.value === "concise")
 const showProcess = computed(() => hasFoldedProcess(props.entry, concise.value))
+const responseCost = computed(() => {
+  const cost = props.entry.usage?.cost
+  return cost && Number.isFinite(cost.total) ? cost : null
+})
 
 function onProcessToggle(event: Event) {
   if ((event.target as HTMLDetailsElement).open) emit("processOpened")
@@ -110,5 +114,17 @@ function onProcessToggle(event: Event) {
     <span v-if="entry.timestamp" class="ml-1 self-center text-xs text-muted-foreground">
       {{ formatMessageTime(entry.timestamp) }}
     </span>
+    <span
+      v-if="entry.responseModel && entry.responseModel !== entry.model"
+      class="min-w-0 truncate self-center text-xs text-muted-foreground"
+      :title="t('chat.actualResponseModel')"
+      >{{ entry.responseModel }}</span
+    >
+    <span
+      v-if="responseCost"
+      class="self-center text-xs text-muted-foreground"
+      :title="t(responseCost.totalFromProvider ? 'chat.responseBilledCost' : 'chat.responseEstimatedCost')"
+      >${{ responseCost.total.toFixed(4) }}</span
+    >
   </MessageActions>
 </template>

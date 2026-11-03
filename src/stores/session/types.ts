@@ -1,3 +1,5 @@
+import type { Usage } from "@/api/protocol"
+
 // ---- render model ----
 
 export interface ToolRun {
@@ -10,6 +12,8 @@ export interface ToolRun {
   /** Execution start (tool_execution_start); drives the elapsed-time display. */
   startedAt?: number
   completedAt?: number
+  /** Monotonic execution duration reported by pi; also available in history. */
+  durationMs?: number
 }
 
 export interface TextBlock {
@@ -60,6 +64,9 @@ export interface AssistantEntry {
   startedAt?: number
   completedAt?: number
   timestamp?: number
+  model?: string
+  responseModel?: string
+  usage?: Usage
 }
 /** Marks where a compaction collapsed earlier history; summary stays expandable. */
 export interface CompactionEntry {

@@ -107,6 +107,9 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "run-config", labelKey: "settings.processDetail" },
   { tab: "run-config", labelKey: "retrySettings.maxRetries" },
   { tab: "run-config", labelKey: "queueMode.title" },
+  { tab: "run-config", labelKey: "piPreferences.shareDestination" },
+  { tab: "run-config", labelKey: "piPreferences.collapseChangelog" },
+  { tab: "run-config", labelKey: "piPreferences.updateCommand" },
   { tab: "shortcuts", labelKey: "settings.shortcutsTitle" },
   { tab: "notifications", labelKey: "settings.turnComplete" },
   { tab: "notifications", labelKey: "settings.questionNotify" },
@@ -158,6 +161,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.processDetailDesc",
     "retrySettings",
     "queueMode",
+    "piPreferences",
   ],
   shortcuts: [
     "shortcuts.actions.newSession",

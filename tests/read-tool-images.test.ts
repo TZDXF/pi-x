@@ -49,13 +49,15 @@ test("live, final and restored results retain images and image reads have no exp
   expect(chatSource("stores/session/history.ts")).toContain("outputImages: contentImages(msg.content)")
   const blocks = chatSource("components/AssistantBlocks.vue")
   const imageCard = blocks.slice(
-    blocks.indexOf('v-else-if="block.type === \'toolCall\' && hasReadImages(block)"'),
+    blocks.indexOf("v-else-if=\"block.type === 'toolCall' && hasReadImages(block)\""),
     blocks.indexOf("<!-- other tools:"),
   )
   expect(imageCard).toContain("<ToolImageGallery")
   expect(imageCard).toContain("<ToolStatusBadge")
   expect(imageCard).not.toMatch(/<Tool(?:Header|Content|RunDetails)\b/)
-  expect(blocks).toContain('<ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />')
+  expect(blocks).toContain(
+    '<ToolRunDetails class="p-3" :input="toolInput(block, runFor(block))" :output="runFor(block)?.outputText" />',
+  )
   const gallery = chatSource("components/chat/ToolImageGallery.vue")
   expect(gallery).toContain('@click="preview = src"')
   expect(gallery).toContain(':src="preview"')

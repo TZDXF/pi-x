@@ -37,27 +37,31 @@ function fixture(t) {
   return { root, agent, project, call }
 }
 
-test("installed Pi persists settings without a PiX copy and retains unrelated data", { skip: !dist }, t => {
-  const { agent, root, call } = fixture(t)
-  const path = join(agent, "settings.json")
-  writeFileSync(path, JSON.stringify({ theme: "dark", retry: { enabled: false }, defaultThinkingLevel: "high" }))
-  call({ op: "settings_save", settings: { defaultProvider: "test", defaultModel: "vendor/model" } })
-  call({ op: "settings_save", settings: { skills: ["C:/skill.md", "!**/excluded/**"] } })
-  let saved = JSON.parse(readFileSync(path, "utf8"))
-  expect(saved.defaultProvider).toBe("test")
-  expect(saved.defaultModel).toBe("vendor/model")
-  expect(saved.theme).toBe("dark")
-  expect(saved.retry.enabled).toBe(false)
-  expect(call({ op: "settings_get" }).defaultThinkingLevel).toBe("high")
-  expect(saved.skills).toEqual(["C:/skill.md", "!**/excluded/**"])
-  call({ op: "settings_save", settings: { defaultProvider: null, defaultModel: null } })
-  saved = JSON.parse(readFileSync(path, "utf8"))
-  expect(saved.defaultProvider).toBe(undefined)
-  expect(saved.defaultModel).toBe(undefined)
-  expect(existsSync(join(root, ".pix"))).toBe(false)
-})
+test(
+  "installed Pi persists settings without a PiX copy and retains unrelated data",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { agent, root, call } = fixture(t)
+    const path = join(agent, "settings.json")
+    writeFileSync(path, JSON.stringify({ theme: "dark", retry: { enabled: false }, defaultThinkingLevel: "high" }))
+    call({ op: "settings_save", settings: { defaultProvider: "test", defaultModel: "vendor/model" } })
+    call({ op: "settings_save", settings: { skills: ["C:/skill.md", "!**/excluded/**"] } })
+    let saved = JSON.parse(readFileSync(path, "utf8"))
+    expect(saved.defaultProvider).toBe("test")
+    expect(saved.defaultModel).toBe("vendor/model")
+    expect(saved.theme).toBe("dark")
+    expect(saved.retry.enabled).toBe(false)
+    expect(call({ op: "settings_get" }).defaultThinkingLevel).toBe("high")
+    expect(saved.skills).toEqual(["C:/skill.md", "!**/excluded/**"])
+    call({ op: "settings_save", settings: { defaultProvider: null, defaultModel: null } })
+    saved = JSON.parse(readFileSync(path, "utf8"))
+    expect(saved.defaultProvider).toBe(undefined)
+    expect(saved.defaultModel).toBe(undefined)
+    expect(existsSync(join(root, ".pix"))).toBe(false)
+  },
+)
 
-test("Pi trust handles resources, parent inheritance, and explicit denial", { skip: !dist }, t => {
+test("Pi trust handles resources, parent inheritance, and explicit denial", { skip: !dist, timeout: 60000 }, t => {
   const { agent, root, project, call } = fixture(t)
   mkdirSync(join(project, ".pi"))
   writeFileSync(join(project, ".pi", "settings.json"), "{}")
@@ -72,44 +76,48 @@ test("Pi trust handles resources, parent inheritance, and explicit denial", { sk
   expect(stored[project]).toBe(false)
 })
 
-test("Pi native session names roundtrip and automatic names preserve manual names", { skip: !dist }, t => {
-  const { root, project, call } = fixture(t)
-  const file = join(root, "session.jsonl")
-  writeFileSync(
-    file,
-    [
-      { type: "session", version: 3, id: "test", timestamp: new Date().toISOString(), cwd: project },
-      {
-        type: "message",
-        id: "m1",
-        parentId: null,
-        timestamp: new Date().toISOString(),
-        message: { role: "user", content: "hello", timestamp: Date.now() },
-      },
-      {
-        type: "message",
-        id: "m2",
-        parentId: "m1",
-        timestamp: new Date().toISOString(),
-        message: { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: Date.now() },
-      },
-    ]
-      .map(v => JSON.stringify(v))
-      .join("\n") + "\n",
-  )
-  expect(call({ op: "session_name", file, title: "Manual" })).toBe("Manual")
-  expect(call({ op: "session_name", file, title: "Auto", onlyIfEmpty: true })).toBe("Manual")
-  expect(call({ op: "session_name", file })).toBe("Manual")
-  const entries = readFileSync(file, "utf8")
-    .trim()
-    .split("\n")
-    .map(v => JSON.parse(v))
-  expect(entries.at(-1).type).toBe("session_info")
-  expect(entries.at(-1).name).toBe("Manual")
-  expect(existsSync(file.replace(".jsonl", ".pix.json"))).toBe(false)
-})
+test(
+  "Pi native session names roundtrip and automatic names preserve manual names",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { root, project, call } = fixture(t)
+    const file = join(root, "session.jsonl")
+    writeFileSync(
+      file,
+      [
+        { type: "session", version: 3, id: "test", timestamp: new Date().toISOString(), cwd: project },
+        {
+          type: "message",
+          id: "m1",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "hello", timestamp: Date.now() },
+        },
+        {
+          type: "message",
+          id: "m2",
+          parentId: "m1",
+          timestamp: new Date().toISOString(),
+          message: { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: Date.now() },
+        },
+      ]
+        .map(v => JSON.stringify(v))
+        .join("\n") + "\n",
+    )
+    expect(call({ op: "session_name", file, title: "Manual" })).toBe("Manual")
+    expect(call({ op: "session_name", file, title: "Auto", onlyIfEmpty: true })).toBe("Manual")
+    expect(call({ op: "session_name", file })).toBe("Manual")
+    const entries = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map(v => JSON.parse(v))
+    expect(entries.at(-1).type).toBe("session_info")
+    expect(entries.at(-1).name).toBe("Manual")
+    expect(existsSync(file.replace(".jsonl", ".pix.json"))).toBe(false)
+  },
+)
 
-test("Pi exports a saved session file directly without opening a runtime", { skip: !dist }, t => {
+test("Pi exports a saved session file directly without opening a runtime", { skip: !dist, timeout: 60000 }, t => {
   const { root, project, call } = fixture(t)
   const file = join(root, "conversation.jsonl"),
     outputPath = join(root, "chosen.html")
@@ -132,11 +140,11 @@ test("Pi exports a saved session file directly without opening a runtime", { ski
   expect(readFileSync(outputPath, "utf8").startsWith("<!DOCTYPE html>")).toBeTruthy()
 })
 
-test("retry count merges into the global file and invalid patches are rejected", { skip: !dist }, t => {
+test("retry count merges into the global file and invalid patches are rejected", { skip: !dist, timeout: 60000 }, t => {
   const { agent, call } = fixture(t)
   const path = join(agent, "settings.json")
   writeFileSync(path, "{}")
-  expect(call({ op: "settings_get" }).retry, "the default comes from Pi").toEqual({ maxRetries: 3 })
+  expect(call({ op: "settings_get" }).retry, "the default comes from Pi").toEqual({ maxRetries: 3, enabled: true })
 
   writeFileSync(
     path,
@@ -152,13 +160,13 @@ test("retry count merges into the global file and invalid patches are rejected",
   expect(saved.retry.enabled, "untouched retry keys survive the patch").toBe(false)
   expect(saved.retry.baseDelayMs).toBe(500)
   expect(saved.retry.provider).toEqual({ maxRetries: 2 })
-  expect(call({ op: "settings_get" }).retry).toEqual({ maxRetries: 5 })
+  expect(call({ op: "settings_get" }).retry).toEqual({ maxRetries: 5, enabled: false })
 
   for (const retry of [
     { maxRetries: -1 },
     { maxRetries: 1.5 },
     { maxRetries: "5" },
-    { enabled: false },
+    { enabled: "false" },
     { baseDelayMs: 1 },
     3,
   ]) {
@@ -169,34 +177,92 @@ test("retry count merges into the global file and invalid patches are rejected",
   expect(saved.retry.enabled).toBe(false)
 })
 
-test("malformed Pi settings and invalid patches fail without replacing the file", { skip: !dist }, t => {
-  const { agent, call } = fixture(t)
-  const file = join(agent, "settings.json")
-  writeFileSync(file, "{broken")
-  call({ op: "settings_get" }, false)
-  call({ op: "settings_save", settings: { skills: [] } }, false)
-  expect(readFileSync(file, "utf8")).toBe("{broken")
-  writeFileSync(file, "{}")
-  call({ op: "settings_save", settings: { defaultProvider: "p", defaultModel: "m", skills: false } }, false)
-  expect(readFileSync(file, "utf8")).toBe("{}")
-})
+test(
+  "Pi 1.5 update, sharing and changelog settings preserve unrelated preferences",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { agent, call } = fixture(t)
+    const path = join(agent, "settings.json")
+    writeFileSync(path, JSON.stringify({ theme: "dark", extensionChangelogVersions: { "npm:example": "1.0.0" } }))
+    const argv = ["C:/Program Files/updater.exe", "{installSpec}", "", "literal;argument"]
+    call({
+      op: "settings_save",
+      settings: { selfUpdateCommand: argv, sessionShareDestination: "gist", collapseChangelog: true },
+    })
+    expect(call({ op: "settings_get" })).toMatchObject({
+      selfUpdateCommand: argv,
+      sessionShareDestination: "gist",
+      collapseChangelog: true,
+      selfUpdateCommandSupported: true,
+    })
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    expect(saved.theme).toBe("dark")
+    expect(saved.extensionChangelogVersions).toEqual({ "npm:example": "1.0.0" })
+    call({ op: "settings_save", settings: { selfUpdateCommand: null } })
+    expect(JSON.parse(readFileSync(path, "utf8")).selfUpdateCommand).toBeUndefined()
+    expect(call({ op: "settings_get" }).sessionShareDestination).toBe("gist")
+  },
+)
 
-test("follow-up delivery mode merges into the global file and invalid values are rejected", { skip: !dist }, t => {
-  const { agent, call } = fixture(t)
-  const path = join(agent, "settings.json")
-  writeFileSync(path, "{}")
-  expect(call({ op: "settings_get" }).followUpMode, "the default comes from Pi").toBe("one-at-a-time")
+test(
+  "invalid new preferences are rejected before any other preference is saved",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { agent, call } = fixture(t)
+    const path = join(agent, "settings.json")
+    writeFileSync(path, "{}")
+    for (const patch of [
+      { selfUpdateCommand: "npm update" },
+      { selfUpdateCommand: [] },
+      { selfUpdateCommand: [" "] },
+      { selfUpdateCommand: ["npm", 1] },
+      { selfUpdateCommand: ["npm", "\0"] },
+      { sessionShareDestination: "unknown" },
+      { sessionShareDestination: null },
+      { collapseChangelog: "true" },
+    ]) {
+      call({ op: "settings_save", settings: { defaultProvider: "test", defaultModel: "test", ...patch } }, false)
+      expect(readFileSync(path, "utf8")).toBe("{}")
+    }
+  },
+)
 
-  writeFileSync(path, JSON.stringify({ theme: "dark" }))
-  call({ op: "settings_save", settings: { followUpMode: "all" } })
-  let saved = JSON.parse(readFileSync(path, "utf8"))
-  expect(saved.followUpMode).toBe("all")
-  expect(saved.theme, "unrelated keys survive the patch").toBe("dark")
-  expect(call({ op: "settings_get" }).followUpMode).toBe("all")
+test(
+  "malformed Pi settings and invalid patches fail without replacing the file",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { agent, call } = fixture(t)
+    const file = join(agent, "settings.json")
+    writeFileSync(file, "{broken")
+    call({ op: "settings_get" }, false)
+    call({ op: "settings_save", settings: { skills: [] } }, false)
+    expect(readFileSync(file, "utf8")).toBe("{broken")
+    writeFileSync(file, "{}")
+    call({ op: "settings_save", settings: { defaultProvider: "p", defaultModel: "m", skills: false } }, false)
+    expect(readFileSync(file, "utf8")).toBe("{}")
+  },
+)
 
-  for (const mode of ["sometimes", 3, null]) {
-    call({ op: "settings_save", settings: { followUpMode: mode } }, false)
-  }
-  saved = JSON.parse(readFileSync(path, "utf8"))
-  expect(saved.followUpMode, "invalid values never reach the file").toBe("all")
-})
+test(
+  "follow-up delivery mode merges into the global file and invalid values are rejected",
+  { skip: !dist, timeout: 60000 },
+  t => {
+    const { agent, call } = fixture(t)
+    const path = join(agent, "settings.json")
+    writeFileSync(path, "{}")
+    expect(call({ op: "settings_get" }).followUpMode, "the default comes from Pi").toBe("one-at-a-time")
+
+    writeFileSync(path, JSON.stringify({ theme: "dark" }))
+    call({ op: "settings_save", settings: { followUpMode: "all" } })
+    let saved = JSON.parse(readFileSync(path, "utf8"))
+    expect(saved.followUpMode).toBe("all")
+    expect(saved.theme, "unrelated keys survive the patch").toBe("dark")
+    expect(call({ op: "settings_get" }).followUpMode).toBe("all")
+
+    for (const mode of ["sometimes", 3, null]) {
+      call({ op: "settings_save", settings: { followUpMode: mode } }, false)
+    }
+    saved = JSON.parse(readFileSync(path, "utf8"))
+    expect(saved.followUpMode, "invalid values never reach the file").toBe("all")
+  },
+)

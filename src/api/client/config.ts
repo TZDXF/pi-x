@@ -57,10 +57,26 @@ export interface PiSettings {
   compaction?: { enabled: boolean }
   /** pi 全局 settings.json 的 `followUpMode`：排队跟进消息的投递节奏。 */
   followUpMode?: import("../protocol").QueueDeliveryMode
+  selfUpdateCommand?: string[] | null
+  selfUpdateCommandSupported?: boolean
+  selfUpdateCommandOverridden?: boolean
+  collapseChangelog?: boolean
+  sessionShareDestination?: "auto" | "gist" | "radius" | null
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
-  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills" | "followUpMode">> & {
+  settings: Partial<
+    Pick<
+      PiSettings,
+      | "defaultProvider"
+      | "defaultModel"
+      | "skills"
+      | "followUpMode"
+      | "selfUpdateCommand"
+      | "collapseChangelog"
+      | "sessionShareDestination"
+    >
+  > & {
     retry?: { maxRetries?: number; enabled?: boolean }
     compaction?: { enabled: boolean }
   },

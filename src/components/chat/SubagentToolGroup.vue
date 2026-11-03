@@ -7,6 +7,7 @@ import ToolRunDetails from "./ToolRunDetails.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { subagentStateLabel, subagentStateView, subagentStateVisual, subagentToolTitle } from "@/lib/subagents"
 import type { ToolCallBlock, ToolRun } from "@/stores/conversations"
+import { toolDuration, toolInput } from "@/lib/toolRun"
 
 /**
  * Queue-style display for a run of consecutive npm:pi-subagents delegation
@@ -24,7 +25,7 @@ function runFor(block: ToolCallBlock): ToolRun | undefined {
 }
 
 function titleFor(block: ToolCallBlock): string {
-  return subagentToolTitle(block.argsText || runFor(block)?.argsText, t("piSubagents.workflowTool")) || block.name
+  return subagentToolTitle(toolInput(block, runFor(block)), t("piSubagents.workflowTool")) || block.name
 }
 
 function stateOf(block: ToolCallBlock): string {
@@ -35,10 +36,8 @@ function stateOf(block: ToolCallBlock): string {
 const now = useToolRunClock(() => props.blocks.some(block => subagentStateView(stateOf(block)) === "running"))
 
 function elapsedText(block: ToolCallBlock): string {
-  if (subagentStateView(stateOf(block)) !== "running") return ""
-  const startedAt = runFor(block)?.startedAt
-  if (!startedAt) return ""
-  return formatToolElapsed(now.value - startedAt, false)
+  const duration = toolDuration(runFor(block), now.value)
+  return duration === null ? "" : formatToolElapsed(duration, false)
 }
 
 // Rows expand individually; collapsed by default like the tool cards they replace.
@@ -81,7 +80,7 @@ function toggle(callId: string) {
         <ToolRunDetails
           v-if="expanded.has(block.callId)"
           class="px-1 pb-2"
-          :input="block.argsText"
+          :input="toolInput(block, runFor(block))"
           :output="runFor(block)?.outputText"
         />
       </li>

@@ -14,7 +14,7 @@ test("shell tool output has no nested terminal chrome and reveals a copy action 
 
 test("tool runs surface elapsed time, highlighted for long-running commands", () => {
   // pi's bash tool has no default timeout; a stuck command must be visible.
-  expect(blocks).toMatch(/startedAt/)
+  expect(blocks).toContain("toolDuration(run, now.value)")
   expect(blocks).toMatch(/elapsedText\(block\)/)
   expect(blocks).toMatch(/text-amber-600 dark:text-amber-400/)
   expect(blocks).toMatch(/ms > 120_000\?[\s\S]*?text-destructive|text-destructive/)

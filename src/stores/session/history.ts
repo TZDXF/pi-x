@@ -142,6 +142,9 @@ export function createSessionHistory(context: HistoryContext) {
               blocks,
               failed: msg.stopReason === "error",
               timestamp: msg.timestamp,
+              model: msg.model,
+              responseModel: msg.responseModel,
+              usage: msg.usage,
             })
         } else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
           page.push({
@@ -162,6 +165,10 @@ export function createSessionHistory(context: HistoryContext) {
               outputText: contentText(msg.content),
               outputImages: contentImages(msg.content),
               state: msg.isError ? "output-error" : "output-available",
+              durationMs:
+                typeof msg.durationMs === "number" && Number.isFinite(msg.durationMs) && msg.durationMs >= 0
+                  ? msg.durationMs
+                  : undefined,
             }
         }
         if ((i - start + 1) % 20 === 0) await yieldHistory()

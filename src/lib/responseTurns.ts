@@ -1,4 +1,5 @@
 import { modelKey } from "@/lib/modelKey"
+import type { Usage } from "@/api/protocol"
 import type {
   ErrorBlock,
   Block,
@@ -22,6 +23,9 @@ export interface AssistantTurn {
   durationMs: number | null
   toolCallCount: number
   timestamp?: number
+  model?: string
+  responseModel?: string
+  usage?: Usage
 }
 
 /** Group a turn without changing store entries or indices used for branching. */
@@ -110,6 +114,10 @@ export function responseTurns(
           }
     if (turn !== previous) result.push(turn)
     turn.lastIndex = index
+    if (entry.model) turn.model = entry.model
+    // These describe the last response, not another message earlier in the turn.
+    turn.responseModel = entry.responseModel
+    turn.usage = entry.usage
     turn.failed = entry.failed === true || entry.blocks.some(block => block.type === "error")
     const blocks = entry.blocks.filter(block => block.type !== "error")
     turn.errors.push(...entry.blocks.filter((block): block is ErrorBlock => block.type === "error"))

@@ -9,6 +9,8 @@ const controls = vi.hoisted(() => {
   const state = {}
   return {
     state,
+    notify: vi.fn(),
+    setStatus: vi.fn(),
     piClient: {
       adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
@@ -31,12 +33,78 @@ vi.mock("@/i18n", () => ({
 vi.mock("@/lib/fileRewind", () => ({
   fileRewindState: async () => [],
 }))
-vi.mock("@/lib/notifications", () => ({ notifyTurnComplete() {} }))
-vi.mock("@/stores/sessionRunStatus", () => ({ setSessionRunStatus() {} }))
+vi.mock("@/lib/notifications", () => ({ notifyTurnComplete: (...args) => controls.notify(...args) }))
+vi.mock("@/stores/sessionRunStatus", () => ({ setSessionRunStatus: (...args) => controls.setStatus(...args) }))
 vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: () => controls.workspace }))
 
 beforeEach(() => {
+  controls.notify.mockClear()
+  controls.setStatus.mockClear()
   setActivePinia(createPinia())
+})
+
+test("runtime abort without an assistant message never marks completion or notifies", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled", aborted: true })
+  expect(h.store.isStreaming).toBe(false)
+  expect(controls.setStatus).toHaveBeenLastCalledWith("one.jsonl", null, "project-one")
+  expect(controls.notify).not.toHaveBeenCalled()
+  // Late duplicate terminal events cannot report completion either.
+  h.store.handleEvent({ type: "agent_settled", aborted: false })
+  expect(controls.notify).not.toHaveBeenCalled()
+})
+
+test("settled without an abort flag remains compatible with older pi", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled" })
+  expect(controls.setStatus).toHaveBeenLastCalledWith("one.jsonl", "completed", "project-one")
+  expect(controls.notify).toHaveBeenCalledOnce()
+})
+
+test("tool execution retains RPC args, pi-schema error text and monotonic duration", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "tool_execution_start", toolCallId: "c", toolName: "read", args: { limit: 3 } })
+  h.store.handleEvent({
+    type: "tool_execution_end",
+    toolCallId: "c",
+    durationMs: 1250,
+    isError: true,
+    result: { content: [{ type: "text", text: "- path: missing\n- limit: expected number, got string" }] },
+  })
+  expect(h.store.runs.c).toMatchObject({
+    argsText: JSON.stringify({ limit: 3 }, null, 2),
+    durationMs: 1250,
+    state: "output-error",
+    outputText: "- path: missing\n- limit: expected number, got string",
+  })
+})
+
+test("assistant response metadata and provider total survive live message ingestion", async () => {
+  const h = await harness()
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 0.25, totalFromProvider: true },
+  }
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      model: "auto",
+      responseModel: "concrete-model",
+      usage,
+      stopReason: "stop",
+      content: [{ type: "text", text: "answer" }],
+    },
+  })
+  expect(h.store.entries.at(-1)).toMatchObject({ model: "auto", responseModel: "concrete-model", usage })
+  expect(h.store.lastUsage.cost.total).toBe(0.25)
 })
 
 afterEach(() => {

@@ -10,6 +10,27 @@ const tool = { type: "toolCall", callId: "tool-1", name: "bash", argsText: "{}" 
 const thinking = { type: "thinking", text: "reasoning", streaming: false }
 const plain = value => JSON.parse(JSON.stringify(value))
 
+test("response model and billed cost follow the final response without summing catalog components", () => {
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 0.2, totalFromProvider: true },
+  }
+  const result = responseTurns(
+    [
+      user(1),
+      { ...assistant(2, text("checking")), model: "auto", responseModel: "first" },
+      { ...assistant(3, text("done")), model: "auto", responseModel: "final", usage },
+    ],
+    false,
+  )
+  expect(result[1]).toMatchObject({ model: "auto", responseModel: "final", usage })
+  expect((result[1] as any).usage.cost.total).toBe(0.2)
+})
+
 test("completed turn folds earlier replies, reasoning and tools, retaining final summary", () => {
   const entries = [user(1), assistant(2, text("checking"), tool), assistant(3, thinking, text("done"), text("details"))]
   const original = JSON.stringify(entries)

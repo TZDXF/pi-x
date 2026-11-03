@@ -10,6 +10,7 @@ import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib
 import { processDetail, setProcessDetail, type ProcessDetail } from "@/lib/processDetail"
 import RetrySettings from "@/components/settings/RetrySettings.vue"
 import QueueModeSettings from "@/components/settings/QueueModeSettings.vue"
+import PiPreferencesSettings from "@/components/settings/PiPreferencesSettings.vue"
 
 const { t } = useI18n()
 </script>
@@ -53,4 +54,5 @@ const { t } = useI18n()
   </SettingRow>
   <RetrySettings />
   <QueueModeSettings />
+  <PiPreferencesSettings />
 </template>

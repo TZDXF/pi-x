@@ -63,6 +63,39 @@ async function harness() {
 }
 const messages = count => Array.from({ length: count }, (_, i) => ({ role: "user", content: `message ${i}` }))
 
+test("restoring history retains response billing metadata and recorded tool duration", async () => {
+  const { store } = await harness()
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 0.2, totalFromProvider: true },
+  }
+  controls.state.sessionHistory = async () => [
+    { role: "user", content: "question", timestamp: 100 },
+    {
+      role: "assistant",
+      model: "auto",
+      responseModel: "actual",
+      usage,
+      stopReason: "stop",
+      content: [{ type: "text", text: "answer" }],
+      timestamp: 200,
+    },
+    { role: "toolResult", toolCallId: "recorded", durationMs: 1250, content: [{ type: "text", text: "output" }] },
+  ]
+  store.sessionFile = "history.jsonl"
+  await store.loadHistory()
+  expect(store.entries.find(entry => entry.kind === "assistant")).toMatchObject({
+    model: "auto",
+    responseModel: "actual",
+    usage,
+  })
+  expect(store.runs.recorded.durationMs).toBe(1250)
+})
+
 test("first page is asynchronous and limited to 30 entries; pages preserve ordering and ids", async () => {
   const { store } = await harness()
   const loading = store.loadMessages(messages(75))

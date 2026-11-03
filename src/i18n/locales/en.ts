@@ -283,6 +283,7 @@ export default {
     noDiscovered: "No auto-discovered skills found.",
   },
   mcpConfig: {
+    supportsResources: "Resources supported",
     title: "MCP servers",
     description: "Inspect MCP server status and edit the global and project mcp.json.",
     refresh: "Refresh status",
@@ -442,6 +443,23 @@ export default {
     saved: "Saved; takes effect on the next session start",
     unsupported: "The installed Pi version does not support retry settings. Please upgrade Pi first.",
     hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
+  },
+  piPreferences: {
+    shareDestination: "Session sharing destination",
+    shareDestinationDesc:
+      "Choose where terminal pi uploads /share sessions. Saving this setting does not upload a session.",
+    shareAuto: "Automatic",
+    collapseChangelog: "Collapse extension changelogs",
+    collapseChangelogDesc: "Show brief notices for pi and extension updates on the next terminal pi launch.",
+    updateCommand: "Custom Pi update command",
+    updateCommandDesc:
+      "Enter the program and arguments as a JSON array, with package name, version, and install target placeholders. Leave empty to restore the default updater.",
+    invalidCommand:
+      'Enter a non-empty array of string arguments, e.g. ["npm", "install", "-g", "pi"], or leave empty to restore the default.',
+    commandOverridden: "The host's PI_SELF_UPDATE_COMMAND environment variable takes precedence over this command.",
+    requires15: "Custom update commands require pi 1.5 or later.",
+    hint: "Sharing and changelog settings apply on the next pi launch; the command is used when you run an update after checking for one.",
+    saved: "Pi settings saved",
   },
   queueMode: {
     title: "Follow-up delivery",
@@ -835,6 +853,9 @@ export default {
     editSessionChanged: "The conversation has changed. Please edit the prompt in the current conversation.",
     copyPrompt: "Copy prompt",
     executionDuration: "Elapsed {seconds}s",
+    actualResponseModel: "Actual response model",
+    responseBilledCost: "Provider-reported billing for the last model response (USD)",
+    responseEstimatedCost: "Catalog cost estimate for the last model response (USD)",
     durationUnknown: "Elapsed time unknown",
     toolCallCount: "Tool calls: {count}",
     responseProcess: "Thinking process",
@@ -1409,6 +1430,7 @@ export default {
     noTranslationModel: "No translation model configured; set one in model config",
     translationTimeout: "Translation timed out (2 min)",
     translationFailed: "Translation model returned an error",
+    translationTruncated: "Translation reached the model output limit; translate in smaller sections",
     translationEmpty: "Translation returned empty output",
 
     piNotFound: "pi not found. Configure the pi path in Settings first.",

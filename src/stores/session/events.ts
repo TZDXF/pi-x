@@ -281,6 +281,9 @@ export function createEventHandler(ctx: EventContext) {
           pixLog("settled: ignored (not streaming)", runtimeId)
           break
         }
+        // The runtime can abort before producing an assistant message (e.g.
+        // from an extension), so its terminal flag is authoritative too.
+        flow.turnAborted ||= ev.aborted === true
         retryInfo.value = null
         flow.awaitingAgentStart = false
         // Settled is the terminal boundary even if a message_end was missed.
@@ -377,6 +380,9 @@ export function createEventHandler(ctx: EventContext) {
               live: true,
               startedAt: flow.agentStartedAt,
               completedAt: Date.now(),
+              model: msg.model,
+              responseModel: msg.responseModel,
+              usage: msg.usage,
             })
           if (msg.usage) lastUsage.value = msg.usage
         }
@@ -415,6 +421,8 @@ export function createEventHandler(ctx: EventContext) {
           if (ev.result) run.outputImages = contentImages(ev.result.content)
           run.state = ev.isError ? "output-error" : "output-available"
           run.completedAt = Date.now()
+          if (typeof ev.durationMs === "number" && Number.isFinite(ev.durationMs) && ev.durationMs >= 0)
+            run.durationMs = ev.durationMs
         }
         break
       }

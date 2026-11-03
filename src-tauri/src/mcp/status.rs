@@ -12,8 +12,7 @@ use std::time::Duration;
 /// pi mcp list connects to every server; cap the overall wait.
 const LIST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// One server report from `pi mcp list --json`. Extra fields (toolExposure,
-/// resources, …) are ignored.
+/// One server report from `pi mcp list --json`.
 #[derive(Deserialize)]
 pub struct McpServerReport {
     pub name: String,
@@ -31,8 +30,24 @@ pub struct McpServerReport {
     pub state: String,
     #[serde(default)]
     pub tools: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_resources")]
+    pub resources: Option<bool>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+// Before pi 1.2 this field was a count. Keep old remote installations usable,
+// without presenting unknown capability as false or enumerating resources.
+fn deserialize_resources<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(match value {
+        Value::Bool(value) => Some(value),
+        Value::Number(value) => value.as_u64().map(|count| count > 0),
+        _ => None,
+    })
 }
 
 #[derive(Deserialize)]
@@ -131,6 +146,7 @@ pub async fn mcp_status(app: tauri::AppHandle, project: Option<String>) -> Resul
                 "transport": s.transport,
                 "state": if s.state.is_empty() { "unknown" } else { &s.state },
                 "tools": s.tools,
+                "resources": s.resources,
                 "error": s.error,
                 "toolDefs": tool_defs.get(&format!("{scope}:{}", s.name)),
             })
@@ -225,5 +241,23 @@ mod tests {
         assert!(parsed.servers[0].enabled == false);
         assert!(parsed.errors.is_empty());
         assert!(parsed.note.is_none());
+        assert_eq!(parsed.servers[0].resources, None);
+    }
+
+    #[test]
+    fn resource_capability_accepts_booleans_and_legacy_counts() {
+        for (raw, expected) in [
+            ("true", Some(true)),
+            ("false", Some(false)),
+            ("3", Some(true)),
+            ("0", Some(false)),
+            ("null", None),
+        ] {
+            let report: McpListOutput = serde_json::from_str(&format!(
+                "{{\"servers\":[{{\"name\":\"a\",\"resources\":{raw}}}]}}"
+            ))
+            .unwrap();
+            assert_eq!(report.servers[0].resources, expected);
+        }
     }
 }
