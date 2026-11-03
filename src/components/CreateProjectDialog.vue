@@ -297,7 +297,7 @@ function submit() {
           {{ t(value === "local" ? "projectDialog.modeLocal" : "projectDialog.modeRemote") }}
         </button>
       </div>
-      <form class="space-y-5" @submit.prevent="submit">
+      <form class="min-w-0 space-y-5" @submit.prevent="submit">
         <div v-if="trustProjects.length" class="max-h-64 space-y-2 overflow-y-auto">
           <ProjectTrustControl
             v-for="path in trustProjects"
