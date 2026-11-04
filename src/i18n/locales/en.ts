@@ -592,6 +592,7 @@ export default {
 
     archived: "Archived",
     rename: "Rename",
+    renameDescription: "Enter a new title for this session.",
     restore: "Restore chat",
     open: "Open",
     archive: "Archive chat",

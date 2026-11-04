@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n"
 import { Pencil, Trash2 } from "@lucide/vue"
 import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import SessionContextMenuContent from "@/components/workspace/SessionContextMenuContent.vue"
@@ -89,6 +89,7 @@ async function duplicate() {
     <DialogContent class="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>{{ t("workspace.rename") }}</DialogTitle>
+        <DialogDescription class="sr-only">{{ t("workspace.renameDescription") }}</DialogDescription>
       </DialogHeader>
       <form class="space-y-4" @submit.prevent="saveTitle">
         <Input

@@ -574,6 +574,7 @@ export default {
 
     archived: "已归档",
     rename: "重命名",
+    renameDescription: "输入新的会话标题。",
     restore: "恢复会话",
     open: "打开",
     archive: "归档会话",
