@@ -79,7 +79,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
           projectName: workspace.projectName(row.cwd),
           projectless: workspace.isProjectless(row.cwd),
           title: row.title || row.preview || draft?.message || "",
-          preview: row.preview || draft?.message || "",
+          preview: row.lastUserMessage ?? (row.preview || draft?.message || ""),
           updatedAt: Math.max(row.mtimeMs || Date.parse(row.timestamp || "") || 0, activity?.updatedAt ?? 0),
           status: statusFor(row.file, row.cwd, owner?.runtimeId),
           failed: activity?.status === "error",
@@ -143,6 +143,14 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     const owners = new Map(conversations.map(owner => [owner.runtimeId, owner]))
     for (const card of result.values()) {
       const owner = card.runtimeId ? owners.get(card.runtimeId) : undefined
+      if (owner) {
+        for (let index = owner.entries.length - 1; index >= 0; index--) {
+          const entry = owner.entries[index]!
+          if (entry.kind !== "user") continue
+          card.preview = entry.text
+          break
+        }
+      }
       if (card.status === "running" && owner) card.activity = kanbanLivePreview(owner) ?? undefined
     }
     return [...result.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))

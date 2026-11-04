@@ -34,6 +34,8 @@ pub struct SessionMeta {
     pub timestamp: Option<String>,
     pub mtime_ms: u64,
     pub preview: Option<String>,
+    #[serde(default)]
+    pub last_user_message: Option<String>,
     pub title: Option<String>,
     pub archived: bool,
 }
@@ -262,6 +264,7 @@ pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, 
         timestamp,
         mtime_ms: mtime,
         preview,
+        last_user_message: last_user_preview(path)?,
         title: read_session_name(path)?,
         archived: presentation.archived,
     };
@@ -540,6 +543,25 @@ pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, Str
     tokio::task::spawn_blocking(move || read_session_history(&path))
         .await
         .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Keep the sidebar's first-message preview separate from the board's latest prompt.
+fn last_user_preview(path: &Path) -> Result<Option<String>, String> {
+    let messages = read_session_history(path)?;
+    let Some(message) = messages.iter().rev().find(|message| message["role"] == "user") else {
+        return Ok(None);
+    };
+    let text = match &message["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    Ok(Some(text.trim().chars().take(120).collect()))
 }
 
 fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
@@ -1187,6 +1209,31 @@ if (request.op === 'read') {
         std::fs::write(&file, content).unwrap();
         let meta = read_session_meta(&file, mtime_ms(&file)).unwrap();
         assert_eq!(meta.preview.as_deref(), Some("调用 3 个智能体"));
+        std::fs::remove_file(file).unwrap();
+    }
+    #[test]
+    fn board_preview_uses_latest_current_branch_prompt_without_changing_sidebar_preview() {
+        let file =
+            std::env::temp_dir().join(format!("pix-latest-preview-{}.jsonl", uuid::Uuid::new_v4()));
+        let entries = [
+            serde_json::json!({"type": "session", "id": "session", "cwd": "/tmp"}),
+            serde_json::json!({"type": "message", "id": "q1", "parentId": null, "message": {"role": "user", "content": "First question"}}),
+            serde_json::json!({"type": "message", "id": "q2", "parentId": "q1", "message": {"role": "user", "content": [{"type": "text", "text": "Latest"}, {"type": "text", "text": "question"}]}}),
+            serde_json::json!({"type": "message", "id": "abandoned", "parentId": "q1", "message": {"role": "user", "content": "Other branch"}}),
+            serde_json::json!({"type": "message", "id": "answer", "parentId": "q2", "message": {"role": "assistant", "content": "Answer"}}),
+        ];
+        let content = entries
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file, format!("{content}\n{{\"type\":")).unwrap();
+        let meta = read_session_meta(&file, mtime_ms(&file)).unwrap();
+        assert_eq!(meta.preview.as_deref(), Some("First question"));
+        assert_eq!(meta.last_user_message.as_deref(), Some("Latest\nquestion"));
+        let image = serde_json::json!({"type": "message", "id": "image", "parentId": "answer", "message": {"role": "user", "content": [{"type": "image", "data": "data"}]}});
+        std::fs::write(&file, format!("{content}\n{image}\n")).unwrap();
+        assert_eq!(last_user_preview(&file).unwrap().as_deref(), Some(""));
         std::fs::remove_file(file).unwrap();
     }
     #[test]

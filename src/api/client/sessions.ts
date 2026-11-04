@@ -16,6 +16,8 @@ export interface SessionMeta {
   title?: string | null
   archived?: boolean
   preview?: string | null
+  /** Latest user prompt in the current branch, used by board cards. */
+  lastUserMessage?: string | null
 }
 
 export interface SessionSearchHit {

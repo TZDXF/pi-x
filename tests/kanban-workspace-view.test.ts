@@ -150,6 +150,63 @@ test("running cards follow live deltas even when history already provides the ca
   expect(board.cards.value[0].activity).toBeUndefined()
 })
 
+test("saved cards use the latest prompt while retaining the session title and legacy preview fallback", () => {
+  const { board, workspace, sessionFor } = harness()
+  workspace.histories["/root"] = [
+    {
+      file: "/saved.jsonl",
+      cwd: "/root",
+      title: "Session title",
+      preview: "First question",
+      lastUserMessage: "Latest question",
+      mtimeMs: 5,
+    },
+    { file: "/legacy.jsonl", cwd: "/root", preview: "Legacy question", mtimeMs: 4 },
+  ]
+  expect(board.cards.value[0]).toMatchObject({ title: "Session title", preview: "Latest question" })
+  expect(board.cards.value[1].preview).toBe("Legacy question")
+  expect(sessionFor).not.toHaveBeenCalled()
+})
+
+test.each([false, true])("live cards follow the latest submitted prompt with saved history=%s", saved => {
+  const { board, workspace, sessionFor } = harness()
+  const file = "/sessions/latest.jsonl"
+  if (saved)
+    workspace.histories["/root"] = [
+      { file, cwd: "/root", title: "Session title", preview: "First question", lastUserMessage: "Stale question" },
+    ]
+  const owner = sessionFor("worker")
+  Object.assign(owner, { cwd: "/root", sessionFile: file })
+  owner.entries.push(
+    { kind: "user", text: "First question", timestamp: 1 },
+    { kind: "assistant", blocks: [{ type: "text", text: "First answer" }] },
+    { kind: "user", text: "Latest question", timestamp: 2 },
+    { kind: "assistant", blocks: [{ type: "text", text: "Latest answer" }] },
+  )
+  expect(board.cards.value[0]).toMatchObject({
+    title: saved ? "Session title" : "First question",
+    preview: "Latest question",
+  })
+  owner.promptQueue.push({ text: "Not sent yet" })
+  expect(board.cards.value[0].preview).toBe("Latest question")
+  owner.entries.push({ kind: "user", text: "Follow-up question", timestamp: 3 })
+  expect(board.cards.value[0].preview).toBe("Follow-up question")
+  owner.entries.splice(-1)
+  expect(board.cards.value[0].preview).toBe("Latest question")
+})
+
+test("an image-only latest prompt does not fall back to an older question", () => {
+  const { board, workspace, sessionFor } = harness()
+  workspace.histories["/root"] = [
+    { file: "/saved.jsonl", cwd: "/root", preview: "First question", lastUserMessage: "" },
+  ]
+  expect(board.cards.value[0].preview).toBe("")
+  const owner = sessionFor("worker")
+  Object.assign(owner, { cwd: "/root", sessionFile: "/saved.jsonl" })
+  owner.entries.push({ kind: "user", text: "First question" }, { kind: "user", text: "", images: [{ url: "image" }] })
+  expect(board.cards.value[0].preview).toBe("")
+})
+
 test("more than twelve independent todos in one project are persisted without starting pi", async () => {
   const { board, workspace, sessionFor } = harness()
   for (let index = 0; index < 20; index++) await board.createDraft({ project: "/root", message: `Task ${index}` })

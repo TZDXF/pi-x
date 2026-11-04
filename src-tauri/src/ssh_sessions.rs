@@ -251,6 +251,7 @@ fn record_to_meta(
             .map(String::from),
         mtime_ms: record.mtime_s.saturating_mul(1000),
         preview: None,
+        last_user_message: None,
         title,
         archived: false,
     })
