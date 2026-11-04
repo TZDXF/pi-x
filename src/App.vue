@@ -647,13 +647,13 @@ onUnmounted(() => {
       :show-sidebar="!showKanban"
       :sidebar-open="sidebarOpen"
       :right-sidebar-open="rightSidebarOpen"
-      :show-right-sidebar="
+      :show-right-sidebar="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules' && !showKanban"
+      :show-open-in-editor="
         phase === 'chat' &&
         route.name !== 'settings' &&
         route.name !== 'schedules' &&
-        (!showKanban || board.detailsOpen)
+        (!showKanban || (board.detailsOpen && !!board.selectedCard && boardSelectionReady))
       "
-      :show-open-in-editor="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules'"
       :open-in-editor-project="session.cwd || project"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
