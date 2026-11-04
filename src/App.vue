@@ -737,73 +737,75 @@ onUnmounted(() => {
                 @create="createBoardDraft"
                 @retry="board.refresh"
               />
-              <KanbanDetailsPanel v-if="showKanban && board.detailsOpen">
-                <header class="flex h-12 shrink-0 items-center gap-1.5 border-b px-3">
-                  <span class="min-w-0 flex-1 truncate text-sm font-medium">{{
-                    board.selectedCard?.title || t("sidebar.untitled")
-                  }}</span>
-                  <Button
-                    v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
-                    variant="ghost"
-                    size="icon-sm"
-                    :disabled="connecting || navigating"
-                    :title="t('kanban.deleteDraft')"
-                    :aria-label="t('kanban.deleteDraft')"
-                    @click="deleteBoardDraft"
-                    ><Trash2 class="size-4"
-                  /></Button>
-                  <Button
-                    v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
-                    variant="outline"
-                    size="sm"
-                    :disabled="connecting || navigating || !boardSelectionReady"
-                    @click="boardChat?.submitDraft()"
-                    ><Play class="size-3.5" />{{ t("kanban.startDraft") }}</Button
+              <Transition name="kanban-details">
+                <KanbanDetailsPanel v-if="showKanban && board.detailsOpen">
+                  <header class="flex h-12 shrink-0 items-center gap-1.5 border-b px-3">
+                    <span class="min-w-0 flex-1 truncate text-sm font-medium">{{
+                      board.selectedCard?.title || t("sidebar.untitled")
+                    }}</span>
+                    <Button
+                      v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
+                      variant="ghost"
+                      size="icon-sm"
+                      :disabled="connecting || navigating"
+                      :title="t('kanban.deleteDraft')"
+                      :aria-label="t('kanban.deleteDraft')"
+                      @click="deleteBoardDraft"
+                      ><Trash2 class="size-4"
+                    /></Button>
+                    <Button
+                      v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
+                      variant="outline"
+                      size="sm"
+                      :disabled="connecting || navigating || !boardSelectionReady"
+                      @click="boardChat?.submitDraft()"
+                      ><Play class="size-3.5" />{{ t("kanban.startDraft") }}</Button
+                    >
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      :title="t('kanban.openInChat')"
+                      :aria-label="t('kanban.openInChat')"
+                      @click="openBoardConversationInChat"
+                      ><ExternalLink class="size-4"
+                    /></Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      :title="t('kanban.closeDetails')"
+                      :aria-label="t('kanban.closeDetails')"
+                      @click="board.detailsOpen = false"
+                      ><X class="size-4"
+                    /></Button>
+                  </header>
+                  <ChatView
+                    v-if="phase === 'chat' && boardSelectionReady"
+                    ref="boardChat"
+                    hide-header
+                    :key="activeRuntimeId"
+                    :session-id="activeRuntimeId"
+                    :project="session.cwd || project"
+                    :ensure-started="ensureBoardStarted"
+                    :connecting="connecting"
+                    :selecting-project="selectingProject"
+                    :connected="started"
+                    sidebar-target="#workspace-main"
+                    v-model:right-sidebar-open="rightSidebarOpen"
+                    @select-project="selectBoardDraftProject"
+                    @open-project="requestNavigation(switchProject)"
+                    @new-session="newSessionFromChat"
+                    @resume-session="resumeSessionFromRoute"
+                    @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
+                  />
+                  <div
+                    v-else
+                    class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground"
+                    role="status"
                   >
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    :title="t('kanban.openInChat')"
-                    :aria-label="t('kanban.openInChat')"
-                    @click="openBoardConversationInChat"
-                    ><ExternalLink class="size-4"
-                  /></Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    :title="t('kanban.closeDetails')"
-                    :aria-label="t('kanban.closeDetails')"
-                    @click="board.detailsOpen = false"
-                    ><X class="size-4"
-                  /></Button>
-                </header>
-                <ChatView
-                  v-if="phase === 'chat' && boardSelectionReady"
-                  ref="boardChat"
-                  hide-header
-                  :key="activeRuntimeId"
-                  :session-id="activeRuntimeId"
-                  :project="session.cwd || project"
-                  :ensure-started="ensureBoardStarted"
-                  :connecting="connecting"
-                  :selecting-project="selectingProject"
-                  :connected="started"
-                  sidebar-target="#workspace-main"
-                  v-model:right-sidebar-open="rightSidebarOpen"
-                  @select-project="selectBoardDraftProject"
-                  @open-project="requestNavigation(switchProject)"
-                  @new-session="newSessionFromChat"
-                  @resume-session="resumeSessionFromRoute"
-                  @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
-                />
-                <div
-                  v-else
-                  class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground"
-                  role="status"
-                >
-                  {{ phase === "down" ? lastError || t("app.exited") : t("chat.historyLoading") }}
-                </div>
-              </KanbanDetailsPanel>
+                    {{ phase === "down" ? lastError || t("app.exited") : t("chat.historyLoading") }}
+                  </div>
+                </KanbanDetailsPanel>
+              </Transition>
             </div>
             <ScheduledTasksPage
               v-if="route.name === 'schedules'"

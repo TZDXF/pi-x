@@ -102,6 +102,23 @@ onBeforeUnmount(() => observer?.disconnect())
 .kanban-details {
   width: var(--kanban-details-width);
 }
+.kanban-details-enter-active,
+.kanban-details-leave-active {
+  overflow: hidden;
+  transition:
+    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.kanban-details-leave-active {
+  pointer-events: none;
+}
+.kanban-details-enter-from,
+.kanban-details-leave-to {
+  width: 0;
+  opacity: 0;
+  transform: translateX(16px);
+}
 .kanban-details-resize {
   position: absolute;
   z-index: 30;
@@ -134,6 +151,20 @@ onBeforeUnmount(() => observer?.disconnect())
   }
   .kanban-details-resize {
     display: none;
+  }
+  .kanban-details-enter-active,
+  .kanban-details-leave-active {
+    transition-property: opacity, transform;
+  }
+  .kanban-details-enter-from,
+  .kanban-details-leave-to {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kanban-details-enter-active,
+  .kanban-details-leave-active {
+    transition: none;
   }
 }
 </style>
