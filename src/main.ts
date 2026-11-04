@@ -3,8 +3,13 @@ import { createPinia } from "pinia"
 import RemoteEntry from "./components/RemoteEntry.vue"
 import { i18n } from "./i18n"
 import { isDeveloperModeEnabled } from "./lib/developerMode"
+import { ignoreInvalidKeyboardEvent } from "./lib/keyboardEvents"
 import "./style.css"
 import "./lib/theme"
+
+// 必须先于 element-source-dev 的 document 捕获监听器注册。
+window.addEventListener("keydown", ignoreInvalidKeyboardEvent, true)
+window.addEventListener("keyup", ignoreInvalidKeyboardEvent, true)
 
 if (import.meta.env.DEV || isDeveloperModeEnabled()) {
   const { default: elementDev } = await import("element-source-dev")

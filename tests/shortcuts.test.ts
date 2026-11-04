@@ -91,8 +91,28 @@ test("comboFromEvent normalizes modifiers, keys, IME and modifiers-only presses"
   expect(api.comboFromEvent(keyEvent(" "))).toBe("space")
   expect(api.comboFromEvent(keyEvent("Escape"))).toBe("escape")
   expect(api.comboFromEvent(keyEvent("`", { ctrl: true }))).toBe("ctrl+`")
+  expect(api.comboFromEvent(keyEvent("toString"))).toBe("tostring")
+  expect(api.comboFromEvent(keyEvent("constructor"))).toBe("constructor")
   expect(api.comboFromEvent(keyEvent("Shift"))).toBe(null)
   expect(api.comboFromEvent(keyEvent("e", { ctrl: true, composing: true }))).toBe(null)
+})
+
+test("invalid keyboard keys do not form or dispatch shortcuts", () => {
+  const { api } = harness(null)
+  let hits = 0
+  api.registerShortcutHandler("app.searchTasks", () => hits++)
+
+  for (const key of [undefined, null, "", 42, {}]) {
+    const event = keyEvent(key, { ctrl: true })
+    event.preventDefault = () => {
+      throw new Error("Unmatched keyboard events must not be consumed")
+    }
+    expect(api.comboFromEvent(event)).toBe(null)
+    expect(api.dispatchShortcut(event)).toBe(false)
+  }
+  expect(hits).toBe(0)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(true)
+  expect(hits).toBe(1)
 })
 
 test("dispatchShortcut resolves handlers and respects scope and suppression", () => {

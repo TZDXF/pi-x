@@ -176,11 +176,9 @@ export function formatComboParts(combo: string): string[] {
   })
 }
 
-const SPECIAL_KEYS: Record<string, string> = { " ": "space" }
-
 function normalizeEventKey(key: string): string {
-  const mapped = SPECIAL_KEYS[key] ?? key
-  return mapped.toLowerCase()
+  if (typeof key !== "string") return ""
+  return key === " " ? "space" : key.toLowerCase()
 }
 
 /** Canonical combo for a keyboard event, or null for pure modifiers / IME. */

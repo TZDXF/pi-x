@@ -67,6 +67,7 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
   }
 
   function onGlobalKeydown(event: KeyboardEvent) {
+    if (typeof event.key !== "string" || !event.key) return
     // devtools 快捷键不受会话阶段限制；默认 release 产物不含 devtools，
     // 打包版本需以 --features devtools 编译（见 developerMode.ts）。
     if (developerModeEnabled.value && isDevtoolsShortcut(event)) {
@@ -111,7 +112,8 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
     if (rows.length < 2) return
     const index = rows.findIndex(row => row.file === session.sessionFile)
     // No saved session yet (pristine draft): next = newest, prev = oldest.
-    const target = index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
+    const target =
+      index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
     if (target)
       requestConversationNavigation(sessionRoute(target.file, target.cwd), () => resumeSession(target.file, target.cwd))
   }
