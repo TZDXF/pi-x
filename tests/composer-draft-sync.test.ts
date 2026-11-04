@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { nextTick, reactive, ref } from "vue"
 import { useComposerDraftSync } from "@/composables/useComposerDraftSync"
+import { useBoardComposerDraft } from "@/composables/useBoardComposerDraft"
 import { usePromptInputProvider } from "@/components/ai-elements/prompt-input/context"
 import { composerDraftFiles, composerDraftText, recordComposerDraft } from "@/stores/composerDrafts"
 import { mountBrowserComposable } from "./browserTestHarness"
@@ -31,13 +32,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mountComposer(file: string | null = `${project}/one.jsonl`) {
+function mountComposer(file: string | null = `${project}/one.jsonl`, options = {}) {
   const session = reactive({ cwd: project, sessionFile: file })
   const selectedProject = ref(project)
   const bridge = ref(null)
   const onSubmit = vi.fn(async () => {})
   const { result: input, unmount } = mountBrowserComposable(() => {
-    const { initialDraft } = useComposerDraftSync(session, () => selectedProject.value, bridge)
+    const { initialDraft } = useComposerDraftSync(session, () => selectedProject.value, bridge, options)
     const input = usePromptInputProvider({ initialInput: initialDraft, onSubmit })
     bridge.value = reactive(input)
     return input
@@ -53,6 +54,94 @@ function mountComposer(file: string | null = `${project}/one.jsonl`) {
 }
 
 const photo = () => new File(["hello"], "photo.png", { type: "image/png" })
+
+function mountBoardDraft() {
+  const session = reactive({ runtimeId: "board-one", isStreaming: false, entries: [] })
+  const workspace = reactive({
+    boardDrafts: { "board-one": { id: "board-one", project, message: "Original task", createdAt: 1, updatedAt: 1 } },
+    upsertBoardDraft: vi.fn(draft => {
+      workspace.boardDrafts[draft.id] = draft
+    }),
+  })
+  const bridge = ref({
+    textInput: "Original task",
+    isLoading: false,
+    setTextInput(text) {
+      this.textInput = text
+    },
+  })
+  const mounted = mountBrowserComposable(() => useBoardComposerDraft(session, workspace, bridge))
+  cleanup.push(mounted.unmount)
+  return { workspace, bridge, session }
+}
+
+test("board draft autosave preserves its message while submission temporarily clears the composer", async () => {
+  vi.useFakeTimers()
+  try {
+    const { workspace, bridge, session } = mountBoardDraft()
+    bridge.value.textInput = "Edited task"
+    await nextTick()
+    vi.advanceTimersByTime(400)
+    expect(workspace.boardDrafts["board-one"].message).toBe("Edited task")
+    bridge.value.textInput = ""
+    bridge.value.isLoading = true
+    await nextTick()
+    vi.advanceTimersByTime(400)
+    expect(workspace.boardDrafts["board-one"].message).toBe("Edited task")
+    session.entries.push({ kind: "user" })
+    bridge.value.isLoading = false
+    await nextTick()
+    vi.advanceTimersByTime(400)
+    expect(workspace.boardDrafts["board-one"].message).toBe("Edited task")
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test("remote board draft edits refresh an untouched composer without overwriting local edits", async () => {
+  vi.useFakeTimers()
+  try {
+    const { workspace, bridge } = mountBoardDraft()
+    workspace.boardDrafts["board-one"].message = "Changed on another client"
+    await nextTick()
+    expect(bridge.value.textInput).toBe("Changed on another client")
+    vi.advanceTimersByTime(400)
+    expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
+    bridge.value.textInput = "My local edit"
+    workspace.boardDrafts["board-one"].message = "Second remote edit"
+    await nextTick()
+    expect(bridge.value.textInput).toBe("My local edit")
+    vi.advanceTimersByTime(400)
+    expect(workspace.boardDrafts["board-one"].message).toBe("My local edit")
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test("unstarted board drafts in the same project keep independent text and attachments", () => {
+  const first = mountComposer(null, { scope: "board-draft:first", initialText: "First todo" })
+  expect(first.input.textInput.value).toBe("First todo")
+  first.input.setTextInput("Edited first todo")
+  const image = photo()
+  first.input.addFiles([image])
+  first.unmount()
+  const second = mountComposer(null, { scope: "board-draft:second", initialText: "Second todo" })
+  expect(second.input.textInput.value).toBe("Second todo")
+  expect(second.input.files.value).toEqual([])
+  second.unmount()
+  const restored = mountComposer(null, { scope: "board-draft:first", initialText: "First todo" })
+  expect(restored.input.textInput.value).toBe("Edited first todo")
+  expect(restored.input.files.value[0]!.file).toBe(image)
+})
+
+test("a board todo's original prompt is not restored after its worker reserves a real file", async () => {
+  const composer = mountComposer(null, { scope: "board-draft:starting", initialText: "Run this task" })
+  await composer.input.submitForm()
+  expect(composer.input.textInput.value).toBe("")
+  composer.session.sessionFile = `${project}/started.jsonl`
+  await nextTick()
+  expect(composer.input.textInput.value).toBe("")
+})
 
 test.each(["draft text", ""])(
   "switching sessions restores image drafts with text %j using fresh preview URLs",

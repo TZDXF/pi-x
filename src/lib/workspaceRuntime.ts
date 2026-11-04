@@ -3,6 +3,8 @@ import { copySshProjectConnection } from "@/lib/ssh"
 import type { AppConfig, RunningSession } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
 import { debounce } from "@/lib/timing"
+import { setSessionRunStatus } from "@/stores/sessionRunStatus"
+import { sessionIdentityKey } from "@/lib/sessionIdentity"
 
 export type WorkspacePhase = "detecting" | "no-pi" | "pick" | "trust" | "chat" | "down"
 type Api = typeof import("@/api/piClient")
@@ -83,11 +85,17 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
         [
           onPiEvent(ev => {
             const id = ev.runtimeId ?? "default"
+            if (ev.type === "extension_ui_resolved") {
+              uiFor(id).resolveRequest(ev.id)
+              return
+            }
             if (ev.type === "extension_ui_request") {
               uiFor(id).handleRequest(ev as any)
               return
             }
             const owner = sessionFor(id)
+            if (!owner.cwd && typeof ev.pixProject === "string") owner.cwd = ev.pixProject
+            if (!owner.sessionFile && typeof ev.pixSessionFile === "string") owner.sessionFile = ev.pixSessionFile
             if (ev.type === "scheduled_session_created") {
               owner.cwd = ev.project
               owner.sessionFile = ev.sessionFile
@@ -97,6 +105,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
               void owner.init(ev.project).catch(console.warn)
             }
             owner.handleEvent(ev)
+            if (ev.type === "agent_settled") uiFor(id).restoreRequests([])
             if ((ev.type === "agent_end" || ev.type === "agent_settled") && owner.cwd)
               void workspace.refresh(owner.cwd).catch(console.warn)
           }),
@@ -104,7 +113,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
           onWorkspaceStateChanged(state => {
             if (!isDisposed()) workspace.applyState(state)
           }),
-          onPiExit(runtimeId => {
+          onPiExit((runtimeId, activity) => {
             pixLog(`pi exit: runtimeId=${runtimeId ?? "<transport>"}`, runtimeId ?? null)
             // An unscoped exit is a transport disconnect; it is not an agent exit.
             if (!runtimeId) {
@@ -112,11 +121,19 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
               return
             }
             const owner = sessionFor(runtimeId)
-            owner.markInterrupted()
+            if (activity)
+              setSessionRunStatus(
+                activity.file,
+                activity.status === "idle" ? null : activity.status,
+                activity.project,
+                activity,
+              )
+            if (!activity || activity.status === "error") owner.markInterrupted()
             owner.started = false
             owner.isStreaming = false
             owner.isCompacting = false
             owner.partialBlocks = null
+            uiFor(runtimeId).restoreRequests([])
             if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
           }),
           onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(tBackendError(line))),
@@ -146,6 +163,9 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
                 const restored = await reattachRunningSessions()
                 if (restored) return
                 phase.value = "pick"
+              } else {
+                // Events during a remote transport gap are lost, including UI resolutions.
+                await reattachRunningSessions(false)
               }
               refreshVisibleHistories()
             })().catch(error => {
@@ -173,7 +193,7 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
 
   /** Reattach to runtimes already alive on the backend (UI reload, remote
    *  reconnect) without spawning duplicates. Returns the restored runtime. */
-  async function reattachRunningSessions(): Promise<RunningSession | null> {
+  async function reattachRunningSessions(activate = true): Promise<RunningSession | null> {
     const running = await listRunningSessions()
     if (isDisposed()) return null
     for (const runtime of running) {
@@ -182,14 +202,40 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
       await owner.init(runtime.project)
       owner.isStreaming = runtime.state.isStreaming ?? false
       await owner.loadHistory()
-      if (owner.isStreaming) owner.markRunning()
+      const file = owner.sessionFile || runtime.state.sessionFile
+      if (runtime.activity && file) {
+        setSessionRunStatus(
+          file,
+          runtime.activity.status === "idle" ? null : runtime.activity.status,
+          runtime.project,
+          runtime.activity,
+        )
+      } else if (owner.isStreaming) owner.markRunning()
+      if (runtime.pendingUiRequests) uiFor(runtime.runtimeId).restoreRequests(runtime.pendingUiRequests)
       if (isDisposed()) return null
+    }
+    const activeFiles = new Set(
+      running
+        .filter(runtime => runtime.state.isStreaming || runtime.activity?.status === "running")
+        .flatMap(runtime =>
+          runtime.state.sessionFile ? [sessionIdentityKey(runtime.state.sessionFile, runtime.project)] : [],
+        ),
+    )
+    // A desktop restart kills workers. Persisted running cards must not stay
+    // running forever after their worker disappears.
+    for (const activity of Object.values(workspace.sessionActivities ?? {})) {
+      if (activity.status !== "running" || activeFiles.has(sessionIdentityKey(activity.file, activity.project)))
+        continue
+      setSessionRunStatus(activity.file, "error", activity.project, {
+        runId: activity.runId,
+        updatedAt: Math.max(Date.now(), activity.updatedAt + 1),
+      })
     }
     // Never auto-activate a project the user explicitly removed, even when its
     // conversations keep running in the background.
     const restorable = running.filter(runtime => !workspace.isRemovedProject(runtime.project))
     const restored = restorable.find(runtime => runtime.project === config.value.lastProject) ?? restorable[0]
-    if (restored) {
+    if (restored && activate) {
       activateSession(restored.runtimeId)
       project.value = restored.project
       phase.value = "chat"

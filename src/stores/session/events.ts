@@ -3,7 +3,7 @@ import { pixLog } from "@/api/piClient"
 import { contentImages, contentText } from "@/lib/content"
 import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
-import { setSessionRunStatus } from "@/stores/sessionRunStatus"
+import { setSessionRunStatus, type SessionRunStatus } from "@/stores/sessionRunStatus"
 import { useWorkspaceStore } from "@/stores/workspace"
 import type { Ref } from "vue"
 import type { AssistantMessageEvent, Usage } from "@/api/protocol"
@@ -231,13 +231,21 @@ export function createEventHandler(ctx: EventContext) {
   } = ctx
 
   function handleEvent(ev: Record<string, any>) {
+    const runMetadata = typeof ev.pixRunId === "string" && ev.pixRunId &&
+      typeof ev.pixRunUpdatedAt === "number" && Number.isFinite(ev.pixRunUpdatedAt)
+      ? { runId: ev.pixRunId, updatedAt: ev.pixRunUpdatedAt }
+      : undefined
+    const setRunStatus = (status: SessionRunStatus | null) => {
+      if (runMetadata) setSessionRunStatus(sessionFile.value, status, cwd.value, runMetadata)
+      else setSessionRunStatus(sessionFile.value, status, cwd.value)
+    }
     switch (ev.type) {
       case "scheduled_session_created":
         // This prompt is submitted by PiX's scheduler rather than the composer.
         entries.value.push({ kind: "user", id: nextId(), text: ev.prompt, timestamp: Date.now() })
         isStreaming.value = true
         flow.awaitingAgentStart = true
-        setSessionRunStatus(sessionFile.value, "running", cwd.value)
+        setRunStatus("running")
         break
 
       case "scheduled_session_failed":
@@ -246,7 +254,7 @@ export function createEventHandler(ctx: EventContext) {
           flow.awaitingAgentStart = false
           flow.turnFailed = true
           flow.lastErrorMessage = tBackendError(ev.error)
-          handleEvent({ type: "agent_settled" })
+          handleEvent({ ...ev, type: "agent_settled" })
         }
         break
 
@@ -259,7 +267,7 @@ export function createEventHandler(ctx: EventContext) {
         flow.turnFailed = false
         flow.turnAborted = false
         flow.lastErrorMessage = null
-        setSessionRunStatus(sessionFile.value, "running", cwd.value)
+        setRunStatus("running")
         break
 
       case "agent_end":
@@ -296,7 +304,7 @@ export function createEventHandler(ctx: EventContext) {
           `settled: finalize status=${finalStatus ?? "none"} notify=${!flow.turnAborted && !flow.stopping} failed=${flow.turnFailed} aborted=${flow.turnAborted}`,
           runtimeId,
         )
-        setSessionRunStatus(sessionFile.value, finalStatus, cwd.value)
+        setRunStatus(finalStatus)
         // Error messages carry an empty content array, so a finally-failed run
         // would otherwise leave no trace in the conversation. Transient errors
         // that a retry recovered from never reach this point.
@@ -472,7 +480,7 @@ export function createEventHandler(ctx: EventContext) {
 
       case "auto_retry_start":
         isStreaming.value = true
-        setSessionRunStatus(sessionFile.value, "running", cwd.value)
+        setRunStatus("running")
         retryInfo.value = {
           attempt: Number(ev.attempt) || 1,
           maxAttempts: Number(ev.maxAttempts) || Number(ev.attempt) || 1,

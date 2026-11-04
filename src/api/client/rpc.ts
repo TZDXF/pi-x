@@ -1,6 +1,7 @@
 import { activeRuntimeId } from "@/stores/runtime"
 import { RECONNECTED_EVENT, invoke, listen } from "../transport"
 import type { ExtensionUiResponse, RpcResponse } from "../protocol"
+import type { SessionActivity } from "@/lib/workspaceState"
 
 /** Correlated request: resolves with the `response` record that carries our id. */
 export function rpcRequest<T = unknown>(
@@ -48,8 +49,31 @@ export function onPiEvent(handler: (event: Record<string, any>) => void): Promis
   return listen<Record<string, any>>("pi://event", e => handler(e.payload))
 }
 
-export function onPiExit(handler: (runtimeId?: string) => void): Promise<() => void> {
-  return listen<{ runtimeId?: string }>("pi://exit", e => handler(e.payload.runtimeId))
+export function onPiExit(handler: (runtimeId?: string, activity?: SessionActivity) => void): Promise<() => void> {
+  return listen<{
+    runtimeId?: string
+    pixSessionFile?: string
+    pixProject?: string
+    pixRunStatus?: SessionActivity["status"]
+    pixRunId?: string
+    pixRunUpdatedAt?: number
+  }>("pi://exit", ({ payload }) => {
+    if (
+      payload.pixSessionFile &&
+      payload.pixProject &&
+      payload.pixRunStatus &&
+      payload.pixRunId &&
+      typeof payload.pixRunUpdatedAt === "number"
+    ) {
+      handler(payload.runtimeId, {
+        file: payload.pixSessionFile,
+        project: payload.pixProject,
+        status: payload.pixRunStatus,
+        runId: payload.pixRunId,
+        updatedAt: payload.pixRunUpdatedAt,
+      })
+    } else handler(payload.runtimeId)
+  })
 }
 
 export function onPiStderr(handler: (line: string, runtimeId?: string) => void): Promise<() => void> {

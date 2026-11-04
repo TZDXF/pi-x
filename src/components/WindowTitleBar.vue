@@ -10,6 +10,8 @@ import {
   CircleArrowUp,
   Code,
   Folder,
+  Columns3,
+  MessageSquare,
   PanelLeft,
   PanelRight,
   Settings,
@@ -39,15 +41,18 @@ import {
 } from "@/lib/openWith"
 import { useUiStore } from "@/stores/conversations"
 import { useAppUpdateStore } from "@/stores/appUpdate"
+import type { WorkspaceLayout } from "@/composables/useWorkspaceLayout"
 
 const props = defineProps<{
+  showSidebar?: boolean
   sidebarOpen?: boolean
   rightSidebarOpen?: boolean
   showRightSidebar?: boolean
   showOpenInEditor?: boolean
   openInEditorProject?: string
+  workspaceLayout?: WorkspaceLayout
 }>()
-const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: [] }>()
+const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: []; changeLayout: [layout: WorkspaceLayout] }>()
 
 const { t } = useI18n()
 const route = useRoute()
@@ -175,6 +180,7 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
   >
     <div class="flex h-full items-center">
       <button
+        v-if="props.showSidebar !== false"
         type="button"
         class="titlebar-control"
         :disabled="route.name === 'settings'"
@@ -223,6 +229,19 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
         @click="navigate('/settings/about')"
       >
         <CircleArrowUp :size="16" />
+      </button>
+      <button
+        v-if="workspaceLayout"
+        type="button"
+        class="titlebar-control"
+        :disabled="route.name === 'settings' || route.name === 'schedules'"
+        :title="workspaceLayout === 'board' ? t('kanban.layoutChat') : t('kanban.layoutBoard')"
+        :aria-label="workspaceLayout === 'board' ? t('kanban.layoutChat') : t('kanban.layoutBoard')"
+        :aria-pressed="workspaceLayout === 'board'"
+        @click="emit('changeLayout', workspaceLayout === 'board' ? 'chat' : 'board')"
+      >
+        <MessageSquare v-if="workspaceLayout === 'board'" :size="16" />
+        <Columns3 v-else :size="16" />
       </button>
       <Badge
         v-if="isDevelopment"

@@ -50,5 +50,12 @@ export interface RunningSession {
   runtimeId: string
   project: string
   state: import("../protocol").SessionState
+  /** Backend-issued identity; updatedAt is Unix time in milliseconds. */
+  activity?: {
+    status: "running" | "completed" | "error" | "idle"
+    runId: string
+    updatedAt: number
+  }
+  pendingUiRequests?: import("../protocol").ExtensionUiRequest[]
 }
 export const listRunningSessions = () => invoke<RunningSession[]>("rpc_sessions")

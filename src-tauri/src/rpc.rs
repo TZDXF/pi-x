@@ -12,6 +12,7 @@
 //! stdio readers, kill). Session-file surgery driven by the live transport
 //! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
+mod activity;
 mod child;
 
 use serde_json::{json, Value};
@@ -31,6 +32,9 @@ use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
 fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
+    if event == EXIT_EVENT || (event == EVENT && matches!(payload["type"].as_str(), Some("agent_start" | "agent_settled"))) {
+        crate::commands::workspace_state::record_runtime_activity(app, &payload);
+    }
     if runtime_id.starts_with("schedule-") {
         use tauri::Emitter;
         let name = event.replace("pi://", "pi://schedule-");
@@ -58,6 +62,7 @@ pub struct ProcessState {
     navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
     generation: Arc<AtomicU64>,
+    activity: Arc<Mutex<activity::RuntimeActivity>>,
 }
 
 impl ProcessState {
@@ -105,11 +110,11 @@ pub async fn process_request(state: &ProcessState, mut command: Value) -> Result
 /// issued it is still current. `next_id` restarts at 1 on every respawn, so a
 /// stale timeout must never delete the new session's in-flight entry.
 async fn remove_pending_if_current(state: &ProcessState, id: u64, generation: u64) {
-    if state.generation.load(Ordering::Relaxed) != generation {
-        return;
-    }
-    if let Some(inner) = state.inner.lock().await.as_ref() {
-        inner.pending.lock().await.remove(&id);
+    let guard = state.inner.lock().await;
+    if state.generation.load(Ordering::Relaxed) == generation {
+        if let Some(inner) = guard.as_ref() {
+            inner.pending.lock().await.remove(&id);
+        }
     }
 }
 
@@ -135,24 +140,8 @@ pub async fn process_request_timeout(
     } else {
         None
     };
-    let guard = state.inner.lock().await;
-    let inner = guard.as_ref().ok_or("pi is not running")?;
-    // Read the generation while the session lock is held: a concurrent spawn
-    // bumps it before replacing `inner`, so this pair identifies the session
-    // the request is issued against.
-    let generation = state.generation.load(Ordering::Relaxed);
-
-    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    command["id"] = json!(id);
-
     let (tx, rx) = oneshot::channel();
-    inner.pending.lock().await.insert(id, tx);
-
-    if let Err(e) = write_line(&inner.stdin_tx, command.to_string()).await {
-        inner.pending.lock().await.remove(&id);
-        return Err(e);
-    }
-    drop(guard);
+    let (id, generation) = accept_command(state, command, Some(tx)).await?;
 
     let result = match timeout {
         Some(t) => tokio::time::timeout(t, rx)
@@ -174,11 +163,62 @@ async fn write_line(stdin_tx: &mpsc::Sender<String>, line: String) -> Result<(),
         .map_err(|_| "pi is not running (stdin closed)".to_string())
 }
 
-/// Fire-and-forget write (e.g. `extension_ui_response`).
-pub async fn process_notify(state: &ProcessState, command: Value) -> Result<(), String> {
+/// Wait for queue capacity without blocking stdout, request expiry or kill.
+/// Queue insertion and its activity update then share one generation check and
+/// lock acquisition, so stdout cannot overtake an accepted abort/UI response.
+async fn accept_command(
+    state: &ProcessState,
+    command: &mut Value,
+    response: Option<oneshot::Sender<Value>>,
+) -> Result<(u64, u64), String> {
+    let ui_response = command["type"] == "extension_ui_response";
+    let (stdin_tx, generation, ui_token) = {
+        let guard = state.inner.lock().await;
+        let inner = guard.as_ref().ok_or("pi is not running")?;
+        let mut activity = state.activity.lock().await;
+        let generation = state.current_generation();
+        if !activity.is_current(generation) {
+            return Err("pi is not running".into());
+        }
+        let token = if ui_response {
+            Some(
+                activity
+                    .response_token(command)
+                    .ok_or("extension UI request is no longer pending")?,
+            )
+        } else {
+            None
+        };
+        (inner.stdin_tx.clone(), generation, token)
+    };
+    let permit = stdin_tx
+        .reserve_owned()
+        .await
+        .map_err(|_| "pi is not running (stdin closed)".to_string())?;
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
-    write_line(&inner.stdin_tx, command.to_string()).await
+    let mut activity = state.activity.lock().await;
+    if state.current_generation() != generation || !activity.is_current(generation) {
+        return Err("pi session changed before accepting command".into());
+    }
+    if ui_response && activity.response_token(command) != ui_token {
+        return Err("extension UI request is no longer pending".into());
+    }
+    let id = if let Some(tx) = response {
+        let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+        command["id"] = json!(id);
+        inner.pending.lock().await.insert(id, tx);
+        id
+    } else {
+        0
+    };
+    permit.send(command.to_string());
+    activity.command(command);
+    Ok((id, generation))
+}
+/// Fire-and-forget write (e.g. `extension_ui_response`).
+pub async fn process_notify(state: &ProcessState, mut command: Value) -> Result<(), String> {
+    accept_command(state, &mut command, None).await.map(|_| ())
 }
 
 /// Each runtime owns a process, request correlation table and navigation lock.
@@ -253,6 +293,15 @@ pub async fn spawn(
     if let Some(existing) = snapshot.iter().find(|p| p.runtime_id == id) {
         if child::process_running(existing).await {
             return Err("Runtime is already running".into());
+        }
+        // A replacement uses a new ProcessState. Retire the old state's readers
+        // and timers before either worker can publish events with the same id.
+        let guard = existing.inner.lock().await;
+        let mut activity = existing.activity.lock().await;
+        let generation = existing.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        activity.stop(generation, true);
+        if let Some(inner) = guard.as_ref() {
+            inner.pending.lock().await.clear();
         }
     }
     // Never open the same persisted conversation in two processes. Probes are
@@ -404,11 +453,18 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
         if !child::process_running(&process).await {
             continue;
         }
+        let generation = process.current_generation();
         let mut probe = json!({"type": "get_state"});
         if let Ok(response) =
             process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await
         {
-            result.push(json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]}));
+            let mut activity = process.activity.lock().await;
+            if !activity.is_current(generation) {
+                continue;
+            }
+            let mut snapshot = json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]});
+            activity.snapshot(&mut snapshot);
+            result.push(snapshot);
         }
     }
     result
@@ -455,8 +511,20 @@ pub(crate) async fn set_session_name(
 #[cfg(test)]
 mod pending_cleanup_tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::process::Stdio;
+    use std::sync::Mutex as StdMutex;
     use tokio::process::Command;
+
+    #[derive(Default)]
+    struct Sink(StdMutex<Vec<Value>>);
+
+    impl child::EventSink for Sink {
+        fn emit(&self, _: &'static str, _: &str, payload: Value) {
+            self.0.lock().unwrap().push(payload);
+        }
+    }
 
     /// `SessionInner` needs a live child handle; a trivially exiting process
     /// is enough because only the pending map is exercised here.
@@ -531,6 +599,226 @@ mod pending_cleanup_tests {
             "a stale generation must never delete the new session's pending entry"
         );
     }
+
+    #[tokio::test]
+    async fn accepted_ui_response_clears_snapshot_and_broadcasts_to_other_clients() {
+        let state = state_with_session().await;
+        let (stdin_tx, mut stdin_rx) = mpsc::channel(8);
+        state.inner.lock().await.as_mut().unwrap().stdin_tx = stdin_tx;
+        let sink = Arc::new(Sink::default());
+        state
+            .activity
+            .lock()
+            .await
+            .reset(0, "test", "project", None, sink.clone());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"confirm"
+        }));
+        let response = json!({"type":"extension_ui_response", "id":"question", "confirmed":true});
+        process_notify(&state, response.clone()).await.unwrap();
+        assert_eq!(stdin_rx.recv().await.unwrap(), response.to_string());
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+        let emitted = sink.0.lock().unwrap();
+        assert_eq!(emitted.last().unwrap()["type"], "extension_ui_resolved");
+        assert_eq!(emitted.last().unwrap()["id"], "question");
+        assert_eq!(emitted.last().unwrap()["runtimeId"], "test");
+    }
+
+    #[tokio::test]
+    async fn failed_ui_response_write_keeps_request_available_for_reconnect() {
+        let state = state_with_session().await;
+        let sink = Arc::new(Sink::default());
+        state
+            .activity
+            .lock()
+            .await
+            .reset(0, "test", "project", None, sink.clone());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"input"
+        }));
+        assert!(process_notify(
+            &state,
+            json!({
+                "type":"extension_ui_response", "id":"question", "value":"answer"
+            })
+        )
+        .await
+        .is_err());
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert_eq!(snapshot["pendingUiRequests"].as_array().unwrap().len(), 1);
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+    }
+
+    async fn backpressured_state() -> (ProcessState, mpsc::Receiver<String>, Arc<Sink>) {
+        let state = state_with_session().await;
+        let (stdin_tx, stdin_rx) = mpsc::channel(1);
+        stdin_tx.try_send("queued".into()).unwrap();
+        state.inner.lock().await.as_mut().unwrap().stdin_tx = stdin_tx;
+        let sink = Arc::new(Sink::default());
+        state.activity.lock().await.reset(
+            0,
+            "test",
+            "project",
+            Some("session.jsonl".into()),
+            sink.clone(),
+        );
+        (state, stdin_rx, sink)
+    }
+
+    async fn assert_pending<F: Future>(mut future: Pin<&mut F>) {
+        std::future::poll_fn(|cx| {
+            assert!(
+                future.as_mut().poll(cx).is_pending(),
+                "queue must actually apply backpressure"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn backpressured_request_releases_locks_and_registers_only_on_acceptance() {
+        let (state, mut stdin_rx, _) = backpressured_state().await;
+        let mut command = json!({"type":"get_state"});
+        let request = process_request_timeout(&state, &mut command, Some(PROBE_TIMEOUT));
+        tokio::pin!(request);
+        assert_pending(request.as_mut()).await;
+        {
+            let inner = state
+                .inner
+                .try_lock()
+                .expect("backpressure must release inner");
+            assert!(inner.as_ref().unwrap().pending.lock().await.is_empty());
+            assert!(
+                state.activity.try_lock().is_ok(),
+                "backpressure must release activity"
+            );
+        }
+        assert_eq!(stdin_rx.recv().await.as_deref(), Some("queued"));
+        assert_pending(request.as_mut()).await;
+        let accepted: Value = serde_json::from_str(&stdin_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(accepted["id"], 1);
+        let inner = state.inner.lock().await;
+        inner
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .remove(&1)
+            .unwrap()
+            .send(json!({"success":true}))
+            .unwrap();
+        drop(inner);
+        assert_eq!(request.await.unwrap()["success"], true);
+    }
+
+    #[tokio::test]
+    async fn backpressured_notify_does_not_block_kill_or_lose_idle_exit_metadata() {
+        let (state, mut stdin_rx, sink) = backpressured_state().await;
+        state
+            .activity
+            .lock()
+            .await
+            .event(json!({"type":"agent_start"}));
+        let started = sink.0.lock().unwrap()[0].clone();
+        let notify = process_notify(&state, json!({"type":"abort"}));
+        tokio::pin!(notify);
+        assert_pending(notify.as_mut()).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            child::process_kill(&state, "test"),
+        )
+        .await
+        .expect("kill must not wait for stdin capacity")
+        .unwrap();
+        let exit = sink.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(exit["runtimeId"], "test");
+        assert_eq!(exit["pixProject"], "project");
+        assert_eq!(exit["pixSessionFile"], "session.jsonl");
+        assert_eq!(exit["pixRunId"], started["pixRunId"]);
+        assert_eq!(exit["pixRunStatus"], "idle");
+        assert!(exit["pixRunUpdatedAt"].as_u64() > started["pixRunUpdatedAt"].as_u64());
+        stdin_rx.recv().await.unwrap();
+        assert!(notify.await.is_err());
+        assert!(
+            stdin_rx.try_recv().is_err(),
+            "retired generation cannot enqueue its command"
+        );
+    }
+
+    #[tokio::test]
+    async fn backpressured_request_cannot_register_in_a_replacement_generation() {
+        let (state, mut stdin_rx, sink) = backpressured_state().await;
+        let mut command = json!({"type":"get_state"});
+        let request = process_request_timeout(&state, &mut command, Some(PROBE_TIMEOUT));
+        tokio::pin!(request);
+        assert_pending(request.as_mut()).await;
+        {
+            let guard = state.inner.lock().await;
+            let mut activity = state.activity.lock().await;
+            state.generation.store(1, Ordering::Relaxed);
+            activity.reset(1, "test", "project", None, sink);
+            let (tx, _rx) = oneshot::channel();
+            guard.as_ref().unwrap().pending.lock().await.insert(1, tx);
+        }
+        stdin_rx.recv().await.unwrap();
+        assert!(request.await.unwrap_err().contains("session changed"));
+        assert!(stdin_rx.try_recv().is_err());
+        assert!(state
+            .inner
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn ui_response_waiting_for_capacity_cannot_resolve_a_reused_id_after_timeout() {
+        let (state, mut stdin_rx, _) = backpressured_state().await;
+        let (token, deadline) = state
+            .activity
+            .lock()
+            .await
+            .event(json!({
+                "type":"extension_ui_request", "id":"question", "method":"input", "timeout":20
+            }))
+            .unwrap();
+        activity::schedule_timeout(Arc::downgrade(&state.activity), 0, token, deadline);
+        let response = json!({"type":"extension_ui_response", "id":"question", "value":"old"});
+        let notify = process_notify(&state, response);
+        tokio::pin!(notify);
+        assert_pending(notify.as_mut()).await;
+        tokio::time::sleep_until(deadline + std::time::Duration::from_millis(1)).await;
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"input"
+        }));
+        stdin_rx.recv().await.unwrap();
+        assert!(notify.await.unwrap_err().contains("no longer pending"));
+        assert!(stdin_rx.try_recv().is_err());
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert_eq!(snapshot["pendingUiRequests"].as_array().unwrap().len(), 1);
+        process_notify(
+            &state,
+            json!({"type":"extension_ui_response", "id":"question", "value":"new"}),
+        )
+        .await
+        .unwrap();
+        assert!(stdin_rx.recv().await.unwrap().contains("new"));
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+    }
+
 }
 
 #[cfg(test)]

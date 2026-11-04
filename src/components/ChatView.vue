@@ -15,6 +15,8 @@ import { useChatTurnList, blocksText } from "@/composables/useChatTurnList"
 import { useChatContextBreakdown } from "@/composables/useChatContextBreakdown"
 import { useVisibleSnapshot } from "@/composables/useVisibleSnapshot"
 import { useComposerDraftSync } from "@/composables/useComposerDraftSync"
+import { useSessionReadReceipt } from "@/composables/useSessionReadReceipt"
+import { useBoardComposerDraft } from "@/composables/useBoardComposerDraft"
 import { useConversationModel } from "@/composables/useConversationModel"
 import {
   Context,
@@ -91,6 +93,7 @@ const props = defineProps<{
   /** 所属会话 id；缺省跟随当前激活会话，分屏时由父层传入各窗格的会话。 */
   sessionId?: string
   splitPane?: boolean
+  hideHeader?: boolean
   /** Render the session's tools outside the split tree, in the workspace shell. */
   sidebarTarget?: string
   rightSidebarOpen?: boolean
@@ -126,7 +129,9 @@ const currentTitle = computed(
 )
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
-const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge)
+const draftOptions = useBoardComposerDraft(session, workspace, bridge)
+const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge, draftOptions)
+defineExpose({ submitDraft: () => bridge.value?.submitForm() })
 // Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
 const rootEl = ref<HTMLElement | null>(null)
@@ -164,6 +169,14 @@ const bottomNotch = computed(() => {
 })
 
 const conversation = ref<InstanceType<typeof ChatTurnList> | null>(null)
+useSessionReadReceipt({
+  session,
+  project: () => session.cwd || props.project,
+  viewport: () => conversation.value?.historyViewport(),
+  enabled: () => !props.connecting && !props.selectingProject,
+  loaded: () => !session.historyLoading && !props.connecting,
+  result: () => session.entries[session.entries.length - 1],
+})
 /** 发送/重发后回对话底部：向上翻阅会解除吸底跟随，发送即阅读意图，需强制回底。 */
 function jumpToConversationBottom() {
   void nextTick().then(() => conversation.value?.scrollToBottom())
@@ -333,6 +346,7 @@ onBeforeUnmount(() => {
     </div>
     <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
       <header
+        v-if="!hideHeader"
         class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border transition-[padding-left] duration-200 ease-out max-[900px]:flex-wrap max-[900px]:gap-1.5"
       >
         <div class="min-w-0">

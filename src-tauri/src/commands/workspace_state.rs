@@ -1,5 +1,9 @@
 //! Shared sidebar metadata. No webview/localStorage migration: development starts fresh.
-use std::{collections::BTreeMap, path::Path, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Mutex,
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -17,6 +21,40 @@ pub struct WorkspaceState {
     project_groups: BTreeMap<String, ProjectGroup>,
     removed_projects: Vec<String>,
     session_order: BTreeMap<String, Vec<String>>,
+    board_column_order: BTreeMap<String, Vec<String>>,
+    board_drafts: BTreeMap<String, BoardDraft>,
+    session_activities: BTreeMap<String, SessionActivity>,
+    session_acknowledgements: BTreeMap<String, String>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardDraft {
+    id: String,
+    project: String,
+    message: String,
+    created_at: f64,
+    updated_at: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_id: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionActivityStatus {
+    Running,
+    Completed,
+    Error,
+    Idle,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionActivity {
+    file: String,
+    project: String,
+    status: SessionActivityStatus,
+    run_id: String,
+    updated_at: f64,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ProjectGroup {
@@ -39,6 +77,10 @@ pub struct WorkspaceStatePatch {
     removed_projects: Option<PathChanges>,
     project_groups: BTreeMap<String, Option<ProjectGroup>>,
     session_order: BTreeMap<String, Option<Vec<String>>>,
+    board_column_order: BTreeMap<String, Option<Vec<String>>>,
+    board_drafts: BTreeMap<String, Option<BoardDraft>>,
+    session_activities: BTreeMap<String, Option<SessionActivity>>,
+    session_acknowledgements: BTreeMap<String, Option<String>>,
 }
 
 fn normalize_path(path: &str) -> String {
@@ -112,7 +154,38 @@ fn update_map<T>(map: &mut BTreeMap<String, T>, changes: BTreeMap<String, Option
         }
     }
 }
+// Board IDs, column keys and composite session identities must never pass through path normalization.
+fn update_identity_map<T>(map: &mut BTreeMap<String, T>, changes: BTreeMap<String, Option<T>>) {
+    for (key, value) in changes {
+        if let Some(value) = value {
+            map.insert(key, value);
+        } else {
+            map.remove(&key);
+        }
+    }
+}
+fn valid_timestamp(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
 fn normalize(state: &mut WorkspaceState) -> Result<(), String> {
+    if state.board_drafts.iter().any(|(key, draft)| {
+        key.trim().is_empty()
+            || key != &draft.id
+            || !valid_timestamp(draft.created_at)
+            || !valid_timestamp(draft.updated_at)
+            || draft.updated_at < draft.created_at
+    }) || state.session_activities.iter().any(|(key, activity)| {
+        key.trim().is_empty()
+            || activity.file.trim().is_empty()
+            || activity.run_id.trim().is_empty()
+            || !valid_timestamp(activity.updated_at)
+    }) || state
+        .session_acknowledgements
+        .iter()
+        .any(|(key, run_id)| key.trim().is_empty() || run_id.trim().is_empty())
+    {
+        return Err(pix_error("workspaceInvalid", "工作区目录列表无效"));
+    }
     state.projects = unique_paths(std::mem::take(&mut state.projects));
     state.removed_projects = unique_paths(std::mem::take(&mut state.removed_projects));
     state.projects.retain(|path| {
@@ -173,6 +246,10 @@ fn normalize(state: &mut WorkspaceState) -> Result<(), String> {
             }
         }
     }
+    for ids in state.board_column_order.values_mut() {
+        let mut seen = BTreeSet::new();
+        ids.retain(|id| seen.insert(id.clone()));
+    }
     Ok(())
 }
 fn read(path: &Path) -> Result<WorkspaceState, String> {
@@ -201,6 +278,33 @@ fn update(path: &Path, patch: WorkspaceStatePatch) -> Result<WorkspaceState, Str
     update_paths(&mut state.removed_projects, patch.removed_projects);
     update_map(&mut state.project_groups, patch.project_groups);
     update_map(&mut state.session_order, patch.session_order);
+    update_identity_map(&mut state.board_column_order, patch.board_column_order);
+    update_identity_map(&mut state.board_drafts, patch.board_drafts);
+    for (key, activity) in patch.session_activities {
+        if let Some(activity) = activity {
+            if state.session_activities.get(&key).is_none_or(|previous| {
+                (previous.run_id.starts_with("local:") && !activity.run_id.starts_with("local:"))
+                    || activity.updated_at >= previous.updated_at
+            }) {
+                state.session_activities.insert(key, activity);
+            }
+        } else {
+            state.session_activities.remove(&key);
+        }
+    }
+    for (key, run_id) in patch.session_acknowledgements {
+        if let Some(run_id) = run_id {
+            if state
+                .session_activities
+                .get(&key)
+                .is_none_or(|activity| activity.run_id == run_id)
+            {
+                state.session_acknowledgements.insert(key, run_id);
+            }
+        } else {
+            state.session_acknowledgements.remove(&key);
+        }
+    }
     normalize(&mut state)?;
     state.revision += 1;
     let body = serde_json::to_vec_pretty(&state)
@@ -246,6 +350,50 @@ pub fn workspace_state_update(
     Ok(state)
 }
 
+fn runtime_activity_patch(payload: &serde_json::Value) -> Option<WorkspaceStatePatch> {
+    let file = payload["pixSessionFile"].as_str()?;
+    let project = payload["pixProject"].as_str()?;
+    let activity: SessionActivity = serde_json::from_value(serde_json::json!({
+        "file": file, "project": project, "status": payload["pixRunStatus"],
+        "runId": payload["pixRunId"], "updatedAt": payload["pixRunUpdatedAt"],
+    })).ok()?;
+    let key = if crate::ssh::is_remote_uri(project) {
+        serde_json::to_string(&[normalize_path(project), file.to_string()]).ok()?
+    } else {
+        file.replace('\\', "/")
+    };
+    let mut patch = WorkspaceStatePatch::default();
+    patch.session_activities.insert(key, Some(activity));
+    Some(patch)
+}
+
+fn record_runtime_activity_at(path: &Path, payload: &serde_json::Value) -> Result<Option<WorkspaceState>, String> {
+    let Some(patch) = runtime_activity_patch(payload) else { return Ok(None) };
+    let current = read(path)?;
+    if patch.session_activities.iter().all(|(key, value)| current.session_activities.get(key) == value.as_ref()) {
+        return Ok(None);
+    }
+    update(path, patch).map(Some)
+}
+
+/// Preserve terminal results even when every remote browser is disconnected
+/// and the scheduler reaps its worker before a browser returns.
+pub(crate) fn record_runtime_activity(app: &AppHandle, payload: &serde_json::Value) {
+    let result = (|| {
+        let _guard = STATE_LOCK.lock().map_err(|e| e.to_string())?;
+        record_runtime_activity_at(&crate::data_dir::root().join("workspace.json"), payload)
+    })();
+    match result {
+        Ok(Some(state)) => {
+            if let Ok(value) = serde_json::to_value(state) {
+                crate::remote::emit(app, "pi://workspace-state-changed", value);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => crate::logs::write("workspace", &format!("runtime activity persistence failed: {error}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +409,36 @@ mod tests {
     }
     fn cleanup(path: &Path) {
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn backend_results_survive_without_a_connected_client_and_retry_starts_do_not_rewrite() {
+        let path = path();
+        let mut event = json!({
+            "pixSessionFile":"C:\\sessions\\one.jsonl", "pixProject":"C:/project",
+            "pixRunStatus":"running", "pixRunId":"backend-run", "pixRunUpdatedAt":1,
+        });
+        let started = record_runtime_activity_at(&path, &event).unwrap().unwrap();
+        assert_eq!(started.session_activities["C:/sessions/one.jsonl"].status, SessionActivityStatus::Running);
+        assert!(record_runtime_activity_at(&path, &event).unwrap().is_none());
+        event["pixRunStatus"] = json!("completed");
+        event["pixRunUpdatedAt"] = json!(2);
+        record_runtime_activity_at(&path, &event).unwrap();
+        let restored = read(&path).unwrap();
+        assert_eq!(restored.revision, 2);
+        assert_eq!(restored.session_activities["C:/sessions/one.jsonl"].status, SessionActivityStatus::Completed);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn backend_activity_keeps_remote_endpoint_identities_separate() {
+        let event = json!({
+            "pixSessionFile":"/sessions/one.jsonl", "pixProject":"ssh://host-a/project",
+            "pixRunStatus":"error", "pixRunId":"backend-run", "pixRunUpdatedAt":1,
+        });
+        let patch = runtime_activity_patch(&event).unwrap();
+        assert!(patch.session_activities.contains_key("[\"ssh://host-a/project\",\"/sessions/one.jsonl\"]"));
+        assert!(runtime_activity_patch(&json!({"pixRunStatus":"running"})).is_none());
     }
 
     #[test]
@@ -376,6 +554,201 @@ mod tests {
         assert!(state.pinned_projects.is_empty());
         assert!(state.project_groups.is_empty());
         assert!(state.session_order.is_empty());
+        assert_eq!(read(&path).unwrap(), state);
+        cleanup(&path);
+    }
+
+    fn draft(id: &str) -> serde_json::Value {
+        json!({"id": id, "project": "", "message": "", "createdAt": 1, "updatedAt": 2})
+    }
+    fn activity(run_id: &str, updated_at: u64) -> serde_json::Value {
+        json!({"file": "/session.jsonl", "project": "ssh://dev@host/project", "status": "running", "runId": run_id, "updatedAt": updated_at})
+    }
+
+    #[test]
+    fn old_workspace_defaults_kanban_maps_and_independent_drafts_survive_restart() {
+        let path = path();
+        crate::atomic_write::write(&path, br#"{"revision":4,"projects":["one"]}"#).unwrap();
+        let legacy = read(&path).unwrap();
+        assert!(legacy.board_column_order.is_empty());
+        assert!(legacy.board_drafts.is_empty());
+        assert!(legacy.session_activities.is_empty());
+        assert!(legacy.session_acknowledgements.is_empty());
+        update(&path, patch(json!({"boardDrafts": {"a": draft("a")}}))).unwrap();
+        let state = update(&path, patch(json!({"boardDrafts": {"b": draft("b")}}))).unwrap();
+        assert_eq!(state.board_drafts.len(), 2);
+        assert_eq!(read(&path).unwrap(), state);
+        let mut launched = draft("a");
+        launched["sessionFile"] = json!("/real.jsonl");
+        launched["runtimeId"] = json!("a");
+        launched["updatedAt"] = json!(3);
+        let state = update(&path, patch(json!({"boardDrafts": {"a": launched}}))).unwrap();
+        assert_eq!(state.board_drafts["a"].message, "");
+        assert_eq!(state.board_drafts["a"].runtime_id.as_deref(), Some("a"));
+        assert_eq!(read(&path).unwrap(), state);
+        let state = update(&path, patch(json!({"boardDrafts": {"a": null}}))).unwrap();
+        assert!(!state.board_drafts.contains_key("a"));
+        assert!(state.board_drafts.contains_key("b"));
+        cleanup(&path);
+    }
+
+    #[test]
+    fn column_orders_patch_opaque_keys_independently_and_survive_restart() {
+        let path = path();
+        let key = serde_json::to_string(&[r"C:\Project\", "running"]).unwrap();
+        let other_key = serde_json::to_string(&["C:/Project/", "running"]).unwrap();
+        let ids = [r"C:\Cards\one", "c:/cards/one", "draft:two"];
+        let first = update(&path, patch(json!({
+            "boardColumnOrder": {(&key): [ids[0], ids[1], ids[0], ids[2], ids[2]]}
+        }))).unwrap();
+        assert_eq!(first.board_column_order[&key], ids);
+        let state = update(&path, patch(json!({
+            "boardColumnOrder": {(&other_key): ["remote"]}
+        }))).unwrap();
+        assert_eq!(state.board_column_order.len(), 2);
+        assert_eq!(state.board_column_order[&key], ids);
+        assert_eq!(state.board_column_order[&other_key], ["remote"]);
+        assert_eq!(read(&path).unwrap(), state);
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["boardColumnOrder"][&key], json!(ids));
+        let state = update(&path, patch(json!({
+            "boardColumnOrder": {(&key): [], (&other_key): null}
+        }))).unwrap();
+        assert_eq!(state.board_column_order.len(), 1);
+        assert!(state.board_column_order[&key].is_empty());
+        assert_eq!(read(&path).unwrap(), state);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn reading_column_orders_deduplicates_without_normalizing_keys_or_ids() {
+        let path = path();
+        let key = serde_json::to_string(&["ssh://HOST/project/", "todo"]).unwrap();
+        let ids = ["draft:one", r"C:\Cards\one", "C:/Cards/one", "", " "];
+        crate::atomic_write::write(&path, &serde_json::to_vec(&json!({
+            "boardColumnOrder": {(&key): [ids[0], ids[1], ids[2], ids[0], ids[3], ids[4], ids[3]]}
+        })).unwrap()).unwrap();
+        let state = read(&path).unwrap();
+        assert_eq!(state.board_column_order.len(), 1);
+        assert_eq!(state.board_column_order[&key], ids);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn composite_keys_remain_exact_and_old_activity_and_ack_cannot_hide_new_run() {
+        let path = path();
+        let key = r#"["ssh://dev@HOST/project","C:\\sessions\\one.jsonl"]"#;
+        let other_key = r#"["ssh://dev@host/project","C:/sessions/one.jsonl"]"#;
+        update(&path, patch(json!({
+            "sessionActivities": {(key): activity("old", 10), (other_key): activity("other", 10)},
+            "sessionAcknowledgements": {(key): "old"}
+        }))).unwrap();
+        let state = update(
+            &path,
+            patch(json!({"sessionActivities": {(key): activity("new", 20)}})),
+        )
+        .unwrap();
+        assert_eq!(state.session_acknowledgements[key], "old");
+        assert_eq!(state.session_activities[key].run_id, "new");
+        update(
+            &path,
+            patch(json!({"sessionAcknowledgements": {(key): "new"}})),
+        )
+        .unwrap();
+        let state = update(
+            &path,
+            patch(json!({
+                "sessionActivities": {(key): activity("old", 19)},
+                "sessionAcknowledgements": {(key): "old"}
+            })),
+        )
+        .unwrap();
+        assert_eq!(state.session_activities.len(), 2);
+        assert_eq!(state.session_activities[key].run_id, "new");
+        assert_eq!(state.session_acknowledgements[key], "new");
+        assert!(state.session_activities.contains_key(other_key));
+        assert_eq!(read(&path).unwrap(), state);
+        let state = update(
+            &path,
+            patch(json!({
+                "sessionActivities": {(other_key): null}, "sessionAcknowledgements": {(key): null}
+            })),
+        )
+        .unwrap();
+        assert_eq!(state.session_activities.len(), 1);
+        assert!(state.session_acknowledgements.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn invalid_kanban_records_do_not_overwrite_saved_state() {
+        let path = path();
+        let before = update(
+            &path,
+            patch(json!({"boardDrafts": {"saved": draft("saved")}})),
+        )
+        .unwrap();
+        for invalid in [
+            json!({"boardDrafts": {"wrong-key": draft("different-id")}}),
+            json!({"boardDrafts": {"": draft("")}}),
+            json!({"boardDrafts": {"bad-time": {"id": "bad-time", "project": "", "message": "", "createdAt": 3, "updatedAt": 2}}}),
+            json!({"sessionActivities": {"key": activity("", 10)}}),
+            json!({"sessionActivities": {"key": {"file": "", "project": "", "status": "idle", "runId": "r", "updatedAt": 10}}}),
+            json!({"sessionActivities": {"key": {"file": "f", "project": "", "status": "idle", "runId": "r", "updatedAt": -1}}}),
+            json!({"sessionAcknowledgements": {"key": ""}}),
+        ] {
+            assert!(update(&path, patch(invalid)).is_err());
+            assert_eq!(read(&path).unwrap(), before);
+        }
+        assert!(serde_json::from_value::<WorkspaceStatePatch>(json!({
+            "sessionActivities": {"key": {"file": "f", "project": "", "status": "invalid", "runId": "r", "updatedAt": 10}}
+        })).is_err());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn stable_run_replaces_local_placeholder_even_with_an_earlier_timestamp() {
+        let path = path();
+        let key = "session-key";
+        update(
+            &path,
+            patch(json!({"sessionActivities": {(key): activity("local:pending", 100)}})),
+        )
+        .unwrap();
+        let state = update(
+            &path,
+            patch(json!({"sessionActivities": {(key): activity("local:older", 99)}})),
+        )
+        .unwrap();
+        assert_eq!(state.session_activities[key].run_id, "local:pending");
+        let state = update(
+            &path,
+            patch(json!({"sessionActivities": {(key): activity("stable-uuid", 10)}})),
+        )
+        .unwrap();
+        assert_eq!(state.session_activities[key].run_id, "stable-uuid");
+        assert_eq!(state.session_activities[key].updated_at, 10.0);
+        let state = update(
+            &path,
+            patch(json!({"sessionActivities": {(key): activity("older-uuid", 9)}})),
+        )
+        .unwrap();
+        assert_eq!(state.session_activities[key].run_id, "stable-uuid");
+        assert_eq!(read(&path).unwrap(), state);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn board_drafts_have_no_count_limit() {
+        let path = path();
+        let drafts: serde_json::Map<String, serde_json::Value> = (0..1001)
+            .map(|i| {
+                let id = format!("draft-{i}");
+                (id.clone(), draft(&id))
+            })
+            .collect();
+        let state = update(&path, patch(json!({"boardDrafts": drafts}))).unwrap();
+        assert_eq!(state.board_drafts.len(), 1001);
         assert_eq!(read(&path).unwrap(), state);
         cleanup(&path);
     }

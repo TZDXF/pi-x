@@ -79,7 +79,7 @@ test("new sessions keep defaulting to the project primary directory", () => {
   const chatHandler = app.match(/function newSessionFromChat\(\)[\s\S]*?\n\}/)?.[0]
   expect(chatHandler).toBeTruthy()
   expect(chatHandler).toMatch(
-    /requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) => newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/,
+    /requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) =>\s*newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/,
   )
   expect(app.match(/@new-session="newSessionFromChat"/g)?.length).toBeGreaterThanOrEqual(2)
   // 顶栏项目下拉不列出组内目录。

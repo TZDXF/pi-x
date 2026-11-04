@@ -8,6 +8,7 @@ const controls = vi.hoisted(() => {
     state,
     statuses: new Map(),
     notifications: [],
+    runMetadata: [],
     piClient: {
       adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
@@ -33,7 +34,8 @@ vi.mock("@/lib/notifications", () => ({
   notifyTurnComplete: (...args) => controls.notifications.push(args),
 }))
 vi.mock("@/stores/sessionRunStatus", () => ({
-  setSessionRunStatus: (file, status) => {
+  setSessionRunStatus: (file, status, project, metadata) => {
+    controls.runMetadata.push({ file, status, project, metadata })
     if (status) controls.statuses.set(file, status)
     else controls.statuses.delete(file)
   },
@@ -58,6 +60,7 @@ async function harness() {
   })
   controls.statuses.clear()
   controls.notifications.length = 0
+  controls.runMetadata.length = 0
   controls.workspace = { histories: {}, projectName: () => "project" }
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
   setActivePinia(createPinia())
@@ -102,6 +105,32 @@ test("concurrent sessions show independent running, completed and error statuses
   expect(statuses.get("second.jsonl")).toBe("running")
   second.handleEvent({ type: "agent_settled" })
   expect(statuses.get("second.jsonl")).toBe("completed")
+})
+
+test("events forward stable backend run identity and time through start, retry and settlement", async () => {
+  const { session } = await harness()
+  const store = session("metadata", "metadata.jsonl")
+  const metadata = { pixRunId: "backend-turn", pixRunUpdatedAt: 100 }
+  store.handleEvent({ type: "agent_start", ...metadata })
+  store.handleEvent({ type: "auto_retry_start", ...metadata, pixRunUpdatedAt: 110 })
+  store.handleEvent({ type: "agent_settled", ...metadata, pixRunUpdatedAt: 120 })
+  expect(controls.runMetadata.map(({ status, metadata }) => ({ status, metadata }))).toEqual([
+    { status: "running", metadata: { runId: "backend-turn", updatedAt: 100 } },
+    { status: "running", metadata: { runId: "backend-turn", updatedAt: 110 } },
+    { status: "completed", metadata: { runId: "backend-turn", updatedAt: 120 } },
+  ])
+  store.handleEvent({ type: "agent_start", ...metadata, pixRunId: "backend-stop", pixRunUpdatedAt: 130 })
+  store.handleEvent({
+    type: "agent_settled",
+    ...metadata,
+    pixRunId: "backend-stop",
+    pixRunUpdatedAt: 140,
+    aborted: true,
+  })
+  expect(controls.runMetadata.at(-1)).toMatchObject({
+    status: null,
+    metadata: { runId: "backend-stop", updatedAt: 140 },
+  })
 })
 
 test("aborted turns clear status; unexpected process exit marks running turn as error", async () => {

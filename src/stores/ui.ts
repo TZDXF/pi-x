@@ -17,6 +17,7 @@ export const createUiStore = (runtimeId = "default") =>
   defineStore(`ui:${runtimeId}`, () => {
     /** Dialog requests (select/confirm/input/editor) awaiting user input. */
     const dialogs = ref<ExtensionUiRequest[]>([])
+    const responding = new Set<string>()
     /** Fire-and-forget widget lines displayed above the composer. */
     const widget = ref<{ key: string; lines: string[]; placement: string } | null>(null)
     /** Status bar entries keyed by extension-provided key. */
@@ -42,6 +43,7 @@ export const createUiStore = (runtimeId = "default") =>
         case "confirm":
         case "input":
         case "editor":
+          if (dialogs.value.some(dialog => dialog.id === req.id)) break
           dialogs.value.push(req)
           notifyQuestion(req.title || req.message || "")
           break
@@ -78,10 +80,30 @@ export const createUiStore = (runtimeId = "default") =>
       }
     }
 
-    function respond(req: ExtensionUiRequest, value: { value?: string; confirmed?: boolean; cancelled?: boolean }) {
-      const idx = dialogs.value.indexOf(req)
-      if (idx >= 0) dialogs.value.splice(idx, 1)
-      void rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
+    function resolveRequest(id: string) {
+      dialogs.value = dialogs.value.filter(dialog => dialog.id !== id)
+    }
+
+    function restoreRequests(requests: ExtensionUiRequest[]) {
+      const ids = new Set(requests.map(request => request.id))
+      dialogs.value = dialogs.value.filter(dialog => ids.has(dialog.id))
+      for (const request of requests) handleRequest(request)
+    }
+
+    async function respond(
+      req: ExtensionUiRequest,
+      value: { value?: string; confirmed?: boolean; cancelled?: boolean },
+    ) {
+      if (responding.has(req.id)) return
+      responding.add(req.id)
+      try {
+        await rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
+        resolveRequest(req.id)
+      } catch (error) {
+        pushToast(String(error), "error")
+      } finally {
+        responding.delete(req.id)
+      }
     }
 
     function pushToast(message: string, kind: Toast["kind"] = "info") {
@@ -112,6 +134,8 @@ export const createUiStore = (runtimeId = "default") =>
       pushStderr,
       activeDialog,
       handleRequest,
+      resolveRequest,
+      restoreRequests,
       respond,
       pushToast,
       clear,

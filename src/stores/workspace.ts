@@ -4,6 +4,7 @@ import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
 import { requireSshConnectionId } from "@/lib/sshTrust"
+import { sessionIdentityKey } from "@/lib/sessionIdentity"
 import {
   listSessions,
   pixLog,
@@ -21,11 +22,14 @@ import {
   applyWorkspaceStatePatch,
   diffWorkspaceState,
   emptyWorkspaceState,
+  shouldApplySessionActivity,
   type WorkspaceState,
   type WorkspaceStatePatch,
+  type BoardDraft,
+  type SessionActivity,
 } from "@/lib/workspaceState"
 import type { ProjectGroup } from "@/lib/workspaceState"
-export type { ProjectGroup } from "@/lib/workspaceState"
+export type { ProjectGroup, BoardDraft, SessionActivity } from "@/lib/workspaceState"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
 import { nowMs } from "@/lib/timing"
@@ -49,6 +53,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
+  const boardColumnOrder = ref<Record<string, string[]>>({})
+  const boardDrafts = ref<Record<string, BoardDraft>>({})
+  const sessionActivities = ref<Record<string, SessionActivity>>({})
+  const sessionAcknowledgements = ref<Record<string, string>>({})
   /** 远程项目会话列表的加载状态（契约 §2.4），驱动侧栏刷新按钮 spinner。 */
   const remoteSessionsLoading = ref<Record<string, boolean>>({})
   /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
@@ -60,7 +68,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const removedProjects = ref<string[]>([])
   const persistenceError = ref<unknown>(null)
   let revision = -1
-  let recorded = emptyWorkspaceState()
+  let recorded: WorkspaceState = emptyWorkspaceState()
   let authoritative = emptyWorkspaceState()
   let initialized = false
   let loading: Promise<void> | null = null
@@ -77,6 +85,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         projectGroups: projectGroups.value,
         removedProjects: removedProjects.value,
         sessionOrder: sessionOrder.value,
+        boardColumnOrder: boardColumnOrder.value,
+        boardDrafts: boardDrafts.value,
+        sessionActivities: sessionActivities.value,
+        sessionAcknowledgements: sessionAcknowledgements.value,
       }),
     )
   }
@@ -84,7 +96,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   function applyState(state: WorkspaceState) {
     if (state.revision >= revision) {
       revision = state.revision
-      authoritative = structuredClone(state)
+      const next = applyWorkspaceStatePatch(state, {})
+      for (const [key, activity] of Object.entries(next.sessionActivities)) {
+        const previous = authoritative.sessionActivities[key]
+        if (previous && !shouldApplySessionActivity(previous, activity)) next.sessionActivities[key] = { ...previous }
+      }
+      authoritative = next
     }
     const next = changes.reduce(applyWorkspaceStatePatch, structuredClone(authoritative))
     // Avoid retriggering sidebar/Git loads when only pins or session ordering changed.
@@ -96,6 +113,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (JSON.stringify(removedProjects.value) !== JSON.stringify(next.removedProjects))
       removedProjects.value = next.removedProjects
     sessionOrder.value = next.sessionOrder
+    boardColumnOrder.value = next.boardColumnOrder
+    boardDrafts.value = next.boardDrafts
+    sessionActivities.value = next.sessionActivities
+    sessionAcknowledgements.value = next.sessionAcknowledgements
     recorded = snapshot()
     for (const path of Object.keys(histories.value)) applySessionOrder(path)
   }
@@ -150,6 +171,32 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const persistProjects = persistState
   const persistSessionOrder = persistState
   const persistRemovedProjects = persistState
+  function reorderBoardColumn(key: string, orderedIds: string[]) {
+    boardColumnOrder.value[key] = [...new Set(orderedIds)]
+    persistState()
+  }
+  function upsertBoardDraft(draft: BoardDraft) {
+    boardDrafts.value[draft.id] = { ...draft }
+    persistState()
+  }
+  function removeBoardDraft(id: string) {
+    delete boardDrafts.value[id]
+    persistState()
+  }
+  function recordSessionActivity(activity: SessionActivity) {
+    const key = sessionIdentityKey(activity.file, activity.project)
+    const previous = sessionActivities.value[key]
+    if (!shouldApplySessionActivity(previous, activity)) return
+    sessionActivities.value[key] = { ...activity }
+    persistState()
+  }
+  function acknowledgeSessionActivity(file: string, project: string, runId: string) {
+    const key = sessionIdentityKey(file, project)
+    const activity = sessionActivities.value[key]
+    if (activity && activity.runId !== runId) return
+    sessionAcknowledgements.value[key] = runId
+    persistState()
+  }
   /** Whether the user explicitly removed this project, so automatic paths must not re-add it. */
   function isRemovedProject(path: string) {
     path = normalizeProjectPath(path)
@@ -497,6 +544,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     applyState,
     flushPersistence,
     persistenceError,
+    boardColumnOrder,
+    reorderBoardColumn,
+    boardDrafts,
+    sessionActivities,
+    sessionAcknowledgements,
+    upsertBoardDraft,
+    removeBoardDraft,
+    recordSessionActivity,
+    acknowledgeSessionActivity,
     gitBusy,
     registerWorktrees,
     registerProjectWorktrees,

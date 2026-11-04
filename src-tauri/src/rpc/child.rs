@@ -3,9 +3,11 @@
 //! tree. Pool management stays in the parent [`super`] module.
 
 use super::{
-    emit_process_event, write_line, ProcessState, EVENT, EXIT_EVENT,
-    SSH_PATH_BOUND_EVENT, STDERR_EVENT,
+    emit_process_event, write_line, ProcessState, EXIT_EVENT, SSH_PATH_BOUND_EVENT, STDERR_EVENT,
 };
+use super::activity::{schedule_timeout, RuntimeActivity};
+#[cfg(test)]
+use super::EVENT;
 use crate::errors::pix_error;
 use crate::pi_locate::{self, PiInfo};
 use crate::process::CREATE_NO_WINDOW;
@@ -192,7 +194,17 @@ async fn process_spawn_impl(
     workspace_manifest: Option<String>,
 ) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
-    state.generation.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut activity = state.activity.lock().await;
+        let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        activity.reset(
+            generation,
+            &state.runtime_id,
+            project,
+            session_file.clone(),
+            sink.clone(),
+        );
+    }
     if let Some(mut old) = guard.take() {
         let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
     }
@@ -314,6 +326,7 @@ async fn process_spawn_impl(
         let pending = pending.clone();
         let generation = state.generation.clone();
         let own_gen = generation.load(Ordering::Relaxed);
+        let activity = state.activity.clone();
         let runtime_id = state.runtime_id.clone();
         tokio::spawn(async move {
             let mut reader = tokio::io::BufReader::new(stdout);
@@ -350,19 +363,22 @@ async fn process_spawn_impl(
                         );
                         continue;
                     };
-                    dispatch(&sink, &pending, &runtime_id, value).await;
+                    dispatch(&pending, &activity, own_gen, &runtime_id, value).await;
                 }
                 drop_oversized_record(&mut buf, &runtime_id, "stdout");
             }
             // stdout closed => process exited (or is gone).
             // Only surface it if this reader still belongs to the current session.
-            if generation.load(Ordering::Relaxed) == own_gen {
+            let mut activity = activity.lock().await;
+            if activity.is_current(own_gen) && generation.load(Ordering::Relaxed) == own_gen {
                 crate::logs::write(
                     &runtime_id,
                     "unexpected exit: stdout closed (pi process exited)",
                 );
                 pending.lock().await.clear();
-                sink.emit(EXIT_EVENT, &runtime_id, json!({ "runtimeId": runtime_id }));
+                let next_gen = generation.fetch_add(1, Ordering::Relaxed) + 1;
+                let exit = activity.stop(next_gen, true);
+                sink.emit(EXIT_EVENT, &runtime_id, exit);
             }
         });
     }
@@ -370,6 +386,8 @@ async fn process_spawn_impl(
     // stderr reader: forward raw lines for logging
     {
         let sink = sink.clone();
+        let activity = state.activity.clone();
+        let own_gen = state.current_generation();
         let runtime_id = state.runtime_id.clone();
         let remote_pid = remote_pid.clone();
         let stderr_tail = stderr_tail.clone();
@@ -398,11 +416,12 @@ async fn process_spawn_impl(
                     }
                     append_stderr_tail(&stderr_tail, &text).await;
                     crate::logs::write(&runtime_id, &format!("stderr: {text}"));
-                    sink.emit(
-                        STDERR_EVENT,
-                        &runtime_id,
-                        json!({ "line": text, "runtimeId": runtime_id }),
-                    );
+                    let current = activity.lock().await;
+                    if current.is_current(own_gen) {
+                        let mut payload = json!({ "line": text, "runtimeId": runtime_id });
+                        current.stamp(&mut payload);
+                        sink.emit(STDERR_EVENT, &runtime_id, payload);
+                    }
                 }
                 drop_oversized_record(&mut buf, &runtime_id, "stderr");
             }
@@ -415,7 +434,9 @@ async fn process_spawn_impl(
         if let Err(message) = wait_ssh_ready(&state.runtime_id, &mut child, &remote_pid, &stderr_tail, remote.as_ref().map(|r| &r.endpoint)).await {
             // spawn 失败：再 bump generation，让已装配的 reader 不发 pi://exit
             //（该 runtime 从未进入进程池）。
-            state.generation.fetch_add(1, Ordering::Relaxed);
+            let mut activity = state.activity.lock().await;
+            let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
+            activity.stop(generation, true);
             return Err(message);
         }
         // 路径别名回绑（契约 §3.8 / P2 §1.1 / 多后端契约 §5.1）：所有远程 spawn
@@ -719,8 +740,19 @@ fn log_lifecycle_event(runtime_id: &str, value: &Value) {
     crate::logs::write(runtime_id, &format!("event {ty}{detail}"));
 }
 
-async fn dispatch(sink: &Arc<dyn EventSink>, pending: &PendingMap, runtime_id: &str, value: Value) {
+async fn dispatch(
+    pending: &PendingMap,
+    activity: &Arc<Mutex<RuntimeActivity>>,
+    generation: u64,
+    runtime_id: &str,
+    value: Value,
+) {
+    let mut current = activity.lock().await;
+    if !current.is_current(generation) {
+        return;
+    }
     if value.get("type").and_then(|t| t.as_str()) == Some("response") {
+        current.response(&value);
         if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
             let tx = pending.lock().await.remove(&id);
             if let Some(tx) = tx {
@@ -733,7 +765,9 @@ async fn dispatch(sink: &Arc<dyn EventSink>, pending: &PendingMap, runtime_id: &
         crate::logs::write(runtime_id, "dropped non-object stdout record");
         return;
     };
-    sink.emit(EVENT, runtime_id, value);
+    if let Some((token, deadline)) = current.event(value) {
+        schedule_timeout(Arc::downgrade(activity), generation, token, deadline);
+    }
 }
 
 /// Stamp an outbound event with the runtime id for frontend delivery.
@@ -826,12 +860,189 @@ async fn kill_inner(
 }
 
 pub(super) async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
-    state.generation.fetch_add(1, Ordering::Relaxed);
     let mut guard = state.inner.lock().await;
+    {
+        let mut activity = state.activity.lock().await;
+        let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        activity.stop_and_emit(generation, false);
+    }
     if let Some(mut inner) = guard.take() {
         kill_inner(&state.runtime_id, &mut inner, reason).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod activity_dispatch_tests {
+    use super::*;
+    use std::future::Future;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct Sink(StdMutex<Vec<Value>>);
+
+    impl EventSink for Sink {
+        fn emit(&self, _: &'static str, _: &str, payload: Value) {
+            self.0.lock().unwrap().push(payload);
+        }
+    }
+
+    struct ChannelSink(mpsc::UnboundedSender<(&'static str, Value)>);
+
+    impl EventSink for ChannelSink {
+        fn emit(&self, event: &'static str, _: &str, payload: Value) {
+            let _ = self.0.send((event, payload));
+        }
+    }
+
+    #[tokio::test]
+    async fn real_stdio_backpressure_keeps_stdout_draining_and_explicit_exit_stamped() {
+        let node = crate::ssh::transport::find_test_program("node")
+            .expect("Node.js is required for the local RPC mock");
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("backpressure.cjs");
+        // Do not read stdin until two stdout records have flushed. Dispatch of
+        // the first record must not stop the reader from draining the second.
+        std::fs::write(&script, r#"
+    const fs = require('fs');
+    const path = require('path');
+    process.stdout.write(JSON.stringify({type:'agent_start'}) + '\n');
+    const timer = setInterval(() => {
+      if (!fs.existsSync(path.join(__dirname, 'release'))) return;
+      clearInterval(timer);
+      process.stdout.write(JSON.stringify({type:'backpressure_probe'}) + '\n');
+      process.stdout.write(JSON.stringify({type:'backpressure_payload', text:'x'.repeat(4*1024*1024)}) + '\n', () => {
+        process.stdin.resume();
+      });
+    }, 5);
+    process.stdin.on('end', () => process.exit(0));
+    "#).unwrap();
+        let state = ProcessState {
+            runtime_id: "backpressure-test".into(),
+            ..Default::default()
+        };
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let program = SpawnProgram::LocalPi(PiInfo {
+            launcher: Some(pi_locate::Launcher::Node {
+                node: node.to_string_lossy().into_owned(),
+                script: script.to_string_lossy().into_owned(),
+            }),
+            ..Default::default()
+        });
+        process_spawn_impl(
+            Arc::new(ChannelSink(tx)),
+            &state,
+            &program,
+            dir.path().to_str().unwrap(),
+            Some("session.jsonl".into()),
+            vec![],
+            None,
+        )
+        .await
+        .unwrap();
+        let (_, started) = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(started["type"], "agent_start");
+        let stdin_tx = state.inner.lock().await.as_ref().unwrap().stdin_tx.clone();
+        // A real OS pipe write stalls because the child has not started reading.
+        stdin_tx
+            .send(json!({"type":"test", "data":"x".repeat(8*1024*1024)}).to_string())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while stdin_tx.capacity() != 256 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stdin writer must dequeue the oversized record");
+        for _ in 0..256 {
+            stdin_tx.try_send("{}".into()).unwrap();
+        }
+        let notify = super::super::process_notify(&state, json!({"type":"abort"}));
+        tokio::pin!(notify);
+        std::future::poll_fn(|cx| {
+            assert!(
+                notify.as_mut().poll(cx).is_pending(),
+                "full queue must block acceptance"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert!(state.inner.try_lock().is_ok());
+        assert!(state.activity.try_lock().is_ok());
+        std::fs::write(dir.path().join("release"), b"").unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let drain_stdout = async {
+                loop {
+                    let (event, value) = events.recv().await.unwrap();
+                    assert_eq!(event, EVENT);
+                    if value["type"] == "backpressure_payload" {
+                        break;
+                    }
+                }
+            };
+            let (accepted, ()) = tokio::join!(notify.as_mut(), drain_stdout);
+            accepted.unwrap();
+        })
+        .await
+        .expect("stdout must drain so the child can resume reading stdin");
+        process_kill(&state, "backpressure test complete")
+            .await
+            .unwrap();
+        let (event, exit) = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event, EXIT_EVENT);
+        assert_eq!(exit["runtimeId"], "backpressure-test");
+        assert_eq!(exit["pixProject"], dir.path().to_str().unwrap());
+        assert_eq!(exit["pixSessionFile"], "session.jsonl");
+        assert_eq!(exit["pixRunId"], started["pixRunId"]);
+        assert_eq!(exit["pixRunStatus"], "idle");
+        assert!(exit["pixRunUpdatedAt"].as_u64() > started["pixRunUpdatedAt"].as_u64());
+    }
+    #[tokio::test]
+    async fn stale_stdout_cannot_update_activity_emit_or_consume_new_response() {
+        let sink = Arc::new(Sink::default());
+        let activity = Arc::new(Mutex::new(RuntimeActivity::default()));
+        activity
+            .lock()
+            .await
+            .reset(2, "test", "project", None, sink.clone());
+        let pending: PendingMap = Default::default();
+        let (tx, mut rx) = oneshot::channel();
+        pending.lock().await.insert(1, tx);
+        for value in [
+            json!({"type":"agent_start"}),
+            json!({"type":"extension_ui_request", "id":"stale", "method":"input"}),
+            json!({"type":"response", "id":1, "success":true, "data":{"sessionFile":"stale.jsonl"}}),
+        ] {
+            dispatch(&pending, &activity, 1, "test", value).await;
+        }
+        assert!(sink.0.lock().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        assert!(pending.lock().await.contains_key(&1));
+        let mut snapshot = json!({"state":{}});
+        activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot.get("activity").is_none());
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+        assert!(snapshot["state"].get("sessionFile").is_none());
+
+        dispatch(&pending, &activity, 2, "test", json!({"type":"agent_start", "pixRunId":"untrusted", "pixRunUpdatedAt":0, "pixProject":"untrusted"})).await;
+        dispatch(&pending, &activity, 2, "test", json!({"type":"response", "id":1, "success":true, "data":{"sessionFile":"current.jsonl"}})).await;
+        assert_eq!(rx.await.unwrap()["success"], true);
+        activity.lock().await.snapshot(&mut snapshot);
+        assert_eq!(snapshot["state"]["sessionFile"], "current.jsonl");
+        assert_ne!(snapshot["activity"]["runId"], "untrusted");
+        assert_eq!(
+            sink.0.lock().unwrap()[0]["pixRunId"],
+            snapshot["activity"]["runId"]
+        );
+        assert_eq!(sink.0.lock().unwrap()[0]["pixProject"], "project");
+    }
 }
 
 #[cfg(test)]
@@ -1074,6 +1285,7 @@ mod mock_ssh_spawn_tests {
             inner: Mutex::new(None),
             navigation: Mutex::new(()),
             generation: Arc::new(AtomicU64::new(0)),
+            activity: Default::default(),
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
@@ -1208,6 +1420,7 @@ mod mock_ssh_spawn_tests {
                 inner: Mutex::new(None),
                 navigation: Mutex::new(()),
                 generation: Arc::new(AtomicU64::new(0)),
+                activity: Default::default(),
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));

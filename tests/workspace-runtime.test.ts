@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { ref } from "vue"
 import { rememberSshProjectConnection, resolveSshConnectionId } from "@/lib/ssh"
 import { createWorkspaceRuntime } from "@/lib/workspaceRuntime"
+import { sessionActivitySnapshot, sessionRunStatus } from "@/stores/sessionRunStatus"
 
 function harness() {
   const callbacks = {}
@@ -48,6 +49,8 @@ function harness() {
     sessionMtime: vi.fn(async () => 1),
   }
   const toast = vi.fn()
+  const resolveRequest = vi.fn()
+  const restoreRequests = vi.fn()
   const context = {
     api,
     conversations: {
@@ -55,7 +58,7 @@ function harness() {
       findConversation: () => sessionFor("active"),
       activateSession: vi.fn(),
       activeRuntimeId: ref("active"),
-      uiFor: () => ({ pushToast: toast, pushStderr: vi.fn(), handleRequest: vi.fn() }),
+      uiFor: () => ({ pushToast: toast, pushStderr: vi.fn(), handleRequest: vi.fn(), resolveRequest, restoreRequests }),
     },
     workspace: {
       histories: {},
@@ -76,8 +79,82 @@ function harness() {
     translateError: value => value,
     registerSessionMtimeSync: vi.fn(),
   }
-  return { context, callbacks, owners, off, toast, runtime: createWorkspaceRuntime(context) }
+  return {
+    context,
+    callbacks,
+    owners,
+    off,
+    toast,
+    resolveRequest,
+    restoreRequests,
+    runtime: createWorkspaceRuntime(context),
+  }
 }
+
+test("runtime snapshots restore the precise unread run and pending UI without changing selection", async () => {
+  const { context, runtime, restoreRequests } = harness()
+  const activity = { status: "completed", runId: "backend-restored-run", updatedAt: Date.now() }
+  const request = { id: "request-1", type: "extension_ui_request", method: "confirm" }
+  context.api.listRunningSessions.mockResolvedValue([
+    {
+      runtimeId: "background",
+      project: "/project",
+      state: { sessionFile: "s.jsonl", isStreaming: false },
+      activity,
+      pendingUiRequests: [request],
+    },
+  ])
+  await runtime.reattachRunningSessions(false)
+  expect(sessionActivitySnapshot("s.jsonl", "/project")).toMatchObject(activity)
+  expect(sessionRunStatus("s.jsonl", "/project")).toBe("completed")
+  expect(restoreRequests).toHaveBeenCalledWith([request])
+  expect(context.conversations.activateSession).not.toHaveBeenCalled()
+})
+
+test("UI resolutions from another client remove the same pending request", async () => {
+  const { runtime, callbacks, resolveRequest, restoreRequests } = harness()
+  await runtime.listen()
+  callbacks.event({ type: "extension_ui_resolved", runtimeId: "background", id: "confirm-1" })
+  expect(resolveRequest).toHaveBeenCalledWith("confirm-1")
+  callbacks.event({ type: "agent_settled", runtimeId: "background" })
+  expect(restoreRequests).toHaveBeenCalledWith([])
+  runtime.dispose()
+})
+
+test("persisted running sessions whose workers disappeared are marked as interrupted", async () => {
+  const { context, runtime } = harness()
+  const activity = {
+    file: "lost-worker.jsonl",
+    project: "/project",
+    status: "running",
+    runId: "lost-worker",
+    updatedAt: 1,
+  }
+  context.workspace.sessionActivities = { "lost-worker.jsonl": activity }
+  await runtime.reattachRunningSessions()
+  expect(sessionRunStatus(activity.file, activity.project)).toBe("error")
+  expect(sessionActivitySnapshot(activity.file, activity.project)?.runId).toBe("lost-worker")
+})
+
+test("an intentional worker exit preserves its authoritative idle result", async () => {
+  const { context, runtime, callbacks } = harness()
+  await runtime.listen()
+  const owner = context.conversations.sessionFor("intentional-exit")
+  owner.isStreaming = true
+  const activity = {
+    file: "intentional-exit.jsonl",
+    project: "/project",
+    status: "idle",
+    runId: "stopped-run",
+    updatedAt: Date.now(),
+  }
+  callbacks.exit(owner.runtimeId, activity)
+  expect(owner.markInterrupted).not.toHaveBeenCalled()
+  expect(owner.isStreaming).toBe(false)
+  expect(sessionRunStatus(activity.file, activity.project)).toBeUndefined()
+  expect(sessionActivitySnapshot(activity.file, activity.project)).toMatchObject(activity)
+  runtime.dispose()
+})
 
 afterEach(() => {
   vi.useRealTimers()

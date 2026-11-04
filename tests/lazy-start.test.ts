@@ -17,6 +17,9 @@ import { useAppNavigation } from "@/composables/useAppNavigation"
 import { useProjectActions } from "@/composables/useProjectActions"
 import { useSessionOpening } from "@/composables/useSessionOpening"
 import { useAppShortcuts } from "@/composables/useAppShortcuts"
+import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
+import * as sessionIdentity from "@/lib/sessionIdentity"
+import * as sshTrust from "@/lib/sshTrust"
 
 async function loadVueSetup(source, require) {
   const { descriptor } = parse(source, { filename: "App.vue" })
@@ -48,6 +51,7 @@ async function harness(group = null) {
     projectRoot: path => path,
     projectName: path => path,
     projectGroups: group ? { project: group } : {},
+    boardDrafts: {},
     // App 挂载即解析无项目会话目录（不阻塞启动），桩掉即可。
     ensureProjectless: async () => "",
     projectlessDefault: "",
@@ -106,6 +110,20 @@ async function harness(group = null) {
       useWindowSize: () => ({ width: ref(1200), height: ref(800) }),
     },
     "@/composables/useWorkspaceSidebarLayout": { useWorkspaceSidebarLayout },
+    "@/composables/useWorkspaceLayout": { useWorkspaceLayout },
+    "@/composables/useKanbanWorkspace": {
+      useKanbanWorkspace: () => ({
+        cards: ref([]),
+        projects: ref([]),
+        selectedDraft: ref(null),
+        selectedCard: ref(null),
+        detailsOpen: ref(false),
+        selectedProject: ref(""),
+      }),
+    },
+    "@/composables/useSessionActivitySync": { useSessionActivitySync: () => {} },
+    "@/lib/sessionIdentity": sessionIdentity,
+    "@/lib/sshTrust": sshTrust,
     "@/api/transport": { isDesktop: false },
     "@/api/piClient": {
       detectPi: async () => ({ found: true }),
