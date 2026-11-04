@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
+import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanTime } from "@/lib/kanbanTime"
 import {
   KANBAN_COLUMNS,
@@ -42,6 +43,8 @@ defineSlots<{ actions?(): unknown }>()
 defineExpose({ openCreate })
 
 const { t, locale } = useI18n()
+const scroller = ref<HTMLElement | null>(null)
+useKanbanSelectionScroll(scroller, () => props.selectedId)
 const id = useId()
 const groups = computed(() =>
   groupKanbanCards(filterKanbanCards(props.cards, props.selectedProject), props.columnOrder, props.selectedProject),
@@ -206,7 +209,7 @@ async function submit() {
       {{ t("kanban.noProjects") }}
     </p>
 
-    <div class="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-4" :aria-busy="loading">
+    <div ref="scroller" class="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-4" :aria-busy="loading">
       <div class="grid h-full min-h-0 min-w-[79rem] grid-cols-[repeat(5,minmax(15rem,1fr))] gap-3">
         <section
           v-for="column in KANBAN_COLUMNS"

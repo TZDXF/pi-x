@@ -2,29 +2,38 @@ import { expect, test } from "@playwright/test"
 import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
 
 const html = `<!doctype html><html><body><div id="app"></div><script type="module">
-import { createApp, h, ref } from 'vue'
+import { createApp, h, ref, Transition } from 'vue'
 import { createI18n } from 'vue-i18n'
 import KanbanBoard from '/src/components/kanban/KanbanBoard.vue'
+import KanbanDetailsPanel from '/src/components/kanban/KanbanDetailsPanel.vue'
 import { kanbanColumnOrderKey } from '/src/lib/kanban'
 import zhCN from '/src/i18n/locales/zh-CN'
 import '/src/style.css'
 const columnOrder = ref(JSON.parse(localStorage.getItem('kanban-test-order') || '{}'))
 const selectedProject = ref('')
+const selectedId = ref()
+const detailsOpen = ref(false)
+const enableDetails = new URLSearchParams(location.search).has('details')
 const cards = Array.from({length:40}, (_,i) => ({
   id:'task-'+i,project:'root',projectName:'Project',status:'todo',updatedAt:Date.now()-300000,
   title:('任务 '+i+' 的完整标题 ').repeat(15),preview:Array(12).fill('这是卡片内容，第'+i+'项。').join(String.fromCharCode(10)),
 }))
 cards.push({...cards[0], id:'running', status:'running'})
+cards.push(...Array.from({length:40}, (_,i) => ({...cards[0],id:'idle-'+i,status:'idle'})))
 createApp({
-  render: () => h('div', {style:'display:flex;width:940px;height:640px'}, [h(KanbanBoard, {
+  render: () => h('div', {style:'position:relative;display:flex;width:940px;height:640px;overflow:hidden'}, [h(KanbanBoard, {
     cards,projects:[{value:'root',label:'Project'}],selectedProject:selectedProject.value,
+    selectedId:detailsOpen.value ? selectedId.value : undefined,
+    onOpen:card => { if (enableDetails) { selectedId.value=card.id; detailsOpen.value=true } },
     columnOrder:columnOrder.value,
     'onUpdate:selectedProject':value => {selectedProject.value=value},
     onReorder:(column,ids) => {
       columnOrder.value={...columnOrder.value,[kanbanColumnOrderKey(selectedProject.value,column)]:ids}
       localStorage.setItem('kanban-test-order',JSON.stringify(columnOrder.value))
     },
-  })]),
+  }), h(Transition, {name:'kanban-details'}, {default: () => detailsOpen.value ? h(KanbanDetailsPanel, {}, {
+    default: () => h('button', {onClick:() => {detailsOpen.value=false}}, '关闭详情'),
+  }) : null})]),
 }).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
 </script></body></html>`
 
@@ -98,3 +107,63 @@ test("titles stay on one line, previews on two, and project/time share the botto
   await expect(card.locator("time")).toHaveAttribute("title", /更新时间:.*\d{4}/)
   await expect(card.locator("time")).toHaveAttribute("datetime", /T/)
 })
+
+for (const reducedMotion of ["no-preference", "reduce"] as const) {
+  test(`selected rightmost card stays visible as details open and resize (${reducedMotion})`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion })
+    await page.goto(`${harness.url}?details`)
+    const board = page.getByRole("region", { name: "任务看板", exact: true })
+    const scroller = board.locator(".overflow-x-auto")
+    const column = board.locator('[data-kanban-column="idle"] .overflow-y-auto')
+    const card = column.locator('[data-kanban-card="idle-10"]')
+    await card.scrollIntoViewIfNeeded()
+    const before = await scroller.evaluate(el => el.scrollLeft)
+    const columnTop = await column.evaluate(el => el.scrollTop)
+    expect(columnTop).toBeGreaterThan(0)
+    await card.click()
+    const panel = page.locator("#kanban-details")
+    await expect(panel).toBeVisible()
+    await expect(panel).not.toHaveClass(/kanban-details-enter-active/)
+
+    const expectVisible = async (selected = card) => {
+      await expect
+        .poll(async () => {
+          const cardBox = (await selected.boundingBox())!
+          const viewport = (await scroller.boundingBox())!
+          const details = (await panel.boundingBox())!
+          return (
+            cardBox.x >= viewport.x + 15 &&
+            cardBox.x + cardBox.width <= Math.min(viewport.x + viewport.width - 15, details.x)
+          )
+        })
+        .toBe(true)
+      expect(await column.evaluate(el => el.scrollTop)).toBe(columnTop)
+    }
+    await expectVisible()
+    expect(await scroller.evaluate(el => el.scrollLeft)).toBeGreaterThan(before + 200)
+
+    await panel.getByRole("separator").focus()
+    await page.keyboard.press("Shift+ArrowLeft")
+    await expectVisible()
+
+    // Click the visible part of a different card clipped at the left edge.
+    const running = board.locator('[data-kanban-card="running"]')
+    await scroller.evaluate(el => {
+      const target = el.querySelector('[data-kanban-card="running"]')!
+      el.scrollLeft += target.getBoundingClientRect().left - el.getBoundingClientRect().left + 60
+    })
+    const viewport = (await scroller.boundingBox())!
+    const runningBox = (await running.boundingBox())!
+    await page.mouse.click(viewport.x + 24, runningBox.y + runningBox.height / 2)
+    await expect(running).toHaveAttribute("aria-pressed", "true")
+    await expectVisible(running)
+
+    // Closing must preserve a manual scroll away from the selected card.
+    await scroller.evaluate(el => {
+      el.scrollLeft = 0
+    })
+    await panel.getByRole("button", { name: "关闭详情" }).click()
+    await expect(panel).toHaveCount(0)
+    expect(await scroller.evaluate(el => el.scrollLeft)).toBe(0)
+  })
+}

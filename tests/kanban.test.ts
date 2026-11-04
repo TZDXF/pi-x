@@ -197,6 +197,7 @@ const imports = {
   "@/lib/kanban": kanban,
   "@/lib/kanbanTime": { formatKanbanTime },
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
+  "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
   "@/components/ui/textarea": { Textarea: textarea },
   "@/components/ui/dialog": {
