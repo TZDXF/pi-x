@@ -75,20 +75,25 @@ test("native dragging reorders only within a column and survives reloading", asy
   await expect(cards.first()).toHaveAttribute("data-kanban-card", "task-1")
 })
 
-test("long titles and previews are clamped to two lines and relative dates retain full hover timestamps", async ({
-  page,
-}) => {
+test("titles stay on one line, previews on two, and project/time share the bottom row", async ({ page }) => {
   await page.goto(harness.url)
   const card = page.locator("[data-kanban-card]").first()
   await expect(card).toBeVisible()
+  const title = card.locator(":scope > span").first()
+  await expect(title).toHaveCSS("white-space", "nowrap")
+  await expect(title).toHaveCSS("text-overflow", "ellipsis")
   const heights = await card.locator(".line-clamp-2").evaluateAll(elements =>
     elements.map(el => ({
       height: el.getBoundingClientRect().height,
       lineHeight: Number.parseFloat(getComputedStyle(el).lineHeight),
     })),
   )
-  expect(heights).toHaveLength(2)
+  expect(heights).toHaveLength(1)
   for (const measure of heights) expect(measure.height).toBeLessThanOrEqual(measure.lineHeight * 2 + 1)
+  const projectBox = (await card.locator('span[title="root"]').boundingBox())!
+  const timeBox = (await card.locator("time").boundingBox())!
+  expect(projectBox.x + projectBox.width).toBeLessThan(timeBox.x)
+  expect(Math.abs(projectBox.y + projectBox.height / 2 - timeBox.y - timeBox.height / 2)).toBeLessThanOrEqual(1)
   await expect(card.locator("time")).toHaveText("5分钟前")
   await expect(card.locator("time")).toHaveAttribute("title", /更新时间:.*\d{4}/)
   await expect(card.locator("time")).toHaveAttribute("datetime", /T/)

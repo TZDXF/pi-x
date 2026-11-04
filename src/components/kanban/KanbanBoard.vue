@@ -256,31 +256,32 @@ async function submit() {
               @keydown="sorting.moveWithKeyboard($event, card)"
               @click="!sorting.source && emit('open', card)"
             >
-              <span class="line-clamp-2 text-sm font-medium break-words" :title="titleFor(card)">{{
-                titleFor(card)
-              }}</span>
-              <span
-                v-if="card.project && !card.projectless"
-                class="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground"
-              >
-                <Folder class="size-3 shrink-0" aria-hidden="true" />
-                <span class="truncate" :title="card.project">{{
-                  card.projectName || card.project || t("kanban.noProject")
-                }}</span>
-              </span>
+              <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
               <span
                 class="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground break-words"
                 :title="previewFor(card)"
                 >{{ previewFor(card) }}</span
               >
-              <span class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
-                <time :datetime="dateFor(card.updatedAt)?.toISOString()" :title="fullTime(card.updatedAt)">{{
-                  formatTime(card.updatedAt)
-                }}</time>
-                <span v-if="card.failed" class="ml-auto inline-flex items-center gap-1 text-destructive">
-                  <AlertCircle class="size-3" aria-hidden="true" />
-                  {{ t("kanban.failed") }}
+              <span v-if="card.failed" class="flex items-center gap-1 text-[10px] text-destructive">
+                <AlertCircle class="size-3" aria-hidden="true" />
+                {{ t("kanban.failed") }}
+              </span>
+              <span class="flex min-w-0 items-center gap-2 text-muted-foreground">
+                <span
+                  v-if="card.project && !card.projectless"
+                  class="flex min-w-0 flex-1 items-center gap-1.5 text-[11px]"
+                >
+                  <Folder class="size-3 shrink-0" aria-hidden="true" />
+                  <span class="truncate" :title="card.project">{{
+                    card.projectName || card.project || t("kanban.noProject")
+                  }}</span>
                 </span>
+                <time
+                  class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
+                  :datetime="dateFor(card.updatedAt)?.toISOString()"
+                  :title="fullTime(card.updatedAt)"
+                  >{{ formatTime(card.updatedAt) }}</time
+                >
               </span>
             </button>
             <p v-if="!groups[column.id].length" class="px-2 py-8 text-center text-xs text-muted-foreground">
