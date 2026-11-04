@@ -61,7 +61,7 @@ export function createSessionHistory(context: HistoryContext) {
   }
 
   /** Materialize only one page, yielding during large tool-heavy histories. */
-  async function materializeHistoryPage(replace = false) {
+  async function materializeHistoryPage(replace = false, preserveStream = false) {
     if (olderHistoryLoading.value || (!replace && !historyCursor.value)) return
     const version = historyVersion
     const source = historyMessages.value
@@ -176,9 +176,13 @@ export function createSessionHistory(context: HistoryContext) {
       if (version !== historyVersion) return
       // Refreshes keep the old transcript mounted across every async yield.
       // Publish the prepared first page together; ordinary paging still prepends.
-      runs.value = replace ? pageRuns : { ...pageRuns, ...runs.value }
+      const keepStream = preserveStream && isStreaming.value
+      runs.value = replace && !keepStream ? pageRuns : { ...pageRuns, ...runs.value }
       entries.value = replace ? page : [...page, ...entries.value]
-      if (replace) {
+      // Attaching to a running worker supplements committed history only.
+      // Its in-flight message is absent from the session file and must survive
+      // every asynchronous history yield, including deltas received meanwhile.
+      if (replace && !keepStream) {
         partialBlocks.value = null
         streamingTurnId.value = null
       }
@@ -296,7 +300,7 @@ export function createSessionHistory(context: HistoryContext) {
       // oldest page is reached, and the final-turn check needs the full list.
       await fetchLastSessionError(version)
       if (version !== historyVersion) return
-      await materializeHistoryPage(true)
+      await materializeHistoryPage(true, true)
       if (version !== historyVersion) return
       placePendingHistoryError()
       void syncSessionFile()

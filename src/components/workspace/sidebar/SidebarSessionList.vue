@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, ref, watchEffect } from "vue"
+import { sidebarSessionProject, type SidebarSessionTarget } from "./useSidebarSessionReveal"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
 import { Layers, RefreshCw } from "@lucide/vue"
@@ -17,7 +18,14 @@ const props = defineProps<{
   path: string
   rows: SessionMeta[]
   orderedFiles: string[]
-  pending: { runtimeId: string; cwd: string; promptQueue: QueuedPrompt[] }[]
+  pending: {
+    runtimeId: string
+    cwd: string
+    sessionFile?: string | null
+    promptQueue: QueuedPrompt[]
+    title?: string
+  }[]
+  revealSession?: SidebarSessionTarget | null
   query: string
   disabled: boolean
   navigationDisabled: boolean
@@ -47,6 +55,18 @@ const { t } = useI18n()
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
 const expanded = ref(false)
+watchEffect(() => {
+  const target = props.revealSession
+  if (!target) return
+  if (
+    (target.file &&
+      props.rows.some(row =>
+        sameSessionIdentity(target.file, target.cwd, row.file, sidebarSessionProject(row.cwd, props.path)),
+      )) ||
+    (!target.file && props.pending.some(row => row.runtimeId === target.runtimeId))
+  )
+    expanded.value = true
+})
 const limited = computed(
   () =>
     !props.projectless &&
@@ -92,6 +112,8 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
       v-if="showDraft"
       class="session-row active flex items-center gap-0.5 w-full pt-0 pr-1 pb-0 pl-7 rounded-md text-xs text-left relative min-h-8 m-0 min-w-0 max-w-full hover:[background:color-mix(in_srgb,_var(--sidebar-accent)_60%,_transparent)] [@media(pointer:coarse)]:min-h-9"
       aria-current="page"
+      :data-runtime-id="activeRuntimeId"
+      :data-cwd="session.cwd"
     >
       <Layers
         v-if="draftWorktree"
@@ -127,7 +149,7 @@ function setSessionDragData(transfer: DataTransfer, item: HTMLElement) {
         :key="row.file"
         :s="row"
         :path="path"
-        :active="sameSessionIdentity(session.sessionFile, session.cwd, row.file, path)"
+        :active="sameSessionIdentity(session.sessionFile, session.cwd, row.file, sidebarSessionProject(row.cwd, path))"
         :disabled="disabled"
         :navigation-disabled="navigationDisabled"
         :query="query"

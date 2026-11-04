@@ -354,7 +354,30 @@ export function createEventHandler(ctx: EventContext) {
         // banner only while nothing is coming back (pi may not report
         // auto_retry_end until the first message ends, if at all).
         retryInfo.value = null
-        if (!partialBlocks.value) break
+        if (!partialBlocks.value) {
+          // A newly attached view can miss message_start. pi includes the
+          // complete current message with each update, so recover the prefix
+          // instead of dropping every later delta until message_end.
+          if (!isStreaming.value) break
+          streamingTurnId.value ??= nextId()
+          if (ev.message?.role === "assistant" && Array.isArray(ev.message.content)) {
+            // Keep content indexes, including empty blocks, aligned with deltas.
+            partialBlocks.value = ev.message.content.map((content: any, index: number) => {
+              if (content.type === "thinking")
+                return {
+                  type: "thinking",
+                  text: content.thinking ?? "",
+                  streaming:
+                    index === delta.contentIndex &&
+                    (delta.type === "thinking_start" || delta.type === "thinking_delta"),
+                }
+              return blocksFromMessage({ content: [content] })[0] ?? { type: "text", text: "" }
+            })
+            // The snapshot already includes this update; never append it twice.
+            break
+          }
+          partialBlocks.value = []
+        }
         applyDelta(partialBlocks.value, delta)
         break
       }

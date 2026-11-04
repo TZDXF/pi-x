@@ -64,6 +64,7 @@ import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
+import type { SidebarSessionTarget } from "@/components/workspace/sidebar/useSidebarSessionReveal"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { Button } from "@/components/ui/button"
@@ -101,6 +102,7 @@ const { t } = useI18n()
 
 const rightSidebarOpen = ref(false)
 const sidebarOpen = ref(true)
+const sidebarRevealTarget = ref<SidebarSessionTarget | null>(null)
 const projectDialogOpen = ref(false)
 const editingProjectPath = ref<string | null>(null)
 
@@ -419,9 +421,21 @@ async function ensureBoardStarted(selection?: import("@/api/piClient").Workspace
   return startSession(owner.runtimeId, selection)
 }
 
-function openBoardConversationInChat() {
+async function openBoardConversationInChat() {
+  const card = board.selectedCard
+  const target: SidebarSessionTarget = {
+    cwd: card?.cwd || card?.project || session.cwd || project.value,
+    file: card ? card.file : session.sessionFile,
+    runtimeId: card?.runtimeId || card?.draftId || activeRuntimeId.value,
+  }
+  sidebarRevealTarget.value = null
   workspaceLayout.value = "chat"
-  void nextTick(focusComposer)
+  // Splitter panels register on mount; expand only after the sidebar is attached again.
+  await nextTick()
+  sidebarOpen.value = true
+  await nextTick()
+  sidebarRevealTarget.value = target
+  focusComposer()
 }
 
 function selectBoardDraftProject(path: string) {
@@ -666,6 +680,7 @@ onUnmounted(() => {
         @resize="onSidebarResize"
       >
         <WorkspaceSidebar
+          :reveal-session="sidebarRevealTarget"
           :inert="!sidebarVisible"
           :class="sidebarVisible ? undefined : 'max-[640px]:-translate-x-full max-[640px]:invisible'"
           :project="project"

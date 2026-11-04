@@ -8,6 +8,7 @@ import ts from "typescript"
 import * as sessionIdentity from "@/lib/sessionIdentity"
 import { setSidebarSessionDragData } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { sidebarQueueTitle } from "@/components/workspace/sidebar/useSidebarSessionStatus"
+import { sidebarSessionProject } from "@/components/workspace/sidebar/useSidebarSessionReveal"
 
 // Compile the actual SFCs against a minimal Vue host; only external widgets/stores are stubbed.
 // This avoids browser/E2E dependencies while testing render branches and emitted events.
@@ -95,6 +96,7 @@ function loadComponent(filename: string) {
     if (id.endsWith(".vue")) return { __esModule: true, default: loadComponent(id) }
     if (id === "./useSidebarSessionOrdering") return { setSidebarSessionDragData }
     if (id === "./useSidebarSessionStatus") return { sidebarQueueTitle }
+    if (id === "./useSidebarSessionReveal") return { sidebarSessionProject }
     throw new Error(`Unexpected import: ${id}`)
   }
   vm.runInNewContext(code, { exports: module.exports, require }, { filename: file })
@@ -295,6 +297,44 @@ test("folded session sorting retains hidden files and five sessions need no togg
   expect(byClass(five, "session-list-toggle")).toHaveLength(0)
 })
 
+test("a requested saved or pending session expands only its matching list beyond five items", () => {
+  const rows = Array.from({ length: 8 }, (_, index) => ({ ...saved, file: `${index}.jsonl` }))
+  const props = { ...listProps, rows, orderedFiles: rows.map(row => row.file), pending: [], showDraft: false }
+  const root = mount("SidebarSessionList.vue", { ...props, revealSession: { file: "7.jsonl", cwd: saved.cwd } })
+  expect(byClass(root, "session-row")).toHaveLength(8)
+  expect(byClass(root, "session-list-toggle")).toHaveLength(0)
+  const unrelated = mount("SidebarSessionList.vue", {
+    ...props,
+    revealSession: { file: "missing.jsonl", cwd: saved.cwd },
+  })
+  expect(byClass(unrelated, "session-row")).toHaveLength(5)
+  const pending = Array.from({ length: 8 }, (_, index) => ({
+    runtimeId: `pending-${index}`,
+    cwd: "root",
+    promptQueue: [],
+  }))
+  const pendingRoot = mount("SidebarSessionList.vue", {
+    ...props,
+    rows: [],
+    pending,
+    revealSession: { cwd: "root", runtimeId: "pending-7" },
+  })
+  expect(byClass(pendingRoot, "session-row")).toHaveLength(8)
+})
+
+test("board drafts have a labeled sidebar row without manufacturing queued prompts", () => {
+  const root = mount("SidebarPendingSessionRow.vue", {
+    pending: { runtimeId: "board-draft", cwd: "root", promptQueue: [], title: "Saved board draft" },
+    active: true,
+    navigationDisabled: false,
+    queueNow: 0,
+    worktree: false,
+  })
+  expect(byClass(root, "session-link")[0].props.title).toBe("Saved board draft")
+  expect(byClass(root, "session-row")[0].props["data-runtime-id"]).toBe("board-draft")
+  expect(byClass(root, "session-queue-status")).toHaveLength(0)
+})
+
 test("run and queue indicators react without changing row padding/positions", async () => {
   const root = mount("SidebarSavedSessionRow.vue", {
     s: saved,
@@ -366,7 +406,12 @@ test("scoped hover selectors remain attached to row/group DOM, including touch s
 test("a same-path remote row is active only in its own project", () => {
   session.cwd = "ssh://dev@first:22/project"
   const first = mount("SidebarSessionList.vue", { ...listProps, path: session.cwd, pending: [], showDraft: false })
-  const second = mount("SidebarSessionList.vue", { ...listProps, path: "ssh://dev@second:22/project", pending: [], showDraft: false })
+  const second = mount("SidebarSessionList.vue", {
+    ...listProps,
+    path: "ssh://dev@second:22/project",
+    pending: [],
+    showDraft: false,
+  })
   expect(byClass(first, "session-row")[0].props["aria-current"]).toBe("page")
   expect(byClass(second, "session-row")[0].props["aria-current"]).toBeUndefined()
   session.cwd = "root"

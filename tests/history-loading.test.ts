@@ -257,6 +257,58 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
+test("attaching history preserves live thinking, turn identity and running tools across later deltas", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const turnId = store.streamingTurnId
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "plan before switching" },
+  })
+  store.handleEvent({ type: "tool_execution_start", toolCallId: "active", toolName: "read", args: {} })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: " while loading" },
+  })
+  history.resolve([{ role: "user", content: "question" }])
+  await loading
+  expect(store.entries[0].text).toBe("question")
+  expect(store.streamingTurnId).toBe(turnId)
+  expect(store.runs.active.state).toBe("input-available")
+  expect(store.partialBlocks).toEqual([
+    { type: "thinking", text: "plan before switching while loading", streaming: true },
+  ])
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: " after switching" },
+  })
+  expect(store.partialBlocks[0].text).toBe("plan before switching while loading after switching")
+})
+
+test("thinking that starts during history materialization survives its publish", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  controls.state.sessionHistory = async () => [{ role: "user", content: "question" }]
+  const loading = store.loadHistory()
+  // Allow history fetch and error lookup to reach the asynchronous page yield.
+  await Promise.resolve()
+  await Promise.resolve()
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "new thinking" },
+  })
+  await loading
+  expect(store.partialBlocks[0].text).toBe("new thinking")
+  expect(store.streamingTurnId).not.toBeNull()
+})
+
 test("worker rebuild reset preserves the visible transcript and identity; normal clear still drops them", async () => {
   const { store } = await harness()
   await store.loadMessages(messages(2))

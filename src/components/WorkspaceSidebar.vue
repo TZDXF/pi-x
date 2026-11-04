@@ -17,11 +17,16 @@ import { VueDraggable } from "vue-draggable-plus"
 import { Clock, FolderPlus, LoaderCircle, Plus, Search, X } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
-import { normalizeProjectPath } from "@/lib/paths"
+import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { isRemoteProject } from "@/lib/ssh"
 import { duplicateSessionFile, type SessionMeta, type SessionSearchHit } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
+import {
+  useSidebarSessionReveal,
+  type SidebarSessionTarget,
+} from "@/components/workspace/sidebar/useSidebarSessionReveal"
+import type { QueuedPrompt } from "@/stores/session"
 import { copyWithToast } from "@/lib/clipboard"
 import { allConversations, useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
@@ -37,7 +42,13 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { useRoute } from "@/lib/router"
 import { formatComboParts, registerShortcutHandler, setShortcutsSuppressed, shortcutCombo } from "@/lib/shortcuts"
-const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
+const props = defineProps<{
+  project: string
+  ready: boolean
+  busy: boolean
+  navigationBusy?: boolean
+  revealSession?: SidebarSessionTarget | null
+}>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string]
   switchProject: []
@@ -78,6 +89,18 @@ const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
 const tasksCollapsed = ref(false)
 const projectsCollapsed = ref(false)
+const root = ref<HTMLElement | null>(null)
+useSidebarSessionReveal(
+  root,
+  () => props.revealSession,
+  target => {
+    if (workspace.isProjectless(target.cwd)) tasksCollapsed.value = false
+    else {
+      projectsCollapsed.value = false
+      collapsed.value[workspace.projectRoot(target.cwd)] = false
+    }
+  },
+)
 // Navigation can queue during startup; the parent decides when it must be blocked.
 const navigationDisabled = computed<boolean>(() => !!props.navigationBusy || saving.value)
 const disabled = computed<boolean>(() => props.busy || workspace.gitBusy || saving.value)
@@ -108,17 +131,41 @@ function rows(path: string) {
 function orderedSessionFiles(path: string) {
   return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label).map(s => s.file)
 }
+const activeBoardDraft = computed(() =>
+  Object.values(workspace.boardDrafts ?? {}).find(
+    draft => !draft.sessionFile && (draft.runtimeId || draft.id) === session.runtimeId,
+  ),
+)
 const showDraft = computed(
   () =>
-    props.ready && !session.sessionFile && !session.promptQueue.length && !!(session.started || session.entries.length),
+    props.ready &&
+    !activeBoardDraft.value &&
+    !session.sessionFile &&
+    !session.promptQueue.length &&
+    !!(session.started || session.entries.length),
 )
 function pendingRows(path: string) {
-  return pendingConversations(
+  const folders = workspace.projectFolders(path)
+  const pending: {
+    runtimeId: string
+    cwd: string
+    sessionFile?: string | null
+    promptQueue: QueuedPrompt[]
+    title?: string
+  }[] = pendingConversations(
     allConversations(),
-    workspace.projectFolders(path),
+    folders,
     workspace.orderedSessions(path).map(row => row.file),
     "",
   )
+  const draft = activeBoardDraft.value
+  if (
+    draft &&
+    folders.some(folder => samePath(folder, draft.project)) &&
+    !pending.some(row => row.runtimeId === session.runtimeId)
+  )
+    pending.push({ runtimeId: session.runtimeId, cwd: draft.project, promptQueue: [], title: draft.message })
+  return pending
 }
 const taskPath = computed(() => workspace.projectless)
 type SidebarSearchResult = {
@@ -244,6 +291,7 @@ watch(
 
 <template>
   <aside
+    ref="root"
     class="workspace-sidebar h-full w-full flex flex-col bg-sidebar border-r border-border pt-3.5 pr-[7px] pb-2 pl-[7px] min-h-0 overflow-hidden transition-[transform,visibility] duration-200 ease-out max-[640px]:absolute max-[640px]:[inset:0_auto_0_0] max-[640px]:z-[30] max-[640px]:shadow-[var(--sidebar-shadow)] max-[640px]:w-55"
     :aria-label="t('sidebar.ariaLabel')"
   >
@@ -325,6 +373,7 @@ watch(
             @remove-project="emit('removeProject', $event)"
           >
             <SidebarSessionList
+              :reveal-session="props.revealSession"
               :path="path"
               :rows="rows(path)"
               :ordered-files="orderedSessionFiles(path)"
@@ -368,6 +417,7 @@ watch(
           /></Button>
         </div>
         <SidebarSessionList
+          :reveal-session="props.revealSession"
           :path="taskPath"
           :rows="rows(taskPath)"
           :ordered-files="orderedSessionFiles(taskPath)"

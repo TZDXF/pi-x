@@ -113,6 +113,47 @@ afterEach(() => {
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
 
+test("a streaming update recovers missed thinking and empty block indexes without duplicating its delta", async () => {
+  const h = await harness()
+  h.store.isStreaming = true
+  h.store.handleEvent({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "" },
+        { type: "thinking", thinking: "before switching and after" },
+      ],
+    },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: " and after" },
+  })
+  expect(h.store.partialBlocks).toEqual([
+    { type: "text", text: "" },
+    { type: "thinking", text: "before switching and after", streaming: true },
+  ])
+  const turnId = h.store.streamingTurnId
+  expect(turnId).not.toBeNull()
+  h.store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: " next" },
+  })
+  expect(h.store.partialBlocks[1].text).toBe("before switching and after next")
+  expect(h.store.streamingTurnId).toBe(turnId)
+})
+
+test("late full-message updates cannot restore thinking after the run settles", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled" })
+  h.store.handleEvent({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "thinking", thinking: "late content" }] },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "late content" },
+  })
+  expect(h.store.partialBlocks).toBeNull()
+  expect(h.store.streamingTurnId).toBeNull()
+})
+
 async function harness(rpcOverrides: Record<string, (command: any) => unknown> = {}) {
   const calls = []
   Object.assign(controls.state, {

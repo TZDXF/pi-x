@@ -7,6 +7,7 @@ import * as vue from "vue"
 import { compileScript, parse } from "vue/compiler-sfc"
 import ts from "typescript"
 import * as sessionIdentity from "@/lib/sessionIdentity"
+import { sidebarSessionProject } from "@/components/workspace/sidebar/useSidebarSessionReveal"
 
 /**
  * 远程会话列表（契约 §2.4）：
@@ -246,6 +247,7 @@ function loadComponent(filename: string) {
     if (id.endsWith(".vue")) return { __esModule: true, default: loadComponent(id) }
     if (id === "./useSidebarSessionOrdering") return { setSidebarSessionDragData: () => {} }
     if (id === "./useSidebarSessionStatus") return { sidebarQueueTitle: () => "" }
+    if (id === "./useSidebarSessionReveal") return { sidebarSessionProject }
     throw new Error(`Unexpected import: ${id}`)
   }
   vm.runInNewContext(code, { exports: module.exports, require }, { filename: file })

@@ -14,6 +14,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import SidebarSessionStatus from "./SidebarSessionStatus.vue"
+import { sidebarSessionProject } from "./useSidebarSessionReveal"
 
 const props = defineProps<{
   s: SessionMeta
@@ -39,7 +40,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const label = computed(() => props.s.title || props.s.preview || t("sidebar.untitled"))
 const status = computed(() => sessionRunStatus(props.s.file, props.path))
-const queue = computed(() => findConversation(props.s.file, props.path)?.promptQueue)
+const owner = computed(() => findConversation(props.s.file, sidebarSessionProject(props.s.cwd, props.path)))
+const queue = computed(() => owner.value?.promptQueue)
 </script>
 
 <template>
@@ -55,6 +57,8 @@ const queue = computed(() => findConversation(props.s.file, props.path)?.promptQ
           'pl-7': !(status && queue?.length),
         }"
         :data-file="s.file"
+        :data-cwd="sidebarSessionProject(s.cwd, path)"
+        :data-runtime-id="owner?.runtimeId"
         :data-path="path"
       >
         <SidebarSessionStatus :status="status" :queue="queue" :now="queueNow" />
