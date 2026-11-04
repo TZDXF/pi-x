@@ -2,7 +2,7 @@ import { computed, onScopeDispose, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getConfig, type WorkspaceSelection } from "@/api/piClient"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib/completion"
 import { commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
@@ -93,6 +93,7 @@ export function useChatSendControl(deps: {
 
   function onInputError(error: { code: string }) {
     if (error.code === "attachment_read_error") ui.pushToast(t("chat.attachmentReadFailed"), "error")
+    if (error.code === "accept") ui.pushToast(t("chat.imageAttachmentsOnly"), "error")
   }
 
   // Navigation owns connecting globally. Keep the editor usable, but wait before
@@ -118,12 +119,21 @@ export function useChatSendControl(deps: {
     })
   }
 
-  async function onSubmit(message: { text?: string; files?: { url?: string }[] }) {
+  async function onSubmit(message: {
+    text?: string
+    files?: { url?: string; mediaType?: string; filename?: string }[]
+  }) {
     if (workspace.gitBusy || deps.editBusy()) return
     if (!(await waitForConnection())) return
     if (workspace.gitBusy || deps.editBusy()) return
     const text = (message.text ?? "").trim()
-    const images = (message.files ?? [])
+    const files = message.files ?? []
+    if (files.some(file => !isImageAttachment(file))) {
+      const error = t("chat.imageAttachmentsOnly")
+      ui.pushToast(error, "error")
+      throw new Error(error)
+    }
+    const images = files
       .map(f => f.url)
       .filter((u): u is string => isImageUrl(u))
       .map(u => dataUrlToImage(u))

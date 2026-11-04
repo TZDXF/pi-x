@@ -17,7 +17,10 @@ const props = defineProps<{
   projects: { value: string; label: string }[]
   disabled?: boolean
 }>()
-const emit = defineEmits<{ open: [card: KanbanCard] }>()
+const emit = defineEmits<{
+  open: [card: KanbanCard]
+  cardDeleted: [card: KanbanCard]
+}>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
 const ui = useUiStore()
@@ -57,9 +60,11 @@ const canArchive = computed(
 
 function openEditor() {
   if (props.disabled || saving.value || props.card.status !== "todo") return
-  const queued = owner.value?.promptQueue[0]
+  const queued = owner.value?.promptQueue.find(item => item.id === queuedId.value) ?? owner.value?.promptQueue[0]
   queuedId.value = queued?.id ?? null
-  message.value = draft.value?.message ?? queued?.text ?? props.card.preview
+  message.value = draft.value?.sessionFile
+    ? (queued?.text ?? props.card.preview)
+    : (draft.value?.message ?? queued?.text ?? props.card.preview)
   project.value = draft.value?.project ?? props.card.cwd ?? props.card.project
   error.value = ""
   editing.value = true
@@ -130,8 +135,16 @@ async function remove() {
     if (owner.value?.isStreaming || owner.value?.entries.some(entry => entry.kind === "user"))
       throw new Error(t("kanban.draftUnavailable"))
     if (draft.value && !draft.value.sessionFile) {
-      workspace.removeBoardDraft(draft.value.id)
-      await workspace.flushPersistence()
+      const removed = { ...draft.value }
+      workspace.removeBoardDraft(removed.id)
+      try {
+        await workspace.flushPersistence()
+      } catch (cause) {
+        // Keep the visible draft consistent with the failed persisted delete.
+        workspace.upsertBoardDraft(removed)
+        throw cause
+      }
+      emit("cardDeleted", props.card)
     } else {
       const queued = owner.value?.promptQueue[0]
       if (!queued) throw new Error(t("kanban.draftUnavailable"))

@@ -46,10 +46,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function harness() {
+function harness(accept?: string) {
   const onSubmit = vi.fn(async (_message: { text: string; files: { url: string }[] }) => {})
   const onError = vi.fn()
-  const { result: input, unmount } = mountBrowserComposable(() => usePromptInputProvider({ onSubmit, onError }))
+  const { result: input, unmount } = mountBrowserComposable(() => usePromptInputProvider({ onSubmit, onError, accept }))
   let mounted = true
   const dispose = () => {
     if (mounted) {
@@ -83,6 +83,18 @@ test.each(["look at this", ""])(
   },
 )
 
+test("a mixed image and non-image selection is rejected atomically", () => {
+  const { input, onError } = harness("image/*")
+  input.addFiles([
+    new File(["hello"], "photo.png", { type: "image/png" }),
+    new File(["notes"], "notes.txt", { type: "text/plain" }),
+  ])
+  expect(onError).toHaveBeenCalledExactlyOnceWith({
+    code: "accept",
+    message: "Some files do not match the accepted types.",
+  })
+  expect(input.files.value).toEqual([])
+})
 test.each(["error", "abort"])(
   "a file read %s prevents sending and preserves the draft and attachment for retry",
   async kind => {

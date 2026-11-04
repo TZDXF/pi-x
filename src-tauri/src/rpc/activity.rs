@@ -315,6 +315,21 @@ impl RuntimeActivity {
             sink.emit(EXIT_EVENT, &self.runtime_id, exit);
         }
     }
+
+    pub(super) fn rebind_project(&mut self, project: &str, path: &str) -> Option<Value> {
+        if self.project == project {
+            return None;
+        }
+        let previous = std::mem::replace(&mut self.project, project.to_string());
+        let mut value = json!({
+            "runtimeId": self.runtime_id,
+            "project": project,
+            "previousProject": previous,
+            "path": path,
+        });
+        self.stamp(&mut value);
+        Some(value)
+    }
 }
 
 pub(super) fn schedule_timeout(
@@ -523,6 +538,23 @@ mod tests {
         assert!(activity.pending.is_empty());
         event(&mut activity, "agent_start");
         assert_eq!(activity.stop(4, false)["pixRunStatus"], "idle");
+    }
+
+    #[test]
+    fn realpath_rebind_stamps_future_events_with_the_new_project() {
+        let (mut activity, _) = setup();
+        event(&mut activity, "agent_start");
+        let rebound = activity
+            .rebind_project("ssh://host/physical", "/physical")
+            .unwrap();
+        assert_eq!(rebound["previousProject"], "project");
+        assert_eq!(rebound["pixProject"], "ssh://host/physical");
+        assert_eq!(rebound["pixSessionFile"], "session.jsonl");
+        let exit = activity.stop(2, true);
+        assert_eq!(exit["pixProject"], "ssh://host/physical");
+        assert!(activity
+            .rebind_project("ssh://host/physical", "/physical")
+            .is_none());
     }
 
     #[tokio::test]

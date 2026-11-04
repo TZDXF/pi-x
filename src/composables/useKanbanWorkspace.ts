@@ -3,6 +3,7 @@ import { allConversations, sessionFor, uiFor, findConversation } from "@/stores/
 import { sessionRunStatus, sessionActivitySnapshot } from "@/stores/sessionRunStatus"
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
+import { isRemoteProject } from "@/lib/ssh"
 import { createUuid } from "@/lib/uuid"
 import type { KanbanCard, KanbanCreatePayload, KanbanStatus } from "@/lib/kanban"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
@@ -32,14 +33,16 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
   ])
   const isIncluded = (project: string) => folders.value.some(folder => samePath(folder, project))
   const cardProject = (project: string) => (workspace.isProjectless(project) ? project : workspace.projectRoot(project))
+  // Remote session files contain a bare physical cwd; only the source folder
+  // carries the endpoint that makes that path a usable project identity.
+  const historyProject = (folder: string, cwd: string) => (isRemoteProject(folder) ? normalizeProjectPath(folder) : cwd)
 
   const cards = computed<KanbanCard[]>(() => {
     const result = new Map<string, KanbanCard>()
     const archived = new Set(
-      Object.values(workspace.histories)
-        .flat()
-        .filter(row => row.archived)
-        .map(row => sessionIdentityKey(row.file, row.cwd)),
+      Object.entries(workspace.histories).flatMap(([folder, rows]) =>
+        rows.filter(row => row.archived).map(row => sessionIdentityKey(row.file, historyProject(folder, row.cwd))),
+      ),
     )
     const drafts = Object.values(workspace.boardDrafts ?? {})
     const draftByFile = new Map(
@@ -48,6 +51,11 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
         .map(draft => [sessionIdentityKey(draft.sessionFile!, draft.project), draft]),
     )
     const conversations = allConversations()
+    const hasDelayedFirstPrompt = (owner: ReturnType<typeof sessionFor> | undefined) =>
+      !!owner &&
+      !owner.isStreaming &&
+      !owner.entries.some(entry => entry.kind === "user") &&
+      owner.promptQueue.length > 0
     const statusFor = (file: string | undefined, project: string, runtimeId?: string): KanbanStatus => {
       if (runtimeId && uiFor(runtimeId).activeDialog) return "waiting"
       const run = file ? sessionRunStatus(file, project) : undefined
@@ -65,23 +73,24 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     for (const folder of folders.value) {
       for (const row of workspace.histories[folder] ?? []) {
         if (row.archived) continue
-        const identity = sessionIdentityKey(row.file, row.cwd)
+        const project = historyProject(folder, row.cwd)
+        const identity = sessionIdentityKey(row.file, project)
         const draft = draftByFile.get(identity)
-        const owner = findConversation(row.file, row.cwd)
-        const activity = sessionActivitySnapshot(row.file, row.cwd)
+        const owner = findConversation(row.file, project)
+        const activity = sessionActivitySnapshot(row.file, project)
         result.set(identity, {
           id: identity,
           file: row.file,
-          cwd: row.cwd,
+          cwd: project,
           runtimeId: owner?.runtimeId,
           draftId: draft?.id,
-          project: cardProject(row.cwd),
-          projectName: workspace.projectName(row.cwd),
-          projectless: workspace.isProjectless(row.cwd),
+          project: cardProject(project),
+          projectName: workspace.projectName(project),
+          projectless: workspace.isProjectless(project),
           title: row.title || row.preview || draft?.message || "",
           preview: row.lastUserMessage ?? (row.preview || draft?.message || ""),
           updatedAt: Math.max(row.mtimeMs || Date.parse(row.timestamp || "") || 0, activity?.updatedAt ?? 0),
-          status: statusFor(row.file, row.cwd, owner?.runtimeId),
+          status: hasDelayedFirstPrompt(owner) ? "todo" : statusFor(row.file, project, owner?.runtimeId),
           failed: activity?.status === "error",
         })
       }
@@ -113,7 +122,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
         title: firstPrompt?.text || pending?.text || draft?.message || "",
         preview: firstPrompt?.text || pending?.text || draft?.message || "",
         updatedAt: activity?.updatedAt ?? draft?.updatedAt ?? firstPrompt?.timestamp ?? 0,
-        status: !firstPrompt && pending && !owner.isStreaming ? "todo" : statusFor(file, owner.cwd, owner.runtimeId),
+        status: hasDelayedFirstPrompt(owner) ? "todo" : statusFor(file, owner.cwd, owner.runtimeId),
         failed: activity?.status === "error",
       })
     }

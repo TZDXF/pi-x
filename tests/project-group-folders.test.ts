@@ -86,6 +86,26 @@ test("new sessions keep defaulting to the project primary directory", () => {
   expect(context).not.toMatch(/groupFolders/)
 })
 
+test("board shortcuts use the layout-aware action and deletion clears only the selected card", () => {
+  expect(app).toMatch(/newSessionFromChat,\s*resumeSession,/)
+  expect(app).toMatch(/@card-deleted="onBoardCardDeleted"/)
+  const board = { selection: { id: "selected", draftId: "draft-1" }, detailsOpen: true }
+  const vmContext = runSlice(
+    app,
+    "function onBoardCardDeleted",
+    "function openBoardCard",
+    { board },
+    "onBoardCardDeleted",
+  )
+  const onDeleted = (vmContext as { __out: (card: Record<string, string>) => void }).__out
+  onDeleted({ id: "other" })
+  expect(board.selection).toEqual({ id: "selected", draftId: "draft-1" })
+  expect(board.detailsOpen).toBe(true)
+  onDeleted({ id: "other", draftId: "draft-1" })
+  expect(board.selection).toBeNull()
+  expect(board.detailsOpen).toBe(false)
+})
+
 test("the project file tree switches roots across the group folders", () => {
   expect(files).toMatch(/v-if="roots\.length > 1"/)
   expect(files).toMatch(/@select="activeRoot = root"/)

@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::errors::pix_error_detail;
-use crate::sessions::SessionMeta;
 use crate::session_search::SessionSearchHit;
+use crate::sessions::SessionMeta;
 use crate::ssh::backend::RemoteEndpoint;
 use crate::ssh::payload;
 use crate::ssh::transport::{remote_exec, AuthMethod};
@@ -136,6 +136,7 @@ struct RawSessionRecord {
     mtime_s: u64,
     header_line: Option<String>,
     title_line: Option<String>,
+    preview_line: Option<String>,
 }
 
 /// 解析扫描输出：逐行 `split_once('=')`，仅认 `PIX_SESSION_*` 前缀标签行，
@@ -188,6 +189,11 @@ fn parse_sessions_output(stdout: &str, project_path: &str) -> Option<Vec<Session
                     last.title_line = Some(value.to_string());
                 }
             }
+            "PIX_SESSION_PREVIEW" => {
+                if let Some(last) = records.last_mut() {
+                    last.preview_line = Some(value.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -204,8 +210,7 @@ fn parse_sessions_output(stdout: &str, project_path: &str) -> Option<Vec<Session
 }
 
 /// 把一条原始记录组装为 [`SessionMeta`]：HEADER/TITLE 值按 JSON 解析，解析失败
-/// 或非会话头的记录跳过（单文件损坏不清空整个列表）；`preview` 恒 `None`、
-/// `archived` 恒 `false`（契约 P2 §2.3 裁剪）。
+/// 或非会话头的记录跳过（单文件损坏不清空整个列表）；`archived` 恒 `false`。
 fn record_to_meta(
     record: &RawSessionRecord,
     project_path: &str,
@@ -237,6 +242,11 @@ fn record_to_meta(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     });
+    let last_user_message = record.preview_line.as_deref().and_then(|line| {
+        serde_json::from_str::<String>(line)
+            .ok()
+            .filter(|preview| !preview.is_empty())
+    });
     Some(SessionMeta {
         file: record.file.clone(),
         id: header
@@ -250,8 +260,8 @@ fn record_to_meta(
             .and_then(|t| t.as_str())
             .map(String::from),
         mtime_ms: record.mtime_s.saturating_mul(1000),
-        preview: None,
-        last_user_message: None,
+        preview: last_user_message.clone(),
+        last_user_message,
         title,
         archived: false,
     })
@@ -334,7 +344,7 @@ mod tests {
         assert_eq!(metas[0].timestamp, None);
         // mtime 秒 × 1000（契约 P2 §2.1）。
         assert_eq!(metas[0].mtime_ms, 100_000);
-        // P2 裁剪：preview 恒 null、archived 恒 false。
+        // 没有用户消息时 preview 为 null；远程会话不归入本地归档。
         assert_eq!(metas[0].preview, None);
         assert!(!metas[0].archived);
         // 未读到 DONE（超时/截断）→ None。
@@ -350,7 +360,12 @@ mod tests {
             "/home/dev",
             &[
                 // cwd == URI 路径。
-                ("/s/one.jsonl", 10, &header_json("/dev", "one"), Some(r#"{"type":"session_info","name":"One"}"#)),
+                (
+                    "/s/one.jsonl",
+                    10,
+                    &header_json("/dev", "one"),
+                    Some(r#"{"type":"session_info","name":"One"}"#),
+                ),
                 // cwd == 物理路径（别名）→ 兜底收录。
                 ("/s/two.jsonl", 20, &header_json("/home/dev", "two"), None),
                 // 其余 cwd 不收录。
@@ -375,7 +390,12 @@ mod tests {
                 // 合法记录。
                 ("/s/good.jsonl", 7, &header_json("/proj", "good"), None),
                 // TITLE 不是 JSON → 标题为空但记录保留。
-                ("/s/notitle.jsonl", 8, &header_json("/proj", "notitle"), Some("plain text")),
+                (
+                    "/s/notitle.jsonl",
+                    8,
+                    &header_json("/proj", "notitle"),
+                    Some("plain text"),
+                ),
             ],
         );
         let metas = parse_sessions_output(stdout, "/proj").expect("DONE 应存在");
@@ -421,10 +441,33 @@ mod tests {
         // session_info 的 name 为空白 → 标题 None。
         let stdout = scan_output(
             "/proj",
-            &[(("/s/a.jsonl"), 1, &header_json("/proj", "a"), Some(r#"{"type":"session_info","name":"  "}"#))],
+            &[(
+                ("/s/a.jsonl"),
+                1,
+                &header_json("/proj", "a"),
+                Some(r#"{"type":"session_info","name":"  "}"#),
+            )],
         );
         let metas = parse_sessions_output(&stdout, "/proj").unwrap();
         assert_eq!(metas[0].title, None);
+    }
+
+    #[test]
+    fn parse_decodes_latest_user_preview() {
+        let mut stdout = scan_output(
+            "/proj",
+            &[("/s/a.jsonl", 1, &header_json("/proj", "a"), None)],
+        );
+        stdout = stdout.replace(
+            "PIX_SESSIONS_DONE",
+            "PIX_SESSION_PREVIEW=\"  latest question  \"\nPIX_SESSIONS_DONE",
+        );
+        let metas = parse_sessions_output(&stdout, "/proj").unwrap();
+        assert_eq!(metas[0].preview.as_deref(), Some("  latest question  "));
+        assert_eq!(
+            metas[0].last_user_message.as_deref(),
+            Some("  latest question  ")
+        );
     }
 
     #[test]
@@ -464,6 +507,48 @@ mod tests {
                 .map(|i| format!("project-{i}"))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_scan_returns_latest_user_message_from_the_current_branch() {
+        use std::fs;
+        use std::process::Command;
+
+        let home = std::env::temp_dir().join(format!("pix-preview-{}", uuid::Uuid::new_v4()));
+        let root = home.join(".pi/agent/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let project = home.join("project");
+        fs::create_dir(&project).unwrap();
+        let project = project.to_str().unwrap();
+        let entries = [
+            serde_json::json!({"type":"session","cwd":project,"id":"session"}),
+            serde_json::json!({"type":"message","id":"a","message":{"role":"user","content":"first"}}),
+            serde_json::json!({"type":"message","id":"b","parentId":"a","message":{"role":"assistant","content":"answer"}}),
+            serde_json::json!({"type":"message","id":"abandoned","parentId":"b","message":{"role":"user","content":"wrong branch"}}),
+            serde_json::json!({"type":"message","id":"c","parentId":"b","message":{"role":"user","content":[{"type":"text","text":"latest"},{"type":"image"},{"type":"text","text":"question"}]}}),
+            serde_json::json!({"type":"message","id":"d","parentId":"c","message":{"role":"assistant","content":"answer"}}),
+        ];
+        let body = entries
+            .iter()
+            .map(|entry| entry.to_string() + "\n")
+            .collect::<String>();
+        fs::write(root.join("one.jsonl"), body).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(payload::build_sessions_script(project))
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let metas = parse_sessions_output(&stdout, project).unwrap();
+        assert_eq!(metas[0].preview.as_deref(), Some("latest\nquestion"));
+        assert_eq!(
+            metas[0].last_user_message.as_deref(),
+            Some("latest\nquestion")
+        );
+        fs::remove_dir_all(home).unwrap();
     }
 
     // 真正执行扫描脚本，使用隔离的本地 HOME；不调用 SSH 或任何外部服务。
@@ -552,8 +637,8 @@ mod tests {
 
     use crate::ssh::backend::RemoteEndpoint;
     use crate::ssh::transport::remote_exec_with_stdin;
-    use crate::ssh::SshEndpoint;
     use crate::ssh::transport::{remote_exec, AuthMethod};
+    use crate::ssh::SshEndpoint;
 
     struct RealEnv {
         endpoint: SshEndpoint,
@@ -595,7 +680,7 @@ mod tests {
                 user: Some(user.clone()),
                 key_path: Some(key_path),
                 auth_method: AuthMethod::Key,
-            key_passphrase: None,
+                key_passphrase: None,
                 password: None,
             },
             project,
@@ -654,8 +739,7 @@ mod tests {
             .await
             .expect("创建远端符号链接应成功");
         let uri = env.uri_for(&alias);
-        let result =
-            crate::rpc::resolve_path_rebind(&env.remote_endpoint(), &uri, &alias).await;
+        let result = crate::rpc::resolve_path_rebind(&env.remote_endpoint(), &uri, &alias).await;
         // 清理符号链接（不影响断言）。
         let _ = remote_exec(
             &env.remote_endpoint(),

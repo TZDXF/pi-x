@@ -5,6 +5,7 @@ import * as vue from "vue"
 import { transpileModule, ModuleKind, ScriptTarget } from "typescript"
 import * as paths from "@/lib/paths"
 import * as identities from "@/lib/sessionIdentity"
+import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
 
@@ -79,6 +80,7 @@ function harness() {
     },
     "@/lib/sessionIdentity": identities,
     "@/lib/paths": paths,
+    "@/lib/ssh": { isRemoteProject },
     "@/lib/uuid": { createUuid: () => `draft-${++sequence}` },
     "@/lib/kanbanLivePreview": { kanbanLivePreview },
   }
@@ -265,6 +267,31 @@ test("worktree cards filter by their project but keep their real cwd and waiting
   expect(board.cards.value[0]).toMatchObject({ status: "idle", failed: true })
 })
 
+test("remote history uses its source folder URI for identity, ownership, activity and navigation", () => {
+  const { board, workspace, sessionFor, activities, statuses } = harness()
+  const project = "ssh://dev@example.com:2222/home/dev/project"
+  const file = "/home/dev/.pi/sessions/saved.jsonl"
+  workspace.orderedProjects = () => [project]
+  workspace.projectFolders = () => [project]
+  workspace.histories[project] = [{ file, cwd: "/home/dev/project", title: "Remote", mtimeMs: 5 }]
+  const owner = sessionFor("remote-worker")
+  Object.assign(owner, { cwd: project, sessionFile: file })
+  const identity = identities.sessionIdentityKey(file, project)
+  statuses.set(identity, "running")
+  activities.set(identity, { status: "running", updatedAt: 20 })
+  expect(board.cards.value).toHaveLength(1)
+  expect(board.cards.value[0]).toMatchObject({
+    id: identity,
+    file,
+    cwd: project,
+    project,
+    runtimeId: owner.runtimeId,
+    status: "running",
+    updatedAt: 20,
+  })
+  expect(board.cards.value[0].id).not.toBe(file)
+})
+
 test("a delayed first prompt created in the ordinary layout appears as a todo without sending it", () => {
   const { board, sessionFor } = harness()
   const owner = sessionFor("delayed-first-prompt")
@@ -273,6 +300,18 @@ test("a delayed first prompt created in the ordinary layout appears as a todo wi
   expect(board.cards.value).toHaveLength(1)
   expect(board.cards.value[0]).toMatchObject({ status: "todo", title: "Delayed task", runtimeId: owner.runtimeId })
   expect(owner.entries).toEqual([])
+})
+
+test("saved history keeps an unsent delayed first prompt in todo", () => {
+  const { board, workspace, sessionFor } = harness()
+  const file = "/sessions/delayed.jsonl"
+  workspace.histories["/root"] = [{ file, cwd: "/root", title: "Delayed", mtimeMs: 5 }]
+  const owner = sessionFor("delayed-worker")
+  Object.assign(owner, { cwd: "/root", sessionFile: file })
+  owner.promptQueue.push({ text: "Not yet", sendAt: Date.now() + 60000 })
+  expect(board.cards.value[0]).toMatchObject({ status: "todo", runtimeId: owner.runtimeId })
+  owner.entries.push({ kind: "user", text: "Not yet", timestamp: 1 })
+  expect(board.cards.value[0].status).toBe("running")
 })
 
 test("attachment-only todos persist model choices without starting pi and restore them on opening", async () => {

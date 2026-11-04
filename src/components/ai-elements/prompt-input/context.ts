@@ -72,10 +72,11 @@ export function usePromptInputProvider(props: {
   const addFiles = (incoming: File[] | FileList) => {
     const fileList = Array.from(incoming)
 
-    // Validate Accept
+    // Treat a mixed selection atomically: silently accepting only part of what
+    // the user picked makes the eventual send differ from the visible intent.
     const accepted = fileList.filter(matchesAccept)
-    if (fileList.length && accepted.length === 0) {
-      props.onError?.({ code: 'accept', message: 'No files match the accepted types.' })
+    if (fileList.length !== accepted.length) {
+      props.onError?.({ code: 'accept', message: 'Some files do not match the accepted types.' })
       return
     }
 

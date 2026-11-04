@@ -923,6 +923,7 @@ export default {
     removeAttachment: "Remove",
     attachmentReadFailed:
       "Could not read the attachment. Your message was not sent. Please add the attachment again and retry.",
+    imageAttachmentsOnly: "Only image attachments are supported. Add only images and try again.",
     previewImage: "Preview image",
     attachment: "Attachment",
     noMatchingFiles: "No matching files.",

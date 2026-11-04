@@ -4,7 +4,7 @@ import * as vueRuntime from "vue"
 import ts from "typescript"
 import { chatSource } from "./fixtures/chatSources"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { buildPromptWithCodeComments, commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
@@ -21,7 +21,7 @@ function harness(config = Promise.resolve({})) {
     "vue-i18n": { useI18n: () => ({ t: key => key }) },
     "@/api/piClient": { getConfig: () => config },
     "@/lib/sendDelay": { parseSendDelay, stepSendDelayWheel },
-    "@/lib/attachments": { dataUrlToImage, isImageUrl },
+    "@/lib/attachments": { dataUrlToImage, isImageAttachment, isImageUrl },
     "@/lib/completion": { withSessionReferences, desktopCommands },
     "@/lib/codeComments": { commentFilePath },
     "@/lib/promptContexts": { serializeComposerPromptContexts },
@@ -88,6 +88,24 @@ function harness(config = Promise.resolve({})) {
   }
 }
 const image = "data:image/png;base64,aGVsbG8="
+
+test.each(["", "Keep this draft"])("rejects non-image attachments without consuming text or files", async text => {
+  const h = harness()
+  const file = { url: "data:text/plain;base64,bm90ZXM=", mediaType: "text/plain", filename: "notes.txt" }
+  h.bridge.value.textInput = text
+  h.bridge.value.files = [{ id: "notes", ...file }]
+  try {
+    await expect(h.controls.onSubmit({ text, files: [file] })).rejects.toThrow("chat.imageAttachmentsOnly")
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.imageAttachmentsOnly", "error")
+    expect(h.session.send).not.toHaveBeenCalled()
+    expect(h.session.schedulePrompt).not.toHaveBeenCalled()
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+    expect(h.bridge.value.textInput).toBe(text)
+    expect(h.bridge.value.files).toEqual([{ id: "notes", ...file }])
+  } finally {
+    h.scope.stop()
+  }
+})
 
 test("sending scrolls back to the bottom; queued and delayed sends keep the reading position", async () => {
   const h = harness()
@@ -438,6 +456,16 @@ test("send failure also clears the first-message echo", async () => {
     })
     await expect(h.controls.onSubmit({ text: "draft" })).rejects.toThrow("send failed")
     expect(h.ui.pendingUserMessage).toBeNull()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("unsupported picker or drop files show the same localized image-only error", () => {
+  const h = harness()
+  try {
+    h.controls.onInputError({ code: "accept" })
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.imageAttachmentsOnly", "error")
   } finally {
     h.scope.stop()
   }

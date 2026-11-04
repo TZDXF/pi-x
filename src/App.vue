@@ -350,10 +350,9 @@ const { onGlobalKeydown, disposeShortcuts } = useAppShortcuts({
   t,
   translateError: tBackendError,
   navigate,
-  projectRoute,
   sessionRoute,
   requestConversationNavigation,
-  newProjectSession,
+  newSessionFromChat,
   resumeSession,
   developerModeEnabled,
   isDesktop,
@@ -373,6 +372,14 @@ function selectBoardConversation(file: string, path: string) {
   if (workspaceLayout.value !== "board") return
   board.selection = board.cards.find(card => sameSessionIdentity(card.file, card.cwd, file, path)) ?? null
   board.detailsOpen = true
+}
+
+function onBoardCardDeleted(card: KanbanCard) {
+  const selected = board.selection
+  const matches = selected?.id === card.id || (!!card.draftId && selected?.draftId === card.draftId)
+  if (!matches) return
+  board.selection = null
+  board.detailsOpen = false
 }
 
 function openBoardCard(card: KanbanCard) {
@@ -737,6 +744,7 @@ onUnmounted(() => {
                     workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
                 "
                 @open="openBoardCard"
+                @card-deleted="onBoardCardDeleted"
                 @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
                 @retry="board.refresh"

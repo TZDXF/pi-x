@@ -45,6 +45,7 @@ const emit = defineEmits<{
   open: [card: KanbanCard]
   export: [file: string]
   create: [payload: KanbanCreatePayload]
+  cardDeleted: [card: KanbanCard]
   retry: []
   reorder: [column: KanbanStatus, ids: string[]]
 }>()
@@ -173,6 +174,7 @@ function openCreate(project = props.selectedProject) {
 
 function inputError(error: { code: string }) {
   if (error.code === "attachment_read_error") createError.value = t("chat.attachmentReadFailed")
+  if (error.code === "accept") createError.value = t("chat.imageAttachmentsOnly")
 }
 const createError = ref("")
 
@@ -286,6 +288,7 @@ async function submit(message: PromptInputMessage) {
               :projects="availableProjects"
               :disabled="navigationBusy || busy"
               @open="emit('open', card)"
+              @card-deleted="emit('cardDeleted', $event)"
             >
               <KanbanSessionMenu
                 :card="card"

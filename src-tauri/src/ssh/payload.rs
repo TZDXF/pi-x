@@ -39,7 +39,7 @@ echo "PIX_PROBE_DONE"
 "#;
 
 /// 单次 Node 扫描：所有文件只读最多 8192 字节头部，cwd 过滤、排序、取 50 条后
-/// 才流式读取标题。项目路径仅作为 argv 传递，不拼入 JavaScript。
+/// 才流式读取标题和当前分支预览；详细扫描每文件最多 16 MiB，超限则不返回预览。
 /// Node 缺失或扫描失败输出 PIX_SESSIONS_ERROR 且不输出 DONE，不能伪装成空列表；
 /// 退出码恒 0（对齐契约 P2 §2.1：remote_exec 对非零退出码只回传 stderr，
 /// 业务错误必须走 stdout 标签行才能携带具体原因）。
@@ -97,21 +97,48 @@ async function scan() {
     Buffer.compare(Buffer.from(a.file), Buffer.from(b.file)));
   for (const record of records.slice(0, 50)) {
     let title = '';
+    let preview = '';
+    let leaf = null;
+    let scanned = 0;
+    let truncated = false;
+    const parents = new Map();
+    const users = [];
     const input = fs.createReadStream(record.file);
     const lines = readline.createInterface({ input, crlfDelay: Infinity });
     try {
       for await (const line of lines) {
+        scanned += Buffer.byteLength(line) + 1;
+        if (scanned > 16 * 1024 * 1024) { truncated = true; break; }
         try {
           const value = JSON.parse(line);
           if (value?.type === 'session_info') title = JSON.stringify(value);
+          if (typeof value?.id === 'string') {
+            parents.set(value.id, typeof value.parentId === 'string' ? value.parentId : null);
+            leaf = value.id;
+            if (value?.type === 'message' && value.message?.role === 'user') {
+              users.push({ id: value.id, content: value.message.content });
+            }
+          }
         } catch { /* 忽略损坏的 JSONL 行。 */ }
       }
     } catch { /* 文件消失或读取失败时仍保留头部元数据。 */ }
     finally { lines.close(); input.destroy(); }
+    if (!truncated && leaf) {
+      const branch = new Set();
+      for (let id = leaf; id && !branch.has(id); id = parents.get(id)) branch.add(id);
+      const message = users.reverse().find((entry) => branch.has(entry.id));
+      const content = message?.content;
+      const text = typeof content === 'string' ? content : Array.isArray(content)
+        ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string')
+            .map((block) => block.text).join('\n')
+        : '';
+      preview = Array.from(text.trim()).slice(0, 120).join('');
+    }
     emit('PIX_SESSION_FILE', record.file);
     emit('PIX_SESSION_MTIME', record.mtime);
     emit('PIX_SESSION_HEADER', JSON.stringify(record.header));
     emit('PIX_SESSION_TITLE', title);
+    emit('PIX_SESSION_PREVIEW', JSON.stringify(preview));
   }
   console.log('PIX_SESSIONS_DONE');
 }
@@ -327,13 +354,22 @@ mod tests {
     #[test]
     fn probe_script_contains_contract_markers() {
         for marker in [
-            "UNAME_S=", "UNAME_M=", "NODE_V=", "PI_BIN=", "PI_V=", "PIX_PROBE_DONE",
+            "UNAME_S=",
+            "UNAME_M=",
+            "NODE_V=",
+            "PI_BIN=",
+            "PI_V=",
+            "PIX_PROBE_DONE",
         ] {
             assert!(PROBE_SCRIPT.contains(marker), "probe 脚本缺 {marker:?}");
         }
         // 可整体经 base64 通道无损往返。
-        let decoded = String::from_utf8(BASE64_STANDARD.decode(encode_payload(PROBE_SCRIPT)).unwrap())
-            .unwrap();
+        let decoded = String::from_utf8(
+            BASE64_STANDARD
+                .decode(encode_payload(PROBE_SCRIPT))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(decoded, PROBE_SCRIPT);
     }
 
@@ -345,19 +381,29 @@ mod tests {
         assert!(script.contains("PIX_SESSIONS_ERROR="));
         assert!(SESSIONS_NODE_SCRIPT.contains("Buffer.alloc(8192)"));
         assert!(SESSIONS_NODE_SCRIPT.contains("records.slice(0, 50)"));
+        assert!(SESSIONS_NODE_SCRIPT.contains("scanned > 16 * 1024 * 1024"));
+        assert!(SESSIONS_NODE_SCRIPT.contains("parents.get(id)"));
+        assert!(SESSIONS_NODE_SCRIPT.contains("JSON.stringify(preview)"));
         assert!(!script.contains("grep"));
         // 脚本中不得再残留占位符。
         assert!(!script.contains("<PROJECT>"));
         // 可整体经 base64 通道无损往返。
-        let decoded = String::from_utf8(BASE64_STANDARD.decode(encode_payload(&script)).unwrap())
-            .unwrap();
+        let decoded =
+            String::from_utf8(BASE64_STANDARD.decode(encode_payload(&script)).unwrap()).unwrap();
         assert_eq!(decoded, script);
     }
 
     #[test]
     fn trust_scripts_carry_contract_markers_and_exit_codes() {
-        for marker in ["mkdir -p \"$HOME/.pix\"", "pi_data.mjs.$$", "PIX_TRUST_UPLOAD_DONE"] {
-            assert!(TRUST_UPLOAD_SCRIPT.contains(marker), "上传脚本缺 {marker:?}");
+        for marker in [
+            "mkdir -p \"$HOME/.pix\"",
+            "pi_data.mjs.$$",
+            "PIX_TRUST_UPLOAD_DONE",
+        ] {
+            assert!(
+                TRUST_UPLOAD_SCRIPT.contains(marker),
+                "上传脚本缺 {marker:?}"
+            );
         }
         // 临时名必须带 $$：固定名在多进程并发首传时会产生 mv 竞态（实机复现）。
         assert!(!TRUST_UPLOAD_SCRIPT.contains(".pixtmp"));
@@ -375,8 +421,8 @@ mod tests {
         assert!(TRUST_UPLOAD_SCRIPT.matches("|| exit 96").count() == 2);
         // 两个脚本均可整体经 base64 通道无损往返。
         for script in [TRUST_UPLOAD_SCRIPT, TRUST_RUN_SCRIPT] {
-            let decoded = String::from_utf8(BASE64_STANDARD.decode(encode_payload(script)).unwrap())
-                .unwrap();
+            let decoded =
+                String::from_utf8(BASE64_STANDARD.decode(encode_payload(script)).unwrap()).unwrap();
             assert_eq!(decoded, *script);
         }
     }

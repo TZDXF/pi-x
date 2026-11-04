@@ -32,8 +32,16 @@ use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
 fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
-    if event == EXIT_EVENT || (event == EVENT && matches!(payload["type"].as_str(), Some("agent_start" | "agent_settled"))) {
+    if event == EXIT_EVENT
+        || (event == EVENT
+            && matches!(
+                payload["type"].as_str(),
+                Some("agent_start" | "agent_settled")
+            ))
+    {
         crate::commands::workspace_state::record_runtime_activity(app, &payload);
+    } else if event == SSH_PATH_BOUND_EVENT {
+        crate::commands::workspace_state::rebind_runtime_activity(app, &payload);
     }
     if runtime_id.starts_with("schedule-") {
         use tauri::Emitter;
@@ -41,6 +49,18 @@ fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: V
         let _ = app.emit(&name, payload.clone());
     }
     crate::remote::emit(app, event, payload);
+}
+
+async fn retire_process(process: &ProcessState) {
+    let guard = process.inner.lock().await;
+    let mut activity = process.activity.lock().await;
+    let generation = process.generation.fetch_add(1, Ordering::Relaxed) + 1;
+    // The process may already have exited while its stdout reader has not yet
+    // observed EOF. Publish the terminal event before invalidating that reader.
+    activity.stop_and_emit(generation, true);
+    if let Some(inner) = guard.as_ref() {
+        inner.pending.lock().await.clear();
+    }
 }
 
 const EVENT: &str = "pi://event";
@@ -57,7 +77,7 @@ const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 #[derive(Default)]
 pub struct ProcessState {
     runtime_id: String,
-    project: String,
+    project: Arc<Mutex<String>>,
     inner: Mutex<Option<SessionInner>>,
     navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
@@ -296,13 +316,7 @@ pub async fn spawn(
         }
         // A replacement uses a new ProcessState. Retire the old state's readers
         // and timers before either worker can publish events with the same id.
-        let guard = existing.inner.lock().await;
-        let mut activity = existing.activity.lock().await;
-        let generation = existing.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        activity.stop(generation, true);
-        if let Some(inner) = guard.as_ref() {
-            inner.pending.lock().await.clear();
-        }
+        retire_process(existing).await;
     }
     // Never open the same persisted conversation in two processes. Probes are
     // time-bounded: a hung pi process must not block spawning forever.
@@ -345,7 +359,7 @@ pub async fn spawn(
     }
     let process = Arc::new(ProcessState {
         runtime_id: id.clone(),
-        project: project.into(),
+        project: Arc::new(Mutex::new(project.into())),
         ..Default::default()
     });
     child::process_spawn(
@@ -375,7 +389,7 @@ pub async fn request(
     let exporting = command["type"] == "export_html";
     let mut response = process_request(&process, command).await?;
     if exporting {
-        resolve_export_path(&mut response, &process.project)?;
+        resolve_export_path(&mut response, &process.project.lock().await)?;
     }
     Ok(response)
 }
@@ -462,7 +476,8 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
             if !activity.is_current(generation) {
                 continue;
             }
-            let mut snapshot = json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]});
+            let project = process.project.lock().await.clone();
+            let mut snapshot = json!({"runtimeId": process.runtime_id, "project": project, "state": response["data"]});
             activity.snapshot(&mut snapshot);
             result.push(snapshot);
         }
@@ -547,6 +562,47 @@ mod pending_cleanup_tests {
             remote: None,
         });
         state
+    }
+
+    #[tokio::test]
+    async fn respawn_retires_exited_process_before_eof_with_error_exit_event() {
+        #[derive(Default)]
+        struct ExitSink(StdMutex<Vec<(&'static str, Value)>>);
+        impl child::EventSink for ExitSink {
+            fn emit(&self, event: &'static str, _: &str, payload: Value) {
+                self.0.lock().unwrap().push((event, payload));
+            }
+        }
+
+        let state = state_with_session().await;
+        let sink = Arc::new(ExitSink::default());
+        state.activity.lock().await.reset(
+            0,
+            "test",
+            "project",
+            Some("session.jsonl".into()),
+            sink.clone(),
+        );
+        state
+            .activity
+            .lock()
+            .await
+            .event(json!({"type":"agent_start"}));
+        while child::process_running(&state).await {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Model the restart race: waitpid has observed exit, but no stdout EOF
+        // reader has emitted a terminal event yet.
+        retire_process(&state).await;
+        let events = sink.0.lock().unwrap();
+        let exit = events
+            .iter()
+            .find(|(event, _)| *event == EXIT_EVENT)
+            .expect("restart must emit pi://exit");
+        assert_eq!(exit.1["pixRunStatus"], "error");
+        assert_eq!(exit.1["pixSessionFile"], "session.jsonl");
+        assert!(exit.1["pixRunId"].as_str().is_some_and(|id| !id.is_empty()));
     }
 
     #[tokio::test]
@@ -818,7 +874,6 @@ mod pending_cleanup_tests {
         state.activity.lock().await.snapshot(&mut snapshot);
         assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
     }
-
 }
 
 #[cfg(test)]

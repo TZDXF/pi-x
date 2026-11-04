@@ -309,6 +309,64 @@ test("thinking that starts during history materialization survives its publish",
   expect(store.streamingTurnId).not.toBeNull()
 })
 
+test.each([false, true])("history publish preserves an answer completed during loading (settled=%s)", async settled => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "live answer" }] },
+  })
+  if (settled) store.handleEvent({ type: "agent_settled" })
+  history.resolve([{ role: "user", content: "question" }])
+  await loading
+  expect(store.entries.map(entry => entry.kind)).toEqual(["user", "assistant"])
+  expect(store.entries[1]).toMatchObject({ blocks: [{ type: "text", text: "live answer" }] })
+})
+
+test("history publish deduplicates a live answer already present in the snapshot", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({ type: "tool_execution_start", toolCallId: "live-tool", toolName: "read", args: {} })
+  store.handleEvent({
+    type: "tool_execution_end",
+    toolCallId: "live-tool",
+    result: { content: [{ type: "text", text: "tool output" }] },
+    durationMs: 25,
+  })
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "live answer" }] },
+  })
+  store.handleEvent({ type: "agent_settled" })
+  history.resolve([
+    { role: "user", content: "question", timestamp: 100 },
+    {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "live answer" }],
+      timestamp: 200,
+    },
+  ])
+  await loading
+  expect(store.entries).toHaveLength(2)
+  expect(store.entries.filter(entry => entry.kind === "assistant")).toHaveLength(1)
+  expect(store.runs["live-tool"]).toMatchObject({
+    state: "output-available",
+    outputText: "tool output",
+    durationMs: 25,
+  })
+})
+
 test("worker rebuild reset preserves the visible transcript and identity; normal clear still drops them", async () => {
   const { store } = await harness()
   await store.loadMessages(messages(2))

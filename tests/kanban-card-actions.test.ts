@@ -140,6 +140,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
   })
   const disabled = vue.ref(false)
   const open = vi.fn()
+  const cardDeleted = vi.fn()
   let actions: { edit(): void; remove(): Promise<void> }
   const app = renderer.createApp({
     render: () =>
@@ -153,6 +154,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
             { value: "/other", label: "Other" },
           ],
           onOpen: open,
+          onCardDeleted: cardDeleted,
         },
         {
           default: value => {
@@ -189,7 +191,20 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     await vue.nextTick()
   }
   const removeFromMenu = () => actions.remove()
-  return { card, disabled, all, action, click, save, edit, isEditing, open, editFromMenu, removeFromMenu }
+  return {
+    card,
+    disabled,
+    all,
+    action,
+    click,
+    save,
+    edit,
+    isEditing,
+    open,
+    cardDeleted,
+    editFromMenu,
+    removeFromMenu,
+  }
 }
 
 test("todo menu editing reuses the existing editor and deletion removes only the chosen persisted draft", async () => {
@@ -205,8 +220,21 @@ test("todo menu editing reuses the existing editor and deletion removes only the
   expect(workspace.boardDrafts.task).toBeUndefined()
   expect(workspace.boardDrafts.other.message).toBe("Keep")
   expect(workspace.flushPersistence).toHaveBeenCalledTimes(2)
+  expect(h.cardDeleted).toHaveBeenCalledExactlyOnceWith(h.card)
   expect(h.open).not.toHaveBeenCalled()
   expect(workspace.update).not.toHaveBeenCalled()
+})
+
+test("failed draft deletion does not emit cardDeleted", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Keep" }
+  workspace.flushPersistence.mockRejectedValueOnce(new Error("Delete failed"))
+  const h = await harness()
+  await h.removeFromMenu()
+  expect(workspace.removeBoardDraft).toHaveBeenCalledExactlyOnceWith("task")
+  expect(workspace.upsertBoardDraft).toHaveBeenCalledWith(expect.objectContaining({ id: "task", message: "Keep" }))
+  expect(workspace.boardDrafts.task).toMatchObject({ id: "task", message: "Keep" })
+  expect(h.cardDeleted).not.toHaveBeenCalled()
+  expect(pushToast).toHaveBeenCalledWith("Error: Delete failed", "error")
 })
 
 test("deleting a queued todo cancels the prompt without writing session metadata", async () => {
@@ -308,7 +336,13 @@ test("a delayed todo edits its original queued prompt and never rewrites it once
     ],
   })
   owners.set("runtime", owner)
-  const h = await harness({ draftId: undefined, runtimeId: "runtime", file: "/queued.jsonl" })
+  workspace.boardDrafts.task = {
+    id: "task",
+    project: "/project",
+    message: "Stale draft",
+    sessionFile: "/queued.jsonl",
+  }
+  const h = await harness({ runtimeId: "runtime", file: "/queued.jsonl" })
   await h.click("kanban.editDraft")
   expect(h.all().find(n => n.tag === "select")!.props.disabled).toBe(true)
   await h.edit("Updated delayed task")
@@ -321,6 +355,7 @@ test("a delayed todo edits its original queued prompt and never rewrites it once
   })
   expect(owner.promptQueue[0].images).toHaveLength(1)
   await h.click("kanban.editDraft")
+  expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Updated delayed task")
   await h.edit("Too late")
   owner.isStreaming = true
   await h.save()

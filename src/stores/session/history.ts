@@ -60,8 +60,45 @@ export function createSessionHistory(context: HistoryContext) {
     olderHistoryLoading.value = false
   }
 
+  function sameEntry(left: Entry, right: Entry): boolean {
+    if (left.kind !== right.kind) return false
+    if (left.timestamp !== undefined && right.timestamp !== undefined && left.timestamp !== right.timestamp)
+      return false
+    if (left.kind === "user" && right.kind === "user")
+      return left.text === right.text && JSON.stringify(left.images ?? []) === JSON.stringify(right.images ?? [])
+    if (left.kind === "assistant" && right.kind === "assistant")
+      return left.failed === right.failed && JSON.stringify(left.blocks) === JSON.stringify(right.blocks)
+    if (left.kind === "compaction" && right.kind === "compaction") return left.summary === right.summary
+    if (left.kind === "context_edit" && right.kind === "context_edit")
+      return left.targetId === right.targetId && left.replaced === right.replaced
+    if (left.kind === "model_change" && right.kind === "model_change")
+      return left.provider === right.provider && left.modelId === right.modelId
+    return false
+  }
+
+  /** A snapshot may already contain some events received while it was loading. */
+  function mergeLiveTail(page: Entry[], liveTail: Entry[]): Entry[] {
+    let overlap = Math.min(page.length, liveTail.length)
+    while (overlap > 0) {
+      let matches = true
+      for (let index = 0; index < overlap; index++) {
+        if (!sameEntry(page[page.length - overlap + index]!, liveTail[index]!)) {
+          matches = false
+          break
+        }
+      }
+      if (matches) break
+      overlap--
+    }
+    return [...page, ...liveTail.slice(overlap)]
+  }
+
   /** Materialize only one page, yielding during large tool-heavy histories. */
-  async function materializeHistoryPage(replace = false, preserveStream = false) {
+  async function materializeHistoryPage(
+    replace = false,
+    preserveStream = false,
+    replacedEntryIds?: ReadonlySet<number>,
+  ) {
     if (olderHistoryLoading.value || (!replace && !historyCursor.value)) return
     const version = historyVersion
     const source = historyMessages.value
@@ -177,8 +214,9 @@ export function createSessionHistory(context: HistoryContext) {
       // Refreshes keep the old transcript mounted across every async yield.
       // Publish the prepared first page together; ordinary paging still prepends.
       const keepStream = preserveStream && isStreaming.value
-      runs.value = replace && !keepStream ? pageRuns : { ...pageRuns, ...runs.value }
-      entries.value = replace ? page : [...page, ...entries.value]
+      const liveTail = replacedEntryIds ? entries.value.filter(entry => !replacedEntryIds.has(entry.id)) : []
+      runs.value = replace && !keepStream && !liveTail.length ? pageRuns : { ...pageRuns, ...runs.value }
+      entries.value = replace ? mergeLiveTail(page, liveTail) : [...page, ...entries.value]
       // Attaching to a running worker supplements committed history only.
       // Its in-flight message is absent from the session file and must survive
       // every asynchronous history yield, including deltas received meanwhile.
@@ -268,6 +306,7 @@ export function createSessionHistory(context: HistoryContext) {
 
   /** Fetch asynchronously; stale responses must never replace another session. */
   async function loadHistory() {
+    const replacedEntryIds = new Set(entries.value.map(entry => entry.id))
     invalidateHistory()
     const version = historyVersion
     historyLoading.value = true
@@ -300,7 +339,7 @@ export function createSessionHistory(context: HistoryContext) {
       // oldest page is reached, and the final-turn check needs the full list.
       await fetchLastSessionError(version)
       if (version !== historyVersion) return
-      await materializeHistoryPage(true, true)
+      await materializeHistoryPage(true, true, replacedEntryIds)
       if (version !== historyVersion) return
       placePendingHistoryError()
       void syncSessionFile()

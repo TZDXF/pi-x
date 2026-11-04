@@ -20,10 +20,9 @@ interface UseAppShortcutsContext {
   t(key: string): string
   translateError(error: unknown): string
   navigate(path: string, replace?: boolean): void
-  projectRoute(project: string): string
   sessionRoute(conversation: string, project?: string): string
   requestConversationNavigation(path: string, action: () => Promise<unknown>): void
-  newProjectSession(path: string): Promise<unknown>
+  newSessionFromChat(): void
   resumeSession(file: string, targetProject?: string): Promise<unknown>
   developerModeEnabled: Ref<boolean>
   isDesktop: boolean
@@ -47,10 +46,9 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
     t,
     translateError: tBackendError,
     navigate,
-    projectRoute,
     sessionRoute,
     requestConversationNavigation,
-    newProjectSession,
+    newSessionFromChat,
     resumeSession,
     developerModeEnabled,
     isDesktop,
@@ -119,9 +117,7 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
   }
 
   const offShortcutHandlers = [
-    registerShortcutHandler("app.newSession", () =>
-      requestConversationNavigation(projectRoute(project.value), () => newProjectSession(project.value)),
-    ),
+    registerShortcutHandler("app.newSession", () => newSessionFromChat()),
     registerShortcutHandler("app.focusComposer", focusComposerFromShortcut),
     registerShortcutHandler("app.toggleSidebar", () => {
       if (route.value.name === "home") sidebarOpen.value = !sidebarOpen.value

@@ -41,6 +41,7 @@ function bindBridge(value: Element | ComponentPublicInstance | null) {
 
 <template>
   <PromptInput
+    accept="image/*"
     :group-class="[
       'relative rounded-[22px] bg-card dark:bg-card p-2 shadow-[var(--composer-shadow)]',
       dragOver && 'outline-2 outline-dashed outline-primary outline-offset-[3px]',

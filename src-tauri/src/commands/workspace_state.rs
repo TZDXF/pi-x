@@ -370,21 +370,69 @@ fn runtime_activity_patch(payload: &serde_json::Value) -> Option<WorkspaceStateP
     let activity: SessionActivity = serde_json::from_value(serde_json::json!({
         "file": file, "project": project, "status": payload["pixRunStatus"],
         "runId": payload["pixRunId"], "updatedAt": payload["pixRunUpdatedAt"],
-    })).ok()?;
-    let key = if crate::ssh::is_remote_uri(project) {
-        serde_json::to_string(&[normalize_path(project), file.to_string()]).ok()?
-    } else {
-        file.replace('\\', "/")
-    };
+    }))
+    .ok()?;
+    let key = runtime_activity_key(project, file)?;
     let mut patch = WorkspaceStatePatch::default();
     patch.session_activities.insert(key, Some(activity));
     Some(patch)
 }
 
-fn record_runtime_activity_at(path: &Path, payload: &serde_json::Value) -> Result<Option<WorkspaceState>, String> {
-    let Some(patch) = runtime_activity_patch(payload) else { return Ok(None) };
+fn runtime_activity_key(project: &str, file: &str) -> Option<String> {
+    if crate::ssh::is_remote_uri(project) {
+        Some(serde_json::to_string(&[normalize_path(project), file.to_string()]).ok()?)
+    } else {
+        Some(file.replace('\\', "/"))
+    }
+}
+
+fn rebind_runtime_activity_at(
+    path: &Path,
+    payload: &serde_json::Value,
+) -> Result<Option<WorkspaceState>, String> {
+    let Some(previous_project) = payload["previousProject"].as_str() else {
+        return Ok(None);
+    };
+    let Some(project) = payload["pixProject"].as_str() else {
+        return Ok(None);
+    };
+    let Some(file) = payload["pixSessionFile"].as_str() else {
+        return Ok(None);
+    };
+    let (Some(previous_key), Some(key)) = (
+        runtime_activity_key(previous_project, file),
+        runtime_activity_key(project, file),
+    ) else {
+        return Ok(None);
+    };
     let current = read(path)?;
-    if patch.session_activities.iter().all(|(key, value)| current.session_activities.get(key) == value.as_ref()) {
+    let Some(mut activity) = current.session_activities.get(&previous_key).cloned() else {
+        return Ok(None);
+    };
+    activity.project = project.to_string();
+    let mut patch = WorkspaceStatePatch::default();
+    patch.session_activities.insert(previous_key.clone(), None);
+    patch.session_activities.insert(key.clone(), Some(activity));
+    if let Some(run_id) = current.session_acknowledgements.get(&previous_key).cloned() {
+        patch.session_acknowledgements.insert(previous_key, None);
+        patch.session_acknowledgements.insert(key, Some(run_id));
+    }
+    update(path, patch).map(Some)
+}
+
+fn record_runtime_activity_at(
+    path: &Path,
+    payload: &serde_json::Value,
+) -> Result<Option<WorkspaceState>, String> {
+    let Some(patch) = runtime_activity_patch(payload) else {
+        return Ok(None);
+    };
+    let current = read(path)?;
+    if patch
+        .session_activities
+        .iter()
+        .all(|(key, value)| current.session_activities.get(key) == value.as_ref())
+    {
         return Ok(None);
     }
     update(path, patch).map(Some)
@@ -404,7 +452,29 @@ pub(crate) fn record_runtime_activity(app: &AppHandle, payload: &serde_json::Val
             }
         }
         Ok(None) => {}
-        Err(error) => crate::logs::write("workspace", &format!("runtime activity persistence failed: {error}")),
+        Err(error) => crate::logs::write(
+            "workspace",
+            &format!("runtime activity persistence failed: {error}"),
+        ),
+    }
+}
+
+pub(crate) fn rebind_runtime_activity(app: &AppHandle, payload: &serde_json::Value) {
+    let result = (|| {
+        let _guard = STATE_LOCK.lock().map_err(|e| e.to_string())?;
+        rebind_runtime_activity_at(&crate::data_dir::root().join("workspace.json"), payload)
+    })();
+    match result {
+        Ok(Some(state)) => {
+            if let Ok(value) = serde_json::to_value(state) {
+                crate::remote::emit(app, "pi://workspace-state-changed", value);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => crate::logs::write(
+            "workspace",
+            &format!("runtime activity rebind failed: {error}"),
+        ),
     }
 }
 
@@ -433,14 +503,20 @@ mod tests {
             "pixRunStatus":"running", "pixRunId":"backend-run", "pixRunUpdatedAt":1,
         });
         let started = record_runtime_activity_at(&path, &event).unwrap().unwrap();
-        assert_eq!(started.session_activities["C:/sessions/one.jsonl"].status, SessionActivityStatus::Running);
+        assert_eq!(
+            started.session_activities["C:/sessions/one.jsonl"].status,
+            SessionActivityStatus::Running
+        );
         assert!(record_runtime_activity_at(&path, &event).unwrap().is_none());
         event["pixRunStatus"] = json!("completed");
         event["pixRunUpdatedAt"] = json!(2);
         record_runtime_activity_at(&path, &event).unwrap();
         let restored = read(&path).unwrap();
         assert_eq!(restored.revision, 2);
-        assert_eq!(restored.session_activities["C:/sessions/one.jsonl"].status, SessionActivityStatus::Completed);
+        assert_eq!(
+            restored.session_activities["C:/sessions/one.jsonl"].status,
+            SessionActivityStatus::Completed
+        );
         cleanup(&path);
     }
 
@@ -451,8 +527,46 @@ mod tests {
             "pixRunStatus":"error", "pixRunId":"backend-run", "pixRunUpdatedAt":1,
         });
         let patch = runtime_activity_patch(&event).unwrap();
-        assert!(patch.session_activities.contains_key("[\"ssh://host-a/project\",\"/sessions/one.jsonl\"]"));
+        assert!(patch
+            .session_activities
+            .contains_key("[\"ssh://host-a/project\",\"/sessions/one.jsonl\"]"));
         assert!(runtime_activity_patch(&json!({"pixRunStatus":"running"})).is_none());
+    }
+
+    #[test]
+    fn realpath_rebind_moves_persisted_activity_to_the_authoritative_project() {
+        let path = path();
+        let event = json!({
+            "pixSessionFile":"/sessions/one.jsonl", "pixProject":"ssh://host/alias",
+            "pixRunStatus":"running", "pixRunId":"backend-run", "pixRunUpdatedAt":1,
+        });
+        record_runtime_activity_at(&path, &event).unwrap();
+        let old_key = runtime_activity_key("ssh://host/alias", "/sessions/one.jsonl").unwrap();
+        let new_key = runtime_activity_key("ssh://host/physical", "/sessions/one.jsonl").unwrap();
+        update(
+            &path,
+            patch(json!({
+                "sessionAcknowledgements": {(old_key.clone()): "backend-run"},
+            })),
+        )
+        .unwrap();
+        let rebound = json!({
+            "previousProject":"ssh://host/alias", "pixProject":"ssh://host/physical",
+            "pixSessionFile":"/sessions/one.jsonl",
+        });
+        rebind_runtime_activity_at(&path, &rebound)
+            .unwrap()
+            .unwrap();
+        let state = read(&path).unwrap();
+        assert!(!state.session_activities.contains_key(&old_key));
+        assert!(!state.session_acknowledgements.contains_key(&old_key));
+        assert_eq!(state.session_acknowledgements[&new_key], "backend-run");
+        assert_eq!(
+            state.session_activities[&new_key].project,
+            "ssh://host/physical"
+        );
+        assert_eq!(state.session_activities[&new_key].run_id, "backend-run");
+        cleanup(&path);
     }
 
     #[test]
@@ -631,22 +745,35 @@ mod tests {
         let key = serde_json::to_string(&[r"C:\Project\", "running"]).unwrap();
         let other_key = serde_json::to_string(&["C:/Project/", "running"]).unwrap();
         let ids = [r"C:\Cards\one", "c:/cards/one", "draft:two"];
-        let first = update(&path, patch(json!({
-            "boardColumnOrder": {(&key): [ids[0], ids[1], ids[0], ids[2], ids[2]]}
-        }))).unwrap();
+        let first = update(
+            &path,
+            patch(json!({
+                "boardColumnOrder": {(&key): [ids[0], ids[1], ids[0], ids[2], ids[2]]}
+            })),
+        )
+        .unwrap();
         assert_eq!(first.board_column_order[&key], ids);
-        let state = update(&path, patch(json!({
-            "boardColumnOrder": {(&other_key): ["remote"]}
-        }))).unwrap();
+        let state = update(
+            &path,
+            patch(json!({
+                "boardColumnOrder": {(&other_key): ["remote"]}
+            })),
+        )
+        .unwrap();
         assert_eq!(state.board_column_order.len(), 2);
         assert_eq!(state.board_column_order[&key], ids);
         assert_eq!(state.board_column_order[&other_key], ["remote"]);
         assert_eq!(read(&path).unwrap(), state);
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["boardColumnOrder"][&key], json!(ids));
-        let state = update(&path, patch(json!({
-            "boardColumnOrder": {(&key): [], (&other_key): null}
-        }))).unwrap();
+        let state = update(
+            &path,
+            patch(json!({
+                "boardColumnOrder": {(&key): [], (&other_key): null}
+            })),
+        )
+        .unwrap();
         assert_eq!(state.board_column_order.len(), 1);
         assert!(state.board_column_order[&key].is_empty());
         assert_eq!(read(&path).unwrap(), state);

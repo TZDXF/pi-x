@@ -247,10 +247,15 @@ const imports = {
   "./KanbanCardActions.vue": {
     __esModule: true,
     default: vue.defineComponent({
+      props: ["card"],
+      emits: ["cardDeleted"],
       setup:
-        (_, { slots }) =>
+        (props, { slots, emit }) =>
         () =>
-          slots.default?.({ edit() {}, remove() {}, busy: false }),
+          vue.h("div", [
+            vue.h("button", { "data-delete-card": true, onClick: () => emit("cardDeleted", props.card) }),
+            slots.default?.({ edit() {}, remove() {}, busy: false }),
+          ]),
     }),
   },
   "@/components/ui/dialog": {
@@ -295,6 +300,7 @@ async function harness(overrides: Record<string, any> = {}) {
     open = vi.fn(),
     retry = vi.fn(),
     select = vi.fn(),
+    cardDeleted = vi.fn(),
     reorder = vi.fn((column: kanban.KanbanStatus, ids: string[]) => {
       state.columnOrder = { ...state.columnOrder, [kanban.kanbanColumnOrderKey(state.selectedProject, column)]: ids }
     })
@@ -308,6 +314,7 @@ async function harness(overrides: Record<string, any> = {}) {
           ref: board,
           onCreate: create,
           onOpen: open,
+          onCardDeleted: cardDeleted,
           onRetry: retry,
           onReorder: reorder,
           "onUpdate:selectedProject": select,
@@ -355,6 +362,7 @@ async function harness(overrides: Record<string, any> = {}) {
     submit,
     create,
     open,
+    cardDeleted,
     retry,
     reorder,
     select,
@@ -366,6 +374,15 @@ describe("KanbanBoard", () => {
     const h = await harness({ cards: [card()] })
     h.cards()[0].props.onClick()
     expect(h.open).not.toHaveBeenCalled()
+  })
+
+  test("forwards cardDeleted with the deleted card", async () => {
+    const deleted = card()
+    const h = await harness({ cards: [deleted] })
+    h.all()
+      .find(child => child.props["data-delete-card"])!
+      .props.onClick()
+    expect(h.cardDeleted).toHaveBeenCalledExactlyOnceWith(deleted)
   })
 
   test("running cards render live content while other columns retain their task preview", async () => {

@@ -34,3 +34,24 @@ test("devtools shortcuts ignore missing keys and keep valid shortcuts working", 
   expect(dispatchShortcut).toHaveBeenCalledExactlyOnceWith(regularEvent)
   disposeShortcuts()
 })
+
+test("new session shortcut delegates to the layout-aware app action", () => {
+  const handlers = new Map<string, () => void>()
+  const newSessionFromChat = vi.fn()
+  const newProjectSession = vi.fn()
+  useAppShortcuts({
+    phase: ref("chat"),
+    newSessionFromChat,
+    newProjectSession,
+    shortcuts: {
+      dispatchShortcut: vi.fn(),
+      registerShortcutHandler: (name, handler) => {
+        handlers.set(name, handler)
+        return () => {}
+      },
+    },
+  } as unknown as Parameters<typeof useAppShortcuts>[0])
+  handlers.get("app.newSession")!()
+  expect(newSessionFromChat).toHaveBeenCalledOnce()
+  expect(newProjectSession).not.toHaveBeenCalled()
+})
