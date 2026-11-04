@@ -366,7 +366,7 @@ describe("KanbanBoard", () => {
     expect(h.cards().every(rendered => !rendered.props.disabled)).toBe(true)
     h.cards()[1].props.onClick()
     expect(h.open.mock.calls.map(([selected]) => selected.id)).toEqual(["first", "second"])
-    expect(h.byText("kanban.create").props.disabled).toBe(true)
+    expect(h.byText("kanban.create").props.disabled).toBeFalsy()
     h.state.navigationBusy = true
     await vue.nextTick()
     expect(h.cards().every(rendered => rendered.props.disabled)).toBe(true)
@@ -522,10 +522,34 @@ describe("KanbanBoard", () => {
     expect(h.retry).toHaveBeenCalledOnce()
   })
 
-  test("without projects, new task is disabled but ungrouped existing cards are still displayed", async () => {
+  test.each([
+    { busy: true },
+    { navigationBusy: true },
+    { loading: true },
+    { projects: [] },
+    { busy: true, navigationBusy: true, loading: true, projects: [] },
+  ])("creation entry stays enabled and opens the dialog with %j", async overrides => {
+    const h = await harness(overrides)
+    expect(h.byText("kanban.create").props.disabled).toBeFalsy()
+    await h.openCreate()
+    expect(h.isDialogOpen()).toBe(true)
+  })
+
+  test("parent can open creation while busy and without projects", async () => {
+    const h = await harness({ busy: true, projects: [] })
+    h.board.value!.openCreate()
+    await vue.nextTick()
+    expect(h.isDialogOpen()).toBe(true)
+  })
+
+  test("without projects, creation opens while ungrouped existing cards are still displayed", async () => {
     const h = await harness({ projects: [], cards: [card({ project: "", projectName: "" })] })
-    expect(h.byText("kanban.create").props.disabled).toBe(true)
+    await h.openCreate()
+    expect(h.isDialogOpen()).toBe(true)
     expect(h.cards()).toHaveLength(1)
+    await h.fill("", "Task")
+    h.submit()
+    expect(h.create).not.toHaveBeenCalled()
   })
 
   test("projectless cards omit the folder/name row without hiding normal projects with the same label", async () => {

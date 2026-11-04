@@ -729,7 +729,7 @@ onUnmounted(() => {
                 :selected-id="board.detailsOpen ? board.selectedCard?.id : undefined"
                 :loading="board.loading"
                 :error="board.error ? tBackendError(board.error) : undefined"
-                :busy="creatingBoardDraft || navigating || connecting || workspace.gitBusy"
+                :busy="creatingBoardDraft"
                 :navigation-busy="(workspace.gitBusy && !connecting) || phase === 'trust'"
                 :column-order="workspace.boardColumnOrder"
                 @reorder="(column, ids) => workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)"

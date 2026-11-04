@@ -141,14 +141,12 @@ function selectProject(event: Event) {
 }
 
 function setCreateOpen(open: boolean) {
-  if (createBusy.value) return
   if (open) openCreate()
-  else createOpen.value = false
+  else if (!createBusy.value) createOpen.value = false
 }
 
 /** Parent title-bar actions may open creation with an optional project preset. */
 function openCreate(project = props.selectedProject) {
-  if (createBusy.value || !availableProjects.value.length) return
   draftProject.value = availableProjects.value.some(option => option.value === project) ? project : ""
   draftMessage.value = ""
   createOpen.value = true
@@ -189,7 +187,7 @@ async function submit() {
       </label>
       <div class="ml-auto flex items-center gap-2">
         <slot name="actions" />
-        <Button size="sm" :disabled="createBusy || !availableProjects.length" @click="setCreateOpen(true)">
+        <Button size="sm" @click="setCreateOpen(true)">
           <Plus class="size-3.5" aria-hidden="true" />
           {{ t("kanban.create") }}
         </Button>
