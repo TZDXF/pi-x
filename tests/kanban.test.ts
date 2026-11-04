@@ -312,7 +312,11 @@ describe("KanbanBoard", () => {
   test("running cards render live content while other columns retain their task preview", async () => {
     const h = await harness({
       cards: [
-        card({ id: "live", status: "running", activity: { kind: "text", text: "Current streamed progress" } }),
+        card({
+          id: "live",
+          status: "running",
+          activity: { kind: "text", text: "Current streamed progress\nNext line" },
+        }),
         card({ id: "idle", status: "idle", activity: { kind: "text", text: "Stale progress" } }),
       ],
     })
@@ -320,9 +324,21 @@ describe("KanbanBoard", () => {
     expect(textOf(h.cards()[0])).not.toContain("Task message")
     expect(textOf(h.cards()[1])).toContain("Task message")
     expect(textOf(h.cards()[1])).not.toContain("Stale progress")
+    const livePreview = () =>
+      descendants(h.cards()[0]).find(
+        child =>
+          child.props.title === "Current streamed progress\nNext line" ||
+          child.props.title === "kanban.executingTool\nTests: 10 passed",
+      )!
+    expect(livePreview().props.class.split(" ")).toEqual(expect.arrayContaining(["block", "truncate"]))
+    expect(livePreview().props.class).not.toMatch(/line-clamp-2|whitespace-pre-wrap|break-words/)
+    expect(livePreview().props.title).toBe("Current streamed progress\nNext line")
+    const idlePreview = descendants(h.cards()[1]).find(child => child.props.title === "Task message")!
+    expect(idlePreview.props.class).toContain("line-clamp-2")
     h.state.cards[0].activity = { kind: "tool", name: "bash", detail: "Tests: 10 passed" }
     await vue.nextTick()
     expect(textOf(h.cards()[0])).toContain("Tests: 10 passed")
+    expect(livePreview().props.class.split(" ")).toContain("truncate")
     h.state.cards[0].activity = { kind: "thinking" }
     await vue.nextTick()
     expect(textOf(h.cards()[0])).toContain("chat.thinking")

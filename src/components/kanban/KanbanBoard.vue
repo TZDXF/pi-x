@@ -259,7 +259,8 @@ async function submit() {
             >
               <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
               <span
-                class="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground break-words"
+                class="text-xs leading-relaxed text-muted-foreground"
+                :class="card.status === 'running' ? 'block truncate' : 'line-clamp-2 whitespace-pre-wrap break-words'"
                 :title="previewFor(card)"
                 >{{ previewFor(card) }}</span
               >
