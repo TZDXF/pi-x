@@ -877,8 +877,6 @@ export default {
     copyPrompt: "复制提问",
     executionDuration: "用时 {seconds} 秒",
     actualResponseModel: "实际响应模型",
-    responseBilledCost: "最后一条模型响应的供应商账单金额（美元）",
-    responseEstimatedCost: "最后一条模型响应的目录估算费用（美元）",
     durationUnknown: "用时未知",
     toolCallCount: "工具调用 {count} 次",
     responseProcess: "思考过程",

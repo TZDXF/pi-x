@@ -902,8 +902,6 @@ export default {
     copyPrompt: "Copy prompt",
     executionDuration: "Elapsed {seconds}s",
     actualResponseModel: "Actual response model",
-    responseBilledCost: "Provider-reported billing for the last model response (USD)",
-    responseEstimatedCost: "Catalog cost estimate for the last model response (USD)",
     durationUnknown: "Elapsed time unknown",
     toolCallCount: "Tool calls: {count}",
     responseProcess: "Thinking process",
