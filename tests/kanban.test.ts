@@ -191,6 +191,7 @@ const code = ts.transpileModule(compiled.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const imports = {
+  "./KanbanCardActions.vue": { __esModule: true, default: passthrough },
   vue: { ...vue, vModelSelect: {} },
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key, locale: vue.ref("en") }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
@@ -309,6 +310,12 @@ async function harness(overrides: Record<string, any> = {}) {
 }
 
 describe("KanbanBoard", () => {
+  test("clicking a todo never opens the conversation panel", async () => {
+    const h = await harness({ cards: [card()] })
+    h.cards()[0].props.onClick()
+    expect(h.open).not.toHaveBeenCalled()
+  })
+
   test("running cards render live content while other columns retain their task preview", async () => {
     const h = await harness({
       cards: [
@@ -374,8 +381,8 @@ describe("KanbanBoard", () => {
   })
 
   test("cards stay clickable during conversation switches while hard navigation guards still apply", async () => {
-    const first = card({ id: "first" })
-    const second = card({ id: "second" })
+    const first = card({ id: "first", status: "idle" })
+    const second = card({ id: "second", status: "idle" })
     const h = await harness({ cards: [first, second] })
     h.cards()[0].props.onClick()
     h.state.busy = true

@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanTime } from "@/lib/kanbanTime"
+import KanbanCardActions from "./KanbanCardActions.vue"
 import {
   KANBAN_COLUMNS,
   filterKanbanCards,
@@ -232,60 +233,67 @@ async function submit() {
             @dragover="sorting.overColumn($event, column.id)"
             @drop="sorting.drop($event, column.id)"
           >
-            <button
+            <KanbanCardActions
               v-for="card in visibleCards(column.id)"
               :key="card.id"
-              type="button"
-              :data-kanban-card="card.id"
-              :aria-pressed="selectedId === card.id"
-              :disabled="navigationBusy"
-              :draggable="!navigationBusy"
-              :aria-description="t('kanban.reorderCard')"
-              aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-              class="block w-full min-w-0 space-y-2 rounded-lg border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-              :class="[
-                selectedId === card.id ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border/60',
-                {
-                  'opacity-50': sorting.source?.id === card.id,
-                  'border-t-primary border-t-2': sorting.target?.id === card.id && !sorting.target.after,
-                  'border-b-primary border-b-2': sorting.target?.id === card.id && sorting.target.after,
-                },
-              ]"
-              @dragstart="sorting.startDrag($event, card)"
-              @dragover="sorting.overCard($event, card)"
-              @dragend="sorting.endDrag"
-              @keydown="sorting.moveWithKeyboard($event, card)"
-              @click="!sorting.source && emit('open', card)"
+              :card="card"
+              :projects="availableProjects"
+              :disabled="navigationBusy || busy"
+              @open="emit('open', card)"
             >
-              <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
-              <span
-                class="text-xs leading-relaxed text-muted-foreground"
-                :class="card.status === 'running' ? 'block truncate' : 'line-clamp-2 whitespace-pre-wrap break-words'"
-                :title="previewFor(card)"
-                >{{ previewFor(card) }}</span
+              <button
+                type="button"
+                :data-kanban-card="card.id"
+                :aria-pressed="selectedId === card.id"
+                :disabled="navigationBusy"
+                :draggable="!navigationBusy"
+                :aria-description="t('kanban.reorderCard')"
+                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                class="block w-full min-w-0 space-y-2 rounded-lg border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                :class="[
+                  selectedId === card.id ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border/60',
+                  {
+                    'opacity-50': sorting.source?.id === card.id,
+                    'border-t-primary border-t-2': sorting.target?.id === card.id && !sorting.target.after,
+                    'border-b-primary border-b-2': sorting.target?.id === card.id && sorting.target.after,
+                  },
+                ]"
+                @dragstart="sorting.startDrag($event, card)"
+                @dragover="sorting.overCard($event, card)"
+                @dragend="sorting.endDrag"
+                @keydown="sorting.moveWithKeyboard($event, card)"
+                @click="!sorting.source && card.status !== 'todo' && emit('open', card)"
               >
-              <span v-if="card.failed" class="flex items-center gap-1 text-[10px] text-destructive">
-                <AlertCircle class="size-3" aria-hidden="true" />
-                {{ t("kanban.failed") }}
-              </span>
-              <span class="flex min-w-0 items-center gap-2 text-muted-foreground">
+                <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
                 <span
-                  v-if="card.project && !card.projectless"
-                  class="flex min-w-0 flex-1 items-center gap-1.5 text-[11px]"
+                  class="text-xs leading-relaxed text-muted-foreground"
+                  :class="card.status === 'running' ? 'block truncate' : 'line-clamp-2 whitespace-pre-wrap break-words'"
+                  :title="previewFor(card)"
+                  >{{ previewFor(card) }}</span
                 >
-                  <Folder class="size-3 shrink-0" aria-hidden="true" />
-                  <span class="truncate" :title="card.project">{{
-                    card.projectName || card.project || t("kanban.noProject")
-                  }}</span>
+                <span v-if="card.failed" class="flex items-center gap-1 text-[10px] text-destructive">
+                  <AlertCircle class="size-3" aria-hidden="true" />
+                  {{ t("kanban.failed") }}
                 </span>
-                <time
-                  class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
-                  :datetime="dateFor(card.updatedAt)?.toISOString()"
-                  :title="fullTime(card.updatedAt)"
-                  >{{ formatTime(card.updatedAt) }}</time
-                >
-              </span>
-            </button>
+                <span class="flex min-w-0 items-center gap-2 text-muted-foreground">
+                  <span
+                    v-if="card.project && !card.projectless"
+                    class="flex min-w-0 flex-1 items-center gap-1.5 text-[11px]"
+                  >
+                    <Folder class="size-3 shrink-0" aria-hidden="true" />
+                    <span class="truncate" :title="card.project">{{
+                      card.projectName || card.project || t("kanban.noProject")
+                    }}</span>
+                  </span>
+                  <time
+                    class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
+                    :datetime="dateFor(card.updatedAt)?.toISOString()"
+                    :title="fullTime(card.updatedAt)"
+                    >{{ formatTime(card.updatedAt) }}</time
+                  >
+                </span>
+              </button>
+            </KanbanCardActions>
             <p v-if="!groups[column.id].length" class="px-2 py-8 text-center text-xs text-muted-foreground">
               {{ t("kanban.emptyColumn") }}
             </p>
