@@ -143,6 +143,57 @@ test("a board todo's original prompt is not restored after its worker reserves a
   expect(composer.input.textInput.value).toBe("")
 })
 
+test.each(["streaming", "submitted", "bound"])(
+  "reopening a %s board task keeps the submitted prompt out of the composer",
+  async state => {
+    const id = `board-started-${sequence++}`
+    const session = reactive({
+      cwd: project,
+      runtimeId: id,
+      sessionFile: null,
+      isStreaming: false,
+      entries: [],
+    })
+    const workspace = reactive({
+      boardDrafts: {
+        [id]: { id, project, message: "Run this task", createdAt: 1, updatedAt: 1 },
+      },
+      upsertBoardDraft: vi.fn(),
+    })
+    function open() {
+      const bridge = ref(null)
+      const mounted = mountBrowserComposable(() => {
+        const options = useBoardComposerDraft(session, workspace, bridge)
+        const { initialDraft } = useComposerDraftSync(session, () => project, bridge, options)
+        const input = usePromptInputProvider({ initialInput: initialDraft, onSubmit: async () => {} })
+        bridge.value = reactive(input)
+        return input
+      })
+      cleanup.push(mounted.unmount)
+      return mounted
+    }
+
+    const first = open()
+    expect(first.result.textInput.value).toBe("Run this task")
+    await first.result.submitForm()
+    if (state === "streaming") session.isStreaming = true
+    else {
+      session.sessionFile = `${project}/started.jsonl`
+      if (state === "bound") workspace.boardDrafts[id].sessionFile = session.sessionFile
+      else session.entries.push({ kind: "user" })
+    }
+    await nextTick()
+    first.unmount()
+
+    const reopened = open()
+    expect(reopened.result.textInput.value).toBe("")
+    reopened.result.setTextInput("Unsent follow-up")
+    reopened.unmount()
+    expect(open().result.textInput.value).toBe("Unsent follow-up")
+    expect(workspace.boardDrafts[id].message).toBe("Run this task")
+  },
+)
+
 test.each(["draft text", ""])(
   "switching sessions restores image drafts with text %j using fresh preview URLs",
   async text => {
