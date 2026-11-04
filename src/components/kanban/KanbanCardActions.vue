@@ -25,6 +25,7 @@ const id = useId()
 const editing = ref(false)
 const saving = ref(false)
 const archiving = ref(false)
+const deleting = ref(false)
 const message = ref("")
 const project = ref("")
 const error = ref("")
@@ -121,6 +122,27 @@ async function archive() {
     archiving.value = false
   }
 }
+
+async function remove() {
+  if (props.disabled || saving.value || deleting.value || props.card.status !== "todo") return
+  deleting.value = true
+  try {
+    if (owner.value?.isStreaming || owner.value?.entries.some(entry => entry.kind === "user"))
+      throw new Error(t("kanban.draftUnavailable"))
+    if (draft.value && !draft.value.sessionFile) {
+      workspace.removeBoardDraft(draft.value.id)
+      await workspace.flushPersistence()
+    } else {
+      const queued = owner.value?.promptQueue[0]
+      if (!queued) throw new Error(t("kanban.draftUnavailable"))
+      owner.value!.removeQueuedPrompt(queued.id)
+    }
+  } catch (cause) {
+    ui.pushToast(String(cause), "error")
+  } finally {
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -129,7 +151,7 @@ async function archive() {
     class="kanban-card-actions relative min-w-0"
     :class="{ 'has-action': card.status === 'todo' || canArchive }"
   >
-    <slot />
+    <slot :edit="openEditor" :remove="remove" :busy="saving || deleting" />
     <Button
       v-if="card.status === 'todo'"
       type="button"

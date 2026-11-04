@@ -172,17 +172,37 @@ const dialog = vue.defineComponent({
         ? vue.h("div", { "data-dialog": true, onDismiss: () => emit("update:open", false) }, slots.default?.())
         : null,
 })
-const textarea = vue.defineComponent({
-  props: ["modelValue"],
-  emits: ["update:modelValue"],
-  setup:
-    (props, { attrs, emit }) =>
-    () =>
-      vue.h("textarea", {
-        ...attrs,
-        value: props.modelValue,
-        onInput: event => emit("update:modelValue", event.target.value),
-      }),
+const promptInput = vue.defineComponent({
+  props: ["bridge", "submit", "disabled"],
+  emits: ["update:bridge"],
+  setup(props, { emit, slots }) {
+    const bridge = vue.reactive({ textInput: "", files: [], isLoading: false })
+    emit("update:bridge", bridge)
+    return () =>
+      vue.h(
+        "form",
+        {
+          onSubmit: async event => {
+            event.preventDefault()
+            if (props.disabled || !bridge.textInput.trim()) return
+            try {
+              await props.submit({ text: bridge.textInput, files: bridge.files })
+            } catch {
+              /* Editor retains failed drafts. */
+            }
+          },
+        },
+        [
+          vue.h("textarea", {
+            value: bridge.textInput,
+            onInput: event => {
+              bridge.textInput = event.target.value
+            },
+          }),
+          slots.actions?.(),
+        ],
+      )
+  },
 })
 const source = readFileSync(new URL("../src/components/kanban/KanbanBoard.vue", import.meta.url), "utf8")
 const { descriptor } = parse(source)
@@ -191,7 +211,6 @@ const code = ts.transpileModule(compiled.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const imports = {
-  "./KanbanCardActions.vue": { __esModule: true, default: passthrough },
   vue: { ...vue, vModelSelect: {} },
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key, locale: vue.ref("en") }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
@@ -200,7 +219,37 @@ const imports = {
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
   "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
-  "@/components/ui/textarea": { Textarea: textarea },
+  "@/components/chat/ChatPromptInput.vue": { __esModule: true, default: promptInput },
+  "@/components/ModelThinkingSelect.vue": { __esModule: true, default: passthrough },
+  "@/components/chat/ImagePreviewContent.vue": { __esModule: true, default: passthrough },
+  "@/stores/session/modelSelection": {
+    createModelSelection: () => ({
+      desiredModelKey: vue.ref(null),
+      offlineDefaultModelKey: vue.ref(null),
+      availableThinking: vue.ref(["off"]),
+      thinkingLevel: vue.ref("off"),
+      loadOfflineModels: async () => {},
+      setDesiredModel() {},
+      setDesiredThinkingLevel() {},
+    }),
+  },
+  "./KanbanSessionMenu.vue": {
+    __esModule: true,
+    default: vue.defineComponent({
+      props: ["card", "disabled"],
+      emits: ["open", "export"],
+      setup:
+        (_, { slots }) =>
+        () =>
+          slots.default?.(),
+    }),
+  },
+  "./KanbanCardActions.vue": {
+    __esModule: true,
+    default: vue.defineComponent({
+      setup: (_, { slots }) => () => slots.default?.({ edit() {}, remove() {}, busy: false }),
+    }),
+  },
   "@/components/ui/dialog": {
     Dialog: dialog,
     DialogContent: passthrough,
@@ -407,7 +456,7 @@ describe("KanbanBoard", () => {
     await vue.nextTick()
     h.submit()
     await vue.nextTick()
-    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "other", message: "Task" })
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "other", message: "Task", thinkingLevel: "off" })
     h.board.value!.openCreate("missing")
     await vue.nextTick()
     h.all()
@@ -497,7 +546,8 @@ describe("KanbanBoard", () => {
     await h.fill("root", `  ${message}  `)
     const saved = h.submit()
     h.submit()
-    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "root", message: message.trim() })
+    await vue.nextTick()
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "root", message: message.trim(), thinkingLevel: "off" })
     await saved
     await vue.nextTick()
     expect(h.isDialogOpen()).toBe(false)
@@ -510,7 +560,7 @@ describe("KanbanBoard", () => {
     })
     await h.openCreate()
     await h.fill("root", "Keep this message")
-    h.submit()
+    const failed = h.submit()
     await vue.nextTick()
     h.submit()
     expect(h.create).toHaveBeenCalledOnce()
@@ -522,15 +572,17 @@ describe("KanbanBoard", () => {
     expect(h.isDialogOpen()).toBe(true)
     h.state.error = "Save failed"
     h.state.busy = false
+    await failed
     await vue.nextTick()
     expect(h.isDialogOpen()).toBe(true)
     expect(h.all().find(child => child.tag === "textarea")!.props.value).toBe("Keep this message")
     h.state.error = ""
     await vue.nextTick()
-    h.submit()
+    const retried = h.submit()
     await vue.nextTick()
     expect(h.create).toHaveBeenCalledTimes(2)
     h.state.busy = false
+    await retried
     await vue.nextTick()
     expect(h.isDialogOpen()).toBe(false)
   })

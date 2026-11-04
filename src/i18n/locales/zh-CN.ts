@@ -22,6 +22,8 @@ export default {
     messagePlaceholder: "描述需要完成的工作…",
     saveDraft: "保存待办",
     editDraft: "编辑待办",
+    edit: "编辑",
+    delete: "删除",
     openConversation: "打开会话",
     draftUnavailable: "此待办已开始或已移除，请关闭弹窗后重试。",
     startDraft: "开始待办",

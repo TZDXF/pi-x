@@ -16,6 +16,7 @@ ws.histories = {'/project': [
   {file:'/completed.jsonl',cwd:'/project',title:'完成会话'},
 ]}
 ws.upsertBoardDraft = draft => { ws.boardDrafts[draft.id] = draft }
+ws.removeBoardDraft = id => { delete ws.boardDrafts[id] }
 ws.flushPersistence = async () => {}
 ws.update = async (row,title,archived) => { row.archived = archived }
 ws.refresh = async () => {}
@@ -67,4 +68,23 @@ test("idle and completed cards show archive icons that do not open the conversat
     await expect(column.locator("[data-kanban-card]")).toHaveCount(0)
     await expect(page.locator("output")).toHaveAttribute("data-details-open", "false")
   }
+})
+
+test("todo context menu only edits and deletes the task without opening a conversation", async ({ page }) => {
+  await page.goto(harness.url)
+  const card = page.locator('[data-kanban-card="todo"]')
+  await card.click({ button: "right" })
+  const menu = page.getByRole("menu")
+  await expect(menu.getByRole("menuitem")).toHaveText(["编辑", "删除"])
+  await menu.getByRole("menuitem", { name: "编辑", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "编辑待办" })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole("textbox").fill("右键编辑后的待办")
+  await dialog.getByRole("button", { name: "保存待办", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(card).toContainText("右键编辑后的待办")
+  await card.click({ button: "right" })
+  await menu.getByRole("menuitem", { name: "删除", exact: true }).click()
+  await expect(card).toHaveCount(0)
+  await expect(page.locator("output")).toHaveAttribute("data-details-open", "false")
 })

@@ -9,6 +9,8 @@ import * as sessionIdentity from "@/lib/sessionIdentity"
 import { setSidebarSessionDragData } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { sidebarQueueTitle } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 import { sidebarSessionProject } from "@/components/workspace/sidebar/useSidebarSessionReveal"
+import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
+import { isRemoteProject } from "@/lib/ssh"
 
 // Compile the actual SFCs against a minimal Vue host; only external widgets/stores are stubbed.
 // This avoids browser/E2E dependencies while testing render branches and emitted events.
@@ -16,12 +18,18 @@ const directory = path.resolve("src/components/workspace/sidebar")
 const session = vue.reactive({ sessionFile: "saved.jsonl", cwd: "root" })
 const activeRuntimeId = vue.ref("pending-1")
 const workspace = {
+  histories: {} as Record<string, any[]>,
+  update: vi.fn(async () => {}),
+  refresh: vi.fn(async () => {}),
   isWorktree: (cwd: string) => cwd.endsWith("worktree"),
   projectRoot: () => "root",
   projectName: (cwd: string) => `name:${cwd}`,
   pinnedProjects: ["root"],
   togglePin: vi.fn(),
 }
+const duplicateSessionFile = vi.fn(async (_file: string) => {})
+const copyWithToast = vi.fn()
+const pushToast = vi.fn()
 const queue = vue.reactive([{ text: "saved prompt", sendAt: 61000 }])
 const runStatus = vue.ref<string | undefined>("running")
 const passthrough = {
@@ -63,7 +71,7 @@ const draggable = {
 const cache = new Map()
 const translate = vi.fn((key: string) => key)
 function loadComponent(filename: string) {
-  const file = path.resolve(directory, filename)
+  const file = filename.startsWith("@/") ? path.resolve("src", filename.slice(2)) : path.resolve(directory, filename)
   if (cache.has(file)) return cache.get(file)
   const source = readFileSync(file, "utf8")
   const { descriptor } = parse(source, { filename: file })
@@ -84,13 +92,57 @@ function loadComponent(filename: string) {
         useSessionStore: () => session,
         activeRuntimeId,
         findConversation: () => ({ promptQueue: queue, runtimeId: "saved-runtime" }),
-        useUiStore: () => ({ pushToast: vi.fn() }),
+        useUiStore: () => ({ pushToast }),
       }
     if (id === "@/stores/sessionRunStatus") return { sessionRunStatus: () => runStatus.value }
     if (id === "@/stores/workspace") return { useWorkspaceStore: () => workspace }
     if (id === "@/api/transport") return { isDesktop: true }
-    if (id === "@/api/piClient") return { openPath: vi.fn(async () => {}) }
+    if (id === "@/api/piClient") return { openPath: vi.fn(async () => {}), duplicateSessionFile }
+    if (id === "@/lib/clipboard") return { copyWithToast }
+    if (id === "@/lib/ssh") return { isRemoteProject }
+    if (id === "@/components/workspace/sidebar/useSidebarSessionActions") return { useSidebarSessionActions }
+    if (id === "@/components/ui/dialog")
+      return {
+        Dialog: {
+          props: ["open"],
+          setup:
+            (props, { slots }) =>
+            () =>
+              props.open ? slots.default?.() : null,
+        },
+        DialogContent: passthrough,
+        DialogHeader: passthrough,
+        DialogTitle: passthrough,
+      }
+    if (id === "@/components/ui/input")
+      return {
+        Input: {
+          props: ["modelValue"],
+          emits: ["update:modelValue"],
+          setup:
+            (props, { emit }) =>
+            () =>
+              vue.h("input", {
+                value: props.modelValue,
+                onInput: value => emit("update:modelValue", value),
+              }),
+        },
+      }
     if (id === "@/components/ui/button") return { Button: button }
+    if (id === "@/components/ui/context-menu")
+      return {
+        ContextMenu: passthrough,
+        ContextMenuContent: passthrough,
+        ContextMenuSeparator: passthrough,
+        ContextMenuItem: menuItem,
+        ContextMenuTrigger: {
+          props: ["disabled", "asChild"],
+          setup:
+            (props, { slots }) =>
+            () =>
+              vue.h("div", { "data-menu-disabled": props.disabled }, slots.default?.()),
+        },
+      }
     if (id.startsWith("@/components/ui/"))
       return new Proxy({}, { get: (_, name) => (String(name).endsWith("Item") ? menuItem : passthrough) })
     if (id.endsWith(".vue")) return { __esModule: true, default: loadComponent(id) }
@@ -415,4 +467,144 @@ test("a same-path remote row is active only in its own project", () => {
   expect(byClass(first, "session-row")[0].props["aria-current"]).toBe("page")
   expect(byClass(second, "session-row")[0].props["aria-current"]).toBeUndefined()
   session.cwd = "root"
+})
+
+const boardCard = {
+  id: "board-session",
+  file: "saved.jsonl",
+  project: "root",
+  cwd: "root/worktree",
+  projectName: "Project",
+  title: "Card title",
+  preview: "Card preview",
+  updatedAt: 1000,
+  status: "idle",
+}
+const menuButtons = root =>
+  find(root, item => item.tag === "button" && item.props.onClick && item.children.some(child => child.tag === "text"))
+const menuButton = (root, label) =>
+  find(root, item => item.tag === "button" && item.children.some(child => child.text === label))[0]
+
+test("board sessions share the list menu and act on the actual session file and worktree", async () => {
+  const open = vi.fn()
+  const exportFile = vi.fn()
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", {
+    card: boardCard,
+    onOpen: open,
+    onExport: exportFile,
+  })
+  expect(menuButtons(root)).toHaveLength(5)
+  menuButton(root, "workspace.duplicate").props.onClick()
+  await vi.waitFor(() => expect(workspace.refresh).toHaveBeenCalledWith("root/worktree"))
+  expect(duplicateSessionFile).toHaveBeenCalledWith("saved.jsonl")
+  menuButton(root, "workspace.copyLink").props.onClick()
+  expect(copyWithToast).toHaveBeenCalledWith({ pushToast }, "saved.jsonl", "workspace.linkCopied")
+  menuButton(root, "chat.export").props.onClick()
+  expect(exportFile).toHaveBeenCalledWith("saved.jsonl")
+  expect(open).not.toHaveBeenCalled()
+})
+
+test("board rename uses saved metadata and persists the trimmed title", async () => {
+  const row = { ...saved, cwd: boardCard.cwd, title: "Saved metadata title" }
+  workspace.histories[boardCard.cwd] = [row]
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", { card: boardCard })
+  menuButton(root, "workspace.rename").props.onClick()
+  await vue.nextTick()
+  const input = find(root, item => item.tag === "input")[0]
+  expect(input.props.value).toBe("Saved metadata title")
+  input.props.onInput("  New title  ")
+  await vue.nextTick()
+  await find(root, item => item.tag === "form")[0].props.onSubmit({ preventDefault() {} })
+  expect(workspace.update).toHaveBeenCalledWith(row, "New title", false)
+  expect(workspace.refresh).toHaveBeenCalledWith(boardCard.cwd)
+  await vue.nextTick()
+  expect(find(root, item => item.tag === "form")).toHaveLength(0)
+  workspace.histories = {}
+})
+
+test("board archive preserves the title and updates the actual worktree without opening the card", async () => {
+  const row = { ...saved, cwd: boardCard.cwd }
+  workspace.histories[boardCard.cwd] = [row]
+  const open = vi.fn()
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", { card: boardCard, onOpen: open })
+  menuButton(root, "workspace.archive").props.onClick()
+  await vi.waitFor(() => expect(workspace.refresh).toHaveBeenCalledWith(boardCard.cwd))
+  expect(workspace.update).toHaveBeenCalledWith(row, row.title, true)
+  expect(open).not.toHaveBeenCalled()
+  workspace.histories = {}
+})
+
+test("shared session menu restores archived sessions", () => {
+  const archive = vi.fn()
+  const root = mount("SidebarSavedSessionRow.vue", {
+    s: { ...saved, archived: true },
+    path: "root",
+    active: false,
+    disabled: false,
+    navigationDisabled: false,
+    query: "",
+    queueNow: 0,
+    worktree: false,
+    onArchive: archive,
+  })
+  menuButton(root, "workspace.restore").props.onClick()
+  expect(archive).toHaveBeenCalledWith({ ...saved, archived: true })
+})
+
+test("board remote sessions only offer open even when their cwd is a raw remote path", () => {
+  const open = vi.fn()
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", {
+    card: { ...boardCard, cwd: "/project", project: "ssh://dev@host:22/project" },
+    onOpen: open,
+  })
+  expect(menuButtons(root)).toHaveLength(1)
+  menuButton(root, "workspace.open").props.onClick()
+  expect(open).toHaveBeenCalledOnce()
+  expect(duplicateSessionFile).not.toHaveBeenCalled()
+})
+
+test("board drafts have no file actions and busy sessions disable the context trigger", () => {
+  const draft = mount("@/components/kanban/KanbanSessionMenu.vue", { card: { ...boardCard, file: undefined } })
+  expect(menuButtons(draft)).toHaveLength(0)
+  expect(find(draft, item => item.props["data-menu-disabled"] === true)).toHaveLength(1)
+  const busy = mount("@/components/kanban/KanbanSessionMenu.vue", { card: boardCard, disabled: true })
+  expect(find(busy, item => item.props["data-menu-disabled"] === true)).toHaveLength(1)
+})
+
+test.each([undefined, "reserved.jsonl"])("todo menus only offer edit and delete with session file %s", file => {
+  const edit = vi.fn()
+  const remove = vi.fn()
+  const open = vi.fn()
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", {
+    card: { ...boardCard, status: "todo", draftId: "draft", file },
+    onEdit: edit,
+    onDelete: remove,
+    onOpen: open,
+  })
+  expect(menuButtons(root)).toHaveLength(2)
+  expect(find(root, item => item.props["data-menu-disabled"] === true)).toHaveLength(0)
+  menuButton(root, "kanban.edit").props.onClick()
+  menuButton(root, "kanban.delete").props.onClick()
+  expect(edit).toHaveBeenCalledOnce()
+  expect(remove).toHaveBeenCalledOnce()
+  expect(open).not.toHaveBeenCalled()
+  expect(duplicateSessionFile).not.toHaveBeenCalled()
+  expect(workspace.update).not.toHaveBeenCalled()
+})
+
+test("busy todo cards disable their context trigger even without a session file", () => {
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", {
+    card: { ...boardCard, status: "todo", file: undefined },
+    disabled: true,
+  })
+  expect(find(root, item => item.props["data-menu-disabled"] === true)).toHaveLength(1)
+})
+
+test("board duplicate failures show an error without opening a conversation", async () => {
+  duplicateSessionFile.mockRejectedValueOnce(new Error("copy failed"))
+  const open = vi.fn()
+  const root = mount("@/components/kanban/KanbanSessionMenu.vue", { card: boardCard, onOpen: open })
+  menuButton(root, "workspace.duplicate").props.onClick()
+  await vi.waitFor(() => expect(pushToast).toHaveBeenCalledWith("Error: copy failed", "error"))
+  expect(open).not.toHaveBeenCalled()
 })

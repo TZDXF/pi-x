@@ -14,6 +14,7 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/t
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanTime } from "@/lib/kanbanTime"
+import KanbanSessionMenu from "./KanbanSessionMenu.vue"
 import KanbanCardActions from "./KanbanCardActions.vue"
 import {
   KANBAN_COLUMNS,
@@ -42,6 +43,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   "update:selectedProject": [project: string]
   open: [card: KanbanCard]
+  export: [file: string]
   create: [payload: KanbanCreatePayload]
   retry: []
   reorder: [column: KanbanStatus, ids: string[]]
@@ -279,12 +281,20 @@ async function submit(message: PromptInputMessage) {
             <KanbanCardActions
               v-for="card in visibleCards(column.id)"
               :key="card.id"
+              v-slot="{ edit, remove, busy: actionsBusy }"
               :card="card"
               :projects="availableProjects"
               :disabled="navigationBusy || busy"
               @open="emit('open', card)"
             >
-
+              <KanbanSessionMenu
+                :card="card"
+                :disabled="navigationBusy || busy || actionsBusy"
+                @edit="edit"
+                @delete="remove"
+                @open="emit('open', card)"
+                @export="emit('export', $event)"
+              >
                 <button
                   type="button"
                   :data-kanban-card="card.id"
@@ -339,6 +349,7 @@ async function submit(message: PromptInputMessage) {
                     >
                   </span>
                 </button>
+              </KanbanSessionMenu>
             </KanbanCardActions>
             <p v-if="!groups[column.id].length" class="px-2 py-8 text-center text-xs text-muted-foreground">
               {{ t("kanban.emptyColumn") }}

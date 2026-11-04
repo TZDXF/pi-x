@@ -391,9 +391,10 @@ function openBoardCard(card: KanbanCard) {
   }
 }
 
-async function createBoardDraft(input: { project: string; message: string }) {
+async function createBoardDraft(input: import("@/lib/kanban").KanbanCreatePayload) {
   if (creatingBoardDraft.value) return
   creatingBoardDraft.value = true
+  board.error = ""
   try {
     const draft = await board.createDraft(input)
     if (!draft) return
@@ -736,6 +737,7 @@ onUnmounted(() => {
                     workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
                 "
                 @open="openBoardCard"
+                @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
                 @retry="board.refresh"
               />

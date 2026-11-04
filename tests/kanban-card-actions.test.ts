@@ -13,6 +13,9 @@ const workspace = vue.reactive({
   upsertBoardDraft: vi.fn((draft: any) => {
     workspace.boardDrafts[draft.id] = draft
   }),
+  removeBoardDraft: vi.fn((id: string) => {
+    delete workspace.boardDrafts[id]
+  }),
   flushPersistence: vi.fn(async () => {}),
   update: vi.fn(async () => {}),
   refresh: vi.fn(async () => {}),
@@ -137,6 +140,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
   })
   const disabled = vue.ref(false)
   const open = vi.fn()
+  let actions: { edit(): void; remove(): Promise<void> }
   const app = renderer.createApp({
     render: () =>
       vue.h(
@@ -150,7 +154,12 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
           ],
           onOpen: open,
         },
-        { default: () => vue.h("button", { "data-card": true }) },
+        {
+          default: value => {
+            actions = value
+            return vue.h("button", { "data-card": true })
+          },
+        },
       ),
   })
   apps.push(app)
@@ -175,8 +184,56 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     await vue.nextTick()
   }
   const isEditing = () => all().some(n => n.tag === "dialog")
-  return { card, disabled, all, action, click, save, edit, isEditing, open }
+  const editFromMenu = async () => {
+    actions.edit()
+    await vue.nextTick()
+  }
+  const removeFromMenu = () => actions.remove()
+  return { card, disabled, all, action, click, save, edit, isEditing, open, editFromMenu, removeFromMenu }
 }
+
+test("todo menu editing reuses the existing editor and deletion removes only the chosen persisted draft", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Original" }
+  workspace.boardDrafts.other = { id: "other", project: "/project", message: "Keep" }
+  const h = await harness()
+  await h.editFromMenu()
+  expect(h.isEditing()).toBe(true)
+  await h.edit("Updated")
+  await h.save()
+  await h.removeFromMenu()
+  expect(workspace.removeBoardDraft).toHaveBeenCalledExactlyOnceWith("task")
+  expect(workspace.boardDrafts.task).toBeUndefined()
+  expect(workspace.boardDrafts.other.message).toBe("Keep")
+  expect(workspace.flushPersistence).toHaveBeenCalledTimes(2)
+  expect(h.open).not.toHaveBeenCalled()
+  expect(workspace.update).not.toHaveBeenCalled()
+})
+
+test("deleting a queued todo cancels the prompt without writing session metadata", async () => {
+  const removeQueuedPrompt = vi.fn()
+  owners.set("runtime", { entries: [], promptQueue: [{ id: 7, text: "Queued" }], removeQueuedPrompt })
+  const h = await harness({ draftId: undefined, runtimeId: "runtime", file: "/reserved.jsonl" })
+  await h.removeFromMenu()
+  expect(removeQueuedPrompt).toHaveBeenCalledExactlyOnceWith(7)
+  expect(workspace.removeBoardDraft).not.toHaveBeenCalled()
+  expect(workspace.update).not.toHaveBeenCalled()
+  expect(h.open).not.toHaveBeenCalled()
+})
+
+test("disabled or started tasks cannot be deleted through a stale todo menu", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Keep" }
+  const h = await harness()
+  h.disabled.value = true
+  await vue.nextTick()
+  await h.removeFromMenu()
+  expect(workspace.removeBoardDraft).not.toHaveBeenCalled()
+  h.disabled.value = false
+  await vue.nextTick()
+  owners.set("task", { isStreaming: true, entries: [], promptQueue: [] })
+  await h.removeFromMenu()
+  expect(workspace.removeBoardDraft).not.toHaveBeenCalled()
+  expect(pushToast).toHaveBeenCalledWith("Error: kanban.draftUnavailable", "error")
+})
 
 test("todo editing opens a dialog and saves only the chosen draft without opening or creating a conversation", async () => {
   const original = {

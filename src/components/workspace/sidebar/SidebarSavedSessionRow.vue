@@ -1,18 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, Copy, FileDown, Layers, Link, Pencil } from "@lucide/vue"
+import { Archive, Layers } from "@lucide/vue"
 import type { SessionMeta } from "@/api/piClient"
 import { findConversation } from "@/stores/conversations"
 import { sessionRunStatus } from "@/stores/sessionRunStatus"
 import { Button } from "@/components/ui/button"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import SessionContextMenuContent from "../SessionContextMenuContent.vue"
 import SidebarSessionStatus from "./SidebarSessionStatus.vue"
 import { sidebarSessionProject } from "./useSidebarSessionReveal"
 
@@ -94,23 +89,16 @@ const queue = computed(() => owner.value?.promptQueue)
         /></Button>
       </div>
     </ContextMenuTrigger>
-    <!-- 远程项目：右键菜单仅保留“打开”（契约 §2.4） -->
-    <ContextMenuContent v-if="remote">
-      <ContextMenuItem @select="emit('open', s)"
-        ><Link :size="14" class="size-auto shrink-0" />{{ t("workspace.open") }}</ContextMenuItem
-      ></ContextMenuContent
-    >
-    <ContextMenuContent v-else
-      ><ContextMenuItem @select="emit('rename', s)"
-        ><Pencil :size="14" class="size-auto shrink-0" />{{ t("workspace.rename") }}</ContextMenuItem
-      ><ContextMenuItem @select="emit('duplicate', s)"
-        ><Copy :size="14" class="size-auto shrink-0" />{{ t("workspace.duplicate") }}</ContextMenuItem
-      ><ContextMenuItem @select="emit('copyLink', s)"
-        ><Link :size="14" class="size-auto shrink-0" />{{ t("workspace.copyLink") }}</ContextMenuItem
-      ><ContextMenuSeparator /><ContextMenuItem @select="emit('export', s.file)"
-        ><FileDown :size="14" class="size-auto shrink-0" />{{ t("chat.export") }}</ContextMenuItem
-      ></ContextMenuContent
-    >
+    <SessionContextMenuContent
+      :remote="remote"
+      :archived="s.archived"
+      @open="emit('open', s)"
+      @rename="emit('rename', s)"
+      @duplicate="emit('duplicate', s)"
+      @copy-link="emit('copyLink', s)"
+      @export="emit('export', s.file)"
+      @archive="emit('archive', s)"
+    />
   </ContextMenu>
 </template>
 

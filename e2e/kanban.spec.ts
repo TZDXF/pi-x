@@ -4,6 +4,7 @@ import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
 const html = `<!doctype html><html><body><div id="app"></div><script type="module">
 import { createApp, h, ref, Transition } from 'vue'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import KanbanBoard from '/src/components/kanban/KanbanBoard.vue'
 import KanbanDetailsPanel from '/src/components/kanban/KanbanDetailsPanel.vue'
 import { kanbanColumnOrderKey } from '/src/lib/kanban'
@@ -13,9 +14,10 @@ const columnOrder = ref(JSON.parse(localStorage.getItem('kanban-test-order') || 
 const selectedProject = ref('')
 const selectedId = ref()
 const detailsOpen = ref(false)
+const exportedFile = ref('')
 const enableDetails = new URLSearchParams(location.search).has('details')
 const cards = Array.from({length:40}, (_,i) => ({
-  id:'task-'+i,project:'root',projectName:'Project',status:'todo',updatedAt:Date.now()-300000,
+  id:'task-'+i,file:'/sessions/task-'+i+'.jsonl',cwd:'root',project:'root',projectName:'Project',status:'todo',updatedAt:Date.now()-300000,
   title:('任务 '+i+' 的完整标题 ').repeat(15),preview:Array(12).fill('这是卡片内容，第'+i+'项。').join(String.fromCharCode(10)),
 }))
 cards.push({...cards[0], id:'running', status:'running'})
@@ -25,16 +27,17 @@ createApp({
     cards,projects:[{value:'root',label:'Project'}],selectedProject:selectedProject.value,
     selectedId:detailsOpen.value ? selectedId.value : undefined,
     onOpen:card => { if (enableDetails) { selectedId.value=card.id; detailsOpen.value=true } },
+    onExport:file => { exportedFile.value=file },
     columnOrder:columnOrder.value,
     'onUpdate:selectedProject':value => {selectedProject.value=value},
     onReorder:(column,ids) => {
       columnOrder.value={...columnOrder.value,[kanbanColumnOrderKey(selectedProject.value,column)]:ids}
       localStorage.setItem('kanban-test-order',JSON.stringify(columnOrder.value))
     },
-  }), h(Transition, {name:'kanban-details'}, {default: () => detailsOpen.value ? h(KanbanDetailsPanel, {}, {
+  }), h('output', {'data-exported-file': exportedFile.value}), h(Transition, {name:'kanban-details'}, {default: () => detailsOpen.value ? h(KanbanDetailsPanel, {}, {
     default: () => h('button', {onClick:() => {detailsOpen.value=false}}, '关闭详情'),
   }) : null})]),
-}).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
+}).use(createPinia()).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
 </script></body></html>`
 
 let harness: VueHarness
@@ -42,6 +45,28 @@ test.beforeAll(async () => {
   harness = await startVueHarness({ name: "kanban", port: 1531, html })
 })
 test.afterAll(async () => harness?.close())
+
+test("right-click opens shared session actions without selecting the card", async ({ page }) => {
+  await page.goto(`${harness.url}?details`)
+  const card = page.locator('[data-kanban-card="running"]')
+  await card.click({ button: "right" })
+  const menu = page.getByRole("menu")
+  await expect(menu.getByRole("menuitem")).toHaveText(["重命名", "复制会话", "复制链接", "导出", "归档会话"])
+  await expect(page.locator("#kanban-details")).toHaveCount(0)
+  await menu.getByRole("menuitem", { name: "导出", exact: true }).click()
+  await expect(page.locator("output")).toHaveAttribute("data-exported-file", "/sessions/task-0.jsonl")
+  await expect(page.locator("#kanban-details")).toHaveCount(0)
+
+  await card.click({ button: "right" })
+  await menu.getByRole("menuitem", { name: "重命名", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toBeVisible()
+  expect((await dialog.getByRole("textbox").inputValue()).trim()).toBe(
+    await card.locator(":scope > span").first().getAttribute("title"),
+  )
+  await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+})
 
 test("horizontal wheel scrolls over cards and column whitespace while vertical wheel stays in its column", async ({
   page,

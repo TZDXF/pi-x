@@ -22,6 +22,8 @@ export default {
     messagePlaceholder: "Describe the work to do…",
     saveDraft: "Save task",
     editDraft: "Edit task",
+    edit: "Edit",
+    delete: "Delete",
     openConversation: "Open conversation",
     draftUnavailable: "This task has started or was removed. Close the dialog and try again.",
     startDraft: "Start task",

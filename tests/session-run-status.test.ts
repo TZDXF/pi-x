@@ -390,10 +390,15 @@ test("session rows expose their actions through a right-click context menu", () 
   expect(row).toMatch(/<ContextMenuTrigger as-child :disabled="disabled">/)
   for (const action of ["emit('rename', s)", "emit('duplicate', s)", "emit('copyLink', s)", "emit('export', s.file)"])
     expect(row.includes(action), `menu keeps ${action}`).toBeTruthy()
-  // 归档是行内快捷按钮，hover 时显示，不进右键菜单。
+  // 归档同时保留行内快捷按钮和共享右键菜单入口。
   expect(row).toMatch(/class="session-archive hover-action /)
   expect(row.includes("@click=\"emit('archive', s)\""), "row keeps the hover archive button").toBeTruthy()
-  expect(row).not.toMatch(/<ContextMenuItem @select="emit\('archive'/)
+  expect(row).toContain("@archive=\"emit('archive', s)\"")
+  const menu = readFileSync(
+    new URL("../src/components/workspace/SessionContextMenuContent.vue", import.meta.url),
+    "utf8",
+  )
+  expect(menu).toContain("@select=\"emit('archive')\"")
 })
 
 test("project heading exposes its actions through a right-click context menu", () => {
