@@ -1,4 +1,12 @@
 import { samePath } from "@/lib/paths"
+import type { ThinkingLevel } from "@/api/protocol"
+
+export interface BoardDraftAttachment {
+  filename?: string
+  mediaType: string
+  /** Durable inline bytes; object URLs are owned by the editor. */
+  url: string
+}
 
 export interface ProjectGroup {
   name: string
@@ -13,6 +21,9 @@ export interface BoardDraft {
   updatedAt: number
   sessionFile?: string
   runtimeId?: string
+  modelKey?: string
+  thinkingLevel?: ThinkingLevel
+  attachments?: BoardDraftAttachment[]
 }
 export interface SessionActivity {
   file: string

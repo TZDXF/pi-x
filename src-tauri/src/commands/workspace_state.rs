@@ -38,6 +38,20 @@ pub struct BoardDraft {
     session_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<BoardDraftAttachment>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardDraftAttachment {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    media_type: String,
+    url: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -589,6 +603,25 @@ mod tests {
         let state = update(&path, patch(json!({"boardDrafts": {"a": null}}))).unwrap();
         assert!(!state.board_drafts.contains_key("a"));
         assert!(state.board_drafts.contains_key("b"));
+        cleanup(&path);
+    }
+
+    #[test]
+    fn board_draft_composer_options_and_attachment_bytes_survive_restart() {
+        let path = path();
+        let mut value = draft("image-task");
+        value["modelKey"] = json!("test/reasoner");
+        value["thinkingLevel"] = json!("high");
+        value["attachments"] = json!([{
+            "filename": "photo.png", "mediaType": "image/png",
+            "url": "data:image/png;base64,aGVsbG8="
+        }]);
+        let state = update(&path, patch(json!({"boardDrafts": {"image-task": value}}))).unwrap();
+        let saved = &state.board_drafts["image-task"];
+        assert_eq!(saved.model_key.as_deref(), Some("test/reasoner"));
+        assert_eq!(saved.thinking_level.as_deref(), Some("high"));
+        assert_eq!(saved.attachments[0].url, "data:image/png;base64,aGVsbG8=");
+        assert_eq!(read(&path).unwrap(), state);
         cleanup(&path);
     }
 

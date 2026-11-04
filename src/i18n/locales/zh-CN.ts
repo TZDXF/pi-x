@@ -15,7 +15,7 @@ export default {
     noProject: "无项目",
     noProjects: "添加项目后即可新建待办。",
     create: "新建待办",
-    createDescription: "选择项目并填写消息，保存到待办后可随时开始执行。",
+    createDescription: "选择项目，填写任务消息或添加附件，可设置模型和思考强度，保存后随时开始执行。",
     project: "项目",
     selectProject: "请选择项目",
     draftMessage: "任务消息",

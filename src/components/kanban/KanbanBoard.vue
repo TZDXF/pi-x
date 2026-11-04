@@ -4,7 +4,13 @@ import { useI18n } from "vue-i18n"
 import { AlertCircle, ChevronDown, Folder, LoaderCircle, Plus, RotateCcw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
+import ChatPromptInput from "@/components/chat/ChatPromptInput.vue"
+import PromptInputBridge from "@/components/PromptInputBridge.vue"
+import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
+import ImagePreviewContent from "@/components/chat/ImagePreviewContent.vue"
+import { createModelSelection } from "@/stores/session/modelSelection"
+import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanTime } from "@/lib/kanbanTime"
@@ -63,7 +69,18 @@ const idlePageSize = 30
 const idleLimit = ref(idlePageSize)
 const createOpen = ref(false)
 const draftProject = ref("")
-const draftMessage = ref("")
+const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
+const previewImage = ref<string | null>(null)
+const models = ref<Model[]>([])
+const modelSelection = createModelSelection(ref<SessionState | null>(null), models)
+const { desiredModelKey, offlineDefaultModelKey, availableThinking, thinkingLevel } = modelSelection
+const modelKey = computed({
+  get: () => desiredModelKey.value || offlineDefaultModelKey.value || "",
+  set: (key: string) => modelSelection.setDesiredModel(key),
+})
+function setThinkingLevel(level: string) {
+  modelSelection.setDesiredThinkingLevel(level as ThinkingLevel)
+}
 const submitted = ref(false)
 const now = ref(Date.now())
 let timeTicker: ReturnType<typeof setInterval> | undefined
@@ -76,7 +93,8 @@ const canCreate = computed(
   () =>
     !createBusy.value &&
     availableProjects.value.some(project => project.value === draftProject.value) &&
-    !!draftMessage.value.trim(),
+    (!!bridge.value?.textInput.trim() || !!bridge.value?.files.length) &&
+    !bridge.value?.isLoading,
 )
 const statusColor: Record<KanbanStatus, string> = {
   todo: "bg-muted-foreground",
@@ -99,12 +117,6 @@ const dateFormatter = computed(
 watch(
   () => props.selectedProject,
   () => (idleLimit.value = idlePageSize),
-)
-watch(
-  () => props.busy,
-  (busy, previous) => {
-    if (previous && !busy && submitted.value) finishCreate()
-  },
 )
 
 function visibleCards(status: KanbanStatus) {
@@ -152,23 +164,54 @@ function setCreateOpen(open: boolean) {
 /** Parent title-bar actions may open creation with an optional project preset. */
 function openCreate(project = props.selectedProject) {
   draftProject.value = availableProjects.value.some(option => option.value === project) ? project : ""
-  draftMessage.value = ""
+  void modelSelection.loadOfflineModels()
+  createError.value = ""
   createOpen.value = true
 }
 
-function finishCreate() {
-  submitted.value = false
-  if (!props.error) createOpen.value = false
+function inputError(error: { code: string }) {
+  if (error.code === "attachment_read_error") createError.value = t("chat.attachmentReadFailed")
 }
+const createError = ref("")
 
-async function submit() {
-  if (!canCreate.value) return
-  // Lock synchronously: the parent's busy prop is only reflected on the next render.
+async function submit(message: PromptInputMessage) {
+  if (
+    createBusy.value ||
+    !availableProjects.value.some(project => project.value === draftProject.value) ||
+    (!message.text.trim() && !message.files.length)
+  )
+    throw new Error(t("kanban.createDescription"))
+  // The shared input waits for this promise and restores text/files on failure.
   submitted.value = true
-  emit("create", { project: draftProject.value, message: draftMessage.value.trim() })
-  await nextTick()
-  // A parent may save synchronously without supplying busy; async parents hold the dialog open.
-  if (!props.busy && submitted.value) finishCreate()
+  createError.value = ""
+  try {
+    // PromptInput has already converted original files to durable data URLs.
+    const attachments = message.files.map(({ filename, mediaType, url }) => ({ filename, mediaType, url }))
+    emit("create", {
+      project: draftProject.value,
+      message: message.text.trim(),
+      ...(modelKey.value ? { modelKey: modelKey.value } : {}),
+      thinkingLevel: thinkingLevel.value,
+      ...(attachments.length ? { attachments } : {}),
+    })
+    await nextTick()
+    if (props.busy)
+      await new Promise<void>(resolve => {
+        const stop = watch(
+          () => props.busy,
+          busy => {
+            if (!busy) {
+              stop()
+              resolve()
+            }
+          },
+        )
+      })
+    if (props.error) throw new Error(props.error)
+    createOpen.value = false
+  } finally {
+    submitted.value = false
+  }
 }
 </script>
 
@@ -241,58 +284,61 @@ async function submit() {
               :disabled="navigationBusy || busy"
               @open="emit('open', card)"
             >
-              <button
-                type="button"
-                :data-kanban-card="card.id"
-                :aria-pressed="selectedId === card.id"
-                :disabled="navigationBusy"
-                :draggable="!navigationBusy"
-                :aria-description="t('kanban.reorderCard')"
-                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-                class="block w-full min-w-0 space-y-2 rounded-lg border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-                :class="[
-                  selectedId === card.id ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border/60',
-                  {
-                    'opacity-50': sorting.source?.id === card.id,
-                    'border-t-primary border-t-2': sorting.target?.id === card.id && !sorting.target.after,
-                    'border-b-primary border-b-2': sorting.target?.id === card.id && sorting.target.after,
-                  },
-                ]"
-                @dragstart="sorting.startDrag($event, card)"
-                @dragover="sorting.overCard($event, card)"
-                @dragend="sorting.endDrag"
-                @keydown="sorting.moveWithKeyboard($event, card)"
-                @click="!sorting.source && card.status !== 'todo' && emit('open', card)"
-              >
-                <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
-                <span
-                  class="text-xs leading-relaxed text-muted-foreground"
-                  :class="card.status === 'running' ? 'block truncate' : 'line-clamp-2 whitespace-pre-wrap break-words'"
-                  :title="previewFor(card)"
-                  >{{ previewFor(card) }}</span
+
+                <button
+                  type="button"
+                  :data-kanban-card="card.id"
+                  :aria-pressed="selectedId === card.id"
+                  :disabled="navigationBusy"
+                  :draggable="!navigationBusy"
+                  :aria-description="t('kanban.reorderCard')"
+                  aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                  class="block w-full min-w-0 space-y-2 rounded-lg border bg-card p-3 text-left text-card-foreground shadow-xs transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                  :class="[
+                    selectedId === card.id ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border/60',
+                    {
+                      'opacity-50': sorting.source?.id === card.id,
+                      'border-t-primary border-t-2': sorting.target?.id === card.id && !sorting.target.after,
+                      'border-b-primary border-b-2': sorting.target?.id === card.id && sorting.target.after,
+                    },
+                  ]"
+                  @dragstart="sorting.startDrag($event, card)"
+                  @dragover="sorting.overCard($event, card)"
+                  @dragend="sorting.endDrag"
+                  @keydown="sorting.moveWithKeyboard($event, card)"
+                  @click="!sorting.source && card.status !== 'todo' && emit('open', card)"
                 >
-                <span v-if="card.failed" class="flex items-center gap-1 text-[10px] text-destructive">
-                  <AlertCircle class="size-3" aria-hidden="true" />
-                  {{ t("kanban.failed") }}
-                </span>
-                <span class="flex min-w-0 items-center gap-2 text-muted-foreground">
+                  <span class="block truncate text-sm font-medium" :title="titleFor(card)">{{ titleFor(card) }}</span>
                   <span
-                    v-if="card.project && !card.projectless"
-                    class="flex min-w-0 flex-1 items-center gap-1.5 text-[11px]"
+                    class="text-xs leading-relaxed text-muted-foreground"
+                    :class="
+                      card.status === 'running' ? 'block truncate' : 'line-clamp-2 whitespace-pre-wrap break-words'
+                    "
+                    :title="previewFor(card)"
+                    >{{ previewFor(card) }}</span
                   >
-                    <Folder class="size-3 shrink-0" aria-hidden="true" />
-                    <span class="truncate" :title="card.project">{{
-                      card.projectName || card.project || t("kanban.noProject")
-                    }}</span>
+                  <span v-if="card.failed" class="flex items-center gap-1 text-[10px] text-destructive">
+                    <AlertCircle class="size-3" aria-hidden="true" />
+                    {{ t("kanban.failed") }}
                   </span>
-                  <time
-                    class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
-                    :datetime="dateFor(card.updatedAt)?.toISOString()"
-                    :title="fullTime(card.updatedAt)"
-                    >{{ formatTime(card.updatedAt) }}</time
-                  >
-                </span>
-              </button>
+                  <span class="flex min-w-0 items-center gap-2 text-muted-foreground">
+                    <span
+                      v-if="card.project && !card.projectless"
+                      class="flex min-w-0 flex-1 items-center gap-1.5 text-[11px]"
+                    >
+                      <Folder class="size-3 shrink-0" aria-hidden="true" />
+                      <span class="truncate" :title="card.project">{{
+                        card.projectName || card.project || t("kanban.noProject")
+                      }}</span>
+                    </span>
+                    <time
+                      class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
+                      :datetime="dateFor(card.updatedAt)?.toISOString()"
+                      :title="fullTime(card.updatedAt)"
+                      >{{ formatTime(card.updatedAt) }}</time
+                    >
+                  </span>
+                </button>
             </KanbanCardActions>
             <p v-if="!groups[column.id].length" class="px-2 py-8 text-center text-xs text-muted-foreground">
               {{ t("kanban.emptyColumn") }}
@@ -313,12 +359,12 @@ async function submit() {
     </div>
 
     <Dialog :open="createOpen" @update:open="setCreateOpen">
-      <DialogContent :show-close-button="false" class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent :show-close-button="false" class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{{ t("kanban.create") }}</DialogTitle>
           <DialogDescription>{{ t("kanban.createDescription") }}</DialogDescription>
         </DialogHeader>
-        <form class="min-w-0 space-y-4" @submit.prevent="submit">
+        <div class="min-w-0 space-y-4">
           <label class="block space-y-2 text-sm font-medium" :for="`${id}-project`">
             <span>{{ t("kanban.project") }}</span>
             <select
@@ -334,29 +380,43 @@ async function submit() {
               </option>
             </select>
           </label>
-          <label class="block space-y-2 text-sm font-medium" :for="`${id}-message`">
-            <span>{{ t("kanban.draftMessage") }}</span>
-            <Textarea
-              :id="`${id}-message`"
-              v-model="draftMessage"
-              required
+          <div class="space-y-2">
+            <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
+            <ChatPromptInput
+              v-model:bridge="bridge"
               :disabled="createBusy"
-              class="min-h-36 max-h-[45dvh] resize-y overflow-y-auto"
               :placeholder="t('kanban.messagePlaceholder')"
-            />
-          </label>
-          <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
-          <div class="flex justify-end gap-2">
-            <Button type="button" variant="outline" :disabled="createBusy" @click="setCreateOpen(false)">{{
-              t("kanban.cancel")
-            }}</Button>
-            <Button type="submit" :disabled="!canCreate">
-              <LoaderCircle v-if="createBusy" class="size-3.5 animate-spin" aria-hidden="true" />
-              {{ t(createBusy ? "kanban.saving" : "kanban.saveDraft") }}
-            </Button>
+              :submit="submit"
+              @error="inputError"
+              @preview-image="previewImage = $event"
+            >
+              <template #model>
+                <ModelThinkingSelect
+                  v-model="modelKey"
+                  :thinking-level="thinkingLevel"
+                  :available-thinking="availableThinking"
+                  :models="models"
+                  :disabled="createBusy || !models.length"
+                  @update:thinking-level="setThinkingLevel"
+                />
+              </template>
+              <template #actions>
+                <Button type="button" variant="ghost" :disabled="createBusy" @click="setCreateOpen(false)">
+                  {{ t("kanban.cancel") }}
+                </Button>
+                <Button type="submit" :disabled="!canCreate">
+                  <LoaderCircle v-if="createBusy" class="size-3.5 animate-spin" aria-hidden="true" />
+                  {{ t(createBusy ? "kanban.saving" : "kanban.saveDraft") }}
+                </Button>
+              </template>
+            </ChatPromptInput>
           </div>
-        </form>
+          <p v-if="createError || error" role="alert" class="text-sm text-destructive">{{ createError || error }}</p>
+        </div>
       </DialogContent>
+    </Dialog>
+    <Dialog :open="!!previewImage" @update:open="previewImage = null">
+      <ImagePreviewContent v-if="previewImage" :src="previewImage" :alt="t('chat.previewImage')" />
     </Dialog>
   </section>
 </template>

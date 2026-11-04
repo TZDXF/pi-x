@@ -26,6 +26,7 @@ export async function startVueHarness(options: VueHarnessOptions): Promise<VueHa
   const server = await createServer({
     configFile: path.join(projectRoot, "vite.config.ts"),
     root: projectRoot,
+    cacheDir: path.join(projectRoot, "node_modules/.vite-e2e", options.name),
     server: { port: options.port, strictPort: true },
     plugins: [
       {

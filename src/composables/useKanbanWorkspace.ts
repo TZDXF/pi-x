@@ -4,7 +4,7 @@ import { sessionRunStatus, sessionActivitySnapshot } from "@/stores/sessionRunSt
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { createUuid } from "@/lib/uuid"
-import type { KanbanCard, KanbanStatus } from "@/lib/kanban"
+import type { KanbanCard, KanbanCreatePayload, KanbanStatus } from "@/lib/kanban"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
 import type { BoardDraft } from "@/lib/workspaceState"
 import type { useWorkspaceStore } from "@/stores/workspace"
@@ -190,12 +190,26 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
       selectedProject.value = ""
   })
 
-  async function createDraft(input: { project: string; message: string }): Promise<BoardDraft | null> {
+  async function createDraft(input: KanbanCreatePayload): Promise<BoardDraft | null> {
     const project = normalizeProjectPath(input.project)
     const message = input.message.trim()
-    if (!project || !message || !projects.value.some(item => samePath(item.value, project))) return null
+    if (
+      !project ||
+      (!message && !input.attachments?.length) ||
+      !projects.value.some(item => samePath(item.value, project))
+    )
+      return null
     const timestamp = Date.now()
-    const draft: BoardDraft = { id: createUuid(), project, message, createdAt: timestamp, updatedAt: timestamp }
+    const draft: BoardDraft = {
+      id: createUuid(),
+      project,
+      message,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...(input.modelKey ? { modelKey: input.modelKey } : {}),
+      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+    }
     workspace.upsertBoardDraft(draft)
     await workspace.flushPersistence()
     return draft
@@ -204,6 +218,10 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
   function draftConversation(draft: BoardDraft) {
     const owner = sessionFor(draft.runtimeId || draft.id)
     owner.cwd = draft.project
+    if (!owner.started && !owner.entries.length) {
+      if (draft.modelKey) owner.setDesiredModel(draft.modelKey)
+      if (draft.thinkingLevel) owner.setDesiredThinkingLevel(draft.thinkingLevel)
+    }
     if (!owner.started) void owner.loadOfflineModels()
     return owner
   }

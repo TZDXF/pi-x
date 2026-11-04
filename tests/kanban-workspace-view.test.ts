@@ -37,6 +37,8 @@ function harness() {
           isCompacting: false,
           retryInfo: null,
           loadOfflineModels: vi.fn(async () => {}),
+          setDesiredModel: vi.fn(),
+          setDesiredThinkingLevel: vi.fn(),
         }),
       )
     return owners.get(id)
@@ -271,4 +273,30 @@ test("a delayed first prompt created in the ordinary layout appears as a todo wi
   expect(board.cards.value).toHaveLength(1)
   expect(board.cards.value[0]).toMatchObject({ status: "todo", title: "Delayed task", runtimeId: owner.runtimeId })
   expect(owner.entries).toEqual([])
+})
+
+test("attachment-only todos persist model choices without starting pi and restore them on opening", async () => {
+  const { board, workspace, sessionFor } = harness()
+  const attachments = [{ filename: "photo.png", mediaType: "image/png", url: "data:image/png;base64,aGVsbG8=" }]
+  const draft = await board.createDraft({
+    project: "/root",
+    message: "  ",
+    modelKey: "test/reasoner",
+    thinkingLevel: "high",
+    attachments,
+  })
+  expect(sessionFor).not.toHaveBeenCalled()
+  expect(workspace.boardDrafts[draft.id]).toMatchObject({
+    message: "",
+    modelKey: "test/reasoner",
+    thinkingLevel: "high",
+    attachments,
+  })
+  expect(board.cards.value[0].status).toBe("todo")
+  const owner = board.draftConversation(draft)
+  expect(owner.setDesiredModel).toHaveBeenCalledWith("test/reasoner")
+  expect(owner.setDesiredThinkingLevel).toHaveBeenCalledWith("high")
+  expect(owner.loadOfflineModels).toHaveBeenCalledOnce()
+  expect(owner.entries).toEqual([])
+  expect(await board.createDraft({ project: "/missing", message: "", attachments })).toBeNull()
 })

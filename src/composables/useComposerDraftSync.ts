@@ -17,7 +17,7 @@ export function useComposerDraftSync<B extends ComposerDraftBridge>(
   session: SessionStore,
   project: () => string,
   bridge: Ref<B | null>,
-  options: { scope?: string; initialText?: string } = {},
+  options: { scope?: string; initialText?: string; initialFiles?: File[] } = {},
 ) {
   const draftFile = ref<string | null>(session.sessionFile)
   const draftProject = () => session.cwd || project()
@@ -26,6 +26,7 @@ export function useComposerDraftSync<B extends ComposerDraftBridge>(
   const attachmentFiles = () =>
     (bridge.value?.files ?? []).map(attachment => attachment.file).filter((file): file is File => !!file)
 
+  let restored = false
   function restoreDraft() {
     const composer = bridge.value
     if (!composer) return
@@ -35,7 +36,9 @@ export function useComposerDraftSync<B extends ComposerDraftBridge>(
       composerDraftText(draftProject(), draftTarget()) ||
       (!session.sessionFile && !draftFile.value ? options.initialText : "") ||
       ""
-    const files = composerDraftFiles(draftProject(), draftTarget())
+    const savedFiles = composerDraftFiles(draftProject(), draftTarget())
+    const files = savedFiles.length ? savedFiles : !restored ? (options.initialFiles ?? []) : []
+    restored = true
     if (!composer.textInput && text) composer.setTextInput(text)
     if (!composer.files.length && files.length) composer.addFiles(files)
   }

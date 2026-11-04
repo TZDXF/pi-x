@@ -1,4 +1,5 @@
 import type { KanbanLivePreview } from "@/lib/kanbanLivePreview"
+import type { BoardDraft } from "@/lib/workspaceState"
 
 export const KANBAN_COLUMNS = [
   { id: "todo", labelKey: "kanban.todo" },
@@ -43,7 +44,7 @@ export interface KanbanCardSource extends Omit<KanbanCard, "title" | "preview"> 
   archived?: boolean
 }
 
-export interface KanbanCreatePayload {
+export interface KanbanCreatePayload extends Pick<BoardDraft, "modelKey" | "thinkingLevel" | "attachments"> {
   project: string
   message: string
 }
