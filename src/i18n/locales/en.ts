@@ -15,7 +15,8 @@ export default {
     noProject: "No project",
     noProjects: "Add a project to create tasks.",
     create: "New task",
-    createDescription: "Choose a project, add a message or attachments, and select a model and thinking level. Save the task to start it later.",
+    createDescription:
+      "Choose a project, add a message or attachments, and select a model and thinking level. Save the task to start it later.",
     project: "Project",
     selectProject: "Select a project",
     draftMessage: "Task message",

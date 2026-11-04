@@ -247,7 +247,10 @@ const imports = {
   "./KanbanCardActions.vue": {
     __esModule: true,
     default: vue.defineComponent({
-      setup: (_, { slots }) => () => slots.default?.({ edit() {}, remove() {}, busy: false }),
+      setup:
+        (_, { slots }) =>
+        () =>
+          slots.default?.({ edit() {}, remove() {}, busy: false }),
     }),
   },
   "@/components/ui/dialog": {
