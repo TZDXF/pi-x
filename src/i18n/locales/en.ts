@@ -654,7 +654,6 @@ export default {
 
   welcome: {
     subtitle: "Your local AI coding workspace",
-    connecting: "Connecting to the local runtime…",
     noPiTitle: "pi CLI not found",
     noPiDesc:
       "PiX drives {code} as a child process. Install the pi CLI (requires Node.js), or point PiX at an existing binary below.",

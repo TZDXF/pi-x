@@ -636,7 +636,6 @@ export default {
 
   welcome: {
     subtitle: "你的本地 AI 编程工作区",
-    connecting: "正在连接本地运行环境…",
     noPiTitle: "未找到 pi CLI",
     noPiDesc: "PiX 以子进程方式驱动 {code}。请安装 pi CLI（需要 Node.js），或在下方指定已有的可执行文件路径。",
     pathPlaceholder: "自定义 pi 路径，例如 C:\\Users\\you\\AppData\\Roaming\\npm\\pi.cmd",

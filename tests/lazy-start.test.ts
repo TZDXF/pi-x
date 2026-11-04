@@ -21,9 +21,9 @@ import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import * as sessionIdentity from "@/lib/sessionIdentity"
 import * as sshTrust from "@/lib/sshTrust"
 
-async function loadVueSetup(source, require) {
+async function loadVueSetup(source, require, props = {}, inlineTemplate = false) {
   const { descriptor } = parse(source, { filename: "App.vue" })
-  const compiled = compileScript(descriptor, { id: "app-test" }).content
+  const compiled = compileScript(descriptor, { id: "app-test", inlineTemplate }).content
   const output = transpileModule(compiled, {
     compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
   }).outputText
@@ -36,7 +36,7 @@ async function loadVueSetup(source, require) {
     "App.vue",
     import.meta.dirname,
   )
-  return module.exports.default.setup({}, { expose: () => {}, emit: () => {} })
+  return module.exports.default.setup(props, { expose: () => {}, emit: () => {} })
 }
 
 afterEach(() => {
@@ -82,6 +82,7 @@ async function harness(group = null) {
   }
   const context = {
     mount: undefined,
+    getConfig: async () => ({ lastProject: "project" }),
     findConversation: () => undefined,
     trustStatus: async () => ({ needsDecision: false }),
     spawnPi: async (...args) => {
@@ -131,7 +132,7 @@ async function harness(group = null) {
       workspaceGitInfo: async () => ({}),
       exportSessionFileHtml: async () => true,
       listRunningSessions: (...args) => context.listRunningSessions(...args),
-      getConfig: async () => ({ lastProject: "project" }),
+      getConfig: () => context.getConfig(),
       killPi: (...args) => context.killPi(...args),
       onPiEvent: async () => () => {},
       pixLog: () => {},
@@ -202,11 +203,61 @@ async function harness(group = null) {
     connecting: bindings.connecting,
     selectingProject: bindings.selectingProject,
     phase: bindings.phase,
+    showKanban: bindings.showKanban,
+    boardVisited: bindings.boardVisited,
+    route: bindings.route,
   }
   context.activeRuntimeId = bindings.activeRuntimeId ?? activeRuntimeId
   context.sessionFor = bindings.sessionFor ?? sessionFor
   return { context, calls, spawnArgs, workspace }
 }
+
+test("the saved board layout is visible before and during runtime initialization", async () => {
+  vi.stubGlobal("localStorage", { getItem: () => "board" })
+  const { context, calls } = await harness()
+  expect(context.actions.phase.value).toBe("detecting")
+  expect(context.actions.boardVisited.value).toBe(true)
+  expect(context.actions.showKanban.value).toBe(true)
+
+  let resolveConfig
+  context.getConfig = () => new Promise(resolve => (resolveConfig = resolve))
+  const mounting = context.mount()
+  expect(context.actions.showKanban.value).toBe(true)
+  resolveConfig({ lastProject: "project" })
+  await mounting
+  expect(context.actions.phase.value).toBe("chat")
+  expect(context.actions.showKanban.value).toBe(true)
+  expect(calls).toEqual([])
+
+  context.actions.phase.value = "trust"
+  expect(context.actions.showKanban.value).toBe(false)
+  context.actions.phase.value = "chat"
+  for (const name of ["settings", "schedules"]) {
+    context.actions.route.value = { name, params: {} }
+    expect(context.actions.showKanban.value).toBe(false)
+  }
+})
+
+test("the ordinary layout remains the default during startup", async () => {
+  const { context } = await harness()
+  expect(context.actions.phase.value).toBe("detecting")
+  expect(context.actions.boardVisited.value).toBe(false)
+  expect(context.actions.showKanban.value).toBe(false)
+})
+
+test("the welcome page renders startup without a runtime connection notice", async () => {
+  const source = readFileSync(new URL("../src/components/WelcomeView.vue", import.meta.url), "utf8")
+  const t = vi.fn(key => key)
+  const render = await loadVueSetup(
+    source,
+    { vue: vueRuntime, "vue-i18n": { useI18n: () => ({ t }) } },
+    { phase: "detecting", config: {} },
+    true,
+  )
+  const view = render({}, [])
+  expect(view.type).toBe("div")
+  expect(t).not.toHaveBeenCalledWith("welcome.connecting")
+})
 
 test("opening the app, selecting projects and drafting a new chat do not start pi", async () => {
   const { context, calls } = await harness()

@@ -139,7 +139,6 @@ const creatingBoardDraft = ref(false)
 const showKanban = computed(
   () =>
     workspaceLayout.value === "board" &&
-    phase.value !== "detecting" &&
     phase.value !== "trust" &&
     route.value.name !== "settings" &&
     route.value.name !== "schedules",
@@ -732,7 +731,10 @@ onUnmounted(() => {
                 :busy="creatingBoardDraft"
                 :navigation-busy="(workspace.gitBusy && !connecting) || phase === 'trust'"
                 :column-order="workspace.boardColumnOrder"
-                @reorder="(column, ids) => workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)"
+                @reorder="
+                  (column, ids) =>
+                    workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
+                "
                 @open="openBoardCard"
                 @create="createBoardDraft"
                 @retry="board.refresh"
