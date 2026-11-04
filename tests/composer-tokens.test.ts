@@ -96,7 +96,9 @@ test("rich editor wires workspace session titles into chip rendering", () => {
 test("rich editor validates rendering and chip deletion against its own session commands", () => {
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
   const composer = readFileSync(new URL("../src/components/chat/ChatComposer.vue", import.meta.url), "utf8")
-  expect(composer).toMatch(/<ComposerRichEditor\s+:commands="session\.commands"/)
+  const promptInput = readFileSync(new URL("../src/components/chat/ChatPromptInput.vue", import.meta.url), "utf8")
+  expect(composer).toMatch(/<ChatPromptInput[\s\S]*?:commands="session\.commands"/)
+  expect(promptInput).toMatch(/<ComposerRichEditor\s+:commands="commands \?\? \[\]"/)
   expect(editor).toMatch(/new Set\(\[\.\.\.desktopCommands, \.\.\.\(props\.commands/)
   expect(editor.match(/composerParts\([^\n]+commandNames\.value\)/g)).toHaveLength(3)
   expect(editor).toMatch(/watch\(commandNames/)

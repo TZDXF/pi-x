@@ -389,7 +389,8 @@ test("the projectless workspace never prompts for trust", async () => {
 })
 test("project selection keeps the editor enabled without bypassing other edit guards", () => {
   const view = composerSources() + turnSources()
-  const editor = view.split("<ComposerRichEditor")[1].split("/>")[0]
+  // 编辑器禁用条件由 ChatComposer 传给 ChatPromptInput，再传给 ComposerRichEditor。
+  const editor = view.split("<ChatPromptInput")[1].split("/>")[0]
   const expression = editor.match(/:disabled="([^"]+)"/)[1]
   const state = {
     editBusy: false,

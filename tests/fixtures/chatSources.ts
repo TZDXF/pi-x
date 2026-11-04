@@ -5,7 +5,12 @@ export function chatSource(...files: string[]) {
 }
 
 export const composerSources = () =>
-  chatSource("composables/useChatSendControl.ts", "components/chat/ChatComposer.vue", "components/ChatView.vue")
+  chatSource(
+    "composables/useChatSendControl.ts",
+    "components/chat/ChatPromptInput.vue",
+    "components/chat/ChatComposer.vue",
+    "components/ChatView.vue",
+  )
 export const turnSources = () =>
   chatSource(
     "composables/useChatTurnList.ts",

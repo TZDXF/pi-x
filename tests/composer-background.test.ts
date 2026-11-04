@@ -3,7 +3,7 @@ import { expect, test } from "vitest"
 import { cn } from "@/lib/utils"
 
 test("chat composer overrides the translucent input-group background in dark mode", () => {
-  const composer = readFileSync(new URL("../src/components/chat/ChatComposer.vue", import.meta.url), "utf8")
+  const composer = readFileSync(new URL("../src/components/chat/ChatPromptInput.vue", import.meta.url), "utf8")
   const groupClass = composer.match(/'([^']*rounded-\[22px\][^']*)'/)?.[1]
 
   expect(groupClass).toBeDefined()
