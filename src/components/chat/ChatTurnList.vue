@@ -148,7 +148,7 @@ onBeforeUnmount(() => {
       </div>
       <ConversationEmptyState
         class="chat-empty flex-1 min-h-60"
-        v-if="session.entries.length === 0 && !session.historyLoading"
+        v-if="session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"
         :title="t('workspace.emptyTitle', { project: projectName })"
       >
         <template #icon>
@@ -226,14 +226,6 @@ onBeforeUnmount(() => {
             </MessageContent>
           </div>
         </Message>
-        <div
-          v-if="connecting && !selectingProject"
-          class="text-muted-foreground mt-2 flex items-center gap-2 text-sm"
-          role="status"
-        >
-          <Loader :size="14" />
-          <span>{{ t("chat.thinking") }}</span>
-        </div>
       </template>
 
       <!-- waiting indicator before any content arrives: icon on the left,
