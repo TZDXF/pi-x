@@ -162,8 +162,13 @@ const openWithKind = (kind: EditorKind, project: string) =>
   kind === "system" ? openPath(project) : openProjectInEditor(project, kind)
 const openWithDefault = () => runProjectAction(project => openWithKind(defaultKind.value, project))
 // 下拉选择即设为默认，设置页的“默认打开方式”随之变更
-const chooseOpenWith = (kind: EditorKind) => {
-  setOpenWith(kind)
+const chooseOpenWith = async (kind: EditorKind) => {
+  try {
+    await setOpenWith(kind)
+  } catch (cause) {
+    ui.pushToast(String(cause), "error")
+    return
+  }
   return runProjectAction(project => openWithKind(kind, project))
 }
 const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))

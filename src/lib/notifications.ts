@@ -4,38 +4,41 @@
  * questions awaiting input, and an optional sound.
  *
  * Desktop uses tauri-plugin-notification; the web build falls back to the
- * browser Notification API. Preferences persist to localStorage and sync
- * across windows via the storage event.
+ * browser Notification API. Preferences persist to ~/.pix/config.json and
+ * synchronize between desktop and remote web clients.
  */
 import { i18n } from "@/i18n"
 import { invoke, isDesktop } from "@/api/transport"
 import { pixLog } from "@/api/piClient"
-import { createLocalPreference } from "@/lib/localPreference"
+import { createConfigPreference } from "@/lib/configPreference"
 
 export type TurnCompleteNotification = "never" | "unfocused" | "always"
 export type NotificationSound = "default" | "none"
 
-const TURN_KEY = "pix.notify.turnComplete"
-const QUESTION_KEY = "pix.notify.question"
-const SOUND_KEY = "pix.notify.sound"
+const TURN_LEGACY_KEY = "pix.notify.turnComplete"
+const QUESTION_LEGACY_KEY = "pix.notify.question"
+const SOUND_LEGACY_KEY = "pix.notify.sound"
 
 const isTurnMode = (value: unknown): value is TurnCompleteNotification =>
   value === "never" || value === "unfocused" || value === "always"
 const isSound = (value: unknown): value is NotificationSound => value === "default" || value === "none"
 
-const turnPreference = createLocalPreference<TurnCompleteNotification>({
-  key: TURN_KEY,
+const turnPreference = createConfigPreference<TurnCompleteNotification>({
+  key: "notifyTurnComplete",
+  legacyKey: TURN_LEGACY_KEY,
   defaultValue: "unfocused",
   validate: isTurnMode,
 })
-const questionPreference = createLocalPreference<boolean>({
-  key: QUESTION_KEY,
+const questionPreference = createConfigPreference<boolean>({
+  key: "notifyQuestion",
+  legacyKey: QUESTION_LEGACY_KEY,
   defaultValue: true,
   read: raw => raw !== "0",
   serialize: value => (value ? "1" : "0"),
 })
-const soundPreference = createLocalPreference<NotificationSound>({
-  key: SOUND_KEY,
+const soundPreference = createConfigPreference<NotificationSound>({
+  key: "notifySound",
+  legacyKey: SOUND_LEGACY_KEY,
   defaultValue: "default",
   validate: isSound,
 })
@@ -46,17 +49,20 @@ export const notificationSound = soundPreference.value
 
 export function setTurnCompleteNotification(value: TurnCompleteNotification) {
   if (!isTurnMode(value)) return
-  turnPreference.set(value)
+  const saving = turnPreference.set(value)
   if (value !== "never") void ensurePermission()
+  return saving
 }
 export function setQuestionNotification(value: boolean) {
-  questionPreference.set(value)
+  const saving = questionPreference.set(value)
   if (value) void ensurePermission()
+  return saving
 }
 export function setNotificationSound(value: NotificationSound) {
   if (!isSound(value)) return
-  soundPreference.set(value)
+  const saving = soundPreference.set(value)
   if (value === "default") playNotificationSound()
+  return saving
 }
 
 /** True when the window is hidden or unfocused, so "unfocused" mode fires. */

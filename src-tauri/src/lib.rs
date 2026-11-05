@@ -124,6 +124,7 @@ pub fn run() {
             commands::workspace_state::workspace_state_update,
             commands::config::app_config_get,
             commands::config::app_config_save,
+            commands::config::app_preference_set,
             commands::config::projectless_dir_resolve,
             commands::prompts::global_prompt_list,
             commands::prompts::global_prompt_save,

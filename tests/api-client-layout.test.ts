@@ -50,7 +50,7 @@ const originalExports = `PiInfo TrustStatus ModelRef AppConfig PiSettings getPiS
 setTrayLabels toggleDevtools HostedSkill listHostedSkills openHostedSkillsDirectory deleteHostedSkill setHostedSkillsEnabled DiscoveredSkill
 listDiscoveredSkills skillListFiles skillReadFile detectPi PiUpdateStatus checkPiUpdate executePiUpdate
 UpdateChannel AppUpdateStatus APP_UPDATE_PROGRESS_EVENT checkAppUpdate getAppVersion installAppUpdate restartApp getConfig
-saveConfig ProjectlessDirInfo resolveProjectlessDir chooseDirectoryPath GlobalPromptFile listGlobalPrompts saveGlobalPrompt
+saveConfig saveConfigPreference onAppConfigChanged ProjectlessDirInfo resolveProjectlessDir chooseDirectoryPath GlobalPromptFile listGlobalPrompts saveGlobalPrompt
 trustStatus trustSave WorkspaceContext spawnPi killPi piRunning pixLog
 SessionMeta SessionSearchHit listSessions searchSessions sessionMtime sessionHistory SessionLastError sessionLastError duplicateSessionFile
 StorageCategoryId StorageCategory StorageSummary StorageCleanupResult getStorageSummary cleanupStorage
@@ -282,10 +282,18 @@ test("RPC and session listeners forward payloads, including subagent events, unc
 
 test("SSH probe forwards in-memory credentials without trimming", async () => {
   const { sshProbeTarget, sshConnectionSave } = await loaders.ssh()
-  const target = { host: "host.test", authMethod: "password" as const, password: " secret & % ", keyPassphrase: " passphrase " }
+  const target = {
+    host: "host.test",
+    authMethod: "password" as const,
+    password: " secret & % ",
+    keyPassphrase: " passphrase ",
+  }
   await sshProbeTarget(target)
   expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_probe_target", {
-    ...target, port: null, user: null, keyPath: null,
+    ...target,
+    port: null,
+    user: null,
+    keyPath: null,
   })
   await sshConnectionSave({ ...target, name: "test" })
   expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_connection_save", { connection: { ...target, name: "test" } })

@@ -80,6 +80,7 @@ import { isRemoteProject } from "@/lib/ssh"
 import { sameSessionIdentity } from "@/lib/sessionIdentity"
 import { ExternalLink, FolderPlus, Trash2, X } from "@lucide/vue"
 import { developerModeEnabled } from "@/lib/developerMode"
+import { initializeConfigPreferences } from "@/lib/configPreference"
 import { isDesktop } from "@/api/transport"
 import { tBackendError } from "@/i18n"
 import { saveTrustDecision } from "@/lib/sshTrust"
@@ -592,6 +593,8 @@ onMounted(async () => {
   void appUpdate.autoCheck()
   try {
     config.value = await getConfig()
+    // Remote authentication may not have been available during main.ts startup.
+    await initializeConfigPreferences(config.value)
   } catch {
     config.value = {}
   }

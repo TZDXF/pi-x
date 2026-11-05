@@ -3,7 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{collections::BTreeMap, sync::Mutex};
 use tauri::AppHandle;
+
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 use crate::errors::{pix_error_detail, pix_error_with};
 
@@ -26,6 +29,10 @@ pub enum UpdateChannel {
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
+    /// Settings-page UI preferences. Values keep the legacy localPreference
+    /// serialization so existing validators and one-time migration stay small.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub preferences: BTreeMap<String, String>,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(
@@ -148,9 +155,49 @@ pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
         .map_err(|e| pix_error_detail("configParseFailed", "配置文件解析失败: {detail}", e))
 }
 
+fn emit_config_changed(app: &AppHandle, config: &AppConfig) {
+    if let Ok(payload) = serde_json::to_value(config) {
+        crate::remote::emit(app, "pi://app-config-changed", payload);
+    }
+}
+
 #[tauri::command]
-pub fn app_config_save(app: AppHandle, config: AppConfig) -> Result<(), String> {
-    write_config(&config_path(&app)?, &config)
+pub fn app_config_save(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+    let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
+    // Most callers save a snapshot captured earlier. Preferences have their own
+    // single-key command, so a stale snapshot must never erase newer UI choices.
+    config.preferences = app_config_get(app.clone())?.preferences;
+    write_config(&config_path(&app)?, &config)?;
+    emit_config_changed(&app, &config);
+    Ok(())
+}
+
+const PREFERENCE_KEYS: [&str; 11] = [
+    "locale",
+    "theme",
+    "terminalTheme",
+    "openWith",
+    "developerMode",
+    "shortcuts",
+    "notifyTurnComplete",
+    "notifyQuestion",
+    "notifySound",
+    "runningBehavior",
+    "processDetail",
+];
+
+/// Persist one settings-page preference without racing unrelated config fields.
+#[tauri::command]
+pub fn app_preference_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
+    if !PREFERENCE_KEYS.contains(&key.as_str()) {
+        return Err(format!("Unsupported app preference: {key}"));
+    }
+    let mut config = app_config_get(app.clone())?;
+    config.preferences.insert(key, value);
+    write_config(&config_path(&app)?, &config)?;
+    emit_config_changed(&app, &config);
+    Ok(())
 }
 
 /// 无项目会话的工作目录：`dir` 为实际使用路径，`default_dir` 用于设置页展示与「恢复默认」。
@@ -261,6 +308,29 @@ mod tests {
             .unwrap()
             .get("sshConnections")
             .is_none());
+    }
+
+    #[test]
+    fn app_config_round_trips_ui_preferences() {
+        let mut preferences = BTreeMap::new();
+        preferences.insert("theme".into(), "dark".into());
+        preferences.insert("processDetail".into(), "concise".into());
+        preferences.insert("terminalTheme".into(), r#"{"preset":"nord"}"#.into());
+        let config = AppConfig {
+            preferences,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["preferences"]["theme"], "dark");
+        assert_eq!(value["preferences"]["processDetail"], "concise");
+        let parsed: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.preferences, config.preferences);
+        assert!(
+            serde_json::to_value(AppConfig::default())
+                .unwrap()
+                .get("preferences")
+                .is_none()
+        );
     }
 
     #[test]

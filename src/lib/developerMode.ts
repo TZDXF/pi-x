@@ -1,15 +1,14 @@
-import { createLocalPreference } from "@/lib/localPreference"
+import { createConfigPreference } from "@/lib/configPreference"
 
 /**
- * 开发者模式开关，持久化到 localStorage 并经 storage 事件跨窗口同步。
+ * 开发者模式开关，持久化到 ~/.pix/config.json 并跨客户端同步。
  * 开启后：允许打开 webview devtools（F12 / Ctrl+Shift+I），并在应用启动时
  * 加载 element-source-dev（后者需重启应用后生效）。debug 构建自带
  * devtools；打包版本需以 `--features devtools` 编译，否则后端会拒绝。
  */
-const STORAGE_KEY = "pix.developerMode"
-
-const preference = createLocalPreference<boolean>({
-  key: STORAGE_KEY,
+const preference = createConfigPreference<boolean>({
+  key: "developerMode",
+  legacyKey: "pix.developerMode",
   defaultValue: false,
   read: raw => raw === "1",
   serialize: value => (value ? "1" : "0"),
@@ -24,5 +23,5 @@ export function isDeveloperModeEnabled(): boolean {
 }
 
 export function setDeveloperMode(next: boolean) {
-  preference.set(next)
+  return preference.set(next)
 }

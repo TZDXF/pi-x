@@ -191,6 +191,7 @@ async function harness(group = null) {
     "@/lib/backendError": backendError,
     "@/i18n": { tBackendError: value => value },
     "@/lib/shortcuts": { dispatchShortcut: () => false, registerShortcutHandler: () => () => {} },
+    "@/lib/configPreference": { initializeConfigPreferences: async () => true },
   }
   const bindings = await loadVueSetup(appSource, dependencies)
   context.actions = {

@@ -1,11 +1,12 @@
 /**
  * i18n setup: vue-i18n with zh-CN / en locales.
  *
- * The active locale is persisted to localStorage ("pix.locale") and defaults
- * to the OS language when supported, falling back to zh-CN.
+ * The active locale is persisted to ~/.pix/config.json and defaults to the
+ * OS language when supported, falling back to zh-CN.
  */
 import { createI18n } from "vue-i18n"
 import { formatCodedError } from "@/lib/backendError"
+import { createConfigPreference } from "@/lib/configPreference"
 import zhCN from "./locales/zh-CN"
 import en from "./locales/en"
 
@@ -16,8 +17,6 @@ export const LOCALES: { value: Locale; label: string }[] = [
   { value: "en", label: "English" },
 ]
 
-const STORAGE_KEY = "pix.locale"
-
 function normalize(value: string): Locale | null {
   const v = value.toLowerCase()
   if (v.startsWith("zh")) return "zh-CN"
@@ -26,15 +25,6 @@ function normalize(value: string): Locale | null {
 }
 
 function initialLocale(): Locale {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      const v = normalize(stored)
-      if (v) return v
-    }
-  } catch {
-    /* Storage is optional. */
-  }
   for (const lang of navigator.languages ?? [navigator.language]) {
     const v = normalize(lang)
     if (v) return v
@@ -49,13 +39,18 @@ export const i18n = createI18n({
   messages: { "zh-CN": zhCN, en },
 })
 
+const preference = createConfigPreference<Locale>({
+  key: "locale",
+  legacyKey: "pix.locale",
+  defaultValue: initialLocale,
+  validate: (value): value is Locale => value === "zh-CN" || value === "en",
+  onChange: locale => {
+    i18n.global.locale.value = locale
+  },
+})
+
 export function setLocale(locale: Locale) {
-  i18n.global.locale.value = locale
-  try {
-    localStorage.setItem(STORAGE_KEY, locale)
-  } catch {
-    /* Storage is optional. */
-  }
+  return preference.set(locale)
 }
 
 export function currentLocale(): Locale {

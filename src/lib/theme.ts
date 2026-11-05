@@ -1,7 +1,8 @@
-import { createLocalPreference } from "@/lib/localPreference"
+import { createConfigPreference } from "@/lib/configPreference"
 
 export type ThemePreference = "light" | "dark" | "system"
-const STORAGE_KEY = "pix.theme"
+const CONFIG_KEY = "theme"
+const LEGACY_STORAGE_KEY = "pix.theme"
 const DEFAULT_THEME: ThemePreference = "system"
 const isTheme = (value: unknown): value is ThemePreference =>
   value === "light" || value === "dark" || value === "system"
@@ -17,8 +18,9 @@ function applyTheme(value: ThemePreference) {
   classList.toggle("light", value === "light")
 }
 
-const preference = createLocalPreference<ThemePreference>({
-  key: STORAGE_KEY,
+const preference = createConfigPreference<ThemePreference>({
+  key: CONFIG_KEY,
+  legacyKey: LEGACY_STORAGE_KEY,
   defaultValue: DEFAULT_THEME,
   validate: isTheme,
   onChange: applyTheme,
@@ -27,5 +29,5 @@ export const theme = preference.value
 
 export function setTheme(value: ThemePreference) {
   if (!isTheme(value)) return
-  preference.set(value)
+  return preference.set(value)
 }

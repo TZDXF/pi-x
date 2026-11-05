@@ -1,5 +1,5 @@
 import { invoke, isDesktop } from "@/api/transport"
-import { createLocalPreference } from "@/lib/localPreference"
+import { createConfigPreference } from "@/lib/configPreference"
 
 export const EDITOR_OPTIONS = [
   { id: "vscode", label: "Visual Studio Code" },
@@ -21,7 +21,7 @@ interface OpenWithPreference {
   kind: EditorKind
   executable: string
 }
-const STORAGE_KEY = "pix.openWith"
+const LEGACY_STORAGE_KEY = "pix.openWith"
 export const isEditorKind = (value: unknown): value is EditorKind =>
   value === "system" || value === "custom" || EDITOR_OPTIONS.some(option => option.id === value)
 function readPreference(raw: string | null): OpenWithPreference {
@@ -34,8 +34,9 @@ function readPreference(raw: string | null): OpenWithPreference {
   }
   return { kind: "vscode", executable: "" }
 }
-const preference = createLocalPreference<OpenWithPreference>({
-  key: STORAGE_KEY,
+const preference = createConfigPreference<OpenWithPreference>({
+  key: "openWith",
+  legacyKey: LEGACY_STORAGE_KEY,
   defaultValue: { kind: "vscode", executable: "" },
   read: readPreference,
   serialize: JSON.stringify,
@@ -45,7 +46,7 @@ export const openWithPreference = preference.value
 export function setOpenWith(kind: EditorKind, executable = openWithPreference.value.executable) {
   if (!isEditorKind(kind)) return
   const next = { kind, executable: executable.trim() }
-  preference.set(next)
+  return preference.set(next)
 }
 
 export const detectEditors = () => invoke<Record<string, boolean>>("detect_editors")

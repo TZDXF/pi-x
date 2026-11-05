@@ -9,6 +9,8 @@ const run = (code, context) =>
 
 function harness(storage) {
   const preference = source("../src/lib/localPreference.ts")
+    .replace("createLocalPreference", "createConfigPreference")
+    .replaceAll("options.key", "options.legacyKey")
     .replace(/^import .*$/gm, "")
     .replace(/if \(import\.meta\.hot\).*$/gm, "")
     .replace(/^export /gm, "")

@@ -38,11 +38,11 @@ const visibleOptions = computed(() =>
 )
 const iconOf = (id: string) => icons.value[id] ?? null
 const selectedIcon = computed(() => iconOf(openWithPreference.value.kind))
-function save(value: unknown) {
+async function save(value: unknown) {
   if (!isEditorKind(value)) return
   error.value = ""
   try {
-    setOpenWith(value, executable.value)
+    await setOpenWith(value, executable.value)
   } catch (e) {
     error.value = String(e)
   }

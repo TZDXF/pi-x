@@ -27,8 +27,8 @@ pub(crate) mod workspace_state;
 // remote-access feature 之后，默认构建下这些再导出会显示为未使用。
 #[allow(unused_imports)]
 pub use config::{
-    app_config_get, app_config_save, projectless_dir_resolve, AppConfig, ModelRef,
-    ProjectlessDirInfo, UpdateChannel,
+    app_config_get, app_config_save, app_preference_set, projectless_dir_resolve, AppConfig,
+    ModelRef, ProjectlessDirInfo, UpdateChannel,
 };
 #[allow(unused_imports)]
 pub use files::{

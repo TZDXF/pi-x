@@ -7,6 +7,15 @@ const source = readFileSync(new URL("../src/lib/shortcuts.ts", import.meta.url),
   .replace(/^import .*$/gm, "")
   .replace(/export /g, "")
 
+// Synchronous adapter double for shortcut behavior; config.json persistence is
+// tested independently in config-preferences.test.ts.
+const preferenceSource = readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8")
+  .replace("createLocalPreference", "createConfigPreference")
+  .replaceAll("options.key", "options.legacyKey")
+  .replace(/^import .*$/gm, "")
+  .replace(/if \(import\.meta\.hot\).*$/gm, "")
+  .replace(/export /g, "")
+
 const expose = `
 globalThis.api = {
   SHORTCUT_ACTION_DEFS, SHORTCUT_ACTION_IDS, LOCKED_SHORTCUTS,
@@ -36,7 +45,7 @@ function harness(stored) {
     },
   })
   vm.runInContext(
-    ts.transpile(source + expose, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }),
+    ts.transpile(preferenceSource + source + expose, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }),
     context,
   )
   return { api: context.api, storage: () => value }
@@ -59,7 +68,7 @@ function keyEvent(key, mods = {}, target = null) {
 const editable = { closest: () => ({}) }
 const plain = { closest: () => null }
 
-test("defaults resolve and overrides persist to storage", () => {
+test("defaults resolve and overrides persist through the preference adapter", () => {
   const { api, storage } = harness(null)
   expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
   expect(api.isShortcutModified("app.newSession")).toBe(false)
@@ -76,12 +85,12 @@ test("defaults resolve and overrides persist to storage", () => {
   // resetting to the default removes the stored override
   api.setShortcutOverride("app.newSession", "ctrl+n")
   expect(api.isShortcutModified("app.newSession")).toBe(false)
-  expect(storage()).toBe(null)
+  expect(storage()).toBe("{}")
 
   api.setShortcutOverride("app.newSession", "ctrl+alt+n")
   api.resetAllShortcuts()
   expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
-  expect(storage()).toBe(null)
+  expect(storage()).toBe("{}")
 })
 
 test("comboFromEvent normalizes modifiers, keys, IME and modifiers-only presses", () => {

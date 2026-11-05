@@ -1,4 +1,4 @@
-import { createLocalPreference } from "@/lib/localPreference"
+import { createConfigPreference } from "@/lib/configPreference"
 
 /** xterm 面板用到的四个核心颜色，其余颜色交给 xterm 默认调色板。 */
 export interface TerminalColors {
@@ -44,7 +44,8 @@ export const TERMINAL_PRESETS = {
   },
 } satisfies Record<string, TerminalColors>
 
-const STORAGE_KEY = "pix.terminalTheme"
+const CONFIG_KEY = "terminalTheme"
+const LEGACY_STORAGE_KEY = "pix.terminalTheme"
 const COLOR_FIELDS = ["background", "foreground", "cursor", "selectionBackground"] as const
 type ColorField = (typeof COLOR_FIELDS)[number]
 const isHexColor = (value: unknown): value is string => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
@@ -83,8 +84,9 @@ function initialState(rawValue: string | null) {
   }
 }
 
-const preference = createLocalPreference({
-  key: STORAGE_KEY,
+const preference = createConfigPreference({
+  key: CONFIG_KEY,
+  legacyKey: LEGACY_STORAGE_KEY,
   defaultValue: defaultState,
   read: initialState,
   serialize: JSON.stringify,
@@ -99,7 +101,7 @@ export function terminalPresetLabelKey(key: TerminalThemeKey): string {
 
 export function setTerminalPreset(key: TerminalThemeKey) {
   if (key !== "custom" && !(key in TERMINAL_PRESETS)) return
-  preference.set({
+  return preference.set({
     preset: key,
     colors: key === "custom" ? { ...terminalTheme.value.colors } : { ...TERMINAL_PRESETS[key] },
   })
@@ -108,9 +110,12 @@ export function setTerminalPreset(key: TerminalThemeKey) {
 /** 修改单个颜色后进入自定义状态；非法值被忽略。 */
 export function setTerminalColor(field: ColorField, value: string) {
   if (!COLOR_FIELDS.includes(field) || !isHexColor(value)) return
-  preference.set({ preset: "custom", colors: { ...terminalTheme.value.colors, [field]: value.toLowerCase() } })
+  return preference.set({
+    preset: "custom",
+    colors: { ...terminalTheme.value.colors, [field]: value.toLowerCase() },
+  })
 }
 
 export function resetTerminalTheme() {
-  preference.set(defaultState())
+  return preference.set(defaultState())
 }

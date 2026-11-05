@@ -1,51 +1,60 @@
-import { test, expect } from "vitest"
+import { expect, test } from "vitest"
 import { readFileSync } from "node:fs"
+import vm from "node:vm"
 import ts from "typescript"
 
-const preferenceJs = ts.transpile(
-  readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8").replace(
-    'from "vue"',
-    `from "${import.meta.resolve("vue")}"`,
-  ),
-  { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-)
-const preferenceUrl = `data:text/javascript;base64,${Buffer.from(preferenceJs).toString("base64")}`
-const source = readFileSync(new URL("../src/lib/developerMode.ts", import.meta.url), "utf8").replace(
-  'from "@/lib/localPreference"',
-  `from "${preferenceUrl}"`,
-)
-const js = ts
-  .transpile(source, { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 })
-  .replace('from "vue"', `from "${import.meta.resolve("vue")}"`)
-const storage = new Map()
-globalThis.localStorage = {
-  getItem: key => storage.get(key) ?? null,
-  setItem: (key, value) => storage.set(key, value),
+const source = readFileSync(new URL("../src/lib/developerMode.ts", import.meta.url), "utf8")
+  .replace(/^import .*$/gm, "")
+  .replace(/export /g, "")
+
+function harness(preferences: Record<string, string> = {}) {
+  const context = vm.createContext({
+    ref: (value: unknown) => ({ value }),
+    readonly: (value: unknown) => value,
+    localStorage: { getItem: () => null, removeItem() {} },
+    createConfigPreference: (options: {
+      key: string
+      read: (raw: string | null) => boolean
+      serialize: (value: boolean) => string
+    }) => {
+      const state = { value: options.read(preferences[options.key] ?? null) }
+      return {
+        value: state,
+        read: () => options.read(preferences[options.key] ?? null),
+        set: (value: boolean) => {
+          preferences[options.key] = options.serialize(value)
+          state.value = options.read(preferences[options.key]!)
+        },
+      }
+    },
+  })
+  vm.runInContext(
+    ts.transpile(source + "\nglobalThis.api = { developerModeEnabled, isDeveloperModeEnabled, setDeveloperMode };", {
+      target: ts.ScriptTarget.ES2022,
+    }),
+    context,
+  )
+  return { api: context.api, preferences }
 }
-let sequence = 0
-const load = () => import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}#${sequence++}`)
 
-test("developer mode defaults to off and persists across reloads", async () => {
-  const first = await load()
-  expect(first.developerModeEnabled.value).toBe(false)
-  expect(first.isDeveloperModeEnabled()).toBe(false)
+test("developer mode defaults to off and persists through the config preference", () => {
+  const first = harness()
+  expect(first.api.developerModeEnabled.value).toBe(false)
+  expect(first.api.isDeveloperModeEnabled()).toBe(false)
 
-  first.setDeveloperMode(true)
-  expect(first.developerModeEnabled.value).toBe(true)
-  expect(storage.get("pix.developerMode")).toBe("1")
+  first.api.setDeveloperMode(true)
+  expect(first.api.developerModeEnabled.value).toBe(true)
+  expect(first.preferences.developerMode).toBe("1")
 
-  const reloaded = await load()
-  expect(reloaded.developerModeEnabled.value).toBe(true)
-  expect(reloaded.isDeveloperModeEnabled()).toBe(true)
+  const reloaded = harness(first.preferences)
+  expect(reloaded.api.developerModeEnabled.value).toBe(true)
+  expect(reloaded.api.isDeveloperModeEnabled()).toBe(true)
 
-  reloaded.setDeveloperMode(false)
-  expect(storage.get("pix.developerMode")).toBe("0")
-  const again = await load()
-  expect(again.developerModeEnabled.value).toBe(false)
+  reloaded.api.setDeveloperMode(false)
+  expect(reloaded.preferences.developerMode).toBe("0")
 })
 
-test("corrupted storage falls back to off", async () => {
-  storage.set("pix.developerMode", "yes")
-  const mod = await load()
-  expect(mod.developerModeEnabled.value).toBe(false)
+test("corrupted stored values fall back to off", () => {
+  const mod = harness({ developerMode: "yes" })
+  expect(mod.api.developerModeEnabled.value).toBe(false)
 })

@@ -25,6 +25,14 @@ pub(super) async fn handle(
                 crate::commands::app_config_save(app.clone(), cfg)?;
                 Ok(Value::Null)
             }
+            "app_preference_set" => {
+                crate::commands::app_preference_set(
+                    app.clone(),
+                    text(a, "key")?,
+                    text(a, "value")?,
+                )?;
+                Ok(Value::Null)
+            }
             "projectless_dir_resolve" => Ok(to_json(crate::commands::projectless_dir_resolve(
                 app.clone(),
             )?)?),
@@ -193,8 +201,13 @@ mod tests {
                 pi_path: Some("host-pi".to_owned()),
                 ..Default::default()
             };
+            cfg.preferences.insert("theme".into(), "dark".into());
             apply_remote_app_config(&mut cfg, &request);
             assert_eq!(cfg.pi_path.as_deref(), Some("host-pi"));
+            assert_eq!(
+                cfg.preferences.get("theme").map(String::as_str),
+                Some("dark")
+            );
         }
     }
 }

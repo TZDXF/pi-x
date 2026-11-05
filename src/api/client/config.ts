@@ -1,5 +1,5 @@
 import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
-import { invoke, isDesktop } from "../transport"
+import { invoke, isDesktop, listen } from "../transport"
 import type { UpdateChannel } from "./updates"
 import type { SshConnection } from "./ssh"
 
@@ -19,6 +19,8 @@ export interface ModelRef {
 }
 
 export interface AppConfig {
+  /** Settings-page preferences, serialized by configPreference.ts. */
+  preferences?: Record<string, string>
   piPath?: string
   lastProject?: string
   /** 应用自身更新通道（app_update.rs），缺省为 stable */
@@ -98,6 +100,9 @@ export function toggleDevtools(): Promise<boolean> {
 export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
+export const saveConfigPreference = (key: string, value: string) => invoke<void>("app_preference_set", { key, value })
+export const onAppConfigChanged = (handler: (config: AppConfig) => void) =>
+  listen<AppConfig>("pi://app-config-changed", event => handler(event.payload))
 
 export interface ProjectlessDirInfo {
   /** 实际使用的工作目录（已规范化）。 */
