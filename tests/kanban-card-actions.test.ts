@@ -380,10 +380,13 @@ test.each(["idle", "completed"] as const)(
   },
 )
 
-test("todo start and idle archive actions are revealed on hover or focus", async () => {
+test("todo actions replace the card time on hover or focus; idle cards keep their archive action", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Delete me" }
   const todo = await harness()
   expect(todo.action("kanban.startDraft")!.props.class).toContain("kanban-card-action")
   expect(todo.action("kanban.editDraft")!.props.class).toContain("kanban-card-action")
+  expect(todo.action("kanban.delete")!.props.class).toContain("kanban-card-delete")
+  expect(todo.action("kanban.delete")!.props.class).toContain("bottom-2")
   await todo.click("kanban.startDraft")
   expect(todo.startDraft).toHaveBeenCalledExactlyOnceWith(todo.card)
   expect(todo.isEditing()).toBe(false)
@@ -391,7 +394,13 @@ test("todo start and idle archive actions are revealed on hover or focus", async
   const idle = await harness({ status: "idle", file: "/session.jsonl" })
   expect(idle.action("workspace.archive")!.props.class).toContain("kanban-archive")
   const styles = descriptor.styles.map(style => style.content).join("\n")
-  expect(styles).toContain(".kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-archive)")
+  expect(styles).toContain(
+    ".kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-card-delete, .kanban-archive)",
+  )
+  expect(styles).toContain(".has-todo-actions:is(:hover, :focus-within) :deep(.kanban-card-time)")
+  await todo.click("kanban.delete")
+  expect(workspace.removeBoardDraft).toHaveBeenCalledExactlyOnceWith("task")
+  expect(todo.cardDeleted).toHaveBeenCalledExactlyOnceWith(todo.card)
 })
 
 test("archive failure restores the card and reports the error", async () => {

@@ -481,7 +481,7 @@ async function submit(message: PromptInputMessage) {
                       }}</span>
                     </span>
                     <time
-                      class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
+                      class="kanban-card-time ml-auto shrink-0 whitespace-nowrap text-[10px] transition-opacity"
                       :datetime="
                         currentRoundStartedAt(card) === null ? dateFor(card.updatedAt)?.toISOString() : undefined
                       "

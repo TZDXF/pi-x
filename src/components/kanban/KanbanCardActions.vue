@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, useId } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, LoaderCircle, Pencil, Play } from "@lucide/vue"
+import { Archive, LoaderCircle, Pencil, Play, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
@@ -191,6 +191,20 @@ async function remove() {
       <Pencil class="size-3.5" aria-hidden="true" />
     </Button>
     <Button
+      v-if="card.status === 'todo'"
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      class="kanban-card-delete absolute bottom-2 right-2 z-1 size-7 bg-card text-muted-foreground hover:text-destructive"
+      :disabled="disabled || saving || deleting"
+      :title="t('kanban.delete')"
+      :aria-label="t('kanban.delete')"
+      @click.stop="remove"
+    >
+      <LoaderCircle v-if="deleting" class="size-3.5 animate-spin" aria-hidden="true" />
+      <Trash2 v-else class="size-3.5" aria-hidden="true" />
+    </Button>
+    <Button
       v-else-if="canArchive"
       type="button"
       variant="ghost"
@@ -248,13 +262,17 @@ async function remove() {
 
 <style scoped>
 .kanban-card-action,
+.kanban-card-delete,
 .kanban-archive {
   opacity: 0;
   pointer-events: none;
 }
-.kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-archive) {
+.kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-card-delete, .kanban-archive) {
   opacity: 1;
   pointer-events: auto;
+}
+.has-todo-actions:is(:hover, :focus-within) :deep(.kanban-card-time) {
+  opacity: 0;
 }
 .has-action :deep([data-kanban-card] > span:first-child) {
   padding-right: 1.75rem;
@@ -264,9 +282,13 @@ async function remove() {
 }
 @media (hover: none) {
   .kanban-card-action,
+  .kanban-card-delete,
   .kanban-archive {
     opacity: 1;
     pointer-events: auto;
+  }
+  .has-todo-actions :deep(.kanban-card-time) {
+    opacity: 0;
   }
 }
 </style>
