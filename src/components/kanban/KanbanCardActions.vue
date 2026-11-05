@@ -183,7 +183,7 @@ async function remove() {
       type="button"
       variant="ghost"
       size="icon-sm"
-      class="absolute right-2 top-2 z-1 size-7 bg-card text-muted-foreground"
+      class="kanban-archive absolute right-2 top-2 z-1 size-7 bg-card text-muted-foreground"
       :disabled="disabled || archiving"
       :title="t('workspace.archive')"
       :aria-label="t('workspace.archive')"
@@ -238,11 +238,12 @@ async function remove() {
 </template>
 
 <style scoped>
-.kanban-edit {
+.kanban-edit,
+.kanban-archive {
   opacity: 0;
   pointer-events: none;
 }
-.kanban-card-actions:is(:hover, :focus-within) .kanban-edit {
+.kanban-card-actions:is(:hover, :focus-within) :is(.kanban-edit, .kanban-archive) {
   opacity: 1;
   pointer-events: auto;
 }
@@ -250,7 +251,8 @@ async function remove() {
   padding-right: 1.75rem;
 }
 @media (hover: none) {
-  .kanban-edit {
+  .kanban-edit,
+  .kanban-archive {
     opacity: 1;
     pointer-events: auto;
   }

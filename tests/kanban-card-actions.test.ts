@@ -381,6 +381,13 @@ test.each(["idle", "completed"] as const)(
   },
 )
 
+test("the idle archive action is revealed when the card is hovered or focused", async () => {
+  const h = await harness({ status: "idle", file: "/session.jsonl" })
+  expect(h.action("workspace.archive")!.props.class).toContain("kanban-archive")
+  const styles = descriptor.styles.map(style => style.content).join("\n")
+  expect(styles).toContain(".kanban-card-actions:is(:hover, :focus-within) :is(.kanban-edit, .kanban-archive)")
+})
+
 test("archive failure restores the card and reports the error", async () => {
   workspace.update.mockRejectedValueOnce(new Error("Archive failed"))
   const h = await harness({ status: "idle", file: "/session.jsonl" })
