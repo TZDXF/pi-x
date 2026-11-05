@@ -256,7 +256,8 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
         {{ t("app.development") }}
       </Badge>
     </div>
-    <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
+    <!-- Modal layers disable body pointer events; keep native window dragging available. -->
+    <div data-tauri-drag-region class="pointer-events-auto h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
     <div v-if="openInEditorVisible" class="flex h-full items-center">
       <button
         type="button"

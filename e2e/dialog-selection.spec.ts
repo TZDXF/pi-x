@@ -3,6 +3,10 @@ import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
 
 const html = `<!doctype html><html><body><div id="app"></div><script type="module">
 import { createApp, h, ref } from 'vue'
+import { createPinia } from 'pinia'
+import { createI18n } from 'vue-i18n'
+import messages from '/src/i18n/locales/en.ts'
+import WindowTitleBar from '/src/components/WindowTitleBar.vue'
 import { Dialog, DialogContent, DialogScrollContent, DialogTitle } from '/src/components/ui/dialog'
 import { Select, SelectContent, SelectTrigger, SelectValue, SelectItem } from '/src/components/ui/select'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem } from '/src/components/ui/dropdown-menu'
@@ -12,9 +16,16 @@ const open = ref(true)
 const contentTag = ref('section')
 const Content = new URLSearchParams(location.search).has('scroll') ? DialogScrollContent : DialogContent
 window.escapeEvents = 0
+window.titlebarPointerDowns = 0
 const app = createApp({
   setup() {
-    return () => h(Dialog, { open: open.value, 'onUpdate:open': (value) => { open.value = value } }, {
+    return () => h('div', [
+      new URLSearchParams(location.search).has('titlebar') ? h(WindowTitleBar, {
+        onPointerdown: (event) => {
+          if (event.target.hasAttribute('data-tauri-drag-region')) window.titlebarPointerDowns++
+        },
+      }) : null,
+      h(Dialog, { open: open.value, 'onUpdate:open': (value) => { open.value = value } }, {
       default: () => h(Content, {
         'aria-describedby': undefined,
         as: contentTag.value,
@@ -36,10 +47,11 @@ const app = createApp({
         h('button', { id: 'change-content-tag', onClick: () => { contentTag.value = 'article' } }, 'Change content tag'),
         h('p', { id: 'selectable', style: 'width:320px;user-select:text;' }, 'Select this long dialog text'),
       ]),
-    })
+      }),
+    ])
   },
 })
-app.mount('#app')
+app.use(createPinia()).use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).mount('#app')
 </script></body></html>`
 
 let harness: VueHarness | null = null
@@ -51,6 +63,36 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await harness?.close()
 })
+
+// Native window movement cannot run in Chromium, but its drag region must
+// receive real pointer events while the modal disables the rest of the page.
+for (const variant of ["regular", "scroll"]) {
+  test(`${variant} modal keeps the titlebar drag region interactive`, async ({ page }) => {
+    await page.goto(`${harness!.url}?titlebar=1${variant === "scroll" ? "&scroll=1" : ""}`)
+    const dialog = page.getByRole("dialog")
+    await expect(dialog).toBeVisible()
+    await expect(page.locator("body")).toHaveCSS("pointer-events", "none")
+    const dragRegion = page.locator("[data-tauri-drag-region]")
+    const box = await dragRegion.boundingBox()
+    expect(box).toBeTruthy()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + box!.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + 80, y, { steps: 8 })
+    await page.mouse.up()
+    expect(
+      await page.evaluate(() => (window as unknown as { titlebarPointerDowns: number }).titlebarPointerDowns),
+    ).toBe(1)
+    await expect(dialog).toBeVisible()
+    // Application actions remain blocked by the modal.
+    await expect(
+      page.getByTestId("window-titlebar").getByRole("button", { name: "Settings", includeHidden: true }),
+    ).toHaveCSS("pointer-events", "none")
+    await page.keyboard.press("Escape")
+    await expect(dialog).toHaveCount(0)
+  })
+}
 
 test("a selection drag ending outside does not dismiss the dialog", async ({ page }) => {
   await page.goto(harness!.url)
