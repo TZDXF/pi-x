@@ -2,10 +2,9 @@
 /** 用量/成本汇总面板（设置 → 用量统计）：聚合 pi 会话文件中的 token/cost，仅本地会话。 */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { CircleDollarSign, ExternalLink, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
+import { CircleDollarSign, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
 import { fetchUsageSummary, type UsageSummary, type UsageTotals } from "@/api/usage"
-import { compactNumber, formatDateTime } from "@/lib/format"
-import { navigate, sessionRoute } from "@/lib/router"
+import { compactNumber } from "@/lib/format"
 import { tBackendError } from "@/i18n"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -86,11 +85,6 @@ function barHeight(day: { cost: number; totalTokens: number }): number {
 }
 function barValue(day: { cost: number; totalTokens: number }): string {
   return metric.value === "cost" ? formatCost(day.cost) : compactNumber(day.totalTokens)
-}
-
-const label = (row: { name: string | null; file: string }) => row.name || t("sidebar.untitled")
-function openSession(file: string, project: string) {
-  navigate(sessionRoute(file, project))
 }
 </script>
 
@@ -206,42 +200,6 @@ function openSession(file: string, project: string) {
               compactNumber(row.totalTokens)
             }}</span>
             <span class="w-20 shrink-0 text-right font-medium tabular-nums">{{ formatCost(row.cost) }}</span>
-          </li>
-        </ul>
-      </section>
-
-      <section v-if="summary.sessions.length" class="overflow-hidden rounded-lg border border-border/60">
-        <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2 text-sm font-medium">
-          {{ t("usage.sessionsTitle") }}
-          <span
-            v-if="summary.truncated"
-            class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground"
-          >
-            {{ t("usage.truncated", { limit: summary.sessions.length }) }}
-          </span>
-        </header>
-        <ul class="divide-y divide-border/60">
-          <li v-for="row in summary.sessions" :key="row.file" class="group flex items-center gap-3 px-3 py-2 text-sm">
-            <div class="min-w-0 flex-1">
-              <p class="truncate" :title="label(row)">{{ label(row) }}</p>
-              <p class="text-xs text-muted-foreground">
-                {{ workspace.projectName(row.project) }} · {{ formatDateTime(row.lastAt) }}
-              </p>
-            </div>
-            <span class="w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{{
-              compactNumber(row.totalTokens)
-            }}</span>
-            <span class="w-20 shrink-0 text-right font-medium tabular-nums">{{ formatCost(row.cost) }}</span>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              class="shrink-0 text-muted-foreground hover:text-foreground"
-              :title="t('usage.openSession')"
-              :aria-label="t('usage.openSession')"
-              @click="openSession(row.file, row.project)"
-            >
-              <ExternalLink :size="15" />
-            </Button>
           </li>
         </ul>
       </section>

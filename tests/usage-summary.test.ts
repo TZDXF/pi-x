@@ -30,12 +30,12 @@ test("the usage command scans pi session files and serves both transports", () =
   expect(dispatch).toMatch(/usage::handle\(cmd, &a\)/)
 })
 
-test("the usage panel aggregates by day/project/model and can open recorded sessions", () => {
+test("the usage panel aggregates by day/project/model without session details", () => {
   const page = readFileSync(new URL("../src/components/UsageSummaryPage.vue", import.meta.url), "utf8")
   const api = readFileSync(new URL("../src/api/usage.ts", import.meta.url), "utf8")
   expect(api).toMatch(/invoke<UsageSummary>\("usage_summary", \{ days, project \}\)/)
-  expect(page).toMatch(/navigate\(sessionRoute\(file, project\)\)/)
-  expect(page).toMatch(/@click="openSession\(row\.file, row\.project\)"/)
+  expect(page).not.toMatch(/summary\.sessions\.length/)
+  expect(page).not.toMatch(/openSession/)
   expect(page).toMatch(/t\("usage\.byProject"\)/)
   expect(page).toMatch(/t\("usage\.byModel"\)/)
   expect(page).toMatch(/t\("usage\.sourceNote"\)/)
@@ -68,10 +68,7 @@ test("usage panel copy exists in both locales", async () => {
       "usage.dailyTitle",
       "usage.byProject",
       "usage.byModel",
-      "usage.sessionsTitle",
       "usage.sessionsShort",
-      "usage.truncated",
-      "usage.openSession",
       "usage.empty",
       "usage.sourceNote",
     ]) {

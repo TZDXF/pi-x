@@ -596,10 +596,7 @@ export default {
     dailyTitle: "每日用量",
     byProject: "按项目",
     byModel: "按模型",
-    sessionsTitle: "会话明细",
     sessionsShort: "{count} 会话",
-    truncated: "仅显示最近 {limit} 个会话",
-    openSession: "打开会话",
     empty: "统计范围内没有用量记录。",
     sourceNote:
       "数据来自 pi 会话文件，仅统计本地项目的会话（终端 pi 与定时任务产生的会话同样计入）；非按量计费的供应商费用可能为 0，请以 tokens 为准。",

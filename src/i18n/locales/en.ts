@@ -619,10 +619,7 @@ export default {
     dailyTitle: "Daily usage",
     byProject: "By project",
     byModel: "By model",
-    sessionsTitle: "Sessions",
     sessionsShort: "{count} session(s)",
-    truncated: "Showing the latest {limit} sessions",
-    openSession: "Open session",
     empty: "No usage recorded in this range.",
     sourceNote:
       "Derived from pi session files; local sessions only (terminal pi and scheduled runs included). Subscription plans may report zero cost — rely on tokens instead.",
