@@ -22,6 +22,7 @@ function harness() {
   const interfaces = reactive(new Map())
   const activities = reactive(new Map())
   const statuses = reactive(new Map())
+  const composerDrafts = reactive(new Map())
   let sequence = 0
   const sessionFor = vi.fn(id => {
     if (!owners.has(id))
@@ -79,6 +80,10 @@ function harness() {
       sessionRunStatus: (file, project) => statuses.get(identities.sessionIdentityKey(file, project)),
       sessionActivitySnapshot: (file, project) => activities.get(identities.sessionIdentityKey(file, project)),
     },
+    "@/stores/composerDrafts": {
+      composerDraftText: (project, file) => composerDrafts.get(file)?.text ?? "",
+      composerDraftFiles: (project, file) => composerDrafts.get(file)?.files ?? [],
+    },
     "@/lib/sessionIdentity": identities,
     "@/lib/paths": paths,
     "@/lib/ssh": { isRemoteProject },
@@ -94,7 +99,7 @@ function harness() {
   scopes.push(scope)
   const enabled = ref(false)
   const board = scope.run(() => module.exports.useKanbanWorkspace(workspace, () => enabled.value))
-  return { board, workspace, owners, sessionFor, uiFor, activities, statuses, enabled }
+  return { board, workspace, owners, sessionFor, uiFor, activities, statuses, composerDrafts, enabled }
 }
 
 test("the ordinary layout is the default and switching layouts survives a reload", () => {
@@ -268,6 +273,28 @@ test("opening a todo or reserving a filename does not start it; the first prompt
   expect(sessionFor).toHaveBeenCalledWith(draft.id)
   workspace.histories["/root"][0].archived = true
   expect(board.cards.value).toEqual([])
+})
+
+test.each(["idle", "completed"])("%s cards with an unsent composer draft become todo immediately", expectedStatus => {
+  const { board, workspace, statuses, composerDrafts } = harness()
+  const file = "/sessions/draft.jsonl"
+  workspace.histories["/root"] = [{ file, cwd: "/root", title: "Saved task", mtimeMs: 5 }]
+  if (expectedStatus === "completed") statuses.set(identities.sessionIdentityKey(file, "/root"), "completed")
+
+  expect(board.cards.value[0].status).toBe(expectedStatus)
+  composerDrafts.set(file, { text: "Unsent follow-up", files: [] })
+  expect(board.cards.value[0].status).toBe("todo")
+
+  composerDrafts.set(file, { text: "", files: [] })
+  expect(board.cards.value[0].status).toBe(expectedStatus)
+})
+
+test("an attachment-only composer draft moves an idle card to todo", () => {
+  const { board, workspace, composerDrafts } = harness()
+  const file = "/sessions/attachment-draft.jsonl"
+  workspace.histories["/root"] = [{ file, cwd: "/root", title: "Saved task", mtimeMs: 5 }]
+  composerDrafts.set(file, { text: "", files: [{}] })
+  expect(board.cards.value[0].status).toBe("todo")
 })
 
 test("worktree cards filter by their project but keep their real cwd and waiting takes precedence", () => {

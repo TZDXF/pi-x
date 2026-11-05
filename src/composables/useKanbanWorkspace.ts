@@ -1,6 +1,7 @@
 import { computed, ref, watch } from "vue"
 import { allConversations, sessionFor, uiFor, findConversation } from "@/stores/conversations"
 import { sessionRunStatus, sessionActivitySnapshot } from "@/stores/sessionRunStatus"
+import { composerDraftFiles, composerDraftText } from "@/stores/composerDrafts"
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { isRemoteProject } from "@/lib/ssh"
@@ -68,6 +69,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
         (owner?.promptQueue.length ?? 0) > 0
       )
         return "running"
+      if (file && (composerDraftText(project, file) || composerDraftFiles(project, file).length)) return "todo"
       return run === "completed" || run === "error" ? "completed" : "idle"
     }
     for (const folder of folders.value) {
