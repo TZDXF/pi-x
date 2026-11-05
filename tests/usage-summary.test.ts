@@ -39,6 +39,10 @@ test("the usage panel aggregates by day/project/model without session details", 
   expect(page).toMatch(/t\("usage\.byProject"\)/)
   expect(page).toMatch(/t\("usage\.byModel"\)/)
   expect(page).toMatch(/t\("usage\.sourceNote"\)/)
+  // 项目过滤复用会话页的可搜索项目下拉，选项来自工作区而非筛选后的汇总。
+  expect(page).toMatch(/<ProjectPicker[\s\S]*?:project="projectFilter"/)
+  expect(page).toMatch(/<ProjectPicker[\s\S]*?show-all/)
+  expect(page).not.toMatch(/summary\.value\?\.byProject[\s\S]*?projectOptions/)
   // 百分比柱高需要明确的父级高度，否则柱子会折叠为 0。
   expect(page).toMatch(/class="flex h-full min-w-\[3px\] flex-1 flex-col justify-end"/)
   // 与归档面板同形态：无 ScrollArea / h1，由设置页供给框架。

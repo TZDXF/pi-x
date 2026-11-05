@@ -5,6 +5,7 @@ import vm from "node:vm"
 import ts from "typescript"
 
 const source = readFileSync(new URL("../src/components/WorkspaceContext.vue", import.meta.url), "utf8")
+const projectPicker = readFileSync(new URL("../src/components/ProjectPicker.vue", import.meta.url), "utf8")
 
 test("environment and branch menus only record draft choices", () => {
   const menu = source
@@ -46,7 +47,7 @@ test("projectless drafts show a default project and hide Git menus", () => {
   expect(source).toMatch(
     /const isProjectless = computed\(\(\) => !props\.project \|\| workspace\.isProjectless\(props\.project\)\)/,
   )
-  expect(source).toMatch(/projectless\.name/)
+  expect(projectPicker).toMatch(/projectless\.name/)
   expect(source).toMatch(/if \(!props\.project\) return/)
   expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"/)
   expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"/)
@@ -184,9 +185,11 @@ test("branch creation is skipped when blocked or the name is blank", async () =>
 
 test("workspace menus open upward without trigger arrows", () => {
   const contents = source.match(/<PopoverContent\b[^>]*>/g) || []
-  expect(contents.length).toBe(3)
+  expect(contents.length).toBe(2)
   for (const content of contents) expect(content).toMatch(/side="top"/)
+  expect(projectPicker).toMatch(/contentSide: "top"/)
   expect(source).not.toMatch(/ChevronDown/)
+  expect(projectPicker).not.toMatch(/ChevronDown/)
 })
 
 function harness(overrides = {}) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Folder, GitBranch, Laptop, Layers, MessagesSquare, Plus, LoaderCircle } from "@lucide/vue"
+import { GitBranch, Laptop, Layers, Plus, LoaderCircle } from "@lucide/vue"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -11,6 +11,7 @@ import { workspaceGitInfo, createWorkspaceGit, type WorkspaceGitInfo, type Works
 import { tBackendError } from "@/i18n"
 import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceStore } from "@/stores/workspace"
+import ProjectPicker from "@/components/ProjectPicker.vue"
 const props = withDefaults(
   defineProps<{
     project: string
@@ -28,25 +29,17 @@ const { t } = useI18n()
 const info = ref<WorkspaceGitInfo | null>(null)
 const loading = ref(false)
 const gitError = ref("")
-const projectOpen = ref(false)
-
 function openProject() {
   if (blocked.value) return
-  projectOpen.value = false
   emit("openProject")
 }
 const modeOpen = ref(false)
 const branchOpen = ref(false)
 const blocked = computed(() => props.disabled || workspace.gitBusy)
-const name = (path: string) => workspace.projectName(path)
 // 空项目仅作为无项目会话的初始展示；真正切换仍由父组件完成。
 const isProjectless = computed(() => !props.project || workspace.isProjectless(props.project))
 // 远程项目 P1 不查询本地 git，也不提供分支/工作树选择（契约 §5）。
 const isRemote = computed(() => isRemoteProject(props.project))
-const projectTitle = computed(() => props.project || (props.projectPlaceholder ? "" : workspace.projectless))
-const projectLabel = computed(() =>
-  props.project ? name(props.project) : props.projectPlaceholder || t("projectless.name"),
-)
 // An unborn HEAD is the current branch, but it has no commit to use as a base.
 const branchOptions = computed(() => {
   const result = info.value
@@ -56,17 +49,6 @@ const branchOptions = computed(() => {
     : result.branches
 })
 const unbornBranch = (branch: string) => info.value?.unborn_branch && info.value.branch === branch
-// 项目下拉：搜索框 + 两组选项（上方为普通项目，底部固定为无项目会话与添加项目）。
-const projectQuery = ref("")
-watch(projectOpen, open => {
-  if (open) projectQuery.value = ""
-})
-const filteredProjects = computed(() => {
-  const paths = workspace.orderedProjects().filter(p => !workspace.isProjectless(p))
-  const query = projectQuery.value.trim().toLowerCase()
-  if (!query) return paths
-  return paths.filter(p => name(p).toLowerCase().includes(query) || p.toLowerCase().includes(query))
-})
 let request = 0
 let initialSelection = props.initialSelection
 async function refresh() {
@@ -106,7 +88,6 @@ async function refresh() {
 }
 function select(path: string) {
   if (blocked.value) return
-  projectOpen.value = false
   if (path !== props.project) emit("selectProject", path)
 }
 // 这里只记录草稿的工作环境；首次发送时才准备工作区。
@@ -169,56 +150,14 @@ watch(() => props.project, refresh, { immediate: true })
     v-if="projectPicker || (!isProjectless && !isRemote)"
     class="workspace-context flex gap-[5px] items-center mt-0 mr-3.5 mb-[-10px] ml-3.5 pt-[5px] pr-2 pb-[15px] pl-2 bg-muted rounded-[16px_16px_0_0] max-[700px]:[margin-inline:2px] max-[700px]:gap-0"
   >
-    <Popover v-if="projectPicker" v-model:open="projectOpen"
-      ><PopoverTrigger as-child
-        ><Button
-          variant="context-chip"
-          size="content"
-          class="context-chip"
-          :disabled="blocked"
-          :title="projectTitle || undefined"
-          ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ projectLabel }}</span></Button
-        ></PopoverTrigger
-      >
-      <PopoverContent side="top" align="start" class="w-72 p-2">
-        <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
-        <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
-          <Button
-            v-for="path in filteredProjects"
-            :key="path"
-            variant="context-menu-item"
-            size="content"
-            class="context-menu-item"
-            :aria-current="path === workspace.projectRoot(project) ? 'true' : undefined"
-            :title="path"
-            @click="select(path)"
-            ><Folder :size="14" class="size-auto shrink-0" /><span class="truncate">{{ name(path) }}</span
-            ><span v-if="path === workspace.projectRoot(project)" class="ml-auto">✓</span></Button
-          >
-        </ScrollArea>
-        <p v-else-if="projectQuery.trim()" class="px-2 py-2 text-xs text-muted-foreground">
-          {{ t("workspace.noMatchingProject") }}
-        </p>
-        <div class="border-t border-border pt-1.5">
-          <Button
-            v-if="workspace.projectless"
-            variant="context-menu-item"
-            size="content"
-            class="context-menu-item"
-            :aria-current="isProjectless ? 'true' : undefined"
-            :title="workspace.projectless"
-            @click="select(workspace.projectless)"
-            ><MessagesSquare :size="14" class="size-auto shrink-0" /><span class="truncate">{{
-              name(workspace.projectless)
-            }}</span
-            ><span v-if="isProjectless" class="ml-auto">✓</span></Button
-          >
-          <Button variant="context-menu-item" size="content" class="context-menu-item" @click="openProject"
-            ><Plus :size="14" class="size-auto shrink-0" />{{ t("sidebar.openProject") }}</Button
-          >
-        </div>
-      </PopoverContent>
-    </Popover>
+    <ProjectPicker
+      v-if="projectPicker"
+      :project="project"
+      :disabled="blocked"
+      :placeholder="projectPlaceholder"
+      @select-project="select"
+      @open-project="openProject"
+    />
     <Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"
       ><PopoverTrigger as-child
         ><Button

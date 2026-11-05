@@ -7,6 +7,7 @@ import { fetchUsageSummary, type UsageSummary, type UsageTotals } from "@/api/us
 import { compactNumber } from "@/lib/format"
 import { tBackendError } from "@/i18n"
 import { Button } from "@/components/ui/button"
+import ProjectPicker from "@/components/ProjectPicker.vue"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useWorkspaceStore } from "@/stores/workspace"
 
@@ -39,16 +40,6 @@ async function load() {
 }
 onMounted(load)
 watch([days, projectFilter], load)
-
-/** 项目过滤下拉：当前汇总里出现过的项目（选中项若不在列表中也要保留）。 */
-const projectOptions = computed(() => {
-  const seen = new Map<string, string>()
-  for (const row of summary.value?.byProject ?? [])
-    if (!seen.has(row.project)) seen.set(row.project, workspace.projectName(row.project))
-  if (projectFilter.value !== "all" && !seen.has(projectFilter.value))
-    seen.set(projectFilter.value, workspace.projectName(projectFilter.value))
-  return [...seen.entries()].map(([cwd, name]) => ({ cwd, name })).sort((a, b) => a.name.localeCompare(b.name))
-})
 
 function formatCost(cost: number): string {
   if (!cost) return "$0"
@@ -101,15 +92,18 @@ function barValue(day: { cost: number; totalTokens: number }): string {
           </SelectItem>
         </SelectContent>
       </Select>
-      <Select v-model="projectFilter">
-        <SelectTrigger class="w-48 shrink-0 text-xs" :aria-label="t('sessionArchive.filter')">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">{{ t("sessionArchive.filterAll") }}</SelectItem>
-          <SelectItem v-for="p in projectOptions" :key="p.cwd" :value="p.cwd">{{ p.name }}</SelectItem>
-        </SelectContent>
-      </Select>
+      <ProjectPicker
+        :project="projectFilter"
+        show-all
+        :show-projectless="false"
+        :show-open-project="false"
+        trigger-variant="outline"
+        trigger-size="default"
+        trigger-class="w-48 shrink-0 justify-start px-3 text-xs font-normal"
+        content-side="bottom"
+        :aria-label="t('sessionArchive.filter')"
+        @select-project="projectFilter = $event"
+      />
       <Select v-model="metric">
         <SelectTrigger class="w-32 shrink-0 text-xs" :aria-label="t('usage.metric')">
           <SelectValue />
