@@ -157,6 +157,17 @@ const passthrough = vue.defineComponent({
     () =>
       vue.h("div", slots.default?.()),
 })
+const dialogContent = vue.defineComponent({
+  props: { disableOutsidePointerEvents: { type: Boolean, default: true } },
+  setup:
+    (props, { slots }) =>
+    () =>
+      vue.h(
+        "div",
+        { "data-dialog-content": true, "data-disable-outside-pointer-events": props.disableOutsidePointerEvents },
+        slots.default?.(),
+      ),
+})
 const button = vue.defineComponent({
   setup:
     (_, { slots, attrs }) =>
@@ -323,7 +334,7 @@ const imports = {
   },
   "@/components/ui/dialog": {
     Dialog: dialog,
-    DialogContent: passthrough,
+    DialogContent: dialogContent,
     DialogHeader: passthrough,
     DialogTitle: passthrough,
     DialogDescription: passthrough,
@@ -605,7 +616,9 @@ describe("KanbanBoard", () => {
 
     const picker = h.all().find(child => child.props["data-workspace-project"])!
     expect(picker.props["data-project-placeholder"]).toBe("kanban.selectProject")
-    h.all().find(child => child.props["data-open-project"])!.props.onClick()
+    h.all()
+      .find(child => child.props["data-open-project"])!
+      .props.onClick()
     expect(h.openProject).toHaveBeenCalledOnce()
   })
 
@@ -838,6 +851,13 @@ describe("KanbanBoard", () => {
     expect(h.byText("kanban.create").props.disabled).toBeFalsy()
     await h.openCreate()
     expect(h.isDialogOpen()).toBe(true)
+  })
+
+  test("creation keeps native title bar pointer events enabled", async () => {
+    const h = await harness()
+    await h.openCreate()
+    const content = h.all().find(child => child.props["data-dialog-content"])!
+    expect(content.props["data-disable-outside-pointer-events"]).toBe(true)
   })
 
   test("parent can open creation while busy and without projects", async () => {

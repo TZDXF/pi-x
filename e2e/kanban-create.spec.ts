@@ -6,9 +6,12 @@ import { createApp, h, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import KanbanBoard from '/src/components/kanban/KanbanBoard.vue'
+import { useWorkspaceStore } from '/src/stores/workspace'
 import zhCN from '/src/i18n/locales/zh-CN'
 import '/src/style.css'
 const busy = ref(false), error = ref(''), saved = ref(null)
+const pinia = createPinia()
+useWorkspaceStore(pinia).projects = ['/project']
 createApp({render: () => h('div', {style:'height:700px'}, [h(KanbanBoard, {
   cards:[], projects:[{value:'/project', label:'Project'}], selectedProject:'/project',
   busy:busy.value, error:error.value,
@@ -20,7 +23,7 @@ createApp({render: () => h('div', {style:'height:700px'}, [h(KanbanBoard, {
     busy.value = false
   },
 }), h('pre', {id:'saved'}, JSON.stringify(saved.value))])})
-  .use(createPinia()).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
+  .use(pinia).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
 </script></body></html>`
 
 let harness: VueHarness
@@ -52,6 +55,21 @@ test.beforeEach(async ({ page }) => {
   })
   await page.goto(harness.url)
   await page.getByRole("button", { name: "新建待办", exact: true }).click()
+})
+
+test("the project picker opens inside the creation dialog", async ({ page }) => {
+  const dialog = page.getByRole("dialog", { name: "新建待办" })
+  await expect(dialog.getByText("项目", { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText("任务消息", { exact: true })).toHaveCount(0)
+  await dialog.getByRole("button", { name: /project/i }).click()
+  const content = page.locator('[data-slot="popover-content"]')
+  await expect(content).toBeVisible()
+  await expect(content.getByRole("textbox")).toBeVisible()
+  await content.getByRole("button", { name: /project/i }).click()
+  await expect(content).toHaveCount(0)
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("button", { name: "main", exact: true })).toBeVisible()
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
 })
 
 const image = {

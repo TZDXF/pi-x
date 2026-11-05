@@ -2,12 +2,14 @@
 /** 用量/成本汇总面板（设置 → 用量统计）：聚合 pi 会话文件中的 token/cost，仅本地会话。 */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { CircleDollarSign, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
+import { CircleDollarSign, Folder, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
 import { fetchUsageSummary, type UsageSummary, type UsageTotals } from "@/api/usage"
 import { compactNumber } from "@/lib/format"
 import { tBackendError } from "@/i18n"
 import { Button } from "@/components/ui/button"
-import ProjectPicker from "@/components/ProjectPicker.vue"
+import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useWorkspaceStore } from "@/stores/workspace"
 
@@ -40,6 +42,25 @@ async function load() {
 }
 onMounted(load)
 watch([days, projectFilter], load)
+
+// 与会话页一致的项目搜索下拉，但选项始终来自完整工作区，不受统计筛选结果影响。
+const projectOpen = ref(false)
+const projectQuery = ref("")
+watch(projectOpen, open => {
+  if (open) projectQuery.value = ""
+})
+const filteredProjects = computed(() => {
+  const paths = workspace.orderedProjects().filter(path => !workspace.isProjectless(path))
+  const query = projectQuery.value.trim().toLowerCase()
+  if (!query) return paths
+  return paths.filter(
+    path => workspace.projectName(path).toLowerCase().includes(query) || path.toLowerCase().includes(query),
+  )
+})
+function selectProject(path: string) {
+  projectFilter.value = path
+  projectOpen.value = false
+}
 
 function formatCost(cost: number): string {
   if (!cost) return "$0"
@@ -92,18 +113,56 @@ function barValue(day: { cost: number; totalTokens: number }): string {
           </SelectItem>
         </SelectContent>
       </Select>
-      <ProjectPicker
-        :project="projectFilter"
-        show-all
-        :show-projectless="false"
-        :show-open-project="false"
-        trigger-variant="outline"
-        trigger-size="default"
-        trigger-class="w-48 shrink-0 justify-start px-3 text-xs font-normal"
-        content-side="bottom"
-        :aria-label="t('sessionArchive.filter')"
-        @select-project="projectFilter = $event"
-      />
+      <Popover v-model:open="projectOpen">
+        <PopoverTrigger as-child>
+          <Button
+            variant="outline"
+            class="w-48 shrink-0 justify-start px-3 text-xs font-normal"
+            :aria-label="t('sessionArchive.filter')"
+            :title="projectFilter === 'all' ? undefined : projectFilter"
+          >
+            <Folder :size="14" class="size-auto shrink-0" />
+            <span class="truncate">{{
+              projectFilter === "all" ? t("sessionArchive.filterAll") : workspace.projectName(projectFilter)
+            }}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" align="start" class="w-72 p-2">
+          <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
+          <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
+            <Button
+              v-for="path in filteredProjects"
+              :key="path"
+              variant="context-menu-item"
+              size="content"
+              class="context-menu-item"
+              :aria-current="path === projectFilter ? 'true' : undefined"
+              :title="path"
+              @click="selectProject(path)"
+            >
+              <Folder :size="14" class="size-auto shrink-0" />
+              <span class="truncate">{{ workspace.projectName(path) }}</span>
+              <span v-if="path === projectFilter" class="ml-auto">✓</span>
+            </Button>
+          </ScrollArea>
+          <p v-else-if="projectQuery.trim()" class="px-2 py-2 text-xs text-muted-foreground">
+            {{ t("workspace.noMatchingProject") }}
+          </p>
+          <div class="border-t border-border pt-1.5">
+            <Button
+              variant="context-menu-item"
+              size="content"
+              class="context-menu-item"
+              :aria-current="projectFilter === 'all' ? 'true' : undefined"
+              @click="selectProject('all')"
+            >
+              <Folder :size="14" class="size-auto shrink-0" />
+              <span class="truncate">{{ t("sessionArchive.filterAll") }}</span>
+              <span v-if="projectFilter === 'all'" class="ml-auto">✓</span>
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
       <Select v-model="metric">
         <SelectTrigger class="w-32 shrink-0 text-xs" :aria-label="t('usage.metric')">
           <SelectValue />

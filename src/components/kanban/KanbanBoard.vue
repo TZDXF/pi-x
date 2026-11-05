@@ -72,8 +72,8 @@ const groups = computed(() =>
   groupKanbanCards(filterKanbanCards(props.cards, props.selectedProject), props.columnOrder, props.selectedProject),
 )
 const columns = computed(() =>
-  orderKanbanColumns(props.columnOrder?.[kanbanStatusOrderKey]).map(
-    status => KANBAN_COLUMNS.find(column => column.id === status)!,
+  orderKanbanColumns(props.columnOrder?.[kanbanStatusOrderKey]).map(status =>
+    KANBAN_COLUMNS.find(column => column.id === status)!,
   ),
 )
 const columnSorting = reactive(
@@ -403,8 +403,9 @@ async function submit(message: PromptInputMessage) {
               @dragstart="columnSorting.startDrag($event, column.id)"
               @dragend="columnSorting.endDrag"
               @keydown="columnSorting.moveWithKeyboard($event, column.id)"
-              >{{ t(column.labelKey) }}</h2
             >
+              {{ t(column.labelKey) }}
+            </h2>
             <span
               class="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground"
               :aria-label="t('kanban.columnCount', { count: groups[column.id].length })"
@@ -516,53 +517,47 @@ async function submit(message: PromptInputMessage) {
           <DialogTitle>{{ t("kanban.create") }}</DialogTitle>
           <DialogDescription>{{ t("kanban.createDescription") }}</DialogDescription>
         </DialogHeader>
-        <div class="min-w-0 space-y-4">
-          <div class="space-y-2">
-            <p class="text-sm font-medium">{{ t("kanban.project") }}</p>
-            <WorkspaceContext
-              v-model="draftSelection"
-              :project="draftProject"
-              :project-placeholder="t('kanban.selectProject')"
-              :disabled="createBusy"
-              @select-project="draftProject = $event"
-              @open-project="emit('openProject')"
-            />
-          </div>
-          <div class="space-y-2">
-            <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
-            <ChatPromptInput
-              v-model:bridge="bridge"
-              :disabled="createBusy"
-              :placeholder="t('kanban.messagePlaceholder')"
-              :submit="submit"
-              @error="inputError"
-              @preview-image="previewImage = $event"
-            >
-              <template #model>
-                <ModelThinkingSelect
-                  v-model="modelKey"
-                  :thinking-level="thinkingLevel"
-                  :available-thinking="availableThinking"
-                  :models="models"
-                  :disabled="createBusy || !models.length"
-                  @update:thinking-level="setThinkingLevel"
-                />
-              </template>
-              <template #actions>
-                <label class="mr-2 flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-normal">
-                  <Checkbox v-model="startImmediately" :disabled="createBusy" />
-                  <span>{{ t("kanban.startImmediately") }}</span>
-                </label>
-                <Button type="button" variant="ghost" :disabled="createBusy" @click="setCreateOpen(false)">
-                  {{ t("kanban.cancel") }}
-                </Button>
-                <Button type="submit" :disabled="!canCreate">
-                  <LoaderCircle v-if="createBusy" class="size-3.5 animate-spin" aria-hidden="true" />
-                  {{ t(submitLabel) }}
-                </Button>
-              </template>
-            </ChatPromptInput>
-          </div>
+        <div class="min-w-0 space-y-3">
+          <WorkspaceContext
+            v-model="draftSelection"
+            :project="draftProject"
+            :project-placeholder="t('kanban.selectProject')"
+            :disabled="createBusy"
+            @select-project="draftProject = $event"
+            @open-project="emit('openProject')"
+          />
+          <ChatPromptInput
+            v-model:bridge="bridge"
+            :disabled="createBusy"
+            :placeholder="t('kanban.messagePlaceholder')"
+            :submit="submit"
+            @error="inputError"
+            @preview-image="previewImage = $event"
+          >
+            <template #model>
+              <ModelThinkingSelect
+                v-model="modelKey"
+                :thinking-level="thinkingLevel"
+                :available-thinking="availableThinking"
+                :models="models"
+                :disabled="createBusy || !models.length"
+                @update:thinking-level="setThinkingLevel"
+              />
+            </template>
+            <template #actions>
+              <label class="mr-2 flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-normal">
+                <Checkbox v-model="startImmediately" :disabled="createBusy" />
+                <span>{{ t("kanban.startImmediately") }}</span>
+              </label>
+              <Button type="button" variant="ghost" :disabled="createBusy" @click="setCreateOpen(false)">
+                {{ t("kanban.cancel") }}
+              </Button>
+              <Button type="submit" :disabled="!canCreate">
+                <LoaderCircle v-if="createBusy" class="size-3.5 animate-spin" aria-hidden="true" />
+                {{ t(submitLabel) }}
+              </Button>
+            </template>
+          </ChatPromptInput>
           <p v-if="createError || error" role="alert" class="text-sm text-destructive">{{ createError || error }}</p>
         </div>
       </DialogContent>
