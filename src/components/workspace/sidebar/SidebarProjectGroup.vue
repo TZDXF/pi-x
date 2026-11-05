@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n"
-import { AlertTriangle, Folder, FolderOpen, MoreHorizontal, Pencil, Pin, PinOff, Plus, X } from "@lucide/vue"
+import {
+  AlertTriangle,
+  Folder,
+  FolderOpen,
+  LoaderCircle,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  X,
+} from "@lucide/vue"
 import { isDesktop } from "@/api/transport"
 import { openPath } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
@@ -26,6 +37,7 @@ defineProps<{
   project: string
   ready: boolean
   collapsed: boolean
+  running?: boolean
   error?: string
   /** Every folder of a grouped project is unreadable — hide the session list. */
   hidden?: boolean
@@ -75,6 +87,14 @@ async function openProjectFolder(path: string) {
               :size="15"
               class="size-auto shrink-0"
             /><span class="truncate">{{ workspace.projectName(path) }}</span>
+            <LoaderCircle
+              v-if="collapsed && running"
+              :size="14"
+              class="project-running size-auto shrink-0 animate-spin text-muted-foreground"
+              role="status"
+              :aria-label="t('sidebar.status.running')"
+              :title="t('sidebar.status.running')"
+            />
             <AlertTriangle
               v-if="error === 'missing'"
               :size="14"

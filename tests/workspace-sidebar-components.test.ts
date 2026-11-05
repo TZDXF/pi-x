@@ -436,6 +436,41 @@ test("project group keeps pin, missing-directory handling and independent collap
   expect(newSession).toHaveBeenCalledWith("root")
 })
 
+test("project group shows a running indicator only while collapsed", () => {
+  const collapsed = mount("SidebarProjectGroup.vue", {
+    path: "root",
+    project: "root",
+    ready: true,
+    collapsed: true,
+    running: true,
+    disabled: false,
+    navigationDisabled: false,
+  })
+  expect(find(collapsed, item => item.props.icon === "LoaderCircle")).toHaveLength(1)
+
+  const expanded = mount("SidebarProjectGroup.vue", {
+    path: "root",
+    project: "root",
+    ready: true,
+    collapsed: false,
+    running: true,
+    disabled: false,
+    navigationDisabled: false,
+  })
+  expect(find(expanded, item => item.props.icon === "LoaderCircle")).toHaveLength(0)
+
+  const idle = mount("SidebarProjectGroup.vue", {
+    path: "root",
+    project: "root",
+    ready: true,
+    collapsed: true,
+    running: false,
+    disabled: false,
+    navigationDisabled: false,
+  })
+  expect(find(idle, item => item.props.icon === "LoaderCircle")).toHaveLength(0)
+})
+
 test("scoped hover selectors remain attached to row/group DOM, including touch spacing and open menus", () => {
   const read = name => readFileSync(path.join(directory, name), "utf8")
   const row = read("SidebarSavedSessionRow.vue")

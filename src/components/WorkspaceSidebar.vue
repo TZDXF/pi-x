@@ -35,6 +35,7 @@ import SidebarProjectGroup from "@/components/workspace/sidebar/SidebarProjectGr
 import SidebarSessionList from "@/components/workspace/sidebar/SidebarSessionList.vue"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
 import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
+import { projectHasRunningSession } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -255,6 +256,9 @@ function groupState(path: string) {
 async function refreshGroup(path: string) {
   for (const folder of workspace.projectFolders(path)) await refresh(folder)
 }
+function projectRunning(path: string) {
+  return projectHasRunningSession(path, rows(path), allConversations(), workspace.projectRoot)
+}
 const projectStates = computed(() => Object.fromEntries(visibleProjects.value.map(path => [path, groupState(path)])))
 function onProjectDragStart(event: { item?: HTMLElement; originalEvent?: DragEvent }) {
   const path = event.item?.dataset.path
@@ -363,6 +367,7 @@ watch(
             :project="project"
             :ready="ready"
             :collapsed="!!collapsed[path]"
+            :running="projectRunning(path)"
             :error="projectStates[path]?.error"
             :hidden="projectStates[path]?.hidden"
             :disabled="disabled"
