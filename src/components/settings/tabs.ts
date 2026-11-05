@@ -121,6 +121,13 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./McpSettings.vue")),
   },
   {
+    id: "storage",
+    nav: "storage.nav",
+    title: "storage.title",
+    desc: "storage.description",
+    component: defineAsyncComponent(() => import("./StorageSettings.vue")),
+  },
+  {
     id: "archives",
     nav: "sessionArchive.nav",
     title: "sessionArchive.title",
@@ -167,7 +174,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "other",
     labelKey: "settings.groups.other",
-    tabIds: ["model-config", "archives", "usage", "about"],
+    tabIds: ["model-config", "storage", "archives", "usage", "about"],
   },
 ]
 

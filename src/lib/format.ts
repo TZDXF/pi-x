@@ -23,6 +23,15 @@ export function formatPercent(n: number): string {
   return cachedNumberFormatter({ style: "percent", maximumFractionDigits: 1 }).format(n)
 }
 
+/** Binary file sizes with compact locale-aware digits and technical units. */
+export function formatBytes(bytes: number): string {
+  const value = Number.isFinite(bytes) ? Math.max(0, bytes) : 0
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"]
+  const unit = Math.min(Math.floor(Math.log(value || 1) / Math.log(1024)), units.length - 1)
+  const scaled = value / 1024 ** unit
+  const maximumFractionDigits = unit === 0 || scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2
+  return `${cachedNumberFormatter({ maximumFractionDigits }).format(scaled)} ${units[unit]}`
+}
 /** Message timestamps: time only for today, otherwise a short date plus time. */
 export function formatMessageTime(ts?: number): string {
   if (!ts) return ""

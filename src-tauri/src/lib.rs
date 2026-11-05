@@ -36,6 +36,7 @@ mod sessions;
 mod skills;
 mod ssh;
 mod ssh_sessions;
+mod storage;
 mod terminal;
 mod terminal_open;
 mod title_generation;
@@ -151,6 +152,8 @@ pub fn run() {
             commands::files::session_list,
             session_search::session_search,
             usage::usage_summary,
+            storage::storage_summary,
+            storage::storage_cleanup,
             sessions::session_mtime,
             sessions::session_history,
             sessions::session_last_error,

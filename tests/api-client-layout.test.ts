@@ -39,6 +39,7 @@ const loaders = {
   rpc: () => import("@/api/client/rpc"),
   sessions: () => import("@/api/client/sessions"),
   skills: () => import("@/api/client/skills"),
+  storage: () => import("@/api/client/storage"),
   ssh: () => import("@/api/client/ssh"),
   updates: () => import("@/api/client/updates"),
   workspace: () => import("@/api/client/workspace"),
@@ -52,6 +53,7 @@ UpdateChannel AppUpdateStatus APP_UPDATE_PROGRESS_EVENT checkAppUpdate getAppVer
 saveConfig ProjectlessDirInfo resolveProjectlessDir chooseDirectoryPath GlobalPromptFile listGlobalPrompts saveGlobalPrompt
 trustStatus trustSave WorkspaceContext spawnPi killPi piRunning pixLog
 SessionMeta SessionSearchHit listSessions searchSessions sessionMtime sessionHistory SessionLastError sessionLastError duplicateSessionFile
+StorageCategoryId StorageCategory StorageSummary StorageCleanupResult getStorageSummary cleanupStorage
 onSessionsChanged FileHit searchFiles openPath openTerminalInDir exportSessionHtml exportSessionFileHtml
 rpcRequest RpcImage rpcSteer rpcFollowUp rpcNotify onPiEvent onPiExit
 onPiStderr onSshPathBound onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet PreviewProxyInfo

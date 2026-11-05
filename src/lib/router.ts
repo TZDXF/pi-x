@@ -35,6 +35,7 @@ export const SETTINGS_TABS = [
   "general",
   "appearance",
   "run-config",
+  "storage",
   "archives",
   "usage",
   "notifications",

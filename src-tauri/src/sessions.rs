@@ -305,7 +305,7 @@ fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
         );
     }
 }
-fn invalidate_meta_cache(path: &Path) {
+pub(crate) fn invalidate_meta_cache(path: &Path) {
     if let Ok(mut cache) = meta_cache().lock() {
         cache.remove(path);
     }

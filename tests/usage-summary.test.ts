@@ -15,7 +15,7 @@ test("usage summary is a settings tab reachable from the router and tab registry
   expect(router).toMatch(/"archives",\s*"usage",/)
   expect(tabs).toMatch(/id: "usage"/)
   expect(tabs).toMatch(/import\("@\/components\/UsageSummaryPage\.vue"\)/)
-  expect(tabs).toMatch(/tabIds: \["model-config", "archives", "usage", "about"\]/)
+  expect(tabs).toMatch(/tabIds: \["model-config", "storage", "archives", "usage", "about"\]/)
 })
 
 test("the usage command scans pi session files and serves both transports", () => {

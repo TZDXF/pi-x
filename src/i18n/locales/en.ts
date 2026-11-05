@@ -553,6 +553,48 @@ export default {
     deletedAll: "Deleted {count} session(s)",
     deleteAllFailed: "Failed to delete {count} session(s)",
   },
+  storage: {
+    nav: "Storage",
+    title: "Storage",
+    description: "Review disk usage for PiX and Pi sessions, and clean up safely regenerable data.",
+    total: "Total usage",
+    refresh: "Refresh",
+    reload: "Reload",
+    loading: "Scanning storage…",
+    categories: {
+      sessions: "Sessions",
+      archivedSessions: "Archived sessions",
+      cache: "Icon cache",
+      logs: "Diagnostic logs",
+      appData: "Other app data",
+    },
+    descriptions: {
+      sessions:
+        "Unarchived sessions and their metadata. Manage them individually in the sidebar; bulk deletion is not available.",
+      archivedSessions:
+        "Archived sessions and their metadata. Restore them from Archives, or permanently remove all archives here.",
+      cache: "Editor and IDE icons. They are regenerated as needed; settings and sessions are not affected.",
+      logs: "PiX diagnostic .log files. Sessions are not affected, but troubleshooting history will be removed.",
+      appData:
+        "Settings, skills, extensions, WebView data, and more. One-click deletion is unavailable to protect configuration and sign-in state.",
+    },
+    sessionCount: "{count} session(s)",
+    fileCount: "{count} file(s)",
+    manageArchives: "Manage archives",
+    openDataDirectory: "Open data directory",
+    clean: "Clean up",
+    cleanupTitle: "Clean up {name}?",
+    cleanupArchivedConfirm:
+      "Permanently delete every archived session and free approximately {size}? This cannot be undone. Unarchived sessions are not affected.",
+    cleanupCacheConfirm: "Delete regenerable icon cache and free approximately {size}?",
+    cleanupLogsConfirm: "Permanently delete all diagnostic logs and free approximately {size}?",
+    confirmClean: "Clean up",
+    cleaned: "Freed {size}",
+    cleanedPartial: "Freed {size}, but {count} item(s) could not be removed. Refresh and try again.",
+    scopeNote:
+      "Includes only the PiX- and Pi-managed data above, not project files or the projectless workspace. Usage is an estimate at scan time.",
+    scannedAt: "Scanned at {time}",
+  },
   usage: {
     nav: "Usage",
     title: "Usage & cost",
@@ -1542,6 +1584,7 @@ export default {
     missingArchived: "Missing the archived field.",
     missingWorktree: "Missing the worktree field.",
     missingEnabled: "Missing the enabled field.",
+    storageCategoryNotCleanable: "This storage category cannot be cleaned up.",
     sessionPathInvalid: "Invalid session path.",
     sessionFileReadFailed: "Failed to read the session file: {detail}",
     sessionMetaPathInvalid: "Invalid session metadata path.",
