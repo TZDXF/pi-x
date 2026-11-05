@@ -13,11 +13,11 @@ export default {
     projectFilter: "Project",
     allTasks: "All tasks",
     noProject: "No project",
-    noProjects: "Add a project to create tasks.",
+    noProjects: "Create a task without a project, or add a project to associate tasks with it.",
     create: "New task",
     createProject: "New project",
     createDescription:
-      "Choose a project, add a message or attachments, and select a model and thinking level. Save the task to start it later.",
+      "Add a message or attachments, optionally choose a project, and select a model and thinking level. Leave the project unselected to save a task without a project and start it later.",
     project: "Project",
     selectProject: "Select a project",
     draftMessage: "Task message",

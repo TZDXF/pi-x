@@ -207,14 +207,10 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
   })
 
   async function createDraft(input: KanbanCreatePayload): Promise<BoardDraft | null> {
-    const project = normalizeProjectPath(input.project)
     const message = input.message.trim()
-    if (
-      !project ||
-      (!message && !input.attachments?.length) ||
-      !projects.value.some(item => samePath(item.value, project))
-    )
-      return null
+    if (!message && !input.attachments?.length) return null
+    const project = normalizeProjectPath(input.project || (await workspace.ensureProjectless()))
+    if (!project || !projects.value.some(item => samePath(item.value, project))) return null
     const timestamp = Date.now()
     const draft: BoardDraft = {
       id: createUuid(),

@@ -134,10 +134,13 @@ onMounted(() => {
 })
 onBeforeUnmount(() => clearInterval(timeTicker))
 const createBusy = computed(() => props.busy || submitted.value)
+const validDraftProject = computed(
+  () => !draftProject.value || availableProjects.value.some(project => project.value === draftProject.value),
+)
 const canCreate = computed(
   () =>
     !createBusy.value &&
-    availableProjects.value.some(project => project.value === draftProject.value) &&
+    validDraftProject.value &&
     (!!bridge.value?.textInput.trim() || !!bridge.value?.files.length) &&
     !bridge.value?.isLoading,
 )
@@ -249,11 +252,7 @@ const submitLabel = computed(() => {
 })
 
 async function submit(message: PromptInputMessage) {
-  if (
-    createBusy.value ||
-    !availableProjects.value.some(project => project.value === draftProject.value) ||
-    (!message.text.trim() && !message.files.length)
-  )
+  if (createBusy.value || !validDraftProject.value || (!message.text.trim() && !message.files.length))
     throw new Error(t("kanban.createDescription"))
   // The shared input waits for this promise and restores text/files on failure.
   submitted.value = true
@@ -521,7 +520,6 @@ async function submit(message: PromptInputMessage) {
           <WorkspaceContext
             v-model="draftSelection"
             :project="draftProject"
-            :project-placeholder="t('kanban.selectProject')"
             :disabled="createBusy"
             @select-project="draftProject = $event"
             @open-project="emit('openProject')"

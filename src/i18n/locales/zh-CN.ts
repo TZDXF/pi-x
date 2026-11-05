@@ -13,10 +13,11 @@ export default {
     projectFilter: "项目",
     allTasks: "全部任务",
     noProject: "无项目",
-    noProjects: "添加项目后即可新建待办。",
+    noProjects: "可直接新建无项目任务，也可添加项目后关联任务。",
     create: "新建待办",
     createProject: "新建项目",
-    createDescription: "选择项目，填写任务消息或添加附件，可设置模型和思考强度，保存后随时开始执行。",
+    createDescription:
+      "填写任务消息或添加附件，可选择项目、设置模型和思考强度；不选项目时保存为无项目任务，保存后随时开始执行。",
     project: "项目",
     selectProject: "请选择项目",
     draftMessage: "任务消息",

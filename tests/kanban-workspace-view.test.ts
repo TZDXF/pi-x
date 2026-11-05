@@ -56,6 +56,10 @@ function harness() {
     sessionAcknowledgements: {},
     histories: {},
     projectless: "/loose",
+    ensureProjectless: vi.fn(async () => {
+      workspace.projectless = "/loose"
+      return workspace.projectless
+    }),
     orderedProjects: () => ["/root"],
     projectFolders: () => ["/root", "/root/linked"],
     projectRoot: path => (path === "/root/linked" ? "/root" : path),
@@ -247,6 +251,39 @@ test("more than twelve independent todos in one project are persisted without st
   expect(sessionFor).not.toHaveBeenCalled()
   expect(await board.createDraft({ project: "/missing", message: "Task" })).toBeNull()
   expect(await board.createDraft({ project: "/root", message: "  " })).toBeNull()
+})
+
+test.each([true, false])(
+  "unselected projects resolve and persist as projectless tasks (directory resolved: %s)",
+  async resolved => {
+    const { board, workspace, sessionFor } = harness()
+    workspace.orderedProjects = () => []
+    if (!resolved) workspace.projectless = ""
+    const draft = await board.createDraft({ project: "", message: "  Task  " })
+    expect(workspace.ensureProjectless).toHaveBeenCalledOnce()
+    expect(draft).toMatchObject({ project: "/loose", message: "Task" })
+    expect(workspace.boardDrafts[draft.id]).toEqual(draft)
+    expect(workspace.flushPersistence).toHaveBeenCalledOnce()
+    expect(board.cards.value).toEqual([
+      expect.objectContaining({ draftId: draft.id, project: "/loose", projectless: true, status: "todo" }),
+    ])
+    expect(sessionFor).not.toHaveBeenCalled()
+  },
+)
+
+test("projectless tasks support attachments and propagate directory resolution failures", async () => {
+  const { board, workspace } = harness()
+  expect(await board.createDraft({ project: "", message: "  " })).toBeNull()
+  expect(workspace.ensureProjectless).not.toHaveBeenCalled()
+  workspace.ensureProjectless.mockRejectedValueOnce(new Error("directory unavailable"))
+  await expect(board.createDraft({ project: "", message: "Task" })).rejects.toThrow("directory unavailable")
+  expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
+  const attachments = [{ filename: "notes.txt", mediaType: "text/plain", url: "data:text/plain;base64,aGVsbG8=" }]
+  expect(await board.createDraft({ project: "", message: "", attachments })).toMatchObject({
+    project: "/loose",
+    message: "",
+    attachments,
+  })
 })
 
 test("opening a todo or reserving a filename does not start it; the first prompt keeps a single card", async () => {

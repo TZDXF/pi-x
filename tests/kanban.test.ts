@@ -615,14 +615,14 @@ describe("KanbanBoard", () => {
     await h.openCreate()
 
     const picker = h.all().find(child => child.props["data-workspace-project"])!
-    expect(picker.props["data-project-placeholder"]).toBe("kanban.selectProject")
+    expect(picker.props["data-project-placeholder"]).toBeUndefined()
     h.all()
       .find(child => child.props["data-open-project"])!
       .props.onClick()
     expect(h.openProject).toHaveBeenCalledOnce()
   })
 
-  test("parent can open creation with an explicit project, while an invalid preset requires a new selection", async () => {
+  test("parent can preset a project, while an invalid preset defaults to no project", async () => {
     const h = await harness()
     h.board.value!.openCreate("other")
     await vue.nextTick()
@@ -641,7 +641,8 @@ describe("KanbanBoard", () => {
       .props.onInput({ target: { value: "Task" } })
     await vue.nextTick()
     h.submit()
-    expect(h.create).toHaveBeenCalledOnce()
+    expect(h.create).toHaveBeenCalledTimes(2)
+    expect(h.create).toHaveBeenLastCalledWith({ project: "", message: "Task", thinkingLevel: "off" })
   })
 
   test("keeps five empty columns, renders parent actions, and emits project changes without mutating props", async () => {
@@ -731,14 +732,14 @@ describe("KanbanBoard", () => {
     expect(h.cards()).toHaveLength(65)
   })
 
-  test("creation requires a known project and non-whitespace message; no title or message limit is added", async () => {
+  test("creation rejects unknown projects and whitespace messages; no title or message limit is added", async () => {
     const h = await harness()
     await h.openCreate()
-    await h.fill("", "message")
-    h.submit()
     await h.fill("missing", "message")
     h.submit()
     await h.fill("root", " \n\t ")
+    h.submit()
+    await h.fill("", " \n\t ")
     h.submit()
     expect(h.create).not.toHaveBeenCalled()
     const dialog = h.all().find(child => child.props["data-dialog"])!
@@ -867,14 +868,27 @@ describe("KanbanBoard", () => {
     expect(h.isDialogOpen()).toBe(true)
   })
 
-  test("without projects, creation opens while ungrouped existing cards are still displayed", async () => {
+  test.each([undefined, []])("creation defaults to no project with project options %j", async projects => {
+    const h = await harness(projects ? { projects } : {})
+    await h.openCreate()
+    h.all()
+      .find(child => child.tag === "textarea")!
+      .props.onInput({ target: { value: "Task" } })
+    await vue.nextTick()
+    expect(h.byText("kanban.saveDraft").props.disabled).toBe(false)
+    await h.submit()
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "", message: "Task", thinkingLevel: "off" })
+    expect(h.isDialogOpen()).toBe(false)
+  })
+
+  test("without projects, new tasks can be saved while ungrouped existing cards remain displayed", async () => {
     const h = await harness({ projects: [], cards: [card({ project: "", projectName: "" })] })
     await h.openCreate()
     expect(h.isDialogOpen()).toBe(true)
     expect(h.cards()).toHaveLength(1)
     await h.fill("", "Task")
-    h.submit()
-    expect(h.create).not.toHaveBeenCalled()
+    await h.submit()
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({ project: "", message: "Task", thinkingLevel: "off" })
   })
 
   test("projectless cards omit the folder/name row without hiding normal projects with the same label", async () => {
