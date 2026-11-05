@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, useId } from "vue"
+import { computed, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { Archive, LoaderCircle, Pencil, Play, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { peekConversation, useUiStore } from "@/stores/conversations"
 import { isRemoteProject } from "@/lib/ssh"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
-import type { KanbanCard } from "@/lib/kanban"
+import { dataUrlToImage } from "@/lib/attachments"
+import { modelKey } from "@/lib/modelKey"
+import type { KanbanCard, KanbanCreatePayload, KanbanDraftEditor } from "@/lib/kanban"
 import type { BoardDraft } from "@/lib/workspaceState"
 
 const props = defineProps<{
@@ -21,36 +20,22 @@ const props = defineProps<{
 const emit = defineEmits<{
   cardDeleted: [card: KanbanCard]
   startDraft: [card: KanbanCard]
+  editDraft: [editor: KanbanDraftEditor]
 }>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
 const ui = useUiStore()
-const id = useId()
-const editing = ref(false)
 const saving = ref(false)
 const archiving = ref(false)
 const deleting = ref(false)
-const message = ref("")
-const project = ref("")
-const error = ref("")
-const queuedId = ref<number | null>(null)
 const draft = computed(() =>
-  props.card.draftId
-    ? (workspace.boardDrafts[props.card.draftId] as (BoardDraft & { attachments?: unknown[] }) | undefined)
-    : undefined,
+  props.card.draftId ? (workspace.boardDrafts[props.card.draftId] as BoardDraft | undefined) : undefined,
 )
 const owner = computed(() => {
   const key = props.card.runtimeId || props.card.draftId || props.card.file
   return key ? peekConversation(key, props.card.cwd || props.card.project) : undefined
 })
 const projectLocked = computed(() => !draft.value || !!owner.value?.started)
-const canSave = computed(
-  () =>
-    !props.disabled &&
-    !saving.value &&
-    (!!message.value.trim() || !!draft.value?.attachments?.length || !!owner.value?.promptQueue[0]?.images?.length) &&
-    (projectLocked.value || props.projects.some(item => samePath(item.value, project.value))),
-)
 const canArchive = computed(
   () =>
     !!props.card.file &&
@@ -61,46 +46,83 @@ const canArchive = computed(
 
 function openEditor() {
   if (props.disabled || saving.value || props.card.status !== "todo") return
-  const queued = owner.value?.promptQueue.find(item => item.id === queuedId.value) ?? owner.value?.promptQueue[0]
-  queuedId.value = queued?.id ?? null
-  message.value = draft.value?.sessionFile
-    ? (queued?.text ?? props.card.preview)
-    : (draft.value?.message ?? queued?.text ?? props.card.preview)
-  project.value = draft.value?.project ?? props.card.cwd ?? props.card.project
-  error.value = ""
-  editing.value = true
+  const queued = owner.value?.promptQueue[0]
+  const queuedId = queued?.id
+  const project = draft.value?.project ?? props.card.cwd ?? props.card.project
+  const environmentLocked = projectLocked.value
+  const initial: KanbanCreatePayload = {
+    project: workspace.isProjectless(project) ? "" : project,
+    message: draft.value?.sessionFile
+      ? (queued?.text ?? props.card.preview)
+      : (draft.value?.message ?? queued?.text ?? props.card.preview),
+    attachments:
+      draft.value && !draft.value.sessionFile
+        ? draft.value.attachments
+        : queued?.images?.map(image => ({
+            mediaType: image.mimeType,
+            url: `data:${image.mimeType};base64,${image.data}`,
+          })),
+    modelKey:
+      draft.value?.modelKey ??
+      owner.value?.desiredModelKey ??
+      (owner.value?.state?.model ? modelKey(owner.value.state.model) : undefined),
+    thinkingLevel: draft.value?.thinkingLevel ?? owner.value?.desiredThinkingLevel ?? owner.value?.thinkingLevel,
+    selection: draft.value?.selection ? { ...draft.value.selection } : undefined,
+  }
+  emit("editDraft", { initial, environmentLocked, save: payload => save(payload, queuedId) })
 }
 
-function setEditing(open: boolean) {
-  if (!saving.value) editing.value = open
-}
-
-async function save() {
-  if (!canSave.value) return
+async function save(payload: KanbanCreatePayload, queuedId?: number) {
+  if (props.disabled || saving.value) throw new Error(t("kanban.draftUnavailable"))
+  if (!payload.message.trim() && !payload.attachments?.length) throw new Error(t("kanban.createDescription"))
   saving.value = true
-  error.value = ""
   try {
     // A delayed prompt may start while its editor is open. Never rewrite a running task.
     if (props.card.status !== "todo" || owner.value?.isStreaming || owner.value?.entries.some(e => e.kind === "user"))
       throw new Error(t("kanban.draftUnavailable"))
     if (draft.value && !draft.value.sessionFile) {
-      const next = {
-        ...draft.value,
-        project: projectLocked.value ? draft.value.project : normalizeProjectPath(project.value),
-        message: message.value.trim(),
+      const project = projectLocked.value
+        ? draft.value.project
+        : normalizeProjectPath(payload.project || (await workspace.ensureProjectless()))
+      if (
+        !projectLocked.value &&
+        !props.projects.some(item => samePath(item.value, project)) &&
+        !workspace.isProjectless(project)
+      )
+        throw new Error(t("kanban.draftUnavailable"))
+      const previous = { ...draft.value }
+      const next: BoardDraft = {
+        ...previous,
+        project,
+        message: payload.message.trim(),
+        attachments: payload.attachments ?? [],
+        modelKey: projectLocked.value ? previous.modelKey : payload.modelKey,
+        thinkingLevel: projectLocked.value ? previous.thinkingLevel : payload.thinkingLevel,
+        selection: projectLocked.value
+          ? previous.selection
+          : payload.selection?.project === project
+            ? payload.selection
+            : undefined,
         updatedAt: Date.now(),
       }
       workspace.upsertBoardDraft(next)
-      await workspace.flushPersistence()
+      try {
+        await workspace.flushPersistence()
+      } catch (cause) {
+        workspace.upsertBoardDraft(previous)
+        throw cause
+      }
     } else {
-      const queued = owner.value?.promptQueue.find(item => item.id === queuedId.value)
+      const queued = owner.value?.promptQueue.find(item => item.id === queuedId)
       if (!queued) throw new Error(t("kanban.draftUnavailable"))
-      queued.text = message.value.trim()
+      queued.text = payload.message.trim()
       queued.expandedText = undefined
+      queued.images = (payload.attachments ?? []).flatMap(attachment => {
+        const image = dataUrlToImage(attachment.url)
+        return image ? [image] : []
+      })
     }
-    editing.value = false
-  } catch (cause) {
-    error.value = String(cause)
+    if (payload.startImmediately) emit("startDraft", props.card)
   } finally {
     saving.value = false
   }
@@ -219,46 +241,6 @@ async function remove() {
       <Archive class="size-3.5" aria-hidden="true" />
     </Button>
   </div>
-  <Dialog :open="editing" @update:open="setEditing">
-    <DialogContent :aria-describedby="undefined" class="max-h-[calc(100dvh-2rem)] gap-3 overflow-y-auto sm:max-w-xl">
-      <DialogHeader>
-        <DialogTitle>{{ t("kanban.editDraft") }}</DialogTitle>
-      </DialogHeader>
-      <form class="min-w-0 space-y-3" @submit.prevent="save()">
-        <label class="flex items-center gap-3 text-sm font-medium" :for="`${id}-project`">
-          <span class="shrink-0">{{ t("kanban.project") }}</span>
-          <Select v-model="project" :disabled="disabled || saving || projectLocked">
-            <SelectTrigger :id="`${id}-project`" class="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="item in projects" :key="item.value" :value="item.value">
-                {{ item.label }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
-        <Textarea
-          :id="`${id}-message`"
-          v-model="message"
-          :disabled="disabled || saving"
-          class="min-h-40 max-h-[50dvh] resize-y overflow-y-auto"
-          :placeholder="t('kanban.messagePlaceholder')"
-          :aria-label="t('kanban.draftMessage')"
-        />
-        <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
-        <div class="flex flex-wrap justify-end gap-2 border-t pt-3">
-          <Button type="button" variant="ghost" :disabled="saving" @click="setEditing(false)">
-            {{ t("kanban.cancel") }}
-          </Button>
-          <Button type="submit" :disabled="!canSave">
-            <LoaderCircle v-if="saving" class="size-3.5 animate-spin" aria-hidden="true" />
-            {{ t(saving ? "kanban.saving" : "kanban.saveDraft") }}
-          </Button>
-        </div>
-      </form>
-    </DialogContent>
-  </Dialog>
 </template>
 
 <style scoped>

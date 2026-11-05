@@ -5,11 +5,15 @@ import { compileScript, parse } from "vue/compiler-sfc"
 import ts from "typescript"
 import { isRemoteProject } from "@/lib/ssh"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
-import type { KanbanCard } from "@/lib/kanban"
+import { dataUrlToImage } from "@/lib/attachments"
+import { modelKey } from "@/lib/modelKey"
+import type { KanbanCard, KanbanCreatePayload, KanbanDraftEditor } from "@/lib/kanban"
 
 const workspace = vue.reactive({
   boardDrafts: {} as Record<string, any>,
   histories: {} as Record<string, any[]>,
+  isProjectless: (project: string) => project === "/loose",
+  ensureProjectless: vi.fn(async () => "/loose"),
   upsertBoardDraft: vi.fn((draft: any) => {
     workspace.boardDrafts[draft.id] = draft
   }),
@@ -23,72 +27,11 @@ const workspace = vue.reactive({
 const owners = vue.reactive(new Map<string, any>())
 const peekConversation = vi.fn((id: string) => owners.get(id))
 const pushToast = vi.fn()
-const passthrough = {
-  setup:
-    (_, { slots, attrs }) =>
-    () =>
-      vue.h("div", attrs, slots.default?.()),
-}
 const button = {
   setup:
     (_, { slots, attrs }) =>
     () =>
       vue.h("button", attrs, slots.default?.()),
-}
-const textarea = {
-  props: ["modelValue"],
-  emits: ["update:modelValue"],
-  setup:
-    (props, { attrs, emit }) =>
-    () =>
-      vue.h("textarea", {
-        ...attrs,
-        value: props.modelValue,
-        onInput: value => emit("update:modelValue", value),
-      }),
-}
-const dialog = {
-  props: ["open"],
-  emits: ["update:open"],
-  setup:
-    (props, { slots, emit }) =>
-    () =>
-      props.open ? vue.h("dialog", { onDismiss: () => emit("update:open", false) }, slots.default?.()) : null,
-}
-const select = {
-  props: ["modelValue", "disabled"],
-  emits: ["update:modelValue"],
-  setup(props, { slots, emit }) {
-    vue.provide(
-      "selectDisabled",
-      vue.computed(() => props.disabled),
-    )
-    return () =>
-      vue.h(
-        "select-root",
-        {
-          modelValue: props.modelValue,
-          disabled: props.disabled,
-          onChoose: value => {
-            if (!props.disabled) emit("update:modelValue", value)
-          },
-        },
-        slots.default?.(),
-      )
-  },
-}
-const selectTrigger = {
-  setup(_, { slots, attrs }) {
-    const disabled = vue.inject<vue.ComputedRef<boolean>>("selectDisabled")!
-    return () => vue.h("button", { ...attrs, disabled: disabled.value, "data-select-trigger": true }, slots.default?.())
-  },
-}
-const selectItem = {
-  props: ["value"],
-  setup:
-    (props, { slots }) =>
-    () =>
-      vue.h("select-item", { value: props.value }, slots.default?.()),
 }
 const { descriptor } = parse(readFileSync("src/components/kanban/KanbanCardActions.vue", "utf8"))
 const compiled = compileScript(descriptor, { id: "kanban-card-actions-test", inlineTemplate: true })
@@ -100,24 +43,12 @@ const imports = {
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
   "@/components/ui/button": { Button: button },
-  "@/components/ui/textarea": { Textarea: textarea },
-  "@/components/ui/select": {
-    Select: select,
-    SelectTrigger: selectTrigger,
-    SelectValue: passthrough,
-    SelectContent: passthrough,
-    SelectItem: selectItem,
-  },
-  "@/components/ui/dialog": {
-    Dialog: dialog,
-    DialogContent: passthrough,
-    DialogHeader: passthrough,
-    DialogTitle: passthrough,
-  },
   "@/stores/workspace": { useWorkspaceStore: () => workspace },
   "@/stores/conversations": { peekConversation, useUiStore: () => ({ pushToast }) },
   "@/lib/ssh": { isRemoteProject },
   "@/lib/paths": { normalizeProjectPath, samePath },
+  "@/lib/attachments": { dataUrlToImage },
+  "@/lib/modelKey": { modelKey },
 }
 const module = { exports: {} as any }
 new Function("exports", "require", code)(module.exports, id => {
@@ -182,6 +113,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
   })
   const disabled = vue.ref(false)
   const startDraft = vi.fn()
+  const editDraft = vi.fn<(editor: KanbanDraftEditor) => void>()
   const cardDeleted = vi.fn()
   let actions: { edit(): void; remove(): Promise<void> }
   const app = renderer.createApp({
@@ -196,6 +128,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
             { value: "/other", label: "Other" },
           ],
           onStartDraft: startDraft,
+          onEditDraft: editDraft,
           onCardDeleted: cardDeleted,
         },
         {
@@ -218,17 +151,8 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     await action(label)!.props.onClick({ stopPropagation() {} })
     await vue.nextTick()
   }
-  const save = () =>
-    all()
-      .find(n => n.tag === "form")!
-      .props.onSubmit({ preventDefault() {} })
-  const edit = async (text: string) => {
-    all()
-      .find(n => n.tag === "textarea")!
-      .props.onInput(text)
-    await vue.nextTick()
-  }
-  const isEditing = () => all().some(n => n.tag === "dialog")
+  const editor = () => editDraft.mock.lastCall![0]
+  const save = (payload: Partial<KanbanCreatePayload> = {}) => editor().save({ ...editor().initial, ...payload })
   const editFromMenu = async () => {
     actions.edit()
     await vue.nextTick()
@@ -241,8 +165,8 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     action,
     click,
     save,
-    edit,
-    isEditing,
+    editor,
+    editDraft,
     startDraft,
     textOf,
     cardDeleted,
@@ -256,9 +180,8 @@ test("todo menu editing reuses the existing editor and deletion removes only the
   workspace.boardDrafts.other = { id: "other", project: "/project", message: "Keep" }
   const h = await harness()
   await h.editFromMenu()
-  expect(h.isEditing()).toBe(true)
-  await h.edit("Updated")
-  await h.save()
+  expect(h.editDraft).toHaveBeenCalledOnce()
+  await h.save({ message: "Updated" })
   await h.removeFromMenu()
   expect(workspace.removeBoardDraft).toHaveBeenCalledExactlyOnceWith("task")
   expect(workspace.boardDrafts.task).toBeUndefined()
@@ -305,7 +228,7 @@ test("disabled or started tasks cannot be deleted through a stale todo menu", as
   expect(pushToast).toHaveBeenCalledWith("Error: kanban.draftUnavailable", "error")
 })
 
-test("todo editing opens a dialog and saves only the chosen draft without opening or creating a conversation", async () => {
+test("todo editing supplies the shared dialog with every saved option and updates only that draft", async () => {
   const original = {
     id: "task",
     project: "/project",
@@ -314,102 +237,88 @@ test("todo editing opens a dialog and saves only the chosen draft without openin
     updatedAt: 1,
     modelKey: "provider/model",
     thinkingLevel: "high",
-    attachments: [{ url: "data:image/png;base64,eA==" }],
+    selection: { project: "/project", worktree: true, branch: "main" },
+    attachments: [{ mediaType: "image/png", url: "data:image/png;base64,eA==" }],
   }
   workspace.boardDrafts.task = original
+  workspace.boardDrafts.other = { id: "other", project: "/project", message: "Keep" }
   const h = await harness()
   await h.click("kanban.editDraft")
-  expect(h.isEditing()).toBe(true)
-  expect(h.all().some(n => h.textOf(n).includes("kanban.openConversation"))).toBe(false)
-  expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Original")
-  await h.edit("  Updated task  ")
-  h.all()
-    .find(n => n.tag === "select-root")!
-    .props.onChoose("/other")
-  await vue.nextTick()
-  expect(h.all().find(n => n.tag === "select-root")!.props.modelValue).toBe("/other")
-  await h.save()
-  await vue.nextTick()
+  expect(h.editor().initial).toEqual({
+    project: original.project,
+    message: original.message,
+    attachments: original.attachments,
+    modelKey: original.modelKey,
+    thinkingLevel: original.thinkingLevel,
+    selection: original.selection,
+  })
+  expect(h.editor().initial.selection).not.toBe(workspace.boardDrafts.task.selection)
+  expect(h.editor().environmentLocked).toBe(false)
+  expect(h.all().some(n => n.tag === "dialog")).toBe(false)
+  await h.save({
+    project: "/other",
+    message: "  Updated task  ",
+    attachments: [],
+    modelKey: "provider/other",
+    thinkingLevel: "low",
+  })
   expect(workspace.boardDrafts.task).toMatchObject({
-    ...original,
+    id: "task",
     project: "/other",
     message: "Updated task",
+    createdAt: 1,
     updatedAt: expect.any(Number),
+    attachments: [],
+    modelKey: "provider/other",
+    thinkingLevel: "low",
   })
+  expect(workspace.boardDrafts.task.selection).toBeUndefined()
+  expect(workspace.boardDrafts.other.message).toBe("Keep")
   expect(workspace.flushPersistence).toHaveBeenCalledOnce()
-  expect(h.isEditing()).toBe(false)
+  expect(h.startDraft).not.toHaveBeenCalled()
 })
 
-test("project Select keeps its label association and options and disables changes while saving", async () => {
-  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Original" }
+test("disabled edits are rejected and a failed save restores the original draft for retry", async () => {
+  const original = { id: "task", project: "/project", message: "Original" }
+  workspace.boardDrafts.task = original
   const h = await harness()
-  await h.editFromMenu()
-  const trigger = () => h.all().find(n => n.props["data-select-trigger"])!
-  const projectSelect = () => h.all().find(n => n.tag === "select-root")!
-  expect(h.all().find(n => n.tag === "label" && n.props.for === trigger().props.id)).toBeDefined()
-  expect(trigger().props.id).toBeTruthy()
-  expect(
-    h
-      .all()
-      .filter(n => n.tag === "select-item")
-      .map(n => [n.props.value, h.textOf(n)]),
-  ).toEqual([
-    ["/project", "Project"],
-    ["/other", "Other"],
-  ])
   h.disabled.value = true
   await vue.nextTick()
-  expect(trigger().props.disabled).toBe(true)
-  projectSelect().props.onChoose("/other")
-  await vue.nextTick()
-  expect(projectSelect().props.modelValue).toBe("/project")
+  await h.editFromMenu()
+  expect(h.editDraft).not.toHaveBeenCalled()
   h.disabled.value = false
   await vue.nextTick()
-  expect(trigger().props.disabled).toBe(false)
-  let finish!: () => void
-  workspace.flushPersistence.mockImplementationOnce(
-    () =>
-      new Promise<void>(resolve => {
-        finish = resolve
-      }),
-  )
-  const pending = h.save()
-  await vue.nextTick()
-  expect(trigger().props.disabled).toBe(true)
-  finish()
-  await pending
-  await vue.nextTick()
-  expect(h.isEditing()).toBe(false)
-})
-
-test("cancel discards changes; a failed save stays open and supports retry", async () => {
-  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Original" }
-  const h = await harness()
-  await h.click("kanban.editDraft")
-  await h.edit("Unsaved")
-  h.all()
-    .find(n => n.tag === "dialog")!
-    .props.onDismiss()
-  await vue.nextTick()
-  expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
-  await h.click("kanban.editDraft")
-  expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Original")
-  await h.edit("Updated")
+  await h.editFromMenu()
   workspace.flushPersistence.mockRejectedValueOnce(new Error("Save failed"))
-  await h.save()
-  await vue.nextTick()
-  expect(h.isEditing()).toBe(true)
-  expect(h.all().find(n => n.props.role === "alert")!.text).toContain("Save failed")
-  await h.save()
-  await vue.nextTick()
-  expect(h.isEditing()).toBe(false)
+  await expect(h.save({ message: "Updated", startImmediately: true })).rejects.toThrow("Save failed")
+  expect(workspace.boardDrafts.task).toEqual(original)
+  expect(h.startDraft).not.toHaveBeenCalled()
+  await h.save({ message: "Updated", startImmediately: true })
+  expect(workspace.boardDrafts.task.message).toBe("Updated")
+  expect(h.startDraft).toHaveBeenCalledExactlyOnceWith(h.card)
 })
 
-test("a delayed todo edits its original queued prompt and never rewrites it once execution starts", async () => {
+test("projectless edits can retain no project, change project, and save attachment-only tasks", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/loose", message: "Original" }
+  const h = await harness({ project: "/loose", projectless: true })
+  await h.editFromMenu()
+  expect(h.editor().initial.project).toBe("")
+  await expect(h.save({ message: "  ", attachments: [] })).rejects.toThrow()
+  const attachments = [{ mediaType: "image/png", url: "data:image/png;base64,eA==" }]
+  await h.save({ message: "", attachments })
+  expect(workspace.ensureProjectless).toHaveBeenCalledOnce()
+  expect(workspace.boardDrafts.task).toMatchObject({ project: "/loose", message: "", attachments })
+  await h.save({ project: "/other", message: "Moved" })
+  expect(workspace.boardDrafts.task.project).toBe("/other")
+  await h.save({ project: "", message: "No project" })
+  expect(workspace.boardDrafts.task.project).toBe("/loose")
+})
+
+test("a delayed todo edits its original queued prompt and refuses to rewrite a task that started", async () => {
   const owner = vue.reactive({
     started: true,
     isStreaming: false,
-    entries: [],
+    entries: [] as any[],
     promptQueue: [
       {
         id: 7,
@@ -429,24 +338,22 @@ test("a delayed todo edits its original queued prompt and never rewrites it once
   }
   const h = await harness({ runtimeId: "runtime", file: "/queued.jsonl" })
   await h.click("kanban.editDraft")
-  expect(h.all().find(n => n.props["data-select-trigger"])!.props.disabled).toBe(true)
-  await h.edit("Updated delayed task")
-  await h.save()
+  expect(h.editor().environmentLocked).toBe(true)
+  expect(h.editor().initial.message).toBe("Delayed")
+  expect(h.editor().initial.attachments).toEqual([{ mediaType: "image/png", url: "data:image/png;base64,eA==" }])
+  await h.save({ message: "Updated delayed task", attachments: [] })
   expect(owner.promptQueue[0]).toMatchObject({
     id: 7,
     text: "Updated delayed task",
     expandedText: undefined,
     sendAt: 5000,
+    images: [],
   })
-  expect(owner.promptQueue[0].images).toHaveLength(1)
   await h.click("kanban.editDraft")
-  expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Updated delayed task")
-  await h.edit("Too late")
+  expect(h.editor().initial.message).toBe("Updated delayed task")
   owner.isStreaming = true
-  await h.save()
-  await vue.nextTick()
+  await expect(h.save({ message: "Too late" })).rejects.toThrow("kanban.draftUnavailable")
   expect(owner.promptQueue[0].text).toBe("Updated delayed task")
-  expect(h.isEditing()).toBe(true)
   expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
 })
 
@@ -474,7 +381,7 @@ test("todo actions replace the card time on hover or focus; idle cards keep thei
   expect(todo.action("kanban.delete")!.props.class).toContain("bottom-2")
   await todo.click("kanban.startDraft")
   expect(todo.startDraft).toHaveBeenCalledExactlyOnceWith(todo.card)
-  expect(todo.isEditing()).toBe(false)
+  expect(todo.editDraft).not.toHaveBeenCalled()
 
   const idle = await harness({ status: "idle", file: "/session.jsonl" })
   expect(idle.action("workspace.archive")!.props.class).toContain("kanban-archive")

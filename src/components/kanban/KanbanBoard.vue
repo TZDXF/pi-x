@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, useId, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { AlertCircle, Check, ChevronDown, Folder, LoaderCircle, Plus, RotateCcw, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -21,6 +21,7 @@ import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanColumnSorting } from "@/composables/useKanbanColumnSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
+import { boardDraftFiles } from "@/lib/boardDraftAttachments"
 import KanbanSessionMenu from "./KanbanSessionMenu.vue"
 import KanbanCardActions from "./KanbanCardActions.vue"
 import {
@@ -32,6 +33,7 @@ import {
   orderKanbanColumns,
   type KanbanCard,
   type KanbanCreatePayload,
+  type KanbanDraftEditor,
   type KanbanStatus,
 } from "@/lib/kanban"
 
@@ -111,6 +113,8 @@ watch(projectFilterOpen, open => {
 const idlePageSize = 30
 const idleLimit = ref(idlePageSize)
 const createOpen = ref(false)
+const editor = shallowRef<KanbanDraftEditor | null>(null)
+const initialMessage = ref("")
 const draftProject = ref("")
 const draftSelection = ref<WorkspaceSelection | null>(null)
 const startImmediately = ref(false)
@@ -135,7 +139,10 @@ onMounted(() => {
 onBeforeUnmount(() => clearInterval(timeTicker))
 const createBusy = computed(() => props.busy || submitted.value)
 const validDraftProject = computed(
-  () => !draftProject.value || availableProjects.value.some(project => project.value === draftProject.value),
+  () =>
+    editor.value?.environmentLocked ||
+    !draftProject.value ||
+    availableProjects.value.some(project => project.value === draftProject.value),
 )
 const canCreate = computed(
   () =>
@@ -233,6 +240,9 @@ function setCreateOpen(open: boolean) {
 
 /** Parent title-bar actions may open creation with an optional project preset. */
 function openCreate(project = props.selectedProject) {
+  if (submitted.value) return
+  editor.value = null
+  initialMessage.value = ""
   draftProject.value = availableProjects.value.some(option => option.value === project) ? project : ""
   void modelSelection.loadOfflineModels()
   createError.value = ""
@@ -240,6 +250,24 @@ function openCreate(project = props.selectedProject) {
   draftSelection.value = null
   createOpen.value = true
 }
+
+function openEditor(value: KanbanDraftEditor) {
+  if (createBusy.value) return
+  editor.value = value
+  initialMessage.value = value.initial.message
+  draftProject.value = value.initial.project
+  draftSelection.value = value.initial.selection ? { ...value.initial.selection } : null
+  desiredModelKey.value = value.initial.modelKey ?? null
+  modelSelection.desiredThinkingLevel.value = value.initial.thinkingLevel ?? null
+  void modelSelection.loadOfflineModels()
+  createError.value = ""
+  startImmediately.value = false
+  createOpen.value = true
+}
+
+watch(bridge, value => {
+  if (value && editor.value) value.addFiles(boardDraftFiles(editor.value.initial.attachments))
+})
 
 function inputError(error: { code: string }) {
   if (error.code === "attachment_read_error") createError.value = t("chat.attachmentReadFailed")
@@ -260,17 +288,19 @@ async function submit(message: PromptInputMessage) {
   try {
     // PromptInput has already converted original files to durable data URLs.
     const attachments = message.files.map(({ filename, mediaType, url }) => ({ filename, mediaType, url }))
-    emit("create", {
+    const payload: KanbanCreatePayload = {
       project: draftProject.value,
       message: message.text.trim(),
       ...(draftSelection.value?.project === draftProject.value ? { selection: draftSelection.value } : {}),
       ...(startImmediately.value ? { startImmediately: true } : {}),
       ...(modelKey.value ? { modelKey: modelKey.value } : {}),
-      thinkingLevel: thinkingLevel.value,
-      ...(attachments.length ? { attachments } : {}),
-    })
+      thinkingLevel: (editor.value && modelSelection.desiredThinkingLevel.value) || thinkingLevel.value,
+      ...(editor.value || attachments.length ? { attachments } : {}),
+    }
+    if (editor.value) await editor.value.save(payload)
+    else emit("create", payload)
     await nextTick()
-    if (props.busy)
+    if (!editor.value && props.busy)
       await new Promise<void>(resolve => {
         const stop = watch(
           () => props.busy,
@@ -282,8 +312,11 @@ async function submit(message: PromptInputMessage) {
           },
         )
       })
-    if (props.error) throw new Error(props.error)
+    if (!editor.value && props.error) throw new Error(props.error)
     createOpen.value = false
+  } catch (cause) {
+    createError.value = String(cause)
+    throw cause
   } finally {
     submitted.value = false
   }
@@ -425,6 +458,7 @@ async function submit(message: PromptInputMessage) {
               :disabled="navigationBusy || busy"
               @start-draft="emit('startDraft', card)"
               @card-deleted="emit('cardDeleted', $event)"
+              @edit-draft="openEditor"
             >
               <KanbanSessionMenu
                 :card="card"
@@ -513,19 +547,21 @@ async function submit(message: PromptInputMessage) {
     <Dialog :open="createOpen" @update:open="setCreateOpen">
       <DialogContent :show-close-button="false" class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{{ t("kanban.create") }}</DialogTitle>
+          <DialogTitle>{{ t(editor ? "kanban.editDraft" : "kanban.create") }}</DialogTitle>
           <DialogDescription>{{ t("kanban.createDescription") }}</DialogDescription>
         </DialogHeader>
         <div class="min-w-0 space-y-3">
           <WorkspaceContext
             v-model="draftSelection"
             :project="draftProject"
-            :disabled="createBusy"
+            :initial-selection="editor?.initial.selection"
+            :disabled="createBusy || editor?.environmentLocked"
             @select-project="draftProject = $event"
             @open-project="emit('openProject')"
           />
           <ChatPromptInput
             v-model:bridge="bridge"
+            :initial-draft="initialMessage"
             :disabled="createBusy"
             :placeholder="t('kanban.messagePlaceholder')"
             :submit="submit"
@@ -538,12 +574,15 @@ async function submit(message: PromptInputMessage) {
                 :thinking-level="thinkingLevel"
                 :available-thinking="availableThinking"
                 :models="models"
-                :disabled="createBusy || !models.length"
+                :disabled="createBusy || editor?.environmentLocked || !models.length"
                 @update:thinking-level="setThinkingLevel"
               />
             </template>
             <template #actions>
-              <label class="mr-2 flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-normal">
+              <label
+                v-if="!editor?.environmentLocked"
+                class="mr-2 flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-normal"
+              >
                 <Checkbox v-model="startImmediately" :disabled="createBusy" />
                 <span>{{ t("kanban.startImmediately") }}</span>
               </label>
@@ -556,7 +595,9 @@ async function submit(message: PromptInputMessage) {
               </Button>
             </template>
           </ChatPromptInput>
-          <p v-if="createError || error" role="alert" class="text-sm text-destructive">{{ createError || error }}</p>
+          <p v-if="createError || (!editor && error)" role="alert" class="text-sm text-destructive">
+            {{ createError || error }}
+          </p>
         </div>
       </DialogContent>
     </Dialog>

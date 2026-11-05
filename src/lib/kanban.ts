@@ -77,6 +77,13 @@ export interface KanbanCreatePayload extends Pick<
   startImmediately?: boolean
 }
 
+/** An existing todo supplies its values and save operation to the board's shared task dialog. */
+export interface KanbanDraftEditor {
+  initial: KanbanCreatePayload
+  environmentLocked: boolean
+  save: (payload: KanbanCreatePayload) => Promise<void>
+}
+
 /** Keep full titles/messages in data; visual truncation belongs to the card. Empty drafts stay empty. */
 export function kanbanCardTitle(title?: string | null, message?: string | null): string {
   return title?.trim() || message?.trim().replace(/\s+/g, " ") || ""

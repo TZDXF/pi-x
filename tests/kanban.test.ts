@@ -7,6 +7,7 @@ import ts from "typescript"
 import * as kanban from "@/lib/kanban"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanColumnSorting } from "@/composables/useKanbanColumnSorting"
+import { boardDraftFiles, serializeBoardAttachments } from "@/lib/boardDraftAttachments"
 import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import type { KanbanCard, KanbanCardSource } from "@/lib/kanban"
 import zhCN from "@/i18n/locales/zh-CN"
@@ -196,20 +197,34 @@ const dialog = vue.defineComponent({
         : null,
 })
 const promptInput = vue.defineComponent({
-  props: ["bridge", "submit", "disabled"],
+  props: ["bridge", "submit", "disabled", "initialDraft"],
   emits: ["update:bridge"],
   setup(props, { emit, slots }) {
-    const bridge = vue.reactive({ textInput: "", files: [], isLoading: false })
+    const bridge = vue.reactive({
+      textInput: props.initialDraft ?? "",
+      files: [] as any[],
+      isLoading: false,
+      addFiles(files: File[]) {
+        this.files.push(...files.map(file => ({ file, filename: file.name, mediaType: file.type })))
+      },
+    })
     emit("update:bridge", bridge)
     return () =>
       vue.h(
         "form",
         {
+          "data-files": bridge.files,
+          onRemoveFiles: () => {
+            bridge.files = []
+          },
           onSubmit: async event => {
             event.preventDefault()
-            if (props.disabled || !bridge.textInput.trim()) return
+            if (props.disabled || (!bridge.textInput.trim() && !bridge.files.length)) return
             try {
-              await props.submit({ text: bridge.textInput, files: bridge.files })
+              await props.submit({
+                text: bridge.textInput,
+                files: bridge.files.length ? await serializeBoardAttachments(bridge.files) : [],
+              })
             } catch {
               /* Editor retains failed drafts. */
             }
@@ -222,6 +237,7 @@ const promptInput = vue.defineComponent({
               bridge.textInput = event.target.value
             },
           }),
+          slots.model?.(),
           slots.actions?.(),
         ],
       )
@@ -239,6 +255,7 @@ const imports = {
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key, locale: vue.ref("en") }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
   "@/lib/kanban": kanban,
+  "@/lib/boardDraftAttachments": { boardDraftFiles },
   "@/lib/kanbanTime": { formatKanbanDuration, formatKanbanTime },
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
   "@/composables/useKanbanColumnSorting": { useKanbanColumnSorting },
@@ -277,6 +294,8 @@ const imports = {
               required: true,
               disabled: props.disabled,
               "data-workspace-project": true,
+              "data-project": props.project,
+              "data-selection": props.modelValue,
               "data-project-placeholder": props.projectPlaceholder,
               "onUpdate:modelValue": (project: string) => emit("selectProject", project),
             }),
@@ -293,18 +312,43 @@ const imports = {
           ]),
     }),
   },
-  "@/components/ModelThinkingSelect.vue": { __esModule: true, default: passthrough },
+  "@/components/ModelThinkingSelect.vue": {
+    __esModule: true,
+    default: vue.defineComponent({
+      props: ["modelValue", "thinkingLevel", "disabled"],
+      emits: ["update:modelValue", "update:thinkingLevel"],
+      setup:
+        (props, { emit }) =>
+        () =>
+          vue.h("model-picker", {
+            ...props,
+            onChoose: value => emit("update:modelValue", value),
+            onThinking: value => emit("update:thinkingLevel", value),
+          }),
+    }),
+  },
   "@/components/chat/ImagePreviewContent.vue": { __esModule: true, default: passthrough },
   "@/stores/session/modelSelection": {
-    createModelSelection: () => ({
-      desiredModelKey: vue.ref(null),
-      offlineDefaultModelKey: vue.ref(null),
-      availableThinking: vue.ref(["off"]),
-      thinkingLevel: vue.ref("off"),
-      loadOfflineModels: async () => {},
-      setDesiredModel() {},
-      setDesiredThinkingLevel() {},
-    }),
+    createModelSelection: (_state, models) => {
+      const desiredModelKey = vue.ref(null)
+      const desiredThinkingLevel = vue.ref(null)
+      return {
+        desiredModelKey,
+        desiredThinkingLevel,
+        offlineDefaultModelKey: vue.ref(null),
+        availableThinking: vue.ref(["off", "low", "high"]),
+        thinkingLevel: vue.computed(() => desiredThinkingLevel.value ?? "off"),
+        loadOfflineModels: async () => {
+          models.value = [{ provider: "test", id: "model" }]
+        },
+        setDesiredModel(key) {
+          desiredModelKey.value = key
+        },
+        setDesiredThinkingLevel(level) {
+          desiredThinkingLevel.value = level
+        },
+      }
+    },
   },
   "./KanbanSessionMenu.vue": {
     __esModule: true,
@@ -320,14 +364,15 @@ const imports = {
   "./KanbanCardActions.vue": {
     __esModule: true,
     default: vue.defineComponent({
-      props: ["card"],
-      emits: ["cardDeleted", "startDraft"],
+      props: ["card", "editor"],
+      emits: ["cardDeleted", "startDraft", "editDraft"],
       setup:
         (props, { slots, emit }) =>
         () =>
           vue.h("div", [
             vue.h("button", { "data-delete-card": true, onClick: () => emit("cardDeleted", props.card) }),
             vue.h("button", { "data-start-card": true, onClick: () => emit("startDraft", props.card) }),
+            vue.h("button", { "data-edit-card": true, onClick: editor => emit("editDraft", editor) }),
             slots.default?.({ edit() {}, remove() {}, busy: false }),
           ]),
     }),
@@ -455,6 +500,108 @@ async function harness(overrides: Record<string, any> = {}) {
 }
 
 describe("KanbanBoard", () => {
+  test("editing reuses creation controls and saves the original task with restored files and options", async () => {
+    const h = await harness({ cards: [card()] })
+    const initial = {
+      project: "root",
+      message: "Original task",
+      modelKey: "test/original",
+      thinkingLevel: "high",
+      selection: { project: "root", worktree: true, branch: "main" },
+      attachments: [{ filename: "photo.png", mediaType: "image/png", url: "data:image/png;base64,aGVsbG8=" }],
+    }
+    const save = vi.fn(async () => {})
+    h.all()
+      .find(child => child.props["data-edit-card"])!
+      .props.onClick({ initial, environmentLocked: false, save })
+    await vue.nextTick()
+    expect(h.isDialogOpen()).toBe(true)
+    expect(h.all().some(child => child.text === "kanban.editDraft")).toBe(true)
+    expect(h.all().find(child => child.tag === "textarea")!.props.value).toBe("Original task")
+    expect(h.all().find(child => child.props["data-workspace-project"])!.props["data-selection"]).toEqual(
+      initial.selection,
+    )
+    expect(await h.form().props["data-files"][0].file.text()).toBe("hello")
+    const model = () => h.all().find(child => child.tag === "model-picker")!
+    expect(model().props.modelValue).toBe("test/original")
+    expect(model().props.thinkingLevel).toBe("high")
+    model().props.onChoose("test/updated")
+    model().props.onThinking("low")
+    await h.fill("other", "  Updated task  ")
+    await h.submit()
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      project: "other",
+      message: "Updated task",
+      attachments: initial.attachments,
+      modelKey: "test/updated",
+      thinkingLevel: "low",
+    })
+    expect(h.create).not.toHaveBeenCalled()
+    expect(h.isDialogOpen()).toBe(false)
+    await h.openCreate()
+    expect(h.all().find(child => child.tag === "textarea")!.props.value).toBe("")
+    expect(h.form().props["data-files"]).toHaveLength(0)
+    await h.fill("root", "New task")
+    await h.submit()
+    expect(h.create).toHaveBeenCalledOnce()
+    expect(save).toHaveBeenCalledOnce()
+  })
+
+  test("failed edits stay open with their content for retry; cancellation does not save", async () => {
+    const h = await harness({ cards: [card()] })
+    const save = vi.fn(async () => {}).mockRejectedValueOnce(new Error("Save failed"))
+    const edit = () =>
+      h
+        .all()
+        .find(child => child.props["data-edit-card"])!
+        .props.onClick({
+          initial: { project: "root", message: "Original" },
+          environmentLocked: false,
+          save,
+        })
+    edit()
+    await vue.nextTick()
+    await h.fill("root", "Updated")
+    await h.submit()
+    expect(h.isDialogOpen()).toBe(true)
+    expect(h.all().find(child => child.props.role === "alert")!.text).toContain("Save failed")
+    expect(h.all().find(child => child.tag === "textarea")!.props.value).toBe("Updated")
+    await h.submit()
+    expect(h.isDialogOpen()).toBe(false)
+    edit()
+    await vue.nextTick()
+    await h.fill("root", "Unsaved")
+    h.byText("kanban.cancel").props.onClick()
+    await vue.nextTick()
+    expect(h.isDialogOpen()).toBe(false)
+    expect(save).toHaveBeenCalledTimes(2)
+  })
+
+  test("queued todo edits lock their environment while allowing attachment-only updates", async () => {
+    const h = await harness({ cards: [card()] })
+    const save = vi.fn(async () => {})
+    const attachments = [{ filename: "photo.png", mediaType: "image/png", url: "data:image/png;base64,eA==" }]
+    h.all()
+      .find(child => child.props["data-edit-card"])!
+      .props.onClick({
+        initial: { project: "root/worktree", message: "", attachments },
+        environmentLocked: true,
+        save,
+      })
+    await vue.nextTick()
+    expect(h.all().find(child => child.props["data-workspace-project"])!.props.disabled).toBe(true)
+    expect(h.all().find(child => child.tag === "model-picker")!.props.disabled).toBe(true)
+    expect(h.all().some(child => child.props.role === "checkbox")).toBe(false)
+    expect(h.byText("kanban.saveDraft").props.disabled).toBe(false)
+    await h.submit()
+    expect(save).toHaveBeenCalledExactlyOnceWith({
+      project: "root/worktree",
+      message: "",
+      attachments,
+      thinkingLevel: "off",
+    })
+  })
+
   test("clicking a todo never opens the conversation panel", async () => {
     const h = await harness({ cards: [card()] })
     h.cards()[0].props.onClick()
