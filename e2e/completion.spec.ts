@@ -3,6 +3,8 @@ import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
 
 type InvokeArgs = {
   query?: string
+  key?: string
+  value?: string
   command?: {
     type?: string
     message?: string
@@ -67,13 +69,15 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   page.on("pageerror", error => errors.push(error.message))
 
   const calls: InvokeCall[] = []
+  const preferences: Record<string, string> = {}
   let failedSearch = false
   await page.routeWebSocket("**/api/events*", () => {})
   await page.route("**/api/invoke", async route => {
     const { command, args } = route.request().postDataJSON() as { command: string; args: InvokeArgs }
     calls.push({ command, args })
     let data: unknown = {}
-    if (command === "app_config_get") data = { lastProject: "C:/test-project" }
+    if (command === "app_config_get") data = { lastProject: "C:/test-project", preferences }
+    else if (command === "app_preference_set") preferences[String(args.key)] = String(args.value)
     else if (command === "rpc_running") data = false
     else if (command === "trust_status") data = { needsDecision: false }
     else if (/sessions|projects/.test(command)) data = []

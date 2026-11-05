@@ -59,6 +59,8 @@ test("upward scrolling stays unlocked when nearby content shrinks", async ({ pag
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("set-tail-height", { detail: 189 })))
   await page.waitForTimeout(100)
   const finalReadingPosition = await viewport.evaluate(element => element.scrollTop)
+  expect(finalReadingPosition).toBeGreaterThanOrEqual(settledPosition - 1)
+  expect(finalReadingPosition).toBeLessThanOrEqual(settledPosition)
   await page.evaluate(() => window.dispatchEvent(new Event("grow-tail")))
   await page.waitForTimeout(100)
   expect(await viewport.evaluate(element => element.scrollTop)).toBe(finalReadingPosition)
