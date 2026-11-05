@@ -1,3 +1,13 @@
+/** Only a genuine downward reading gesture may re-enable bottom following. */
+export function shouldResumeBottomLock(
+  previousScrollTop: number,
+  scrollTop: number,
+  maxScrollTop: number,
+  escapedFromLock: boolean,
+): boolean {
+  return escapedFromLock && scrollTop > previousScrollTop && scrollTop >= maxScrollTop - 1
+}
+
 /** Whether an upward wheel gesture can scroll the conversation viewport. */
 export function shouldReleaseBottomLock(viewport: HTMLElement, target: Element | null, deltaY: number): boolean {
   if (deltaY >= 0 || viewport.scrollHeight <= viewport.clientHeight) return false

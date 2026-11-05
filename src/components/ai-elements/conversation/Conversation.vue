@@ -7,7 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { shouldReleaseBottomLock } from '@/lib/scrollIntent'
+import { shouldReleaseBottomLock, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
 interface Props {
@@ -65,6 +65,8 @@ watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
 // The library clears escapedFromLock when shrinking near the bottom. Keep the
 // user's reading intent authoritative so our instant resize pin cannot re-lock.
+// Run after its whole resize callback: isAtBottom also includes "near bottom",
+// so a synchronous watcher cannot observe the internal at-bottom change.
 watch(() => context.escapedFromLock.value, escaped => {
   if (readingHistory && !escaped) context.stopScroll()
 })
@@ -82,7 +84,12 @@ function handleScroll(event: Event) {
     lastScrollTop = scroll.scrollTop
     // Scroll events also cover scrollbar dragging and keyboard navigation.
     if (scroll.scrollTop < previous) releaseBottomLock()
-    else if (scroll.scrollTop >= scroll.scrollHeight - scroll.clientHeight - 1) readingHistory = false
+    else if (shouldResumeBottomLock(
+      previous,
+      scroll.scrollTop,
+      scroll.scrollHeight - scroll.clientHeight,
+      context.escapedFromLock.value,
+    )) readingHistory = false
   }
   emit('scroll', event)
 }

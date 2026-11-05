@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
-import { shouldReleaseBottomLock } from "../src/lib/scrollIntent"
+import { shouldReleaseBottomLock, shouldResumeBottomLock } from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
   return {
@@ -16,6 +16,17 @@ beforeEach(() => {
   vi.stubGlobal("getComputedStyle", (element: HTMLElement) => element.style)
 })
 afterEach(() => vi.unstubAllGlobals())
+
+test("only a downward user scroll to the bottom resumes following", () => {
+  // A resize can produce a bottom scroll event after the library clears its
+  // escape flag; that must not relock a reader or follow the next growth.
+  expect(shouldResumeBottomLock(900, 1000, 1000, false)).toBe(false)
+  expect(shouldResumeBottomLock(1000, 1000, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(1000, 900, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(900, 950, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(900, 1000, 1000, true)).toBe(true)
+  expect(shouldResumeBottomLock(900, 999, 1000, true)).toBe(true)
+})
 
 test("upward wheels release a viewport with different overflow values on each axis", () => {
   const viewport = element(null, {

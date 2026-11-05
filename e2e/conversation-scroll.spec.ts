@@ -8,6 +8,7 @@ import '/src/style.css'
 const tailHeight = ref(240)
 window.addEventListener('shrink-tail', () => { tailHeight.value = 200 })
 window.addEventListener('grow-tail', () => { tailHeight.value += 50 })
+window.addEventListener('set-tail-height', event => { tailHeight.value = event.detail })
 createApp({
   render: () => h('div', { style: 'width:600px;height:400px;display:flex' }, [
     h(Conversation, { initial: 'instant', resize: 'instant' }, () => [
@@ -40,6 +41,27 @@ test("upward scrolling stays unlocked when nearby content shrinks", async ({ pag
   await page.evaluate(() => window.dispatchEvent(new Event("shrink-tail")))
   await page.waitForTimeout(100)
   expect(await viewport.evaluate(element => element.scrollTop)).toBe(readingPosition)
+  await page.evaluate(() => window.dispatchEvent(new Event("grow-tail")))
+  await page.waitForTimeout(100)
+  expect(await viewport.evaluate(element => element.scrollTop)).toBe(readingPosition)
+
+  // Shrinking can leave the reader exactly at the new bottom without moving.
+  // A duplicate scroll event must not mistake that resize for downward intent.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("set-tail-height", { detail: 190 })))
+  await page.waitForTimeout(100)
+  // The library uses max - 1 as its target and may settle one pixel upward.
+  const settledPosition = await viewport.evaluate(element => element.scrollTop)
+  await viewport.evaluate(element => element.dispatchEvent(new Event("scroll")))
+  await page.waitForTimeout(50)
+  await viewport.evaluate(element => element.dispatchEvent(new Event("scroll")))
+  // One more stationary shrink lets the library relock if the duplicate event
+  // incorrectly cleared readingHistory; the following growth must not follow.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("set-tail-height", { detail: 189 })))
+  await page.waitForTimeout(100)
+  const finalReadingPosition = await viewport.evaluate(element => element.scrollTop)
+  await page.evaluate(() => window.dispatchEvent(new Event("grow-tail")))
+  await page.waitForTimeout(100)
+  expect(await viewport.evaluate(element => element.scrollTop)).toBe(finalReadingPosition)
 
   await page.mouse.wheel(0, 100)
   await expect
