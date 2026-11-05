@@ -14,7 +14,7 @@ import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
-import { formatKanbanTime } from "@/lib/kanbanTime"
+import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import KanbanSessionMenu from "./KanbanSessionMenu.vue"
 import KanbanCardActions from "./KanbanCardActions.vue"
 import {
@@ -92,7 +92,7 @@ const submitted = ref(false)
 const now = ref(Date.now())
 let timeTicker: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
-  timeTicker = setInterval(() => (now.value = Date.now()), 30_000)
+  timeTicker = setInterval(() => (now.value = Date.now()), 1_000)
 })
 onBeforeUnmount(() => clearInterval(timeTicker))
 const createBusy = computed(() => props.busy || submitted.value)
@@ -157,6 +157,27 @@ function formatTime(timestamp: number) {
 function fullTime(timestamp: number) {
   const date = dateFor(timestamp)
   return date ? `${t("kanban.updatedAt")}: ${dateFormatter.value.format(date)}` : t("kanban.unknownTime")
+}
+
+function currentRoundStartedAt(card: KanbanCard): number | null {
+  if (card.status !== "running" && card.status !== "waiting") return null
+  return Number.isFinite(card.lastPromptAt) ? card.lastPromptAt! : card.updatedAt
+}
+
+function cardTime(card: KanbanCard) {
+  const startedAt = currentRoundStartedAt(card)
+  if (startedAt === null) return formatTime(card.updatedAt)
+  return formatKanbanDuration(startedAt, now.value, locale.value) ?? t("kanban.unknownExecutionTime")
+}
+
+function cardTimeTitle(card: KanbanCard) {
+  const startedAt = currentRoundStartedAt(card)
+  if (startedAt === null) return fullTime(card.updatedAt)
+  const elapsed = cardTime(card)
+  const date = dateFor(startedAt)
+  return date
+    ? `${t("kanban.executionTime")}: ${elapsed}\n${t("kanban.startedAt")}: ${dateFormatter.value.format(date)}`
+    : t("kanban.unknownExecutionTime")
 }
 
 function selectProject(event: Event) {
@@ -356,9 +377,11 @@ async function submit(message: PromptInputMessage) {
                     </span>
                     <time
                       class="ml-auto shrink-0 whitespace-nowrap text-[10px]"
-                      :datetime="dateFor(card.updatedAt)?.toISOString()"
-                      :title="fullTime(card.updatedAt)"
-                      >{{ formatTime(card.updatedAt) }}</time
+                      :datetime="
+                        currentRoundStartedAt(card) === null ? dateFor(card.updatedAt)?.toISOString() : undefined
+                      "
+                      :title="cardTimeTitle(card)"
+                      >{{ cardTime(card) }}</time
                     >
                   </span>
                 </button>

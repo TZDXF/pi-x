@@ -6,7 +6,7 @@ import { createI18n } from "vue-i18n"
 import ts from "typescript"
 import * as kanban from "@/lib/kanban"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
-import { formatKanbanTime } from "@/lib/kanbanTime"
+import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import type { KanbanCard, KanbanCardSource } from "@/lib/kanban"
 import zhCN from "@/i18n/locales/zh-CN"
 import en from "@/i18n/locales/en"
@@ -215,7 +215,7 @@ const imports = {
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key, locale: vue.ref("en") }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
   "@/lib/kanban": kanban,
-  "@/lib/kanbanTime": { formatKanbanTime },
+  "@/lib/kanbanTime": { formatKanbanDuration, formatKanbanTime },
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
   "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
@@ -434,6 +434,25 @@ describe("KanbanBoard", () => {
     h.state.cards[0].activity = { kind: "thinking" }
     await vue.nextTick()
     expect(textOf(h.cards()[0])).toContain("chat.thinking")
+  })
+
+  test("running and waiting cards show the current round duration while other cards keep update times", async () => {
+    const startedAt = Date.now() - 65_000
+    const h = await harness({
+      cards: [
+        card({ id: "running", status: "running", lastPromptAt: startedAt, updatedAt: Date.now() }),
+        card({ id: "waiting", status: "waiting", lastPromptAt: startedAt, updatedAt: Date.now() }),
+        card({ id: "idle", status: "idle", lastPromptAt: startedAt, updatedAt: Date.now() - 120_000 }),
+      ],
+    })
+    const rendered = h.cards()
+    expect(textOf(rendered[0])).toContain("1 minute 5 seconds")
+    expect(textOf(rendered[1])).toContain("1 minute 5 seconds")
+    expect(textOf(rendered[2])).toContain("2 minutes ago")
+    const time = descendants(rendered[0]).find(child => child.tag === "time")!
+    expect(time.props.title).toContain("kanban.executionTime: 1 minute 5 seconds")
+    expect(time.props.title).toContain("kanban.startedAt:")
+    expect(time.props.datetime).toBeUndefined()
   })
 
   test("keyboard reordering updates only the active project/column and keeps hidden idle peers", async () => {

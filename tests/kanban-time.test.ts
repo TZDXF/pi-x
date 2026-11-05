@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { formatKanbanTime } from "@/lib/kanbanTime"
+import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import zhCN from "@/i18n/locales/zh-CN"
 import en from "@/i18n/locales/en"
 
@@ -113,5 +113,26 @@ describe("formatKanbanTime", () => {
   test("accepts the Unix epoch and negative timestamps as valid millisecond values", () => {
     expect(formatKanbanTime(0, "en", 0, "Just now")).toBe("Just now")
     expect(formatKanbanTime(-MINUTE, "en", 0, "Just now")).toBe("1 minute ago")
+  })
+})
+
+describe("formatKanbanDuration", () => {
+  test.each([
+    [0, "0秒钟", "0 seconds"],
+    [45_999, "45秒钟", "45 seconds"],
+    [60_000, "1分钟", "1 minute"],
+    [65_000, "1分钟5秒钟", "1 minute 5 seconds"],
+    [HOUR, "1小时", "1 hour"],
+    [HOUR + 2 * MINUTE + 30_000, "1小时2分钟", "1 hour 2 minutes"],
+    [25 * HOUR, "25小时", "25 hours"],
+  ])("formats %i ms as a friendly localized duration", (elapsed, chinese, english) => {
+    expect(formatKanbanDuration(now - elapsed, now, "zh-CN")).toBe(chinese)
+    expect(formatKanbanDuration(now - elapsed, now, "en")).toBe(english)
+  })
+
+  test("clamps clock skew and rejects invalid timestamps", () => {
+    expect(formatKanbanDuration(now + 1000, now, "zh-CN")).toBe("0秒钟")
+    expect(formatKanbanDuration(NaN, now, "en")).toBeNull()
+    expect(formatKanbanDuration(now, Infinity, "en")).toBeNull()
   })
 })

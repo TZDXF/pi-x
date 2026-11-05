@@ -9,6 +9,21 @@ function localDayNumber(date: Date): number {
   return day.getTime() / DAY
 }
 
+/** Friendly elapsed time for an active turn; clock skew is clamped to zero. */
+export function formatKanbanDuration(startedAt: number, now: number, locale: string): string | null {
+  if (!Number.isFinite(startedAt) || !Number.isFinite(now)) return null
+  const totalSeconds = Math.floor(Math.max(0, now - startedAt) / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const unit = (value: number, name: "hour" | "minute" | "second") =>
+    new Intl.NumberFormat(locale, { style: "unit", unit: name, unitDisplay: "long" }).format(value)
+  const separator = locale.toLowerCase().startsWith("zh") ? "" : " "
+  if (hours) return [unit(hours, "hour"), minutes ? unit(minutes, "minute") : ""].filter(Boolean).join(separator)
+  if (minutes) return [unit(minutes, "minute"), seconds ? unit(seconds, "second") : ""].filter(Boolean).join(separator)
+  return unit(seconds, "second")
+}
+
 /** Compact local-time labels for Unix timestamps in milliseconds; now is supplied by the caller. */
 export function formatKanbanTime(timestamp: number, locale: string, now: number, justNow: string): string | null {
   if (!Number.isFinite(timestamp) || !Number.isFinite(now)) return null

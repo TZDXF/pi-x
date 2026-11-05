@@ -27,6 +27,8 @@ export interface KanbanCard {
   activity?: KanbanLivePreview
   /** Unix timestamp in milliseconds. */
   updatedAt: number
+  /** Start of the latest submitted prompt; drives active-turn duration. */
+  lastPromptAt?: number
   status: KanbanStatus
   failed?: boolean
   /** Actual session directory; project remains the grouping/filtering root. */

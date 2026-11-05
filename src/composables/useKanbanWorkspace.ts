@@ -90,6 +90,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
           title: row.title || row.preview || draft?.message || "",
           preview: row.lastUserMessage ?? (row.preview || draft?.message || ""),
           updatedAt: Math.max(row.mtimeMs || Date.parse(row.timestamp || "") || 0, activity?.updatedAt ?? 0),
+          lastPromptAt: activity?.status === "running" ? activity.updatedAt : undefined,
           status: hasDelayedFirstPrompt(owner) ? "todo" : statusFor(row.file, project, owner?.runtimeId),
           failed: activity?.status === "error",
         })
@@ -122,6 +123,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
         title: firstPrompt?.text || pending?.text || draft?.message || "",
         preview: firstPrompt?.text || pending?.text || draft?.message || "",
         updatedAt: activity?.updatedAt ?? draft?.updatedAt ?? firstPrompt?.timestamp ?? 0,
+        lastPromptAt: activity?.status === "running" ? activity.updatedAt : undefined,
         status: hasDelayedFirstPrompt(owner) ? "todo" : statusFor(file, owner.cwd, owner.runtimeId),
         failed: activity?.status === "error",
       })
@@ -157,6 +159,9 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
           const entry = owner.entries[index]!
           if (entry.kind !== "user") continue
           card.preview = entry.text
+          if (typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp)) {
+            card.lastPromptAt = entry.timestamp
+          }
           break
         }
       }
