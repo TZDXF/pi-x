@@ -101,6 +101,8 @@ const props = defineProps<{
   connecting: boolean
   selectingProject?: boolean
   connected: boolean
+  /** Board cards stay completed until their details view is closed. */
+  deferReadReceipt?: boolean
 }>()
 
 // 组件按会话 id 定向绑定（单屏由 App 以 :key 重挂载切换），分屏时每个窗格各自持有 id。
@@ -175,6 +177,7 @@ useSessionReadReceipt({
   project: () => session.cwd || props.project,
   viewport: () => conversation.value?.historyViewport(),
   enabled: () => !props.connecting && !props.selectingProject,
+  deferAcknowledgement: props.deferReadReceipt,
   loaded: () => !session.historyLoading && !props.connecting,
   result: () => session.entries[session.entries.length - 1],
 })

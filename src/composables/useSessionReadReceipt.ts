@@ -21,6 +21,8 @@ interface ReadReceiptView {
   loaded?: () => boolean
   /** Optional rendered result token; changes trigger another post-render check. */
   result?: () => unknown
+  /** Keep the terminal status visible while reading; acknowledge it when this view closes. */
+  deferAcknowledgement?: boolean
 }
 
 export type SessionReadReceiptOptions = ReadReceiptView &
@@ -61,6 +63,7 @@ export function useSessionReadReceipt(options: SessionReadReceiptOptions) {
   let viewport: HTMLElement | null | undefined
   let resizeObserver: ResizeObserver | undefined
   let mutationObserver: MutationObserver | undefined
+  let pendingAcknowledgement: { file: string; project: string; runId: string } | undefined
   const doc = typeof document === "undefined" ? undefined : document
   const win = doc?.defaultView
 
@@ -128,6 +131,10 @@ export function useSessionReadReceipt(options: SessionReadReceiptOptions) {
       )
         return
       if (Math.abs(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight) > 2) return
+      if (options.deferAcknowledgement) {
+        pendingAcknowledgement = { file: targetFile, project: targetProject, runId }
+        return
+      }
       acknowledgeSessionRunStatus(targetFile, targetProject, runId)
     })
   }
@@ -152,6 +159,11 @@ export function useSessionReadReceipt(options: SessionReadReceiptOptions) {
   const stop = () => {
     stopped = true
     ++generation
+    if (pendingAcknowledgement) {
+      const { file, project, runId } = pendingAcknowledgement
+      pendingAcknowledgement = undefined
+      acknowledgeSessionRunStatus(file, project, runId)
+    }
     stopWatching()
     doc?.removeEventListener("visibilitychange", schedule)
     win?.removeEventListener("focus", schedule)

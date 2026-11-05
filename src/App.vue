@@ -813,6 +813,7 @@ onUnmounted(() => {
                     v-if="phase === 'chat' && boardSelectionReady"
                     ref="boardChat"
                     hide-header
+                    defer-read-receipt
                     :key="activeRuntimeId"
                     :session-id="activeRuntimeId"
                     :project="session.cwd || project"

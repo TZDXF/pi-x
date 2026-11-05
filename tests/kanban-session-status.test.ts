@@ -199,7 +199,7 @@ async function flush() {
   await nextTick()
 }
 
-function reader(explicit = false) {
+function reader(explicit = false, deferAcknowledgement = false) {
   const file = identity()
   const doc = Object.assign(new EventTarget(), {
     visibilityState: "visible",
@@ -239,12 +239,14 @@ function reader(explicit = false) {
             loaded: () => state.loaded,
             viewport: () => state.viewport as unknown as HTMLElement,
             enabled: () => state.enabled,
+            deferAcknowledgement,
           }
         : {
             session,
             loaded: () => state.loaded,
             viewport: () => state.viewport as unknown as HTMLElement,
             enabled: () => state.enabled,
+            deferAcknowledgement,
           },
     ),
   )!
@@ -280,6 +282,30 @@ test.each(["completed", "error"] as const)(
     expect(sessionRunStatus(r.file)).toBeUndefined()
   },
 )
+
+test("a completed board card stays completed while open and becomes idle after closing", async () => {
+  const r = reader(false, true)
+  setSessionRunStatus(r.file, "completed", "project")
+  await flush()
+  expect(sessionRunStatus(r.file)).toBe("completed")
+
+  r.scope.stop()
+  expect(sessionRunStatus(r.file)).toBeUndefined()
+})
+
+test("a run completed in the open board details stays completed until closing", async () => {
+  const r = reader(false, true)
+  setSessionRunStatus(r.file, "running", "project")
+  await flush()
+  expect(sessionRunStatus(r.file)).toBe("running")
+
+  setSessionRunStatus(r.file, "completed", "project")
+  await flush()
+  expect(sessionRunStatus(r.file)).toBe("completed")
+
+  r.scope.stop()
+  expect(sessionRunStatus(r.file)).toBeUndefined()
+})
 
 test("explicit identity gates loading/enabled/visibility and rechecks scroll, resize and result changes", async () => {
   const r = reader(true)
