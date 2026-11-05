@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { AlertCircle, ChevronDown, Folder, LoaderCircle, Plus, RotateCcw } from "@lucide/vue"
+import { AlertCircle, Check, ChevronDown, Folder, LoaderCircle, Plus, RotateCcw, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import ChatPromptInput from "@/components/chat/ChatPromptInput.vue"
 import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
@@ -73,6 +76,21 @@ const sorting = reactive(
   ),
 )
 const availableProjects = computed(() => props.projects.filter(project => project.value !== ""))
+const projectFilterOpen = ref(false)
+const projectQuery = ref("")
+const selectedProjectLabel = computed(
+  () => availableProjects.value.find(project => project.value === props.selectedProject)?.label || t("kanban.allTasks"),
+)
+const filteredProjects = computed(() => {
+  const query = projectQuery.value.trim().toLowerCase()
+  if (!query) return availableProjects.value
+  return availableProjects.value.filter(
+    project => project.label.toLowerCase().includes(query) || project.value.toLowerCase().includes(query),
+  )
+})
+watch(projectFilterOpen, open => {
+  if (open) projectQuery.value = ""
+})
 const idlePageSize = 30
 const idleLimit = ref(idlePageSize)
 const createOpen = ref(false)
@@ -183,8 +201,9 @@ function cardTimeTitle(card: KanbanCard) {
     : t("kanban.unknownExecutionTime")
 }
 
-function selectProject(event: Event) {
-  emit("update:selectedProject", (event.target as HTMLSelectElement).value)
+function selectProject(project: string) {
+  emit("update:selectedProject", project)
+  projectFilterOpen.value = false
 }
 
 function setCreateOpen(open: boolean) {
@@ -257,21 +276,68 @@ async function submit(message: PromptInputMessage) {
 
 <template>
   <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background" :aria-label="t('kanban.title')">
-    <header class="flex shrink-0 flex-wrap items-center gap-3 border-b border-border/60 px-4 py-3">
-      <h1 class="text-sm font-semibold">{{ t("kanban.title") }}</h1>
-      <label class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <span>{{ t("kanban.projectFilter") }}</span>
-        <select
-          :value="selectedProject"
-          class="h-8 min-w-0 max-w-56 rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="selectProject"
+    <header
+      class="workspace-header flex min-h-12 shrink-0 items-center justify-between gap-4 border-b border-border py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 transition-[padding-left] duration-200 ease-out max-[900px]:flex-wrap max-[900px]:gap-1.5"
+    >
+      <div class="relative min-w-0">
+        <Popover v-model:open="projectFilterOpen">
+          <PopoverTrigger as-child>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-8 w-48 min-w-0 justify-start gap-2 font-normal"
+              :aria-label="t('kanban.projectFilter')"
+              :title="selectedProjectLabel"
+            >
+              <Folder class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate text-left">{{ selectedProjectLabel }}</span>
+              <ChevronDown
+                class="size-3.5 shrink-0 text-muted-foreground"
+                :class="selectedProject ? 'mr-5' : ''"
+                aria-hidden="true"
+              />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" class="w-64 p-2">
+            <Input
+              v-model="projectQuery"
+              :placeholder="t('workspace.searchProject')"
+              :aria-label="t('workspace.searchProject')"
+              class="h-7 text-xs"
+            />
+            <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
+              <Button
+                v-for="project in filteredProjects"
+                :key="project.value"
+                variant="context-menu-item"
+                size="content"
+                class="context-menu-item"
+                :aria-current="project.value === selectedProject ? 'true' : undefined"
+                :title="project.value"
+                @click="selectProject(project.value)"
+              >
+                <Folder :size="14" class="size-auto shrink-0" aria-hidden="true" />
+                <span class="truncate">{{ project.label }}</span>
+                <Check v-if="project.value === selectedProject" class="ml-auto size-3.5 shrink-0" aria-hidden="true" />
+              </Button>
+            </ScrollArea>
+            <p v-else class="px-2 py-2 text-xs text-muted-foreground">
+              {{ t("workspace.noMatchingProject") }}
+            </p>
+          </PopoverContent>
+        </Popover>
+        <Button
+          v-if="selectedProject"
+          variant="ghost"
+          size="icon-xs"
+          class="absolute right-1 top-1 text-muted-foreground"
+          :title="t('common.clear')"
+          :aria-label="t('common.clear')"
+          @click="selectProject('')"
         >
-          <option value="">{{ t("kanban.allTasks") }}</option>
-          <option v-for="project in availableProjects" :key="project.value" :value="project.value">
-            {{ project.label }}
-          </option>
-        </select>
-      </label>
+          <X class="size-3.5" aria-hidden="true" />
+        </Button>
+      </div>
       <div class="ml-auto flex items-center gap-2">
         <slot name="actions" />
         <Button size="sm" @click="setCreateOpen(true)">

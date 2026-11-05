@@ -162,6 +162,17 @@ const button = vue.defineComponent({
     () =>
       vue.h("button", attrs, slots.default?.()),
 })
+const input = vue.defineComponent({
+  props: ["modelValue"],
+  emits: ["update:modelValue"],
+  setup:
+    (props, { emit }) =>
+    () =>
+      vue.h("input", {
+        value: props.modelValue,
+        onInput: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).value),
+      }),
+})
 const dialog = vue.defineComponent({
   props: ["open"],
   emits: ["update:open"],
@@ -220,6 +231,9 @@ const imports = {
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
   "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
+  "@/components/ui/input": { Input: input },
+  "@/components/ui/popover": { Popover: passthrough, PopoverContent: passthrough, PopoverTrigger: passthrough },
+  "@/components/ui/scroll-area": { ScrollArea: passthrough },
   "@/components/ui/checkbox": {
     Checkbox: vue.defineComponent({
       props: ["modelValue", "disabled"],
@@ -559,11 +573,35 @@ describe("KanbanBoard", () => {
     )
     expect(h.columns().every(column => textOf(column).includes("kanban.emptyColumn"))).toBe(true)
     expect(h.all().some(child => child.props["data-actions"])).toBe(true)
-    const select = h.all().find(child => child.tag === "select")!
-    expect(select.props.value).toBe("")
-    select.props.onChange({ target: { value: "other" } })
+    const header = h.all().find(child => child.tag === "header" && child.props.class?.includes("workspace-header"))!
+    expect(header.props.class).toContain("min-h-12")
+    expect(header.props.class).toContain("py-1.5")
+    expect(textOf(header)).not.toContain("kanban.title")
+    expect(textOf(header)).not.toContain("kanban.projectFilter")
+    h.byText("Other").props.onClick()
     expect(h.select).toHaveBeenCalledExactlyOnceWith("other")
     expect(h.state.selectedProject).toBe("")
+  })
+
+  test("project filter searches labels and paths and can be cleared without mutating props", async () => {
+    const h = await harness()
+    const trigger = () => h.all().find(child => child.props["aria-label"] === "kanban.projectFilter")!
+    expect(textOf(trigger())).toContain("kanban.allTasks")
+    const search = h
+      .all()
+      .find(child => child.tag === "input" && child.props["aria-label"] === "workspace.searchProject")!
+    search.props.onInput({ target: { value: "OTHER" } })
+    await vue.nextTick()
+    expect(h.all().some(child => child.tag === "button" && child.props.title === "root")).toBe(false)
+    expect(h.all().some(child => child.tag === "button" && child.props.title === "other")).toBe(true)
+    h.state.selectedProject = "other"
+    await vue.nextTick()
+    expect(textOf(trigger())).toContain("Other")
+    h.all()
+      .find(child => child.tag === "button" && child.props["aria-label"] === "common.clear")!
+      .props.onClick()
+    expect(h.select).toHaveBeenCalledExactlyOnceWith("")
+    expect(h.state.selectedProject).toBe("other")
   })
 
   test("opens the original card with cwd and marks selection/failure; empty drafts have localized fallbacks", async () => {
@@ -625,7 +663,8 @@ describe("KanbanBoard", () => {
     await h.fill("root", " \n\t ")
     h.submit()
     expect(h.create).not.toHaveBeenCalled()
-    expect(h.all().filter(child => child.tag === "input")).toHaveLength(0)
+    const dialog = h.all().find(child => child.props["data-dialog"])!
+    expect(descendants(dialog).filter(child => child.tag === "input")).toHaveLength(0)
     expect(h.all().find(child => child.tag === "textarea")!.props.maxlength).toBeUndefined()
     const message = "long message\n".repeat(1000)
     await h.fill("root", `  ${message}  `)
@@ -807,8 +846,9 @@ test("the board header exposes project creation through the existing guarded nav
   expect(actions).toContain(":disabled=\"(workspace.gitBusy && !connecting) || phase === 'trust'\"")
 })
 
-test("the board details panel does not duplicate the todo start action", () => {
+test("the board details panel defers read receipts and does not duplicate the todo start action", () => {
   const panel = appSource.slice(appSource.indexOf("<KanbanDetailsPanel"), appSource.indexOf("</KanbanDetailsPanel>"))
+  expect(panel).toContain("defer-read-receipt")
   expect(panel).not.toContain("kanban.startDraft")
   expect(panel).not.toContain("boardChat?.submitDraft()")
 })
