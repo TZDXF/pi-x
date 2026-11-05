@@ -254,16 +254,30 @@ const imports = {
   "@/components/WorkspaceContext.vue": {
     __esModule: true,
     default: vue.defineComponent({
-      props: ["project", "modelValue"],
-      emits: ["update:modelValue"],
+      props: ["project", "modelValue", "projectPicker", "projectPlaceholder", "disabled"],
+      emits: ["update:modelValue", "selectProject", "openProject"],
       setup:
         (props, { emit }) =>
         () =>
-          vue.h("button", {
-            type: "button",
-            "data-workspace-selection": true,
-            onClick: () => emit("update:modelValue", { project: props.project, worktree: true, branch: "main" }),
-          }),
+          vue.h("div", [
+            vue.h("select", {
+              required: true,
+              disabled: props.disabled,
+              "data-workspace-project": true,
+              "data-project-placeholder": props.projectPlaceholder,
+              "onUpdate:modelValue": (project: string) => emit("selectProject", project),
+            }),
+            vue.h("button", {
+              type: "button",
+              "data-workspace-selection": true,
+              onClick: () => emit("update:modelValue", { project: props.project, worktree: true, branch: "main" }),
+            }),
+            vue.h("button", {
+              type: "button",
+              "data-open-project": true,
+              onClick: () => emit("openProject"),
+            }),
+          ]),
     }),
   },
   "@/components/ModelThinkingSelect.vue": { __esModule: true, default: passthrough },
@@ -345,6 +359,7 @@ async function harness(overrides: Record<string, any> = {}) {
   })
   const create = vi.fn(),
     open = vi.fn(),
+    openProject = vi.fn(),
     retry = vi.fn(),
     select = vi.fn(),
     cardDeleted = vi.fn(),
@@ -362,6 +377,7 @@ async function harness(overrides: Record<string, any> = {}) {
           ref: board,
           onCreate: create,
           onOpen: open,
+          onOpenProject: openProject,
           onCardDeleted: cardDeleted,
           onStartDraft: startDraft,
           onRetry: retry,
@@ -411,6 +427,7 @@ async function harness(overrides: Record<string, any> = {}) {
     submit,
     create,
     open,
+    openProject,
     cardDeleted,
     startDraft,
     retry,
@@ -542,6 +559,16 @@ describe("KanbanBoard", () => {
     h.state.navigationBusy = true
     await vue.nextTick()
     expect(h.cards().every(rendered => rendered.props.disabled)).toBe(true)
+  })
+
+  test("creation uses the session project picker and forwards opening a project", async () => {
+    const h = await harness()
+    await h.openCreate()
+
+    const picker = h.all().find(child => child.props["data-workspace-project"])!
+    expect(picker.props["data-project-placeholder"]).toBe("kanban.selectProject")
+    h.all().find(child => child.props["data-open-project"])!.props.onClick()
+    expect(h.openProject).toHaveBeenCalledOnce()
   })
 
   test("parent can open creation with an explicit project, while an invalid preset requires a new selection", async () => {
@@ -699,6 +726,9 @@ describe("KanbanBoard", () => {
     await h.openCreate()
     await h.fill("root", "Start now")
     const checkbox = () => h.all().find(child => child.props.role === "checkbox")!
+    const nodes = h.all()
+    expect(nodes.indexOf(checkbox())).toBeLessThan(nodes.indexOf(h.byText("kanban.cancel")))
+    expect(nodes.indexOf(h.byText("kanban.cancel"))).toBeLessThan(nodes.indexOf(h.byText("kanban.saveDraft")))
     expect(checkbox().props["aria-checked"]).toBe("false")
     checkbox().props.onClick()
     await vue.nextTick()

@@ -51,6 +51,7 @@ const emit = defineEmits<{
   open: [card: KanbanCard]
   export: [file: string]
   create: [payload: KanbanCreatePayload]
+  openProject: []
   cardDeleted: [card: KanbanCard]
   retry: []
   reorder: [column: KanbanStatus, ids: string[]]
@@ -483,34 +484,19 @@ async function submit(message: PromptInputMessage) {
           <DialogDescription>{{ t("kanban.createDescription") }}</DialogDescription>
         </DialogHeader>
         <div class="min-w-0 space-y-4">
-          <label class="block space-y-2 text-sm font-medium" :for="`${id}-project`">
-            <span>{{ t("kanban.project") }}</span>
-            <select
-              :id="`${id}-project`"
-              v-model="draftProject"
-              required
-              :disabled="createBusy"
-              class="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-            >
-              <option value="" disabled>{{ t("kanban.selectProject") }}</option>
-              <option v-for="project in availableProjects" :key="project.value" :value="project.value">
-                {{ project.label }}
-              </option>
-            </select>
-          </label>
-          <label class="flex w-fit items-center gap-2 text-sm font-medium">
-            <Checkbox v-model="startImmediately" :disabled="createBusy" />
-            <span>{{ t("kanban.startImmediately") }}</span>
-          </label>
           <div class="space-y-2">
-            <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
+            <p class="text-sm font-medium">{{ t("kanban.project") }}</p>
             <WorkspaceContext
-              v-if="draftProject"
               v-model="draftSelection"
               :project="draftProject"
+              :project-placeholder="t('kanban.selectProject')"
               :disabled="createBusy"
-              :project-picker="false"
+              @select-project="draftProject = $event"
+              @open-project="emit('openProject')"
             />
+          </div>
+          <div class="space-y-2">
+            <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
             <ChatPromptInput
               v-model:bridge="bridge"
               :disabled="createBusy"
@@ -530,6 +516,10 @@ async function submit(message: PromptInputMessage) {
                 />
               </template>
               <template #actions>
+                <label class="mr-2 flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-normal">
+                  <Checkbox v-model="startImmediately" :disabled="createBusy" />
+                  <span>{{ t("kanban.startImmediately") }}</span>
+                </label>
                 <Button type="button" variant="ghost" :disabled="createBusy" @click="setCreateOpen(false)">
                   {{ t("kanban.cancel") }}
                 </Button>

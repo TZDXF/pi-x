@@ -765,6 +765,7 @@ onUnmounted(() => {
                 @card-deleted="onBoardCardDeleted"
                 @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
+                @open-project="requestNavigation(switchProject)"
                 @retry="board.refresh"
               >
                 <template #actions>

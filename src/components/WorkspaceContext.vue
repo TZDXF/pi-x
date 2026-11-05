@@ -16,6 +16,7 @@ const props = withDefaults(
     project: string
     disabled?: boolean
     projectPicker?: boolean
+    projectPlaceholder?: string
     initialSelection?: WorkspaceSelection | null
   }>(),
   { projectPicker: true, initialSelection: null },
@@ -42,8 +43,10 @@ const name = (path: string) => workspace.projectName(path)
 const isProjectless = computed(() => !props.project || workspace.isProjectless(props.project))
 // 远程项目 P1 不查询本地 git，也不提供分支/工作树选择（契约 §5）。
 const isRemote = computed(() => isRemoteProject(props.project))
-const projectTitle = computed(() => props.project || workspace.projectless)
-const projectLabel = computed(() => (props.project ? name(props.project) : t("projectless.name")))
+const projectTitle = computed(() => props.project || (props.projectPlaceholder ? "" : workspace.projectless))
+const projectLabel = computed(() =>
+  props.project ? name(props.project) : props.projectPlaceholder || t("projectless.name"),
+)
 // An unborn HEAD is the current branch, but it has no commit to use as a base.
 const branchOptions = computed(() => {
   const result = info.value
