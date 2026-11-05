@@ -219,6 +219,22 @@ const imports = {
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
   "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
+  "@/components/ui/checkbox": {
+    Checkbox: vue.defineComponent({
+      props: ["modelValue", "disabled"],
+      emits: ["update:modelValue"],
+      setup:
+        (props, { emit }) =>
+        () =>
+          vue.h("button", {
+            type: "button",
+            role: "checkbox",
+            "aria-checked": String(!!props.modelValue),
+            disabled: props.disabled,
+            onClick: () => emit("update:modelValue", !props.modelValue),
+          }),
+    }),
+  },
   "@/components/chat/ChatPromptInput.vue": { __esModule: true, default: promptInput },
   "@/components/ModelThinkingSelect.vue": { __esModule: true, default: passthrough },
   "@/components/chat/ImagePreviewContent.vue": { __esModule: true, default: passthrough },
@@ -571,6 +587,26 @@ describe("KanbanBoard", () => {
     await saved
     await vue.nextTick()
     expect(h.isDialogOpen()).toBe(false)
+  })
+
+  test("creation can start immediately and resets the option when reopened", async () => {
+    const h = await harness({ selectedProject: "root" })
+    await h.openCreate()
+    await h.fill("root", "Start now")
+    const checkbox = () => h.all().find(child => child.props.role === "checkbox")!
+    expect(checkbox().props["aria-checked"]).toBe("false")
+    checkbox().props.onClick()
+    await vue.nextTick()
+    expect(h.byText("kanban.startDraft")).toBeDefined()
+    await h.submit()
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({
+      project: "root",
+      message: "Start now",
+      startImmediately: true,
+      thinkingLevel: "off",
+    })
+    await h.openCreate()
+    expect(checkbox().props["aria-checked"]).toBe("false")
   })
 
   test("async creation remains locked until busy settles and retains input on failure for retry", async () => {

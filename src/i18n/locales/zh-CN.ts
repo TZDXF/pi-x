@@ -27,6 +27,7 @@ export default {
     openConversation: "打开会话",
     draftUnavailable: "此待办已开始或已移除，请关闭弹窗后重试。",
     startDraft: "开始待办",
+    startImmediately: "创建后直接开始",
     deleteDraft: "删除待办",
     deleteDraftConfirm: "确定删除此待办？",
     saving: "保存中…",

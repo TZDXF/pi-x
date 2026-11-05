@@ -47,6 +47,7 @@ export interface KanbanCardSource extends Omit<KanbanCard, "title" | "preview"> 
 export interface KanbanCreatePayload extends Pick<BoardDraft, "modelKey" | "thinkingLevel" | "attachments"> {
   project: string
   message: string
+  startImmediately?: boolean
 }
 
 /** Keep full titles/messages in data; visual truncation belongs to the card. Empty drafts stay empty. */

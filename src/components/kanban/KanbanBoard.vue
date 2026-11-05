@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, w
 import { useI18n } from "vue-i18n"
 import { AlertCircle, ChevronDown, Folder, LoaderCircle, Plus, RotateCcw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatPromptInput from "@/components/chat/ChatPromptInput.vue"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
@@ -74,6 +75,7 @@ const idlePageSize = 30
 const idleLimit = ref(idlePageSize)
 const createOpen = ref(false)
 const draftProject = ref("")
+const startImmediately = ref(false)
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 const previewImage = ref<string | null>(null)
 const models = ref<Model[]>([])
@@ -171,6 +173,7 @@ function openCreate(project = props.selectedProject) {
   draftProject.value = availableProjects.value.some(option => option.value === project) ? project : ""
   void modelSelection.loadOfflineModels()
   createError.value = ""
+  startImmediately.value = false
   createOpen.value = true
 }
 
@@ -179,6 +182,10 @@ function inputError(error: { code: string }) {
   if (error.code === "accept") createError.value = t("chat.imageAttachmentsOnly")
 }
 const createError = ref("")
+const submitLabel = computed(() => {
+  if (createBusy.value) return startImmediately.value ? "kanban.starting" : "kanban.saving"
+  return startImmediately.value ? "kanban.startDraft" : "kanban.saveDraft"
+})
 
 async function submit(message: PromptInputMessage) {
   if (
@@ -196,6 +203,7 @@ async function submit(message: PromptInputMessage) {
     emit("create", {
       project: draftProject.value,
       message: message.text.trim(),
+      ...(startImmediately.value ? { startImmediately: true } : {}),
       ...(modelKey.value ? { modelKey: modelKey.value } : {}),
       thinkingLevel: thinkingLevel.value,
       ...(attachments.length ? { attachments } : {}),
@@ -396,6 +404,10 @@ async function submit(message: PromptInputMessage) {
               </option>
             </select>
           </label>
+          <label class="flex w-fit items-center gap-2 text-sm font-medium">
+            <Checkbox v-model="startImmediately" :disabled="createBusy" />
+            <span>{{ t("kanban.startImmediately") }}</span>
+          </label>
           <div class="space-y-2">
             <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
             <ChatPromptInput
@@ -422,7 +434,7 @@ async function submit(message: PromptInputMessage) {
                 </Button>
                 <Button type="submit" :disabled="!canCreate">
                   <LoaderCircle v-if="createBusy" class="size-3.5 animate-spin" aria-hidden="true" />
-                  {{ t(createBusy ? "kanban.saving" : "kanban.saveDraft") }}
+                  {{ t(submitLabel) }}
                 </Button>
               </template>
             </ChatPromptInput>

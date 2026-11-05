@@ -28,6 +28,7 @@ export default {
     openConversation: "Open conversation",
     draftUnavailable: "This task has started or was removed. Close the dialog and try again.",
     startDraft: "Start task",
+    startImmediately: "Start immediately after creating",
     deleteDraft: "Delete task",
     deleteDraftConfirm: "Delete this task?",
     saving: "Saving…",
