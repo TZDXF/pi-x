@@ -11,6 +11,28 @@ export const KANBAN_COLUMNS = [
 
 export type KanbanStatus = (typeof KANBAN_COLUMNS)[number]["id"]
 
+/** Status columns use a separate key in the existing board ordering map. */
+export const kanbanStatusOrderKey = JSON.stringify(["status"])
+
+/** Ignore stale/invalid persisted entries and always retain every built-in column. */
+export function orderKanbanColumns(order: readonly string[] = []): KanbanStatus[] {
+  const known = new Set<string>(KANBAN_COLUMNS.map(column => column.id))
+  const saved = order.filter((id, index): id is KanbanStatus => known.has(id) && order.indexOf(id) === index)
+  return [...saved, ...KANBAN_COLUMNS.map(column => column.id).filter(id => !saved.includes(id))]
+}
+
+export function moveKanbanColumn(
+  columns: readonly KanbanStatus[],
+  source: KanbanStatus,
+  target: KanbanStatus,
+  after: boolean,
+): KanbanStatus[] | null {
+  if (source === target || !columns.includes(source) || !columns.includes(target)) return null
+  const remaining = columns.filter(id => id !== source)
+  remaining.splice(remaining.indexOf(target) + Number(after), 0, source)
+  return remaining.every((id, index) => id === columns[index]) ? null : remaining
+}
+
 /** Separate ordering for all projects and each project filter. Keys are opaque to persistence. */
 export const kanbanColumnOrderKey = (project: string, status: KanbanStatus) => JSON.stringify([project, status])
 

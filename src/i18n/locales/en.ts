@@ -39,6 +39,7 @@ export default {
     close: "Close",
     openInChat: "Open in chat",
     reorderCard: "Drag to reorder within this column, or press Alt + ↑/↓",
+    reorderColumn: "Drag the heading to reorder columns, or press Alt + ←/→",
     detailsTitle: "Task details",
     resizeDetails: "Drag to resize the conversation, or use the left and right arrow keys",
     draftTitle: "Task draft",

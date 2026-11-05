@@ -38,6 +38,7 @@ export default {
     close: "关闭",
     openInChat: "在会话中打开",
     reorderCard: "拖动可在同列排序，Alt + ↑/↓ 调整顺序",
+    reorderColumn: "拖动标题可调整列顺序，Alt + ←/→ 移动当前列",
     detailsTitle: "任务详情",
     resizeDetails: "拖动调整会话宽度，或使用左右方向键",
     draftTitle: "待办详情",

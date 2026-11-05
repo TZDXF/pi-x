@@ -18,6 +18,7 @@ import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
 import type { WorkspaceSelection } from "@/api/piClient"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
+import { useKanbanColumnSorting } from "@/composables/useKanbanColumnSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
 import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import KanbanSessionMenu from "./KanbanSessionMenu.vue"
@@ -26,7 +27,9 @@ import {
   KANBAN_COLUMNS,
   filterKanbanCards,
   groupKanbanCards,
+  kanbanStatusOrderKey,
   kanbanCardTitle,
+  orderKanbanColumns,
   type KanbanCard,
   type KanbanCreatePayload,
   type KanbanStatus,
@@ -55,6 +58,7 @@ const emit = defineEmits<{
   cardDeleted: [card: KanbanCard]
   retry: []
   reorder: [column: KanbanStatus, ids: string[]]
+  reorderColumns: [columns: KanbanStatus[]]
   startDraft: [card: KanbanCard]
 }>()
 defineSlots<{ actions?(): unknown }>()
@@ -66,6 +70,18 @@ useKanbanSelectionScroll(scroller, () => props.selectedId)
 const id = useId()
 const groups = computed(() =>
   groupKanbanCards(filterKanbanCards(props.cards, props.selectedProject), props.columnOrder, props.selectedProject),
+)
+const columns = computed(() =>
+  orderKanbanColumns(props.columnOrder?.[kanbanStatusOrderKey]).map(
+    status => KANBAN_COLUMNS.find(column => column.id === status)!,
+  ),
+)
+const columnSorting = reactive(
+  useKanbanColumnSorting(
+    () => columns.value.map(column => column.id),
+    () => props.navigationBusy,
+    ordered => emit("reorderColumns", ordered),
+  ),
 )
 const sorting = reactive(
   useKanbanCardSorting(
@@ -363,15 +379,32 @@ async function submit(message: PromptInputMessage) {
     <div ref="scroller" class="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-4" :aria-busy="loading">
       <div class="grid h-full min-h-0 min-w-[79rem] grid-cols-[repeat(5,minmax(15rem,1fr))] gap-3">
         <section
-          v-for="column in KANBAN_COLUMNS"
+          v-for="column in columns"
           :key="column.id"
           :data-kanban-column="column.id"
           :aria-labelledby="`${id}-${column.id}`"
           class="flex min-h-0 min-w-0 flex-col rounded-xl border border-border/60 bg-muted/30"
         >
-          <header class="flex shrink-0 items-center gap-2 px-3 py-3">
+          <header
+            class="flex shrink-0 items-center gap-2 rounded-t-xl px-3 py-3 transition-colors"
+            :class="{ 'bg-primary/10': columnSorting.target?.id === column.id }"
+            @dragover="columnSorting.overColumn($event, column.id)"
+            @drop="columnSorting.drop($event, column.id)"
+          >
             <span class="size-2 shrink-0 rounded-full" :class="statusColor[column.id]" aria-hidden="true" />
-            <h2 :id="`${id}-${column.id}`" class="text-xs font-semibold">{{ t(column.labelKey) }}</h2>
+            <h2
+              :id="`${id}-${column.id}`"
+              :draggable="!navigationBusy"
+              tabindex="0"
+              :aria-description="t('kanban.reorderColumn')"
+              aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+              class="cursor-grab rounded-sm text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+              :class="{ 'opacity-50': columnSorting.source === column.id }"
+              @dragstart="columnSorting.startDrag($event, column.id)"
+              @dragend="columnSorting.endDrag"
+              @keydown="columnSorting.moveWithKeyboard($event, column.id)"
+              >{{ t(column.labelKey) }}</h2
+            >
             <span
               class="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground"
               :aria-label="t('kanban.columnCount', { count: groups[column.id].length })"

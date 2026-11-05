@@ -74,7 +74,7 @@ import WindowTitleBar from "@/components/WindowTitleBar.vue"
 import KanbanBoard from "@/components/kanban/KanbanBoard.vue"
 import KanbanDetailsPanel from "@/components/kanban/KanbanDetailsPanel.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
-import { kanbanColumnOrderKey, type KanbanCard } from "@/lib/kanban"
+import { kanbanColumnOrderKey, kanbanStatusOrderKey, type KanbanCard } from "@/lib/kanban"
 import { loadTrustStatus } from "@/lib/sshTrust"
 import { isRemoteProject } from "@/lib/ssh"
 import { sameSessionIdentity } from "@/lib/sessionIdentity"
@@ -760,6 +760,7 @@ onUnmounted(() => {
                   (column, ids) =>
                     workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
                 "
+                @reorder-columns="ids => workspace.reorderBoardColumn(kanbanStatusOrderKey, ids)"
                 @open="openBoardCard"
                 @start-draft="startBoardDraft"
                 @card-deleted="onBoardCardDeleted"

@@ -6,6 +6,7 @@ import { createI18n } from "vue-i18n"
 import ts from "typescript"
 import * as kanban from "@/lib/kanban"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
+import { useKanbanColumnSorting } from "@/composables/useKanbanColumnSorting"
 import { formatKanbanDuration, formatKanbanTime } from "@/lib/kanbanTime"
 import type { KanbanCard, KanbanCardSource } from "@/lib/kanban"
 import zhCN from "@/i18n/locales/zh-CN"
@@ -229,6 +230,7 @@ const imports = {
   "@/lib/kanban": kanban,
   "@/lib/kanbanTime": { formatKanbanDuration, formatKanbanTime },
   "@/composables/useKanbanCardSorting": { useKanbanCardSorting },
+  "@/composables/useKanbanColumnSorting": { useKanbanColumnSorting },
   "@/composables/useKanbanSelectionScroll": { useKanbanSelectionScroll: () => {} },
   "@/components/ui/button": { Button: button },
   "@/components/ui/input": { Input: input },
@@ -366,6 +368,9 @@ async function harness(overrides: Record<string, any> = {}) {
     startDraft = vi.fn(),
     reorder = vi.fn((column: kanban.KanbanStatus, ids: string[]) => {
       state.columnOrder = { ...state.columnOrder, [kanban.kanbanColumnOrderKey(state.selectedProject, column)]: ids }
+    }),
+    reorderColumns = vi.fn((ids: kanban.KanbanStatus[]) => {
+      state.columnOrder = { ...state.columnOrder, [kanban.kanbanStatusOrderKey]: ids }
     })
   const board = vue.ref<{ openCreate(project?: string): void }>()
   const app = renderer.createApp({
@@ -382,6 +387,7 @@ async function harness(overrides: Record<string, any> = {}) {
           onStartDraft: startDraft,
           onRetry: retry,
           onReorder: reorder,
+          onReorderColumns: reorderColumns,
           "onUpdate:selectedProject": select,
         },
         { actions: () => vue.h("span", { "data-actions": true }, "Parent actions") },
@@ -432,6 +438,7 @@ async function harness(overrides: Record<string, any> = {}) {
     startDraft,
     retry,
     reorder,
+    reorderColumns,
     select,
   }
 }
@@ -543,6 +550,37 @@ describe("KanbanBoard", () => {
         .map(card => card.props["data-kanban-card"]),
     ).toEqual(["0", "1"])
     expect(h.open).not.toHaveBeenCalled()
+  })
+
+  test("column headings drag to a new position and persist independently from card order", async () => {
+    const h = await harness()
+    const heading = (status: kanban.KanbanStatus) =>
+      h.all().find(child => child.tag === "h2" && textOf(child) === `kanban.${status}`)!
+    const targetHeader = () => h.columns().find(column => column.props["data-kanban-column"] === "idle")!.children[0]
+    const dataTransfer = { effectAllowed: "none", dropEffect: "none", setData: vi.fn() }
+    heading("todo").props.onDragstart({
+      preventDefault: vi.fn(),
+      dataTransfer,
+    })
+    const over = {
+      clientX: 90,
+      preventDefault: vi.fn(),
+      dataTransfer,
+      currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 100 }) },
+    }
+    targetHeader().props.onDragover(over)
+    targetHeader().props.onDrop({ preventDefault: vi.fn() })
+    await vue.nextTick()
+    expect(h.reorderColumns).toHaveBeenCalledExactlyOnceWith(["running", "waiting", "completed", "idle", "todo"])
+    expect(h.columns().map(column => column.props["data-kanban-column"])).toEqual([
+      "running",
+      "waiting",
+      "completed",
+      "idle",
+      "todo",
+    ])
+    expect(h.reorder).not.toHaveBeenCalled()
+    expect(heading("todo").props["aria-description"]).toBe("kanban.reorderColumn")
   })
 
   test("cards stay clickable during conversation switches while hard navigation guards still apply", async () => {
