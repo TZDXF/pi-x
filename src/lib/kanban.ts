@@ -27,7 +27,7 @@ export interface KanbanCard {
   activity?: KanbanLivePreview
   /** Unix timestamp in milliseconds. */
   updatedAt: number
-  /** Start of the latest submitted prompt; drives active-turn duration. */
+  /** Start of the latest submitted prompt; drives active-turn duration and running-card order. */
   lastPromptAt?: number
   status: KanbanStatus
   failed?: boolean
@@ -62,12 +62,15 @@ export function filterKanbanCards(cards: readonly KanbanCard[], selectedProject 
   return cards.filter(card => !selectedProject || card.project === selectedProject)
 }
 
-/** Newest first; equal timestamps preserve input order. Invalid timestamps sort last. */
+/** Newest first; running cards use their latest prompt start. Equal timestamps preserve input order. */
 export function sortKanbanCards(cards: readonly KanbanCard[]): KanbanCard[] {
-  const time = (value: number) => (Number.isFinite(value) ? value : -Infinity)
+  const time = (card: KanbanCard) => {
+    const value = card.status === "running" && Number.isFinite(card.lastPromptAt) ? card.lastPromptAt! : card.updatedAt
+    return Number.isFinite(value) ? value : -Infinity
+  }
   return [...cards].sort((a, b) => {
-    const aTime = time(a.updatedAt)
-    const bTime = time(b.updatedAt)
+    const aTime = time(a)
+    const bTime = time(b)
     return aTime === bTime ? 0 : aTime > bTime ? -1 : 1
   })
 }

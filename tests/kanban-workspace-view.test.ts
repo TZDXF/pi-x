@@ -8,6 +8,7 @@ import * as identities from "@/lib/sessionIdentity"
 import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
+import { groupKanbanCards } from "@/lib/kanban"
 
 const source = readFileSync(new URL("../src/composables/useKanbanWorkspace.ts", import.meta.url), "utf8")
 const scopes: ReturnType<typeof effectScope>[] = []
@@ -199,6 +200,26 @@ test.each([false, true])("live cards follow the latest submitted prompt with sav
   expect(board.cards.value[0].preview).toBe("Latest question")
 })
 
+test("running cards reorder when a newer follow-up starts, independently of update time", () => {
+  const { board, workspace, sessionFor } = harness()
+  workspace.histories["/root"] = [
+    { file: "/sessions/one.jsonl", cwd: "/root", mtimeMs: 100 },
+    { file: "/sessions/two.jsonl", cwd: "/root", mtimeMs: 200 },
+  ]
+  const first = sessionFor("first-worker")
+  Object.assign(first, { cwd: "/root", sessionFile: "/sessions/one.jsonl", isStreaming: true })
+  first.entries.push({ kind: "user", text: "First question", timestamp: 10 })
+  const second = sessionFor("second-worker")
+  Object.assign(second, { cwd: "/root", sessionFile: "/sessions/two.jsonl", isStreaming: true })
+  second.entries.push({ kind: "user", text: "Second question", timestamp: 20 })
+  const runningIds = () => groupKanbanCards(board.cards.value).running.map(card => card.file)
+  expect(runningIds()).toEqual(["/sessions/two.jsonl", "/sessions/one.jsonl"])
+
+  first.entries.push({ kind: "user", text: "Follow-up question", timestamp: 30 })
+  expect(board.cards.value.find(card => card.file === first.sessionFile)?.lastPromptAt).toBe(30)
+  expect(runningIds()).toEqual(["/sessions/one.jsonl", "/sessions/two.jsonl"])
+})
+
 test("an image-only latest prompt does not fall back to an older question", () => {
   const { board, workspace, sessionFor } = harness()
   workspace.histories["/root"] = [
@@ -288,6 +309,7 @@ test("remote history uses its source folder URI for identity, ownership, activit
     runtimeId: owner.runtimeId,
     status: "running",
     updatedAt: 20,
+    lastPromptAt: 20,
   })
   expect(board.cards.value[0].id).not.toBe(file)
 })

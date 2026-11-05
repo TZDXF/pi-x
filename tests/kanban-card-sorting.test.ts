@@ -56,6 +56,20 @@ test("manual order is scoped by project/column, ignores stale IDs, and gives new
   expect(cards.map(card => card.id)).toEqual(["a", "b", "new", "running"])
 })
 
+test("running cards follow the latest prompt start unless manually reordered", () => {
+  const cards = [
+    card("earlier-prompt", { status: "running", updatedAt: 300, lastPromptAt: 10 }),
+    card("latest-prompt", { status: "running", updatedAt: 200, lastPromptAt: 20 }),
+    card("idle-newer-update", { status: "idle", updatedAt: 30, lastPromptAt: 1 }),
+    card("idle-older-update", { status: "idle", updatedAt: 20, lastPromptAt: 999 }),
+  ]
+  expect(groupKanbanCards(cards).running.map(card => card.id)).toEqual(["latest-prompt", "earlier-prompt"])
+  expect(groupKanbanCards(cards).idle.map(card => card.id)).toEqual(["idle-newer-update", "idle-older-update"])
+
+  const order = { [kanbanColumnOrderKey("", "running")]: ["earlier-prompt", "latest-prompt"] }
+  expect(groupKanbanCards(cards, order).running.map(card => card.id)).toEqual(["earlier-prompt", "latest-prompt"])
+})
+
 test("draft ordering survives binding to a real session and is unaffected by activity timestamps", () => {
   const cards = [card("session", { draftId: "one", updatedAt: 999 }), card("other")]
   const order = { [kanbanColumnOrderKey("", "todo")]: ["other", "draft:one"] }
