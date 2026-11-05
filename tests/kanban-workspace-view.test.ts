@@ -17,7 +17,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function harness() {
+function harness(historyLoaded = true) {
   const owners = reactive(new Map())
   const interfaces = reactive(new Map())
   const activities = reactive(new Map())
@@ -54,7 +54,7 @@ function harness() {
     boardDrafts: {},
     sessionActivities: {},
     sessionAcknowledgements: {},
-    histories: {},
+    histories: historyLoaded ? { "/root": [], "/root/linked": [], "/loose": [] } : {},
     projectless: "/loose",
     ensureProjectless: vi.fn(async () => {
       workspace.projectless = "/loose"
@@ -129,6 +129,93 @@ test("entering the board loads every project folder and the no-project history w
   expect(workspace.refresh.mock.calls.map(([path]) => path)).toEqual(["/root", "/root/linked", "/loose"])
   expect(board.selectedProject.value).toBe("")
   expect(sessionFor).not.toHaveBeenCalled()
+})
+
+test.each(["/root", "/root/linked", "/loose"])(
+  "restored cards in %s wait for archive metadata while unsent todos stay visible",
+  async project => {
+    const { board, workspace, sessionFor } = harness(false)
+    const todo = await board.createDraft({ project: workspace.projectRoot(project), message: "Unsent task" })
+    for (const id of ["archived", "saved", "not-yet-on-disk"]) {
+      workspace.boardDrafts[id] = {
+        id,
+        project,
+        message: id,
+        sessionFile: `/sessions/${id}.jsonl`,
+        createdAt: 1,
+        updatedAt: 2,
+      }
+    }
+    for (const id of ["archived", "archived-runtime", "live"]) {
+      Object.assign(sessionFor(id), {
+        cwd: project,
+        sessionFile: `/sessions/${id}.jsonl`,
+        entries: [{ kind: "user", text: id }],
+      })
+    }
+    expect(board.cards.value.map(card => card.draftId)).toEqual([todo.id])
+
+    let finish!: () => void
+    workspace.refresh.mockImplementation(async folder => {
+      if (folder !== project) {
+        workspace.histories[folder] = []
+        return
+      }
+      await new Promise<void>(resolve => {
+        finish = resolve
+      })
+      workspace.histories[folder] = [
+        { file: "/sessions/archived.jsonl", cwd: project, archived: true },
+        { file: "/sessions/archived-runtime.jsonl", cwd: project, archived: true },
+        { file: "/sessions/saved.jsonl", cwd: project, title: "Saved title" },
+      ]
+    })
+    const refresh = board.refresh()
+    await nextTick()
+    expect(board.loading.value).toBe(true)
+    expect(board.cards.value.map(card => card.draftId)).toEqual([todo.id])
+    finish()
+    await refresh
+    expect(board.loading.value).toBe(false)
+    expect(
+      board.cards.value
+        .map(card => card.file)
+        .filter(Boolean)
+        .sort(),
+    ).toEqual(["/sessions/live.jsonl", "/sessions/not-yet-on-disk.jsonl", "/sessions/saved.jsonl"])
+    expect(board.cards.value.find(card => card.draftId === "saved")?.title).toBe("Saved title")
+    expect(board.cards.value.some(card => card.draftId === todo.id)).toBe(true)
+
+    const secondRefresh = board.refresh()
+    expect(board.cards.value).toHaveLength(4)
+    finish()
+    await secondRefresh
+    expect(board.cards.value).toHaveLength(4)
+  },
+)
+
+test("failed initial history loads keep restored cards hidden until a successful retry", async () => {
+  const { board, workspace } = harness(false)
+  workspace.boardDrafts.restored = {
+    id: "restored",
+    project: "/root",
+    message: "Restored task",
+    sessionFile: "/sessions/restored.jsonl",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  workspace.refresh.mockRejectedValue(new Error("history unavailable"))
+  await board.refresh()
+  expect(board.error.value).toContain("history unavailable")
+  expect(board.loading.value).toBe(false)
+  expect(board.cards.value).toEqual([])
+
+  workspace.refresh.mockImplementation(async folder => {
+    workspace.histories[folder] = []
+  })
+  await board.refresh()
+  expect(board.error.value).toBe("")
+  expect(board.cards.value).toEqual([expect.objectContaining({ draftId: "restored" })])
 })
 
 test("projectless history, drafts and live sessions retain identity while hiding their project label", async () => {

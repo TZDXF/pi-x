@@ -34,6 +34,9 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     ),
   ])
   const isIncluded = (project: string) => folders.value.some(folder => samePath(folder, project))
+  // An absent history has not loaded its archive metadata yet; an empty array has.
+  const hasHistory = (project: string) =>
+    folders.value.some(folder => samePath(folder, project) && workspace.histories[folder] !== undefined)
   const cardProject = (project: string) => (workspace.isProjectless(project) ? project : workspace.projectRoot(project))
   // Remote session files contain a bare physical cwd; only the source folder
   // carries the endpoint that makes that path a usable project identity.
@@ -101,6 +104,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     }
     for (const owner of conversations) {
       if (!isIncluded(owner.cwd) || !owner.sessionFile) continue
+      if (!hasHistory(owner.cwd)) continue
       const file = owner.sessionFile
       const identity = sessionIdentityKey(file, owner.cwd)
       // An archived session must stay hidden even when its runtime is still alive.
@@ -133,6 +137,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     }
     for (const draft of drafts) {
       if (!isIncluded(draft.project)) continue
+      if (draft.sessionFile && !hasHistory(draft.project)) continue
       if (draft.sessionFile && archived.has(sessionIdentityKey(draft.sessionFile, draft.project))) continue
       if (draft.sessionFile && result.has(sessionIdentityKey(draft.sessionFile, draft.project))) continue
       const owner = conversations.find(owner => owner.runtimeId === (draft.runtimeId || draft.id))
