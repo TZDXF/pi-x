@@ -1,5 +1,6 @@
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tauri::AppHandle;
 
 use crate::errors::pix_error;
 
@@ -9,7 +10,7 @@ pub struct StorageCategory {
     pub id: String,
     pub bytes: u64,
     pub file_count: u64,
-    /// Sessions for the two session categories; files for the others.
+    /// Sessions for the two session categories; files for workspaces.
     pub item_count: u64,
 }
 
@@ -18,7 +19,6 @@ pub struct StorageCategory {
 pub struct StorageSummary {
     pub total_bytes: u64,
     pub categories: Vec<StorageCategory>,
-    pub data_directory: String,
     pub sessions_directory: String,
     pub scanned_at: i64,
 }
@@ -55,10 +55,6 @@ fn add_file(category: &mut StorageCategory, path: &Path) -> bool {
 
 fn is_jsonl(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str()) == Some("jsonl")
-}
-
-fn is_log(path: &Path) -> bool {
-    path.extension().and_then(|s| s.to_str()) == Some("log")
 }
 
 /// Session usage includes each JSONL and its optional PiX presentation sidecar.
@@ -99,7 +95,7 @@ fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
 }
 
 /// Recursively measure regular files without following directory links.
-fn path_usage(target: &Path, logs_only: bool, category: &mut StorageCategory) {
+fn path_usage(target: &Path, category: &mut StorageCategory) {
     let mut pending = vec![target.to_path_buf()];
     while let Some(path) = pending.pop() {
         let Ok(metadata) = std::fs::symlink_metadata(&path) else {
@@ -109,74 +105,41 @@ fn path_usage(target: &Path, logs_only: bool, category: &mut StorageCategory) {
             if let Ok(entries) = std::fs::read_dir(&path) {
                 pending.extend(entries.flatten().map(|entry| entry.path()));
             }
-        } else if (!logs_only || is_log(&path)) && add_file(category, &path) {
+        } else if add_file(category, &path) {
             category.item_count = category.item_count.saturating_add(1);
         }
     }
 }
 
-fn scan_data(data_root: &Path) -> [StorageCategory; 3] {
-    let mut cache = category("cache");
-    path_usage(&data_root.join("icons"), false, &mut cache);
-    let mut logs = category("logs");
-    path_usage(&data_root.join("logs"), true, &mut logs);
-    let mut app_data = category("appData");
-    if let Ok(entries) = std::fs::read_dir(data_root) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            // The default projectless workspace contains user files, not app data.
-            if name == "icons" || name == "logs" || name == "workspace" {
-                continue;
-            }
-            path_usage(&entry.path(), false, &mut app_data);
+fn scan_workspaces(roots: &[PathBuf]) -> StorageCategory {
+    let mut workspaces = category("workspaces");
+    let mut scanned: Vec<&PathBuf> = Vec::new();
+    for root in roots {
+        if scanned
+            .iter()
+            .any(|previous| crate::paths::eq_norm_path(previous, root))
+        {
+            continue;
         }
+        scanned.push(root);
+        path_usage(root, &mut workspaces);
     }
-    [cache, logs, app_data]
+    workspaces
 }
 
-fn summary_at(data_root: &Path, sessions_root: &Path) -> StorageSummary {
+fn summary_at(sessions_root: &Path, workspace_roots: &[PathBuf]) -> StorageSummary {
     let [sessions, archived_sessions] = scan_sessions(sessions_root);
-    let [cache, logs, app_data] = scan_data(data_root);
-    let categories = vec![sessions, archived_sessions, cache, logs, app_data];
+    let workspaces = scan_workspaces(workspace_roots);
+    let categories = vec![sessions, archived_sessions, workspaces];
     let total_bytes = categories
         .iter()
         .fold(0u64, |total, row| total.saturating_add(row.bytes));
     StorageSummary {
         total_bytes,
         categories,
-        data_directory: data_root.to_string_lossy().into_owned(),
         sessions_directory: sessions_root.to_string_lossy().into_owned(),
         scanned_at: chrono::Utc::now().timestamp_millis(),
     }
-}
-
-fn remove_entry(path: &Path) -> std::io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_dir() {
-        // std::fs::remove_dir_all does not follow symbolic links.
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    }
-}
-
-fn clear_generated_data(root: &Path, logs_only: bool) -> u64 {
-    let mut failed: u64 = 0;
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if logs_only {
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) || !is_log(&path) {
-                continue;
-            }
-        }
-        if remove_entry(&path).is_err() {
-            failed = failed.saturating_add(1);
-        }
-    }
-    failed
 }
 
 fn clean_archived(root: &Path) -> StorageCleanupResult {
@@ -237,49 +200,31 @@ fn clean_archived(root: &Path) -> StorageCleanupResult {
     result
 }
 
-fn cleanup_at(
-    data_root: &Path,
-    sessions_root: &Path,
-    kind: &str,
-) -> Result<StorageCleanupResult, String> {
+fn cleanup_at(sessions_root: &Path, kind: &str) -> Result<StorageCleanupResult, String> {
     if kind == "archivedSessions" {
         return Ok(clean_archived(sessions_root));
     }
-    let (root, logs_only, category_id) = match kind {
-        "cache" => (data_root.join("icons"), false, "cache"),
-        "logs" => (data_root.join("logs"), true, "logs"),
-        _ => {
-            return Err(pix_error(
-                "storageCategoryNotCleanable",
-                "此存储分类不可清理",
-            ))
-        }
-    };
-    let before = if logs_only {
-        let mut value = category(category_id);
-        path_usage(&root, true, &mut value);
-        value
-    } else {
-        let mut value = category(category_id);
-        path_usage(&root, false, &mut value);
-        value
-    };
-    let failed = clear_generated_data(&root, logs_only);
-    let mut after = category(category_id);
-    path_usage(&root, logs_only, &mut after);
-    Ok(StorageCleanupResult {
-        freed_bytes: before.bytes.saturating_sub(after.bytes),
-        deleted_items: before.item_count.saturating_sub(after.item_count),
-        failed,
-    })
+    Err(pix_error(
+        "storageCategoryNotCleanable",
+        "此存储分类不可清理",
+    ))
 }
 
 #[tauri::command]
-pub async fn storage_summary() -> Result<StorageSummary, String> {
-    tokio::task::spawn_blocking(|| {
+pub async fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
+    let config = crate::commands::app_config_get(app)?;
+    let mut workspace_roots = crate::commands::workspace_state::storage_roots()?;
+    let projectless = crate::data_dir::resolve_projectless_dir(config.projectless_dir.as_deref());
+    if !workspace_roots
+        .iter()
+        .any(|root| crate::paths::eq_norm_path(root, &projectless))
+    {
+        workspace_roots.push(projectless);
+    }
+    tokio::task::spawn_blocking(move || {
         summary_at(
-            &crate::data_dir::root(),
             &crate::trust::agent_dir().join("sessions"),
+            &workspace_roots,
         )
     })
     .await
@@ -289,11 +234,7 @@ pub async fn storage_summary() -> Result<StorageSummary, String> {
 #[tauri::command]
 pub async fn storage_cleanup(kind: String) -> Result<StorageCleanupResult, String> {
     tokio::task::spawn_blocking(move || {
-        cleanup_at(
-            &crate::data_dir::root(),
-            &crate::trust::agent_dir().join("sessions"),
-            &kind,
-        )
+        cleanup_at(&crate::trust::agent_dir().join("sessions"), &kind)
     })
     .await
     .map_err(|e| format!("storage cleanup failed: {e}"))?
@@ -302,7 +243,6 @@ pub async fn storage_cleanup(kind: String) -> Result<StorageCleanupResult, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     struct TestDir(PathBuf);
     impl TestDir {
@@ -340,30 +280,36 @@ mod tests {
     }
 
     #[test]
-    fn summary_separates_active_archived_cache_logs_and_app_data() {
+    fn summary_only_counts_sessions_and_unique_workspace_roots() {
         let temp = TestDir::new("summary");
         let data = temp.0.join("data");
         let sessions = temp.0.join("sessions");
+        let workspace = temp.0.join("workspace");
+        let projectless = temp.0.join("projectless");
         session(&sessions, "active", Some(false), 10);
         session(&sessions, "archived", Some(true), 20);
         session(&sessions, "unmanaged", None, 30);
-        write(&data.join("icons/editor.png"), b"1234");
-        write(&data.join("logs/today.log"), b"12345");
-        write(&data.join("logs/notes.txt"), b"not-a-log");
-        write(&data.join("config.json"), b"123456");
-        write(&data.join("webview/cache.bin"), b"1234567");
-        write(&data.join("workspace/user.txt"), b"must-not-be-counted");
+        write(&workspace.join("src/main.ts"), b"1234");
+        write(&workspace.join("README.md"), b"1234567");
+        write(&projectless.join("notes.txt"), b"123");
+        write(&data.join("icons/editor.png"), b"not-counted");
+        write(&data.join("logs/today.log"), b"not-counted");
+        write(&data.join("config.json"), b"not-counted");
 
-        let summary = summary_at(&data, &sessions);
+        let summary = summary_at(
+            &sessions,
+            &[workspace.clone(), workspace, projectless],
+        );
+        assert_eq!(summary.categories.len(), 3);
         let active = row(&summary, "sessions");
         assert_eq!(active.item_count, 2);
         assert_eq!(active.bytes, 40 + "{\"archived\":false}".len() as u64);
         let archived = row(&summary, "archivedSessions");
         assert_eq!(archived.item_count, 1);
         assert_eq!(archived.bytes, 20 + "{\"archived\":true}".len() as u64);
-        assert_eq!(row(&summary, "cache").bytes, 4);
-        assert_eq!(row(&summary, "logs").bytes, 5);
-        assert_eq!(row(&summary, "appData").bytes, 13);
+        let workspaces = row(&summary, "workspaces");
+        assert_eq!(workspaces.item_count, 3);
+        assert_eq!(workspaces.bytes, 14);
         assert_eq!(
             summary.total_bytes,
             summary.categories.iter().map(|row| row.bytes).sum::<u64>()
@@ -380,7 +326,7 @@ mod tests {
         session(&sessions, "malformed", None, 40);
         write(&sessions.join("project/malformed.pix.json"), b"not-json");
 
-        let result = cleanup_at(&temp.0.join("data"), &sessions, "archivedSessions").unwrap();
+        let result = cleanup_at(&sessions, "archivedSessions").unwrap();
         assert_eq!(result.deleted_items, 1);
         assert_eq!(result.failed, 0);
         assert!(!sessions.join("project/archived.jsonl").exists());
@@ -391,39 +337,17 @@ mod tests {
     }
 
     #[test]
-    fn generated_cleanup_is_scoped_and_preserves_non_logs() {
-        let temp = TestDir::new("cleanup");
-        let data = temp.0.join("data");
-        write(&data.join("icons/editor.png"), b"1234");
-        write(&data.join("logs/today.log"), b"12345");
-        write(&data.join("logs/notes.txt"), b"keep");
-        write(&data.join("workspace/user.txt"), b"keep");
-        write(&data.join("config.json"), b"keep");
-
-        assert_eq!(
-            cleanup_at(&data, &temp.0.join("sessions"), "cache")
-                .unwrap()
-                .freed_bytes,
-            4
-        );
-        assert_eq!(
-            cleanup_at(&data, &temp.0.join("sessions"), "logs")
-                .unwrap()
-                .freed_bytes,
-            5
-        );
-        assert!(!data.join("icons/editor.png").exists());
-        assert!(!data.join("logs/today.log").exists());
-        assert!(data.join("logs/notes.txt").exists());
-        assert!(data.join("workspace/user.txt").exists());
-        assert!(data.join("config.json").exists());
-    }
-
-    #[test]
-    fn active_sessions_and_app_data_cannot_be_bulk_cleaned() {
+    fn only_archived_sessions_can_be_bulk_cleaned() {
         let temp = TestDir::new("rejected");
-        for kind in ["sessions", "appData", "unknown"] {
-            assert!(cleanup_at(&temp.0, &temp.0.join("sessions"), kind).is_err());
+        for kind in [
+            "sessions",
+            "workspaces",
+            "cache",
+            "logs",
+            "appData",
+            "unknown",
+        ] {
+            assert!(cleanup_at(&temp.0.join("sessions"), kind).is_err());
         }
     }
 }

@@ -561,7 +561,7 @@ export default {
   storage: {
     nav: "Storage",
     title: "Storage",
-    description: "Review disk usage for PiX and Pi sessions, and clean up safely regenerable data.",
+    description: "Review disk usage for sessions and workspaces, and manage archived sessions.",
     total: "Total usage",
     refresh: "Refresh",
     reload: "Reload",
@@ -569,35 +569,28 @@ export default {
     categories: {
       sessions: "Sessions",
       archivedSessions: "Archived sessions",
-      cache: "Icon cache",
-      logs: "Diagnostic logs",
-      appData: "Other app data",
+      workspaces: "Workspaces",
     },
     descriptions: {
       sessions:
         "Unarchived sessions and their metadata. Manage them individually in the sidebar; bulk deletion is not available.",
       archivedSessions:
         "Archived sessions and their metadata. Restore them from Archives, or permanently remove all archives here.",
-      cache: "Editor and IDE icons. They are regenerated as needed; settings and sessions are not affected.",
-      logs: "PiX diagnostic .log files. Sessions are not affected, but troubleshooting history will be removed.",
-      appData:
-        "Settings, skills, extensions, WebView data, and more. One-click deletion is unavailable to protect configuration and sign-in state.",
+      workspaces:
+        "Files in added projects (including multi-folder projects) and the projectless workspace. Usage is read-only; deletion is unavailable.",
     },
     sessionCount: "{count} session(s)",
     fileCount: "{count} file(s)",
     manageArchives: "Manage archives",
-    openDataDirectory: "Open data directory",
     clean: "Clean up",
     cleanupTitle: "Clean up {name}?",
     cleanupArchivedConfirm:
       "Permanently delete every archived session and free approximately {size}? This cannot be undone. Unarchived sessions are not affected.",
-    cleanupCacheConfirm: "Delete regenerable icon cache and free approximately {size}?",
-    cleanupLogsConfirm: "Permanently delete all diagnostic logs and free approximately {size}?",
     confirmClean: "Clean up",
     cleaned: "Freed {size}",
     cleanedPartial: "Freed {size}, but {count} item(s) could not be removed. Refresh and try again.",
     scopeNote:
-      "Includes only the PiX- and Pi-managed data above, not project files or the projectless workspace. Usage is an estimate at scan time.",
+      "Includes only sessions and added workspaces. Symbolic links are not followed; usage is an estimate at scan time.",
     scannedAt: "Scanned at {time}",
   },
   usage: {

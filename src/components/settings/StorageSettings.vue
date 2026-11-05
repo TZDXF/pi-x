@@ -1,26 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, type Component } from "vue"
 import { useI18n } from "vue-i18n"
-import {
-  Archive,
-  Database,
-  FileClock,
-  FolderOpen,
-  HardDrive,
-  Images,
-  MessageSquareText,
-  RefreshCw,
-  Trash2,
-} from "@lucide/vue"
+import { Archive, Folder, HardDrive, MessageSquareText, RefreshCw, Trash2 } from "@lucide/vue"
 import {
   cleanupStorage,
   getStorageSummary,
-  openPath,
   type StorageCategory,
   type StorageCategoryId,
   type StorageSummary,
 } from "@/api/piClient"
-import { isDesktop } from "@/api/transport"
 import { formatBytes, formatDateTime } from "@/lib/format"
 import { formatCodedError } from "@/lib/backendError"
 import { navigate } from "@/lib/router"
@@ -47,26 +35,18 @@ const pendingCleanup = ref<StorageCategory | null>(null)
 const categoryUi: Record<StorageCategoryId, { icon: Component; bar: string; iconColor: string }> = {
   sessions: { icon: MessageSquareText, bar: "bg-blue-500", iconColor: "text-blue-500" },
   archivedSessions: { icon: Archive, bar: "bg-violet-500", iconColor: "text-violet-500" },
-  cache: { icon: Images, bar: "bg-amber-500", iconColor: "text-amber-500" },
-  logs: { icon: FileClock, bar: "bg-emerald-500", iconColor: "text-emerald-500" },
-  appData: { icon: Database, bar: "bg-slate-400", iconColor: "text-slate-500" },
+  workspaces: { icon: Folder, bar: "bg-emerald-500", iconColor: "text-emerald-500" },
 }
 
 const categories = computed(() => summary.value?.categories ?? [])
 const pendingTitle = computed(() => (pendingCleanup.value ? t(`storage.categories.${pendingCleanup.value.id}`) : ""))
 const pendingDescription = computed(() => {
   if (!pendingCleanup.value) return ""
-  const key =
-    pendingCleanup.value.id === "archivedSessions"
-      ? "storage.cleanupArchivedConfirm"
-      : pendingCleanup.value.id === "cache"
-        ? "storage.cleanupCacheConfirm"
-        : "storage.cleanupLogsConfirm"
-  return t(key, { size: formatBytes(pendingCleanup.value.bytes) })
+  return t("storage.cleanupArchivedConfirm", { size: formatBytes(pendingCleanup.value.bytes) })
 })
 
 function isCleanable(id: StorageCategoryId) {
-  return id === "archivedSessions" || id === "cache" || id === "logs"
+  return id === "archivedSessions"
 }
 
 function percentage(bytes: number) {
@@ -117,15 +97,6 @@ async function confirmCleanup() {
     }
   } finally {
     busy.value = null
-  }
-}
-
-async function openDataDirectory() {
-  if (!summary.value) return
-  try {
-    await openPath(summary.value.dataDirectory)
-  } catch (e) {
-    ui.pushToast(formatCodedError(t, e), "error")
   }
 }
 
@@ -188,7 +159,7 @@ onMounted(load)
           v-for="category in categories"
           :key="category.id"
           class="flex min-w-0 flex-col rounded-xl border border-border/60 p-4"
-          :class="{ 'md:col-span-2': category.id === 'appData' }"
+          :class="{ 'md:col-span-2': category.id === 'workspaces' }"
         >
           <div class="flex items-start gap-3">
             <component
@@ -212,7 +183,7 @@ onMounted(load)
           <p class="mt-3 flex-1 text-xs leading-5 text-muted-foreground">
             {{ t(`storage.descriptions.${category.id}`) }}
           </p>
-          <div v-if="category.id !== 'sessions'" class="mt-3 flex flex-wrap justify-end gap-2">
+          <div v-if="category.id === 'archivedSessions'" class="mt-3 flex flex-wrap justify-end gap-2">
             <Button
               v-if="category.id === 'archivedSessions'"
               variant="ghost"
@@ -222,16 +193,6 @@ onMounted(load)
             >
               <Archive :size="14" />
               {{ t("storage.manageArchives") }}
-            </Button>
-            <Button
-              v-if="category.id === 'appData' && isDesktop"
-              variant="outline"
-              size="sm"
-              class="gap-2"
-              @click="openDataDirectory"
-            >
-              <FolderOpen :size="14" />
-              {{ t("storage.openDataDirectory") }}
             </Button>
             <Button
               v-if="isCleanable(category.id)"
@@ -278,10 +239,7 @@ onMounted(load)
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" @click="pendingCleanup = null">{{ t("common.cancel") }}</Button>
-          <Button
-            :variant="pendingCleanup?.id === 'archivedSessions' ? 'destructive' : 'default'"
-            @click="confirmCleanup"
-          >
+          <Button variant="destructive" @click="confirmCleanup">
             {{ t("storage.confirmClean") }}
           </Button>
         </DialogFooter>

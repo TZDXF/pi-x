@@ -1,19 +1,18 @@
 import { invoke } from "../transport"
 
-export type StorageCategoryId = "sessions" | "archivedSessions" | "cache" | "logs" | "appData"
+export type StorageCategoryId = "sessions" | "archivedSessions" | "workspaces"
 
 export interface StorageCategory {
   id: StorageCategoryId
   bytes: number
   fileCount: number
-  /** Session count for session categories, file count for the others. */
+  /** Session count for session categories, file count for workspaces. */
   itemCount: number
 }
 
 export interface StorageSummary {
   totalBytes: number
   categories: StorageCategory[]
-  dataDirectory: string
   sessionsDirectory: string
   scannedAt: number
 }
@@ -25,5 +24,4 @@ export interface StorageCleanupResult {
 }
 
 export const getStorageSummary = () => invoke<StorageSummary>("storage_summary")
-export const cleanupStorage = (kind: Exclude<StorageCategoryId, "sessions" | "appData">) =>
-  invoke<StorageCleanupResult>("storage_cleanup", { kind })
+export const cleanupStorage = (kind: "archivedSessions") => invoke<StorageCleanupResult>("storage_cleanup", { kind })

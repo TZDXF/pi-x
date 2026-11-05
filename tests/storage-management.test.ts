@@ -29,11 +29,11 @@ test("storage management is routed, registered and available through both transp
   expect(api).toMatch(/invoke<StorageCleanupResult>\("storage_cleanup", \{ kind \}\)/)
 })
 
-test("storage UI distinguishes all categories and guards destructive cleanup", () => {
+test("storage UI only manages sessions and workspaces and guards destructive cleanup", () => {
   const page = read("../src/components/settings/StorageSettings.vue")
   const backend = read("../src-tauri/src/storage.rs")
 
-  for (const id of ["sessions", "archivedSessions", "cache", "logs", "appData"]) {
+  for (const id of ["sessions", "archivedSessions", "workspaces"]) {
     expect(page).toContain(`${id}:`)
     expect(backend).toContain(`category("${id}")`)
   }
@@ -42,8 +42,11 @@ test("storage UI distinguishes all categories and guards destructive cleanup", (
   expect(page).toMatch(/@click="confirmCleanup"/)
   expect(page).toMatch(/navigate\('\/settings\/archives'\)/)
   expect(backend).toMatch(/Re-check under the same lock used by archive\/restore operations/)
-  expect(backend).toMatch(/name == "workspace"/)
-  expect(backend).toMatch(/active_sessions_and_app_data_cannot_be_bulk_cleaned/)
+  expect(backend).toMatch(/fn scan_workspaces/)
+  expect(backend).toMatch(/resolve_projectless_dir/)
+  expect(backend).toMatch(/only_archived_sessions_can_be_bulk_cleaned/)
+  expect(page).not.toMatch(/cache:|logs:|appData:/)
+  expect(backend).not.toMatch(/category\("cache"\)|category\("logs"\)|category\("appData"\)/)
 })
 
 test("storage panel copy exists in both locales", async () => {
@@ -57,17 +60,11 @@ test("storage panel copy exists in both locales", async () => {
       "storage.total",
       "storage.categories.sessions",
       "storage.categories.archivedSessions",
-      "storage.categories.cache",
-      "storage.categories.logs",
-      "storage.categories.appData",
+      "storage.categories.workspaces",
       "storage.descriptions.sessions",
       "storage.descriptions.archivedSessions",
-      "storage.descriptions.cache",
-      "storage.descriptions.logs",
-      "storage.descriptions.appData",
+      "storage.descriptions.workspaces",
       "storage.cleanupArchivedConfirm",
-      "storage.cleanupCacheConfirm",
-      "storage.cleanupLogsConfirm",
       "storage.cleaned",
       "storage.cleanedPartial",
       "storage.scopeNote",

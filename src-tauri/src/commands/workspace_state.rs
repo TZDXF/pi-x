@@ -342,6 +342,22 @@ pub fn workspace_state_get() -> Result<WorkspaceState, String> {
     read(&crate::data_dir::root().join("workspace.json"))
 }
 
+/// Physical directories represented by the sidebar projects, including every
+/// folder in a multi-directory workspace.
+pub fn storage_roots() -> Result<Vec<std::path::PathBuf>, String> {
+    workspace_state_get().map(|state| {
+        let mut roots = Vec::new();
+        for project in state.projects {
+            if let Some(group) = state.project_groups.get(&project) {
+                roots.extend(group.folders.iter().map(std::path::PathBuf::from));
+            } else {
+                roots.push(std::path::PathBuf::from(project));
+            }
+        }
+        roots
+    })
+}
+
 /// 侧栏曾经展示过的全部会话文件：会话列表过滤改为仅 PiX 纳管会话之前的
 /// 历史记录，供启动时一次性迁移（补写 sidecar）使用。
 pub fn known_session_files() -> Vec<std::path::PathBuf> {
