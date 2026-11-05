@@ -13,6 +13,7 @@ import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Plus, SquareTerminal, X } from "@lucide/vue"
 import { VueDraggable } from "vue-draggable-plus"
 
@@ -63,7 +64,7 @@ function cancelRename() {
 }
 
 function setRenameInput(el: unknown) {
-  renameInput = (el as HTMLInputElement) ?? null
+  renameInput = (el as InstanceType<typeof Input> | null)?.$el ?? null
 }
 
 const tabEls = new Map<number, HTMLElement>()
@@ -370,11 +371,11 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
             @dblclick="startRename(tab)"
           >
             <SquareTerminal class="size-3.5" :class="tab.exited ? 'text-muted-foreground/50' : ''" />
-            <input
+            <Input
               v-if="renamingId === tab.id"
               :ref="setRenameInput"
               v-model="renameDraft"
-              class="border-border bg-background text-foreground h-4 w-20 rounded-sm border px-1 text-xs outline-none"
+              class="border-border bg-background text-foreground h-4 w-20 rounded-sm border px-1 py-0 text-xs md:text-xs outline-none"
               :aria-label="t('terminal.rename')"
               @click.stop
               @blur="commitRename"

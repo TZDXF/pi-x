@@ -25,6 +25,7 @@ import { useSshDeploy } from "@/composables/useSshDeploy"
 import SshDeployStatus from "@/components/SshDeployStatus.vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Dialog,
@@ -434,27 +435,28 @@ function probeLines(info: {
                枚举不可用的后端入口置灰并提示（§4.4）。 -->
           <div v-if="!editingId" class="space-y-2">
             <span class="block text-sm font-medium">{{ t("ssh.kindLabel") }}</span>
-            <div class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium" role="tablist">
-              <button
-                v-for="option in kindOptions"
-                :key="option.kind"
-                type="button"
-                role="tab"
-                :disabled="option.disabled"
-                :title="option.disabled ? t(option.hintKey!) : undefined"
-                class="flex-1 rounded-md px-3 py-1.5 transition-colors"
-                :class="[
-                  formKind === option.kind ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground',
-                  { 'cursor-not-allowed opacity-50': option.disabled },
-                ]"
-                :aria-selected="formKind === option.kind"
-                @click="formKind = option.kind"
+            <Tabs v-model="formKind">
+              <TabsList
+                class="bg-muted text-muted-foreground flex w-full gap-1 rounded-lg p-1 text-sm font-medium group-data-horizontal/tabs:h-auto"
               >
-                {{
-                  t(option.kind === "wsl" ? "ssh.kindWsl" : option.kind === "docker" ? "ssh.kindDocker" : "ssh.kindSsh")
-                }}
-              </button>
-            </div>
+                <TabsTrigger
+                  v-for="option in kindOptions"
+                  :key="option.kind"
+                  :value="option.kind"
+                  :disabled="option.disabled"
+                  :title="option.disabled ? t(option.hintKey!) : undefined"
+                  class="h-auto flex-1 rounded-md border-0 px-3 py-1.5 text-muted-foreground transition-colors disabled:pointer-events-auto dark:data-active:bg-background"
+                  :class="[
+                    formKind === option.kind ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground',
+                    { 'cursor-not-allowed opacity-50': option.disabled },
+                  ]"
+                >
+                  {{
+                    t(option.kind === "wsl" ? "ssh.kindWsl" : option.kind === "docker" ? "ssh.kindDocker" : "ssh.kindSsh")
+                  }}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
             <p v-if="enumsLoading" class="text-xs text-muted-foreground">{{ t("ssh.loading") }}</p>
           </div>
           <!-- kind = ssh：主机/端口/用户/认证方式/密码或私钥 -->
@@ -476,32 +478,30 @@ function probeLines(info: {
             <!-- 认证方式选择（ZCode 风格：密码/密钥切换） -->
             <div class="space-y-2">
               <span class="block text-sm font-medium">{{ t("ssh.authMethod") }}</span>
-              <div class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  class="flex-1 rounded-md px-3 py-1.5 transition-colors"
-                  :class="
-                    form.authMethod === 'password' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'
-                  "
-                  :aria-selected="form.authMethod === 'password'"
-                  @click="form.authMethod = 'password'"
+              <Tabs v-model="form.authMethod">
+                <TabsList
+                  class="bg-muted text-muted-foreground flex w-full gap-1 rounded-lg p-1 text-sm font-medium group-data-horizontal/tabs:h-auto"
                 >
-                  {{ t("ssh.authPassword") }}
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  class="flex-1 rounded-md px-3 py-1.5 transition-colors"
-                  :class="
-                    form.authMethod === 'key' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'
-                  "
-                  :aria-selected="form.authMethod === 'key'"
-                  @click="form.authMethod = 'key'"
-                >
-                  {{ t("ssh.authKey") }}
-                </button>
-              </div>
+                  <TabsTrigger
+                    value="password"
+                    class="h-auto flex-1 rounded-md border-0 px-3 py-1.5 text-muted-foreground transition-colors dark:data-active:bg-background"
+                    :class="
+                      form.authMethod === 'password' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'
+                    "
+                  >
+                    {{ t("ssh.authPassword") }}
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="key"
+                    class="h-auto flex-1 rounded-md border-0 px-3 py-1.5 text-muted-foreground transition-colors dark:data-active:bg-background"
+                    :class="
+                      form.authMethod === 'key' ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'
+                    "
+                  >
+                    {{ t("ssh.authKey") }}
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
             <!-- 密码输入框（密码认证时显示） -->
             <label v-if="form.authMethod === 'password'" class="block space-y-2 text-sm font-medium" for="ssh-password">

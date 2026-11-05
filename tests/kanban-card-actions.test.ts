@@ -55,17 +55,59 @@ const dialog = {
     () =>
       props.open ? vue.h("dialog", { onDismiss: () => emit("update:open", false) }, slots.default?.()) : null,
 }
+const select = {
+  props: ["modelValue", "disabled"],
+  emits: ["update:modelValue"],
+  setup(props, { slots, emit }) {
+    vue.provide(
+      "selectDisabled",
+      vue.computed(() => props.disabled),
+    )
+    return () =>
+      vue.h(
+        "select-root",
+        {
+          modelValue: props.modelValue,
+          disabled: props.disabled,
+          onChoose: value => {
+            if (!props.disabled) emit("update:modelValue", value)
+          },
+        },
+        slots.default?.(),
+      )
+  },
+}
+const selectTrigger = {
+  setup(_, { slots, attrs }) {
+    const disabled = vue.inject<vue.ComputedRef<boolean>>("selectDisabled")!
+    return () => vue.h("button", { ...attrs, disabled: disabled.value, "data-select-trigger": true }, slots.default?.())
+  },
+}
+const selectItem = {
+  props: ["value"],
+  setup:
+    (props, { slots }) =>
+    () =>
+      vue.h("select-item", { value: props.value }, slots.default?.()),
+}
 const { descriptor } = parse(readFileSync("src/components/kanban/KanbanCardActions.vue", "utf8"))
 const compiled = compileScript(descriptor, { id: "kanban-card-actions-test", inlineTemplate: true })
 const code = ts.transpileModule(compiled.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 const imports = {
-  vue: { ...vue, vModelSelect: {} },
+  vue,
   "vue-i18n": { useI18n: () => ({ t: (key: string) => key }) },
   "@lucide/vue": new Proxy({}, { get: () => () => vue.h("svg") }),
   "@/components/ui/button": { Button: button },
   "@/components/ui/textarea": { Textarea: textarea },
+  "@/components/ui/select": {
+    Select: select,
+    SelectTrigger: selectTrigger,
+    SelectValue: passthrough,
+    SelectContent: passthrough,
+    SelectItem: selectItem,
+  },
   "@/components/ui/dialog": {
     Dialog: dialog,
     DialogContent: passthrough,
@@ -282,9 +324,10 @@ test("todo editing opens a dialog and saves only the chosen draft without openin
   expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Original")
   await h.edit("  Updated task  ")
   h.all()
-    .find(n => n.tag === "select")!
-    .props["onUpdate:modelValue"]("/other")
+    .find(n => n.tag === "select-root")!
+    .props.onChoose("/other")
   await vue.nextTick()
+  expect(h.all().find(n => n.tag === "select-root")!.props.modelValue).toBe("/other")
   await h.save()
   await vue.nextTick()
   expect(workspace.boardDrafts.task).toMatchObject({
@@ -294,6 +337,48 @@ test("todo editing opens a dialog and saves only the chosen draft without openin
     updatedAt: expect.any(Number),
   })
   expect(workspace.flushPersistence).toHaveBeenCalledOnce()
+  expect(h.isEditing()).toBe(false)
+})
+
+test("project Select keeps its label association and options and disables changes while saving", async () => {
+  workspace.boardDrafts.task = { id: "task", project: "/project", message: "Original" }
+  const h = await harness()
+  await h.editFromMenu()
+  const trigger = () => h.all().find(n => n.props["data-select-trigger"])!
+  const projectSelect = () => h.all().find(n => n.tag === "select-root")!
+  expect(h.all().find(n => n.tag === "label" && n.props.for === trigger().props.id)).toBeDefined()
+  expect(trigger().props.id).toBeTruthy()
+  expect(
+    h
+      .all()
+      .filter(n => n.tag === "select-item")
+      .map(n => [n.props.value, h.textOf(n)]),
+  ).toEqual([
+    ["/project", "Project"],
+    ["/other", "Other"],
+  ])
+  h.disabled.value = true
+  await vue.nextTick()
+  expect(trigger().props.disabled).toBe(true)
+  projectSelect().props.onChoose("/other")
+  await vue.nextTick()
+  expect(projectSelect().props.modelValue).toBe("/project")
+  h.disabled.value = false
+  await vue.nextTick()
+  expect(trigger().props.disabled).toBe(false)
+  let finish!: () => void
+  workspace.flushPersistence.mockImplementationOnce(
+    () =>
+      new Promise<void>(resolve => {
+        finish = resolve
+      }),
+  )
+  const pending = h.save()
+  await vue.nextTick()
+  expect(trigger().props.disabled).toBe(true)
+  finish()
+  await pending
+  await vue.nextTick()
   expect(h.isEditing()).toBe(false)
 })
 
@@ -344,7 +429,7 @@ test("a delayed todo edits its original queued prompt and never rewrites it once
   }
   const h = await harness({ runtimeId: "runtime", file: "/queued.jsonl" })
   await h.click("kanban.editDraft")
-  expect(h.all().find(n => n.tag === "select")!.props.disabled).toBe(true)
+  expect(h.all().find(n => n.props["data-select-trigger"])!.props.disabled).toBe(true)
   await h.edit("Updated delayed task")
   await h.save()
   expect(owner.promptQueue[0]).toMatchObject({

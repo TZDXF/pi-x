@@ -6,6 +6,7 @@ import { Archive, ArchiveRestore, Folder, MoreHorizontal, RefreshCw, RotateCw, S
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { formatDateTime } from "@/lib/format"
 import { Button } from "@/components/ui/button"
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -174,27 +175,31 @@ onMounted(load)
 <template>
   <div class="space-y-5">
     <div class="flex items-center gap-3">
-      <label
-        class="flex h-8 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-muted-foreground focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30"
+      <InputGroup
+        class="h-8 flex-1 gap-2 rounded-md border-border bg-background px-2.5 text-muted-foreground focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/30"
       >
-        <Search :size="14" class="shrink-0" />
-        <input
+        <InputGroupAddon class="p-0 [&>svg]:size-3.5">
+          <Search :size="14" class="shrink-0" />
+        </InputGroupAddon>
+        <InputGroupInput
           v-model="query"
           type="search"
           :placeholder="t('sessionArchive.search')"
           :aria-label="t('sessionArchive.search')"
-          class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+          class="h-full min-w-0 flex-1 appearance-none bg-transparent px-0 py-0 text-xs md:text-xs outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
         />
-        <button
-          v-if="query"
-          type="button"
-          class="shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground"
-          :aria-label="t('common.clear')"
-          @click="query = ''"
-        >
-          <X :size="13" />
-        </button>
-      </label>
+        <InputGroupAddon v-if="query" align="inline-end" class="p-0">
+          <InputGroupButton
+            size="icon-xs"
+            type="button"
+            class="size-auto shrink-0 rounded p-0.5 hover:bg-muted hover:text-foreground [&>svg]:size-[13px]"
+            :aria-label="t('common.clear')"
+            @click="query = ''"
+          >
+            <X :size="13" />
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
       <Select v-model="filterProject">
         <SelectTrigger class="w-40 shrink-0 text-xs" :aria-label="t('sessionArchive.filter')">
           <SelectValue />

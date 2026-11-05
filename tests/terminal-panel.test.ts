@@ -74,13 +74,20 @@ function harness(create = async (_args: Record<string, any>) => 12) {
   scopes.push(scope)
   scope.run(() =>
     vm.runInContext(
-      ts.transpile(script + "\nglobalThis.api = { openTerminal, closeTab, setTabEl, tabs, instances, outputRouter };", {
-        target: ts.ScriptTarget.ES2022,
-      }),
+      ts.transpile(
+        script +
+          "\nglobalThis.api = { openTerminal, closeTab, setTabEl, tabs, instances, outputRouter, setRenameInput, startRename, commitRename, cancelRename, renameDraft };",
+        { target: ts.ScriptTarget.ES2022 },
+      ),
       context,
     ),
   )
   const api = context.api as {
+    setRenameInput(element: unknown): void
+    startRename(tab: { id: number; title: string }): void
+    commitRename(): void
+    cancelRename(): void
+    renameDraft: vue.Ref<string>
     openTerminal(): Promise<void>
     closeTab(id: number): Promise<void>
     setTabEl(id: number, element: unknown): void
@@ -213,4 +220,29 @@ test("a failed creation clears its early output and closes an already identified
   expect(h.invoke).toHaveBeenCalledWith("term_kill", { id: 12 })
   expect(h.api.tabs.value).toEqual([])
   h.unmount()
+})
+
+test("wrapped rename input focuses and selects, commits edits and tolerates unmount", async () => {
+  const { api } = harness()
+  await api.openTerminal()
+  const focus = vi.fn()
+  const select = vi.fn()
+  const tab = api.tabs.value[0] as { id: number; title: string }
+  api.setRenameInput({ $el: { focus, select } })
+  api.startRename(tab)
+  await vue.nextTick()
+  expect(focus).toHaveBeenCalledOnce()
+  expect(select).toHaveBeenCalledOnce()
+  api.renameDraft.value = "  renamed  "
+  api.commitRename()
+  expect(tab.title).toBe("renamed")
+  api.startRename(tab)
+  api.renameDraft.value = "cancelled"
+  api.cancelRename()
+  api.commitRename()
+  expect(tab.title).toBe("renamed")
+  api.setRenameInput(null)
+  api.startRename(tab)
+  await vue.nextTick()
+  expect(focus).toHaveBeenCalledTimes(1)
 })

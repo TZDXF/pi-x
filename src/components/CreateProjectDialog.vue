@@ -10,6 +10,7 @@ import SshSettings from "@/components/settings/SshSettings.vue"
 import ProjectTrustControl from "@/components/ProjectTrustControl.vue"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore, type ProjectGroup } from "@/stores/workspace"
@@ -277,26 +278,23 @@ function submit() {
         </DialogDescription>
       </DialogHeader>
       <!-- 项目来源切换：本地文件夹 / 远程（SSH/WSL/Docker，多后端契约 §5.4；远程项目为单目录） -->
-      <div
-        v-if="!props.editPath"
-        class="bg-muted text-muted-foreground flex gap-1 rounded-lg p-1 text-sm font-medium"
-        role="tablist"
-        :aria-label="t('projectDialog.modeLabel')"
-      >
-        <button
-          v-for="value in ['local', 'remote'] as const"
-          :key="value"
-          v-show="value === 'local' || isDesktop"
-          type="button"
-          role="tab"
-          class="flex-1 rounded-md px-3 py-1.5 transition-colors"
-          :class="mode === value ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'"
-          :aria-selected="mode === value"
-          @click="mode = value"
+      <Tabs v-if="!props.editPath" v-model="mode">
+        <TabsList
+          class="bg-muted text-muted-foreground flex w-full gap-1 rounded-lg p-1 text-sm font-medium group-data-horizontal/tabs:h-auto"
+          :aria-label="t('projectDialog.modeLabel')"
         >
-          {{ t(value === "local" ? "projectDialog.modeLocal" : "projectDialog.modeRemote") }}
-        </button>
-      </div>
+          <TabsTrigger
+            v-for="value in ['local', 'remote'] as const"
+            :key="value"
+            v-show="value === 'local' || isDesktop"
+            :value="value"
+            class="h-auto flex-1 rounded-md border-0 px-3 py-1.5 text-muted-foreground transition-colors dark:data-active:bg-background"
+            :class="mode === value ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground'"
+          >
+            {{ t(value === "local" ? "projectDialog.modeLocal" : "projectDialog.modeRemote") }}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
       <form class="min-w-0 space-y-5" @submit.prevent="submit">
         <div v-if="trustProjects.length" class="max-h-64 space-y-2 overflow-y-auto">
           <ProjectTrustControl

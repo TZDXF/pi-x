@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n"
 import { Archive, LoaderCircle, Pencil, Play, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { peekConversation, useUiStore } from "@/stores/conversations"
@@ -226,14 +227,16 @@ async function remove() {
       <form class="min-w-0 space-y-4" @submit.prevent="save()">
         <label class="block space-y-2 text-sm font-medium" :for="`${id}-project`">
           <span>{{ t("kanban.project") }}</span>
-          <select
-            :id="`${id}-project`"
-            v-model="project"
-            :disabled="disabled || saving || projectLocked"
-            class="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm disabled:opacity-50"
-          >
-            <option v-for="item in projects" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          <Select v-model="project" :disabled="disabled || saving || projectLocked">
+            <SelectTrigger :id="`${id}-project`" class="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="item in projects" :key="item.value" :value="item.value">
+                {{ item.label }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </label>
         <label class="block space-y-2 text-sm font-medium" :for="`${id}-message`">
           <span>{{ t("kanban.draftMessage") }}</span>
