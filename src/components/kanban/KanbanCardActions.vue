@@ -220,13 +220,13 @@ async function remove() {
     </Button>
   </div>
   <Dialog :open="editing" @update:open="setEditing">
-    <DialogContent :aria-describedby="undefined" class="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+    <DialogContent :aria-describedby="undefined" class="max-h-[calc(100dvh-2rem)] gap-3 overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>{{ t("kanban.editDraft") }}</DialogTitle>
       </DialogHeader>
-      <form class="min-w-0 space-y-4" @submit.prevent="save()">
-        <label class="block space-y-2 text-sm font-medium" :for="`${id}-project`">
-          <span>{{ t("kanban.project") }}</span>
+      <form class="min-w-0 space-y-3" @submit.prevent="save()">
+        <label class="flex items-center gap-3 text-sm font-medium" :for="`${id}-project`">
+          <span class="shrink-0">{{ t("kanban.project") }}</span>
           <Select v-model="project" :disabled="disabled || saving || projectLocked">
             <SelectTrigger :id="`${id}-project`" class="w-full">
               <SelectValue />
@@ -238,18 +238,16 @@ async function remove() {
             </SelectContent>
           </Select>
         </label>
-        <label class="block space-y-2 text-sm font-medium" :for="`${id}-message`">
-          <span>{{ t("kanban.draftMessage") }}</span>
-          <Textarea
-            :id="`${id}-message`"
-            v-model="message"
-            :disabled="disabled || saving"
-            class="min-h-36 max-h-[45dvh] resize-y overflow-y-auto"
-            :placeholder="t('kanban.messagePlaceholder')"
-          />
-        </label>
+        <Textarea
+          :id="`${id}-message`"
+          v-model="message"
+          :disabled="disabled || saving"
+          class="min-h-40 max-h-[50dvh] resize-y overflow-y-auto"
+          :placeholder="t('kanban.messagePlaceholder')"
+          :aria-label="t('kanban.draftMessage')"
+        />
         <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
-        <div class="flex flex-wrap justify-end gap-2">
+        <div class="flex flex-wrap justify-end gap-2 border-t pt-3">
           <Button type="button" variant="ghost" :disabled="saving" @click="setEditing(false)">
             {{ t("kanban.cancel") }}
           </Button>
