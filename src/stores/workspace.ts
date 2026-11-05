@@ -496,23 +496,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     histories.value[path] = [row, ...rows]
     applySessionOrder(path)
   }
-  function generatedTitle(file: string, title: string) {
+  function generatedTitle(file: string, title: string, description?: string) {
     for (const rows of Object.values(histories.value)) {
       const row = rows.find(s => s.file === file)
-      if (row && !row.title) row.title = title
+      if (row && !row.title) Object.assign(row, { title, ...(description ? { preview: description } : {}) })
     }
     const draft = pending.get(file)
-    if (draft && !draft.title) draft.title = title
+    if (draft && !draft.title) Object.assign(draft, { title, ...(description ? { preview: description } : {}) })
   }
   /** Like generatedTitle, but overwrites an existing title: editing the first
    *  question replaces the wording the old title was generated from. */
-  function regeneratedTitle(file: string, title: string) {
+  function regeneratedTitle(file: string, title: string, description?: string) {
     for (const rows of Object.values(histories.value)) {
       const row = rows.find(s => s.file === file)
-      if (row) row.title = title
+      if (row) Object.assign(row, { title, ...(description ? { preview: description } : {}) })
     }
     const draft = pending.get(file)
-    if (draft) draft.title = title
+    if (draft) Object.assign(draft, { title, ...(description ? { preview: description } : {}) })
   }
   /** Lets the app shell record the mtime of metadata writes (rename/archive)
    *  so the session watcher can tell its own writes from external ones. */

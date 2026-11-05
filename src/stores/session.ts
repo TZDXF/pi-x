@@ -439,10 +439,10 @@ export const createSessionStore = (runtimeId = "default") =>
       })
       const titleStart = nowMs()
       void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
-        .then(async title => {
-          if (title) {
-            if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, title)
-            else workspace.generatedTitle(titleFile, title)
+        .then(async generated => {
+          if (generated) {
+            if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, generated.title, generated.description)
+            else workspace.generatedTitle(titleFile, generated.title, generated.description)
           }
           await workspace.refresh(titleProject)
         })

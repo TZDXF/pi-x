@@ -263,7 +263,7 @@ pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, 
         cwd,
         timestamp,
         mtime_ms: mtime,
-        preview,
+        preview: presentation.description.clone().or(preview),
         last_user_message: last_user_preview(path)?,
         title: read_session_name(path)?,
         archived: presentation.archived,
@@ -410,6 +410,8 @@ pub struct Presentation {
     pub archived: bool,
     #[serde(default)]
     pub title_generation_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 pub(crate) static PRESENTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -716,6 +718,16 @@ pub async fn session_update(
     .map_err(|e| format!("session update failed: {e}"))?
 }
 
+pub(crate) fn set_session_description(path: &Path, description: String) -> Result<(), String> {
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut presentation = read_presentation(path)?;
+    presentation.description = Some(description);
+    write_presentation(path, &presentation)?;
+    // The sidecar write does not change the session file's mtime.
+    invalidate_meta_cache(path);
+    Ok(())
+}
+
 fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
     let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
     let mut presentation = read_presentation(path)?;
@@ -1005,6 +1017,7 @@ mod presentation_tests {
             &Presentation {
                 archived: true,
                 title_generation_attempted: false,
+                description: None,
             },
         )
         .unwrap();
@@ -1211,6 +1224,33 @@ if (request.op === 'read') {
         assert_eq!(meta.preview.as_deref(), Some("调用 3 个智能体"));
         std::fs::remove_file(file).unwrap();
     }
+    #[test]
+    fn generated_description_replaces_preview_and_invalidates_meta_cache() {
+        let file =
+            std::env::temp_dir().join(format!("pix-description-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &file,
+            concat!(
+                "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"p\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"Original question\"}}\n",
+            ),
+        )
+        .unwrap();
+        let mtime = mtime_ms(&file);
+        assert_eq!(
+            read_session_meta(&file, mtime).unwrap().preview.as_deref(),
+            Some("Original question")
+        );
+        set_session_description(&file, "Generated task summary".into()).unwrap();
+        // Deliberately reuse the same mtime: only a sidecar changed.
+        assert_eq!(
+            read_session_meta(&file, mtime).unwrap().preview.as_deref(),
+            Some("Generated task summary")
+        );
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
+    }
+
     #[test]
     fn board_preview_uses_latest_current_branch_prompt_without_changing_sidebar_preview() {
         let file =

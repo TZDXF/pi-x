@@ -99,9 +99,9 @@ test("first message is visible immediately; title is independent of unfinished c
   expect(h.calls[0].type).toBe("prompt")
   expect(h.calls[1].type).toBe("title")
   expect(h.titles.length).toBe(0)
-  h.finish("Login fix")
+  h.finish({ title: "Login fix", description: "Resolve the login failure" })
   await tick()
-  expect(h.titles).toEqual([["one.jsonl", "Login fix"]])
+  expect(h.titles).toEqual([["one.jsonl", "Login fix", "Resolve the login failure"]])
 })
 test("subsequent messages never trigger a second title request", async () => {
   const h = await sessionHarness()
@@ -114,9 +114,9 @@ test("switching sessions while generating keeps the result attached to the origi
   await h.store.send("first")
   h.store.sessionFile = "two.jsonl"
   h.store.cwd = "project-two"
-  h.finish("First title")
+  h.finish({ title: "First title", description: "First task summary" })
   await tick()
-  expect(h.titles).toEqual([["one.jsonl", "First title"]])
+  expect(h.titles).toEqual([["one.jsonl", "First title", "First task summary"]])
   expect(h.refreshed).toEqual(["project-one"])
 })
 test("failure leaves preview intact and does not add an error to the conversation", async () => {
@@ -148,8 +148,9 @@ test("workspace preserves previews before pi persists and does not overwrite man
   store.preview({ file: "one", cwd: "project", preview: "first", mtimeMs: 1 })
   await store.refresh("project")
   expect(store.histories.project[0].preview).toBe("first")
-  store.generatedTitle("one", "Generated")
+  store.generatedTitle("one", "Generated", "Generated description")
   expect(store.histories.project[0].title).toBe("Generated")
+  expect(store.histories.project[0].preview).toBe("Generated description")
   await store.update(store.histories.project[0], "Manual", true)
   store.generatedTitle("one", "Late generated title")
   expect(store.histories.project[0].title).toBe("Manual")

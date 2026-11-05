@@ -134,7 +134,12 @@ export const deleteSession = (file: string) => invoke<void>("session_delete", { 
  *  listing; idempotent and cheap (no-op once the sidecar exists). */
 export const adoptSession = (file: string) => invoke<void>("session_adopt", { file })
 
-/** Independent, tool-free title generation; never changes the active RPC model.
+export interface GeneratedSessionTitle {
+  title: string
+  description: string
+}
+
+/** Independent, tool-free title and description generation; never changes the active RPC model.
  *  `overwrite` replaces an existing session name (first-question edits). */
 export const generateSessionTitle = (file: string, message: string, overwrite = false) =>
-  invoke<string | null>("session_generate_title", { file, message, overwrite })
+  invoke<GeneratedSessionTitle | null>("session_generate_title", { file, message, overwrite })
