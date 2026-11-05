@@ -504,23 +504,6 @@ export default {
     unsupported: "The installed Pi version does not support retry settings. Please upgrade Pi first.",
     hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
   },
-  piPreferences: {
-    shareDestination: "Session sharing destination",
-    shareDestinationDesc:
-      "Choose where terminal pi uploads /share sessions. Saving this setting does not upload a session.",
-    shareAuto: "Automatic",
-    collapseChangelog: "Collapse extension changelogs",
-    collapseChangelogDesc: "Show brief notices for pi and extension updates on the next terminal pi launch.",
-    updateCommand: "Custom Pi update command",
-    updateCommandDesc:
-      "Enter the program and arguments as a JSON array, with package name, version, and install target placeholders. Leave empty to restore the default updater.",
-    invalidCommand:
-      'Enter a non-empty array of string arguments, e.g. ["npm", "install", "-g", "pi"], or leave empty to restore the default.',
-    commandOverridden: "The host's PI_SELF_UPDATE_COMMAND environment variable takes precedence over this command.",
-    requires15: "Custom update commands require pi 1.5 or later.",
-    hint: "Sharing and changelog settings apply on the next pi launch; the command is used when you run an update after checking for one.",
-    saved: "Pi settings saved",
-  },
   queueMode: {
     title: "Follow-up delivery",
     desc: "How queued follow-up messages are delivered while the agent runs: one per completion, or all at once when it finishes. Applies globally; running sessions switch immediately.",
