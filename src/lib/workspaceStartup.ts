@@ -140,6 +140,7 @@ export function createWorkspaceStartup(context: StartupContext) {
   // Cache successful creation before later initialization/trust steps. Retrying a
   // failed first send must reuse its checkout, not create another one.
   const preparedWorkspaces = new Map<string, { key: string; path: string }>()
+  const runtimeStarts = new Map<string, Promise<boolean>>()
   /** 弹信任框期间的远程项目 URI：远程决策经 ssh_trust_save 保存（契约 §4.3）。 */
   let sshTrustProject: string | null = null
   /** 单屏入口：始终启动当前激活会话。 */
@@ -148,10 +149,15 @@ export function createWorkspaceStartup(context: StartupContext) {
   }
 
   /** 指定会话的启动流程；分屏时各窗格携带各自 runtimeId 调用，行为与激活会话一致。 */
-  async function startSession(runtimeId: string, selection?: WorkspaceSelection | null): Promise<boolean> {
+  async function startSession(
+    runtimeId: string,
+    selection?: WorkspaceSelection | null,
+    background = false,
+  ): Promise<boolean> {
     const sessionStart = nowMs()
     pixLog(`[perf] startSession begin selection=${selection?.branch ?? "-"}`, runtimeId)
-    if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
+    if (workspace.gitBusy || connecting.value || selectingProject.value || (!background && phase.value !== "chat"))
+      return false
     // 远程项目必须无 branch/worktree 选择（契约 §5）；正常入口不会产生，这里兜底校验。
     if (selection?.project && isRemoteProject(selection.project) && (selection.branch || selection.worktree)) {
       ui.pushToast(t("ssh.gitUnavailable"), "error")
@@ -161,11 +167,12 @@ export function createWorkspaceStartup(context: StartupContext) {
       ui.pushToast(t("workspace.selectBaseBranch"), "error")
       return false
     }
-    if (!selection || !selection.branch) return startRuntime(runtimeId)
+    if (!selection || !selection.branch) return startRuntime(runtimeId, background)
     const owner = sessionFor(runtimeId)
-    if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime(runtimeId)
+    if (owner.entries.length || owner.promptQueue.length || owner.isStreaming)
+      return startRuntime(runtimeId, background)
     workspace.gitBusy = true
-    connecting.value = true
+    if (!background) connecting.value = true
     try {
       const prepStart = nowMs()
       const key = JSON.stringify(selection)
@@ -204,25 +211,39 @@ export function createWorkspaceStartup(context: StartupContext) {
       owner.started = false
       owner.clear()
       owner.cwd = path
-      project.value = path
-      config.value.lastProject = path
-      await saveConfig({ ...config.value })
-      return await startRuntime(runtimeId)
+      if (!background) {
+        project.value = path
+        config.value.lastProject = path
+        await saveConfig({ ...config.value })
+      }
+      return await startRuntime(runtimeId, background)
     } catch (e) {
       lastError.value = String(e)
       uiFor(owner.runtimeId).pushToast(tBackendError(String(e)), "error")
       return false
     } finally {
-      connecting.value = false
+      if (!background) connecting.value = false
       workspace.gitBusy = false
       pixLog(`[perf] startSession total ${Math.round(nowMs() - sessionStart)}ms`, runtimeId)
     }
   }
 
-  async function startRuntime(runtimeId: string): Promise<boolean> {
+  async function startRuntime(runtimeId: string, background = false): Promise<boolean> {
+    const pending = runtimeStarts.get(runtimeId)
+    if (pending) return pending
+    const starting = initializeRuntime(runtimeId, background)
+    runtimeStarts.set(runtimeId, starting)
+    try {
+      return await starting
+    } finally {
+      runtimeStarts.delete(runtimeId)
+    }
+  }
+
+  async function initializeRuntime(runtimeId: string, background: boolean): Promise<boolean> {
     const runtimeStart = nowMs()
     // Completion can request a runtime while the draft remains editable.
-    if (selectingProject.value || phase.value !== "chat") return false
+    if (selectingProject.value || (!background && phase.value !== "chat")) return false
     const owner = sessionFor(runtimeId)
     if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value))
       return true
@@ -244,7 +265,7 @@ export function createWorkspaceStartup(context: StartupContext) {
       await killPi(owner.runtimeId)
       owner.started = false
     }
-    connecting.value = true
+    if (!background) connecting.value = true
     try {
       const spawnStart = nowMs()
       await spawnWorkspacePi(owner.cwd || project.value, undefined, owner.runtimeId)
@@ -259,7 +280,7 @@ export function createWorkspaceStartup(context: StartupContext) {
       uiFor(owner.runtimeId).pushToast(String(e), "error")
       return false
     } finally {
-      connecting.value = false
+      if (!background) connecting.value = false
       pixLog(`[perf] startRuntime total ${Math.round(nowMs() - runtimeStart)}ms`, runtimeId)
     }
   }

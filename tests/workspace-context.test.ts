@@ -263,12 +263,24 @@ function harness(overrides = {}) {
     startup.indexOf("async function startRuntime(runtimeId"),
   )
   vm.runInContext(
-    ts.transpile(code) + "\nglobalThis.api = {start, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
+    ts.transpile(code) +
+      "\nglobalThis.api = {start, startSession, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
     context,
   )
   return { ...context.api, context, owner, events }
 }
 const selection = { project: "C:/repo", worktree: true, branch: "feature/base" }
+
+test("background checkout startup keeps the active project and does not block conversation navigation", async () => {
+  const h = harness({ phase: { value: "pick" } })
+  const pending = h.startSession("draft", selection, true)
+  expect(h.context.connecting.value).toBe(false)
+  expect(await pending).toBe(true)
+  expect(h.owner.cwd).toBe("C:/tree")
+  expect(h.context.project.value).toBe("C:/repo")
+  expect(h.context.phase.value).toBe("pick")
+  expect(h.events).toEqual(["create", "remember:C:/tree", "kill", "clear", "start:C:/tree"])
+})
 
 test("first send waits for checkout preparation before starting the same runtime", async () => {
   let resolve

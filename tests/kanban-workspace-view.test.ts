@@ -312,6 +312,72 @@ test("opening a todo or reserving a filename does not start it; the first prompt
   expect(board.cards.value).toEqual([])
 })
 
+test("starting a dropped todo changes status before session creation and preserves panel selection", async () => {
+  const { board, workspace } = harness()
+  const draft = await board.createDraft({ project: "/root", message: "First task" })
+  const original = board.cards.value[0]
+  board.selection.value = { id: "another-card" }
+  let finish!: () => void
+  let owner
+  const submit = vi.fn(async (_draft, session) => {
+    owner = session
+    await new Promise<void>(resolve => {
+      finish = resolve
+    })
+  })
+  const starting = board.startDraft(original, submit)
+  expect(board.cards.value).toEqual([expect.objectContaining({ draftId: draft.id, status: "running" })])
+  expect(board.cards.value[0].lastPromptAt).toBeGreaterThan(0)
+  expect(owner.sessionFile).toBeNull()
+  expect(board.detailsOpen.value).toBe(false)
+  expect(board.selection.value.id).toBe("another-card")
+  await board.startDraft(original, submit)
+  expect(submit).toHaveBeenCalledOnce()
+
+  owner.sessionFile = "/sessions/started.jsonl"
+  expect(board.cards.value).toHaveLength(1)
+  expect(board.cards.value[0].status).toBe("running")
+  owner.entries.push({ kind: "user", text: draft.message })
+  owner.isStreaming = true
+  await nextTick()
+  finish()
+  await starting
+  expect(workspace.boardDrafts[draft.id].sessionFile).toBe(owner.sessionFile)
+  expect(board.cards.value).toEqual([expect.objectContaining({ draftId: draft.id, status: "running" })])
+})
+
+test("failed background starts return to todo and can be retried", async () => {
+  const { board } = harness()
+  await board.createDraft({ project: "/root", message: "Task" })
+  const original = board.cards.value[0]
+  const failure = board.startDraft(original, async () => {
+    throw new Error("startup failed")
+  })
+  expect(board.cards.value[0].status).toBe("running")
+  await expect(failure).rejects.toThrow("startup failed")
+  expect(board.cards.value[0].status).toBe("todo")
+  const retry = vi.fn(async () => {})
+  await board.startDraft(original, retry)
+  expect(retry).toHaveBeenCalledOnce()
+})
+
+test("another todo can move to running while the first session is still being created", async () => {
+  const { board } = harness()
+  await board.createDraft({ project: "/root", message: "First" })
+  await board.createDraft({ project: "/root", message: "Second" })
+  const cards = [...board.cards.value]
+  let finish!: () => void
+  const waiting = new Promise<void>(resolve => {
+    finish = resolve
+  })
+  const pending = cards.map(card => board.startDraft(card, async () => waiting))
+  expect(board.cards.value.map(card => card.status)).toEqual(["running", "running"])
+  expect(board.cards.value.every(card => !card.file)).toBe(true)
+  expect(board.detailsOpen.value).toBe(false)
+  finish()
+  await Promise.all(pending)
+})
+
 test.each(["idle", "completed"])("%s cards with an unsent composer draft become todo immediately", expectedStatus => {
   const { board, workspace, statuses, composerDrafts } = harness()
   const file = "/sessions/draft.jsonl"

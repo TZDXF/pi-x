@@ -25,7 +25,7 @@ const cards = computed(() => [
   ...ws.histories['/project'].filter(s => !s.archived).map(s => ({id:s.file,file:s.file,cwd:s.cwd,project:s.cwd,projectName:'Project',title:s.title,preview:'会话内容',status:s.file.includes('idle')?'idle':'completed',updatedAt:1})),
 ])
 createApp({render: () => h('div', {style:'height:640px'}, [
-  h(KanbanBoard, {cards:cards.value,projects:[{value:'/project',label:'Project'}],selectedProject:'',onOpen:()=>{opened.value=true},onStartDraft:card=>{started.value=card.id}}),
+  h(KanbanBoard, {cards:cards.value,projects:[{value:'/project',label:'Project'}],selectedProject:'',onOpen:()=>{opened.value=true},onStartDraft:card=>{started.value=card.id},onDropDraft:card=>{started.value=card.id}}),
   h('output', {'data-details-open':String(opened.value),'data-started-draft':started.value}),
 ])}).use(pinia).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
 </script></body></html>`

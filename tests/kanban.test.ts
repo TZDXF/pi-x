@@ -422,6 +422,7 @@ async function harness(overrides: Record<string, any> = {}) {
     select = vi.fn(),
     cardDeleted = vi.fn(),
     startDraft = vi.fn(),
+    dropDraft = vi.fn(),
     reorder = vi.fn((column: kanban.KanbanStatus, ids: string[]) => {
       state.columnOrder = { ...state.columnOrder, [kanban.kanbanColumnOrderKey(state.selectedProject, column)]: ids }
     }),
@@ -441,6 +442,7 @@ async function harness(overrides: Record<string, any> = {}) {
           onOpenProject: openProject,
           onCardDeleted: cardDeleted,
           onStartDraft: startDraft,
+          onDropDraft: dropDraft,
           onRetry: retry,
           onReorder: reorder,
           onReorderColumns: reorderColumns,
@@ -492,6 +494,7 @@ async function harness(overrides: Record<string, any> = {}) {
     openProject,
     cardDeleted,
     startDraft,
+    dropDraft,
     retry,
     reorder,
     reorderColumns,
@@ -615,6 +618,24 @@ describe("KanbanBoard", () => {
       .find(child => child.props["data-start-card"])!
       .props.onClick()
     expect(h.startDraft).toHaveBeenCalledExactlyOnceWith(todo)
+    expect(h.open).not.toHaveBeenCalled()
+  })
+
+  test("dropping a todo onto running uses background start without opening the card", async () => {
+    const todo = card({ draftId: "todo" })
+    const h = await harness({ cards: [todo] })
+    const event = {
+      preventDefault: vi.fn(),
+      dataTransfer: { setData: vi.fn() },
+      target: { closest: () => null },
+    }
+    h.cards()[0].props.onDragstart(event)
+    h.columns()
+      .find(column => column.props["data-kanban-column"] === "running")!
+      .children.find(child => child.tag === "div" && child.props.onDrop)!
+      .props.onDrop(event)
+    expect(h.dropDraft).toHaveBeenCalledExactlyOnceWith(todo)
+    expect(h.startDraft).not.toHaveBeenCalled()
     expect(h.open).not.toHaveBeenCalled()
   })
 
@@ -1050,6 +1071,72 @@ describe("KanbanBoard", () => {
     expect(descendants(h.cards()[0]).some(child => child.props.title === "/workspace/loose")).toBe(false)
     expect(textOf(h.cards()[1])).toContain("No project")
   })
+})
+
+test("dropping a todo submits in the background with its saved workspace selection", async () => {
+  const functionSource = appSource.slice(
+    appSource.indexOf("let boardDraftStart ="),
+    appSource.indexOf("function startBoardDraft"),
+  )
+  const code = ts.transpileModule(functionSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const draft = { id: "draft", selection: { project: "/root", worktree: true, branch: "main" } }
+  const owner = { runtimeId: "draft", cwd: "/root", started: false }
+  const board = {
+    selection: { id: "visible" },
+    detailsOpen: false,
+    startDraft: vi.fn(async (_card, submit) => submit(draft, owner)),
+  }
+  let finish!: () => void
+  const startSession = vi.fn(
+    () =>
+      new Promise<boolean>(resolve => {
+        finish = () => resolve(true)
+      }),
+  )
+  const submitBoardDraft = vi.fn(async (_draft, _owner, deps) => deps.ensureStarted())
+  const trustStatus = vi.fn(async () => ({ needsDecision: false }))
+  const dropBoardDraft = new Function(
+    "board",
+    "navigating",
+    "phase",
+    "submitBoardDraft",
+    "workspace",
+    "t",
+    "loadTrustStatus",
+    "config",
+    "trustStatus",
+    "sshTrustStatus",
+    "requestWorkspaceTrust",
+    "isRemoteProject",
+    "startSession",
+    "tBackendError",
+    "ui",
+    `${code}; return dropBoardDraft`,
+  )(
+    board,
+    { value: false },
+    { value: "pick" },
+    submitBoardDraft,
+    { histories: {} },
+    String,
+    (_cwd, _connections, api) => api.trustStatus(),
+    { value: {} },
+    trustStatus,
+    vi.fn(),
+    vi.fn(),
+    () => false,
+    startSession,
+    String,
+    { pushToast: vi.fn() },
+  )
+  dropBoardDraft({ id: "todo" })
+  await vi.waitFor(() => expect(startSession).toHaveBeenCalledExactlyOnceWith("draft", draft.selection, true))
+  expect(board.detailsOpen).toBe(false)
+  expect(board.selection.id).toBe("visible")
+  finish()
+  await vi.waitFor(() => expect(board.startDraft.mock.settledResults[0]?.type).toBe("fulfilled"))
 })
 
 test("creating a todo only opens a conversation when immediate start is requested", async () => {

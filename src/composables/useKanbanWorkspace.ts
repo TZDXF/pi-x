@@ -20,6 +20,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
   const error = ref("")
   const selection = ref<KanbanCard | null>(null)
   const detailsOpen = ref(false)
+  const startingDrafts = ref(new Map<string, number>())
   const projects = computed(() => {
     const values = workspace.orderedProjects().filter(path => !workspace.isProjectless(path))
     if (workspace.projectless) values.push(workspace.projectless)
@@ -155,6 +156,11 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     }
     const owners = new Map(conversations.map(owner => [owner.runtimeId, owner]))
     for (const card of result.values()) {
+      const startingAt = card.draftId ? startingDrafts.value.get(card.draftId) : undefined
+      if (startingAt !== undefined) {
+        card.status = "running"
+        card.lastPromptAt ??= startingAt
+      }
       const owner = card.runtimeId ? owners.get(card.runtimeId) : undefined
       if (owner) {
         for (let index = owner.entries.length - 1; index >= 0; index--) {
@@ -239,6 +245,20 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     return owner
   }
 
+  async function startDraft(
+    card: KanbanCard,
+    submit: (draft: BoardDraft, owner: ReturnType<typeof sessionFor>) => Promise<void>,
+  ) {
+    const draft = card.draftId ? workspace.boardDrafts[card.draftId] : undefined
+    if (!draft || draft.sessionFile || card.status !== "todo" || startingDrafts.value.has(draft.id)) return
+    startingDrafts.value.set(draft.id, Date.now())
+    try {
+      await submit(draft, draftConversation(draft))
+    } finally {
+      startingDrafts.value.delete(draft.id)
+    }
+  }
+
   // Bind once a first prompt actually exists. Merely opening/completing a draft
   // may start a worker and reserve a filename, but must not consume the todo.
   watch(
@@ -277,5 +297,6 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
     refresh,
     createDraft,
     draftConversation,
+    startDraft,
   }
 }

@@ -11,6 +11,7 @@ import { useSessionOpening, type TrustActivationBackup } from "@/composables/use
 import { useAppShortcuts } from "@/composables/useAppShortcuts"
 import { useWorkspaceLayout, type WorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import { useKanbanWorkspace } from "@/composables/useKanbanWorkspace"
+import { submitBoardDraft } from "@/lib/submitBoardDraft"
 import { useSessionActivitySync } from "@/composables/useSessionActivitySync"
 import {
   detectPi,
@@ -399,6 +400,41 @@ function openBoardCard(card: KanbanCard) {
   }
 }
 
+let boardDraftStart = Promise.resolve()
+function dropBoardDraft(card: KanbanCard) {
+  if (navigating.value || phase.value === "trust") return
+  board.error = ""
+  void board
+    .startDraft(card, (draft, owner) => {
+      const pending = boardDraftStart.then(() =>
+        submitBoardDraft(draft, owner, {
+          knownSessions: () => Object.values(workspace.histories).flat(),
+          translate: t,
+          ensureStarted: async () => {
+            if (!owner.started) {
+              const status = await loadTrustStatus(owner.cwd, config.value.sshConnections ?? [], {
+                trustStatus,
+                sshTrustStatus,
+              })
+              if (
+                status.needsDecision &&
+                !(await requestWorkspaceTrust(status, isRemoteProject(owner.cwd) ? owner.cwd : null))
+              )
+                return false
+            }
+            return startSession(owner.runtimeId, draft.selection, true)
+          },
+        }),
+      )
+      boardDraftStart = pending.catch(() => {})
+      return pending
+    })
+    .catch(error => {
+      board.error = tBackendError(error)
+      ui.pushToast(tBackendError(error), "error")
+    })
+}
+
 function startBoardDraft(card: KanbanCard) {
   if (card.status !== "todo" || !card.draftId || connecting.value || navigating.value) return
   const draft = workspace.boardDrafts[card.draftId]
@@ -763,6 +799,7 @@ onUnmounted(() => {
                 @reorder-columns="ids => workspace.reorderBoardColumn(kanbanStatusOrderKey, ids)"
                 @open="openBoardCard"
                 @start-draft="startBoardDraft"
+                @drop-draft="dropBoardDraft"
                 @card-deleted="onBoardCardDeleted"
                 @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
