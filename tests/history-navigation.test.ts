@@ -87,7 +87,7 @@ test("conversation mounts immediately with instant initial positioning; loading 
   expect(chat).toMatch(/<Conversation[^>]*ref="conversation"[^>]+initial="instant"/)
   expect(chat).toMatch(/v-if="session.sessionFile && session.entries.length === 0 && session.historyLoading"/)
   expect(chat).toMatch(
-    /v-if="session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"/,
+    /v-if="!session.sessionFile && session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"/,
   )
   expect(chat).not.toContain('v-if="connecting && !selectingProject"')
   expect(chat).not.toContain('t("chat.startingSession")')

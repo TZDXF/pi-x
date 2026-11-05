@@ -148,7 +148,7 @@ onBeforeUnmount(() => {
       </div>
       <ConversationEmptyState
         class="chat-empty flex-1 min-h-60"
-        v-if="session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"
+        v-if="!session.sessionFile && session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"
         :title="t('workspace.emptyTitle', { project: projectName })"
       >
         <template #icon>
