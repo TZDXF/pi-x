@@ -48,6 +48,7 @@ const emit = defineEmits<{
   cardDeleted: [card: KanbanCard]
   retry: []
   reorder: [column: KanbanStatus, ids: string[]]
+  startDraft: [card: KanbanCard]
 }>()
 defineSlots<{ actions?(): unknown }>()
 defineExpose({ openCreate })
@@ -65,6 +66,7 @@ const sorting = reactive(
     () => props.selectedProject,
     () => props.navigationBusy,
     (column, ids) => emit("reorder", column, ids),
+    card => emit("startDraft", card),
   ),
 )
 const availableProjects = computed(() => props.projects.filter(project => project.value !== ""))

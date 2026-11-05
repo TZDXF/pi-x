@@ -9,7 +9,7 @@ import KanbanBoard from '/src/components/kanban/KanbanBoard.vue'
 import { useWorkspaceStore } from '/src/stores/workspace'
 import zhCN from '/src/i18n/locales/zh-CN'
 import '/src/style.css'
-const pinia = createPinia(), ws = useWorkspaceStore(pinia), opened = ref(false)
+const pinia = createPinia(), ws = useWorkspaceStore(pinia), opened = ref(false), started = ref('')
 ws.boardDrafts = { todo: {id:'todo',project:'/project',message:'原始待办',createdAt:1,updatedAt:1} }
 ws.histories = {'/project': [
   {file:'/idle.jsonl',cwd:'/project',title:'闲置会话'},
@@ -25,8 +25,8 @@ const cards = computed(() => [
   ...ws.histories['/project'].filter(s => !s.archived).map(s => ({id:s.file,file:s.file,cwd:s.cwd,project:s.cwd,projectName:'Project',title:s.title,preview:'会话内容',status:s.file.includes('idle')?'idle':'completed',updatedAt:1})),
 ])
 createApp({render: () => h('div', {style:'height:640px'}, [
-  h(KanbanBoard, {cards:cards.value,projects:[{value:'/project',label:'Project'}],selectedProject:'',onOpen:()=>{opened.value=true}}),
-  h('output', {'data-details-open':String(opened.value)}),
+  h(KanbanBoard, {cards:cards.value,projects:[{value:'/project',label:'Project'}],selectedProject:'',onOpen:()=>{opened.value=true},onStartDraft:card=>{started.value=card.id}}),
+  h('output', {'data-details-open':String(opened.value),'data-started-draft':started.value}),
 ])}).use(pinia).use(createI18n({legacy:false,locale:'zh-CN',messages:{'zh-CN':zhCN}})).mount('#app')
 </script></body></html>`
 
@@ -86,5 +86,14 @@ test("todo context menu only edits and deletes the task without opening a conver
   await card.click({ button: "right" })
   await menu.getByRole("menuitem", { name: "删除", exact: true }).click()
   await expect(card).toHaveCount(0)
+  await expect(page.locator("output")).toHaveAttribute("data-details-open", "false")
+})
+
+test("dragging a todo into running requests task start", async ({ page }) => {
+  await page.goto(harness.url)
+  const card = page.locator('[data-kanban-card="todo"]')
+  const running = page.locator('[data-kanban-column="running"] .overflow-y-auto')
+  await card.dragTo(running)
+  await expect(page.locator("output")).toHaveAttribute("data-started-draft", "todo")
   await expect(page.locator("output")).toHaveAttribute("data-details-open", "false")
 })

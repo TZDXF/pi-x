@@ -23,6 +23,7 @@ function harness() {
   const scope = ref("")
   const blocked = ref(false)
   const reorder = vi.fn()
+  const startDraft = vi.fn()
   const owner = effectScope()
   scopes.push(owner)
   const sort = owner.run(() =>
@@ -31,9 +32,10 @@ function harness() {
       () => scope.value,
       () => blocked.value,
       reorder,
+      startDraft,
     ),
   )!
-  return { sort, cards, scope, blocked, reorder }
+  return { sort, cards, scope, blocked, reorder, startDraft }
 }
 function dragEvent(y = 0) {
   return {
@@ -90,6 +92,37 @@ test("dropping in column whitespace appends without changing other columns", () 
   sort.overColumn(dragEvent(), "todo")
   sort.drop(dragEvent(), "todo")
   expect(reorder).toHaveBeenCalledExactlyOnceWith("todo", ["b", "c", "a"])
+})
+
+test("dragging a draft onto running starts it without manually changing its status or order", () => {
+  const { sort, cards, reorder, startDraft } = harness()
+  cards.value[0]!.draftId = "draft-a"
+  sort.startDrag(dragEvent(), cards.value[0])
+  const over = dragEvent()
+  sort.overColumn(over, "running")
+  expect(over.preventDefault).toHaveBeenCalledOnce()
+  sort.drop(dragEvent(), "running")
+  expect(startDraft).toHaveBeenCalledExactlyOnceWith(cards.value[0])
+  expect(reorder).not.toHaveBeenCalled()
+  expect(sort.source.value).toBeNull()
+  expect(cards.value.map(card => card.status)).toEqual(["todo", "todo", "todo", "running"])
+})
+
+test("a draft can be dropped over a running card, but a stale source cannot start", () => {
+  const { sort, cards, reorder, startDraft } = harness()
+  cards.value[0]!.draftId = "draft-a"
+  sort.startDrag(dragEvent(), cards.value[0])
+  const over = dragEvent(90)
+  sort.overCard(over, cards.value[3]!)
+  expect(over.preventDefault).toHaveBeenCalledOnce()
+  sort.drop(dragEvent(), "running")
+  expect(startDraft).toHaveBeenCalledOnce()
+
+  sort.startDrag(dragEvent(), cards.value[0])
+  cards.value[0]!.status = "waiting"
+  sort.drop(dragEvent(), "running")
+  expect(startDraft).toHaveBeenCalledOnce()
+  expect(reorder).not.toHaveBeenCalled()
 })
 
 test("external drops, cross-column drops, and status changes during a drag cannot reorder", () => {

@@ -398,6 +398,20 @@ function openBoardCard(card: KanbanCard) {
   }
 }
 
+function startBoardDraft(card: KanbanCard) {
+  if (card.status !== "todo" || !card.draftId || connecting.value || navigating.value) return
+  const draft = workspace.boardDrafts[card.draftId]
+  if (!draft || draft.sessionFile) return
+  board.selection = card
+  board.detailsOpen = true
+  const owner = board.draftConversation(draft)
+  requestConversationNavigation(sessionRoute(owner.runtimeId, owner.cwd), async () => {
+    await selectQueuedConversation(owner.runtimeId)
+    await nextTick()
+    if (activeRuntimeId.value === owner.runtimeId) await boardChat.value?.submitDraft()
+  })
+}
+
 async function createBoardDraft(input: import("@/lib/kanban").KanbanCreatePayload) {
   if (creatingBoardDraft.value) return
   creatingBoardDraft.value = true
@@ -406,7 +420,10 @@ async function createBoardDraft(input: import("@/lib/kanban").KanbanCreatePayloa
     const draft = await board.createDraft(input)
     if (!draft) return
     const card = board.cards.find(card => card.draftId === draft.id)
-    if (card) openBoardCard(card)
+    if (card) {
+      if (input.startImmediately) startBoardDraft(card)
+      else openBoardCard(card)
+    }
   } catch (error) {
     board.error = tBackendError(error)
     ui.pushToast(tBackendError(error), "error")
@@ -744,6 +761,7 @@ onUnmounted(() => {
                     workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
                 "
                 @open="openBoardCard"
+                @start-draft="startBoardDraft"
                 @card-deleted="onBoardCardDeleted"
                 @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
