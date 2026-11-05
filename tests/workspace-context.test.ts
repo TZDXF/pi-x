@@ -115,10 +115,19 @@ function branchHarness(overrides = {}) {
   })
   const code =
     source.slice(source.indexOf("let request = 0"), source.indexOf("watch(() => props.project")) +
-    "\n__out = { newBranch, createError, creating, createBranch, createOpen, branchOpen, openCreateDialog }"
+    "\n__out = { newBranch, createError, creating, createBranch, createOpen, branchOpen, openCreateDialog, refresh }"
   vm.runInNewContext(ts.transpile(code), context)
   return { context: { ...context, ...context.__out }, calls }
 }
+
+test("initial worktree selection survives immediate submission during Git loading", async () => {
+  const initialSelection = { project: "C:/repo", worktree: true, branch: "feature/base" }
+  const { context } = branchHarness({ props: { project: "C:/repo", initialSelection } })
+  const pending = context.refresh()
+  expect(context.selection.value).toEqual(initialSelection)
+  await pending
+  expect(context.selection.value).toEqual(initialSelection)
+})
 
 test("creating a branch checks it out and refreshes the draft selection", async () => {
   const { context, calls } = branchHarness()

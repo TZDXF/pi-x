@@ -11,7 +11,15 @@ import { workspaceGitInfo, createWorkspaceGit, type WorkspaceGitInfo, type Works
 import { tBackendError } from "@/i18n"
 import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceStore } from "@/stores/workspace"
-const props = defineProps<{ project: string; disabled?: boolean }>()
+const props = withDefaults(
+  defineProps<{
+    project: string
+    disabled?: boolean
+    projectPicker?: boolean
+    initialSelection?: WorkspaceSelection | null
+  }>(),
+  { projectPicker: true, initialSelection: null },
+)
 const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
 const selection = defineModel<WorkspaceSelection | null>({ default: null })
 const workspace = useWorkspaceStore()
@@ -57,12 +65,16 @@ const filteredProjects = computed(() => {
   return paths.filter(p => name(p).toLowerCase().includes(query) || p.toLowerCase().includes(query))
 })
 let request = 0
+let initialSelection = props.initialSelection
 async function refresh() {
   if (!props.project) return
   const id = ++request
+  const preferred = initialSelection
+  initialSelection = null
   loading.value = true
   info.value = null
-  selection.value = null
+  // Immediate draft submission may happen before Git metadata returns.
+  selection.value = preferred?.project === props.project ? { ...preferred } : null
   gitError.value = ""
   // 远程项目不做本地 git 查询，工作区选择保持为空。
   if (isRemote.value) {
@@ -73,11 +85,14 @@ async function refresh() {
     const result = await workspaceGitInfo(props.project)
     if (id === request) {
       info.value = result
-      selection.value = {
-        project: props.project,
-        worktree: false,
-        branch: result.branch,
-      }
+      selection.value =
+        preferred?.project === props.project
+          ? { ...preferred }
+          : {
+              project: props.project,
+              worktree: false,
+              branch: result.branch,
+            }
       workspace.registerWorktrees(result)
     }
   } catch (e) {
@@ -148,9 +163,10 @@ watch(() => props.project, refresh, { immediate: true })
 
 <template>
   <div
+    v-if="projectPicker || (!isProjectless && !isRemote)"
     class="workspace-context flex gap-[5px] items-center mt-0 mr-3.5 mb-[-10px] ml-3.5 pt-[5px] pr-2 pb-[15px] pl-2 bg-muted rounded-[16px_16px_0_0] max-[700px]:[margin-inline:2px] max-[700px]:gap-0"
   >
-    <Popover v-model:open="projectOpen"
+    <Popover v-if="projectPicker" v-model:open="projectOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"

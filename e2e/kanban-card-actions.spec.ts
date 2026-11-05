@@ -62,8 +62,10 @@ test("idle and completed cards show archive icons that do not open the conversat
   await page.goto(harness.url)
   for (const status of ["idle", "completed"]) {
     const column = page.locator('[data-kanban-column="' + status + '"]')
+    const card = column.locator("[data-kanban-card]")
     const archive = column.getByRole("button", { name: "归档会话", exact: true })
-    await expect(archive).toBeVisible()
+    await card.hover()
+    await expect(archive).toHaveCSS("opacity", "1")
     await archive.click()
     await expect(column.locator("[data-kanban-card]")).toHaveCount(0)
     await expect(page.locator("output")).toHaveAttribute("data-details-open", "false")

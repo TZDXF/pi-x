@@ -44,6 +44,15 @@ pub struct BoardDraft {
     thinking_level: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<BoardDraftAttachment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<BoardDraftSelection>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardDraftSelection {
+    project: String,
+    worktree: bool,
+    branch: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -726,6 +735,7 @@ mod tests {
         let mut value = draft("image-task");
         value["modelKey"] = json!("test/reasoner");
         value["thinkingLevel"] = json!("high");
+        value["selection"] = json!({"project": "/repo", "worktree": true, "branch": "main"});
         value["attachments"] = json!([{
             "filename": "photo.png", "mediaType": "image/png",
             "url": "data:image/png;base64,aGVsbG8="
@@ -734,6 +744,10 @@ mod tests {
         let saved = &state.board_drafts["image-task"];
         assert_eq!(saved.model_key.as_deref(), Some("test/reasoner"));
         assert_eq!(saved.thinking_level.as_deref(), Some("high"));
+        let selection = saved.selection.as_ref().unwrap();
+        assert_eq!(selection.project, "/repo");
+        assert!(selection.worktree);
+        assert_eq!(selection.branch, "main");
         assert_eq!(saved.attachments[0].url, "data:image/png;base64,aGVsbG8=");
         assert_eq!(read(&path).unwrap(), state);
         cleanup(&path);

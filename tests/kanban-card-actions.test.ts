@@ -139,7 +139,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     ...overrides,
   })
   const disabled = vue.ref(false)
-  const open = vi.fn()
+  const startDraft = vi.fn()
   const cardDeleted = vi.fn()
   let actions: { edit(): void; remove(): Promise<void> }
   const app = renderer.createApp({
@@ -153,7 +153,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
             { value: "/project", label: "Project" },
             { value: "/other", label: "Other" },
           ],
-          onOpen: open,
+          onStartDraft: startDraft,
           onCardDeleted: cardDeleted,
         },
         {
@@ -170,6 +170,7 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
   await vue.nextTick()
   const descendants = (target: HostNode): HostNode[] => target.children.flatMap(child => [child, ...descendants(child)])
   const all = () => descendants(root)
+  const textOf = (target: HostNode): string => target.text + target.children.map(textOf).join("")
   const action = (label: string) => all().find(n => n.props["aria-label"] === label)
   async function click(label: string) {
     await action(label)!.props.onClick({ stopPropagation() {} })
@@ -200,7 +201,8 @@ async function harness(overrides: Partial<KanbanCard> = {}) {
     save,
     edit,
     isEditing,
-    open,
+    startDraft,
+    textOf,
     cardDeleted,
     editFromMenu,
     removeFromMenu,
@@ -221,7 +223,6 @@ test("todo menu editing reuses the existing editor and deletion removes only the
   expect(workspace.boardDrafts.other.message).toBe("Keep")
   expect(workspace.flushPersistence).toHaveBeenCalledTimes(2)
   expect(h.cardDeleted).toHaveBeenCalledExactlyOnceWith(h.card)
-  expect(h.open).not.toHaveBeenCalled()
   expect(workspace.update).not.toHaveBeenCalled()
 })
 
@@ -245,7 +246,6 @@ test("deleting a queued todo cancels the prompt without writing session metadata
   expect(removeQueuedPrompt).toHaveBeenCalledExactlyOnceWith(7)
   expect(workspace.removeBoardDraft).not.toHaveBeenCalled()
   expect(workspace.update).not.toHaveBeenCalled()
-  expect(h.open).not.toHaveBeenCalled()
 })
 
 test("disabled or started tasks cannot be deleted through a stale todo menu", async () => {
@@ -278,6 +278,7 @@ test("todo editing opens a dialog and saves only the chosen draft without openin
   const h = await harness()
   await h.click("kanban.editDraft")
   expect(h.isEditing()).toBe(true)
+  expect(h.all().some(n => h.textOf(n).includes("kanban.openConversation"))).toBe(false)
   expect(h.all().find(n => n.tag === "textarea")!.props.value).toBe("Original")
   await h.edit("  Updated task  ")
   h.all()
@@ -293,7 +294,6 @@ test("todo editing opens a dialog and saves only the chosen draft without openin
     updatedAt: expect.any(Number),
   })
   expect(workspace.flushPersistence).toHaveBeenCalledOnce()
-  expect(h.open).not.toHaveBeenCalled()
   expect(h.isEditing()).toBe(false)
 })
 
@@ -377,15 +377,21 @@ test.each(["idle", "completed"] as const)(
       true,
     )
     expect(workspace.refresh).toHaveBeenCalledWith("/project/worktree")
-    expect(h.open).not.toHaveBeenCalled()
   },
 )
 
-test("the idle archive action is revealed when the card is hovered or focused", async () => {
-  const h = await harness({ status: "idle", file: "/session.jsonl" })
-  expect(h.action("workspace.archive")!.props.class).toContain("kanban-archive")
+test("todo start and idle archive actions are revealed on hover or focus", async () => {
+  const todo = await harness()
+  expect(todo.action("kanban.startDraft")!.props.class).toContain("kanban-card-action")
+  expect(todo.action("kanban.editDraft")!.props.class).toContain("kanban-card-action")
+  await todo.click("kanban.startDraft")
+  expect(todo.startDraft).toHaveBeenCalledExactlyOnceWith(todo.card)
+  expect(todo.isEditing()).toBe(false)
+
+  const idle = await harness({ status: "idle", file: "/session.jsonl" })
+  expect(idle.action("workspace.archive")!.props.class).toContain("kanban-archive")
   const styles = descriptor.styles.map(style => style.content).join("\n")
-  expect(styles).toContain(".kanban-card-actions:is(:hover, :focus-within) :is(.kanban-edit, .kanban-archive)")
+  expect(styles).toContain(".kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-archive)")
 })
 
 test("archive failure restores the card and reports the error", async () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, useId } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, LoaderCircle, Pencil } from "@lucide/vue"
+import { Archive, LoaderCircle, Pencil, Play } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
@@ -18,8 +18,8 @@ const props = defineProps<{
   disabled?: boolean
 }>()
 const emit = defineEmits<{
-  open: [card: KanbanCard]
   cardDeleted: [card: KanbanCard]
+  startDraft: [card: KanbanCard]
 }>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
@@ -74,7 +74,7 @@ function setEditing(open: boolean) {
   if (!saving.value) editing.value = open
 }
 
-async function save(open = false) {
+async function save() {
   if (!canSave.value) return
   saving.value = true
   error.value = ""
@@ -98,7 +98,6 @@ async function save(open = false) {
       queued.expandedText = undefined
     }
     editing.value = false
-    if (open) emit("open", props.card)
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -162,7 +161,7 @@ async function remove() {
   <div
     v-if="!archiving"
     class="kanban-card-actions relative min-w-0"
-    :class="{ 'has-action': card.status === 'todo' || canArchive }"
+    :class="{ 'has-action': card.status === 'todo' || canArchive, 'has-todo-actions': card.status === 'todo' }"
   >
     <slot :edit="openEditor" :remove="remove" :busy="saving || deleting" />
     <Button
@@ -170,7 +169,20 @@ async function remove() {
       type="button"
       variant="ghost"
       size="icon-sm"
-      class="kanban-edit absolute right-2 top-2 z-1 size-7 bg-card text-muted-foreground"
+      class="kanban-card-action absolute right-2 top-2 z-1 size-7 bg-card text-muted-foreground"
+      :disabled="disabled || saving || deleting"
+      :title="t('kanban.startDraft')"
+      :aria-label="t('kanban.startDraft')"
+      @click.stop="emit('startDraft', card)"
+    >
+      <Play class="size-3.5" aria-hidden="true" />
+    </Button>
+    <Button
+      v-if="card.status === 'todo'"
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      class="kanban-card-action absolute right-10 top-2 z-1 size-7 bg-card text-muted-foreground"
       :disabled="disabled"
       :title="t('kanban.editDraft')"
       :aria-label="t('kanban.editDraft')"
@@ -224,9 +236,6 @@ async function remove() {
           <Button type="button" variant="ghost" :disabled="saving" @click="setEditing(false)">
             {{ t("kanban.cancel") }}
           </Button>
-          <Button type="button" variant="outline" :disabled="!canSave" @click="save(true)">
-            {{ t("kanban.openConversation") }}
-          </Button>
           <Button type="submit" :disabled="!canSave">
             <LoaderCircle v-if="saving" class="size-3.5 animate-spin" aria-hidden="true" />
             {{ t(saving ? "kanban.saving" : "kanban.saveDraft") }}
@@ -238,20 +247,23 @@ async function remove() {
 </template>
 
 <style scoped>
-.kanban-edit,
+.kanban-card-action,
 .kanban-archive {
   opacity: 0;
   pointer-events: none;
 }
-.kanban-card-actions:is(:hover, :focus-within) :is(.kanban-edit, .kanban-archive) {
+.kanban-card-actions:is(:hover, :focus-within) :is(.kanban-card-action, .kanban-archive) {
   opacity: 1;
   pointer-events: auto;
 }
 .has-action :deep([data-kanban-card] > span:first-child) {
   padding-right: 1.75rem;
 }
+.has-todo-actions :deep([data-kanban-card] > span:first-child) {
+  padding-right: 3.75rem;
+}
 @media (hover: none) {
-  .kanban-edit,
+  .kanban-card-action,
   .kanban-archive {
     opacity: 1;
     pointer-events: auto;

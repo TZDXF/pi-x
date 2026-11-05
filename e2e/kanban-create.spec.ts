@@ -45,7 +45,9 @@ test.beforeEach(async ({ page }) => {
           }
         : command === "pi_settings_get"
           ? { defaultProvider: "test", defaultModel: "reasoner", defaultThinkingLevel: "medium" }
-          : {}
+          : command === "workspace_git_info"
+            ? { branch: "main", branches: ["main"], unborn_branch: false, worktree: false, worktrees: [] }
+            : {}
     await route.fulfill({ json: { data } })
   })
   await page.goto(harness.url)

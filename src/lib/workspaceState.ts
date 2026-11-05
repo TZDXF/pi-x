@@ -1,5 +1,6 @@
 import { samePath } from "@/lib/paths"
 import type { ThinkingLevel } from "@/api/protocol"
+import type { WorkspaceSelection } from "@/api/piClient"
 
 export interface BoardDraftAttachment {
   filename?: string
@@ -24,6 +25,8 @@ export interface BoardDraft {
   modelKey?: string
   thinkingLevel?: ThinkingLevel
   attachments?: BoardDraftAttachment[]
+  /** Git environment chosen when the todo is created; applied on its first start. */
+  selection?: WorkspaceSelection
 }
 export interface SessionActivity {
   file: string

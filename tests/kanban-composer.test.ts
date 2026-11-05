@@ -31,7 +31,7 @@ test("board attachments preserve image and document bytes without retaining prev
   await expect(serializeBoardAttachments([{ url: "blob:missing-original" }])).rejects.toThrow()
 })
 
-function mountDraft(attachments: BoardDraft["attachments"]) {
+function mountDraft(attachments: BoardDraft["attachments"], initialSelection?: BoardDraft["selection"]) {
   const draft: BoardDraft = {
     id: "composer-options",
     project: "/composer-options",
@@ -39,6 +39,7 @@ function mountDraft(attachments: BoardDraft["attachments"]) {
     createdAt: 1,
     updatedAt: 1,
     attachments,
+    selection: initialSelection,
   }
   const session = reactive({
     runtimeId: draft.id,
@@ -56,6 +57,7 @@ function mountDraft(attachments: BoardDraft["attachments"]) {
       workspace.boardDrafts[next.id] = next
     }),
   })
+  const selection = ref(initialSelection ?? null)
   const bridge = ref<{
     textInput: string
     files: { file: File }[]
@@ -68,6 +70,7 @@ function mountDraft(attachments: BoardDraft["attachments"]) {
       session as unknown as SessionStore,
       workspace as unknown as ReturnType<typeof useWorkspaceStore>,
       bridge,
+      selection,
     )
     useComposerDraftSync(session as unknown as SessionStore, () => draft.project, bridge, options)
     bridge.value = {
@@ -83,7 +86,7 @@ function mountDraft(attachments: BoardDraft["attachments"]) {
     }
   })
   cleanup.push(mounted.unmount)
-  return { session, workspace, bridge }
+  return { session, workspace, bridge, selection }
 }
 
 test("a reopened todo restores durable files and saves attachment-only and model edits", async () => {
@@ -107,6 +110,17 @@ test("a reopened todo restores durable files and saves attachment-only and model
   await nextTick()
   await vi.advanceTimersByTimeAsync(350)
   expect(workspace.boardDrafts[session.runtimeId].attachments).toEqual([])
+})
+
+test("a reopened todo keeps and autosaves its Git environment selection", async () => {
+  vi.useFakeTimers()
+  const initial = { project: "/composer-options", worktree: true, branch: "main" }
+  const { workspace, selection } = mountDraft([], initial)
+  expect(selection.value).toEqual(initial)
+  selection.value = { project: "/composer-options", worktree: false, branch: "feature/todo" }
+  await nextTick()
+  await vi.advanceTimersByTimeAsync(350)
+  expect(workspace.boardDrafts["composer-options"].selection).toEqual(selection.value)
 })
 
 test("assigning a session file after submit never restores the original attachment", async () => {

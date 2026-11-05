@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ChatPromptInput from "@/components/chat/ChatPromptInput.vue"
+import WorkspaceContext from "@/components/WorkspaceContext.vue"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
 import ImagePreviewContent from "@/components/chat/ImagePreviewContent.vue"
 import { createModelSelection } from "@/stores/session/modelSelection"
 import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
+import type { WorkspaceSelection } from "@/api/piClient"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
 import { useKanbanCardSorting } from "@/composables/useKanbanCardSorting"
 import { useKanbanSelectionScroll } from "@/composables/useKanbanSelectionScroll"
@@ -75,6 +77,7 @@ const idlePageSize = 30
 const idleLimit = ref(idlePageSize)
 const createOpen = ref(false)
 const draftProject = ref("")
+const draftSelection = ref<WorkspaceSelection | null>(null)
 const startImmediately = ref(false)
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
 const previewImage = ref<string | null>(null)
@@ -195,6 +198,7 @@ function openCreate(project = props.selectedProject) {
   void modelSelection.loadOfflineModels()
   createError.value = ""
   startImmediately.value = false
+  draftSelection.value = null
   createOpen.value = true
 }
 
@@ -224,6 +228,7 @@ async function submit(message: PromptInputMessage) {
     emit("create", {
       project: draftProject.value,
       message: message.text.trim(),
+      ...(draftSelection.value?.project === draftProject.value ? { selection: draftSelection.value } : {}),
       ...(startImmediately.value ? { startImmediately: true } : {}),
       ...(modelKey.value ? { modelKey: modelKey.value } : {}),
       thinkingLevel: thinkingLevel.value,
@@ -318,7 +323,7 @@ async function submit(message: PromptInputMessage) {
               :card="card"
               :projects="availableProjects"
               :disabled="navigationBusy || busy"
-              @open="emit('open', card)"
+              @start-draft="emit('startDraft', card)"
               @card-deleted="emit('cardDeleted', $event)"
             >
               <KanbanSessionMenu
@@ -433,6 +438,13 @@ async function submit(message: PromptInputMessage) {
           </label>
           <div class="space-y-2">
             <p class="text-sm font-medium">{{ t("kanban.draftMessage") }}</p>
+            <WorkspaceContext
+              v-if="draftProject"
+              v-model="draftSelection"
+              :project="draftProject"
+              :disabled="createBusy"
+              :project-picker="false"
+            />
             <ChatPromptInput
               v-model:bridge="bridge"
               :disabled="createBusy"

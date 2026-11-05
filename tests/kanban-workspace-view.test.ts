@@ -344,6 +344,7 @@ test("attachment-only todos persist model choices without starting pi and restor
     message: "  ",
     modelKey: "test/reasoner",
     thinkingLevel: "high",
+    selection: { project: "/root", worktree: true, branch: "main" },
     attachments,
   })
   expect(sessionFor).not.toHaveBeenCalled()
@@ -351,6 +352,7 @@ test("attachment-only todos persist model choices without starting pi and restor
     message: "",
     modelKey: "test/reasoner",
     thinkingLevel: "high",
+    selection: { project: "/root", worktree: true, branch: "main" },
     attachments,
   })
   expect(board.cards.value[0].status).toBe("todo")

@@ -57,6 +57,7 @@ const { codeComments, conversationSelections, onSendDelayWheel, onSubmit, abort 
   <div class="composer-dock mx-auto w-full max-w-3xl px-6 pt-3 shrink-0 pb-3 max-[900px]:pl-4 max-[900px]:pr-4">
     <WorkspaceContext
       v-model="workspaceSelection"
+      :initial-selection="workspaceSelection"
       :disabled="gitBusy || connecting"
       v-if="
         !session.promptQueue.length &&

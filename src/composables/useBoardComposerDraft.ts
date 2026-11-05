@@ -3,6 +3,7 @@ import type { SessionStore } from "@/stores/session"
 import type { useWorkspaceStore } from "@/stores/workspace"
 import { boardDraftFiles, serializeBoardAttachments } from "@/lib/boardDraftAttachments"
 import { modelKey } from "@/lib/modelKey"
+import type { WorkspaceSelection } from "@/api/piClient"
 
 interface BoardDraftBridge {
   textInput: string
@@ -16,6 +17,7 @@ export function useBoardComposerDraft(
   session: SessionStore,
   workspace: ReturnType<typeof useWorkspaceStore>,
   bridge: Ref<BoardDraftBridge | null>,
+  workspaceSelection?: Ref<WorkspaceSelection | null>,
 ) {
   const draft = Object.values(workspace.boardDrafts ?? {}).find(
     draft => (draft.runtimeId || draft.id) === session.runtimeId,
@@ -56,6 +58,7 @@ export function useBoardComposerDraft(
         ...(selection ? { modelKey: selection } : {}),
         ...(thinking ? { thinkingLevel: thinking } : {}),
         ...(attachments ? { attachments } : {}),
+        ...(workspaceSelection ? { selection: workspaceSelection.value ?? undefined } : {}),
       }
       if (JSON.stringify(next) !== JSON.stringify(workspace.boardDrafts[draftId]))
         workspace.upsertBoardDraft({ ...next, updatedAt: Date.now() })
@@ -82,6 +85,7 @@ export function useBoardComposerDraft(
       session.offlineDefaultModelKey,
       session.desiredThinkingLevel,
       session.thinkingLevel,
+      workspaceSelection?.value,
     ],
     () => {
       if (timer !== undefined) clearTimeout(timer)

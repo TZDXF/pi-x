@@ -78,7 +78,7 @@ import { kanbanColumnOrderKey, type KanbanCard } from "@/lib/kanban"
 import { loadTrustStatus } from "@/lib/sshTrust"
 import { isRemoteProject } from "@/lib/ssh"
 import { sameSessionIdentity } from "@/lib/sessionIdentity"
-import { ExternalLink, Play, Trash2, X } from "@lucide/vue"
+import { ExternalLink, FolderPlus, Trash2, X } from "@lucide/vue"
 import { developerModeEnabled } from "@/lib/developerMode"
 import { isDesktop } from "@/api/transport"
 import { tBackendError } from "@/i18n"
@@ -418,12 +418,9 @@ async function createBoardDraft(input: import("@/lib/kanban").KanbanCreatePayloa
   board.error = ""
   try {
     const draft = await board.createDraft(input)
-    if (!draft) return
+    if (!draft || !input.startImmediately) return
     const card = board.cards.find(card => card.draftId === draft.id)
-    if (card) {
-      if (input.startImmediately) startBoardDraft(card)
-      else openBoardCard(card)
-    }
+    if (card) startBoardDraft(card)
   } catch (error) {
     board.error = tBackendError(error)
     ui.pushToast(tBackendError(error), "error")
@@ -766,7 +763,19 @@ onUnmounted(() => {
                 @export="openSessionAction($event, 'export')"
                 @create="createBoardDraft"
                 @retry="board.refresh"
-              />
+              >
+                <template #actions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="(workspace.gitBusy && !connecting) || phase === 'trust'"
+                    @click="requestNavigation(switchProject)"
+                  >
+                    <FolderPlus class="size-3.5" aria-hidden="true" />
+                    {{ t("kanban.createProject") }}
+                  </Button>
+                </template>
+              </KanbanBoard>
               <Transition name="kanban-details">
                 <KanbanDetailsPanel v-if="showKanban && board.detailsOpen">
                   <header class="flex h-12 shrink-0 items-center gap-1.5 border-b px-3">
@@ -783,14 +792,6 @@ onUnmounted(() => {
                       @click="deleteBoardDraft"
                       ><Trash2 class="size-4"
                     /></Button>
-                    <Button
-                      v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
-                      variant="outline"
-                      size="sm"
-                      :disabled="connecting || navigating || !boardSelectionReady"
-                      @click="boardChat?.submitDraft()"
-                      ><Play class="size-3.5" />{{ t("kanban.startDraft") }}</Button
-                    >
                     <Button
                       variant="ghost"
                       size="icon-sm"

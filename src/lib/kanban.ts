@@ -46,7 +46,10 @@ export interface KanbanCardSource extends Omit<KanbanCard, "title" | "preview"> 
   archived?: boolean
 }
 
-export interface KanbanCreatePayload extends Pick<BoardDraft, "modelKey" | "thinkingLevel" | "attachments"> {
+export interface KanbanCreatePayload extends Pick<
+  BoardDraft,
+  "modelKey" | "thinkingLevel" | "attachments" | "selection"
+> {
   project: string
   message: string
   startImmediately?: boolean

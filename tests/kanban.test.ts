@@ -205,6 +205,7 @@ const promptInput = vue.defineComponent({
   },
 })
 const source = readFileSync(new URL("../src/components/kanban/KanbanBoard.vue", import.meta.url), "utf8")
+const appSource = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8")
 const { descriptor } = parse(source)
 const compiled = compileScript(descriptor, { id: "kanban-board-test", inlineTemplate: true })
 const code = ts.transpileModule(compiled.content, {
@@ -236,6 +237,21 @@ const imports = {
     }),
   },
   "@/components/chat/ChatPromptInput.vue": { __esModule: true, default: promptInput },
+  "@/components/WorkspaceContext.vue": {
+    __esModule: true,
+    default: vue.defineComponent({
+      props: ["project", "modelValue"],
+      emits: ["update:modelValue"],
+      setup:
+        (props, { emit }) =>
+        () =>
+          vue.h("button", {
+            type: "button",
+            "data-workspace-selection": true,
+            onClick: () => emit("update:modelValue", { project: props.project, worktree: true, branch: "main" }),
+          }),
+    }),
+  },
   "@/components/ModelThinkingSelect.vue": { __esModule: true, default: passthrough },
   "@/components/chat/ImagePreviewContent.vue": { __esModule: true, default: passthrough },
   "@/stores/session/modelSelection": {
@@ -264,12 +280,13 @@ const imports = {
     __esModule: true,
     default: vue.defineComponent({
       props: ["card"],
-      emits: ["cardDeleted"],
+      emits: ["cardDeleted", "startDraft"],
       setup:
         (props, { slots, emit }) =>
         () =>
           vue.h("div", [
             vue.h("button", { "data-delete-card": true, onClick: () => emit("cardDeleted", props.card) }),
+            vue.h("button", { "data-start-card": true, onClick: () => emit("startDraft", props.card) }),
             slots.default?.({ edit() {}, remove() {}, busy: false }),
           ]),
     }),
@@ -317,6 +334,7 @@ async function harness(overrides: Record<string, any> = {}) {
     retry = vi.fn(),
     select = vi.fn(),
     cardDeleted = vi.fn(),
+    startDraft = vi.fn(),
     reorder = vi.fn((column: kanban.KanbanStatus, ids: string[]) => {
       state.columnOrder = { ...state.columnOrder, [kanban.kanbanColumnOrderKey(state.selectedProject, column)]: ids }
     })
@@ -331,6 +349,7 @@ async function harness(overrides: Record<string, any> = {}) {
           onCreate: create,
           onOpen: open,
           onCardDeleted: cardDeleted,
+          onStartDraft: startDraft,
           onRetry: retry,
           onReorder: reorder,
           "onUpdate:selectedProject": select,
@@ -379,6 +398,7 @@ async function harness(overrides: Record<string, any> = {}) {
     create,
     open,
     cardDeleted,
+    startDraft,
     retry,
     reorder,
     select,
@@ -389,6 +409,16 @@ describe("KanbanBoard", () => {
   test("clicking a todo never opens the conversation panel", async () => {
     const h = await harness({ cards: [card()] })
     h.cards()[0].props.onClick()
+    expect(h.open).not.toHaveBeenCalled()
+  })
+
+  test("starts a todo from its card action", async () => {
+    const todo = card()
+    const h = await harness({ cards: [todo] })
+    h.all()
+      .find(child => child.props["data-start-card"])!
+      .props.onClick()
+    expect(h.startDraft).toHaveBeenCalledExactlyOnceWith(todo)
     expect(h.open).not.toHaveBeenCalled()
   })
 
@@ -608,6 +638,23 @@ describe("KanbanBoard", () => {
     expect(h.isDialogOpen()).toBe(false)
   })
 
+  test("creation carries the selected worktree and base branch", async () => {
+    const h = await harness({ selectedProject: "root" })
+    await h.openCreate()
+    await h.fill("root", "Start in a worktree")
+    h.all()
+      .find(child => child.props["data-workspace-selection"])!
+      .props.onClick()
+    await vue.nextTick()
+    await h.submit()
+    expect(h.create).toHaveBeenCalledExactlyOnceWith({
+      project: "root",
+      message: "Start in a worktree",
+      selection: { project: "root", worktree: true, branch: "main" },
+      thinkingLevel: "off",
+    })
+  })
+
   test("creation can start immediately and resets the option when reopened", async () => {
     const h = await harness({ selectedProject: "root" })
     await h.openCreate()
@@ -717,6 +764,55 @@ describe("KanbanBoard", () => {
   })
 })
 
+test("creating a todo only opens a conversation when immediate start is requested", async () => {
+  const functionSource = appSource.slice(
+    appSource.indexOf("async function createBoardDraft"),
+    appSource.indexOf("async function ensureBoardStarted"),
+  )
+  const code = ts.transpileModule(functionSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const board = {
+    error: "",
+    cards: [{ draftId: "draft" }],
+    createDraft: vi.fn(async () => ({ id: "draft" })),
+  }
+  const openBoardCard = vi.fn()
+  const startBoardDraft = vi.fn()
+  const createBoardDraft = new Function(
+    "board",
+    "creatingBoardDraft",
+    "openBoardCard",
+    "startBoardDraft",
+    "tBackendError",
+    "ui",
+    `${code}; return createBoardDraft`,
+  )(board, { value: false }, openBoardCard, startBoardDraft, String, { pushToast: vi.fn() })
+
+  await createBoardDraft({ project: "root", message: "Save only" })
+  expect(openBoardCard).not.toHaveBeenCalled()
+  expect(startBoardDraft).not.toHaveBeenCalled()
+
+  await createBoardDraft({ project: "root", message: "Start now", startImmediately: true })
+  expect(startBoardDraft).toHaveBeenCalledExactlyOnceWith(board.cards[0])
+  expect(openBoardCard).not.toHaveBeenCalled()
+})
+
+test("the board header exposes project creation through the existing guarded navigation flow", () => {
+  const board = appSource.slice(appSource.indexOf("<KanbanBoard"), appSource.indexOf("</KanbanBoard>"))
+  const actions = board.match(/<template #actions>([\s\S]*?)<\/template>/)?.[1]
+  expect(actions).toBeDefined()
+  expect(actions).toContain('t("kanban.createProject")')
+  expect(actions).toContain('@click="requestNavigation(switchProject)"')
+  expect(actions).toContain(":disabled=\"(workspace.gitBusy && !connecting) || phase === 'trust'\"")
+})
+
+test("the board details panel does not duplicate the todo start action", () => {
+  const panel = appSource.slice(appSource.indexOf("<KanbanDetailsPanel"), appSource.indexOf("</KanbanDetailsPanel>"))
+  expect(panel).not.toContain("kanban.startDraft")
+  expect(panel).not.toContain("boardChat?.submitDraft()")
+})
+
 test("both locales translate board UI, fixed columns, and parent layout/drawer/draft actions", () => {
   expect(Object.keys(zhCN.kanban).sort()).toEqual(Object.keys(en.kanban).sort())
   for (const [locale, messages] of [
@@ -730,6 +826,7 @@ test("both locales translate board UI, fixed columns, and parent layout/drawer/d
       ...[
         "layoutBoard",
         "layoutChat",
+        "createProject",
         "openInChat",
         "closeDetails",
         "detailsTitle",

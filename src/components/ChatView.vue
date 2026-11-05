@@ -123,13 +123,14 @@ const emit = defineEmits<{
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
-const workspaceSelection = ref<WorkspaceSelection | null>(null)
+const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
+const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
 const currentTitle = computed(
   () => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title,
 )
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
-const draftOptions = useBoardComposerDraft(session, workspace, bridge)
+const draftOptions = useBoardComposerDraft(session, workspace, bridge, workspaceSelection)
 const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge, draftOptions)
 defineExpose({ submitDraft: () => bridge.value?.submitForm() })
 // Dragging a session row onto the view appends an @session reference to the composer.

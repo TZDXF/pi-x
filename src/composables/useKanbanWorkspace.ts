@@ -223,6 +223,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
       ...(input.modelKey ? { modelKey: input.modelKey } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.selection ? { selection: { ...input.selection, project } } : {}),
     }
     workspace.upsertBoardDraft(draft)
     await workspace.flushPersistence()

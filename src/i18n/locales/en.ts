@@ -15,6 +15,7 @@ export default {
     noProject: "No project",
     noProjects: "Add a project to create tasks.",
     create: "New task",
+    createProject: "New project",
     createDescription:
       "Choose a project, add a message or attachments, and select a model and thinking level. Save the task to start it later.",
     project: "Project",
@@ -25,7 +26,6 @@ export default {
     editDraft: "Edit task",
     edit: "Edit",
     delete: "Delete",
-    openConversation: "Open conversation",
     draftUnavailable: "This task has started or was removed. Close the dialog and try again.",
     startDraft: "Start task",
     startImmediately: "Start immediately after creating",
