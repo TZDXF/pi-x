@@ -159,7 +159,7 @@ function openSession(file: string, project: string) {
           <div
             v-for="day in byDay"
             :key="day.day"
-            class="flex min-w-[3px] flex-1 flex-col justify-end"
+            class="flex h-full min-w-[3px] flex-1 flex-col justify-end"
             :title="`${day.day} · ${barValue(day)}`"
           >
             <div class="w-full rounded-sm bg-primary/70" :style="{ height: `${barHeight(day)}%` }" />

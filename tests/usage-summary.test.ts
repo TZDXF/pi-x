@@ -39,6 +39,8 @@ test("the usage panel aggregates by day/project/model and can open recorded sess
   expect(page).toMatch(/t\("usage\.byProject"\)/)
   expect(page).toMatch(/t\("usage\.byModel"\)/)
   expect(page).toMatch(/t\("usage\.sourceNote"\)/)
+  // 百分比柱高需要明确的父级高度，否则柱子会折叠为 0。
+  expect(page).toMatch(/class="flex h-full min-w-\[3px\] flex-1 flex-col justify-end"/)
   // 与归档面板同形态：无 ScrollArea / h1，由设置页供给框架。
   expect(page).not.toMatch(/ScrollArea/)
   expect(page).not.toMatch(/<h1/)
