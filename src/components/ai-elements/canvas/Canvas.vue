@@ -3,6 +3,7 @@ import type { FlowEmits, FlowProps, FlowSlots } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { VueFlow } from '@vue-flow/core'
 import { useForwardPropsEmits } from 'reka-ui'
+import { getCurrentInstance } from 'vue'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 
@@ -15,10 +16,10 @@ const props = withDefaults(defineProps<FlowProps>(), {
   zoomOnDoubleClick: false,
 })
 
-const emits = defineEmits<FlowEmits>()
+defineEmits<FlowEmits>()
 const slots = defineSlots<FlowSlots>()
-// @ts-expect-error vue-flow generics trigger excessive type instantiation depth here
-const forwarded = useForwardPropsEmits(props, emits)
+// Keep the public FlowEmits contract, but avoid expanding its overloads in Reka's event-to-prop types.
+const forwarded = useForwardPropsEmits(props, getCurrentInstance()!.emit)
 </script>
 
 <template>

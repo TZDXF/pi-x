@@ -17,7 +17,9 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run dev:desktop`：桌面开发，支持前端热更新。
 - `pnpm run dev`：仅浏览器预览，不启动 pi 进程。
 - `pnpm run dev:desktop:remote`：先构建前端，再启用远程访问；远程页面不支持热更新。
-- `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
+- `pnpm run check`：并行执行 oxlint、增量类型检查、前端构建与默认 Rust 检查；构建和默认 Rust 检查均成功后再检查 `remote-access`，输出各项耗时，**不含测试**。
+- `pnpm run check:quick`：仅并行执行 oxlint 与增量类型检查，适合前端日常迭代；不替代提交前的完整检查。
+- 内存紧张或同时运行其他构建时，可用 `pnpm run check --serial` 保留串行检查。
 - `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
 - `pnpm run test:web` / `pnpm run test:web:all` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别按增量（仅相对 HEAD 变动的测试）、全量、watch 模式运行 Vitest 单元测试，以及运行 Playwright E2E 与 Rust 单元测试。

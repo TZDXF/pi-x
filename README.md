@@ -99,12 +99,17 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `pnpm run dev`                   | 仅浏览器预览，不启动 Pi 进程            |
 | `pnpm run dev:desktop:remote`    | 构建前端并启用远程访问开发模式          |
 | `pnpm run check`                 | oxlint、类型检查、前端构建与 Rust check |
+| `pnpm run check:quick`           | 仅 oxlint 与增量类型检查，适合前端迭代 |
 | `pnpm run test:web`              | Vitest 单元测试                         |
 | `pnpm run test:e2e`              | Playwright E2E 测试                     |
 | `pnpm test`                      | Rust 单元测试                           |
 | `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
 Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
+
+日常前端迭代可运行 `pnpm run check:quick` 和 `pnpm run test:web`（仅运行相对 HEAD 变动及其关联的测试）。完整的 `pnpm run check` 会并行执行独立检查，等待前端构建与默认 Rust 检查成功后再检查 `remote-access`，并输出各项耗时；提交前仍需运行完整检查及测试。
+
+类型检查缓存保存在 `node_modules/.cache/vue-tsc/`，后续运行会复用结果并检查变动。首次运行或删除缓存后需要完整检查，缓存不会提交到仓库。内存紧张或同时运行其他构建时，可使用 `pnpm run check --serial` 串行检查，减少资源争抢。
 
 ### E2E 测试
 
