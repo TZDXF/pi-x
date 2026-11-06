@@ -13,6 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuIte
 import { Popover, PopoverContent, PopoverTrigger } from '/src/components/ui/popover'
 import '/src/style.css'
 const open = ref(true)
+const laterOpen = ref(false)
 const contentTag = ref('section')
 const Content = new URLSearchParams(location.search).has('scroll') ? DialogScrollContent : DialogContent
 window.escapeEvents = 0
@@ -20,6 +21,18 @@ window.titlebarPointerDowns = 0
 const app = createApp({
   setup() {
     return () => h('div', [
+      // Declare this sibling first to reproduce Teleport order differing from
+      // opening order, including a dialog that is closed and opened again.
+      new URLSearchParams(location.search).has('stacked') ? h(Dialog, {
+        open: laterOpen.value, 'onUpdate:open': value => { laterOpen.value = value },
+      }, () => h(Content, { 'aria-describedby': undefined }, () => [
+        h(DialogTitle, () => 'Later dialog'),
+        h('input', { 'aria-label': 'Later input' }),
+        h(Select, {}, () => [
+          h(SelectTrigger, { 'data-testid': 'later-select' }, () => h(SelectValue, { placeholder: 'Choose later' })),
+          h(SelectContent, {}, () => h(SelectItem, { value: 'later' }, () => 'Later option')),
+        ]),
+      ])) : null,
       new URLSearchParams(location.search).has('titlebar') ? h(WindowTitleBar, {
         onPointerdown: (event) => {
           if (event.target.hasAttribute('data-tauri-drag-region')) window.titlebarPointerDowns++
@@ -32,6 +45,7 @@ const app = createApp({
         onEscapeKeyDown: () => { window.escapeEvents++ },
       }, () => [
         h(DialogTitle, () => 'Selection dialog'),
+        h('button', { onClick: () => { laterOpen.value = true } }, 'Open later dialog'),
         h(Select, {}, () => [
           h(SelectTrigger, { 'data-testid': 'select-trigger' }, () => h(SelectValue, { placeholder: 'Choose' })),
           h(SelectContent, {}, () => [h(SelectItem, { value: 'alpha' }, () => 'Alpha'), h(SelectItem, { value: 'beta' }, () => 'Beta')]),
@@ -63,6 +77,34 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await harness?.close()
 })
+
+// Stacking and pointer interception require real browser hit-testing.
+for (const variant of ["regular", "scroll"]) {
+  test(`${variant} dialogs follow opening order and keep child menus interactive`, async ({ page }) => {
+    await page.goto(`${harness!.url}?stacked=1${variant === "scroll" ? "&scroll=1" : ""}`)
+    const first = page.getByRole("dialog", { name: "Selection dialog" })
+    const later = page.getByRole("dialog", { name: "Later dialog" })
+    for (const dismissal of ["overlay", "escape"]) {
+      await first.getByRole("button", { name: "Open later dialog" }).click()
+      await expect(later.getByRole("textbox")).toBeFocused()
+      await later.getByRole("textbox").fill("Editable")
+      await later.getByTestId("later-select").click()
+      await page.getByRole("option", { name: "Later option" }).click()
+      await expect(later.getByTestId("later-select")).toContainText("Later option")
+      await expect(page.locator('[data-slot="select-content"]')).toHaveCount(0)
+      if (dismissal === "overlay") await page.mouse.click(2, 2)
+      else await page.keyboard.press("Escape")
+      await expect(later).toHaveCount(0)
+      await expect(first).toBeVisible()
+    }
+    await first.getByTestId("select-trigger").click()
+    await page.getByRole("option", { name: "Alpha" }).click()
+    await expect(first.getByTestId("select-trigger")).toContainText("Alpha")
+    await page.keyboard.press("Escape")
+    await expect(first).toHaveCount(0)
+    await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none")
+  })
+}
 
 // Native window movement cannot run in Chromium, but its drag region must
 // receive real pointer events while the modal disables the rest of the page.

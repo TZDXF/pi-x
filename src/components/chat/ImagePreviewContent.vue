@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { DialogClose, DialogContent, DialogPortal, DialogTitle, injectDialogRootContext } from "reka-ui"
+import { DialogClose, DialogContent, DialogTitle, injectDialogRootContext } from "reka-ui"
+import { DialogPortal } from "@/components/ui/dialog"
 import { X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import ImageViewer from "@/components/ImageViewer.vue"
@@ -14,9 +15,10 @@ function closePreview() {
 </script>
 
 <template>
-  <DialogPortal>
+  <DialogPortal v-slot="{ onAfterLeave }">
     <!-- 非模态预览保留标题栏交互；遮罩覆盖聊天区域，点击空白处关闭。 -->
     <DialogContent
+      @after-leave="onAfterLeave"
       :aria-describedby="undefined"
       class="fixed inset-x-0 bottom-0 top-9 z-50 flex flex-col overflow-hidden bg-black/60 p-2 pt-10 outline-none"
       @interact-outside.prevent

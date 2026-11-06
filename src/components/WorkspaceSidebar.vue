@@ -2,7 +2,6 @@
 import { computed, onUnmounted, ref, watch } from "vue"
 import {
   DialogRoot,
-  DialogPortal,
   DialogOverlay,
   DialogContent as SearchDialogContent,
   DialogClose,
@@ -37,7 +36,7 @@ import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSide
 import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { projectHasRunningSession } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogPortal, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
@@ -444,13 +443,14 @@ watch(
       </section>
     </ScrollArea>
     <DialogRoot v-model:open="searchOpen">
-      <DialogPortal>
+      <DialogPortal v-slot="{ onAfterLeave }">
         <!-- Keep both the backdrop and its content below the 36px desktop title bar. -->
         <DialogOverlay
           class="task-search-overlay fixed inset-x-0 bottom-0 top-9 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-[min(12vh,5rem)] backdrop-blur-sm"
           @pointerdown.self="searchOpen = false"
         >
           <SearchDialogContent
+            @after-leave="onAfterLeave"
             class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl outline-none"
             :aria-describedby="undefined"
           >

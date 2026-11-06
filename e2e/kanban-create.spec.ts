@@ -6,15 +6,19 @@ import { createApp, h, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import KanbanBoard from '/src/components/kanban/KanbanBoard.vue'
+import CreateProjectDialog from '/src/components/CreateProjectDialog.vue'
 import { useWorkspaceStore } from '/src/stores/workspace'
 import zhCN from '/src/i18n/locales/zh-CN'
 import '/src/style.css'
-const busy = ref(false), error = ref(''), saved = ref(null)
+const busy = ref(false), error = ref(''), saved = ref(null), projectOpen = ref(false)
 const pinia = createPinia()
 useWorkspaceStore(pinia).projects = ['/project']
-createApp({render: () => h('div', {style:'height:700px'}, [h(KanbanBoard, {
+createApp({render: () => h('div', {style:'height:700px'}, [
+h(CreateProjectDialog, {open:projectOpen.value, onClose: () => { projectOpen.value = false }}),
+h(KanbanBoard, {
   cards:[], projects:[{value:'/project', label:'Project'}], selectedProject:'/project',
   busy:busy.value, error:error.value,
+  onOpenProject: () => { projectOpen.value = true },
   onCreate: async payload => {
     busy.value = true; error.value = ''
     await new Promise(resolve => setTimeout(resolve, 30))
@@ -70,6 +74,26 @@ test("the project picker opens inside the creation dialog", async ({ page }) => 
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole("button", { name: "main", exact: true })).toBeVisible()
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+})
+
+test("creating a project from a todo keeps the latest dialog interactive", async ({ page }) => {
+  const todo = page.getByRole("dialog", { name: "新建待办" })
+  await todo.getByRole("textbox").fill("保留待办内容")
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await todo.getByRole("button", { name: /project/i }).click()
+    await page.getByRole("button", { name: "添加项目", exact: true }).click()
+    const project = page.getByRole("dialog", { name: "添加项目", exact: true })
+    await expect(project).toBeVisible()
+    await project.getByRole("textbox").click({ timeout: 5000 })
+    await project.getByRole("textbox").fill("新项目")
+    await expect(project.getByRole("textbox")).toBeFocused()
+    if (attempt === 0) await page.screenshot({ path: "temp/kanban-create-project-dialog.png" })
+    await page.keyboard.press("Escape")
+    await expect(project).toHaveCount(0)
+    await expect(todo).toBeVisible()
+    await expect(todo.getByRole("textbox")).toHaveText("保留待办内容")
+  }
+  await todo.getByRole("textbox").fill("继续编辑待办")
 })
 
 const image = {
