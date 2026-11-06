@@ -93,7 +93,7 @@ jobs:
       - name: 同步版本号
         run: node scripts/set-version.mjs "${{ needs.prepare.outputs.version }}"
 
-      - name: 构建并发布正式版
+      - name: 构建并上传正式版到草稿
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,12 +102,13 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: PiX ${{ github.ref_name }}
-          releaseDraft: false
+          # 各平台只上传到草稿，全部成功后由 publish 作业统一公开。
+          releaseDraft: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
-  notes:
-    name: 生成发布说明
+  publish:
+    name: 生成发布说明并公开正式版
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -117,7 +118,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_ID=$(gh api "repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" --jq .id)
-          BODY=$(gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name="${{ github.ref_name }}" --jq .body)
-          gh api -X PATCH "repos/${{ github.repository }}/releases/$RELEASE_ID" -F body="$BODY" --jq .html_url
-          gh release edit "${{ github.ref_name }}" --draft=false -R "${{ github.repository }}"
+          gh api "repos/${{ github.repository }}/releases/generate-notes" -f tag_name="${{ github.ref_name }}" --jq .body > "$RUNNER_TEMP/release-notes.md"
+          gh release edit "${{ github.ref_name }}" --notes-file "$RUNNER_TEMP/release-notes.md" --draft=false -R "${{ github.repository }}"
