@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, type Component } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, HardDrive, MessageSquareText, RefreshCw, Trash2 } from "@lucide/vue"
+import { Archive, Database, HardDrive, MessageSquareText, RefreshCw, Trash2 } from "@lucide/vue"
 import {
   cleanupStorage,
   getStorageSummary,
@@ -35,17 +35,23 @@ const pendingCleanup = ref<StorageCategory | null>(null)
 const categoryUi: Record<StorageCategoryId, { icon: Component; bar: string; iconColor: string }> = {
   sessions: { icon: MessageSquareText, bar: "bg-blue-500", iconColor: "text-blue-500" },
   archivedSessions: { icon: Archive, bar: "bg-violet-500", iconColor: "text-violet-500" },
+  webviewCache: { icon: Database, bar: "bg-amber-500", iconColor: "text-amber-500" },
 }
 
 const categories = computed(() => summary.value?.categories ?? [])
 const pendingTitle = computed(() => (pendingCleanup.value ? t(`storage.categories.${pendingCleanup.value.id}`) : ""))
 const pendingDescription = computed(() => {
   if (!pendingCleanup.value) return ""
-  return t("storage.cleanupArchivedConfirm", { size: formatBytes(pendingCleanup.value.bytes) })
+  return t(
+    pendingCleanup.value.id === "webviewCache"
+      ? "storage.cleanupWebviewCacheConfirm"
+      : "storage.cleanupArchivedConfirm",
+    { size: formatBytes(pendingCleanup.value.bytes) },
+  )
 })
 
-function isCleanable(id: StorageCategoryId) {
-  return id === "archivedSessions"
+function isCleanable(id: StorageCategoryId): id is "archivedSessions" | "webviewCache" {
+  return id === "archivedSessions" || id === "webviewCache"
 }
 
 function percentage(bytes: number) {
@@ -169,7 +175,11 @@ onMounted(load)
             <div class="min-w-0 flex-1">
               <h3 class="text-sm font-medium">{{ t(`storage.categories.${category.id}`) }}</h3>
               <p class="mt-0.5 text-xs text-muted-foreground">
-                {{ t("storage.sessionCount", { count: category.itemCount }) }}
+                {{
+                  category.id === "webviewCache"
+                    ? t("storage.fileCount", { count: category.fileCount })
+                    : t("storage.sessionCount", { count: category.itemCount })
+                }}
               </p>
             </div>
             <span class="shrink-0 text-sm font-semibold tabular-nums">{{ formatBytes(category.bytes) }}</span>
@@ -177,7 +187,7 @@ onMounted(load)
           <p class="mt-3 flex-1 text-xs leading-5 text-muted-foreground">
             {{ t(`storage.descriptions.${category.id}`) }}
           </p>
-          <div v-if="category.id === 'archivedSessions'" class="mt-3 flex flex-wrap justify-end gap-2">
+          <div v-if="isCleanable(category.id)" class="mt-3 flex flex-wrap justify-end gap-2">
             <Button
               v-if="category.id === 'archivedSessions'"
               variant="ghost"

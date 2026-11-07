@@ -530,7 +530,7 @@ export default {
   storage: {
     nav: "存储空间",
     title: "存储空间",
-    description: "查看会话的磁盘占用，并管理已归档会话。",
+    description: "查看会话与缓存的磁盘占用，清理归档会话和 WebView 缓存。",
     total: "总占用",
     refresh: "刷新",
     reload: "重新加载",
@@ -538,20 +538,26 @@ export default {
     categories: {
       sessions: "会话",
       archivedSessions: "已归档会话",
+      webviewCache: "WebView 缓存",
     },
     descriptions: {
       sessions: "未归档会话及其元数据。请在侧边栏逐个管理，不提供批量删除。",
       archivedSessions: "归档会话及其元数据。可进入归档页恢复，或在此永久清理全部归档。",
+      webviewCache: "Windows 桌面端的页面资源与代码缓存。清理后会按需重新生成，首次加载可能稍慢。",
     },
     sessionCount: "{count} 个会话",
+    fileCount: "{count} 个文件",
     manageArchives: "管理归档",
     clean: "清理",
     cleanupTitle: "清理{name}？",
     cleanupArchivedConfirm: "将永久删除全部已归档会话，预计释放 {size}。该操作不可恢复；未归档会话不会受影响。",
+    cleanupWebviewCacheConfirm:
+      "将清理页面资源与代码缓存，当前占用 {size}。保留会话、草稿、登录状态和偏好设置，无需重启应用。使用中可能重新生成少量缓存。",
     confirmClean: "确认清理",
     cleaned: "已释放 {size}",
     cleanedPartial: "已释放 {size}，但有 {count} 项清理失败。请刷新后重试。",
-    scopeNote: "仅统计会话及其元数据；不跟随符号链接，占用为扫描时的估算值。",
+    scopeNote:
+      "统计会话及其元数据，以及 Windows 桌面端的页面资源与代码缓存；不含 WebView 的其他数据。不跟随符号链接，占用为扫描时的估算值。",
     scannedAt: "扫描时间：{time}",
   },
   usage: {
@@ -1511,6 +1517,7 @@ export default {
     missingWorktree: "缺少 worktree 参数",
     missingEnabled: "缺少 enabled 参数",
     storageCategoryNotCleanable: "此存储分类不可清理",
+    webviewCacheCleanupFailed: "清理 WebView 缓存失败：{detail}",
     sessionPathInvalid: "无效的会话路径",
     sessionFileReadFailed: "无法读取会话文件: {detail}",
     sessionMetaPathInvalid: "无效的会话元数据路径",

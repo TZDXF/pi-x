@@ -544,7 +544,7 @@ export default {
   storage: {
     nav: "Storage",
     title: "Storage",
-    description: "Review disk usage for sessions and manage archived sessions.",
+    description: "Review session and cache usage, and clean up archives and WebView caches.",
     total: "Total usage",
     refresh: "Refresh",
     reload: "Reload",
@@ -552,24 +552,30 @@ export default {
     categories: {
       sessions: "Sessions",
       archivedSessions: "Archived sessions",
+      webviewCache: "WebView cache",
     },
     descriptions: {
       sessions:
         "Unarchived sessions and their metadata. Manage them individually in the sidebar; bulk deletion is not available.",
       archivedSessions:
         "Archived sessions and their metadata. Restore them from Archives, or permanently remove all archives here.",
+      webviewCache:
+        "Page resource and code caches for the Windows desktop app. Caches rebuild as needed; the first load may be slower.",
     },
     sessionCount: "{count} session(s)",
+    fileCount: "{count} file(s)",
     manageArchives: "Manage archives",
     clean: "Clean up",
     cleanupTitle: "Clean up {name}?",
     cleanupArchivedConfirm:
       "Permanently delete every archived session and free approximately {size}? This cannot be undone. Unarchived sessions are not affected.",
+    cleanupWebviewCacheConfirm:
+      "Clear page resource and code caches, currently using {size}? Sessions, drafts, sign-in state and preferences are preserved. No restart is needed. Some cache may rebuild during use.",
     confirmClean: "Clean up",
     cleaned: "Freed {size}",
     cleanedPartial: "Freed {size}, but {count} item(s) could not be removed. Refresh and try again.",
     scopeNote:
-      "Includes only sessions and their metadata. Symbolic links are not followed; usage is an estimate at scan time.",
+      "Includes sessions, their metadata, and page resource and code caches for the Windows desktop app. Other WebView data is excluded. Symbolic links are not followed; usage is an estimate at scan time.",
     scannedAt: "Scanned at {time}",
   },
   usage: {
@@ -1559,6 +1565,7 @@ export default {
     missingWorktree: "Missing the worktree field.",
     missingEnabled: "Missing the enabled field.",
     storageCategoryNotCleanable: "This storage category cannot be cleaned up.",
+    webviewCacheCleanupFailed: "Failed to clear WebView cache: {detail}",
     sessionPathInvalid: "Invalid session path.",
     sessionFileReadFailed: "Failed to read the session file: {detail}",
     sessionMetaPathInvalid: "Invalid session metadata path.",

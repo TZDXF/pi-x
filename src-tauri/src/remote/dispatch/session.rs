@@ -159,7 +159,7 @@ pub(super) async fn handle(
             }
             "storage_summary" => Ok(to_json(crate::storage::storage_summary().await?)?),
             "storage_cleanup" => Ok(to_json(
-                crate::storage::storage_cleanup(text(a, "kind")?).await?,
+                crate::storage::storage_cleanup(app.clone(), text(a, "kind")?).await?,
             )?),
             _ => return Err(UNHANDLED.to_owned()),
         }

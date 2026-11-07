@@ -1,6 +1,6 @@
 import { invoke } from "../transport"
 
-export type StorageCategoryId = "sessions" | "archivedSessions"
+export type StorageCategoryId = "sessions" | "archivedSessions" | "webviewCache"
 
 export interface StorageCategory {
   id: StorageCategoryId
@@ -24,4 +24,5 @@ export interface StorageCleanupResult {
 }
 
 export const getStorageSummary = () => invoke<StorageSummary>("storage_summary")
-export const cleanupStorage = (kind: "archivedSessions") => invoke<StorageCleanupResult>("storage_cleanup", { kind })
+export const cleanupStorage = (kind: "archivedSessions" | "webviewCache") =>
+  invoke<StorageCleanupResult>("storage_cleanup", { kind })

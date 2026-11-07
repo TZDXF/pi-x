@@ -3334,6 +3334,8 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "webview2-com",
+ "windows-core",
  "winreg 0.56.0",
 ]
 

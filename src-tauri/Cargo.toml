@@ -67,6 +67,8 @@ argon2 = { version = "0.6", optional = true }
 # Windows toast 直接构造:AUMID 注册 + 点击激活,见 src/notifications.rs
 tauri-winrt-notification = "0.8"
 winreg = "0.56"
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [profile.release]
 codegen-units = 1

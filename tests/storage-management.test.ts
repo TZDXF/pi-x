@@ -2,6 +2,8 @@ import { expect, test, vi } from "vitest"
 import { readFileSync } from "node:fs"
 import ts from "typescript"
 import { createI18n } from "vue-i18n"
+import * as vue from "vue"
+import { compileScript, parse } from "vue/compiler-sfc"
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
 
@@ -29,7 +31,7 @@ test("storage management is routed, registered and available through both transp
   expect(api).toMatch(/invoke<StorageCleanupResult>\("storage_cleanup", \{ kind \}\)/)
 })
 
-test("storage only counts sessions and guards destructive cleanup", () => {
+test("storage includes WebView caches and guards destructive cleanup", () => {
   const page = read("../src/components/settings/StorageSettings.vue")
   const backend = read("../src-tauri/src/storage.rs")
 
@@ -39,13 +41,17 @@ test("storage only counts sessions and guards destructive cleanup", () => {
   }
   expect(page).toMatch(/pendingCleanup = category/)
   expect(page).toMatch(/cleanupArchivedConfirm/)
+  expect(page).toMatch(/cleanupWebviewCacheConfirm/)
+  expect(page).toContain('id === "webviewCache"')
+  expect(page).toContain('t("storage.fileCount", { count: category.fileCount })')
+  expect(page).toContain('v-if="isCleanable(category.id)"')
   expect(page).toMatch(/@click="confirmCleanup"/)
   expect(page).toMatch(/navigate\('\/settings\/archives'\)/)
   expect(backend).toMatch(/Re-check under the same lock used by archive\/restore operations/)
   expect(page).not.toContain("workspaces")
   expect(backend).not.toMatch(/scan_workspaces|storage_roots|resolve_projectless_dir/)
-  expect(read("../src/api/client/storage.ts")).toContain('StorageCategoryId = "sessions" | "archivedSessions"')
-  expect(backend).toContain("let categories = vec![sessions, archived_sessions];")
+  expect(read("../src/api/client/storage.ts")).toContain('"archivedSessions" | "webviewCache"')
+  expect(backend).toContain("categories.push(webview_cache::scan(root))")
   expect(backend).toMatch(/only_archived_sessions_can_be_bulk_cleaned/)
   expect(page).not.toMatch(/cache:|logs:|appData:/)
   expect(backend).not.toMatch(/category\("cache"\)|category\("logs"\)|category\("appData"\)/)
@@ -62,9 +68,14 @@ test("storage panel copy exists in both locales", async () => {
       "storage.total",
       "storage.categories.sessions",
       "storage.categories.archivedSessions",
+      "storage.categories.webviewCache",
       "storage.descriptions.sessions",
       "storage.descriptions.archivedSessions",
+      "storage.descriptions.webviewCache",
       "storage.cleanupArchivedConfirm",
+      "storage.cleanupWebviewCacheConfirm",
+      "storage.fileCount",
+      "backendErrors.webviewCacheCleanupFailed",
       "storage.cleaned",
       "storage.cleanedPartial",
       "storage.scopeNote",
@@ -74,6 +85,56 @@ test("storage panel copy exists in both locales", async () => {
     expect(messages.storage.categories).not.toHaveProperty("workspaces")
     expect(messages.storage.descriptions).not.toHaveProperty("workspaces")
   }
+})
+
+test("cache cleanup confirms the right category, refreshes usage and recovers from native errors", async () => {
+  const cache = { id: "webviewCache", bytes: 8192, fileCount: 8, itemCount: 0 }
+  const initial = { totalBytes: 8192, categories: [cache] }
+  const refreshed = { totalBytes: 128, categories: [{ ...cache, bytes: 128, fileCount: 1 }] }
+  const getStorageSummary = vi.fn().mockResolvedValue(initial)
+  const cleanupStorage = vi.fn().mockResolvedValue({ freedBytes: 8064, deletedItems: 7, failed: 0 })
+  const pushToast = vi.fn()
+  const { descriptor } = parse(read("../src/components/settings/StorageSettings.vue"))
+  const compiled = compileScript(descriptor, { id: "storage-settings-test" })
+  const code = ts.transpileModule(compiled.content, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const modules: Record<string, unknown> = {
+    vue: { ...vue, onMounted() {} },
+    "vue-i18n": { useI18n: () => ({ t: (key: string) => key }) },
+    "@lucide/vue": {},
+    "@/api/piClient": { cleanupStorage, getStorageSummary },
+    "@/lib/format": { formatBytes: String },
+    "@/lib/backendError": { formatCodedError: (_t: unknown, error: Error) => error.message },
+    "@/lib/router": {},
+    "@/stores/conversations": { useUiStore: () => ({ pushToast }) },
+    "@/components/ui/button": {},
+    "@/components/ui/dialog": {},
+  }
+  const exports: any = {}
+  new Function("exports", "require", code)(exports, (id: string) => modules[id])
+  const panel = exports.default.setup({}, { expose() {} })
+  await panel.load()
+  panel.pendingCleanup.value = cache
+  expect(panel.pendingDescription.value).toBe("storage.cleanupWebviewCacheConfirm")
+  getStorageSummary.mockResolvedValue(refreshed)
+  await panel.confirmCleanup()
+  expect(cleanupStorage).toHaveBeenCalledExactlyOnceWith("webviewCache")
+  expect(panel.summary.value.totalBytes).toBe(128)
+  expect(panel.pendingCleanup.value).toBeNull()
+  expect(panel.busy.value).toBeNull()
+  expect(pushToast).toHaveBeenCalledWith("storage.cleaned", "info")
+
+  cleanupStorage.mockRejectedValueOnce(new Error("native cleanup failed"))
+  panel.pendingCleanup.value = cache
+  await panel.confirmCleanup()
+  expect(panel.error.value).toBe("native cleanup failed")
+  expect(getStorageSummary).toHaveBeenCalledTimes(3)
+  expect(panel.busy.value).toBeNull()
+
+  panel.pendingCleanup.value = { id: "sessions", bytes: 10 }
+  await panel.confirmCleanup()
+  expect(cleanupStorage).toHaveBeenCalledTimes(2)
 })
 
 test("byte formatting uses binary units and bounded precision", async () => {

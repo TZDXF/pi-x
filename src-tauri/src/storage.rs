@@ -3,6 +3,8 @@ use std::path::Path;
 
 use crate::errors::pix_error;
 
+mod webview_cache;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageCategory {
@@ -93,9 +95,12 @@ fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
     [active, archived]
 }
 
-fn summary_at(sessions_root: &Path) -> StorageSummary {
+fn summary_at(sessions_root: &Path, webview_root: Option<&Path>) -> StorageSummary {
     let [sessions, archived_sessions] = scan_sessions(sessions_root);
-    let categories = vec![sessions, archived_sessions];
+    let mut categories = vec![sessions, archived_sessions];
+    if let Some(root) = webview_root {
+        categories.push(webview_cache::scan(root));
+    }
     let total_bytes = categories
         .iter()
         .fold(0u64, |total, row| total.saturating_add(row.bytes));
@@ -177,13 +182,47 @@ fn cleanup_at(sessions_root: &Path, kind: &str) -> Result<StorageCleanupResult, 
 
 #[tauri::command]
 pub async fn storage_summary() -> Result<StorageSummary, String> {
-    tokio::task::spawn_blocking(move || summary_at(&crate::trust::agent_dir().join("sessions")))
-        .await
-        .map_err(|e| format!("storage scan failed: {e}"))
+    tokio::task::spawn_blocking(move || {
+        summary_at(
+            &crate::trust::agent_dir().join("sessions"),
+            cfg!(windows)
+                .then(|| crate::data_dir::root().join("webview"))
+                .as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("storage scan failed: {e}"))
 }
 
 #[tauri::command]
-pub async fn storage_cleanup(kind: String) -> Result<StorageCleanupResult, String> {
+pub async fn storage_cleanup(
+    app: tauri::AppHandle,
+    kind: String,
+) -> Result<StorageCleanupResult, String> {
+    #[cfg(windows)]
+    if kind == "webviewCache" {
+        // Serialize native cleanup requests, including requests from remote clients.
+        static CLEANUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _guard = CLEANUP_LOCK.lock().await;
+        let root = crate::data_dir::root().join("webview");
+        let scan = || {
+            let root = root.clone();
+            tokio::task::spawn_blocking(move || webview_cache::scan(&root))
+        };
+        let before = scan()
+            .await
+            .map_err(|e| format!("storage scan failed: {e}"))?;
+        webview_cache::clear(&app).await?;
+        let after = scan()
+            .await
+            .map_err(|e| format!("storage scan failed: {e}"))?;
+        return Ok(StorageCleanupResult {
+            freed_bytes: before.bytes.saturating_sub(after.bytes),
+            deleted_items: before.file_count.saturating_sub(after.file_count),
+            failed: 0,
+        });
+    }
+    let _ = app;
     tokio::task::spawn_blocking(move || {
         cleanup_at(&crate::trust::agent_dir().join("sessions"), &kind)
     })
@@ -248,7 +287,7 @@ mod tests {
         write(&data.join("logs/today.log"), b"not-counted");
         write(&data.join("config.json"), b"not-counted");
 
-        let summary = summary_at(&sessions);
+        let summary = summary_at(&sessions, None);
         assert_eq!(
             summary
                 .categories
@@ -302,5 +341,64 @@ mod tests {
         ] {
             assert!(cleanup_at(&temp.0.join("sessions"), kind).is_err());
         }
+    }
+
+    #[test]
+    fn webview_summary_counts_only_resource_and_code_caches() {
+        let temp = TestDir::new("webview");
+        let webview = temp.0.join("webview");
+        let profile = webview.join("EBWebView").join("Default");
+        write(&profile.join("Cache/Cache_Data/resource"), b"12345");
+        write(&profile.join("Code Cache/js/compiled"), b"123");
+        for path in [
+            "Local Storage/leveldb/data",
+            "Cookies",
+            "IndexedDB/data",
+            "GPUCache/data",
+        ] {
+            write(&profile.join(path), b"persistent-data");
+        }
+        write(
+            &webview.join("EBWebView/Crashpad/reports/crash.dmp"),
+            b"report",
+        );
+        let summary = summary_at(&temp.0.join("sessions"), Some(&webview));
+        let cache = row(&summary, "webviewCache");
+        assert_eq!(cache.bytes, 8);
+        assert_eq!(cache.file_count, 2);
+        assert_eq!(summary.total_bytes, 8);
+        assert_eq!(summary.categories.len(), 3);
+        assert_eq!(webview_cache::scan(&temp.0.join("missing")).bytes, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn webview_scan_does_not_follow_junctions_in_or_above_cache() {
+        use std::os::windows::process::CommandExt;
+
+        let temp = TestDir::new("webview-junction");
+        let outside = temp.0.join("outside");
+        write(&outside.join("data"), b"outside-profile");
+        let webview = temp.0.join("webview");
+        let profile = webview.join("EBWebView").join("Default");
+        let cache = profile.join("Cache");
+        write(&cache.join("resource"), b"123");
+        for junction in [cache.join("linked"), profile.join("Code Cache")] {
+            let output = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&outside)
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        let cache_usage = webview_cache::scan(&webview);
+        assert_eq!(cache_usage.bytes, 3);
+        assert_eq!(cache_usage.file_count, 1);
+        assert!(outside.join("data").exists());
+        // Remove only the junctions before TestDir recursively removes its own directory.
+        std::fs::remove_dir(cache.join("linked")).unwrap();
+        std::fs::remove_dir(profile.join("Code Cache")).unwrap();
     }
 }
