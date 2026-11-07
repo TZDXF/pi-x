@@ -1,12 +1,12 @@
 import { invoke } from "../transport"
 
-export type StorageCategoryId = "sessions" | "archivedSessions" | "workspaces"
+export type StorageCategoryId = "sessions" | "archivedSessions"
 
 export interface StorageCategory {
   id: StorageCategoryId
   bytes: number
   fileCount: number
-  /** Session count for session categories, file count for workspaces. */
+  /** Number of sessions in this category. */
   itemCount: number
 }
 

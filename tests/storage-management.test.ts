@@ -29,11 +29,11 @@ test("storage management is routed, registered and available through both transp
   expect(api).toMatch(/invoke<StorageCleanupResult>\("storage_cleanup", \{ kind \}\)/)
 })
 
-test("storage UI only manages sessions and workspaces and guards destructive cleanup", () => {
+test("storage only counts sessions and guards destructive cleanup", () => {
   const page = read("../src/components/settings/StorageSettings.vue")
   const backend = read("../src-tauri/src/storage.rs")
 
-  for (const id of ["sessions", "archivedSessions", "workspaces"]) {
+  for (const id of ["sessions", "archivedSessions"]) {
     expect(page).toContain(`${id}:`)
     expect(backend).toContain(`category("${id}")`)
   }
@@ -42,8 +42,10 @@ test("storage UI only manages sessions and workspaces and guards destructive cle
   expect(page).toMatch(/@click="confirmCleanup"/)
   expect(page).toMatch(/navigate\('\/settings\/archives'\)/)
   expect(backend).toMatch(/Re-check under the same lock used by archive\/restore operations/)
-  expect(backend).toMatch(/fn scan_workspaces/)
-  expect(backend).toMatch(/resolve_projectless_dir/)
+  expect(page).not.toContain("workspaces")
+  expect(backend).not.toMatch(/scan_workspaces|storage_roots|resolve_projectless_dir/)
+  expect(read("../src/api/client/storage.ts")).toContain('StorageCategoryId = "sessions" | "archivedSessions"')
+  expect(backend).toContain("let categories = vec![sessions, archived_sessions];")
   expect(backend).toMatch(/only_archived_sessions_can_be_bulk_cleaned/)
   expect(page).not.toMatch(/cache:|logs:|appData:/)
   expect(backend).not.toMatch(/category\("cache"\)|category\("logs"\)|category\("appData"\)/)
@@ -60,10 +62,8 @@ test("storage panel copy exists in both locales", async () => {
       "storage.total",
       "storage.categories.sessions",
       "storage.categories.archivedSessions",
-      "storage.categories.workspaces",
       "storage.descriptions.sessions",
       "storage.descriptions.archivedSessions",
-      "storage.descriptions.workspaces",
       "storage.cleanupArchivedConfirm",
       "storage.cleaned",
       "storage.cleanedPartial",
@@ -71,6 +71,8 @@ test("storage panel copy exists in both locales", async () => {
     ]) {
       expect(i18n.global.t(key), `${locale}: ${key}`).not.toBe(key)
     }
+    expect(messages.storage.categories).not.toHaveProperty("workspaces")
+    expect(messages.storage.descriptions).not.toHaveProperty("workspaces")
   }
 })
 

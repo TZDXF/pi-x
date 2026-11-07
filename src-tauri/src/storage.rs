@@ -1,6 +1,5 @@
 use serde::Serialize;
-use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use std::path::Path;
 
 use crate::errors::pix_error;
 
@@ -10,7 +9,7 @@ pub struct StorageCategory {
     pub id: String,
     pub bytes: u64,
     pub file_count: u64,
-    /// Sessions for the two session categories; files for workspaces.
+    /// Number of sessions in this category.
     pub item_count: u64,
 }
 
@@ -94,43 +93,9 @@ fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
     [active, archived]
 }
 
-/// Recursively measure regular files without following directory links.
-fn path_usage(target: &Path, category: &mut StorageCategory) {
-    let mut pending = vec![target.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if metadata.file_type().is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&path) {
-                pending.extend(entries.flatten().map(|entry| entry.path()));
-            }
-        } else if add_file(category, &path) {
-            category.item_count = category.item_count.saturating_add(1);
-        }
-    }
-}
-
-fn scan_workspaces(roots: &[PathBuf]) -> StorageCategory {
-    let mut workspaces = category("workspaces");
-    let mut scanned: Vec<&PathBuf> = Vec::new();
-    for root in roots {
-        if scanned
-            .iter()
-            .any(|previous| crate::paths::eq_norm_path(previous, root))
-        {
-            continue;
-        }
-        scanned.push(root);
-        path_usage(root, &mut workspaces);
-    }
-    workspaces
-}
-
-fn summary_at(sessions_root: &Path, workspace_roots: &[PathBuf]) -> StorageSummary {
+fn summary_at(sessions_root: &Path) -> StorageSummary {
     let [sessions, archived_sessions] = scan_sessions(sessions_root);
-    let workspaces = scan_workspaces(workspace_roots);
-    let categories = vec![sessions, archived_sessions, workspaces];
+    let categories = vec![sessions, archived_sessions];
     let total_bytes = categories
         .iter()
         .fold(0u64, |total, row| total.saturating_add(row.bytes));
@@ -211,24 +176,10 @@ fn cleanup_at(sessions_root: &Path, kind: &str) -> Result<StorageCleanupResult, 
 }
 
 #[tauri::command]
-pub async fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
-    let config = crate::commands::app_config_get(app)?;
-    let mut workspace_roots = crate::commands::workspace_state::storage_roots()?;
-    let projectless = crate::data_dir::resolve_projectless_dir(config.projectless_dir.as_deref());
-    if !workspace_roots
-        .iter()
-        .any(|root| crate::paths::eq_norm_path(root, &projectless))
-    {
-        workspace_roots.push(projectless);
-    }
-    tokio::task::spawn_blocking(move || {
-        summary_at(
-            &crate::trust::agent_dir().join("sessions"),
-            &workspace_roots,
-        )
-    })
-    .await
-    .map_err(|e| format!("storage scan failed: {e}"))
+pub async fn storage_summary() -> Result<StorageSummary, String> {
+    tokio::task::spawn_blocking(move || summary_at(&crate::trust::agent_dir().join("sessions")))
+        .await
+        .map_err(|e| format!("storage scan failed: {e}"))
 }
 
 #[tauri::command]
@@ -243,6 +194,7 @@ pub async fn storage_cleanup(kind: String) -> Result<StorageCleanupResult, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     struct TestDir(PathBuf);
     impl TestDir {
@@ -280,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_only_counts_sessions_and_unique_workspace_roots() {
+    fn summary_only_counts_sessions_and_their_metadata() {
         let temp = TestDir::new("summary");
         let data = temp.0.join("data");
         let sessions = temp.0.join("sessions");
@@ -296,23 +248,24 @@ mod tests {
         write(&data.join("logs/today.log"), b"not-counted");
         write(&data.join("config.json"), b"not-counted");
 
-        let summary = summary_at(
-            &sessions,
-            &[workspace.clone(), workspace, projectless],
+        let summary = summary_at(&sessions);
+        assert_eq!(
+            summary
+                .categories
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sessions", "archivedSessions"]
         );
-        assert_eq!(summary.categories.len(), 3);
         let active = row(&summary, "sessions");
         assert_eq!(active.item_count, 2);
         assert_eq!(active.bytes, 40 + "{\"archived\":false}".len() as u64);
         let archived = row(&summary, "archivedSessions");
         assert_eq!(archived.item_count, 1);
         assert_eq!(archived.bytes, 20 + "{\"archived\":true}".len() as u64);
-        let workspaces = row(&summary, "workspaces");
-        assert_eq!(workspaces.item_count, 3);
-        assert_eq!(workspaces.bytes, 14);
         assert_eq!(
             summary.total_bytes,
-            summary.categories.iter().map(|row| row.bytes).sum::<u64>()
+            60 + "{\"archived\":false}".len() as u64 + "{\"archived\":true}".len() as u64
         );
     }
 

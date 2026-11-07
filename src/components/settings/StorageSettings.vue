@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, type Component } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, Folder, HardDrive, MessageSquareText, RefreshCw, Trash2 } from "@lucide/vue"
+import { Archive, HardDrive, MessageSquareText, RefreshCw, Trash2 } from "@lucide/vue"
 import {
   cleanupStorage,
   getStorageSummary,
@@ -35,7 +35,6 @@ const pendingCleanup = ref<StorageCategory | null>(null)
 const categoryUi: Record<StorageCategoryId, { icon: Component; bar: string; iconColor: string }> = {
   sessions: { icon: MessageSquareText, bar: "bg-blue-500", iconColor: "text-blue-500" },
   archivedSessions: { icon: Archive, bar: "bg-violet-500", iconColor: "text-violet-500" },
-  workspaces: { icon: Folder, bar: "bg-emerald-500", iconColor: "text-emerald-500" },
 }
 
 const categories = computed(() => summary.value?.categories ?? [])
@@ -159,7 +158,6 @@ onMounted(load)
           v-for="category in categories"
           :key="category.id"
           class="flex min-w-0 flex-col rounded-xl border border-border/60 p-4"
-          :class="{ 'md:col-span-2': category.id === 'workspaces' }"
         >
           <div class="flex items-start gap-3">
             <component
@@ -171,11 +169,7 @@ onMounted(load)
             <div class="min-w-0 flex-1">
               <h3 class="text-sm font-medium">{{ t(`storage.categories.${category.id}`) }}</h3>
               <p class="mt-0.5 text-xs text-muted-foreground">
-                {{
-                  category.id === "sessions" || category.id === "archivedSessions"
-                    ? t("storage.sessionCount", { count: category.itemCount })
-                    : t("storage.fileCount", { count: category.itemCount })
-                }}
+                {{ t("storage.sessionCount", { count: category.itemCount }) }}
               </p>
             </div>
             <span class="shrink-0 text-sm font-semibold tabular-nums">{{ formatBytes(category.bytes) }}</span>

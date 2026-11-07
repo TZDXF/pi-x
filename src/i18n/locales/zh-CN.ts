@@ -530,7 +530,7 @@ export default {
   storage: {
     nav: "存储空间",
     title: "存储空间",
-    description: "查看会话与工作空间的磁盘占用，并管理已归档会话。",
+    description: "查看会话的磁盘占用，并管理已归档会话。",
     total: "总占用",
     refresh: "刷新",
     reload: "重新加载",
@@ -538,15 +538,12 @@ export default {
     categories: {
       sessions: "会话",
       archivedSessions: "已归档会话",
-      workspaces: "工作空间",
     },
     descriptions: {
       sessions: "未归档会话及其元数据。请在侧边栏逐个管理，不提供批量删除。",
       archivedSessions: "归档会话及其元数据。可进入归档页恢复，或在此永久清理全部归档。",
-      workspaces: "已添加项目（含多目录项目）及无项目工作目录中的文件。仅统计占用，不提供删除。",
     },
     sessionCount: "{count} 个会话",
-    fileCount: "{count} 个文件",
     manageArchives: "管理归档",
     clean: "清理",
     cleanupTitle: "清理{name}？",
@@ -554,7 +551,7 @@ export default {
     confirmClean: "确认清理",
     cleaned: "已释放 {size}",
     cleanedPartial: "已释放 {size}，但有 {count} 项清理失败。请刷新后重试。",
-    scopeNote: "仅统计会话与已添加的工作空间；不跟随符号链接，占用为扫描时的估算值。",
+    scopeNote: "仅统计会话及其元数据；不跟随符号链接，占用为扫描时的估算值。",
     scannedAt: "扫描时间：{time}",
   },
   usage: {

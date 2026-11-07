@@ -544,7 +544,7 @@ export default {
   storage: {
     nav: "Storage",
     title: "Storage",
-    description: "Review disk usage for sessions and workspaces, and manage archived sessions.",
+    description: "Review disk usage for sessions and manage archived sessions.",
     total: "Total usage",
     refresh: "Refresh",
     reload: "Reload",
@@ -552,18 +552,14 @@ export default {
     categories: {
       sessions: "Sessions",
       archivedSessions: "Archived sessions",
-      workspaces: "Workspaces",
     },
     descriptions: {
       sessions:
         "Unarchived sessions and their metadata. Manage them individually in the sidebar; bulk deletion is not available.",
       archivedSessions:
         "Archived sessions and their metadata. Restore them from Archives, or permanently remove all archives here.",
-      workspaces:
-        "Files in added projects (including multi-folder projects) and the projectless workspace. Usage is read-only; deletion is unavailable.",
     },
     sessionCount: "{count} session(s)",
-    fileCount: "{count} file(s)",
     manageArchives: "Manage archives",
     clean: "Clean up",
     cleanupTitle: "Clean up {name}?",
@@ -573,7 +569,7 @@ export default {
     cleaned: "Freed {size}",
     cleanedPartial: "Freed {size}, but {count} item(s) could not be removed. Refresh and try again.",
     scopeNote:
-      "Includes only sessions and added workspaces. Symbolic links are not followed; usage is an estimate at scan time.",
+      "Includes only sessions and their metadata. Symbolic links are not followed; usage is an estimate at scan time.",
     scannedAt: "Scanned at {time}",
   },
   usage: {
