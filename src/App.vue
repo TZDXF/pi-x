@@ -6,6 +6,8 @@ import { useMediaQuery, useWindowSize } from "@vueuse/core"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
 import { useAppNavigation } from "@/composables/useAppNavigation"
+import { useSessionNotificationNavigation } from "@/composables/useSessionNotificationNavigation"
+import { onSessionNotificationActivated } from "@/lib/notifications"
 import { useProjectActions } from "@/composables/useProjectActions"
 import { useSessionOpening, type TrustActivationBackup } from "@/composables/useSessionOpening"
 import { useAppShortcuts } from "@/composables/useAppShortcuts"
@@ -330,6 +332,14 @@ const navigation = useAppNavigation({
   newProjectSession,
 })
 const { requestNavigation, requestConversationNavigation } = navigation
+const openSessionNotification = useSessionNotificationNavigation({
+  workspaceLayout,
+  board,
+  workspace,
+  peekConversation,
+  navigation,
+})
+let unlistenNotifications: (() => void) | undefined
 
 // ---- 会话分屏：状态跟随激活会话，树在非成员会话展示期间挂起保留 ----
 const splitLeaf = computed<PaneLeaf | null>(() => leafByRuntime(activeRuntimeId.value))
@@ -623,6 +633,12 @@ watch(
 
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKeydown)
+  void onSessionNotificationActivated(openSessionNotification)
+    .then(unlisten => {
+      if (disposed) unlisten()
+      else unlistenNotifications = unlisten
+    })
+    .catch(error => console.warn("[pi] failed to listen for notification activation:", error))
   // 更新下载可能跨越页面切换，进度监听跟随应用生命周期。
   void appUpdate.startProgressListener()
   // 启动后自动检查应用更新，发现新版本时标题栏会出现更新入口
@@ -694,6 +710,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onGlobalKeydown)
+  unlistenNotifications?.()
   disposeShortcuts()
   disposed = true
   finishWorkspaceTrust(false)

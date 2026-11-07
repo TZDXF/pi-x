@@ -184,6 +184,8 @@ async function harness(group = null) {
     "@/lib/workspaceRuntime": { createWorkspaceRuntime },
     "@/lib/workspaceStartup": { createWorkspaceStartup },
     "@/composables/useAppNavigation": { useAppNavigation },
+    "@/composables/useSessionNotificationNavigation": { useSessionNotificationNavigation: () => () => {} },
+    "@/lib/notifications": { onSessionNotificationActivated: async () => () => {} },
     "@/composables/useProjectActions": { useProjectActions },
     "@/composables/useSessionOpening": { useSessionOpening },
     "@/composables/useAppShortcuts": { useAppShortcuts },

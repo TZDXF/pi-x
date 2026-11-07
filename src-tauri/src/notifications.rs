@@ -8,13 +8,48 @@
 
 use tauri::AppHandle;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionNotificationTarget {
+    runtime_id: String,
+    session_file: Option<String>,
+    cwd: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionNotificationTarget;
+    use serde_json::json;
+
+    #[test]
+    fn session_notification_target_preserves_frontend_identity() {
+        let payload = json!({
+            "runtimeId": "background",
+            "sessionFile": "session.jsonl",
+            "cwd": "ssh://host/project",
+        });
+        let target: SessionNotificationTarget = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(serde_json::to_value(target).unwrap(), payload);
+        let pending: SessionNotificationTarget =
+            serde_json::from_value(json!({"runtimeId": "pending"})).unwrap();
+        assert!(pending.session_file.is_none());
+        assert!(pending.cwd.is_none());
+    }
+}
+
 #[tauri::command]
-pub fn send_notification(app: AppHandle, title: String, body: String) {
+pub fn send_notification(
+    app: AppHandle,
+    title: String,
+    body: String,
+    target: SessionNotificationTarget,
+) {
     #[cfg(windows)]
-    windows::show(&app, &title, &body);
+    windows::show(&app, &title, &body, target);
     #[cfg(not(windows))]
     {
         use tauri_plugin_notification::NotificationExt;
+        let _ = target;
         let _ = app.notification().builder().title(title).body(body).show();
     }
 }
@@ -24,7 +59,7 @@ mod windows {
     use std::path::{Path, PathBuf};
     use std::sync::Once;
 
-    use tauri::{AppHandle, Manager};
+    use tauri::{AppHandle, Emitter, Manager};
     use tauri_winrt_notification::Toast;
 
     /// 未打包的应用需要按用户注册 AUMID,否则 Windows 会把 toast 归属到宿主
@@ -46,7 +81,10 @@ mod windows {
             let _ = key.set_value("DisplayName", &display_name);
             // IconUri 只认磁盘上的图标文件(PNG/ICO),不会从 exe 内嵌资源提取;
             // 提取失败时仅缺图标,显示名仍生效
-            if let Some(png) = std::env::current_exe().ok().and_then(|exe| ensure_icon_png(&exe)) {
+            if let Some(png) = std::env::current_exe()
+                .ok()
+                .and_then(|exe| ensure_icon_png(&exe))
+            {
                 let _ = key.set_value("IconUri", &png.display().to_string());
             }
         });
@@ -67,7 +105,12 @@ mod windows {
         Some(dest)
     }
 
-    pub(super) fn show(app: &AppHandle, title: &str, body: &str) {
+    pub(super) fn show(
+        app: &AppHandle,
+        title: &str,
+        body: &str,
+        target: super::SessionNotificationTarget,
+    ) {
         ensure_aumid(app);
         let handle = app.clone();
         if let Err(e) = Toast::new(&app.config().identifier)
@@ -76,10 +119,9 @@ mod windows {
             // 提示音由前端统一播放,禁用 Windows 默认声音以免叠加。
             .sound(None)
             .on_activated(move |_| {
+                crate::desktop::restore(&handle);
                 if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = window.emit("notification-activated", &target);
                 }
                 Ok(())
             })

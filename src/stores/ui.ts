@@ -3,7 +3,7 @@ import { computed, ref } from "vue"
 import { rpcNotify } from "@/api/piClient"
 import { tBackendError } from "@/i18n"
 import type { ExtensionUiRequest } from "@/api/protocol"
-import { notifyQuestion } from "@/lib/notifications"
+import { notifyQuestion, type SessionNotificationTarget } from "@/lib/notifications"
 
 export interface Toast {
   id: number
@@ -13,7 +13,10 @@ export interface Toast {
 
 let toastSeq = 0
 
-export const createUiStore = (runtimeId = "default") =>
+export const createUiStore = (
+  runtimeId = "default",
+  notificationTarget: () => SessionNotificationTarget = () => ({ runtimeId }),
+) =>
   defineStore(`ui:${runtimeId}`, () => {
     /** Dialog requests (select/confirm/input/editor) awaiting user input. */
     const dialogs = ref<ExtensionUiRequest[]>([])
@@ -45,7 +48,7 @@ export const createUiStore = (runtimeId = "default") =>
         case "editor":
           if (dialogs.value.some(dialog => dialog.id === req.id)) break
           dialogs.value.push(req)
-          notifyQuestion(req.title || req.message || "")
+          notifyQuestion(req.title || req.message || "", notificationTarget())
           break
 
         case "notify":

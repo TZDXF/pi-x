@@ -27,7 +27,10 @@ export function sessionFor(id: string): Session {
 export function uiFor(id: string): Ui {
   let store = interfaces.get(id)
   if (!store) {
-    store = createUiStore(id)()
+    store = createUiStore(id, () => {
+      const owner = sessionFor(id)
+      return { runtimeId: id, sessionFile: owner.sessionFile, cwd: owner.cwd }
+    })()
     interfaces.set(id, store)
   }
   return store

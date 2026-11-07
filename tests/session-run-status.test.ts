@@ -87,6 +87,7 @@ test("concurrent sessions show independent running, completed and error statuses
   expect(statuses.get("first.jsonl")).toBe("running")
   first.handleEvent({ type: "agent_settled" })
   expect(statuses.get("first.jsonl")).toBe("completed")
+  expect(controls.notifications[0][2]).toEqual({ runtimeId: "first", sessionFile: "first.jsonl", cwd: "" })
   expect(statuses.get("second.jsonl")).toBe("running")
   second.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
   second.handleEvent({ type: "agent_end" })

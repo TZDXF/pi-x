@@ -6,4 +6,6 @@ test("Windows toast disables system sound while keeping click activation", () =>
   const toast = source.slice(source.indexOf("if let Err(e) = Toast::new"))
   expect(toast).toMatch(/\.sound\(None\)[\s\S]*\.show\(\)/)
   expect(toast).toContain(".on_activated(")
+  expect(toast).toContain("crate::desktop::restore(&handle)")
+  expect(toast).toContain('window.emit("notification-activated", &target)')
 })

@@ -8,12 +8,29 @@
  * synchronize between desktop and remote web clients.
  */
 import { i18n } from "@/i18n"
-import { invoke, isDesktop } from "@/api/transport"
+import { invoke, isDesktop, listen } from "@/api/transport"
 import { pixLog } from "@/api/piClient"
 import { createConfigPreference } from "@/lib/configPreference"
 
 export type TurnCompleteNotification = "never" | "unfocused" | "always"
 export type NotificationSound = "default" | "none"
+
+export interface SessionNotificationTarget {
+  runtimeId: string
+  sessionFile?: string | null
+  cwd?: string
+}
+
+const activationHandlers = new Set<(target: SessionNotificationTarget) => void>()
+
+/** Desktop events stay local to this webview; web notifications use their own click handler. */
+export async function onSessionNotificationActivated(handler: (target: SessionNotificationTarget) => void) {
+  if (isDesktop) return listen<SessionNotificationTarget>("notification-activated", event => handler(event.payload))
+  activationHandlers.add(handler)
+  return () => {
+    activationHandlers.delete(handler)
+  }
+}
 
 const TURN_LEGACY_KEY = "pix.notify.turnComplete"
 const QUESTION_LEGACY_KEY = "pix.notify.question"
@@ -113,7 +130,7 @@ export function playNotificationSound() {
   }
 }
 
-async function deliver(title: string, body: string) {
+async function deliver(title: string, body: string, target: SessionNotificationTarget) {
   if (!(await ensurePermission())) return
   if (notificationSound.value === "default") playNotificationSound()
   try {
@@ -123,9 +140,14 @@ async function deliver(title: string, body: string) {
       // activation, so the toast showed as PowerShell and clicking it did
       // nothing. The command registers the app identity and focuses the main
       // window on click.
-      await invoke("send_notification", { title, body })
+      await invoke("send_notification", { title, body, target })
     } else {
-      new Notification(title, { body })
+      const notification = new Notification(title, { body })
+      notification.onclick = () => {
+        window.focus()
+        notification.close()
+        activationHandlers.forEach(handler => handler(target))
+      }
     }
   } catch {
     /* Notification delivery is best-effort. */
@@ -135,17 +157,17 @@ async function deliver(title: string, body: string) {
 const t = (key: string) => i18n.global.t(key)
 
 /** Pi finished a turn (or failed); `detail` is "project · session title". */
-export function notifyTurnComplete(detail: string, failed = false) {
+export function notifyTurnComplete(detail: string, failed: boolean, target: SessionNotificationTarget) {
   const mode = turnCompleteNotification.value
   pixLog(`notify turnComplete failed=${failed} mode=${mode} detail=${detail}`)
   if (mode === "never") return
   if (mode === "unfocused" && !windowUnfocused()) return
-  void deliver(t(failed ? "notify.turnFailedTitle" : "notify.turnCompleteTitle"), detail)
+  void deliver(t(failed ? "notify.turnFailedTitle" : "notify.turnCompleteTitle"), detail, { ...target })
 }
 
 /** An extension dialog (select/confirm/input/editor) awaits user input. */
-export function notifyQuestion(detail: string) {
+export function notifyQuestion(detail: string, target: SessionNotificationTarget) {
   if (!questionNotification.value) return
   if (!windowUnfocused()) return
-  void deliver(t("notify.questionTitle"), detail)
+  void deliver(t("notify.questionTitle"), detail, { ...target })
 }

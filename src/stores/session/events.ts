@@ -324,7 +324,11 @@ export function createEventHandler(ctx: EventContext) {
           const row = file ? workspace.histories[cwd.value]?.find(s => s.file === file) : undefined
           const project = cwd.value ? workspace.projectName(cwd.value) : ""
           const name = row?.title || row?.preview || ""
-          notifyTurnComplete(name ? `${project} · ${name}` : project, flow.turnFailed)
+          notifyTurnComplete(name ? `${project} · ${name}` : project, flow.turnFailed, {
+            runtimeId,
+            sessionFile: file,
+            cwd: cwd.value,
+          })
         }
         void refreshStats()
         void refreshState()
