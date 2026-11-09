@@ -76,21 +76,23 @@ test("viewer emits background clicks for padding and empty space, but not images
 
 test("preview closes on its backdrop, viewer background and Escape while ignoring content clicks", () => {
   const close = vi.fn()
+  const onAfterLeave = vi.fn()
   const preview = renderComponent("components/chat/ImagePreviewContent.vue", {
     "reka-ui": {
-      DialogPortal: {},
       DialogContent: {},
       DialogTitle: {},
       DialogClose: {},
       injectDialogRootContext: () => ({ onOpenChange: close }),
     },
+    "@/components/ui/dialog": { DialogPortal: {} },
     "@/components/ImageViewer.vue": { default: {} },
   })
   try {
     const content = preview
       .render()
-      .children.default()
+      .children.default({ onAfterLeave })
       .find(node => node.props?.onClick)
+    expect(content.props.onAfterLeave).toBe(onAfterLeave)
     click(content)
     expect(close).toHaveBeenCalledExactlyOnceWith(false)
     close.mockClear()
