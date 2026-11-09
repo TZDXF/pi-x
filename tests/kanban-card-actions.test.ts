@@ -7,6 +7,7 @@ import { isRemoteProject } from "@/lib/ssh"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { dataUrlToImage } from "@/lib/attachments"
 import { modelKey } from "@/lib/modelKey"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
 import type { KanbanCard, KanbanCreatePayload, KanbanDraftEditor } from "@/lib/kanban"
 
 const workspace = vue.reactive({
@@ -49,6 +50,7 @@ const imports = {
   "@/lib/paths": { normalizeProjectPath, samePath },
   "@/lib/attachments": { dataUrlToImage },
   "@/lib/modelKey": { modelKey },
+  "@/lib/sessionArchiveToast": { notifySessionArchived },
 }
 const module = { exports: {} as any }
 new Function("exports", "require", code)(module.exports, id => {

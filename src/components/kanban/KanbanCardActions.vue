@@ -9,6 +9,7 @@ import { isRemoteProject } from "@/lib/ssh"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
 import { dataUrlToImage } from "@/lib/attachments"
 import { modelKey } from "@/lib/modelKey"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
 import type { KanbanCard, KanbanCreatePayload, KanbanDraftEditor } from "@/lib/kanban"
 import type { BoardDraft } from "@/lib/workspaceState"
 
@@ -142,6 +143,11 @@ async function archive() {
   archiving.value = true
   try {
     await workspace.update(row, row.title || null, true)
+    notifySessionArchived(ui, t, async () => {
+      const current = workspace.histories[cwd]?.find(item => item.file === row.file) ?? row
+      await workspace.update(current, current.title || null, false)
+      await workspace.refresh(cwd)
+    })
     await workspace.refresh(cwd)
   } catch (cause) {
     ui.pushToast(String(cause), "error")

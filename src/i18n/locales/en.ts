@@ -613,6 +613,8 @@ export default {
     desktopOnly: "Available in the desktop app only",
 
     archived: "Archived",
+    sessionArchived: "Chat archived",
+    undoArchive: "Undo archive",
     rename: "Rename",
     renameDescription: "Enter a new title for this session.",
     restore: "Restore chat",

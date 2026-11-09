@@ -595,6 +595,8 @@ export default {
     desktopOnly: "仅桌面端可用",
 
     archived: "已归档",
+    sessionArchived: "会话已归档",
+    undoArchive: "撤销归档",
     rename: "重命名",
     renameDescription: "输入新的会话标题。",
     restore: "恢复会话",

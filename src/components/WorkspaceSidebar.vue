@@ -33,6 +33,7 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import SidebarProjectGroup from "@/components/workspace/sidebar/SidebarProjectGroup.vue"
 import SidebarSessionList from "@/components/workspace/sidebar/SidebarSessionList.vue"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
 import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { projectHasRunningSession } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
@@ -113,6 +114,7 @@ const { renaming, title, saving, archiving, rename, openSession, renameOnDoubleC
     resume: s => emit("resumeSession", s.file, s.cwd),
     update: (s, nextTitle, archived) => workspace.update(s, nextTitle, archived),
     onError: error => ui.pushToast(String(error), "error"),
+    onArchived: restore => notifySessionArchived(ui, t, restore),
   })
 const sessionActions = {
   open: openSession,

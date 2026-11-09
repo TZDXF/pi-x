@@ -9,6 +9,8 @@ export interface Toast {
   id: number
   message: string
   kind: "info" | "warning" | "error"
+  action?: { label: string; onClick: () => Promise<unknown> }
+  pending?: boolean
 }
 
 let toastSeq = 0
@@ -26,6 +28,7 @@ export const createUiStore = (
     /** Status bar entries keyed by extension-provided key. */
     const statusEntries = ref<Record<string, string>>({})
     const toasts = ref<Toast[]>([])
+    const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
     /** Text pushed into the composer by extensions (set_editor_text). */
     const pendingEditorText = ref<string | null>(null)
     /** 首条消息发送时 worker 尚未启动（冷启动需数秒）；先在对话区回显这条
@@ -109,13 +112,40 @@ export const createUiStore = (
       }
     }
 
-    function pushToast(message: string, kind: Toast["kind"] = "info") {
+    function dismissToast(id: number) {
+      clearTimeout(toastTimers.get(id))
+      toastTimers.delete(id)
+      toasts.value = toasts.value.filter(t => t.id !== id)
+    }
+
+    function expireToast(toast: Toast) {
+      toastTimers.set(
+        toast.id,
+        setTimeout(() => dismissToast(toast.id), toast.action ? 10000 : 5000),
+      )
+    }
+
+    function pushToast(message: string, kind: Toast["kind"] = "info", action?: Toast["action"]) {
       const id = ++toastSeq
       // 后端编码错误在此统一按当前语言翻译；普通文本原样透传。
-      toasts.value.push({ id, message: tBackendError(message), kind })
-      setTimeout(() => {
-        toasts.value = toasts.value.filter(t => t.id !== id)
-      }, 5000)
+      const toast = { id, message: tBackendError(message), kind, action }
+      toasts.value.push(toast)
+      expireToast(toast)
+    }
+
+    async function runToastAction(id: number) {
+      const toast = toasts.value.find(t => t.id === id)
+      if (!toast?.action || toast.pending) return
+      toast.pending = true
+      clearTimeout(toastTimers.get(id))
+      try {
+        await toast.action.onClick()
+        dismissToast(id)
+      } catch (error) {
+        pushToast(String(error), "error")
+        toast.pending = false
+        expireToast(toast)
+      }
     }
 
     function clear() {
@@ -141,6 +171,7 @@ export const createUiStore = (
       restoreRequests,
       respond,
       pushToast,
+      runToastAction,
       clear,
     }
   })

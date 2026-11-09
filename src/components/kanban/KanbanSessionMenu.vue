@@ -12,6 +12,7 @@ import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSide
 import { useWorkspaceStore } from "@/stores/workspace"
 import { useUiStore } from "@/stores/conversations"
 import { copyWithToast } from "@/lib/clipboard"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
 import { isRemoteProject } from "@/lib/ssh"
 import type { KanbanCard } from "@/lib/kanban"
 
@@ -45,6 +46,7 @@ const { renaming, title, saving, rename, saveTitle, archive } = useSidebarSessio
     await workspace.refresh(row.cwd)
   },
   onError: error => ui.pushToast(String(error), "error"),
+  onArchived: restore => notifySessionArchived(ui, t, restore),
 })
 
 async function duplicate() {

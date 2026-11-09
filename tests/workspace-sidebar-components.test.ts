@@ -11,6 +11,8 @@ import { sidebarQueueTitle } from "@/components/workspace/sidebar/useSidebarSess
 import { sidebarSessionProject } from "@/components/workspace/sidebar/useSidebarSessionReveal"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
 import { isRemoteProject } from "@/lib/ssh"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
+import { normalizeProjectPath, samePath } from "@/lib/paths"
 
 // Compile the actual SFCs against a minimal Vue host; only external widgets/stores are stubbed.
 // This avoids browser/E2E dependencies while testing render branches and emitted events.
@@ -92,6 +94,7 @@ function loadComponent(filename: string) {
         useSessionStore: () => session,
         activeRuntimeId,
         findConversation: () => ({ promptQueue: queue, runtimeId: "saved-runtime" }),
+        peekConversation: () => undefined,
         useUiStore: () => ({ pushToast }),
       }
     if (id === "@/stores/sessionRunStatus") return { sessionRunStatus: () => runStatus.value }
@@ -100,6 +103,10 @@ function loadComponent(filename: string) {
     if (id === "@/api/piClient") return { openPath: vi.fn(async () => {}), duplicateSessionFile }
     if (id === "@/lib/clipboard") return { copyWithToast }
     if (id === "@/lib/ssh") return { isRemoteProject }
+    if (id === "@/lib/sessionArchiveToast") return { notifySessionArchived }
+    if (id === "@/lib/paths") return { normalizeProjectPath, samePath }
+    if (id === "@/lib/attachments") return { dataUrlToImage: vi.fn() }
+    if (id === "@/lib/modelKey") return { modelKey: vi.fn() }
     if (id === "@/components/workspace/sidebar/useSidebarSessionActions") return { useSidebarSessionActions }
     if (id === "@/components/ui/dialog")
       return {
@@ -565,7 +572,35 @@ test("board archive preserves the title and updates the actual worktree without 
   menuButton(root, "workspace.archive").props.onClick()
   await vi.waitFor(() => expect(workspace.refresh).toHaveBeenCalledWith(boardCard.cwd))
   expect(workspace.update).toHaveBeenCalledWith(row, row.title, true)
+  expect(pushToast).toHaveBeenCalledWith("workspace.sessionArchived", "info", {
+    label: "workspace.undoArchive",
+    onClick: expect.any(Function),
+  })
+  await pushToast.mock.calls[0]![2].onClick()
+  expect(workspace.update).toHaveBeenLastCalledWith(row, row.title, false)
   expect(open).not.toHaveBeenCalled()
+  workspace.histories = {}
+})
+
+test("board quick archive offers undo after its card unmounts and restores the latest metadata", async () => {
+  const row = { ...saved, cwd: boardCard.cwd }
+  workspace.histories[boardCard.cwd] = [row]
+  const root = mount("@/components/kanban/KanbanCardActions.vue", { card: boardCard, projects: [] })
+  byClass(root, "kanban-archive")[0].props.onClick({ stopPropagation() {} })
+  await vi.waitFor(() =>
+    expect(pushToast).toHaveBeenCalledWith("workspace.sessionArchived", "info", {
+      label: "workspace.undoArchive",
+      onClick: expect.any(Function),
+    }),
+  )
+  expect(workspace.update).toHaveBeenCalledWith(row, row.title, true)
+  const restore = pushToast.mock.calls[0]![2].onClick
+  for (const unmount of cleanup.splice(0)) unmount()
+  const current = { ...row, title: "New title", archived: true }
+  workspace.histories[boardCard.cwd] = [current]
+  await restore()
+  expect(workspace.update).toHaveBeenLastCalledWith(current, "New title", false)
+  expect(workspace.refresh).toHaveBeenLastCalledWith(boardCard.cwd)
   workspace.histories = {}
 })
 

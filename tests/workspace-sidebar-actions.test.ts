@@ -118,6 +118,33 @@ test("busy archive does nothing; successful archive/restore preserves the existi
   expect(actions.archiving.value).toEqual({})
 })
 
+test("successful archive offers undo even when update mutates the row; undo preserves the latest title", async () => {
+  const onArchived = vi.fn()
+  const update = vi.fn(async (row: SessionMeta, title: string | null, archived: boolean) => {
+    Object.assign(row, { title, archived })
+  })
+  const { actions } = mountActions({ update, onArchived })
+  const row = saved()
+  await actions.archive(row)
+  expect(row.archived).toBe(true)
+  expect(onArchived).toHaveBeenCalledOnce()
+  row.title = "Updated title"
+  await onArchived.mock.calls[0]![0]()
+  expect(update).toHaveBeenLastCalledWith(row, "Updated title", false)
+  expect(row.archived).toBe(false)
+  expect(actions.archiving.value).toEqual({})
+})
+
+test("failed archives and restoring archived sessions do not offer archive undo", async () => {
+  const onArchived = vi.fn()
+  const failed = mountActions({ update: vi.fn().mockRejectedValue(new Error("archive failed")), onArchived })
+  await failed.actions.archive(saved())
+  expect(onArchived).not.toHaveBeenCalled()
+  const restored = mountActions({ onArchived })
+  await restored.actions.archive(saved("old", { archived: true }))
+  expect(onArchived).not.toHaveBeenCalled()
+})
+
 test("rename trims the title, preserves archive state, blocks concurrent saves and stays open after failure", async () => {
   let finish!: () => void
   const update = vi.fn(

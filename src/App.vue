@@ -1016,14 +1016,27 @@ onUnmounted(() => {
       <div
         v-for="t in ui.toasts"
         :key="t.id"
-        class="pointer-events-auto max-w-sm rounded-md border px-4 py-3 text-sm shadow-lg"
+        class="pointer-events-auto flex max-w-sm items-center gap-3 rounded-md border px-4 py-3 text-sm shadow-lg"
+        role="status"
         :class="{
           'bg-background text-foreground': t.kind === 'info',
           'border-amber-500/50 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100': t.kind === 'warning',
           'border-red-500/50 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100': t.kind === 'error',
         }"
       >
-        {{ t.message }}
+        <span class="min-w-0 break-words">{{ t.message }}</span>
+        <Button
+          v-if="t.action"
+          type="button"
+          variant="outline"
+          size="sm"
+          class="shrink-0"
+          :disabled="t.pending"
+          :aria-busy="t.pending || undefined"
+          @click="ui.runToastAction(t.id)"
+        >
+          {{ t.action.label }}
+        </Button>
       </div>
     </div>
   </div>

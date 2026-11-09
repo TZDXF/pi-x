@@ -8,6 +8,7 @@ interface SidebarSessionActions {
   resume: (session: SessionMeta) => void
   update: (session: SessionMeta, title: string | null, archived: boolean) => Promise<unknown>
   onError: (error: unknown) => void
+  onArchived?: (restore: () => Promise<unknown>) => void
 }
 
 /** Immediate navigation and optimistic archive state shared by both lists. */
@@ -45,8 +46,10 @@ export function useSidebarSessionActions(options: SidebarSessionActions) {
     if (options.disabled() || archiving.value[session.file]) return
     // Hide immediately; clearing the marker on failure restores the row without reordering it.
     archiving.value[session.file] = true
+    const archived = !session.archived
     try {
-      await options.update(session, session.title || null, !session.archived)
+      await options.update(session, session.title || null, archived)
+      if (archived) options.onArchived?.(() => options.update(session, session.title || null, false))
     } catch (error) {
       options.onError(error)
     } finally {
