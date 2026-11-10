@@ -4,12 +4,12 @@
  * not render, so present the original YAML as a code block before the body.
  */
 export function withVisibleFrontmatter(source: string): string {
-  const opening = /^---(\r?\n)/.exec(source)
+  const opening = /^---[ \t]*(\r?\n)/.exec(source)
   if (!opening) return source
 
   const eol = opening[1]
   const rest = source.slice(opening[0].length)
-  const closing = /^---[ \t]*(?:\r?\n|$)/m.exec(rest)
+  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(rest)
   if (!closing) return source
 
   const yaml = rest.slice(0, closing.index).replace(/\r?\n$/, "")

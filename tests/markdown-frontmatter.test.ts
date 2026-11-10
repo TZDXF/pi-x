@@ -20,6 +20,34 @@ test("rendered previews show leading YAML frontmatter before the Markdown body",
   ])
 })
 
+test.each([" ", "\t"])("accepts trailing whitespace on the opening delimiter: %j", async whitespace => {
+  const source = `---${whitespace}\nname: demo\ndescription: Show YAML\n---\n\n# Body`
+  const rendered = withVisibleFrontmatter(source)
+
+  expect(rendered).toBe("```yaml\nname: demo\ndescription: Show YAML\n```\n\n# Body")
+  const { document } = await createMarkmendParser().parse(rendered, "static")
+  expect(document.nodes[0]).toEqual([
+    "pre",
+    { language: "yaml" },
+    ["code", { class: "language-yaml" }, "name: demo\ndescription: Show YAML"],
+  ])
+  expect(document.nodes[1]).toEqual(["h1", { id: "body" }, "Body"])
+})
+
+test("recognizes an explicit YAML end marker without consuming later horizontal rules", async () => {
+  const source = "---\nname: demo\ndescription: demo\n...\n\n# Body\n\n---\n\nAfter"
+  const rendered = withVisibleFrontmatter(source)
+
+  expect(rendered).toBe("```yaml\nname: demo\ndescription: demo\n```\n\n# Body\n\n---\n\nAfter")
+  const { document } = await createMarkmendParser().parse(rendered, "static")
+  expect(document.nodes).toEqual([
+    ["pre", { language: "yaml" }, ["code", { class: "language-yaml" }, "name: demo\ndescription: demo"]],
+    ["h1", { id: "body" }, "Body"],
+    ["hr", {}],
+    ["p", {}, "After"],
+  ])
+})
+
 test("frontmatter conversion preserves CRLF and YAML containing code fences", async () => {
   const source = "---\r\nname: demo\r\nexample: |\r\n  ```\r\n  ```\r\n--- \r\nBody"
   const rendered = withVisibleFrontmatter(source)
