@@ -68,6 +68,21 @@ test("archived session list, restore and delete work through remote dispatch", (
   expect(remote).toMatch(/"session_delete" =>/)
 })
 
+test("archive all is confirmed and reuses the single-row metadata action across every loaded project", () => {
+  const sidebar = read("../src/components/WorkspaceSidebar.vue")
+  const actions = read("../src/components/workspace/sidebar/useSidebarSessionActions.ts")
+
+  expect(sidebar).toMatch(/class="archive-all shrink-0"/)
+  expect(sidebar).toMatch(/:aria-label="t\('workspace\.archiveAll'\)"/)
+  expect(sidebar).toMatch(/:open="!!pendingArchiveAll"/)
+  expect(sidebar).toMatch(/workspace\.archiveAllConfirm/)
+  expect(sidebar).toMatch(/Object\.values\(workspace\.histories\)/)
+  expect(sidebar).toMatch(/await archiveAll\(rows\)/)
+  // 批量只写入归档元数据，不复用恢复时的切换语义。
+  expect(actions).toMatch(/async function archiveAll\(sessions: SessionMeta\[\]\)/)
+  expect(actions).toMatch(/await options\.update\(session, session\.title \|\| null, true\)/)
+})
+
 test("archiving hides the row immediately without disabling the rest of the sidebar", () => {
   const actions = read("../src/components/workspace/sidebar/useSidebarSessionActions.ts")
   const ordering = read("../src/components/workspace/sidebar/useSidebarSessionOrdering.ts")

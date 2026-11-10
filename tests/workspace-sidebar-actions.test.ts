@@ -145,6 +145,51 @@ test("failed archives and restoring archived sessions do not offer archive undo"
   expect(onArchived).not.toHaveBeenCalled()
 })
 
+test("archive all hides every target, preserves titles, continues after failures and restores only failed rows", async () => {
+  const sessions = [saved("first"), saved("second", { title: null }), saved("archived", { archived: true })]
+  const update = vi.fn(async (session: SessionMeta, _title: string | null, archived: boolean) => {
+    if (session.file === "second") throw new Error("archive failed")
+    session.archived = archived
+  })
+  const { actions, options } = mountActions({ update })
+
+  const pending = actions.archiveAll(sessions)
+  expect(actions.archivingAll.value).toBe(true)
+  expect(actions.archiving.value).toEqual({ first: true, second: true })
+  expect(sidebarSessionRows(sessions, actions.archiving.value, "", s => s.title || "Untitled")).toEqual([])
+
+  await expect(pending).resolves.toEqual({ total: 2, failed: 1 })
+  expect(update.mock.calls).toEqual([
+    [sessions[0], "first", true],
+    [sessions[1], null, true],
+  ])
+  expect(options.onError).not.toHaveBeenCalled()
+  expect(actions.archiving.value).toEqual({})
+  expect(actions.archivingAll.value).toBe(false)
+  expect(sidebarSessionRows(sessions, actions.archiving.value, "", s => s.title || "Untitled")).toEqual([sessions[1]])
+})
+
+test("archive all respects the shared busy boundary and blocks re-entry", async () => {
+  const blocked = mountActions({ disabled: () => true })
+  await expect(blocked.actions.archiveAll([saved()])).resolves.toEqual({ total: 0, failed: 0 })
+  expect(blocked.options.update).not.toHaveBeenCalled()
+
+  let finish!: () => void
+  const update = vi.fn(
+    () =>
+      new Promise<void>(resolve => {
+        finish = resolve
+      }),
+  )
+  const { actions } = mountActions({ update })
+  const pending = actions.archiveAll([saved("first")])
+  await expect(actions.archiveAll([saved("second")])).resolves.toEqual({ total: 0, failed: 0 })
+  expect(update).toHaveBeenCalledExactlyOnceWith(saved("first"), "first", true)
+  finish()
+  await pending
+  expect(actions.archivingAll.value).toBe(false)
+})
+
 test("rename trims the title, preserves archive state, blocks concurrent saves and stays open after failure", async () => {
   let finish!: () => void
   const update = vi.fn(

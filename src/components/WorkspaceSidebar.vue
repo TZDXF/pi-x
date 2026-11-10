@@ -13,7 +13,7 @@ import {
 } from "reka-ui"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
-import { Clock, FolderPlus, LoaderCircle, Plus, Search, X } from "@lucide/vue"
+import { Archive, Clock, FolderPlus, LoaderCircle, Plus, Search, X } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
 import { tBackendError } from "@/i18n"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
@@ -37,7 +37,15 @@ import { notifySessionArchived } from "@/lib/sessionArchiveToast"
 import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 import { projectHasRunningSession } from "@/components/workspace/sidebar/useSidebarSessionStatus"
 import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
-import { Dialog, DialogContent, DialogHeader, DialogPortal, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
@@ -85,6 +93,7 @@ onUnmounted(() => {
   unregisterSearchShortcut()
   setShortcutsSuppressed("task-search", false)
 })
+const pendingArchiveAll = ref<SessionMeta[] | null>(null)
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
@@ -106,16 +115,27 @@ useSidebarSessionReveal(
 const navigationDisabled = computed<boolean>(() => !!props.navigationBusy || saving.value)
 const disabled = computed<boolean>(() => props.busy || workspace.gitBusy || saving.value)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
-const { renaming, title, saving, archiving, rename, openSession, renameOnDoubleClick, saveTitle, archive } =
-  useSidebarSessionActions({
-    label,
-    disabled: () => disabled.value,
-    navigationDisabled: () => navigationDisabled.value,
-    resume: s => emit("resumeSession", s.file, s.cwd),
-    update: (s, nextTitle, archived) => workspace.update(s, nextTitle, archived),
-    onError: error => ui.pushToast(String(error), "error"),
-    onArchived: restore => notifySessionArchived(ui, t, restore),
-  })
+const {
+  renaming,
+  title,
+  saving,
+  archiving,
+  archivingAll,
+  rename,
+  openSession,
+  renameOnDoubleClick,
+  saveTitle,
+  archive,
+  archiveAll,
+} = useSidebarSessionActions({
+  label,
+  disabled: () => disabled.value,
+  navigationDisabled: () => navigationDisabled.value,
+  resume: s => emit("resumeSession", s.file, s.cwd),
+  update: (s, nextTitle, archived) => workspace.update(s, nextTitle, archived),
+  onError: error => ui.pushToast(String(error), "error"),
+  onArchived: restore => notifySessionArchived(ui, t, restore),
+})
 const sessionActions = {
   open: openSession,
   renameOnDoubleClick,
@@ -125,6 +145,29 @@ const sessionActions = {
   copyLink: copySessionLink,
   export: (file: string) => emit("sessionAction", file, "export"),
   selectConversation: (runtimeId: string) => emit("selectConversation", runtimeId),
+}
+/** All loaded, unarchived files across project groups and projectless sessions. */
+const archivableSessions = computed(() => {
+  const unique = new Map<string, SessionMeta>()
+  for (const rows of Object.values(workspace.histories)) {
+    for (const row of rows) {
+      if (!row.archived && !archiving.value[row.file] && !unique.has(row.file)) unique.set(row.file, row)
+    }
+  }
+  return [...unique.values()]
+})
+function askArchiveAll() {
+  if (disabled.value || archivingAll.value || !archivableSessions.value.length) return
+  pendingArchiveAll.value = archivableSessions.value
+}
+async function confirmArchiveAll() {
+  const rows = pendingArchiveAll.value
+  if (!rows || archivingAll.value) return
+  pendingArchiveAll.value = null
+  const { total, failed } = await archiveAll(rows)
+  if (!total) return
+  if (failed) ui.pushToast(t("workspace.archiveAllFailed", { count: failed }), "error")
+  else ui.pushToast(t("workspace.archivedAll", { count: total }), "info")
 }
 function rows(path: string) {
   return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label)
@@ -318,15 +361,28 @@ watch(
     >
     <div class="flex items-center justify-between gap-2 px-2.5 pt-4 pb-2 shrink-0">
       <h2 class="text-sm font-semibold">{{ t("sidebar.taskList") }}</h2>
-      <Button
-        variant="quiet"
-        size="toolbar"
-        :title="`${t('sidebar.search')} (${searchShortcutLabel})`"
-        :aria-label="t('sidebar.search')"
-        @click="searchOpen = true"
-      >
-        <Search :size="16" />
-      </Button>
+      <div class="flex items-center gap-1">
+        <Button
+          variant="quiet"
+          size="toolbar"
+          class="archive-all"
+          :disabled="disabled || archivingAll || !archivableSessions.length"
+          :title="t('workspace.archiveAll')"
+          :aria-label="t('workspace.archiveAll')"
+          @click="askArchiveAll"
+        >
+          <Archive :size="16" />
+        </Button>
+        <Button
+          variant="quiet"
+          size="toolbar"
+          :title="`${t('sidebar.search')} (${searchShortcutLabel})`"
+          :aria-label="t('sidebar.search')"
+          @click="searchOpen = true"
+        >
+          <Search :size="16" />
+        </Button>
+      </div>
     </div>
     <ScrollArea class="project-groups flex-1 min-h-0 min-w-0 -mr-[7px]" viewportClass="pr-[7px]">
       <section class="project-section mb-1.5 min-w-0 max-w-full">
@@ -518,6 +574,31 @@ watch(
         </DialogOverlay>
       </DialogPortal>
     </DialogRoot>
+    <Dialog
+      :open="!!pendingArchiveAll"
+      @update:open="
+        (v: boolean) => {
+          if (!v && !archivingAll) pendingArchiveAll = null
+        }
+      "
+    >
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t("workspace.archiveAll") }}</DialogTitle>
+          <DialogDescription>
+            {{ t("workspace.archiveAllConfirm", { count: pendingArchiveAll?.length ?? 0 }) }}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" :disabled="archivingAll" @click="pendingArchiveAll = null">
+            {{ t("common.cancel") }}
+          </Button>
+          <Button :disabled="archivingAll" @click="confirmArchiveAll">
+            {{ t("workspace.archiveAll") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Dialog
       :open="!!renaming"
       @update:open="
