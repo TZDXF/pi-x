@@ -45,6 +45,22 @@ test("the archived session panel filters by project after the search box", () =>
   expect(page).toMatch(/filterProject\.value = "all"/)
 })
 
+test("archive project groups can collapse and expand independently", () => {
+  const page = read("../src/components/ArchivedSessionsPage.vue")
+  const toggle = page.slice(page.indexOf("function toggleProject"), page.indexOf("async function load"))
+
+  expect(page).toMatch(/const collapsedProjects = ref\(new Set<string>\(\)\)/)
+  expect(toggle).toMatch(/if \(next\.has\(cwd\)\) next\.delete\(cwd\)/)
+  expect(toggle).toMatch(/else next\.add\(cwd\)/)
+  expect(page).toMatch(/:aria-expanded="!collapsedProjects\.has\(group\.cwd\)"/)
+  expect(page).toMatch(/@click="toggleProject\(group\.cwd\)"/)
+  expect(page).toMatch(/<ul v-if="!collapsedProjects\.has\(group\.cwd\)"/)
+  expect(page).toMatch(/sessionArchive\.expandProject/)
+  expect(page).toMatch(/sessionArchive\.collapseProject/)
+  // 项目操作和数量保留在折叠按钮外，折叠后仍可管理项目。
+  expect(page).toMatch(/<\/button>\s*<DropdownMenu>/)
+})
+
 test("bulk delete is exposed per project and for the whole page behind confirmation", () => {
   const page = read("../src/components/ArchivedSessionsPage.vue")
 

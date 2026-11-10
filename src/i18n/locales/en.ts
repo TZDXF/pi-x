@@ -468,6 +468,8 @@ export default {
     filter: "Filter by project",
     filterAll: "All projects",
     projectActions: "Project actions",
+    collapseProject: "Collapse project “{name}”",
+    expandProject: "Expand project “{name}”",
     deleteAll: "Delete all sessions",
     deleteAllConfirm: "All {count} archived session(s) will be deleted permanently. This cannot be undone.",
     deleteAllProjectConfirm:
