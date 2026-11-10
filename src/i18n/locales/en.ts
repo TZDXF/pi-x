@@ -580,16 +580,12 @@ export default {
   },
   usage: {
     nav: "Usage",
-    title: "Usage & cost",
-    description: "Token usage and cost summaries by project, model and time range.",
+    title: "Usage",
+    description: "Token usage summaries by project, model and time range.",
     range: "Time range",
     rangeDays: "Last {days} days",
     rangeAll: "All history",
-    metric: "Chart metric",
-    metricCost: "Cost",
-    metricTokens: "Tokens",
     loading: "Loading…",
-    totalCost: "Total cost",
     totalTokens: "Total tokens",
     sessionCount: "Sessions",
     messageCount: "Assistant messages",
@@ -599,8 +595,7 @@ export default {
     byModel: "By model",
     sessionsShort: "{count} session(s)",
     empty: "No usage recorded in this range.",
-    sourceNote:
-      "Derived from pi session files; local sessions only (terminal pi and scheduled runs included). Subscription plans may report zero cost — rely on tokens instead.",
+    sourceNote: "Derived from pi session files; local sessions only (terminal pi and scheduled runs included).",
   },
   workspace: {
     projectActions: "Project options",

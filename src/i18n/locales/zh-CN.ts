@@ -563,15 +563,11 @@ export default {
   usage: {
     nav: "用量统计",
     title: "用量统计",
-    description: "按项目、模型与时间查看 token 用量与成本汇总。",
+    description: "按项目、模型与时间查看 token 用量汇总。",
     range: "统计范围",
     rangeDays: "最近 {days} 天",
     rangeAll: "全部历史",
-    metric: "图表指标",
-    metricCost: "费用",
-    metricTokens: "Tokens",
     loading: "加载中…",
-    totalCost: "总费用",
     totalTokens: "总 Tokens",
     sessionCount: "会话数",
     messageCount: "助手消息数",
@@ -581,8 +577,7 @@ export default {
     byModel: "按模型",
     sessionsShort: "{count} 会话",
     empty: "统计范围内没有用量记录。",
-    sourceNote:
-      "数据来自 pi 会话文件，仅统计本地项目的会话（终端 pi 与定时任务产生的会话同样计入）；非按量计费的供应商费用可能为 0，请以 tokens 为准。",
+    sourceNote: "数据来自 pi 会话文件，仅统计本地项目的会话（终端 pi 与定时任务产生的会话同样计入）。",
   },
   workspace: {
     projectActions: "项目更多设置",

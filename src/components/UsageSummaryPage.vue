@@ -1,9 +1,9 @@
 <script setup lang="ts">
-/** 用量/成本汇总面板（设置 → 用量统计）：聚合 pi 会话文件中的 token/cost，仅本地会话。 */
+/** 用量汇总面板（设置 → 用量统计）：聚合 pi 会话文件中的 token 用量，仅本地会话。 */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { CircleDollarSign, Folder, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
-import { fetchUsageSummary, type UsageSummary, type UsageTotals } from "@/api/usage"
+import { Folder, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
+import { fetchUsageSummary, type UsageSummary } from "@/api/usage"
 import { compactNumber } from "@/lib/format"
 import { tBackendError } from "@/i18n"
 import { Button } from "@/components/ui/button"
@@ -22,7 +22,6 @@ const error = ref("")
 // Select 的值是字符串；"all" 表示不过滤项目，"0" 表示全部历史。
 const days = ref("30")
 const projectFilter = ref("all")
-const metric = ref<"cost" | "tokens">("cost")
 
 const ranges = ["7", "30", "90", "0"] as const
 
@@ -62,13 +61,7 @@ function selectProject(path: string) {
   projectOpen.value = false
 }
 
-function formatCost(cost: number): string {
-  if (!cost) return "$0"
-  if (cost < 0.01) return `$${cost.toFixed(4)}`
-  return `$${cost.toFixed(2)}`
-}
-
-const totals = computed<UsageTotals>(
+const totals = computed(
   () =>
     summary.value?.totals ?? {
       input: 0,
@@ -76,27 +69,22 @@ const totals = computed<UsageTotals>(
       cacheRead: 0,
       cacheWrite: 0,
       totalTokens: 0,
-      cost: 0,
       messages: 0,
     },
 )
 const summaryCards = computed(() => [
-  { icon: CircleDollarSign, label: t("usage.totalCost"), value: formatCost(totals.value.cost) },
   { icon: Hash, label: t("usage.totalTokens"), value: compactNumber(totals.value.totalTokens) },
   { icon: Layers, label: t("usage.sessionCount"), value: compactNumber(summary.value?.sessionsScanned ?? 0) },
   { icon: SquareStack, label: t("usage.messageCount"), value: compactNumber(totals.value.messages) },
 ])
 
 const byDay = computed(() => summary.value?.byDay ?? [])
-const maxDayValue = computed(() =>
-  Math.max(1e-9, ...byDay.value.map(d => (metric.value === "cost" ? d.cost : d.totalTokens))),
-)
-function barHeight(day: { cost: number; totalTokens: number }): number {
-  const value = metric.value === "cost" ? day.cost : day.totalTokens
-  return Math.max(2, Math.round((value / maxDayValue.value) * 100))
+const maxDayValue = computed(() => Math.max(1e-9, ...byDay.value.map(d => d.totalTokens)))
+function barHeight(day: { totalTokens: number }): number {
+  return Math.max(2, Math.round((day.totalTokens / maxDayValue.value) * 100))
 }
-function barValue(day: { cost: number; totalTokens: number }): string {
-  return metric.value === "cost" ? formatCost(day.cost) : compactNumber(day.totalTokens)
+function barValue(day: { totalTokens: number }): string {
+  return compactNumber(day.totalTokens)
 }
 </script>
 
@@ -163,15 +151,6 @@ function barValue(day: { cost: number; totalTokens: number }): string {
           </div>
         </PopoverContent>
       </Popover>
-      <Select v-model="metric">
-        <SelectTrigger class="w-32 shrink-0 text-xs" :aria-label="t('usage.metric')">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="cost">{{ t("usage.metricCost") }}</SelectItem>
-          <SelectItem value="tokens">{{ t("usage.metricTokens") }}</SelectItem>
-        </SelectContent>
-      </Select>
       <Button variant="outline" size="sm" class="h-8 shrink-0 gap-2 px-3 text-xs" :disabled="loading" @click="load">
         <RotateCw :size="14" :class="{ 'animate-spin': loading }" />
         {{ t("sessionArchive.refresh") }}
@@ -181,7 +160,7 @@ function barValue(day: { cost: number; totalTokens: number }): string {
     <p v-if="error" class="text-sm text-destructive break-words">{{ error }}</p>
     <p v-else-if="loading && !summary" class="text-sm text-muted-foreground">{{ t("usage.loading") }}</p>
     <template v-else-if="summary">
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div v-for="card in summaryCards" :key="card.label" class="rounded-lg border border-border/60 p-3">
           <p class="flex items-center gap-1.5 text-xs text-muted-foreground">
             <component :is="card.icon" :size="13" />{{ card.label }}
@@ -231,7 +210,6 @@ function barValue(day: { cost: number; totalTokens: number }): string {
             <span class="w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{{
               compactNumber(row.totalTokens)
             }}</span>
-            <span class="w-20 shrink-0 text-right font-medium tabular-nums">{{ formatCost(row.cost) }}</span>
           </li>
         </ul>
       </section>
@@ -252,7 +230,6 @@ function barValue(day: { cost: number; totalTokens: number }): string {
             <span class="w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{{
               compactNumber(row.totalTokens)
             }}</span>
-            <span class="w-20 shrink-0 text-right font-medium tabular-nums">{{ formatCost(row.cost) }}</span>
           </li>
         </ul>
       </section>
