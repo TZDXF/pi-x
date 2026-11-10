@@ -2,7 +2,18 @@
 /** Archived sessions panel (settings → archives): grouped by project, with search, project filter and delete actions. */
 import { computed, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, ArchiveRestore, Folder, MoreHorizontal, RefreshCw, RotateCw, Search, Trash2, X } from "@lucide/vue"
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronRight,
+  Folder,
+  MoreHorizontal,
+  RefreshCw,
+  RotateCw,
+  Search,
+  Trash2,
+  X,
+} from "@lucide/vue"
 import { deleteSession, listArchivedSessions, type SessionMeta } from "@/api/piClient"
 import { formatDateTime } from "@/lib/format"
 import { Button } from "@/components/ui/button"
@@ -31,6 +42,7 @@ const error = ref("")
 const query = ref("")
 const filterProject = ref("all") // "all" 或具体项目 cwd（Select 不允许空字符串值）
 const pendingClear = ref<{ cwd: string | null; count: number } | null>(null) // awaiting bulk delete confirmation; cwd null = all projects
+const collapsedProjects = ref(new Set<string>())
 
 const projectName = (path: string) => workspace.projectName(path)
 const label = (s: SessionMeta) => s.title || s.preview || t("sidebar.untitled")
@@ -81,6 +93,13 @@ const groups = computed<ArchiveGroup[]>(() => {
     })
 })
 const visibleCount = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0))
+
+function toggleProject(cwd: string) {
+  const next = new Set(collapsedProjects.value)
+  if (next.has(cwd)) next.delete(cwd)
+  else next.add(cwd)
+  collapsedProjects.value = next
+}
 
 async function load() {
   loading.value = true
@@ -245,9 +264,27 @@ onMounted(load)
 
     <div class="space-y-4">
       <section v-for="group in groups" :key="group.cwd" class="overflow-hidden rounded-lg border border-border/60">
-        <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
-          <Folder :size="15" class="shrink-0 text-muted-foreground" />
-          <h3 class="truncate text-sm font-medium" :title="group.cwd">{{ group.name }}</h3>
+        <header class="flex items-center gap-2 border-b border-border/60 bg-muted/40">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+            :aria-expanded="!collapsedProjects.has(group.cwd)"
+            :aria-label="
+              t(collapsedProjects.has(group.cwd) ? 'sessionArchive.expandProject' : 'sessionArchive.collapseProject', {
+                name: group.name,
+              })
+            "
+            :title="group.cwd"
+            @click="toggleProject(group.cwd)"
+          >
+            <ChevronRight
+              :size="15"
+              class="shrink-0 text-muted-foreground transition-transform"
+              :class="{ 'rotate-90': !collapsedProjects.has(group.cwd) }"
+            />
+            <Folder :size="15" class="shrink-0 text-muted-foreground" />
+            <h3 class="truncate text-sm font-medium">{{ group.name }}</h3>
+          </button>
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
               <Button
@@ -268,11 +305,11 @@ onMounted(load)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <span class="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+          <span class="mr-3 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
             {{ group.rows.length }}
           </span>
         </header>
-        <ul class="divide-y divide-border/60">
+        <ul v-if="!collapsedProjects.has(group.cwd)" class="divide-y divide-border/60">
           <li
             v-for="s in group.rows"
             :key="s.file"

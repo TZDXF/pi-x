@@ -454,6 +454,8 @@ export default {
     filter: "按项目筛选",
     filterAll: "全部项目",
     projectActions: "项目操作",
+    collapseProject: "折叠项目「{name}」",
+    expandProject: "展开项目「{name}」",
     deleteAll: "删除所有会话",
     deleteAllConfirm: "将永久删除全部 {count} 个归档会话，该操作不可恢复。",
     deleteAllProjectConfirm: "将永久删除项目「{name}」下的 {count} 个归档会话，该操作不可恢复。",
