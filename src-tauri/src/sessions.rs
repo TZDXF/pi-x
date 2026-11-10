@@ -59,6 +59,13 @@ fn first_line(path: &Path) -> Option<String> {
     Some(line.to_string())
 }
 
+/// Lightweight session eligibility shared by listing and storage accounting.
+/// Full transcript parsing remains lazy until a session is actually listed.
+pub(crate) fn read_session_header(path: &Path) -> Option<Value> {
+    let header = first_line(path).and_then(|line| serde_json::from_str::<Value>(&line).ok())?;
+    (header.get("type").and_then(Value::as_str) == Some("session")).then_some(header)
+}
+
 /// Extract a short preview from the first user message in the session file.
 ///
 /// Streams line by line with a total budget instead of slicing a fixed byte
@@ -183,14 +190,9 @@ fn list_project_sessions(
             let (cwd, created) = if let Some(meta) = cached_meta(&path, mtime) {
                 (meta.cwd, creation_time(meta.timestamp.as_deref()))
             } else {
-                let Some(header) =
-                    first_line(&path).and_then(|line| serde_json::from_str::<Value>(&line).ok())
-                else {
+                let Some(header) = read_session_header(&path) else {
                     continue;
                 };
-                if header.get("type").and_then(Value::as_str) != Some("session") {
-                    continue;
-                }
                 (
                     header
                         .get("cwd")
@@ -428,7 +430,7 @@ pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Re
     crate::atomic_write::write(&file.with_extension("pix.json"), &bytes).map_err(|e| e.to_string())
 }
 /// PiX 纳管会话的标记：会话的 .pix.json sidecar 存在。
-fn has_sidecar(path: &Path) -> bool {
+pub(crate) fn has_sidecar(path: &Path) -> bool {
     path.with_extension("pix.json").is_file()
 }
 
