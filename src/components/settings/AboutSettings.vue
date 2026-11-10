@@ -304,7 +304,7 @@ onMounted(() => {
         :aria-label="t('appUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown :link-options="markdownLinkOptions" :content="appStatus.releaseNotes" />
+        <Markdown mode="static" :link-options="markdownLinkOptions" :content="appStatus.releaseNotes" />
       </div>
       <button
         v-if="appStatus.releaseUrl"
@@ -370,7 +370,7 @@ onMounted(() => {
         :aria-label="t('piUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown :link-options="markdownLinkOptions" :content="status.releaseNotes" />
+        <Markdown mode="static" :link-options="markdownLinkOptions" :content="status.releaseNotes" />
       </div>
       <button
         v-if="status.releaseUrl"
