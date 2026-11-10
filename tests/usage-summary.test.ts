@@ -30,10 +30,16 @@ test("the usage command scans pi session files and serves both transports", () =
   expect(dispatch).toMatch(/usage::handle\(cmd, &a\)/)
 })
 
-test("the usage panel aggregates by day/project/model without session details", () => {
+test("the usage panel keeps token aggregates and filters without cost statistics or session details", () => {
   const page = readFileSync(new URL("../src/components/UsageSummaryPage.vue", import.meta.url), "utf8")
   const api = readFileSync(new URL("../src/api/usage.ts", import.meta.url), "utf8")
+  const settings = readFileSync(new URL("../src/components/SettingsPage.vue", import.meta.url), "utf8")
   expect(api).toMatch(/invoke<UsageSummary>\("usage_summary", \{ days, project \}\)/)
+  expect(page).not.toMatch(/\bcost\b/i)
+  expect(page).not.toMatch(/usage\.metric/)
+  expect(settings).not.toMatch(/usage\.totalCost/)
+  expect(page).toMatch(/day\.totalTokens/)
+  expect(page).toMatch(/t\("usage\.totalTokens"\)/)
   expect(page).not.toMatch(/summary\.sessions\.length/)
   expect(page).not.toMatch(/openSession/)
   expect(page).toMatch(/t\("usage\.byProject"\)/)
@@ -62,10 +68,6 @@ test("usage panel copy exists in both locales", async () => {
       "usage.range",
       "usage.rangeDays",
       "usage.rangeAll",
-      "usage.metric",
-      "usage.metricCost",
-      "usage.metricTokens",
-      "usage.totalCost",
       "usage.totalTokens",
       "usage.sessionCount",
       "usage.messageCount",
@@ -79,5 +81,10 @@ test("usage panel copy exists in both locales", async () => {
     ]) {
       expect(i18n.global.t(key), `${locale}: ${key}`).not.toBe(key)
     }
+    expect(messages.usage).not.toHaveProperty("metric")
+    expect(messages.usage).not.toHaveProperty("metricCost")
+    expect(messages.usage).not.toHaveProperty("metricTokens")
+    expect(messages.usage).not.toHaveProperty("totalCost")
+    expect(Object.values(messages.usage).join(" ")).not.toMatch(/cost|费用|成本/i)
   }
 })

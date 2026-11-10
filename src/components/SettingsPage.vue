@@ -136,7 +136,6 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "storage", labelKey: "storage.manageArchives" },
   { tab: "archives", labelKey: "sessionArchive.restore" },
   { tab: "archives", labelKey: "sessionArchive.delete" },
-  { tab: "usage", labelKey: "usage.totalCost" },
   { tab: "usage", labelKey: "usage.totalTokens" },
   { tab: "about", labelKey: "appUpdate.title" },
   { tab: "about", labelKey: "piUpdate.title" },
