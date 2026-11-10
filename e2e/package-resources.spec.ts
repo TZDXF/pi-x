@@ -22,7 +22,7 @@ createApp({ render: () => h('div', { style }, [h(settings ? SettingsPage : Packa
 const files = ["docs/guides/Usage.MD", "README.md", "docs/Reference.markdown", "src/index.ts", "assets/logo.png"]
 const content: Record<string, string> = {
   "README.md":
-    "# Package overview\n\n**Important** documentation.\n\n- First item\n- Second item\n\n```ts\nconst value = 1\n```",
+    "---\nname: pi-docs\ndescription: Package documentation\n---\n\n# Package overview\n\n**Important** documentation.\n\n- First item\n- Second item\n\n```ts\nconst value = 1\n```",
   "docs/guides/Usage.MD": "# Usage guide\n\nNested **Markdown** document.",
   "docs/Reference.markdown": "# Reference\n\nAPI reference.",
 }
@@ -57,7 +57,10 @@ test("shows only Markdown in a collapsible directory tree and renders original a
   await expect(page.getByRole("heading", { name: "Package overview" })).toBeVisible()
   await expect(page.locator("strong", { hasText: "Important" })).toBeVisible()
   await expect(page.locator("li", { hasText: "First item" })).toBeVisible()
-  await expect(page.locator("pre")).toContainText("const value = 1")
+  const yaml = page.locator("pre").filter({ hasText: "name: pi-docs" })
+  await expect(yaml).toBeVisible()
+  await expect(yaml).toContainText("description: Package documentation")
+  await expect(page.locator("pre").filter({ hasText: "const value = 1" })).toBeVisible()
   await expect(tree.getByText("index.ts")).toHaveCount(0)
   await expect(tree.getByText("logo.png")).toHaveCount(0)
   await expect(tree.getByText("src", { exact: true })).toHaveCount(0)
@@ -76,7 +79,8 @@ test("shows only Markdown in a collapsible directory tree and renders original a
   await expect(preview.getByRole("button", { name: "Close preview", exact: true })).toHaveCount(0)
   await expect(preview.getByRole("button", { name: "Open file with default application", exact: true })).toHaveCount(0)
   await preview.getByRole("button", { name: "View source", exact: true }).click()
-  await expect(preview.locator('[data-line="1"] code')).toContainText("# Package overview")
+  await expect(preview.locator('[data-line="1"] code')).toContainText("---")
+  await expect(preview.locator('[data-line="6"] code')).toContainText("# Package overview")
   await expect(preview.getByRole("button", { name: "Annotate", exact: true })).toHaveCount(0)
   await preview.getByRole("button", { name: "Rendered view", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Package overview" })).toBeVisible()

@@ -20,6 +20,7 @@ import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
+import { withVisibleFrontmatter } from "@/lib/markdownPreview"
 import "vue-stream-markdown/index.css"
 
 const props = withDefaults(
@@ -56,6 +57,7 @@ const wrap = ref(true)
 const isMarkdown = computed(() => isMarkdownExt(props.path))
 const isSvg = computed(() => baseName(props.path).toLowerCase().endsWith(".svg"))
 const text = computed(() => (preview.value?.kind === "text" ? (preview.value.text ?? "") : ""))
+const renderedText = computed(() => withVisibleFrontmatter(text.value))
 const codeLines = computed(() => text.value.split("\n"))
 /** svg 以文本读回后可直接按 data URL 渲染（截断的 svg 不完整，只看源码） */
 const imageSrc = computed(() => {
@@ -332,7 +334,7 @@ onBeforeUnmount(() => {
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
           <Markdown
-            :content="text"
+            :content="renderedText"
             mode="static"
             :enable-animate="false"
             :link-options="markdownLinkOptions"
