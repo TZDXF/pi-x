@@ -17,7 +17,6 @@ export function useSidebarSessionActions(options: SidebarSessionActions) {
   const title = ref("")
   const saving = ref(false)
   const archiving = ref<Record<string, boolean>>({})
-  const archivingAll = ref(false)
 
   function rename(session: SessionMeta) {
     renaming.value = session
@@ -57,41 +56,5 @@ export function useSidebarSessionActions(options: SidebarSessionActions) {
       delete archiving.value[session.file]
     }
   }
-  /** Archive saved rows through the same metadata update as the single-row action. */
-  async function archiveAll(sessions: SessionMeta[]) {
-    if (options.disabled() || archivingAll.value) return { total: 0, failed: 0 }
-    const targets = sessions.filter(session => !session.archived && !archiving.value[session.file])
-    if (!targets.length) return { total: 0, failed: 0 }
-    archivingAll.value = true
-    for (const session of targets) archiving.value[session.file] = true
-    let failed = 0
-    try {
-      for (const session of targets) {
-        try {
-          await options.update(session, session.title || null, true)
-        } catch {
-          failed++
-        } finally {
-          // Successful rows stay hidden through their archived flag; failed rows reappear here.
-          delete archiving.value[session.file]
-        }
-      }
-    } finally {
-      archivingAll.value = false
-    }
-    return { total: targets.length, failed }
-  }
-  return {
-    renaming,
-    title,
-    saving,
-    archiving,
-    archivingAll,
-    rename,
-    openSession,
-    renameOnDoubleClick,
-    saveTitle,
-    archive,
-    archiveAll,
-  }
+  return { renaming, title, saving, archiving, rename, openSession, renameOnDoubleClick, saveTitle, archive }
 }

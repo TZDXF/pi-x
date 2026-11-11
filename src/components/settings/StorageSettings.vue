@@ -8,11 +8,14 @@ import {
   type StorageCategory,
   type StorageCategoryId,
   type StorageSummary,
+  type SessionMeta,
 } from "@/api/piClient"
 import { formatBytes, formatDateTime } from "@/lib/format"
 import { formatCodedError } from "@/lib/backendError"
 import { navigate } from "@/lib/router"
 import { useUiStore } from "@/stores/conversations"
+import { useWorkspaceStore } from "@/stores/workspace"
+import { useArchiveAllSessions } from "@/composables/useArchiveAllSessions"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -25,12 +28,18 @@ import {
 
 const { t } = useI18n()
 const ui = useUiStore()
+const workspace = useWorkspaceStore()
+const { archivingAll, archiveAll } = useArchiveAllSessions((session, title, archived) =>
+  workspace.update(session, title, archived),
+)
 const summary = ref<StorageSummary | null>(null)
 const loading = ref(true)
 const refreshing = ref(false)
 const error = ref("")
 const busy = ref<StorageCategoryId | null>(null)
 const pendingCleanup = ref<StorageCategory | null>(null)
+const pendingArchiveAll = ref<SessionMeta[] | null>(null)
+const loadingArchiveAll = ref(false)
 
 const categoryUi: Record<StorageCategoryId, { icon: Component; bar: string; iconColor: string }> = {
   sessions: { icon: MessageSquareText, bar: "bg-blue-500", iconColor: "text-blue-500" },
@@ -103,6 +112,32 @@ async function confirmCleanup() {
   } finally {
     busy.value = null
   }
+}
+
+async function askArchiveAll() {
+  if (loadingArchiveAll.value || archivingAll.value || busy.value || refreshing.value) return
+  loadingArchiveAll.value = true
+  error.value = ""
+  try {
+    const rows = await workspace.listArchivableSessions()
+    if (rows.length) pendingArchiveAll.value = rows
+  } catch (e) {
+    error.value = formatCodedError(t, e)
+  } finally {
+    loadingArchiveAll.value = false
+  }
+}
+
+async function confirmArchiveAll() {
+  const rows = pendingArchiveAll.value
+  if (!rows || archivingAll.value) return
+  pendingArchiveAll.value = null
+  error.value = ""
+  const { total, failed } = await archiveAll(rows)
+  if (!total) return
+  await load()
+  if (failed) ui.pushToast(t("storage.archiveAllFailed", { count: failed }), "error")
+  else ui.pushToast(t("storage.archivedAll", { count: total }), "info")
 }
 
 onMounted(load)
@@ -187,7 +222,22 @@ onMounted(load)
           <p class="mt-3 flex-1 text-xs leading-5 text-muted-foreground">
             {{ t(`storage.descriptions.${category.id}`) }}
           </p>
-          <div v-if="isCleanable(category.id)" class="mt-3 flex flex-wrap justify-end gap-2">
+          <div
+            v-if="category.id === 'sessions' || isCleanable(category.id)"
+            class="mt-3 flex flex-wrap justify-end gap-2"
+          >
+            <Button
+              v-if="category.id === 'sessions'"
+              variant="outline"
+              size="sm"
+              class="archive-all gap-2"
+              :disabled="!!busy || refreshing || loadingArchiveAll || archivingAll"
+              @click="askArchiveAll"
+            >
+              <RefreshCw v-if="loadingArchiveAll || archivingAll" :size="14" class="animate-spin" />
+              <Archive v-else :size="14" />
+              {{ t("storage.archiveAll") }}
+            </Button>
             <Button
               v-if="category.id === 'archivedSessions'"
               variant="ghost"
@@ -227,6 +277,32 @@ onMounted(load)
         {{ t("storage.reload") }}
       </Button>
     </div>
+
+    <Dialog
+      :open="!!pendingArchiveAll"
+      @update:open="
+        (open: boolean) => {
+          if (!open && !archivingAll) pendingArchiveAll = null
+        }
+      "
+    >
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t("storage.archiveAll") }}</DialogTitle>
+          <DialogDescription>
+            {{ t("storage.archiveAllConfirm", { count: pendingArchiveAll?.length ?? 0 }) }}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" :disabled="archivingAll" @click="pendingArchiveAll = null">
+            {{ t("common.cancel") }}
+          </Button>
+          <Button :disabled="archivingAll" @click="confirmArchiveAll">
+            {{ t("storage.archiveAll") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <Dialog
       :open="!!pendingCleanup"
