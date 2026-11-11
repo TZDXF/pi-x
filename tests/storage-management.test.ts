@@ -4,6 +4,7 @@ import ts from "typescript"
 import { createI18n } from "vue-i18n"
 import * as vue from "vue"
 import { compileScript, parse } from "vue/compiler-sfc"
+import { useArchiveAllSessions } from "@/composables/useArchiveAllSessions"
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
 
@@ -78,6 +79,10 @@ test("storage panel copy exists in both locales", async () => {
       "backendErrors.webviewCacheCleanupFailed",
       "storage.cleaned",
       "storage.cleanedPartial",
+      "storage.archiveAll",
+      "storage.archiveAllConfirm",
+      "storage.archivedAll",
+      "storage.archiveAllFailed",
       "storage.scopeNote",
     ]) {
       expect(i18n.global.t(key), `${locale}: ${key}`).not.toBe(key)
@@ -108,6 +113,8 @@ test("cache cleanup confirms the right category, refreshes usage and recovers fr
     "@/lib/backendError": { formatCodedError: (_t: unknown, error: Error) => error.message },
     "@/lib/router": {},
     "@/stores/conversations": { useUiStore: () => ({ pushToast }) },
+    "@/stores/workspace": { useWorkspaceStore: () => ({ update: vi.fn() }) },
+    "@/composables/useArchiveAllSessions": { useArchiveAllSessions },
     "@/components/ui/button": {},
     "@/components/ui/dialog": {},
   }
@@ -135,6 +142,75 @@ test("cache cleanup confirms the right category, refreshes usage and recovers fr
   panel.pendingCleanup.value = { id: "sessions", bytes: 10 }
   await panel.confirmCleanup()
   expect(cleanupStorage).toHaveBeenCalledTimes(2)
+})
+
+test("session storage card owns archive all; the sidebar has no bulk entry", () => {
+  const page = read("../src/components/settings/StorageSettings.vue")
+  const sidebar = read("../src/components/WorkspaceSidebar.vue")
+
+  expect(page).toMatch(/category\.id === 'sessions'/)
+  expect(page).toMatch(/class="archive-all gap-2"/)
+  expect(page).toMatch(/await workspace\.listArchivableSessions\(\)/)
+  expect(page).toMatch(/:open="!!pendingArchiveAll"/)
+  expect(page).toMatch(/storage\.archiveAllConfirm/)
+  expect(page).toMatch(/await archiveAll\(rows\)/)
+  expect(sidebar).not.toMatch(/archive-all|pendingArchiveAll|archiveAll/)
+})
+
+test("session card enumerates disk, confirms archive and refreshes storage counts", async () => {
+  const rows = [
+    { file: "one.jsonl", id: "one", cwd: "C:/demo", title: "First", mtimeMs: 1 },
+    { file: "two.jsonl", id: "two", cwd: "C:/tasks", title: null, mtimeMs: 2 },
+  ]
+  const listArchivableSessions = vi.fn().mockResolvedValue(rows)
+  const update = vi.fn(async (row, title, archived) => Object.assign(row, { title, archived }))
+  const getStorageSummary = vi
+    .fn()
+    .mockResolvedValueOnce({ totalBytes: 100, categories: [{ id: "sessions", itemCount: 2, bytes: 100 }] })
+    .mockResolvedValueOnce({ totalBytes: 0, categories: [{ id: "sessions", itemCount: 0, bytes: 0 }] })
+  const pushToast = vi.fn()
+  const { descriptor } = parse(read("../src/components/settings/StorageSettings.vue"))
+  const compiled = compileScript(descriptor, { id: "storage-archive-all-test" })
+  const code = ts.transpileModule(compiled.content, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText
+  const modules: Record<string, unknown> = {
+    vue: { ...vue, onMounted() {} },
+    "vue-i18n": { useI18n: () => ({ t: (key: string) => key }) },
+    "@lucide/vue": {},
+    "@/api/piClient": { getStorageSummary },
+    "@/lib/format": { formatBytes: String },
+    "@/lib/backendError": { formatCodedError: (_t: unknown, error: Error) => error.message },
+    "@/lib/router": {},
+    "@/stores/conversations": { useUiStore: () => ({ pushToast }) },
+    "@/stores/workspace": { useWorkspaceStore: () => ({ listArchivableSessions, update }) },
+    "@/composables/useArchiveAllSessions": { useArchiveAllSessions },
+    "@/components/ui/button": {},
+    "@/components/ui/dialog": {},
+  }
+  const exports: any = {}
+  new Function("exports", "require", code)(exports, (id: string) => modules[id])
+  const panel = exports.default.setup({}, { expose() {} })
+
+  await panel.load()
+  await panel.askArchiveAll()
+  expect(listArchivableSessions).toHaveBeenCalledOnce()
+  expect(panel.pendingArchiveAll.value).toEqual(rows)
+  await panel.confirmArchiveAll()
+  expect(update.mock.calls).toEqual([
+    [rows[0], "First", true],
+    [rows[1], null, true],
+  ])
+  expect(panel.pendingArchiveAll.value).toBeNull()
+  expect(panel.summary.value.totalBytes).toBe(0)
+  expect(getStorageSummary).toHaveBeenCalledTimes(2)
+  expect(pushToast).toHaveBeenCalledWith("storage.archivedAll", "info")
+
+  // Remote rows are filtered by the store; a genuine local scan failure remains visible.
+  listArchivableSessions.mockRejectedValueOnce(new Error("local enumeration failed"))
+  await panel.askArchiveAll()
+  expect(panel.error.value).toBe("local enumeration failed")
+  expect(panel.pendingArchiveAll.value).toBeNull()
 })
 
 test("byte formatting uses binary units and bounded precision", async () => {

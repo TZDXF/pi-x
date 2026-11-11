@@ -33,7 +33,7 @@ pub use config::{
 #[allow(unused_imports)]
 pub use files::{
     list_project_directory, open_path, read_file_preview, search_files, session_export_file,
-    session_list,
+    session_list, session_list_unarchived,
 };
 #[allow(unused_imports)]
 pub use models::{models_config_get, models_config_save, models_fetch, FetchedModel};

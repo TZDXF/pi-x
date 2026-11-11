@@ -140,6 +140,20 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
 
 /// List sessions whose `cwd` matches `project`, newest creation time first.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
+    list_with_options(project, Some(MAX_SESSIONS), true).await
+}
+
+/// List every persisted, unarchived session for bulk archive. Unlike the
+/// sidebar listing, archived rows do not consume a limit and hide older rows.
+pub async fn list_unarchived(project: String) -> Result<Vec<SessionMeta>, String> {
+    list_with_options(project, None, false).await
+}
+
+async fn list_with_options(
+    project: String,
+    limit: Option<usize>,
+    include_archived: bool,
+) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
             return Err(pix_error(
@@ -153,7 +167,12 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
         normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
-        list_project_sessions(&agent_dir().join("sessions"), &project_norm)
+        list_project_sessions(
+            &agent_dir().join("sessions"),
+            &project_norm,
+            limit,
+            include_archived,
+        )
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
@@ -169,6 +188,8 @@ fn creation_time(timestamp: Option<&str>) -> i64 {
 fn list_project_sessions(
     sessions_root: &Path,
     project_norm: &str,
+    limit: Option<usize>,
+    include_archived: bool,
 ) -> Result<Vec<SessionMeta>, String> {
     let mut candidates = Vec::new();
     let dirs = match std::fs::read_dir(sessions_root) {
@@ -216,12 +237,16 @@ fn list_project_sessions(
     candidates.sort_by(|a, b| b.2.cmp(&a.2).then(b.0.cmp(&a.0)));
     let mut out = Vec::new();
     for (path, mtime, _) in candidates {
-        if out.len() >= MAX_SESSIONS {
+        if limit.is_some_and(|limit| out.len() >= limit) {
             break;
         }
         // One unreadable/partial/corrupt file must not empty the sidebar.
         if let Ok(meta) = read_session_meta(&path, mtime) {
-            out.push(meta);
+            // Bulk archive skips archived rows without letting them consume
+            // the sidebar's limit and hide older unarchived sessions.
+            if include_archived || !meta.archived {
+                out.push(meta);
+            }
         }
     }
     Ok(out)
@@ -963,7 +988,8 @@ mod presentation_tests {
 
         let expected: Vec<String> = (2..MAX_SESSIONS + 2).rev().map(|i| i.to_string()).collect();
         for _ in 0..2 {
-            let rows = list_project_sessions(&sessions, &project_norm).unwrap();
+            let rows =
+                list_project_sessions(&sessions, &project_norm, Some(MAX_SESSIONS), true).unwrap();
             assert_eq!(
                 rows.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>(),
                 expected
@@ -998,7 +1024,8 @@ mod presentation_tests {
         // pi CLI 直接创建的会话没有 sidecar，不出现在 PiX 的列表里。
         adopt(&folder.join("pix-owned.jsonl")).unwrap();
 
-        let rows = list_project_sessions(&root.join("sessions"), &project_norm).unwrap();
+        let rows =
+            list_project_sessions(&root.join("sessions"), &project_norm, Some(MAX_SESSIONS), true).unwrap();
         assert_eq!(
             rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(),
             ["pix-owned"]
@@ -1414,6 +1441,57 @@ if (request.op === 'read') {
         assert_eq!(messages[4]["modelId"], "m");
         assert_eq!(messages[5]["role"], "assistant");
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn bulk_listing_ignores_the_sidebar_limit_and_archived_prefix() {
+        let root = std::env::temp_dir().join(format!("pix-list-all-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let sessions_root = root.join("sessions");
+        let encoded = sessions_root.join("encoded-project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&encoded).unwrap();
+        let project_norm = normalize(&project).unwrap();
+        let base_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+        for index in 0..55 {
+            let path = encoded.join(format!("{index:03}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session",
+                "id": format!("session-{index}"),
+                "cwd": project.to_string_lossy(),
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base_time + std::time::Duration::from_secs(index))
+                .unwrap();
+            // Every row is PiX-managed; the 50 newest are archived and the five oldest are not.
+            let presentation = if index >= 5 { "true" } else { "false" };
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{presentation}}}"),
+            )
+            .unwrap();
+        }
+
+        let recent =
+            list_project_sessions(&sessions_root, &project_norm, Some(MAX_SESSIONS), true).unwrap();
+        assert_eq!(recent.len(), MAX_SESSIONS);
+        assert!(recent.iter().all(|row| row.archived));
+        let unarchived = list_project_sessions(&sessions_root, &project_norm, None, false).unwrap();
+        let mut ids: Vec<String> = unarchived.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            (0..5)
+                .map(|index| format!("session-{index}"))
+                .collect::<Vec<_>>()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

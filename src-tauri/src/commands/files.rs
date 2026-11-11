@@ -14,6 +14,14 @@ pub async fn session_list(project: String) -> Result<Vec<sessions::SessionMeta>,
     sessions::list(project).await
 }
 
+/// List every persisted, unarchived session for the bulk archive action.
+#[tauri::command]
+pub async fn session_list_unarchived(
+    project: String,
+) -> Result<Vec<sessions::SessionMeta>, String> {
+    sessions::list_unarchived(project).await
+}
+
 /// Search project files for @file mention completion.
 #[tauri::command]
 pub async fn search_files(

@@ -63,6 +63,7 @@ test("bulk delete is exposed per project and for the whole page behind confirmat
 test("archived session list, restore and delete work through remote dispatch", () => {
   const remote = read("../src-tauri/src/remote/dispatch/session.rs")
 
+  expect(remote).toMatch(/"session_list_unarchived" =>/)
   expect(remote).toMatch(/"session_list_archived" =>/)
   expect(remote).toMatch(/"session_update" =>/)
   expect(remote).toMatch(/"session_delete" =>/)

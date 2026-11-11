@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     updateSession: async (...args) => {
       state.writes.push(args)
     },
+    listUnarchivedSessions: async () => [],
     workspaceGitInfo: async () => {
       throw new Error("not a repository")
     },
@@ -28,6 +29,7 @@ vi.mock("@/api/piClient", () => ({
       mocks.requests.push({ path, resolve })
     }),
   updateSession: (...args) => mocks.updateSession(...args),
+  listUnarchivedSessions: (...args) => mocks.listUnarchivedSessions(...args),
   workspaceGitInfo: (...args) => mocks.workspaceGitInfo(...args),
   pixLog: () => {},
   getWorkspaceState: () => mocks.getWorkspaceState(),
@@ -55,6 +57,7 @@ async function harness(backend = { state: emptyWorkspaceState() }) {
   mocks.updateSession = async (...args) => {
     mocks.writes.push(args)
   }
+  mocks.listUnarchivedSessions = async () => []
   mocks.workspaceGitInfo = async () => {
     throw new Error("not a repository")
   }
@@ -76,6 +79,12 @@ async function harness(backend = { state: emptyWorkspaceState() }) {
     },
     set updateSession(value) {
       mocks.updateSession = value
+    },
+    get listUnarchivedSessions() {
+      return mocks.listUnarchivedSessions
+    },
+    set listUnarchivedSessions(value) {
+      mocks.listUnarchivedSessions = value
     },
     get workspaceGitInfo() {
       return mocks.workspaceGitInfo
@@ -273,6 +282,51 @@ test("new sessions discovered on refresh precede saved order across project fold
   await reopened.store.flushPersistence()
   expect(reopened.store.orderedSessions("front").map(row => row.file)).toEqual(["b", "new", "a", "newer"])
 })
+test("bulk archive enumerates every project folder from disk and excludes first-response previews", async () => {
+  const h = await harness()
+  h.store.createProject({ name: "Group", primary: "C:/front", folders: ["C:/front", "C:/back"] })
+  h.store.projectless = "C:/tasks"
+  const persisted = [
+    { file: "old.jsonl", cwd: "C:/back", mtimeMs: 1 },
+    { file: "task.jsonl", cwd: "C:/tasks", mtimeMs: 3 },
+  ]
+  const requests: string[] = []
+  h.listUnarchivedSessions = async (path: string) => {
+    requests.push(path)
+    return persisted.filter(row => row.cwd === path)
+  }
+  // This row is visible before the first assistant response, but its file does not exist yet.
+  h.store.preview({ file: "unflushed.jsonl", cwd: "C:/front", preview: "first question", mtimeMs: 4 })
+
+  const rows = await h.store.listArchivableSessions()
+  expect(requests.sort()).toEqual(["C:/back", "C:/front", "C:/tasks"])
+  expect(rows.map(row => row.file)).toEqual(["task.jsonl", "old.jsonl"])
+  expect(rows.some(row => row.file === "unflushed.jsonl")).toBe(false)
+})
+
+test("bulk archive uses only local storage scope when remote and local projects are mixed", async () => {
+  const h = await harness()
+  h.store.remember("ssh://host/remote")
+  h.store.remember("wsl://Ubuntu/home/dev/project")
+  h.store.remember("docker://container/root/project")
+  h.store.remember("C:/demo")
+  h.store.projectless = "C:/tasks"
+  const persisted = [
+    { file: "local.jsonl", cwd: "C:/demo", mtimeMs: 1 },
+    { file: "task.jsonl", cwd: "C:/tasks", mtimeMs: 2 },
+  ]
+  const requests: string[] = []
+  h.listUnarchivedSessions = async (path: string) => {
+    requests.push(path)
+    return persisted.filter(row => row.cwd === path)
+  }
+
+  const rows = await h.store.listArchivableSessions()
+  expect(requests.sort()).toEqual(["C:/demo", "C:/tasks"])
+  expect(requests.some(path => /^(ssh|wsl|docker):\/\//.test(path))).toBe(false)
+  expect(rows.map(row => row.file)).toEqual(["task.jsonl", "local.jsonl"])
+})
+
 test("rename and archive persist and update shared state; restore keeps title", async () => {
   const h = await harness()
   const row = { file: "one.jsonl", preview: "first message" }

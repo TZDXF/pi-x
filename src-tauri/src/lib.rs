@@ -155,6 +155,7 @@ pub fn run() {
             usage::usage_summary,
             storage::storage_summary,
             storage::storage_cleanup,
+            commands::files::session_list_unarchived,
             sessions::session_mtime,
             sessions::session_history,
             sessions::session_last_error,

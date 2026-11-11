@@ -576,6 +576,10 @@ export default {
     sessionCount: "{count} session(s)",
     fileCount: "{count} file(s)",
     manageArchives: "Manage archives",
+    archiveAll: "Archive all",
+    archiveAllConfirm: "Archive all {count} session(s)? You can restore them from Archives in Settings.",
+    archivedAll: "Archived {count} session(s)",
+    archiveAllFailed: "Failed to archive {count} session(s)",
     clean: "Clean up",
     cleanupTitle: "Clean up {name}?",
     cleanupArchivedConfirm:
