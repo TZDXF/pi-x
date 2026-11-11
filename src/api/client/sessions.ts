@@ -32,6 +32,9 @@ export const listSessions = (project: string) => invoke<SessionMeta[]>("session_
 /** Search titles, ids and user/assistant text across every local session file. */
 export const searchSessions = (query: string) => invoke<SessionSearchHit[]>("session_search", { query })
 
+/** Every persisted, unarchived session in a project, without the sidebar's recent-row limit. */
+export const listUnarchivedSessions = (project: string) => invoke<SessionMeta[]>("session_list_unarchived", { project })
+
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
 

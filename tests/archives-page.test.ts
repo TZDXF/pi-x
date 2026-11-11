@@ -63,20 +63,22 @@ test("bulk delete is exposed per project and for the whole page behind confirmat
 test("archived session list, restore and delete work through remote dispatch", () => {
   const remote = read("../src-tauri/src/remote/dispatch/session.rs")
 
+  expect(remote).toMatch(/"session_list_unarchived" =>/)
   expect(remote).toMatch(/"session_list_archived" =>/)
   expect(remote).toMatch(/"session_update" =>/)
   expect(remote).toMatch(/"session_delete" =>/)
 })
 
-test("archive all is confirmed and reuses the single-row metadata action across every loaded project", () => {
+test("archive all confirms a fresh on-disk enumeration and reuses the single-row metadata action", () => {
   const sidebar = read("../src/components/WorkspaceSidebar.vue")
   const actions = read("../src/components/workspace/sidebar/useSidebarSessionActions.ts")
 
-  expect(sidebar).toMatch(/class="archive-all shrink-0"/)
+  expect(sidebar).toMatch(/class="archive-all"/)
   expect(sidebar).toMatch(/:aria-label="t\('workspace\.archiveAll'\)"/)
   expect(sidebar).toMatch(/:open="!!pendingArchiveAll"/)
   expect(sidebar).toMatch(/workspace\.archiveAllConfirm/)
-  expect(sidebar).toMatch(/Object\.values\(workspace\.histories\)/)
+  expect(sidebar).toMatch(/await workspace\.listArchivableSessions\(\)/)
+  expect(sidebar).not.toMatch(/Object\.values\(workspace\.histories\)/)
   expect(sidebar).toMatch(/await archiveAll\(rows\)/)
   // 批量只写入归档元数据，不复用恢复时的切换语义。
   expect(actions).toMatch(/async function archiveAll\(sessions: SessionMeta\[\]\)/)

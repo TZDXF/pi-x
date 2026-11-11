@@ -94,6 +94,7 @@ onUnmounted(() => {
   setShortcutsSuppressed("task-search", false)
 })
 const pendingArchiveAll = ref<SessionMeta[] | null>(null)
+const loadingArchiveAll = ref(false)
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
@@ -146,19 +147,18 @@ const sessionActions = {
   export: (file: string) => emit("sessionAction", file, "export"),
   selectConversation: (runtimeId: string) => emit("selectConversation", runtimeId),
 }
-/** All loaded, unarchived files across project groups and projectless sessions. */
-const archivableSessions = computed(() => {
-  const unique = new Map<string, SessionMeta>()
-  for (const rows of Object.values(workspace.histories)) {
-    for (const row of rows) {
-      if (!row.archived && !archiving.value[row.file] && !unique.has(row.file)) unique.set(row.file, row)
-    }
+/** Enumerate disk instead of the capped sidebar cache, which also contains unflushed previews. */
+async function askArchiveAll() {
+  if (disabled.value || archivingAll.value || loadingArchiveAll.value) return
+  loadingArchiveAll.value = true
+  try {
+    const rows = await workspace.listArchivableSessions()
+    if (rows.length) pendingArchiveAll.value = rows
+  } catch (error) {
+    ui.pushToast(String(error), "error")
+  } finally {
+    loadingArchiveAll.value = false
   }
-  return [...unique.values()]
-})
-function askArchiveAll() {
-  if (disabled.value || archivingAll.value || !archivableSessions.value.length) return
-  pendingArchiveAll.value = archivableSessions.value
 }
 async function confirmArchiveAll() {
   const rows = pendingArchiveAll.value
@@ -366,12 +366,13 @@ watch(
           variant="quiet"
           size="toolbar"
           class="archive-all"
-          :disabled="disabled || archivingAll || !archivableSessions.length"
+          :disabled="disabled || archivingAll || loadingArchiveAll"
           :title="t('workspace.archiveAll')"
           :aria-label="t('workspace.archiveAll')"
           @click="askArchiveAll"
         >
-          <Archive :size="16" />
+          <LoaderCircle v-if="loadingArchiveAll" :size="16" class="animate-spin" />
+          <Archive v-else :size="16" />
         </Button>
         <Button
           variant="quiet"
