@@ -36,16 +36,25 @@ if (op.startsWith("trust_")) {
   checkErrors(settings);
   const { SettingsSchema } = await load("core/settings-schema.js").catch(() => ({}));
   const selfUpdateCommandSupported = !!SettingsSchema?.properties?.selfUpdateCommand;
+  const cacheWarmingSupported = typeof settings.getCacheWarmingMode === "function" &&
+    typeof settings.setCacheWarmingMode === "function";
+  const schemaCacheWarmingModes = SettingsSchema?.properties?.cacheWarming?.anyOf
+    ?.map(option => option?.const)
+    .filter(mode => ["off", "streaming", "idle"].includes(mode)) ?? [];
+  // Pi 0.99 has cache warming but predates the published settings schema and the idle mode.
+  const cacheWarmingModes = cacheWarmingSupported
+    ? schemaCacheWarmingModes.length ? schemaCacheWarmingModes : ["off", "streaming"]
+    : [];
   if (op === "settings_save") {
     const patch = request.settings;
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid settings");
     for (const key of Object.keys(patch)) {
       if (!["defaultProvider", "defaultModel", "skills", "retry", "compaction", "followUpMode",
-        "selfUpdateCommand", "collapseChangelog", "sessionShareDestination"].includes(key))
+        "cacheWarming", "selfUpdateCommand", "collapseChangelog", "sessionShareDestination"].includes(key))
         throw new Error(`Unsupported setting: ${key}`);
     }
     if ("skills" in patch && (!Array.isArray(patch.skills) || !patch.skills.every(p => typeof p === "string"))) throw new Error("Invalid skill paths");
-    validatePreferences(settings, patch, selfUpdateCommandSupported);
+    validatePreferences(settings, patch, selfUpdateCommandSupported, cacheWarmingModes);
     if ("followUpMode" in patch) {
       if (!["one-at-a-time", "all"].includes(patch.followUpMode)) throw new Error("Invalid followUpMode");
       settings.setFollowUpMode(patch.followUpMode);
@@ -59,6 +68,7 @@ if (op.startsWith("trust_")) {
     }
     if ("retry" in patch) applyRetrySettings(settings, patch.retry);
     if ("compaction" in patch) applyCompactionSettings(settings, patch.compaction);
+    if ("cacheWarming" in patch) settings.setCacheWarmingMode(patch.cacheWarming);
     if ("collapseChangelog" in patch) settings.setCollapseChangelog(patch.collapseChangelog);
     if ("sessionShareDestination" in patch) settings.setSessionShareDestination(patch.sessionShareDestination);
     if ("selfUpdateCommand" in patch) {
@@ -75,6 +85,7 @@ if (op.startsWith("trust_")) {
     defaultThinkingLevel: global.defaultThinkingLevel, modelThinkingLevels: global.modelThinkingLevels,
     skills: global.skills ?? [], retry: readRetrySettings(settings),
     compaction: readCompactionSettings(settings), followUpMode: settings.getFollowUpMode(),
+    cacheWarming: cacheWarmingSupported ? settings.getCacheWarmingMode() : null, cacheWarmingModes,
     selfUpdateCommand: global.selfUpdateCommand ?? null, selfUpdateCommandSupported,
     selfUpdateCommandOverridden: !!process.env.PI_SELF_UPDATE_COMMAND?.trim(),
     collapseChangelog: settings.getCollapseChangelog(),
@@ -99,7 +110,9 @@ function checkErrors(settings) {
   if (errors.length) throw new Error(errors.map(e => e.error?.message ?? String(e)).join("; "));
 }
 
-function validatePreferences(settings, patch, supportsCustomUpdate) {
+function validatePreferences(settings, patch, supportsCustomUpdate, cacheWarmingModes) {
+  if ("cacheWarming" in patch && !cacheWarmingModes.includes(patch.cacheWarming))
+    throw new Error("Invalid or unsupported cacheWarming");
   if ("collapseChangelog" in patch && typeof patch.collapseChangelog !== "boolean")
     throw new Error("Invalid collapseChangelog");
   if ("sessionShareDestination" in patch) {

@@ -10,8 +10,11 @@ export const compatFlags = [
   "supportsStrictMode",
   "requiresToolResultName",
   "requiresAssistantAfterToolResult",
+  "requiresNonNullAssistantContent",
+  "requiresToolsWithToolHistory",
   "requiresThinkingAsText",
 ] as const
+export const anthropicCompatFlags = ["supportsMessageThreads"] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -46,7 +49,7 @@ export function parseModelAdvanced(raw: string): Record<string, unknown> {
     }
   }
   if (isObject(value.compat)) {
-    for (const key of compatFlags) {
+    for (const key of [...compatFlags, ...anthropicCompatFlags]) {
       if (key in value.compat && typeof value.compat[key] !== "boolean")
         throw new Error(`compat.${key}: expected boolean / 必须是布尔值`)
     }
@@ -55,6 +58,12 @@ export function parseModelAdvanced(raw: string): Record<string, unknown> {
       !["max_tokens", "max_completion_tokens"].includes(String(value.compat.maxTokensField))
     ) {
       throw new Error("compat.maxTokensField: max_tokens | max_completion_tokens")
+    }
+    if (
+      "promptCacheKeyMode" in value.compat &&
+      !["auto", "enabled", "disabled"].includes(String(value.compat.promptCacheKeyMode))
+    ) {
+      throw new Error("compat.promptCacheKeyMode: auto | enabled | disabled")
     }
     validateFallbackModels(value.compat.allowedFallbackModels)
   }

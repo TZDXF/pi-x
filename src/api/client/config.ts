@@ -47,6 +47,8 @@ export interface AppConfig {
   sshConnections?: SshConnection[]
 }
 
+export type CacheWarmingMode = "off" | "streaming" | "idle"
+
 export interface PiSettings {
   defaultProvider?: string | null
   defaultModel?: string | null
@@ -59,6 +61,9 @@ export interface PiSettings {
   compaction?: { enabled: boolean }
   /** pi 全局 settings.json 的 `followUpMode`：排队跟进消息的投递节奏。 */
   followUpMode?: import("../protocol").QueueDeliveryMode
+  /** 提示缓存预热；null 表示当前 Pi 不支持。modes 列出该版本接受的取值。 */
+  cacheWarming?: CacheWarmingMode | null
+  cacheWarmingModes?: CacheWarmingMode[]
   selfUpdateCommand?: string[] | null
   selfUpdateCommandSupported?: boolean
   selfUpdateCommandOverridden?: boolean
@@ -74,6 +79,7 @@ export const savePiSettings = (
       | "defaultModel"
       | "skills"
       | "followUpMode"
+      | "cacheWarming"
       | "selfUpdateCommand"
       | "collapseChangelog"
       | "sessionShareDestination"

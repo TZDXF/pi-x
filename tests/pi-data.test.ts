@@ -204,6 +204,21 @@ test(
   },
 )
 
+test("Pi 1.5.1 cache warming modes round-trip through the installed SDK", { skip: !dist, timeout: 60000 }, t => {
+  const { agent, call } = fixture(t)
+  const path = join(agent, "settings.json")
+  writeFileSync(path, JSON.stringify({ theme: "dark" }))
+  expect(call({ op: "settings_get" })).toMatchObject({
+    cacheWarming: "idle",
+    cacheWarmingModes: ["off", "streaming", "idle"],
+  })
+  call({ op: "settings_save", settings: { cacheWarming: "streaming" } })
+  expect(call({ op: "settings_get" }).cacheWarming).toBe("streaming")
+  expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ theme: "dark", cacheWarming: "streaming" })
+  call({ op: "settings_save", settings: { cacheWarming: "off" } })
+  expect(call({ op: "settings_get" }).cacheWarming).toBe("off")
+})
+
 test(
   "invalid new preferences are rejected before any other preference is saved",
   { skip: !dist, timeout: 60000 },
@@ -220,6 +235,8 @@ test(
       { sessionShareDestination: "unknown" },
       { sessionShareDestination: null },
       { collapseChangelog: "true" },
+      { cacheWarming: "sometimes" },
+      { cacheWarming: null },
     ]) {
       call({ op: "settings_save", settings: { defaultProvider: "test", defaultModel: "test", ...patch } }, false)
       expect(readFileSync(path, "utf8")).toBe("{}")

@@ -10,6 +10,7 @@ import { runningBehavior, setRunningBehavior, type RunningBehavior } from "@/lib
 import { processDetail, setProcessDetail, type ProcessDetail } from "@/lib/processDetail"
 import RetrySettings from "@/components/settings/RetrySettings.vue"
 import QueueModeSettings from "@/components/settings/QueueModeSettings.vue"
+import CacheWarmingSettings from "@/components/settings/CacheWarmingSettings.vue"
 
 const { t } = useI18n()
 </script>
@@ -52,5 +53,6 @@ const { t } = useI18n()
     </Select>
   </SettingRow>
   <RetrySettings />
+  <CacheWarmingSettings />
   <QueueModeSettings />
 </template>

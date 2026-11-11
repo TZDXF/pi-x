@@ -492,6 +492,17 @@ export default {
     unsupported: "当前安装的 Pi 版本不支持重试设置，请先升级 Pi。",
     hint: "仅超载、限流、5xx 等临时错误会重试；额度不足、上下文超限等不会重试。",
   },
+  cacheWarming: {
+    title: "提示缓存预热",
+    desc: "为声明了缓存有效期的模型按需保持提示缓存。空闲模式在运行结束后最多保持 30 分钟；仅当 Pi 预计可节省至少 $0.05 时刷新，刷新用量计入会话费用。新会话沿用此设置。",
+    modes: {
+      off: "关闭",
+      streaming: "仅运行期间",
+      idle: "运行期间及空闲时（默认）",
+    },
+    saved: "已保存，新会话沿用此设置",
+    unsupported: "当前安装的 Pi 不支持缓存预热设置，请升级 Pi。",
+  },
   queueMode: {
     title: "跟进消息投递",
     desc: "会话运行中排队的跟进消息如何投递：每轮结束投递一条，或结束后一次性全部投递。全局生效，运行中的会话立即切换。",
@@ -1210,7 +1221,15 @@ export default {
       supportsStrictMode: "是否支持工具定义中的 strict 字段。不支持严格工具参数校验的服务应关闭。",
       requiresToolResultName: "是否要求工具结果消息携带工具名称。服务要求 name 字段时启用。",
       requiresAssistantAfterToolResult: "是否要求工具结果后紧接一条 assistant 消息。存在此消息顺序限制时启用。",
+      requiresNonNullAssistantContent:
+        "仅含工具调用的历史 assistant 消息是否必须发送空字符串 content，而不是 null。服务拒绝 null 时启用。",
+      requiresToolsWithToolHistory:
+        "历史消息包含工具调用时，即使当前未启用工具，是否仍发送 tools: []。旧版 LiteLLM 等代理需要此兼容行为。",
       requiresThinkingAsText: "是否需要将思考内容转换为普通文本。无法直接接收思考块的服务可启用。",
+      supportsMessageThreads:
+        "是否支持 Anthropic 消息线程。启用后，带会话 ID 的请求只发送新消息并接续上一回复；仅用于会转发 thread 字段的端点。",
+      promptCacheKeyMode:
+        "控制 prompt_cache_key 请求字段。auto 沿用 Pi 默认策略，enabled 在缓存启用时发送，disabled 始终不发送。",
       maxTokensField: "指定最大输出 Token 数的请求字段。按服务要求选择 max_tokens 或 max_completion_tokens。",
     },
     modelAdvancedJsonHint:

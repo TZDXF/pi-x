@@ -158,6 +158,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.processDetail",
     "settings.processDetailDesc",
     "retrySettings",
+    "cacheWarming",
     "queueMode",
   ],
   shortcuts: [

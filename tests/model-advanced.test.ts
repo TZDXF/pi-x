@@ -7,7 +7,7 @@ import * as modelLimits from "@/lib/modelLimits"
 import * as thinkingLevels from "@/lib/thinkingLevels"
 // modelAdvanced.ts imports the structured-field validators from @/lib/modelLimits,
 // so it is loaded through the alias instead of a transpiled data: URL.
-const { modelAdvancedJson, parseModelAdvanced } = await import("@/lib/modelAdvanced")
+const { anthropicCompatFlags, modelAdvancedJson, parseModelAdvanced } = await import("@/lib/modelAdvanced")
 
 test("advanced fields round-trip without losing false or unknown pi options", () => {
   const extra = {
@@ -33,7 +33,11 @@ test("reject malformed JSON, basic field overrides and invalid common types", ()
     '{"id":"other"}',
     '{"compat":[]}',
     '{"compat":{"supportsDeveloperRole":"false"}}',
+    '{"compat":{"requiresNonNullAssistantContent":"false"}}',
+    '{"compat":{"requiresToolsWithToolHistory":"true"}}',
+    '{"compat":{"supportsMessageThreads":"true"}}',
     '{"compat":{"maxTokensField":"other"}}',
+    '{"compat":{"promptCacheKeyMode":"other"}}',
     '{"headers":{"x":1}}',
     '{"cost":null}',
     '{"baseUrl":false}',
@@ -41,6 +45,19 @@ test("reject malformed JSON, basic field overrides and invalid common types", ()
     expect(() => parseModelAdvanced(raw)).toThrow()
   }
 })
+test("Pi 1.5.1 compatibility fields retain their values and unknown options", () => {
+  const extra = {
+    compat: {
+      requiresNonNullAssistantContent: true,
+      requiresToolsWithToolHistory: false,
+      supportsMessageThreads: true,
+      promptCacheKeyMode: "disabled",
+      futureFlag: "keep",
+    },
+  }
+  expect(parseModelAdvanced(JSON.stringify(extra))).toEqual(extra)
+})
+
 test("advanced settings are available for both add and edit forms", () => {
   const panel = readFileSync(new URL("../src/components/settings/models/ModelSettings.vue", import.meta.url), "utf8")
   expect((panel.match(/<ModelEditForm\b/g) ?? []).length).toBe(2)
@@ -139,6 +156,7 @@ test("shared textareas preserve fallback draft/change events and advanced JSON v
     ...vue,
     ...modelLimits,
     ...thinkingLevels,
+    anthropicCompatFlags,
     parseModelAdvanced,
     defineModel: () => model,
     defineProps: () => ({ api: "anthropic-messages" }),
@@ -152,7 +170,7 @@ test("shared textareas preserve fallback draft/change events and advanced JSON v
       vm.runInContext(
         ts.transpile(
           script +
-            "\nglobalThis.api = { onFallbackInput, setFallbackModels, focused, fallbackModels, fallbackError, parsed };",
+            "\nglobalThis.api = { onFallbackInput, setFallbackModels, setCompat, compatControlKeys, focused, fallbackModels, fallbackError, parsed };",
           { target: ts.ScriptTarget.ES2022 },
         ),
         context,
@@ -190,6 +208,13 @@ test("shared textareas preserve fallback draft/change events and advanced JSON v
     await vue.nextTick()
     expect(emitted.at(-1)).toBe(false)
     expect(api.fallbackModels.value).toBe("[]")
+    expect(api.compatControlKeys.value).toEqual(["supportsMessageThreads"])
+    api.setCompat("supportsMessageThreads", "true")
+    expect(JSON.parse(model.value)).toEqual({ compat: { supportsMessageThreads: true } })
+    api.setCompat("supportsMessageThreads", "false")
+    expect(JSON.parse(model.value)).toEqual({ compat: { supportsMessageThreads: false } })
+    api.setCompat("supportsMessageThreads", "auto")
+    expect(JSON.parse(model.value)).toEqual({})
   } finally {
     scope.stop()
   }

@@ -504,6 +504,17 @@ export default {
     unsupported: "The installed Pi version does not support retry settings. Please upgrade Pi first.",
     hint: "Only transient errors (overload, rate limits, 5xx) are retried; quota and context-limit errors are not.",
   },
+  cacheWarming: {
+    title: "Prompt cache warming",
+    desc: "Keep prompt caches warm as needed for models that declare a cache lifetime. Idle mode continues for up to 30 minutes after a run. Pi refreshes only when it estimates at least $0.05 in savings; refresh usage counts toward session cost. New sessions follow this setting.",
+    modes: {
+      off: "Off",
+      streaming: "During runs only",
+      idle: "During runs and idle (default)",
+    },
+    saved: "Saved; new sessions follow this setting",
+    unsupported: "The installed Pi does not support cache warming settings. Please upgrade Pi.",
+  },
   queueMode: {
     title: "Follow-up delivery",
     desc: "How queued follow-up messages are delivered while the agent runs: one per completion, or all at once when it finishes. Applies globally; running sessions switch immediately.",
@@ -1249,8 +1260,16 @@ export default {
         "Whether tool results must include the tool name. Enable when the service requires the name field.",
       requiresAssistantAfterToolResult:
         "Whether an assistant message must follow tool results. Enable for services with this message ordering requirement.",
+      requiresNonNullAssistantContent:
+        "Whether replayed tool-call-only assistant messages must send an empty string instead of null content. Enable for services that reject null.",
+      requiresToolsWithToolHistory:
+        "Whether requests must keep sending tools: [] after tool calls appear in history, even when tools are currently disabled. Needed by proxies such as older LiteLLM versions.",
       requiresThinkingAsText:
         "Whether thinking content must be converted to plain text. Enable for services that cannot accept thinking blocks directly.",
+      supportsMessageThreads:
+        "Whether Anthropic message threads are supported. Requests with a session ID send only new messages and continue the previous reply; enable only for endpoints that forward the thread field.",
+      promptCacheKeyMode:
+        "Controls the prompt_cache_key request field. auto follows Pi's default policy, enabled sends it while caching is active, and disabled never sends it.",
       maxTokensField:
         "The request field for the maximum output token count. Choose max_tokens or max_completion_tokens as required by the service.",
     },

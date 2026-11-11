@@ -46,7 +46,7 @@ const loaders = {
 }
 
 // Freeze the pre-split public API, including erased TypeScript types.
-const originalExports = `PiInfo TrustStatus ModelRef AppConfig PiSettings getPiSettings savePiSettings
+const originalExports = `PiInfo TrustStatus ModelRef AppConfig PiSettings CacheWarmingMode getPiSettings savePiSettings
 setTrayLabels toggleDevtools HostedSkill listHostedSkills openHostedSkillsDirectory deleteHostedSkill setHostedSkillsEnabled DiscoveredSkill
 listDiscoveredSkills skillListFiles skillReadFile detectPi PiUpdateStatus checkPiUpdate executePiUpdate
 UpdateChannel AppUpdateStatus APP_UPDATE_PROGRESS_EVENT checkAppUpdate getAppVersion installAppUpdate restartApp getConfig
