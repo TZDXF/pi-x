@@ -58,8 +58,8 @@ fn is_jsonl(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str()) == Some("jsonl")
 }
 
-/// Session usage includes each JSONL and its optional PiX presentation sidecar.
-/// Malformed metadata is conservatively treated as active and is never cleaned.
+/// Count only well-formed PiX-managed sessions eligible for the session lists.
+/// Each JSONL and its presentation sidecar stay in the same archive category.
 fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
     let mut active = category("sessions");
     let mut archived = category("archivedSessions");
@@ -78,10 +78,15 @@ fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
                 continue;
             }
             let path = file.path();
-            let is_archived = crate::sessions::read_presentation(&path)
-                .map(|presentation| presentation.archived)
-                .unwrap_or(false);
-            let target = if is_archived {
+            if !crate::sessions::has_sidecar(&path)
+                || crate::sessions::read_session_header(&path).is_none()
+            {
+                continue;
+            }
+            let Ok(presentation) = crate::sessions::read_presentation(&path) else {
+                continue;
+            };
+            let target = if presentation.archived {
                 &mut archived
             } else {
                 &mut active
@@ -257,7 +262,10 @@ mod tests {
 
     fn session(root: &Path, name: &str, archived: Option<bool>, bytes: usize) {
         let file = root.join("project").join(format!("{name}.jsonl"));
-        write(&file, &vec![b'x'; bytes]);
+        let mut contents = b"{\"type\":\"session\"}\n".to_vec();
+        assert!(bytes >= contents.len());
+        contents.resize(bytes, b'x');
+        write(&file, &contents);
         if let Some(archived) = archived {
             write(
                 &file.with_extension("pix.json"),
@@ -271,15 +279,25 @@ mod tests {
     }
 
     #[test]
-    fn summary_only_counts_sessions_and_their_metadata() {
+    fn summary_matches_session_list_eligibility() {
         let temp = TestDir::new("summary");
         let data = temp.0.join("data");
         let sessions = temp.0.join("sessions");
         let workspace = temp.0.join("workspace");
         let projectless = temp.0.join("projectless");
-        session(&sessions, "active", Some(false), 10);
-        session(&sessions, "archived", Some(true), 20);
-        session(&sessions, "unmanaged", None, 30);
+        session(&sessions, "active", Some(false), 100);
+        session(&sessions, "archived", Some(true), 200);
+        session(&sessions, "unmanaged", None, 300);
+        session(&sessions, "malformed-metadata", Some(false), 400);
+        write(
+            &sessions.join("project/malformed-metadata.pix.json"),
+            b"not-json",
+        );
+        session(&sessions, "invalid-header", Some(false), 500);
+        write(
+            &sessions.join("project/invalid-header.jsonl"),
+            b"not-json\n",
+        );
         write(&workspace.join("src/main.ts"), b"1234");
         write(&workspace.join("README.md"), b"1234567");
         write(&projectless.join("notes.txt"), b"123");
@@ -297,14 +315,14 @@ mod tests {
             vec!["sessions", "archivedSessions"]
         );
         let active = row(&summary, "sessions");
-        assert_eq!(active.item_count, 2);
-        assert_eq!(active.bytes, 40 + "{\"archived\":false}".len() as u64);
+        assert_eq!(active.item_count, 1);
+        assert_eq!(active.bytes, 100 + "{\"archived\":false}".len() as u64);
         let archived = row(&summary, "archivedSessions");
         assert_eq!(archived.item_count, 1);
-        assert_eq!(archived.bytes, 20 + "{\"archived\":true}".len() as u64);
+        assert_eq!(archived.bytes, 200 + "{\"archived\":true}".len() as u64);
         assert_eq!(
             summary.total_bytes,
-            60 + "{\"archived\":false}".len() as u64 + "{\"archived\":true}".len() as u64
+            300 + "{\"archived\":false}".len() as u64 + "{\"archived\":true}".len() as u64
         );
     }
 
@@ -312,10 +330,10 @@ mod tests {
     fn archived_cleanup_leaves_active_unmanaged_and_malformed_sessions() {
         let temp = TestDir::new("archived");
         let sessions = temp.0.join("sessions");
-        session(&sessions, "active", Some(false), 10);
-        session(&sessions, "archived", Some(true), 20);
-        session(&sessions, "unmanaged", None, 30);
-        session(&sessions, "malformed", None, 40);
+        session(&sessions, "active", Some(false), 100);
+        session(&sessions, "archived", Some(true), 200);
+        session(&sessions, "unmanaged", None, 300);
+        session(&sessions, "malformed", None, 400);
         write(&sessions.join("project/malformed.pix.json"), b"not-json");
 
         let result = cleanup_at(&sessions, "archivedSessions").unwrap();
