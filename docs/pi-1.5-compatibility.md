@@ -1,4 +1,4 @@
-# pi 1.5 兼容约定
+# pi 1.5.x 兼容约定
 
 PiX 继续通过 `pi --mode rpc` 和已安装 pi 的 SDK 对接，不固定或复制 pi 的模型运行时。
 
@@ -25,6 +25,15 @@ MCP 工具的 JSON Schema 原样保留。参数转换及验证交给运行工具
 - `sessionShareDestination`：`auto`、`gist` 或 `radius`；保存不触发上传，终端 pi 的 `/share` 使用此设置。
 
 新能力在旧版本中通过设置 schema 或 SDK 方法检测，缺失时禁用对应控件。
+
+pi 1.5.1 起还需支持以下配置；当前最新版本 1.5.2 未再改变这些字段：
+
+- `cacheWarming`：`off`、`streaming` 或 `idle`。`idle` 是 1.5.1 新增的默认值，会在运行结束后继续按需保持缓存最多 30 分钟。PiX 通过 Pi 的 SDK getter/setter 读写，并根据 schema 隐藏旧版本不支持的取值；不覆盖用户已有的 `promptCache` 模型元数据。
+- `compat.requiresToolsWithToolHistory` 与 `compat.requiresNonNullAssistantContent`：OpenAI Completions 兼容开关。
+- `compat.promptCacheKeyMode`：OpenAI Completions / Responses 的 `auto`、`enabled`、`disabled` 三态配置。
+- `compat.supportsMessageThreads`：Anthropic Messages 的会话线程开关。
+
+模型高级配置只结构化编辑已知字段，其余字段仍在 JSON 中原样保留，避免升级 Pi 后保存模型时丢失新配置。
 
 ## 验证
 

@@ -14,7 +14,7 @@ import {
   toggleThinkingLevel,
 } from "@/lib/thinkingLevels"
 import type { ThinkingLevel } from "@/api/protocol"
-import { compatFlags, parseModelAdvanced } from "@/lib/modelAdvanced"
+import { anthropicCompatFlags, compatFlags, parseModelAdvanced } from "@/lib/modelAdvanced"
 import {
   ModelFieldError,
   emptyInputLimitsForm,
@@ -29,7 +29,7 @@ import {
   type InputLimitsForm,
 } from "@/lib/modelLimits"
 const model = defineModel<string>({ required: true })
-defineProps<{ api: string }>()
+const props = defineProps<{ api: string }>()
 const emit = defineEmits<{ "update:invalid": [invalid: boolean] }>()
 const { t } = useI18n()
 const id = useId()
@@ -65,6 +65,12 @@ const limitFields = [
 ] as const satisfies readonly { key: keyof InputLimitsForm; max: number | undefined }[]
 
 const cacheTiers = ["short", "long"] as const
+const compatControlKeys = computed(() => {
+  if (props.api === "openai-completions") return [...compatFlags, "maxTokensField", "promptCacheKeyMode"]
+  if (props.api === "openai-responses") return ["promptCacheKeyMode"]
+  if (props.api === "anthropic-messages") return [...anthropicCompatFlags]
+  return []
+})
 
 const invalid = computed(
   () => !!parsed.value.error || !!limitError.value || !!promptCacheError.value || !!fallbackError.value,
@@ -238,12 +244,8 @@ function closeMapping() {
           />
         </div>
       </div>
-      <template v-if="api === 'openai-completions'">
-        <div
-          v-for="key in [...compatFlags, 'maxTokensField']"
-          :key="key"
-          class="flex flex-wrap items-start justify-between gap-3"
-        >
+      <template v-if="compatControlKeys.length">
+        <div v-for="key in compatControlKeys" :key="key" class="flex flex-wrap items-start justify-between gap-3">
           <div class="min-w-0 flex-1 space-y-1">
             <label :for="id + '-' + key" class="break-all font-mono">{{ key }}</label>
             <p :id="id + '-' + key + '-hint'" class="text-muted-foreground leading-relaxed">
@@ -268,6 +270,10 @@ function closeMapping() {
               <template v-if="key === 'maxTokensField'">
                 <SelectItem value="max_tokens">max_tokens</SelectItem>
                 <SelectItem value="max_completion_tokens">max_completion_tokens</SelectItem>
+              </template>
+              <template v-else-if="key === 'promptCacheKeyMode'">
+                <SelectItem value="enabled">enabled</SelectItem>
+                <SelectItem value="disabled">disabled</SelectItem>
               </template>
               <template v-else>
                 <SelectItem value="true">{{ t("settings.modelCompatTrue") }}</SelectItem>
