@@ -205,6 +205,12 @@ test("session card enumerates disk, confirms archive and refreshes storage count
   expect(panel.summary.value.totalBytes).toBe(0)
   expect(getStorageSummary).toHaveBeenCalledTimes(2)
   expect(pushToast).toHaveBeenCalledWith("storage.archivedAll", "info")
+
+  // Remote rows are filtered by the store; a genuine local scan failure remains visible.
+  listArchivableSessions.mockRejectedValueOnce(new Error("local enumeration failed"))
+  await panel.askArchiveAll()
+  expect(panel.error.value).toBe("local enumeration failed")
+  expect(panel.pendingArchiveAll.value).toBeNull()
 })
 
 test("byte formatting uses binary units and bounded precision", async () => {

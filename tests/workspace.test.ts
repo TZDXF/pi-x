@@ -304,6 +304,29 @@ test("bulk archive enumerates every project folder from disk and excludes first-
   expect(rows.some(row => row.file === "unflushed.jsonl")).toBe(false)
 })
 
+test("bulk archive uses only local storage scope when remote and local projects are mixed", async () => {
+  const h = await harness()
+  h.store.remember("ssh://host/remote")
+  h.store.remember("wsl://Ubuntu/home/dev/project")
+  h.store.remember("docker://container/root/project")
+  h.store.remember("C:/demo")
+  h.store.projectless = "C:/tasks"
+  const persisted = [
+    { file: "local.jsonl", cwd: "C:/demo", mtimeMs: 1 },
+    { file: "task.jsonl", cwd: "C:/tasks", mtimeMs: 2 },
+  ]
+  const requests: string[] = []
+  h.listUnarchivedSessions = async (path: string) => {
+    requests.push(path)
+    return persisted.filter(row => row.cwd === path)
+  }
+
+  const rows = await h.store.listArchivableSessions()
+  expect(requests.sort()).toEqual(["C:/demo", "C:/tasks"])
+  expect(requests.some(path => /^(ssh|wsl|docker):\/\//.test(path))).toBe(false)
+  expect(rows.map(row => row.file)).toEqual(["task.jsonl", "local.jsonl"])
+})
+
 test("rename and archive persist and update shared state; restore keeps title", async () => {
   const h = await harness()
   const row = { file: "one.jsonl", preview: "first message" }

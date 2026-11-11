@@ -494,7 +494,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const paths: string[] = []
     const addPath = (path: string) => {
       path = normalizeProjectPath(path)
-      if (path && !paths.some(existing => samePath(existing, path))) paths.push(path)
+      // Match local storage statistics: SSH/WSL/Docker sessions use a different
+      // backend and must not reach the local filesystem enumerator.
+      if (path && !isRemoteProject(path) && !paths.some(existing => samePath(existing, path))) paths.push(path)
     }
     for (const project of orderedProjects()) {
       for (const folder of projectFolders(project)) addPath(folder)
