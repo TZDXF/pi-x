@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
-import { shouldReleaseBottomLock, shouldResumeBottomLock } from "../src/lib/scrollIntent"
+import {
+  shouldReleaseBottomLock,
+  shouldReleaseBottomLockOnScroll,
+  shouldResumeBottomLock,
+} from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
   return {
@@ -17,9 +21,24 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+test("layout clamping and the library's one-pixel correction keep bottom following", () => {
+  expect(shouldReleaseBottomLockOnScroll(1000, 800, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(1000, 799, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 799, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 0, 0)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 0, -100)).toBe(false)
+})
+
+test("upward scrolling away from the bottom releases following", () => {
+  expect(shouldReleaseBottomLockOnScroll(1000, 950, 1000)).toBe(true)
+  expect(shouldReleaseBottomLockOnScroll(800, 700, 1000)).toBe(true)
+  expect(shouldReleaseBottomLockOnScroll(800, 800, 1000)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 900, 1000)).toBe(false)
+})
+
 test("only a downward user scroll to the bottom resumes following", () => {
-  // A resize can produce a bottom scroll event after the library clears its
-  // escape flag; that must not relock a reader or follow the next growth.
+  // Resizing can leave a reader at the bottom without downward movement;
+  // stationary and upward events must not resume following.
   expect(shouldResumeBottomLock(900, 1000, 1000, false)).toBe(false)
   expect(shouldResumeBottomLock(1000, 1000, 1000, true)).toBe(false)
   expect(shouldResumeBottomLock(1000, 900, 1000, true)).toBe(false)

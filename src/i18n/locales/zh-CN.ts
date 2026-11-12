@@ -252,6 +252,7 @@ export default {
     annotateRemove: "移除批注",
     selectFile: "从右侧文件树中选择要查看的文件",
     resizeTree: "拖拽调整文件树宽度（也可使用左右方向键）",
+    commentFileUnavailable: "文件不存在或无法在项目目录中访问：{path}",
   },
   changes: {
     showFlat: "平铺显示",

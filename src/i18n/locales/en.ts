@@ -256,6 +256,7 @@ export default {
     annotateRemove: "Remove comment",
     selectFile: "Select a file from the tree on the right",
     resizeTree: "Drag to resize the file tree (arrow keys also work)",
+    commentFileUnavailable: "File does not exist or is unavailable in the project folders: {path}",
   },
   changes: {
     showFlat: "Flat list",
