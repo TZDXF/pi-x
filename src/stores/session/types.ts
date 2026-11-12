@@ -50,6 +50,8 @@ export interface UserEntry {
   kind: "user"
   id: number
   text: string
+  /** Expanded prompt retains attachments for live bubbles; text stays editable user input. */
+  contextText?: string
   modelChange?: { from: string; to: string }
   images?: { url: string }[]
   live?: true

@@ -15,6 +15,9 @@ import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
+import CodeCommentPreview from "./CodeCommentPreview.vue"
+import type { ParsedCodeComment } from "@/lib/codeComments"
+import { useWorkspaceStore } from "@/stores/workspace"
 import ChatErrorRecord from "./ChatErrorRecord.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
 import ChatCompactionMarker from "./ChatCompactionMarker.vue"
@@ -54,6 +57,18 @@ const emit = defineEmits<{
 }>()
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
+const workspace = useWorkspaceStore()
+const openedComment = ref<ParsedCodeComment | null>(null)
+const commentRoots = computed(() => [
+  props.project,
+  ...workspace.projectFolders(props.project).filter(root => root !== props.project),
+])
+watch(
+  () => [props.project, props.session.sessionFile],
+  () => {
+    openedComment.value = null
+  },
+)
 /** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
 async function stopRetry() {
   try {
@@ -178,6 +193,7 @@ onBeforeUnmount(() => {
                 v-if="entry.kind === 'user'"
                 :entry="entry"
                 :edit="edit"
+                @open-code-comment="openedComment = $event"
                 @preview-image="emit('previewImage', $event)"
                 @copy-text="emit('copyText', $event)"
                 @edit-textarea="emit('editTextarea', $event)"
@@ -301,4 +317,5 @@ onBeforeUnmount(() => {
     @remove="onSelectionRemove"
     @cancel="onSelectionCancel"
   />
+  <CodeCommentPreview :comment="openedComment" :roots="commentRoots" @close="openedComment = null" />
 </template>
