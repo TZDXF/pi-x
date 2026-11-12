@@ -5,6 +5,7 @@ import { createI18n } from "vue-i18n"
 import * as vue from "vue"
 import { compileScript, parse } from "vue/compiler-sfc"
 import { useArchiveAllSessions } from "@/composables/useArchiveAllSessions"
+import { encodeCodedError, parseCodedError } from "@/lib/backendError"
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
 
@@ -81,6 +82,7 @@ test("storage panel copy exists in both locales", async () => {
       "storage.cleanedPartial",
       "storage.archiveAll",
       "storage.archiveAllConfirm",
+      "storage.archiveAllEmpty",
       "storage.archivedAll",
       "storage.archiveAllFailed",
       "storage.scopeNote",
@@ -180,7 +182,7 @@ test("session card enumerates disk, confirms archive and refreshes storage count
     "@lucide/vue": {},
     "@/api/piClient": { getStorageSummary },
     "@/lib/format": { formatBytes: String },
-    "@/lib/backendError": { formatCodedError: (_t: unknown, error: Error) => error.message },
+    "@/lib/backendError": { formatCodedError: (_t: unknown, error: Error) => error.message, parseCodedError },
     "@/lib/router": {},
     "@/stores/conversations": { useUiStore: () => ({ pushToast }) },
     "@/stores/workspace": { useWorkspaceStore: () => ({ listArchivableSessions, update }) },
@@ -188,8 +190,13 @@ test("session card enumerates disk, confirms archive and refreshes storage count
     "@/components/ui/button": {},
     "@/components/ui/dialog": {},
   }
+  const diagnostics: string[] = []
   const exports: any = {}
-  new Function("exports", "require", code)(exports, (id: string) => modules[id])
+  new Function("exports", "require", code)(exports, (id: string) =>
+    id === "@/api/piClient"
+      ? { getStorageSummary, pixLog: (message: string) => diagnostics.push(message) }
+      : modules[id],
+  )
   const panel = exports.default.setup({}, { expose() {} })
 
   await panel.load()
@@ -205,12 +212,40 @@ test("session card enumerates disk, confirms archive and refreshes storage count
   expect(panel.summary.value.totalBytes).toBe(0)
   expect(getStorageSummary).toHaveBeenCalledTimes(2)
   expect(pushToast).toHaveBeenCalledWith("storage.archivedAll", "info")
+  expect(diagnostics).toEqual(["archive all stage=enumerated targets=2", "archive all stage=done targets=2 failed=0"])
 
   // Remote rows are filtered by the store; a genuine local scan failure remains visible.
   listArchivableSessions.mockRejectedValueOnce(new Error("local enumeration failed"))
   await panel.askArchiveAll()
   expect(panel.error.value).toBe("local enumeration failed")
   expect(panel.pendingArchiveAll.value).toBeNull()
+  expect(diagnostics.at(-1)).toBe("archive all stage=enumerate-failed")
+
+  // An empty enumeration is real feedback, not a click that appears to do nothing.
+  pushToast.mockClear()
+  listArchivableSessions.mockResolvedValueOnce([])
+  await panel.askArchiveAll()
+  expect(panel.pendingArchiveAll.value).toBeNull()
+  expect(pushToast).toHaveBeenCalledWith("storage.archiveAllEmpty", "info")
+  expect(diagnostics.at(-1)).toBe("archive all stage=enumerated targets=0")
+
+  // Partial failure: every row is still attempted, the tally is truthful and
+  // the diagnostic carries only an error code (never the raw message or path).
+  pushToast.mockClear()
+  update.mockClear()
+  update.mockRejectedValueOnce(encodeCodedError("sessionPathInvalid", "无效的会话路径"))
+  listArchivableSessions.mockResolvedValueOnce([
+    { file: "one.jsonl", id: "one", cwd: "C:/demo", title: "First", mtimeMs: 1 },
+    { file: "two.jsonl", id: "two", cwd: "C:/tasks", title: null, mtimeMs: 2 },
+  ])
+  await panel.askArchiveAll()
+  await panel.confirmArchiveAll()
+  expect(update).toHaveBeenCalledTimes(2)
+  expect(pushToast).toHaveBeenCalledWith("storage.archiveAllFailed", "error")
+  expect(diagnostics.at(-1)).toBe("archive all stage=done targets=2 failed=1")
+  expect(diagnostics.some(line => line.includes("sessionPathInvalid"))).toBe(true)
+  expect(diagnostics.join("\n")).not.toContain("one.jsonl")
+  expect(diagnostics.join("\n")).not.toContain("无效的会话路径")
 })
 
 test("byte formatting uses binary units and bounded precision", async () => {

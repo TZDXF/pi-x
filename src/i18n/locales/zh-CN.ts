@@ -561,6 +561,7 @@ export default {
     manageArchives: "管理归档",
     archiveAll: "全部归档",
     archiveAllConfirm: "将全部 {count} 个会话归档？可在设置的归档页恢复。",
+    archiveAllEmpty: "没有可归档的未归档会话，存储统计可能尚未刷新，请点刷新后重试。",
     archivedAll: "已归档 {count} 个会话",
     archiveAllFailed: "{count} 个会话归档失败",
     clean: "清理",

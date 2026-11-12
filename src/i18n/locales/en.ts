@@ -578,6 +578,8 @@ export default {
     manageArchives: "Manage archives",
     archiveAll: "Archive all",
     archiveAllConfirm: "Archive all {count} session(s)? You can restore them from Archives in Settings.",
+    archiveAllEmpty:
+      "There are no unarchived sessions to archive. Storage counts may be out of date; refresh and try again.",
     archivedAll: "Archived {count} session(s)",
     archiveAllFailed: "Failed to archive {count} session(s)",
     clean: "Clean up",
