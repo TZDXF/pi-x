@@ -282,7 +282,7 @@ test("new sessions discovered on refresh precede saved order across project fold
   await reopened.store.flushPersistence()
   expect(reopened.store.orderedSessions("front").map(row => row.file)).toEqual(["b", "new", "a", "newer"])
 })
-test("bulk archive enumerates every project folder from disk and excludes first-response previews", async () => {
+test("bulk archive enumerates disk directly and excludes first-response previews", async () => {
   const h = await harness()
   h.store.createProject({ name: "Group", primary: "C:/front", folders: ["C:/front", "C:/back"] })
   h.store.projectless = "C:/tasks"
@@ -290,21 +290,21 @@ test("bulk archive enumerates every project folder from disk and excludes first-
     { file: "old.jsonl", cwd: "C:/back", mtimeMs: 1 },
     { file: "task.jsonl", cwd: "C:/tasks", mtimeMs: 3 },
   ]
-  const requests: string[] = []
-  h.listUnarchivedSessions = async (path: string) => {
-    requests.push(path)
-    return persisted.filter(row => row.cwd === path)
+  const requests: unknown[][] = []
+  h.listUnarchivedSessions = async (...args: unknown[]) => {
+    requests.push(args)
+    return persisted
   }
   // This row is visible before the first assistant response, but its file does not exist yet.
   h.store.preview({ file: "unflushed.jsonl", cwd: "C:/front", preview: "first question", mtimeMs: 4 })
 
   const rows = await h.store.listArchivableSessions()
-  expect(requests.sort()).toEqual(["C:/back", "C:/front", "C:/tasks"])
-  expect(rows.map(row => row.file)).toEqual(["task.jsonl", "old.jsonl"])
+  expect(requests).toEqual([[]])
+  expect(rows.map(row => row.file)).toEqual(["old.jsonl", "task.jsonl"])
   expect(rows.some(row => row.file === "unflushed.jsonl")).toBe(false)
 })
 
-test("bulk archive uses only local storage scope when remote and local projects are mixed", async () => {
+test("bulk archive does not enumerate registered project or remote URIs", async () => {
   const h = await harness()
   h.store.remember("ssh://host/remote")
   h.store.remember("wsl://Ubuntu/home/dev/project")
@@ -315,16 +315,26 @@ test("bulk archive uses only local storage scope when remote and local projects 
     { file: "local.jsonl", cwd: "C:/demo", mtimeMs: 1 },
     { file: "task.jsonl", cwd: "C:/tasks", mtimeMs: 2 },
   ]
-  const requests: string[] = []
-  h.listUnarchivedSessions = async (path: string) => {
-    requests.push(path)
-    return persisted.filter(row => row.cwd === path)
+  const requests: unknown[][] = []
+  h.listUnarchivedSessions = async (...args: unknown[]) => {
+    requests.push(args)
+    return persisted
   }
 
   const rows = await h.store.listArchivableSessions()
-  expect(requests.sort()).toEqual(["C:/demo", "C:/tasks"])
-  expect(requests.some(path => /^(ssh|wsl|docker):\/\//.test(path))).toBe(false)
-  expect(rows.map(row => row.file)).toEqual(["task.jsonl", "local.jsonl"])
+  expect(requests).toEqual([[]])
+  expect(rows.map(row => row.file)).toEqual(["local.jsonl", "task.jsonl"])
+})
+
+test("bulk archive includes persisted sessions whose projects are no longer registered", async () => {
+  const h = await harness()
+  h.store.remember("C:/registered")
+  const orphaned = [{ file: "orphaned.jsonl", cwd: "C:/removed", mtimeMs: 1 }]
+  h.listUnarchivedSessions = async (...args: unknown[]) =>
+    args.length ? orphaned.filter(row => row.cwd === args[0]) : orphaned
+
+  const rows = await h.store.listArchivableSessions()
+  expect(rows).toEqual(orphaned)
 })
 
 test("rename and archive persist and update shared state; restore keeps title", async () => {

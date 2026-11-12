@@ -143,10 +143,15 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
     list_with_options(project, Some(MAX_SESSIONS), true).await
 }
 
-/// List every persisted, unarchived session for bulk archive. Unlike the
-/// sidebar listing, archived rows do not consume a limit and hide older rows.
-pub async fn list_unarchived(project: String) -> Result<Vec<SessionMeta>, String> {
-    list_with_options(project, None, false).await
+/// List every persisted, unarchived local session for bulk archive. Storage
+/// statistics and this action share the same global on-disk scope, independent
+/// of the projects currently registered in the sidebar.
+pub async fn list_unarchived() -> Result<Vec<SessionMeta>, String> {
+    tokio::task::spawn_blocking(move || {
+        list_sessions(&agent_dir().join("sessions"), None, None, false)
+    })
+    .await
+    .map_err(|e| format!("session scan failed: {e}"))?
 }
 
 async fn list_with_options(
@@ -191,6 +196,20 @@ fn list_project_sessions(
     limit: Option<usize>,
     include_archived: bool,
 ) -> Result<Vec<SessionMeta>, String> {
+    list_sessions(
+        sessions_root,
+        Some(project_norm),
+        limit,
+        include_archived,
+    )
+}
+
+fn list_sessions(
+    sessions_root: &Path,
+    project_norm: Option<&str>,
+    limit: Option<usize>,
+    include_archived: bool,
+) -> Result<Vec<SessionMeta>, String> {
     let mut candidates = Vec::new();
     let dirs = match std::fs::read_dir(sessions_root) {
         Ok(d) => d,
@@ -223,7 +242,9 @@ fn list_project_sessions(
                     creation_time(header.get("timestamp").and_then(Value::as_str)),
                 )
             };
-            if normalize(Path::new(&cwd)).unwrap_or(cwd) != project_norm {
+            if project_norm
+                .is_some_and(|project| normalize(Path::new(&cwd)).unwrap_or(cwd) != project)
+            {
                 continue;
             }
             // 只展示 PiX 纳管的会话（带 .pix.json sidecar）；pi CLI 等其他
@@ -1490,6 +1511,42 @@ if (request.op === 'read') {
                 .map(|index| format!("session-{index}"))
                 .collect::<Vec<_>>()
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bulk_listing_includes_sessions_from_unregistered_projects() {
+        let root = std::env::temp_dir().join(format!("pix-list-orphaned-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        for (folder, id, cwd, archived) in [
+            ("registered", "registered", "C:/registered", false),
+            ("removed", "orphaned", "C:/removed", false),
+            ("archived", "archived", "C:/archived", true),
+        ] {
+            let directory = sessions_root.join(folder);
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("{id}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session",
+                "id": id,
+                "cwd": cwd,
+                "timestamp": "2026-11-12T00:00:00Z",
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{archived}}}"),
+            )
+            .unwrap();
+        }
+
+        // None of these cwd values need to exist or remain registered: both
+        // storage statistics and bulk archive operate on the session store.
+        let rows = list_sessions(&sessions_root, None, None, false).unwrap();
+        let mut ids: Vec<String> = rows.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["orphaned", "registered"]);
 
         std::fs::remove_dir_all(root).unwrap();
     }
