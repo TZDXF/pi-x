@@ -105,6 +105,14 @@ pub(super) async fn handle(
             "search_files" => Ok(to_json(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,
             )?),
+            "watch_project_files" => {
+                crate::project_watch::watch_project_files(app.clone(), text(a, "project")?).await?;
+                Ok(Value::Null)
+            }
+            "unwatch_project_files" => {
+                crate::project_watch::unwatch_project_files(text(a, "project")?).await?;
+                Ok(Value::Null)
+            }
             _ => return Err(UNHANDLED.to_owned()),
         }
     }

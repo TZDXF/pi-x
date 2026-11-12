@@ -20,6 +20,7 @@ mod pi_update;
 mod paths;
 mod preview_guard;
 mod preview_proxy;
+mod project_watch;
 mod process;
 #[cfg(feature = "remote-access")]
 mod remote;
@@ -174,6 +175,8 @@ pub fn run() {
             commands::files::search_files,
             commands::files::list_project_directory,
             commands::files::read_file_preview,
+            project_watch::watch_project_files,
+            project_watch::unwatch_project_files,
             commands::files::session_export_file,
             commands::files::open_path,
             editor::open_in_editor,
