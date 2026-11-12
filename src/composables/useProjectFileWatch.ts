@@ -7,6 +7,7 @@ import {
 } from "@/api/client/projectFiles"
 import { samePath } from "@/lib/paths"
 import { isRemoteProject } from "@/lib/ssh"
+import { createId } from "@/lib/uuid"
 
 /** One filesystem report from the backend. */
 export interface ProjectFilesChange {
@@ -27,16 +28,18 @@ export interface ProjectFileWatchOptions {
 /**
  * Subscribe to filesystem changes of one local project root.
  *
- * The front-end tells the backend what it currently shows (loaded directories
- * plus the previewed file) via `interest`; only changes inside that scope are
- * reported, so an unopened `node_modules` costs nothing while every browsable
- * directory still syncs once loaded. Watching is reference counted in the
- * backend, so several sidebar tabs on the same project share one OS watch.
+ * Every mounted sidebar (each files tab owns its own `ProjectFiles` instance)
+ * has a **subscriber token**, so two tabs on the same project keep independent
+ * browsed scopes: the backend reports the union of them, and releasing one tab
+ * only clears its own scope. Each tab then reloads only the directories it has
+ * actually loaded, so a path reported on behalf of another tab costs nothing.
  *
  * Remote projects are not watched (the backend rejects them) and keep manual
  * refresh; a missing event channel degrades the same way.
  */
 export function useProjectFileWatch(options: ProjectFileWatchOptions) {
+  /** Stable identity of this tab, used as the backend's per-subscriber scope key. */
+  const subscriber = createId("files-")
   /** Root currently watched ("" when nothing is watched). */
   const watching = ref("")
   let off: (() => void) | undefined
@@ -50,14 +53,14 @@ export function useProjectFileWatch(options: ProjectFileWatchOptions) {
     off = undefined
     const previous = watching.value
     watching.value = ""
-    if (previous) void unwatchProjectFiles(previous).catch(() => undefined)
+    if (previous) void unwatchProjectFiles(previous, subscriber).catch(() => undefined)
   }
 
   function publishInterest() {
     const root = watching.value
     if (!root) return
     const paths = options.interest?.() ?? [""]
-    void setProjectFilesInterest(root, paths).catch(() => undefined)
+    void setProjectFilesInterest(root, subscriber, paths).catch(() => undefined)
   }
 
   async function start(root: string) {
@@ -79,7 +82,7 @@ export function useProjectFileWatch(options: ProjectFileWatchOptions) {
     }
     off = listener
     try {
-      await watchProjectFiles(root)
+      await watchProjectFiles(root, subscriber)
     } catch {
       // Unwatchable directory or a backend without the command: stay silent.
       release()
@@ -111,5 +114,5 @@ export function useProjectFileWatch(options: ProjectFileWatchOptions) {
       release()
     })
   })
-  return { watching }
+  return { watching, subscriber }
 }

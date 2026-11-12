@@ -21,15 +21,17 @@ export interface ProjectFilesChanged {
   reset: boolean
 }
 
-/** Start the backend watch for a local project directory (reference counted by root). */
-export const watchProjectFiles = (project: string) => invoke<void>("watch_project_files", { project })
+/** Start watching for one subscriber; subscriptions are reference counted per root. */
+export const watchProjectFiles = (project: string, subscriber: string) =>
+  invoke<void>("watch_project_files", { project, subscriber })
 
-/** Release one watcher subscription; the OS watch ends with the last one. */
-export const unwatchProjectFiles = (project: string) => invoke<void>("unwatch_project_files", { project })
+/** Release this subscriber only; other tabs on the same root keep watching. */
+export const unwatchProjectFiles = (project: string, subscriber: string) =>
+  invoke<void>("unwatch_project_files", { project, subscriber })
 
-/** Declare the directories/files on screen so unrelated churn is filtered out. */
-export const setProjectFilesInterest = (project: string, paths: string[]) =>
-  invoke<void>("set_project_files_interest", { project, paths })
+/** Declare the directories/files this subscriber shows; reports are the union across tabs. */
+export const setProjectFilesInterest = (project: string, subscriber: string, paths: string[]) =>
+  invoke<void>("set_project_files_interest", { project, subscriber, paths })
 
 /** Directory/file changes inside watched project roots, coalesced by the backend. */
 export function onProjectFilesChanged(handler: (change: ProjectFilesChanged) => void): Promise<() => void> {

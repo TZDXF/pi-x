@@ -1,16 +1,19 @@
 //! Watches project directories on request so the project-files sidebar can
 //! refresh directory listings and the open preview without a manual reload.
 //!
-//! Subscribers are reference counted per project root: several sidebar tabs may
-//! show the same project, and the OS watch is only removed when the last of
-//! them stops watching (tab close, project switch or app shutdown).
+//! Subscriptions are keyed by **(root, subscriber token)**: several sidebar
+//! tabs may show the same project, each with its own version of what the user
+//! is browsing. The OS watch is reference counted per root and removed with the
+//! last subscriber, and reported paths are the **union** of every subscriber's
+//! scope, so one tab never narrows another's sync (a hidden tab can only widen
+//! it, which costs nothing because receivers reload only what they loaded).
 //!
 //! Two boundaries shape what is reported:
 //!
-//! * **Browsed scope** — the front-end sends the directories it has loaded plus
-//!   the file it is previewing (`set_project_files_interest`). Only changes
-//!   inside that set (or of an ancestor of it) are reported, so a busy
-//!   `node_modules` costs nothing until the user opens it; nothing is hidden.
+//! * **Browsed scope** — each subscriber sends the directories it has loaded
+//!   plus the file it is previewing (`set_project_files_interest`). Only changes
+//!   inside that union (or of an ancestor of it) are reported, so a busy
+//!   `node_modules` costs nothing until someone opens it; nothing is hidden.
 //! * **Root lifetime** — a project root can be deleted, renamed or recreated
 //!   (worktree cleanup, `git` operations). Every event batch re-checks armed
 //!   roots, re-arms recovered ones and tells the front-end to reload, and
@@ -52,11 +55,21 @@ struct WatchEntry {
     /// Project string as the front-end passed it, echoed back in the event.
     project: String,
     root: PathBuf,
-    /// Directories and the previewed file the UI currently shows.
-    interested: HashSet<String>,
-    subscribers: usize,
+    /// Per-subscriber browsed scope (subscriber token → project-relative paths).
+    subscribers: HashMap<String, HashSet<String>>,
     /// Whether the recursive OS watch for `root` is currently installed.
     armed: bool,
+}
+
+impl WatchEntry {
+    /// Union of every subscriber's scope, always including the root listing.
+    fn interest(&self) -> HashSet<String> {
+        let mut union: HashSet<String> = HashSet::from([String::new()]);
+        for scope in self.subscribers.values() {
+            union.extend(scope.iter().cloned());
+        }
+        union
+    }
 }
 
 /// Watcher + subscriptions. Kept as one struct so the lifetime rules above
@@ -159,7 +172,10 @@ fn is_interesting(relative: &str, interested: &HashSet<String>) -> bool {
 impl WatchCore {
     /// Replace the process-wide watcher callback with the event channel used
     /// by [`coalesce_loop`]; idempotent.
-    fn ensure_watcher(&mut self, callback: impl FnMut(NotifyResult<Event>) + Send + 'static) -> Result<(), String> {
+    fn ensure_watcher(
+        &mut self,
+        callback: impl FnMut(NotifyResult<Event>) + Send + 'static,
+    ) -> Result<(), String> {
         if self.watcher.is_some() {
             return Ok(());
         }
@@ -173,9 +189,10 @@ impl WatchCore {
             .ok_or_else(|| watcher_error("not started"))
     }
 
-    /// Subscribe (reference counted). A stale entry whose root vanished is
-    /// re-armed rather than silently accepted.
-    fn subscribe(&mut self, project: &str) -> Result<(), String> {
+    /// Subscribe one UI subscriber (reference counted per `(root, subscriber)`).
+    /// Re-subscribing with the same token keeps its scope; a stale entry whose
+    /// root vanished is re-armed rather than silently accepted.
+    fn subscribe(&mut self, project: &str, subscriber: &str) -> Result<(), String> {
         if crate::ssh::is_remote_uri(project) {
             return Err(crate::errors::pix_error(
                 "projectWatchRemote",
@@ -185,8 +202,11 @@ impl WatchCore {
         let key = entry_key(project);
         if self.entries.contains_key(&key) {
             if let Some(entry) = self.entries.get_mut(&key) {
-                entry.subscribers += 1;
                 entry.project = project.to_string();
+                entry
+                    .subscribers
+                    .entry(subscriber.to_string())
+                    .or_insert_with(|| HashSet::from([String::new()]));
             }
             // 已订阅的根消失（worktree 清理、git 操作）时保持订阅并标记为未 arm：
             // 目录重建后由空闲检查重新 arm 并通知前端重载，不需要前端重试。
@@ -203,8 +223,10 @@ impl WatchCore {
                 project: project.to_string(),
                 root,
                 // The root listing is always on screen.
-                interested: HashSet::from([String::new()]),
-                subscribers: 1,
+                subscribers: HashMap::from([(
+                    subscriber.to_string(),
+                    HashSet::from([String::new()]),
+                )]),
                 armed: true,
             },
         );
@@ -228,8 +250,9 @@ impl WatchCore {
             .map(|(key, _)| key.clone())
     }
 
-    /// Release one subscriber; the OS watch is removed with the last one.
-    fn unsubscribe(&mut self, project: &str) {
+    /// Release **one** subscriber's scope; other subscribers of the same root
+    /// keep watching, and the OS watch ends with the last one.
+    fn unsubscribe(&mut self, project: &str, subscriber: &str) {
         let Some(key) = self.key_for_stop(project) else {
             return;
         };
@@ -237,8 +260,8 @@ impl WatchCore {
             let Some(entry) = self.entries.get_mut(&key) else {
                 return;
             };
-            entry.subscribers = entry.subscribers.saturating_sub(1);
-            (entry.subscribers == 0).then(|| entry.root.clone())
+            entry.subscribers.remove(subscriber);
+            entry.subscribers.is_empty().then(|| entry.root.clone())
         };
         let Some(root) = release else {
             return;
@@ -250,8 +273,8 @@ impl WatchCore {
         }
     }
 
-    /// Record what the UI shows; always keeps the root listing interested.
-    fn set_interest(&mut self, project: &str, paths: &[String]) {
+    /// Record what one subscriber shows. Other subscribers keep their own scope.
+    fn set_interest(&mut self, project: &str, subscriber: &str, paths: &[String]) {
         let Some(key) = self.key_for_stop(project) else {
             return;
         };
@@ -260,7 +283,9 @@ impl WatchCore {
         };
         let mut interested = HashSet::from([String::new()]);
         interested.extend(paths.iter().filter_map(|path| normalize_relative(path)));
-        entry.interested = interested;
+        entry
+            .subscribers
+            .insert(subscriber.to_string(), interested);
     }
 
     /// Re-arm or drop a subscription whose root moved, disappeared or came back.
@@ -328,7 +353,7 @@ impl WatchCore {
         let watched: Vec<(PathBuf, String, HashSet<String>)> = self
             .entries
             .values()
-            .map(|entry| (entry.root.clone(), entry.project.clone(), entry.interested.clone()))
+            .map(|entry| (entry.root.clone(), entry.project.clone(), entry.interest()))
             .collect();
         for path in changed {
             for (root, project, interested) in &watched {
@@ -363,9 +388,14 @@ impl WatchCore {
     }
 }
 
-/// Start watching a local project directory (reference counted).
+/// Start watching a local project directory for one UI subscriber
+/// (reference counted per `(root, subscriber)`).
 #[tauri::command]
-pub async fn watch_project_files(app: AppHandle, project: String) -> Result<(), String> {
+pub async fn watch_project_files(
+    app: AppHandle,
+    project: String,
+    subscriber: String,
+) -> Result<(), String> {
     let mut core = lock(core());
     if core.watcher.is_none() {
         let (tx, rx) = mpsc::channel::<NotifyResult<Event>>();
@@ -378,21 +408,25 @@ pub async fn watch_project_files(app: AppHandle, project: String) -> Result<(), 
             .spawn(move || coalesce_loop(handle, rx))
             .map_err(watcher_error)?;
     }
-    core.subscribe(&project)
+    core.subscribe(&project, &subscriber)
 }
 
-/// Release one subscriber; the OS watch is removed with the last one.
+/// Release this subscriber only; other subscribers keep their watch.
 #[tauri::command]
-pub async fn unwatch_project_files(project: String) -> Result<(), String> {
-    lock(core()).unsubscribe(&project);
+pub async fn unwatch_project_files(project: String, subscriber: String) -> Result<(), String> {
+    lock(core()).unsubscribe(&project, &subscriber);
     Ok(())
 }
 
-/// Declare what the UI currently shows: loaded directories plus the previewed
-/// file. Changes outside that set are not reported.
+/// Declare what this subscriber currently shows: its loaded directories plus
+/// the previewed file. Reported changes are the union across subscribers.
 #[tauri::command]
-pub async fn set_project_files_interest(project: String, paths: Vec<String>) -> Result<(), String> {
-    lock(core()).set_interest(&project, &paths);
+pub async fn set_project_files_interest(
+    project: String,
+    subscriber: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    lock(core()).set_interest(&project, &subscriber, &paths);
     Ok(())
 }
 
@@ -579,7 +613,7 @@ mod tests {
         // 未展开目录不在关注范围内，避免构建输出刷屏。
         assert!(!is_interesting("node_modules/vue/index.js", &interested));
         assert!(!is_interesting("documents/a.md", &interested));
-        // 已加载目录内的子项（新增/删除/重命名）都要上报，删除目录本身也算。
+        // 已加载目录内的子项（新增/删除/重命名）都要上报。
         assert!(is_interesting("src/other.ts", &interested));
         // 形似前缀的兄弟路径不能被误判为子项。
         assert!(!is_interesting("srcX/y.ts", &interested));
@@ -601,14 +635,15 @@ mod tests {
     fn releasing_a_subscription_survives_a_vanished_root() {
         let dir = scratch("stop");
         let (mut core, _rx) = with_watcher();
-        core.subscribe(dir.to_string_lossy().as_ref()).unwrap();
+        core.subscribe(dir.to_string_lossy().as_ref(), "tab-a")
+            .unwrap();
         let request = dir.to_string_lossy().to_string();
         fs::remove_dir_all(&dir).unwrap();
         // canonicalize 已经失败；仍必须找到并释放注册项，不能泄漏 OS watch。
-        core.unsubscribe(&request);
+        core.unsubscribe(&request, "tab-a");
         assert!(core.entries.is_empty());
         assert!(matches!(
-            core.subscribe(&request),
+            core.subscribe(&request, "tab-b"),
             Err(message) if message.contains("projectDirMissing")
         ));
     }
@@ -618,16 +653,16 @@ mod tests {
         let dir = scratch("recreate");
         let (mut core, rx) = with_watcher();
         let request = dir.to_string_lossy().to_string();
-        core.subscribe(&request).unwrap();
+        core.subscribe(&request, "tab-a").unwrap();
         let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
         fs::remove_dir_all(&dir).unwrap();
-        core.unsubscribe(&request);
+        core.unsubscribe(&request, "tab-a");
         assert!(core.entries.is_empty());
         // 重建同名目录后再次订阅：必须重新 arm，事件才能恢复上报。
-        fs::create_dir_all(&dir).unwrap();
-        core.subscribe(&request).unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        core.subscribe(&request, "tab-a").unwrap();
         // 前端重新加载列表后重新声明关注范围（根 + 已展开目录）。
-        core.set_interest(&request, &[String::new(), "src".to_string()]);
+        core.set_interest(&request, "tab-a", &[String::new(), "src".to_string()]);
         write(&dir.join("src").join("new.ts"), "export const value = 1\n");
         let changes = collect_changes(&mut core, &rx, Duration::from_secs(2));
         assert!(
@@ -642,7 +677,7 @@ mod tests {
         let dir = scratch("heal");
         let (mut core, rx) = with_watcher();
         let request = dir.to_string_lossy().to_string();
-        core.subscribe(&request).unwrap();
+        core.subscribe(&request, "tab-a").unwrap();
         let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
 
         // 根目录消失时 notify 无法再上报其内部变化；空批次（空闲检查）必须
@@ -655,14 +690,13 @@ mod tests {
 
         // 同名目录重建后，下一次空批次重新 arm 并再次通知前端。
         fs::create_dir_all(dir.join("src")).unwrap();
-        core.set_interest(&request, &[String::new(), "src".to_string()]);
+        core.set_interest(&request, "tab-a", &[String::new(), "src".to_string()]);
         let rearmed = core.changes(&HashSet::new());
         assert_eq!(rearmed.len(), 1);
         assert!(rearmed[0].reset);
         assert!(core.entries.values().next().unwrap().armed);
 
-        write(&dir.join("src").join("lib.ts"), "one
-");
+        write(&dir.join("src").join("lib.ts"), "one\n");
         let live = collect_changes(&mut core, &rx, Duration::from_secs(3));
         assert!(
             paths_of(&live).iter().any(|path| path == "src/lib.ts"),
@@ -672,14 +706,76 @@ mod tests {
     }
 
     #[test]
+    fn subscriber_scopes_are_unioned_instead_of_overwritten() {
+        let dir = scratch("union");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        core.subscribe(&request, "tab-a").unwrap();
+        core.subscribe(&request, "tab-b").unwrap();
+        core.set_interest(&request, "tab-a", &[String::new(), "src".to_string()]);
+        core.set_interest(&request, "tab-b", &[String::new(), "dist".to_string()]);
+        let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
+
+        // H1 回归：第二个订阅者不能收窄第一个订阅者的关注范围。
+        write(&dir.join("src").join("lib.ts"), "one\n");
+        write(&dir.join("dist").join("bundle.js"), "one\n");
+        let reported = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        let paths = paths_of(&reported);
+        assert!(
+            paths.iter().any(|path| path == "src/lib.ts"),
+            "expected src/lib.ts, got {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|path| path == "dist/bundle.js"),
+            "expected dist/bundle.js, got {paths:?}"
+        );
+    }
+
+    #[test]
+    fn releasing_one_subscriber_keeps_the_others_scope() {
+        let dir = scratch("partial");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        core.subscribe(&request, "tab-a").unwrap();
+        core.subscribe(&request, "tab-b").unwrap();
+        core.set_interest(&request, "tab-a", &[String::new(), "src".to_string()]);
+        core.set_interest(&request, "tab-b", &[String::new(), "dist".to_string()]);
+        let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
+
+        // 关闭其中一个页签只清理它自己的订阅，另一个继续同步。
+        core.unsubscribe(&request, "tab-b");
+        assert!(core.entries.contains_key(&normalize_key(&request)));
+        write(&dir.join("src").join("lib.ts"), "two\n");
+        write(&dir.join("dist").join("bundle.js"), "two\n");
+        let reported = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        let paths = paths_of(&reported);
+        assert!(paths.iter().any(|path| path == "src/lib.ts"), "got {paths:?}");
+        assert!(
+            !paths.iter().any(|path| path == "dist/bundle.js"),
+            "the released subscriber's scope must stop reporting: {paths:?}"
+        );
+
+        // 最后一个订阅者离开时才撤销 OS watch。
+        core.unsubscribe(&request, "tab-a");
+        assert!(core.entries.is_empty());
+        write(&dir.join("src").join("lib.ts"), "three\n");
+        let after = collect_changes(&mut core, &rx, Duration::from_secs(2));
+        assert!(paths_of(&after).is_empty(), "got {:?}", paths_of(&after));
+    }
+
+    #[test]
     fn reloaded_directories_start_reporting_previously_skipped_changes() {
         let dir = scratch("interest");
         let (mut core, rx) = with_watcher();
         let request = dir.to_string_lossy().to_string();
         fs::create_dir_all(dir.join("dist")).unwrap();
         fs::create_dir_all(dir.join("src")).unwrap();
-        core.subscribe(&request).unwrap();
-        core.set_interest(&request, &["".to_string()]);
+        core.subscribe(&request, "tab-a").unwrap();
+        core.set_interest(&request, "tab-a", &[String::new()]);
         write(&dir.join("src").join("lib.ts"), "one\n");
         let _ = collect_changes(&mut core, &rx, Duration::from_secs(2));
 
@@ -689,7 +785,7 @@ mod tests {
         assert!(!paths_of(&hidden).iter().any(|path| path == "dist/bundle.js"));
 
         // 用户展开 dist 后，同一目录的变更必须同步（不靠隐藏目录规避）。
-        core.set_interest(&request, &["".to_string(), "dist".to_string()]);
+        core.set_interest(&request, "tab-a", &[String::new(), "dist".to_string()]);
         write(&dir.join("dist").join("bundle.js"), "two\n");
         let reported = collect_changes(&mut core, &rx, Duration::from_secs(5));
         assert!(
@@ -697,7 +793,7 @@ mod tests {
             "expected dist/bundle.js, got {:?}",
             paths_of(&reported)
         );
-        // 已打开/已加载目录之外的路径仍被过滤。
+        // 根目录列表始终在关注范围内。
         write(&dir.join("README.md"), "readme\n");
         let root_change = collect_changes(&mut core, &rx, Duration::from_secs(3));
         assert!(paths_of(&root_change).iter().any(|path| path == "README.md"));
@@ -709,13 +805,13 @@ mod tests {
         let (mut core, rx) = with_watcher();
         let request = dir.to_string_lossy().to_string();
         fs::create_dir_all(dir.join("dist")).unwrap();
-        core.subscribe(&request).unwrap();
-        core.set_interest(&request, &["".to_string(), "dist".to_string()]);
+        core.subscribe(&request, "tab-a").unwrap();
+        core.set_interest(&request, "tab-a", &[String::new(), "dist".to_string()]);
         write(&dir.join("dist").join("bundle.js"), "one\n");
         let first = collect_changes(&mut core, &rx, Duration::from_secs(3));
         assert!(paths_of(&first).iter().any(|path| path == "dist/bundle.js"));
         // 收起目录后不再为一个不可见的目录持续推送事件。
-        core.set_interest(&request, &["".to_string()]);
+        core.set_interest(&request, "tab-a", &[String::new()]);
         write(&dir.join("dist").join("bundle.js"), "two\n");
         let second = collect_changes(&mut core, &rx, Duration::from_secs(2));
         assert!(!paths_of(&second).iter().any(|path| path == "dist/bundle.js"));
@@ -724,24 +820,22 @@ mod tests {
     #[test]
     fn remote_projects_are_refused() {
         let (mut core, _rx) = with_watcher();
-        let error = core.subscribe("ssh://dev@host/work").unwrap_err();
+        let error = core.subscribe("ssh://dev@host/work", "tab-a").unwrap_err();
         assert!(error.contains("projectWatchRemote"));
         assert!(core.entries.is_empty());
     }
 
     #[test]
-    fn shared_roots_keep_one_os_watch_until_the_last_subscriber_leaves() {
-        let dir = scratch("shared");
-        let (mut core, rx) = with_watcher();
+    fn unknown_subscribers_are_safe_no_ops() {
+        let dir = scratch("unknown");
+        let (mut core, _rx) = with_watcher();
         let request = dir.to_string_lossy().to_string();
-        core.subscribe(&request).unwrap();
-        core.subscribe(&request).unwrap();
-        let _ = collect_changes(&mut core, &rx, Duration::from_millis(200));
-        core.unsubscribe(&request);
-        write(&dir.join("a.ts"), "one\n");
-        let reported = collect_changes(&mut core, &rx, Duration::from_secs(3));
-        assert!(paths_of(&reported).iter().any(|path| path == "a.ts"));
-        core.unsubscribe(&request);
-        assert!(core.entries.is_empty());
+        core.subscribe(&request, "tab-a").unwrap();
+        // 未知 token 的 set_interest 不应改变现有订阅者的范围。
+        core.set_interest(&request, "ghost", &[String::new()]);
+        core.unsubscribe(&request, "ghost");
+        assert!(core.entries.contains_key(&normalize_key(&request)));
+        let entry = core.entries.values().next().unwrap();
+        assert_eq!(entry.subscribers.len(), 1);
     }
 }

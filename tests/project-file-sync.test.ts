@@ -26,16 +26,11 @@ test("a loaded directory that disappeared is re-listed so stale children are rep
   expect(directoriesToReload(["docs"], loaded)).toEqual([""])
 })
 
-test("the published interest is every loaded directory plus the previewed file", () => {
-  expect(interestPaths({}, null)).toEqual([""])
-  expect(interestPaths({ "": [], src: [], "src/stores": [] }, "src/lib.ts")).toEqual([
-    "",
-    "src",
-    "src/stores",
-    "src/lib.ts",
-  ])
-  // 已打开文件同时属于已加载目录时不重复列出。
-  expect(interestPaths({ "": [], src: [], "src/lib.ts": [] }, "src/lib.ts")).toEqual(["", "src", "src/lib.ts"])
+test("the published interest is every expanded directory plus the previewed file", () => {
+  expect(interestPaths([], null)).toEqual([""])
+  expect(interestPaths(["src", "src/stores"], "src/lib.ts")).toEqual(["", "src", "src/stores", "src/lib.ts"])
+  // 已打开文件同时是一个展开目录时不重复列出；缓存但仍收起的目录不参与。
+  expect(interestPaths(["src", "src/lib.ts", ""], "src/lib.ts")).toEqual(["", "src", "src/lib.ts"])
 })
 
 test("the open preview reloads only when its own file changed", () => {

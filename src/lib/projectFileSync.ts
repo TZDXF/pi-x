@@ -34,10 +34,18 @@ export function previewNeedsReload(selected: string | null, paths: string[]): bo
   return !!selected && paths.includes(selected)
 }
 
-/** Loaded directories plus the previewed file: the scope reported by the backend. */
-export function interestPaths(loaded: Record<string, unknown>, selected: string | null): string[] {
+/**
+ * Directories the user can actually see (expanded ones) plus the previewed
+ * file: the scope reported to the backend.
+ *
+ * A collapsed directory is still cached, but its contents are off screen, so
+ * keeping it out of `interest` stops events for invisible subtrees; expanding
+ * again re-lists it (see `ProjectFiles.toggle`), which keeps the cached
+ * children from going stale.
+ */
+export function interestPaths(visibleDirectories: Iterable<string>, selected: string | null): string[] {
   const paths = [""]
-  for (const dir of Object.keys(loaded)) if (dir && !paths.includes(dir)) paths.push(dir)
+  for (const dir of visibleDirectories) if (dir && !paths.includes(dir)) paths.push(dir)
   if (selected && !paths.includes(selected)) paths.push(selected)
   return paths
 }

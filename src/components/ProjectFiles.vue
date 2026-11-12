@@ -66,7 +66,14 @@ async function load(path: string) {
       errors.value = next
     }
   } catch (error) {
-    if (current === generation) errors.value = { ...errors.value, [path]: formatCodedError(t, error) }
+    if (current === generation) {
+      // 已加载目录被删除/重命名后读取失败：同时丢弃陈旧子项，避免树里留下
+      // 已不存在的条目，只保留错误提示。
+      const nextChildren = { ...children.value }
+      if (path !== "") delete nextChildren[path]
+      children.value = nextChildren
+      errors.value = { ...errors.value, [path]: formatCodedError(t, error) }
+    }
   } finally {
     if (current === generation) {
       const next = new Set(loading.value)
@@ -105,7 +112,8 @@ function toggle(entry: Entry) {
   if (next.has(entry.path)) next.delete(entry.path)
   else {
     next.add(entry.path)
-    if (props.files === undefined && !(entry.path in children.value)) void load(entry.path)
+    // 每次展开都重拉：收起期间不监听该目录，缓存可能已经过期。
+    if (props.files === undefined) void load(entry.path)
   }
   expanded.value = next
 }
@@ -134,6 +142,10 @@ const rows = computed(() => {
 function refreshChanged(paths: string[], reset = false) {
   if (props.files !== undefined) return
   if (reset) {
+    // reset 期间的在途请求一律作废：递增 generation 并清空 loading，
+    // 否则旧列表可能写回刚清空的缓存。
+    generation++
+    loading.value = new Set()
     children.value = {}
     errors.value = {}
   }
@@ -143,8 +155,8 @@ function refreshChanged(paths: string[], reset = false) {
 }
 /** 静态资源列表没有文件系统监听，远程项目由后端拒绝。 */
 const watchRoot = computed(() => (props.files === undefined ? activeRoot.value : ""))
-/** 后端只上报当前可浏览范围（已加载目录）与已打开文件的变更。 */
-const interest = () => interestPaths(children.value, selected.value)
+/** 后端只上报当前可见范围（已展开目录）与已打开文件的变更。 */
+const interest = () => interestPaths(expanded.value, selected.value)
 useProjectFileWatch({
   project: () => watchRoot.value,
   interest,

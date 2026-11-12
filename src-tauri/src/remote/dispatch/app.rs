@@ -106,16 +106,26 @@ pub(super) async fn handle(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,
             )?),
             "watch_project_files" => {
-                crate::project_watch::watch_project_files(app.clone(), text(a, "project")?).await?;
+                crate::project_watch::watch_project_files(
+                    app.clone(),
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
                 Ok(Value::Null)
             }
             "unwatch_project_files" => {
-                crate::project_watch::unwatch_project_files(text(a, "project")?).await?;
+                crate::project_watch::unwatch_project_files(
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
                 Ok(Value::Null)
             }
             "set_project_files_interest" => {
                 crate::project_watch::set_project_files_interest(
                     text(a, "project")?,
+                    text(a, "subscriber")?,
                     serde_json::from_value(a["paths"].clone()).map_err(|e| e.to_string())?,
                 )
                 .await?;
