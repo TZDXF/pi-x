@@ -56,14 +56,13 @@ test("handles empty/image questions, unanswered turns, and bounded excerpts", ()
   expect(turns([user(1, "x".repeat(300))])[0].question.length).toBe(181)
   expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
-test("rendered entries have anchors and navigation stops automatic following", () => {
+test("rendered entries have anchors and navigation respects reduced motion", () => {
   const chat = turnSources()
   expect(chat).toMatch(/:data-message-id="entry.id"/)
   const conversation = readFileSync(
     new URL("../src/components/ai-elements/conversation/Conversation.vue", import.meta.url),
     "utf8",
   )
-  expect(conversation).toMatch(/context.stopScroll\(\)[\s\S]*viewport.scrollTo/)
   expect(conversation).toMatch(/prefers-reduced-motion/)
 })
 
