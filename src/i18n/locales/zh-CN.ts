@@ -250,6 +250,7 @@ export default {
     annotateCancel: "取消",
     annotateFull: "代码批注已达上限（20 条），请先移除部分批注。",
     annotateRemove: "移除批注",
+    commentFileUnavailable: "文件不存在或无法在项目目录中访问：{path}",
   },
   changes: {
     showFlat: "平铺显示",

@@ -379,6 +379,7 @@ export const createSessionStore = (runtimeId = "default") =>
         id: replacement?.id ?? nextId(),
         timestamp: Date.now(),
         text: trimmed,
+        ...(expandedText ? { contextText: expandedText } : {}),
         modelChange: modelChange ?? replacement?.modelChange,
         images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
         live: true,

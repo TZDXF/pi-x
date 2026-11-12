@@ -28,6 +28,8 @@ const props = withDefaults(
   defineProps<{
     project: string
     path: string
+    /** Open source view at a referenced range, including Markdown and SVG. */
+    lineRange?: CodeCommentRange
     /** Custom resource reader; project-only editor and annotation actions are hidden. */
     readFile?: (path: string) => Promise<FilePreview>
     closable?: boolean
@@ -80,8 +82,8 @@ async function load() {
   openError.value = null
   preview.value = null
   htmlLines.value = null
-  mdRendered.value = true
-  svgRendered.value = true
+  mdRendered.value = !props.lineRange
+  svgRendered.value = !props.lineRange
   try {
     const result = props.readFile
       ? await props.readFile(props.path)
@@ -118,6 +120,16 @@ async function openInEditor() {
 const codeComments = useCodeCommentsStore()
 const ui = useUiStore()
 const codeRoot = ref<HTMLElement | null>(null)
+watch(
+  () => props.lineRange && ([loading.value, showCode.value, props.lineRange, htmlLines.value] as const),
+  async () => {
+    if (!props.lineRange || loading.value || !showCode.value) return
+    await nextTick()
+    const line = Math.min(Math.max(1, props.lineRange?.start ?? 1), codeLines.value.length)
+    codeRoot.value?.querySelector(`[data-line="${line}"]`)?.scrollIntoView({ block: "center" })
+  },
+  { flush: "post" },
+)
 const commentOpen = ref(false)
 const commentText = ref("")
 const commentRange = ref<CodeCommentRange | null>(null)
@@ -147,6 +159,13 @@ const commentsByEndLine = computed(() => {
 })
 const annotatedLines = computed(() => {
   const lines = new Set<number>()
+  if (props.lineRange)
+    for (
+      let line = Math.max(1, props.lineRange.start);
+      line <= Math.min(props.lineRange.end, codeLines.value.length);
+      line++
+    )
+      lines.add(line)
   for (const comment of pendingComments.value)
     for (let line = comment.startLine; line <= comment.endLine; line++) lines.add(line)
   if (commentRange.value)

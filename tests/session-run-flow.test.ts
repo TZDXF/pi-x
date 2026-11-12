@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
+import { serializeComposerPromptContexts, parseComposerPromptContexts } from "@/lib/promptContexts"
+
+test("live user messages retain file comments while preserving the editable input", async () => {
+  const h = await harness()
+  const comment = { path: "src/main.ts", startLine: 5, endLine: 7, selectedText: "code", comment: "检查边界" }
+  const prompt = serializeComposerPromptContexts("hello", { comments: [comment], selections: [] })
+  await h.store.send("hello", undefined, prompt)
+  const entry = h.store.entries.filter(entry => entry.kind === "user").at(-1)
+  expect(entry.text).toBe("hello")
+  expect(parseComposerPromptContexts(entry.contextText ?? entry.text).comments).toMatchObject([comment])
+  expect(h.calls.find(command => command.type === "prompt").message).toBe(prompt)
+})
 
 // Regression coverage for the session store's run-flow lifecycle: symmetric
 // resets between newSession()/clear(), the resend queue-pause release and the

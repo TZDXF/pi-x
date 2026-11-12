@@ -254,6 +254,7 @@ export default {
     annotateCancel: "Cancel",
     annotateFull: "Code comments are full (max 20). Remove some comments before adding new ones.",
     annotateRemove: "Remove comment",
+    commentFileUnavailable: "File does not exist or is unavailable in the project folders: {path}",
   },
   changes: {
     showFlat: "Flat list",

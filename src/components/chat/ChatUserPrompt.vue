@@ -6,6 +6,7 @@ import { MessageContent, MessageActions, MessageAction } from "@/components/ai-e
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { parseComposerPromptContexts } from "@/lib/promptContexts"
+import type { ParsedCodeComment } from "@/lib/codeComments"
 import ComposerText from "@/components/ComposerText.vue"
 import { formatMessageTime } from "@/lib/format"
 import type { UserEntry } from "@/stores/session"
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   previewImage: [url: string]
   copyText: [text: string]
   editTextarea: [textarea: PromptEditTextarea | null]
+  openCodeComment: [comment: ParsedCodeComment]
 }>()
 const { t } = useI18n()
 const { editedPrompt, editedText, editBusy, editBlocked, lastUserPromptId } = toRefs(props.edit)
@@ -26,7 +28,10 @@ function bindEditTextarea(value: Element | ComponentPublicInstance | null) {
 }
 // 持久化消息带会话引用附加段及 "# userselect:" / "# Code comments:" 尾块；重载历史时解析回附件，
 // 气泡只显示用户原文（同 ZCode ConversationRowView 的 parseComposerPromptContexts）。
-const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text))
+const parsedPrompt = computed(() => {
+  const parsed = parseComposerPromptContexts(props.entry.contextText ?? props.entry.text)
+  return { ...parsed, visibleContent: parseComposerPromptContexts(props.entry.text).visibleContent }
+})
 </script>
 
 <template>
@@ -87,19 +92,23 @@ const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.text
           }}</span>
         </div>
       </div>
-      <!-- 历史消息里解析回的代码批注：只读展示，样式对齐 composer 的待发送 chips -->
+      <!-- 即时消息与历史消息使用同一批注标签；原生按钮支持键盘打开文件。 -->
       <div v-if="parsedPrompt.comments.length" class="mt-1.5 flex flex-wrap gap-1.5">
-        <div
+        <button
           v-for="c in parsedPrompt.comments"
           :key="c.id"
-          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
+          type="button"
+          data-code-comment-tag
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-ring"
+          :title="[c.path, c.selectedText, c.comment].filter(Boolean).join('\n')"
+          @click="emit('openCodeComment', c)"
         >
           <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
-          <span class="shrink-0 font-mono"
+          <span class="min-w-0 truncate font-mono"
             >{{ c.path }}:{{ c.startLine }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span
           >
           <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
-        </div>
+        </button>
       </div>
     </div>
   </MessageContent>
