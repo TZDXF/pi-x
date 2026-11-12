@@ -138,7 +138,10 @@ async function askArchiveAll() {
     else ui.pushToast(t("storage.archiveAllEmpty"), "info")
   } catch (e) {
     logDiagnostic("archive all stage=enumerate-failed")
-    error.value = formatCodedError(t, e)
+    // 枚举失败也要有可感知的反馈：只写在面板内的提示容易被忽略。
+    const message = formatCodedError(t, e)
+    error.value = message
+    ui.pushToast(message, "error")
   } finally {
     loadingArchiveAll.value = false
   }

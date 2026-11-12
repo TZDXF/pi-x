@@ -220,6 +220,8 @@ test("session card enumerates disk, confirms archive and refreshes storage count
   expect(panel.error.value).toBe("local enumeration failed")
   expect(panel.pendingArchiveAll.value).toBeNull()
   expect(diagnostics.at(-1)).toBe("archive all stage=enumerate-failed")
+  // A scan failure must also reach the toast layer, not only the panel inline text.
+  expect(pushToast).toHaveBeenCalledWith("local enumeration failed", "error")
 
   // An empty enumeration is real feedback, not a click that appears to do nothing.
   pushToast.mockClear()
