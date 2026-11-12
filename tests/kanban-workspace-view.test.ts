@@ -176,6 +176,85 @@ test("entering the board loads every project folder and the no-project history w
   expect(sessionFor).not.toHaveBeenCalled()
 })
 
+test("completed draft indexes absent from complete local history do not create phantom idle cards", async () => {
+  const { board, workspace, statuses, activities } = harness()
+  const saved = { file: "/sessions/current.jsonl", cwd: "/root", title: "Current", mtimeMs: 1 }
+  workspace.histories["/root"] = [saved]
+  statuses.set(identities.sessionIdentityKey(saved.file, saved.cwd), "running")
+  for (let index = 0; index < 15; index++) {
+    const id = `submitted-${index}`
+    const project = ["/root", "/root/linked", "/loose"][index % 3]
+    const file = `/sessions/missing-${index}.jsonl`
+    workspace.boardDrafts[id] = { id, project, sessionFile: file, message: "Submitted", createdAt: 1, updatedAt: 2 }
+    // Acknowledged completion projects as idle; persisted indexes are not files.
+    activities.set(identities.sessionIdentityKey(file, project), { status: "completed", updatedAt: 2 })
+  }
+  const original = JSON.stringify(workspace.boardDrafts)
+  expect(board.cards.value.map(card => card.file)).toEqual([saved.file])
+  await board.refresh()
+  expect(board.cards.value.map(card => card.file)).toEqual([saved.file])
+  expect(JSON.stringify(workspace.boardDrafts)).toBe(original)
+  expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
+  expect(workspace.flushPersistence).not.toHaveBeenCalled()
+  // Restoring the file (or selecting the right root) makes its index usable again.
+  workspace.histories["/root"].push({ file: "/sessions/missing-0.jsonl", cwd: "/root", mtimeMs: 3 })
+  expect(board.cards.value.some(card => card.draftId === "submitted-0")).toBe(true)
+})
+
+test.each(["worker", "streaming", "queue", "memory"])("an unflushed submitted draft retains a real %s source", kind => {
+  const { board, workspace, sessionFor } = harness()
+  const file = "/sessions/unflushed.jsonl"
+  workspace.boardDrafts.pending = {
+    id: "pending",
+    project: "/root",
+    sessionFile: file,
+    message: "Prompt",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  const owner = sessionFor("pending")
+  Object.assign(owner, { cwd: "/root", sessionFile: file })
+  if (kind === "worker") owner.started = true
+  if (kind === "streaming") owner.isStreaming = true
+  if (kind === "queue") owner.promptQueue.push({ text: "Pending" })
+  if (kind === "memory") owner.entries.push({ kind: "user", text: "Recoverable prompt" })
+  expect(board.cards.value).toEqual([expect.objectContaining({ file, draftId: "pending" })])
+})
+
+test.each(["empty", "reused"])("a %s runtime placeholder is insufficient to restore a missing draft", kind => {
+  const { board, workspace, sessionFor } = harness()
+  workspace.boardDrafts.old = {
+    id: "old",
+    project: "/root",
+    sessionFile: "/sessions/old.jsonl",
+    message: "Old",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  Object.assign(sessionFor("old"), {
+    cwd: "/root",
+    sessionFile: kind === "empty" ? "/sessions/old.jsonl" : "/sessions/new.jsonl",
+  })
+  expect(board.cards.value).toEqual([])
+})
+
+test("absence from a capped remote history does not suppress a saved remote draft", () => {
+  const { board, workspace } = harness()
+  const project = "ssh://server/project"
+  workspace.orderedProjects = () => [project]
+  workspace.projectFolders = () => [project]
+  workspace.histories[project] = []
+  workspace.boardDrafts.remote = {
+    id: "remote",
+    project,
+    sessionFile: "/remote/old.jsonl",
+    message: "Remote",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  expect(board.cards.value).toEqual([expect.objectContaining({ draftId: "remote" })])
+})
+
 test.each(["/root", "/root/linked", "/loose"])(
   "restored cards in %s wait for archive metadata while unsent todos stay visible",
   async project => {
@@ -191,10 +270,11 @@ test.each(["/root", "/root/linked", "/loose"])(
         updatedAt: 2,
       }
     }
-    for (const id of ["archived", "archived-runtime", "live"]) {
+    for (const id of ["archived", "archived-runtime", "live", "not-yet-on-disk"]) {
       Object.assign(sessionFor(id), {
         cwd: project,
         sessionFile: `/sessions/${id}.jsonl`,
+        started: true,
         entries: [{ kind: "user", text: id }],
       })
     }
@@ -239,7 +319,7 @@ test.each(["/root", "/root/linked", "/loose"])(
   },
 )
 
-test("failed initial history loads keep restored cards hidden until a successful retry", async () => {
+test("failed initial history loads hide restored cards until their file is found on retry", async () => {
   const { board, workspace } = harness(false)
   workspace.boardDrafts.restored = {
     id: "restored",
@@ -260,6 +340,8 @@ test("failed initial history loads keep restored cards hidden until a successful
   })
   await board.refresh()
   expect(board.error.value).toBe("")
+  expect(board.cards.value).toEqual([])
+  workspace.histories["/root"] = [{ file: "/sessions/restored.jsonl", cwd: "/root", mtimeMs: 1 }]
   expect(board.cards.value).toEqual([expect.objectContaining({ draftId: "restored" })])
 })
 

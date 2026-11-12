@@ -61,6 +61,14 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
       !owner.isStreaming &&
       !owner.entries.some(entry => entry.kind === "user") &&
       owner.promptQueue.length > 0
+    const hasSessionSource = (owner: ReturnType<typeof sessionFor> | undefined) =>
+      !!owner &&
+      (!!owner.started ||
+        owner.isStreaming ||
+        owner.isCompacting ||
+        !!owner.retryInfo ||
+        owner.promptQueue.length > 0 ||
+        owner.entries.some(entry => entry.kind === "user"))
     const statusFor = (file: string | undefined, project: string, runtimeId?: string): KanbanStatus => {
       if (runtimeId && uiFor(runtimeId).activeDialog) return "waiting"
       const run = file ? sessionRunStatus(file, project) : undefined
@@ -112,6 +120,7 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
       const existing = result.get(identity)
       if (existing) continue
       const draft = draftByFile.get(identity)
+      if (draft?.sessionFile && !isRemoteProject(owner.cwd) && !hasSessionSource(owner)) continue
       const firstPrompt = owner.entries.find(entry => entry.kind === "user")
       const pending = owner.promptQueue[0]
       if (!firstPrompt && !owner.isStreaming && !draft?.sessionFile) {
@@ -141,6 +150,18 @@ export function useKanbanWorkspace(workspace: Workspace, enabled: () => boolean)
       if (draft.sessionFile && archived.has(sessionIdentityKey(draft.sessionFile, draft.project))) continue
       if (draft.sessionFile && result.has(sessionIdentityKey(draft.sessionFile, draft.project))) continue
       const owner = conversations.find(owner => owner.runtimeId === (draft.runtimeId || draft.id))
+      // A submitted draft is an index, not evidence that its session still
+      // exists. Complete local history already supplied saved rows above;
+      // retain unflushed sessions only when a matching runtime/content backs them.
+      // Remote lists are capped, so absence there cannot establish this.
+      if (
+        draft.sessionFile &&
+        !isRemoteProject(draft.project) &&
+        (!hasSessionSource(owner) ||
+          !owner?.sessionFile ||
+          sessionIdentityKey(owner.sessionFile, owner.cwd) !== sessionIdentityKey(draft.sessionFile, draft.project))
+      )
+        continue
       const submitted = !!draft.sessionFile
       const file = draft.sessionFile
       result.set(file ? sessionIdentityKey(file, draft.project) : `draft:${draft.id}`, {
