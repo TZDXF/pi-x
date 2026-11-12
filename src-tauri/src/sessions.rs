@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager};
 /// 实现见 `edit.rs`，由 `crate::rpc` 池层调用。
 pub(crate) mod edit;
 
+#[cfg(test)]
 const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
@@ -140,7 +141,7 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
 
 /// List sessions whose `cwd` matches `project`, newest creation time first.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
-    list_with_options(project, Some(MAX_SESSIONS), true).await
+    list_with_options(project).await
 }
 
 /// List every persisted, unarchived local session for bulk archive. Storage
@@ -154,11 +155,7 @@ pub async fn list_unarchived() -> Result<Vec<SessionMeta>, String> {
     .map_err(|e| format!("session scan failed: {e}"))?
 }
 
-async fn list_with_options(
-    project: String,
-    limit: Option<usize>,
-    include_archived: bool,
-) -> Result<Vec<SessionMeta>, String> {
+async fn list_with_options(project: String) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
             return Err(pix_error(
@@ -172,15 +169,17 @@ async fn list_with_options(
         normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
-        list_project_sessions(
-            &agent_dir().join("sessions"),
-            &project_norm,
-            limit,
-            include_archived,
-        )
+        list_project_history(&agent_dir().join("sessions"), &project_norm)
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Both layouts share this history. The sidebar folds rows in the UI, so a
+/// backend cap would make older sessions unreachable even after expanding.
+/// Keep archived metadata too, to suppress still-live archived runtimes.
+fn list_project_history(root: &Path, project_norm: &str) -> Result<Vec<SessionMeta>, String> {
+    list_project_sessions(root, project_norm, None, true)
 }
 
 fn creation_time(timestamp: Option<&str>) -> i64 {
@@ -320,12 +319,18 @@ pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, 
     Ok(meta)
 }
 
-/// Parse results cache keyed by path + mtime: listing sessions repeatedly
+/// Parse results cache keyed by path, JSONL mtime and sidecar version: listing sessions repeatedly
 /// re-reads every file (header + 32 KB preview scan + full name scan); the
 /// cache skips that work until the file changes on disk.
 struct CachedMeta {
     mtime: u64,
+    presentation_version: Option<(std::time::SystemTime, u64)>,
     meta: SessionMeta,
+}
+
+fn presentation_version(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path.with_extension("pix.json")).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
     static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, CachedMeta>>> = OnceLock::new();
@@ -333,10 +338,11 @@ fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
 }
 const META_CACHE_CAP: usize = 4096;
 fn cached_meta(path: &Path, mtime: u64) -> Option<SessionMeta> {
+    let presentation_version = presentation_version(path);
     let cache = meta_cache().lock().ok()?;
     cache
         .get(path)
-        .filter(|c| c.mtime == mtime)
+        .filter(|c| c.mtime == mtime && c.presentation_version == presentation_version)
         .map(|c| c.meta.clone())
 }
 fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
@@ -348,6 +354,7 @@ fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
             path.to_path_buf(),
             CachedMeta {
                 mtime,
+                presentation_version: presentation_version(path),
                 meta: meta.clone(),
             },
         );
@@ -1512,6 +1519,125 @@ if (request.op === 'read') {
                 .collect::<Vec<_>>()
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_reconciles_history_bulk_and_storage() {
+        let root = std::env::temp_dir().join(format!("pix-visibility-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let project_norm = normalize(&project).unwrap();
+        // 60 active + 50 newer archived + one orphan. Neither a recent cap nor
+        // archived rows may make active project sessions unreachable.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session-visibility.json"
+        )).unwrap();
+        let active = fixture["activeIds"].as_array().unwrap();
+        let archived = fixture["archivedIds"].as_array().unwrap();
+        let orphan = fixture["orphanId"].as_str().unwrap();
+        let all_ids = active.iter().chain(archived)
+            .map(|id| id.as_str().unwrap()).chain(std::iter::once(orphan));
+        for (index, id) in all_ids.enumerate() {
+            let folder = sessions_root.join(if id == orphan { "orphan" } else { "registered" });
+            std::fs::create_dir_all(&folder).unwrap();
+            let path = folder.join(format!("{index:03}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session", "id": id,
+                "cwd": if id == orphan { root.join("removed") } else { project.clone() },
+                "timestamp": chrono::DateTime::from_timestamp(1_700_000_000 + index as i64, 0).unwrap().to_rfc3339(),
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{}}}", archived.iter().any(|value| value.as_str() == Some(id))),
+            )
+            .unwrap();
+        }
+        let ids = |rows: Vec<SessionMeta>| -> std::collections::BTreeSet<String> {
+            rows.into_iter()
+                .filter(|row| !row.archived)
+                .map(|row| row.id)
+                .collect()
+        };
+        let legacy =
+            ids(list_project_sessions(&sessions_root, &project_norm, Some(50), true).unwrap());
+        let history = ids(list_project_history(&sessions_root, &project_norm).unwrap());
+        let bulk = ids(list_sessions(&sessions_root, None, None, false).unwrap());
+        let expected = active.iter().map(|id| id.as_str().unwrap().to_string()).collect();
+        assert!(legacy.is_empty()); // Reproduces the original empty sidebar.
+        assert_eq!(history, expected);
+        assert_eq!(
+            bulk.difference(&history).cloned().collect::<Vec<_>>(),
+            ["visibility-110"]
+        );
+        let storage = crate::storage::summary_at(&sessions_root, None);
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "sessions")
+                .unwrap()
+                .item_count,
+            61
+        );
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "archivedSessions")
+                .unwrap()
+                .item_count,
+            50
+        );
+        // Re-read the same root (warm cache); no data is rewritten by listing.
+        assert_eq!(
+            ids(list_project_history(&sessions_root, &project_norm).unwrap()),
+            history
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_observes_external_archive_and_restore_with_unchanged_jsonl() {
+        let root = std::env::temp_dir().join(format!("pix-sidecar-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions/project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("session.jsonl");
+        let content = "{\"type\":\"session\",\"id\":\"external\",\"cwd\":\"C:/project\"}\n";
+        std::fs::write(&file, content).unwrap();
+        let sidecar = file.with_extension("pix.json");
+        std::fs::write(&sidecar, "{\"archived\":false}").unwrap();
+        let stamp = mtime_ms(&file);
+        assert_eq!(
+            list_sessions(&root.join("sessions"), None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+        for (presentation, count) in [("{\"archived\":true}", 0), ("{\"archived\":false}", 1)] {
+            // Simulate a different client: no explicit invalidate_meta_cache.
+            std::fs::write(&sidecar, presentation).unwrap();
+            assert_eq!(mtime_ms(&file), stamp);
+            assert_eq!(
+                list_sessions(&root.join("sessions"), None, None, false)
+                    .unwrap()
+                    .len(),
+                count
+            );
+            let storage = crate::storage::summary_at(&root.join("sessions"), None);
+            assert_eq!(
+                storage
+                    .categories
+                    .iter()
+                    .find(|row| row.id == "sessions")
+                    .unwrap()
+                    .item_count,
+                count as u64
+            );
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), content);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

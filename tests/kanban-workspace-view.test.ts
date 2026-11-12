@@ -9,6 +9,7 @@ import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
 import { groupKanbanCards } from "@/lib/kanban"
+import { sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 
 const source = readFileSync(new URL("../src/composables/useKanbanWorkspace.ts", import.meta.url), "utf8")
 const scopes: ReturnType<typeof effectScope>[] = []
@@ -105,6 +106,50 @@ function harness(historyLoaded = true) {
   const board = scope.run(() => module.exports.useKanbanWorkspace(workspace, () => enabled.value))
   return { board, workspace, owners, sessionFor, uiFor, activities, statuses, composerDrafts, enabled }
 }
+
+test("board idle and expanded sidebar reconcile IDs across statuses, previews and archive refresh", async () => {
+  const { board, workspace, statuses } = harness()
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/session-visibility.json", import.meta.url), "utf8"))
+  const rows = fixture.activeIds.map((id, index) => ({
+    id,
+    file: `/sessions/${id}.jsonl`,
+    cwd: "/root",
+    mtimeMs: index,
+  }))
+  const archived = fixture.archivedIds.map(id => ({ ...rows[0], id, file: `/sessions/${id}.jsonl`, archived: true }))
+  const orphan = { ...rows[0], id: fixture.orphanId, file: `/sessions/${fixture.orphanId}.jsonl`, cwd: "/removed" }
+  const preview = { ...rows[0], id: fixture.previewId, file: `/sessions/${fixture.previewId}.jsonl` }
+  const persisted = [...rows, ...archived, orphan]
+  workspace.histories["/root"] = [...rows, ...archived, preview]
+  workspace.histories["/removed"] = [orphan]
+  statuses.set(identities.sessionIdentityKey(`/sessions/${fixture.completedId}.jsonl`, "/root"), "completed")
+  statuses.set(identities.sessionIdentityKey(`/sessions/${fixture.runningId}.jsonl`, "/root"), "running")
+  const visible = () => sidebarSessionRows(workspace.histories["/root"], {}, "", row => row.id)
+  const files = values => values.map(row => row.file).sort()
+  const idle = () => board.cards.value.filter(card => card.status === "idle")
+  expect(visible()).toHaveLength(61) // 60 on disk + one unflushed preview.
+  expect(idle()).toHaveLength(59) // 58 idle on disk + preview.
+  expect(idle().filter(card => !visible().some(row => row.file === card.file))).toEqual([])
+  expect(files(visible().filter(row => !idle().some(card => card.file === row.file)))).toEqual(files(rows.slice(0, 2)))
+  expect(files(persisted.filter(row => !row.archived && !visible().some(item => item.file === row.file)))).toEqual([
+    orphan.file,
+  ])
+  expect(files(visible().filter(row => !persisted.some(item => item.file === row.file)))).toEqual([preview.file])
+  // Same updated history drives both projections after archive and restore.
+  workspace.refresh.mockImplementation(async folder => {
+    if (folder === "/root")
+      workspace.histories[folder] = workspace.histories[folder].map(row => ({
+        ...row,
+        archived: row.file === rows[2].file || row.archived,
+      }))
+  })
+  await board.refresh()
+  expect(visible()).toHaveLength(60)
+  expect(idle()).toHaveLength(58)
+  workspace.histories["/root"].find(row => row.file === rows[2].file).archived = false
+  expect(visible()).toHaveLength(61)
+  expect(idle()).toHaveLength(59)
+})
 
 test("the ordinary layout is the default and switching layouts survives a reload", () => {
   const storage = new Map()
