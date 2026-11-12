@@ -117,7 +117,8 @@ test.describe("project files", () => {
     expect(previewX, `preview x ${previewX} should be left of list x ${listX}`).toBeLessThan(listX)
 
     // 文件树宽度可单独拖拽（此前与预览按 3:2 网格绑定，无法调整）。
-    const treeWidth = async () => requireWidth(await page.locator("[data-project-files-tree]").boundingBox(), "file tree")
+    const treeWidth = async () =>
+      requireWidth(await page.locator("[data-project-files-tree]").boundingBox(), "file tree")
     const before = await treeWidth()
     await dragTreeHandle(page, -80)
     expect(await treeWidth()).toBeGreaterThan(before + 40)
@@ -157,7 +158,8 @@ test.describe("project files", () => {
   })
 })
 
-/** Drag the gutter annotation button on line 5 to the content of line 7. */async function dragPreviewLines(page: Page): Promise<void> {
+/** Drag the gutter annotation button on line 5 to the content of line 7. */
+async function dragPreviewLines(page: Page): Promise<void> {
   const start = page.locator('[data-line="5"]').getByRole("button", { name: "Click or drag to comment" })
   const end = page.locator('[data-line="7"] code')
   await start.hover()

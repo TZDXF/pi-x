@@ -8,8 +8,8 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { invokeProjectFile } from "@/api/client/projectFiles"
 import { formatCodedError } from "@/lib/backendError"
 import { baseName, samePath } from "@/lib/paths"
-import { clampFileTreeWidth, FILE_TREE_DEFAULT_WIDTH, FILE_TREE_MIN_WIDTH } from "@/lib/fileTreeWidth"
-import { directoriesToReload, previewNeedsReload } from "@/lib/projectFileSync"
+import { clampFileTreeWidth, fileTreeWidthBounds, FILE_TREE_DEFAULT_WIDTH } from "@/lib/fileTreeWidth"
+import { directoriesToReload, interestPaths, previewNeedsReload } from "@/lib/projectFileSync"
 import { fileDirectoryEntries, initialFilePath, type ProjectFileEntry as Entry } from "@/lib/projectFiles"
 import { useProjectFileWatch } from "@/composables/useProjectFileWatch"
 import { usePointerDrag } from "@/composables/usePointerDrag"
@@ -122,17 +122,34 @@ const rows = computed(() => {
 })
 
 // ---- 文件自动同步：监听项目目录，已加载的目录重新拉取列表，正在预览的文件重新读取内容。 ----
-function refreshChanged(paths: string[]) {
+/**
+ * Apply one backend report:
+ * - ordinary changes re-list the affected loaded directories (a directory that
+ *   itself disappeared is re-listed too, so its stale children are replaced),
+ *   keeping expansion state as the user left it;
+ * - `reset` means the root was recreated or the OS watch was re-armed: drop the
+ *   cache and reload the root plus every expanded directory, so nothing from
+ *   the old tree survives.
+ */
+function refreshChanged(paths: string[], reset = false) {
   if (props.files !== undefined) return
-  for (const dir of directoriesToReload(paths, children.value)) void load(dir)
-  if (previewNeedsReload(selected.value, paths)) previewRevision.value++
+  if (reset) {
+    children.value = {}
+    errors.value = {}
+  }
+  const targets = reset ? ["", ...expanded.value] : directoriesToReload(paths, children.value)
+  for (const dir of targets) void load(dir)
+  if (reset || previewNeedsReload(selected.value, paths)) previewRevision.value++
 }
 /** 静态资源列表没有文件系统监听，远程项目由后端拒绝。 */
 const watchRoot = computed(() => (props.files === undefined ? activeRoot.value : ""))
-useProjectFileWatch(
-  () => watchRoot.value,
-  paths => refreshChanged(paths),
-)
+/** 后端只上报当前可浏览范围（已加载目录）与已打开文件的变更。 */
+const interest = () => interestPaths(children.value, selected.value)
+useProjectFileWatch({
+  project: () => watchRoot.value,
+  interest,
+  onChange: change => refreshChanged(change.paths, change.reset),
+})
 
 // ---- 文件树宽度：默认不占满面板，内容区常开，宽度可拖拽并按项目记忆。 ----
 const split = ref<HTMLElement | null>(null)
@@ -148,6 +165,7 @@ try {
 const treeWidth = computed(() =>
   props.preview ? clampFileTreeWidth(preferredTreeWidth.value, containerWidth.value) : containerWidth.value,
 )
+const treeBounds = computed(() => fileTreeWidthBounds(containerWidth.value))
 const treeDragging = ref(false)
 let observer: ResizeObserver | undefined
 function measure() {
@@ -192,9 +210,9 @@ function resizeTreeWithKeyboard(event: KeyboardEvent) {
   const step = event.shiftKey ? 64 : 16
   const next =
     event.key === "Home"
-      ? FILE_TREE_MIN_WIDTH
+      ? treeBounds.value.min
       : event.key === "End"
-        ? containerWidth.value
+        ? treeBounds.value.max
         : treeWidth.value + (event.key === "ArrowLeft" ? step : -step)
   preferredTreeWidth.value = clampFileTreeWidth(next, containerWidth.value)
   saveWidth()
@@ -246,8 +264,8 @@ onBeforeUnmount(() => {
         :aria-label="t('projectFiles.resizeTree')"
         :title="t('projectFiles.resizeTree')"
         :aria-valuenow="Math.round(treeWidth)"
-        :aria-valuemin="0"
-        :aria-valuemax="Math.round(containerWidth)"
+        :aria-valuemin="Math.round(treeBounds.min)"
+        :aria-valuemax="Math.round(treeBounds.max)"
         @pointerdown="startTreeResize"
         @pointermove="resizeTree"
         @pointerup="stopTreeResize"

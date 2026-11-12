@@ -1,11 +1,23 @@
 //! Watches project directories on request so the project-files sidebar can
 //! refresh directory listings and the open preview without a manual reload.
 //!
-//! Subscribers are reference counted per canonical project root: several
-//! sidebar tabs may show the same project, and the OS watch is only removed
-//! when the last of them stops watching (tab close, project switch or app
-//! shutdown). Remote (ssh/wsl/docker) projects live on another host and are
-//! explicitly rejected — the front-end keeps manual refresh for those.
+//! Subscribers are reference counted per project root: several sidebar tabs may
+//! show the same project, and the OS watch is only removed when the last of
+//! them stops watching (tab close, project switch or app shutdown).
+//!
+//! Two boundaries shape what is reported:
+//!
+//! * **Browsed scope** — the front-end sends the directories it has loaded plus
+//!   the file it is previewing (`set_project_files_interest`). Only changes
+//!   inside that set (or of an ancestor of it) are reported, so a busy
+//!   `node_modules` costs nothing until the user opens it; nothing is hidden.
+//! * **Root lifetime** — a project root can be deleted, renamed or recreated
+//!   (worktree cleanup, `git` operations). Every event batch re-checks armed
+//!   roots, re-arms recovered ones and tells the front-end to reload, and
+//!   unsubscribing still finds the entry when the directory is gone.
+//!
+//! Remote (ssh/wsl/docker) projects live on another host and are explicitly
+//! rejected — the front-end keeps manual refresh for those.
 
 use notify::{Event, RecursiveMode, Result as NotifyResult, Watcher};
 use serde_json::json;
@@ -19,128 +31,383 @@ pub const PROJECT_FILES_CHANGED_EVENT: &str = "pi://project-files-changed";
 
 /// Coalesce bursts of fs events before reporting the distinct changed paths.
 const QUIET_WINDOW: Duration = Duration::from_millis(200);
+/// Idle re-check of armed roots. A deleted/renamed root stops producing events
+/// (notify cannot report inside a directory that no longer exists), so the watch
+/// would otherwise stay dead until another project happened to change.
+const IDLE_CHECK: Duration = Duration::from_secs(2);
 /// Cap per-project payloads so a huge `git checkout` cannot flood the channel.
 const MAX_PATHS_PER_EVENT: usize = 200;
 
+/// One batch of changes handed to the front-end for a project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectChange {
+    pub project: String,
+    pub paths: Vec<String>,
+    /// Everything the front-end browsed may have changed (root re-armed or lost
+    /// its watch): reload loaded directories and the preview wholesale.
+    pub reset: bool,
+}
+
 struct WatchEntry {
-    root: PathBuf,
     /// Project string as the front-end passed it, echoed back in the event.
     project: String,
+    root: PathBuf,
+    /// Directories and the previewed file the UI currently shows.
+    interested: HashSet<String>,
     subscribers: usize,
+    /// Whether the recursive OS watch for `root` is currently installed.
+    armed: bool,
 }
 
-fn registry() -> &'static Mutex<HashMap<String, WatchEntry>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, WatchEntry>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+/// Watcher + subscriptions. Kept as one struct so the lifetime rules above
+/// are testable without an `AppHandle`.
+#[derive(Default)]
+struct WatchCore {
+    watcher: Option<notify::RecommendedWatcher>,
+    entries: HashMap<String, WatchEntry>,
 }
 
-fn watcher_slot() -> &'static Mutex<Option<notify::RecommendedWatcher>> {
-    static WATCHER: OnceLock<Mutex<Option<notify::RecommendedWatcher>>> = OnceLock::new();
-    WATCHER.get_or_init(|| Mutex::new(None))
+fn core() -> &'static Mutex<WatchCore> {
+    static CORE: OnceLock<Mutex<WatchCore>> = OnceLock::new();
+    CORE.get_or_init(|| Mutex::new(WatchCore::default()))
 }
 
 fn lock<T>(mutex: &'static Mutex<T>) -> std::sync::MutexGuard<'static, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn watcher_error(error: impl std::fmt::Display) -> String {
+    format!("project watcher unavailable: {error}")
+}
+
+fn project_missing() -> String {
+    crate::errors::pix_error("projectDirMissing", "项目目录不存在")
+}
+
+/// Canonical directory for a local project root, or `None` when it is gone.
+fn resolve_root(project: &str) -> Option<PathBuf> {
+    let root = dunce::canonicalize(project).ok()?;
+    root.is_dir().then_some(root)
+}
+
+/// Comparison key for a project path: separators unified, trailing separators
+/// dropped, and ASCII case folded on Windows (drive letters are case-insensitive).
+fn normalize_key(path: &str) -> String {
+    let united = path.replace('\\', "/");
+    let trimmed = united.trim_end_matches('/').to_string();
+    if cfg!(windows) {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed
+    }
+}
+
+/// Registry key used for a subscription: the canonical root when it exists,
+/// the normalized request otherwise, so a vanished root keeps its identity.
+fn entry_key(project: &str) -> String {
+    match resolve_root(project) {
+        Some(root) => normalize_key(&root.to_string_lossy()),
+        None => normalize_key(project),
+    }
+}
+
+/// Project-relative path in the same shape `list_project_directory` returns.
+/// Rejects absolute paths, `.`/`..` and backslashes; "" is the project root.
+fn normalize_relative(path: &str) -> Option<String> {
+    let united = path.replace('\\', "/");
+    let trimmed = united.trim_matches('/');
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+    if trimmed
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Display directory of a project-relative path ("" for root entries).
+fn parent_relative(path: &str) -> String {
+    match path.rfind('/') {
+        Some(index) => path[..index].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Whether a change belongs to what the UI currently shows.
+///
+/// Reported: the browsed entry itself, an entry inside a browsed directory (a
+/// child was added, removed or renamed) and an ancestor of a browsed path
+/// (a loaded directory was renamed or deleted). Everything else is skipped so
+/// unrelated churn never reaches the UI.
+fn is_interesting(relative: &str, interested: &HashSet<String>) -> bool {
+    if interested.is_empty() {
+        return false;
+    }
+    if interested.contains(relative) || interested.contains(&parent_relative(relative)) {
+        return true;
+    }
+    interested.iter().any(|path| {
+        path.len() > relative.len()
+            && path.starts_with(relative)
+            && path.as_bytes().get(relative.len()) == Some(&b'/')
+    })
+}
+
+impl WatchCore {
+    /// Replace the process-wide watcher callback with the event channel used
+    /// by [`coalesce_loop`]; idempotent.
+    fn ensure_watcher(&mut self, callback: impl FnMut(NotifyResult<Event>) + Send + 'static) -> Result<(), String> {
+        if self.watcher.is_some() {
+            return Ok(());
+        }
+        self.watcher = Some(notify::recommended_watcher(callback).map_err(watcher_error)?);
+        Ok(())
+    }
+
+    fn watcher_mut(&mut self) -> Result<&mut notify::RecommendedWatcher, String> {
+        self.watcher
+            .as_mut()
+            .ok_or_else(|| watcher_error("not started"))
+    }
+
+    /// Subscribe (reference counted). A stale entry whose root vanished is
+    /// re-armed rather than silently accepted.
+    fn subscribe(&mut self, project: &str) -> Result<(), String> {
+        if crate::ssh::is_remote_uri(project) {
+            return Err(crate::errors::pix_error(
+                "projectWatchRemote",
+                "远程项目暂不支持文件自动同步",
+            ));
+        }
+        let key = entry_key(project);
+        if self.entries.contains_key(&key) {
+            if let Some(entry) = self.entries.get_mut(&key) {
+                entry.subscribers += 1;
+                entry.project = project.to_string();
+            }
+            // 已订阅的根消失（worktree 清理、git 操作）时保持订阅并标记为未 arm：
+            // 目录重建后由空闲检查重新 arm 并通知前端重载，不需要前端重试。
+            let _ = self.heal(&key);
+            return Ok(());
+        }
+        let root = resolve_root(project).ok_or_else(project_missing)?;
+        self.watcher_mut()?
+            .watch(&root, RecursiveMode::Recursive)
+            .map_err(watcher_error)?;
+        self.entries.insert(
+            key,
+            WatchEntry {
+                project: project.to_string(),
+                root,
+                // The root listing is always on screen.
+                interested: HashSet::from([String::new()]),
+                subscribers: 1,
+                armed: true,
+            },
+        );
+        Ok(())
+    }
+
+    /// Find the entry to release even when the root no longer canonicalizes
+    /// (deleted or renamed between subscribing and closing the tab).
+    fn key_for_stop(&self, project: &str) -> Option<String> {
+        let key = entry_key(project);
+        if self.entries.contains_key(&key) {
+            return Some(key);
+        }
+        let wanted = normalize_key(project);
+        self.entries
+            .iter()
+            .find(|(_, entry)| {
+                normalize_key(&entry.project) == wanted
+                    || normalize_key(&entry.root.to_string_lossy()) == wanted
+            })
+            .map(|(key, _)| key.clone())
+    }
+
+    /// Release one subscriber; the OS watch is removed with the last one.
+    fn unsubscribe(&mut self, project: &str) {
+        let Some(key) = self.key_for_stop(project) else {
+            return;
+        };
+        let release = {
+            let Some(entry) = self.entries.get_mut(&key) else {
+                return;
+            };
+            entry.subscribers = entry.subscribers.saturating_sub(1);
+            (entry.subscribers == 0).then(|| entry.root.clone())
+        };
+        let Some(root) = release else {
+            return;
+        };
+        self.entries.remove(&key);
+        if let Ok(watcher) = self.watcher_mut() {
+            // The directory may already be gone; nothing else to clean up.
+            let _ = watcher.unwatch(&root);
+        }
+    }
+
+    /// Record what the UI shows; always keeps the root listing interested.
+    fn set_interest(&mut self, project: &str, paths: &[String]) {
+        let Some(key) = self.key_for_stop(project) else {
+            return;
+        };
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return;
+        };
+        let mut interested = HashSet::from([String::new()]);
+        interested.extend(paths.iter().filter_map(|path| normalize_relative(path)));
+        entry.interested = interested;
+    }
+
+    /// Re-arm or drop a subscription whose root moved, disappeared or came back.
+    /// Returns whether the watch is installed afterwards.
+    fn heal(&mut self, key: &str) -> bool {
+        let Some((project, root, armed)) = self
+            .entries
+            .get(key)
+            .map(|entry| (entry.project.clone(), entry.root.clone(), entry.armed))
+        else {
+            return false;
+        };
+        let wanted = resolve_root(&project);
+        if armed && wanted.as_deref() == Some(root.as_path()) {
+            return true;
+        }
+        if let Ok(watcher) = self.watcher_mut() {
+            if armed {
+                let _ = watcher.unwatch(&root);
+            }
+            if let Some(next) = wanted {
+                if watcher.watch(&next, RecursiveMode::Recursive).is_ok() {
+                    if let Some(entry) = self.entries.get_mut(key) {
+                        entry.root = next;
+                        entry.armed = true;
+                    }
+                    return true;
+                }
+            }
+        }
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.armed = false;
+        }
+        false
+    }
+
+    /// Re-check every subscription; report the projects whose watch flipped
+    /// state so the front-end reloads what it can no longer trust.
+    fn heal_all(&mut self) -> Vec<String> {
+        let keys: Vec<String> = self.entries.keys().cloned().collect();
+        let mut flipped = Vec::new();
+        for key in keys {
+            let Some((project, armed)) = self
+                .entries
+                .get(&key)
+                .map(|entry| (entry.project.clone(), entry.armed))
+            else {
+                continue;
+            };
+            // Only an armed root can silently die; a live one costs one stat.
+            if armed && self.entries.get(&key).is_some_and(|entry| entry.root.is_dir()) {
+                continue;
+            }
+            if self.heal(&key) != armed {
+                flipped.push(project);
+            }
+        }
+        flipped
+    }
+
+    /// Filter a batch of raw filesystem paths into per-project reports.
+    fn changes(&mut self, changed: &HashSet<PathBuf>) -> Vec<ProjectChange> {
+        let resets = self.heal_all();
+        let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+        let watched: Vec<(PathBuf, String, HashSet<String>)> = self
+            .entries
+            .values()
+            .map(|entry| (entry.root.clone(), entry.project.clone(), entry.interested.clone()))
+            .collect();
+        for path in changed {
+            for (root, project, interested) in &watched {
+                let Some(relative) = relative_to(root, path) else {
+                    continue;
+                };
+                if !is_interesting(&relative, interested) {
+                    continue;
+                }
+                let paths = grouped.entry(project.clone()).or_default();
+                if paths.len() < MAX_PATHS_PER_EVENT && !paths.contains(&relative) {
+                    paths.push(relative);
+                }
+            }
+        }
+        let mut result: Vec<ProjectChange> = grouped
+            .into_iter()
+            .map(|(project, paths)| ProjectChange {
+                project,
+                paths,
+                reset: false,
+            })
+            .collect();
+        for project in resets {
+            result.push(ProjectChange {
+                project,
+                paths: Vec::new(),
+                reset: true,
+            });
+        }
+        result
+    }
+}
+
 /// Start watching a local project directory (reference counted).
 #[tauri::command]
 pub async fn watch_project_files(app: AppHandle, project: String) -> Result<(), String> {
-    if crate::ssh::is_remote_uri(&project) {
-        return Err(crate::errors::pix_error(
-            "projectWatchRemote",
-            "远程项目暂不支持文件自动同步",
-        ));
+    let mut core = lock(core());
+    if core.watcher.is_none() {
+        let (tx, rx) = mpsc::channel::<NotifyResult<Event>>();
+        core.ensure_watcher(move |result| {
+            let _ = tx.send(result);
+        })?;
+        let handle = app;
+        std::thread::Builder::new()
+            .name("project-watch".into())
+            .spawn(move || coalesce_loop(handle, rx))
+            .map_err(watcher_error)?;
     }
-    let root = dunce::canonicalize(&project).map_err(|e| {
-        crate::errors::pix_error_detail("projectDirMissing", "项目目录不存在", e)
-    })?;
-    if !root.is_dir() {
-        return Err(crate::errors::pix_error(
-            "projectDirMissing",
-            "项目目录不存在",
-        ));
-    }
-    ensure_started(&app)?;
-    let key = root.to_string_lossy().to_string();
-    let mut entries = lock(registry());
-    if let Some(entry) = entries.get_mut(&key) {
-        entry.subscribers += 1;
-        return Ok(());
-    }
-    let mut slot = lock(watcher_slot());
-    let watcher = slot
-        .as_mut()
-        .ok_or_else(|| "project watcher unavailable".to_string())?;
-    watcher
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|e| format!("project watcher unavailable: {e}"))?;
-    entries.insert(
-        key,
-        WatchEntry {
-            root,
-            project,
-            subscribers: 1,
-        },
-    );
-    Ok(())
+    core.subscribe(&project)
 }
 
 /// Release one subscriber; the OS watch is removed with the last one.
 #[tauri::command]
 pub async fn unwatch_project_files(project: String) -> Result<(), String> {
-    stop(&project);
+    lock(core()).unsubscribe(&project);
     Ok(())
 }
 
-fn stop(project: &str) {
-    let Ok(root) = dunce::canonicalize(project) else {
-        return;
-    };
-    let key = root.to_string_lossy().to_string();
-    let mut entries = lock(registry());
-    let Some(entry) = entries.get_mut(&key) else {
-        return;
-    };
-    entry.subscribers = entry.subscribers.saturating_sub(1);
-    if entry.subscribers > 0 {
-        return;
-    }
-    entries.remove(&key);
-    let mut slot = lock(watcher_slot());
-    if let Some(watcher) = slot.as_mut() {
-        let _ = watcher.unwatch(&root);
-    }
-}
-
-/// Create the single process-wide watcher and its coalescing thread once.
-fn ensure_started(app: &AppHandle) -> Result<(), String> {
-    static INIT: Mutex<()> = Mutex::new(());
-    let _init = INIT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut slot = lock(watcher_slot());
-    if slot.is_some() {
-        return Ok(());
-    }
-    let (tx, rx) = mpsc::channel::<NotifyResult<Event>>();
-    let watcher = notify::recommended_watcher(move |res| {
-        let _ = tx.send(res);
-    })
-    .map_err(|e| format!("project watcher unavailable: {e}"))?;
-    let handle = app.clone();
-    std::thread::Builder::new()
-        .name("project-watch".into())
-        .spawn(move || coalesce_loop(handle, rx))
-        .map_err(|e| format!("project watcher unavailable: {e}"))?;
-    *slot = Some(watcher);
+/// Declare what the UI currently shows: loaded directories plus the previewed
+/// file. Changes outside that set are not reported.
+#[tauri::command]
+pub async fn set_project_files_interest(project: String, paths: Vec<String>) -> Result<(), String> {
+    lock(core()).set_interest(&project, &paths);
     Ok(())
 }
 
 fn coalesce_loop(app: AppHandle, rx: mpsc::Receiver<NotifyResult<Event>>) {
-    let mut pending: HashSet<PathBuf> = HashSet::new();
     loop {
-        match rx.recv() {
+        let mut pending: HashSet<PathBuf> = HashSet::new();
+        match rx.recv_timeout(IDLE_CHECK) {
             Ok(ev) => collect(&mut pending, ev),
-            Err(_) => return, // channel closed: watcher gone
+            // Idle: re-check the roots so a recreated directory is re-armed and
+            // the front-end learns it must reload.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                flush(&app, &pending);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return, // watcher gone
         }
         // Keep draining until the stream is quiet for QUIET_WINDOW.
         loop {
@@ -150,11 +417,7 @@ fn coalesce_loop(app: AppHandle, rx: mpsc::Receiver<NotifyResult<Event>>) {
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-        if pending.is_empty() {
-            continue;
-        }
-        emit_changes(&app, &pending);
-        pending.clear();
+        flush(&app, &pending);
     }
 }
 
@@ -165,34 +428,18 @@ fn collect(pending: &mut HashSet<PathBuf>, ev: NotifyResult<Event>) {
     }
 }
 
-fn emit_changes(app: &AppHandle, changed: &HashSet<PathBuf>) {
-    let watched: Vec<(PathBuf, String)> = {
-        let entries = lock(registry());
-        entries
-            .values()
-            .map(|entry| (entry.root.clone(), entry.project.clone()))
-            .collect()
-    };
-    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-    for path in changed {
-        for (root, project) in &watched {
-            let Some(relative) = relative_to(root, path) else {
-                continue;
-            };
-            if is_ignored_relative(&relative) {
-                continue;
-            }
-            let paths = grouped.entry(project.clone()).or_default();
-            if paths.len() < MAX_PATHS_PER_EVENT && !paths.contains(&relative) {
-                paths.push(relative);
-            }
-        }
-    }
-    for (project, paths) in grouped {
+/// Filter one batch (possibly empty) and emit the resulting per-project reports.
+fn flush(app: &AppHandle, changed: &HashSet<PathBuf>) {
+    let changes = lock(core()).changes(changed);
+    for change in changes {
         crate::remote::emit(
             app,
             PROJECT_FILES_CHANGED_EVENT,
-            json!({ "project": project, "paths": paths }),
+            json!({
+                "project": change.project,
+                "paths": change.paths,
+                "reset": change.reset,
+            }),
         );
     }
 }
@@ -236,18 +483,69 @@ fn relative_to(root: &Path, path: &Path) -> Option<String> {
     None
 }
 
-/// Dependency/build output directories never feed the sidebar tree; ignoring
-/// them keeps a busy `node_modules` from flooding the event channel.
-fn is_ignored_relative(relative: &str) -> bool {
-    relative
-        .split('/')
-        .any(|part| crate::fs_search::SKIP_DIRS.contains(&part))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{is_ignored_relative, relative_to};
-    use std::path::Path;
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pix-watch-test-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dunce::canonicalize(dir).unwrap()
+    }
+
+    fn write(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(path, body).unwrap();
+    }
+
+    /// Accumulate raw watcher events for `waited`, then run the same
+    /// per-project filtering the coalescing loop applies.
+    fn collect_changes(
+        core: &mut WatchCore,
+        rx: &mpsc::Receiver<NotifyResult<Event>>,
+        waited: Duration,
+    ) -> Vec<ProjectChange> {
+        let deadline = std::time::Instant::now() + waited;
+        let mut batch: HashSet<PathBuf> = HashSet::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(Ok(ev)) => batch.extend(ev.paths),
+                Ok(Err(_)) => {}
+                Err(_) => {}
+            }
+        }
+        if batch.is_empty() {
+            return Vec::new();
+        }
+        core.changes(&batch)
+    }
+
+    fn paths_of(changes: &[ProjectChange]) -> Vec<String> {
+        changes
+            .iter()
+            .flat_map(|change| change.paths.clone())
+            .collect()
+    }
+
+    fn with_watcher() -> (WatchCore, mpsc::Receiver<NotifyResult<Event>>) {
+        let (tx, rx) = mpsc::channel::<NotifyResult<Event>>();
+        let mut core = WatchCore::default();
+        core.ensure_watcher(move |result| {
+            let _ = tx.send(result);
+        })
+        .unwrap();
+        (core, rx)
+    }
 
     #[test]
     fn relative_paths_are_forward_slashed_and_stay_inside_the_root() {
@@ -271,12 +569,179 @@ mod tests {
     }
 
     #[test]
-    fn build_output_directories_are_ignored() {
-        assert!(is_ignored_relative("node_modules/vue/index.js"));
-        assert!(is_ignored_relative(".git/HEAD"));
-        assert!(is_ignored_relative("src-tauri/target/debug/build.log"));
-        assert!(is_ignored_relative("dist/bundle.js"));
-        assert!(!is_ignored_relative("src/lib.ts"));
-        assert!(!is_ignored_relative("src/distribute.ts"));
+    fn interest_covers_browsed_entries_and_their_ancestors_only() {
+        let interested = HashSet::from(["".to_string(), "src".to_string(), "src/lib.ts".to_string()]);
+        for reported in ["src/lib.ts", "src/new.ts", "README.md"] {
+            assert!(is_interesting(reported, &interested), "{reported} should report");
+        }
+        // 已加载目录被删除/移动（祖先路径）也必须通知文件树。
+        assert!(is_interesting("src", &interested));
+        // 未展开目录不在关注范围内，避免构建输出刷屏。
+        assert!(!is_interesting("node_modules/vue/index.js", &interested));
+        assert!(!is_interesting("documents/a.md", &interested));
+        // 已加载目录内的子项（新增/删除/重命名）都要上报，删除目录本身也算。
+        assert!(is_interesting("src/other.ts", &interested));
+        // 形似前缀的兄弟路径不能被误判为子项。
+        assert!(!is_interesting("srcX/y.ts", &interested));
+        assert!(!is_interesting("src/lib.ts", &HashSet::new()));
+    }
+
+    #[test]
+    fn interest_paths_are_normalized_without_escaping_the_project() {
+        assert_eq!(normalize_relative(""), Some(String::new()));
+        assert_eq!(normalize_relative("/src/"), Some("src".to_string()));
+        assert_eq!(normalize_relative("src\\stores"), Some("src/stores".to_string()));
+        assert_eq!(normalize_relative("../escape"), None);
+        assert_eq!(normalize_relative("src//lib.ts"), None);
+        assert_eq!(parent_relative("src/lib.ts"), "src");
+        assert_eq!(parent_relative("README.md"), "");
+    }
+
+    #[test]
+    fn releasing_a_subscription_survives_a_vanished_root() {
+        let dir = scratch("stop");
+        let (mut core, _rx) = with_watcher();
+        core.subscribe(dir.to_string_lossy().as_ref()).unwrap();
+        let request = dir.to_string_lossy().to_string();
+        fs::remove_dir_all(&dir).unwrap();
+        // canonicalize 已经失败；仍必须找到并释放注册项，不能泄漏 OS watch。
+        core.unsubscribe(&request);
+        assert!(core.entries.is_empty());
+        assert!(matches!(
+            core.subscribe(&request),
+            Err(message) if message.contains("projectDirMissing")
+        ));
+    }
+
+    #[test]
+    fn resubscribing_after_the_root_was_recreated_rearms_the_watch() {
+        let dir = scratch("recreate");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        core.subscribe(&request).unwrap();
+        let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
+        fs::remove_dir_all(&dir).unwrap();
+        core.unsubscribe(&request);
+        assert!(core.entries.is_empty());
+        // 重建同名目录后再次订阅：必须重新 arm，事件才能恢复上报。
+        fs::create_dir_all(&dir).unwrap();
+        core.subscribe(&request).unwrap();
+        // 前端重新加载列表后重新声明关注范围（根 + 已展开目录）。
+        core.set_interest(&request, &[String::new(), "src".to_string()]);
+        write(&dir.join("src").join("new.ts"), "export const value = 1\n");
+        let changes = collect_changes(&mut core, &rx, Duration::from_secs(2));
+        assert!(
+            paths_of(&changes).iter().any(|path| path == "src/new.ts"),
+            "expected src/new.ts, got {:?}",
+            paths_of(&changes)
+        );
+    }
+
+    #[test]
+    fn a_root_that_disappears_and_returns_is_rearmed_and_reported_as_reset() {
+        let dir = scratch("heal");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        core.subscribe(&request).unwrap();
+        let _ = collect_changes(&mut core, &rx, Duration::from_millis(300));
+
+        // 根目录消失时 notify 无法再上报其内部变化；空批次（空闲检查）必须
+        // 检测到并转为未 arm，同时通知前端重载。
+        fs::remove_dir_all(&dir).unwrap();
+        let dropped = core.changes(&HashSet::new());
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].reset);
+        assert!(!core.entries.values().next().unwrap().armed);
+
+        // 同名目录重建后，下一次空批次重新 arm 并再次通知前端。
+        fs::create_dir_all(dir.join("src")).unwrap();
+        core.set_interest(&request, &[String::new(), "src".to_string()]);
+        let rearmed = core.changes(&HashSet::new());
+        assert_eq!(rearmed.len(), 1);
+        assert!(rearmed[0].reset);
+        assert!(core.entries.values().next().unwrap().armed);
+
+        write(&dir.join("src").join("lib.ts"), "one
+");
+        let live = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        assert!(
+            paths_of(&live).iter().any(|path| path == "src/lib.ts"),
+            "expected src/lib.ts after re-arm, got {:?}",
+            paths_of(&live)
+        );
+    }
+
+    #[test]
+    fn reloaded_directories_start_reporting_previously_skipped_changes() {
+        let dir = scratch("interest");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        core.subscribe(&request).unwrap();
+        core.set_interest(&request, &["".to_string()]);
+        write(&dir.join("src").join("lib.ts"), "one\n");
+        let _ = collect_changes(&mut core, &rx, Duration::from_secs(2));
+
+        // dist 可见但尚未展开：变更不上报，避免构建输出刷屏。
+        write(&dir.join("dist").join("bundle.js"), "one\n");
+        let hidden = collect_changes(&mut core, &rx, Duration::from_secs(2));
+        assert!(!paths_of(&hidden).iter().any(|path| path == "dist/bundle.js"));
+
+        // 用户展开 dist 后，同一目录的变更必须同步（不靠隐藏目录规避）。
+        core.set_interest(&request, &["".to_string(), "dist".to_string()]);
+        write(&dir.join("dist").join("bundle.js"), "two\n");
+        let reported = collect_changes(&mut core, &rx, Duration::from_secs(5));
+        assert!(
+            paths_of(&reported).iter().any(|path| path == "dist/bundle.js"),
+            "expected dist/bundle.js, got {:?}",
+            paths_of(&reported)
+        );
+        // 已打开/已加载目录之外的路径仍被过滤。
+        write(&dir.join("README.md"), "readme\n");
+        let root_change = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        assert!(paths_of(&root_change).iter().any(|path| path == "README.md"));
+    }
+
+    #[test]
+    fn interest_narrows_again_after_the_directory_is_collapsed() {
+        let dir = scratch("narrow");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        fs::create_dir_all(dir.join("dist")).unwrap();
+        core.subscribe(&request).unwrap();
+        core.set_interest(&request, &["".to_string(), "dist".to_string()]);
+        write(&dir.join("dist").join("bundle.js"), "one\n");
+        let first = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        assert!(paths_of(&first).iter().any(|path| path == "dist/bundle.js"));
+        // 收起目录后不再为一个不可见的目录持续推送事件。
+        core.set_interest(&request, &["".to_string()]);
+        write(&dir.join("dist").join("bundle.js"), "two\n");
+        let second = collect_changes(&mut core, &rx, Duration::from_secs(2));
+        assert!(!paths_of(&second).iter().any(|path| path == "dist/bundle.js"));
+    }
+
+    #[test]
+    fn remote_projects_are_refused() {
+        let (mut core, _rx) = with_watcher();
+        let error = core.subscribe("ssh://dev@host/work").unwrap_err();
+        assert!(error.contains("projectWatchRemote"));
+        assert!(core.entries.is_empty());
+    }
+
+    #[test]
+    fn shared_roots_keep_one_os_watch_until_the_last_subscriber_leaves() {
+        let dir = scratch("shared");
+        let (mut core, rx) = with_watcher();
+        let request = dir.to_string_lossy().to_string();
+        core.subscribe(&request).unwrap();
+        core.subscribe(&request).unwrap();
+        let _ = collect_changes(&mut core, &rx, Duration::from_millis(200));
+        core.unsubscribe(&request);
+        write(&dir.join("a.ts"), "one\n");
+        let reported = collect_changes(&mut core, &rx, Duration::from_secs(3));
+        assert!(paths_of(&reported).iter().any(|path| path == "a.ts"));
+        core.unsubscribe(&request);
+        assert!(core.entries.is_empty());
     }
 }

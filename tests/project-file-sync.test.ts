@@ -1,5 +1,5 @@
 import { expect, test } from "vitest"
-import { directoriesToReload, parentDirectory, previewNeedsReload } from "@/lib/projectFileSync"
+import { directoriesToReload, interestPaths, parentDirectory, previewNeedsReload } from "@/lib/projectFileSync"
 
 test("parentDirectory returns the project-relative folder of a changed path", () => {
   expect(parentDirectory("src/lib.ts")).toBe("src")
@@ -15,6 +15,27 @@ test("only loaded directories are re-listed, plus the project root", () => {
   // 根目录的增删总会刷新根列表。
   expect(directoriesToReload(["README.md"], loaded)).toEqual([""])
   expect(directoriesToReload(["a/b.ts", "a/b.ts"], loaded)).toEqual([""])
+})
+
+test("a loaded directory that disappeared is re-listed so stale children are replaced", () => {
+  const loaded = { "": [], src: [], "src/stores": [] }
+  // 目录自身被删除/重命名：它本身也要重拉，返回空列表即替换掉陈旧子项。
+  expect(directoriesToReload(["src"], loaded)).toEqual(["", "src"])
+  expect(directoriesToReload(["src/stores"], loaded)).toEqual(["", "src", "src/stores"])
+  // 未加载目录被删除只需刷新其父目录。
+  expect(directoriesToReload(["docs"], loaded)).toEqual([""])
+})
+
+test("the published interest is every loaded directory plus the previewed file", () => {
+  expect(interestPaths({}, null)).toEqual([""])
+  expect(interestPaths({ "": [], src: [], "src/stores": [] }, "src/lib.ts")).toEqual([
+    "",
+    "src",
+    "src/stores",
+    "src/lib.ts",
+  ])
+  // 已打开文件同时属于已加载目录时不重复列出。
+  expect(interestPaths({ "": [], src: [], "src/lib.ts": [] }, "src/lib.ts")).toEqual(["", "src", "src/lib.ts"])
 })
 
 test("the open preview reloads only when its own file changed", () => {

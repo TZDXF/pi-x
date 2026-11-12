@@ -1,18 +1,42 @@
 import { onScopeDispose, ref, watch } from "vue"
-import { onProjectFilesChanged, unwatchProjectFiles, watchProjectFiles } from "@/api/client/projectFiles"
+import {
+  onProjectFilesChanged,
+  setProjectFilesInterest,
+  unwatchProjectFiles,
+  watchProjectFiles,
+} from "@/api/client/projectFiles"
 import { samePath } from "@/lib/paths"
 import { isRemoteProject } from "@/lib/ssh"
+
+/** One filesystem report from the backend. */
+export interface ProjectFilesChange {
+  /** Project-relative paths that changed inside the browsed scope. */
+  paths: string[]
+  /** The watch was re-armed or lost its root: reload every loaded directory. */
+  reset: boolean
+}
+
+export interface ProjectFileWatchOptions {
+  /** Root to watch; "" disables the subscription. */
+  project: () => string
+  /** Directories and files the UI currently shows, as project-relative paths. */
+  interest?: () => string[]
+  onChange: (change: ProjectFilesChange) => void
+}
 
 /**
  * Subscribe to filesystem changes of one local project root.
  *
- * `project` returns the root to watch, or an empty string while no watch should
- * run (no project yet, a static resource list, or a remote project — the backend
- * rejects those and the UI keeps manual refresh). Watching is reference counted
- * in the backend, so several sidebar tabs on the same project share one OS
- * watch, and switching roots releases the previous one.
+ * The front-end tells the backend what it currently shows (loaded directories
+ * plus the previewed file) via `interest`; only changes inside that scope are
+ * reported, so an unopened `node_modules` costs nothing while every browsable
+ * directory still syncs once loaded. Watching is reference counted in the
+ * backend, so several sidebar tabs on the same project share one OS watch.
+ *
+ * Remote projects are not watched (the backend rejects them) and keep manual
+ * refresh; a missing event channel degrades the same way.
  */
-export function useProjectFileWatch(project: () => string, onChange: (paths: string[]) => void) {
+export function useProjectFileWatch(options: ProjectFileWatchOptions) {
   /** Root currently watched ("" when nothing is watched). */
   const watching = ref("")
   let off: (() => void) | undefined
@@ -29,6 +53,13 @@ export function useProjectFileWatch(project: () => string, onChange: (paths: str
     if (previous) void unwatchProjectFiles(previous).catch(() => undefined)
   }
 
+  function publishInterest() {
+    const root = watching.value
+    if (!root) return
+    const paths = options.interest?.() ?? [""]
+    void setProjectFilesInterest(root, paths).catch(() => undefined)
+  }
+
   async function start(root: string) {
     if (isRemoteProject(root)) return
     let listener: (() => void) | undefined
@@ -37,7 +68,7 @@ export function useProjectFileWatch(project: () => string, onChange: (paths: str
       listener = await onProjectFilesChanged(change => {
         if (watching.value !== root) return
         // 同一目录可能以大小写/分隔符不同的写法订阅，按路径同一性匹配事件。
-        if (samePath(change.project, root)) onChange(change.paths)
+        if (samePath(change.project, root)) options.onChange({ paths: change.paths, reset: change.reset })
       })
     } catch {
       return // No event channel (remote browser build): manual refresh stays available.
@@ -59,10 +90,11 @@ export function useProjectFileWatch(project: () => string, onChange: (paths: str
       return
     }
     watching.value = root
+    publishInterest()
   }
 
   function apply() {
-    const next = project() || ""
+    const next = options.project() || ""
     desired = next
     queue = queue.then(async () => {
       if (next !== desired || next === watching.value) return
@@ -71,7 +103,8 @@ export function useProjectFileWatch(project: () => string, onChange: (paths: str
     })
   }
 
-  watch(project, apply, { immediate: true })
+  watch(options.project, apply, { immediate: true })
+  if (options.interest) watch(options.interest, publishInterest, { deep: true })
   onScopeDispose(() => {
     desired = ""
     queue = queue.then(() => {

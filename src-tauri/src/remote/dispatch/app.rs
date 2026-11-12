@@ -113,6 +113,14 @@ pub(super) async fn handle(
                 crate::project_watch::unwatch_project_files(text(a, "project")?).await?;
                 Ok(Value::Null)
             }
+            "set_project_files_interest" => {
+                crate::project_watch::set_project_files_interest(
+                    text(a, "project")?,
+                    serde_json::from_value(a["paths"].clone()).map_err(|e| e.to_string())?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
             _ => return Err(UNHANDLED.to_owned()),
         }
     }

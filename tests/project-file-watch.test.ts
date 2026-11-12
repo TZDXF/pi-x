@@ -4,6 +4,7 @@ import { effectScope, nextTick, ref } from "vue"
 const mocks = vi.hoisted(() => ({
   watch: vi.fn(),
   unwatch: vi.fn(),
+  interest: vi.fn(),
   listener: vi.fn(),
   off: vi.fn(),
   isRemote: vi.fn((value: string) => value.startsWith("ssh://")),
@@ -12,7 +13,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/api/client/projectFiles", () => ({
   watchProjectFiles: mocks.watch,
   unwatchProjectFiles: mocks.unwatch,
-  onProjectFilesChanged: async (handler: (change: { project: string; paths: string[] }) => void) => {
+  setProjectFilesInterest: mocks.interest,
+  onProjectFilesChanged: async (handler: (change: { project: string; paths: string[]; reset: boolean }) => void) => {
     mocks.listener(handler)
     return mocks.off
   },
@@ -26,6 +28,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.watch.mockResolvedValue(undefined)
   mocks.unwatch.mockResolvedValue(undefined)
+  mocks.interest.mockResolvedValue(undefined)
 })
 afterEach(() => {
   scopes.splice(0).forEach(scope => scope.stop())
@@ -38,18 +41,20 @@ async function flush(times = 4) {
   }
 }
 
-function setup(initial: string) {
+function setup(initial: string, interest?: () => string[]) {
   const project = ref(initial)
-  const changes: string[][] = []
+  const shown = ref<string[]>([""])
+  const changes: { paths: string[]; reset: boolean }[] = []
   const scope = effectScope()
   scopes.push(scope)
   const result = scope.run(() =>
-    useProjectFileWatch(
-      () => project.value,
-      paths => changes.push(paths),
-    ),
+    useProjectFileWatch({
+      project: () => project.value,
+      interest: interest ?? (() => shown.value),
+      onChange: change => changes.push({ paths: change.paths, reset: change.reset }),
+    }),
   )!
-  return { project, changes, watching: result.watching }
+  return { project, shown, changes, watching: result.watching }
 }
 
 test("a local project root is watched and its changes are forwarded", async () => {
@@ -58,11 +63,39 @@ test("a local project root is watched and its changes are forwarded", async () =
   expect(mocks.watch).toHaveBeenCalledWith("C:/repo")
   expect(watching.value).toBe("C:/repo")
   const handler = mocks.listener.mock.calls[0][0]
-  handler({ project: "C:/repo", paths: ["src/lib.ts"] })
-  expect(changes).toEqual([["src/lib.ts"]])
+  handler({ project: "C:/repo", paths: ["src/lib.ts"], reset: false })
+  expect(changes).toEqual([{ paths: ["src/lib.ts"], reset: false }])
+  // 根目录重建后的 reset 也要透传，前端据此整表重载。
+  handler({ project: "C:/repo", paths: [], reset: true })
+  expect(changes.at(-1)).toEqual({ paths: [], reset: true })
   // Events for another project never leak into this tab.
-  handler({ project: "C:/other", paths: ["README.md"] })
-  expect(changes).toEqual([["src/lib.ts"]])
+  handler({ project: "C:/other", paths: ["README.md"], reset: false })
+  expect(changes).toHaveLength(2)
+})
+
+test("the browsed scope is published on start and whenever it grows or shrinks", async () => {
+  const { shown } = setup("C:/repo")
+  await flush()
+  expect(mocks.interest).toHaveBeenCalledWith("C:/repo", [""])
+  shown.value = ["", "dist"]
+  await flush()
+  expect(mocks.interest).toHaveBeenLastCalledWith("C:/repo", ["", "dist"])
+  // 收起目录后重新收窄关注范围，避免为不可见目录持续推送事件。
+  shown.value = [""]
+  await flush()
+  expect(mocks.interest).toHaveBeenLastCalledWith("C:/repo", [""])
+})
+
+test("interest follows the previewed file as it changes", async () => {
+  const shown = ref([""])
+  const { changes } = setup("C:/repo", () => shown.value)
+  await flush()
+  const handler = mocks.listener.mock.calls[0][0]
+  shown.value = ["", "src", "src/lib.ts"]
+  await flush()
+  expect(mocks.interest).toHaveBeenLastCalledWith("C:/repo", ["", "src", "src/lib.ts"])
+  handler({ project: "C:/repo", paths: ["src/lib.ts"], reset: false })
+  expect(changes).toEqual([{ paths: ["src/lib.ts"], reset: false }])
 })
 
 test("switching projects stops the old watch and starts the new one", async () => {
@@ -107,9 +140,8 @@ test("an unwatchable directory leaves the UI on manual refresh", async () => {
 })
 
 test("disposing the sidebar releases the subscription", async () => {
-  const { project } = setup("C:/repo")
+  setup("C:/repo")
   await flush()
-  project.value = "C:/repo"
   scopes.splice(0).forEach(scope => scope.stop())
   await flush()
   expect(mocks.unwatch).toHaveBeenCalledWith("C:/repo")

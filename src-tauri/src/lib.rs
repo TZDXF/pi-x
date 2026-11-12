@@ -177,6 +177,7 @@ pub fn run() {
             commands::files::read_file_preview,
             project_watch::watch_project_files,
             project_watch::unwatch_project_files,
+            project_watch::set_project_files_interest,
             commands::files::session_export_file,
             commands::files::open_path,
             editor::open_in_editor,
