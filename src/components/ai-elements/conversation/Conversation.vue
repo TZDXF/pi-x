@@ -7,7 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { shouldReleaseBottomLock, shouldResumeBottomLock } from '@/lib/scrollIntent'
+import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
 interface Props {
@@ -23,16 +23,13 @@ interface Props {
 
 const emit = defineEmits<{ scroll: [event: Event] }>()
 defineExpose({
-  stopScroll: () => releaseBottomLock(),
-  scrollToBottom: () => {
-    readingHistory = false
-    return context.scrollToBottom()
-  },
+  stopScroll: releaseBottomLock,
+  scrollToBottom,
   scrollToMessage: async (id: number) => {
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
     if (!viewport || !message) return
-    context.stopScroll()
+    releaseBottomLock()
     message.dispatchEvent(new Event('virtual-reveal'))
     await nextTick()
     if (!message.isConnected) return
@@ -55,11 +52,15 @@ const delegatedProps = reactiveOmit(props, 'class', 'ariaLabel', 'anchor')
 const context = useStickToBottom(delegatedProps)
 const { scrollRef, contentRef } = context
 const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
-let readingHistory = false
+let readingHistory = props.initial === false
 let lastScrollTop: number | undefined
 function releaseBottomLock() {
   readingHistory = true
   context.stopScroll()
+}
+function scrollToBottom(options?: Parameters<typeof context.scrollToBottom>[0]) {
+  readingHistory = false
+  return context.scrollToBottom(options)
 }
 watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
@@ -82,13 +83,15 @@ function handleScroll(event: Event) {
   if (scroll) {
     const previous = lastScrollTop ?? scroll.scrollTop
     lastScrollTop = scroll.scrollTop
-    // Scroll events also cover scrollbar dragging and keyboard navigation.
-    if (scroll.scrollTop < previous) releaseBottomLock()
+    // Scroll events also cover scrollbar dragging and keyboard navigation, but
+    // layout shrinkage clamps scrollTop to the new bottom without user intent.
+    if (shouldReleaseBottomLockOnScroll(previous, scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight))
+      releaseBottomLock()
     else if (shouldResumeBottomLock(
       previous,
       scroll.scrollTop,
       scroll.scrollHeight - scroll.clientHeight,
-      context.escapedFromLock.value,
+      readingHistory,
     )) readingHistory = false
   }
   emit('scroll', event)
@@ -101,15 +104,19 @@ watchEffect((onCleanup) => {
   const scroll = scrollRef.value
   const content = contentRef.value
   if (!scroll || !content || props.resize !== 'instant') return
-  const pin = () => !readingHistory && pinToBottom(scroll, context.isAtBottom.value, context.escapedFromLock.value)
+  // A viewport resize can make the library escape after a layout clamp as well.
+  // Follow our reading intent, rather than that incidental library state.
+  const pin = () => pinToBottom(scroll, !readingHistory, false)
   const observer = new ResizeObserver(pin)
   observer.observe(content)
+  observer.observe(scroll)
   onCleanup(() => observer.disconnect())
 })
-provide(conversationKey, context)
+provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock })
 onMounted(() => {
   if (props.initial === 'instant' && scrollRef.value)
     scrollRef.value.scrollTop = scrollRef.value.scrollHeight
+  lastScrollTop = scrollRef.value?.scrollTop
 })
 </script>
 
