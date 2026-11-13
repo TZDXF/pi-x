@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 const MAX_WALK_ENTRIES: usize = 30_000;
 const MAX_HITS: usize = 50;
 
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     "node_modules",
     ".git",
     ".hg",

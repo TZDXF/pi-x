@@ -105,6 +105,32 @@ pub(super) async fn handle(
             "search_files" => Ok(to_json(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,
             )?),
+            "watch_project_files" => {
+                crate::project_watch::watch_project_files(
+                    app.clone(),
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "unwatch_project_files" => {
+                crate::project_watch::unwatch_project_files(
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "set_project_files_interest" => {
+                crate::project_watch::set_project_files_interest(
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                    serde_json::from_value(a["paths"].clone()).map_err(|e| e.to_string())?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
             _ => return Err(UNHANDLED.to_owned()),
         }
     }

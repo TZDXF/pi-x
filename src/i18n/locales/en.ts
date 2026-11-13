@@ -254,6 +254,8 @@ export default {
     annotateCancel: "Cancel",
     annotateFull: "Code comments are full (max 20). Remove some comments before adding new ones.",
     annotateRemove: "Remove comment",
+    selectFile: "Select a file from the tree on the right",
+    resizeTree: "Drag to resize the file tree (arrow keys also work)",
     commentFileUnavailable: "File does not exist or is unavailable in the project folders: {path}",
   },
   changes: {
@@ -1628,6 +1630,7 @@ export default {
     taskFieldsRequired: "Title, prompt and model are required (title ≤ 300 bytes, prompt ≤ 100 KB).",
     invalidThinkingLevel: "Invalid thinking level.",
     projectDirMissing: "Project directory does not exist.",
+    projectWatchRemote: "Automatic file sync is not available for remote projects.",
     taskNotFound: "Task no longer exists; it may have been deleted.",
     taskRunning: "Task is running. Please try again later.",
     piRequestTimedOut: "The request to pi timed out.",

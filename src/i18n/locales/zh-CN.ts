@@ -250,6 +250,8 @@ export default {
     annotateCancel: "取消",
     annotateFull: "代码批注已达上限（20 条），请先移除部分批注。",
     annotateRemove: "移除批注",
+    selectFile: "从右侧文件树中选择要查看的文件",
+    resizeTree: "拖拽调整文件树宽度（也可使用左右方向键）",
     commentFileUnavailable: "文件不存在或无法在项目目录中访问：{path}",
   },
   changes: {
@@ -1579,6 +1581,7 @@ export default {
     taskFieldsRequired: "标题、指令和模型必填（标题 ≤ 300 字节，指令 ≤ 100 KB）",
     invalidThinkingLevel: "无效的思考等级",
     projectDirMissing: "项目目录不存在",
+    projectWatchRemote: "远程项目暂不支持文件自动同步",
     taskNotFound: "任务不存在，可能已被删除",
     taskRunning: "任务正在运行，请稍后再试",
     piRequestTimedOut: "请求 pi 超时",

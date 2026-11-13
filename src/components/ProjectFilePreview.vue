@@ -36,8 +36,10 @@ const props = withDefaults(
     /** Store key for pending code comments; defaults to project. When set and
      *  different, comments carry `root` so the prompt can address the file. */
     commentProject?: string
+    /** Bumped by the file tree when the file changed on disk; reloads the content. */
+    revision?: number
   }>(),
-  { closable: true },
+  { closable: true, revision: 0 },
 )
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
@@ -75,15 +77,18 @@ const imageSrc = computed(() => {
 const showRenderedMarkdown = computed(() => preview.value?.kind === "text" && isMarkdown.value && mdRendered.value)
 const showCode = computed(() => preview.value?.kind === "text" && !showRenderedMarkdown.value && !imageSrc.value)
 
-async function load() {
+async function load(resetView = true) {
   const current = ++seq
   loading.value = true
   errorCause.value = null
   openError.value = null
-  preview.value = null
-  htmlLines.value = null
-  mdRendered.value = !props.lineRange
-  svgRendered.value = !props.lineRange
+  if (resetView) {
+    preview.value = null
+    htmlLines.value = null
+    // dev 的行号定位要求 Markdown/SVG 直接进源码视图；磁盘变更刷新则保留用户当前视图。
+    mdRendered.value = !props.lineRange
+    svgRendered.value = !props.lineRange
+  }
   try {
     const result = props.readFile
       ? await props.readFile(props.path)
@@ -100,7 +105,16 @@ async function load() {
     if (current === seq) loading.value = false
   }
 }
-watch(() => [props.project, props.path, props.readFile] as const, load, { immediate: true })
+// 文件/项目切换时重置视图（渲染/源码切换）；仅内容因磁盘变更而刷新时保留当前视图。
+watch(
+  () => [props.project, props.path, props.readFile] as const,
+  () => void load(),
+  { immediate: true },
+)
+watch(
+  () => props.revision,
+  () => void load(false),
+)
 
 const opening = ref(false)
 async function openInEditor() {
