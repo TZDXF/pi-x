@@ -122,7 +122,25 @@ Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远�
 cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'
 ```
 
+PowerShell 5.1 会去掉 `--config` 值内部的引号，第二个参数需转义内部双引号（PowerShell 7 两种写法都可用）：
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package.\"*\".debug=2'
+```
+
 改动 profile 或 crate-type 前后用同一环境对比：先 `pnpm run bench:rust -- --target-dir ../bench-before`，改完再跑 `--target-dir ../bench-after`。脚本使用独立 target 目录，打印 cargo/rustc 版本，并报告冷构建、热构建、单文件增量（touch `src/paths.rs`）与构建目录占用；两端都先预热一次再跑正式冷构建，避免磁盘缓存影响结果。
+
+### 基准脚本的 target 目录安全约定
+
+`bench:rust` 的冷构建会清空 target 目录，因此脚本先校验、再删除：
+
+- 目标路径用它自己的真实绝对路径判断（`realpath` 解析符号链接、Windows junction 与 8.3 短名），
+  校验和删除都作用在解析后的路径上，不会顺着链接删到链接之外的内容。
+- 拒绝磁盘根、仓库根及其祖先（含误用 `--target-dir .` / `..`）、源码目录本身及其内部、
+  以及指向这些位置的链接。
+- 只清理脚本创建或带 `.pix-bench-rust-target.json` 标记的目录。目录不存在或为空时由脚本创建并写标记；
+  已存在、非空、无标记的目录直接拒绝并保持原样，绝不先清空再判断。
+- `--skip-cold` 为复用模式，不做任何删除；外来目录只读，也不写标记。若确实要清空外来缓存，请手动删除或换个新路径。
 
 ### E2E 测试
 
