@@ -103,6 +103,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `pnpm run test:web`              | Vitest 单元测试                         |
 | `pnpm run test:e2e`              | Playwright E2E 测试                     |
 | `pnpm test`                      | Rust 单元测试                           |
+| `pnpm run bench:rust`            | Rust 冷/热/单文件增量耗时与占用         |
 | `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
 Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
@@ -110,6 +111,42 @@ Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远�
 日常前端迭代可运行 `pnpm run check:quick` 和 `pnpm run test:web`（仅运行相对 HEAD 变动及其关联的测试）。完整的 `pnpm run check` 会并行执行独立检查，等待前端构建与默认 Rust 检查成功后再检查 `remote-access`，并输出各项耗时；提交前仍需运行完整检查及测试。
 
 类型检查缓存保存在 `node_modules/.cache/vue-tsc/`，后续运行会复用结果并检查变动。首次运行或删除缓存后需要完整检查，缓存不会提交到仓库。内存紧张或同时运行其他构建时，可使用 `pnpm run check --serial` 串行检查，减少资源争抢。
+
+### Rust 构建耗时与占用
+
+`src-tauri/Cargo.toml` 的 dev/test profile 关闭依赖的 debuginfo，本 crate 只保留行号表（`debug = "line-tables-only"`），以降低中间产物占用与增量链接耗时；release profile 不受影响。`.lib` / `.dll` 只在移动端目标需要，因此 `crate-type` 只保留 `rlib`。
+
+需要依赖内部的源码行或变量单步调试时，无需改回默认值，用 `--config` 覆盖即可：
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'
+```
+
+PowerShell 5.1 会去掉 `--config` 值内部的引号，第二个参数需转义内部双引号（PowerShell 7 两种写法都可用）：
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package.\"*\".debug=2'
+```
+
+改动 profile 或 crate-type 前后用同一环境对比：
+
+```bash
+pnpm run bench:rust                              # 冷构建：脚本用 mkdtemp 新建唯一临时目录，结束即删除
+pnpm run bench:rust -- --keep                    # 同上，但保留临时目录便于事后检查
+pnpm run bench:rust -- --target-dir ../bench-out --skip-cold   # 只读复用已有产物（不删除、不写入）
+```
+
+脚本打印 cargo/rustc 版本，并报告冷构建、热构建、单文件增量（touch `src/paths.rs`）与构建目录占用（硬链接按 inode 去重、bigint 计算）。做前后对比时两轮用同一命令与同一工具链，并各自先预热一次再跑正式冷构建，避免磁盘缓存影响结果。
+
+### 基准脚本的 target 目录安全约定
+
+`bench:rust` 把「能删什么」收紧到唯一来源：**本进程自己 `mkdtemp` 出来的目录**。
+
+- 冷构建不接受 `--target-dir`。默认在 `os.tmpdir()` 用 `mkdtemp` 新建随机名目录，创建后立即用一笔 `lstat` 确认为「目录、非符号链接/junction」，并用同一笔 stat 的 `dev`+`ino` 作为登记身份（不再经 realpath，避免创建与登记之间被换向）。登记后、首次使用前再比对一次身份，不一致就放弃使用。
+- 删除前复核路径未变、非链接、身份一致、路径策略通过；真正删除前把目录原子重命名到带 `randomUUID()` 的私有临时名，按新路径复核同一身份后才删除。重命名后路径由本次调用独占，外部无法预先替换。
+- 外部目录只有只读复用能力：`--target-dir` 必须配合 `--skip-cold`，脚本对它不删除、不创建、不写入，也永不登记为可删对象。复用前仍做保护规则校验。
+- 保护规则按整棵源码树判断：磁盘根、仓库根及其祖先、仓库内部（不限名单子目录）全部拒绝。`\\localhost\C$\` 与 `\\?\UNC\localhost\C$\`、`\\?\C:\` 等别名写法会先归一到本地盘符再比较；无法确定归属的远端 UNC 直接拒绝。
+- 全程不写任何标记文件，因此伪造标记不构成删除授权。
 
 ### E2E 测试
 

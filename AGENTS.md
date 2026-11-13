@@ -24,6 +24,9 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
 - `pnpm run test:web` / `pnpm run test:web:all` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别按增量（仅相对 HEAD 变动的测试）、全量、watch 模式运行 Vitest 单元测试，以及运行 Playwright E2E 与 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
+- `pnpm run bench:rust`：测 Rust 冷构建、热构建、单文件增量耗时与目录占用；改动 profile 或 `crate-type` 前后用同一命令对比。冷构建只在脚本自己 `mkdtemp` 出来的临时目录里跑（创建后立即 `lstat` 校验非链接并用同一笔 stat 的 `dev`+`ino` 登记，登记与首次使用之间再比对一次，删除前原子重命名到私有临时名并复核身份）。外部目录没有冷清理能力：`--target-dir` 必须配 `--skip-cold`，只读复用、不删除不创建不写标记，也永不登记为可删对象。磁盘根、仓库根及其祖先、仓库内部一律拒绝，别名写法先归一再比较，无法归一身份的远端 UNC 直接拒绝。
+
+Rust dev/test profile 关闭了依赖的 debuginfo、本 crate 只留行号表（见 `src-tauri/Cargo.toml`），release 不受影响。需要依赖内部源码行或变量单步调试时，用 `--config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'` 临时覆盖（PowerShell 5.1 下第二个值需写成 `'profile.dev.package.\"*\".debug=2'`），不要把默认值改回完整 debuginfo。
 
 ## 代码风格与命名
 
