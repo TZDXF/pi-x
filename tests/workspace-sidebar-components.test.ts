@@ -338,6 +338,22 @@ test("project sessions expand independently from five rows and hide the toggle a
   }
 })
 
+test("expanding history makes sessions older than the former 50-row cap reachable", async () => {
+  const rows = Array.from({ length: 60 }, (_, index) => ({ ...saved, file: `visibility-${index}.jsonl` }))
+  const root = mount("SidebarSessionList.vue", {
+    ...listProps,
+    rows,
+    orderedFiles: rows.map(row => row.file),
+    pending: [],
+    showDraft: false,
+  })
+  expect(byClass(root, "session-link")).toHaveLength(5)
+  byClass(root, "session-list-toggle")[0].props.onClick()
+  await vue.nextTick()
+  expect(byClass(root, "session-link")).toHaveLength(60)
+  expect(byClass(root, "session-list-toggle")).toHaveLength(0)
+})
+
 test("folded session sorting retains hidden files and five sessions need no toggle", () => {
   const rows = Array.from({ length: 7 }, (_, index) => ({ ...saved, file: `${index}.jsonl` }))
   const reorder = vi.fn()

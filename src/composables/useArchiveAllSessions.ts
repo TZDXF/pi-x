@@ -4,6 +4,8 @@ import type { SessionMeta } from "@/api/piClient"
 /** Archive a fresh on-disk enumeration through the same metadata update as single-session archive. */
 export function useArchiveAllSessions(
   update: (session: SessionMeta, title: string | null, archived: boolean) => Promise<unknown>,
+  /** Optional per-row failure hook so callers can record a diagnostic code. */
+  onRowError?: (error: unknown) => void,
 ) {
   const archivingAll = ref(false)
 
@@ -20,8 +22,9 @@ export function useArchiveAllSessions(
       for (const session of targets) {
         try {
           await update(session, session.title || null, true)
-        } catch {
+        } catch (error) {
           failed++
+          onRowError?.(error)
         }
       }
     } finally {

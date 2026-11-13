@@ -5,7 +5,7 @@
 //! pi, so we don't reconstruct it — instead we read each file's first line
 //! (the session header JSON) and filter by its `cwd` field.
 
-use crate::errors::{pix_error, pix_error_detail};
+use crate::errors::{error_code, pix_error, pix_error_detail};
 use crate::trust::agent_dir;
 use dunce::canonicalize;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager};
 /// 实现见 `edit.rs`，由 `crate::rpc` 池层调用。
 pub(crate) mod edit;
 
+#[cfg(test)]
 const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
@@ -140,20 +141,32 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
 
 /// List sessions whose `cwd` matches `project`, newest creation time first.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
-    list_with_options(project, Some(MAX_SESSIONS), true).await
+    list_with_options(project).await
 }
 
-/// List every persisted, unarchived session for bulk archive. Unlike the
-/// sidebar listing, archived rows do not consume a limit and hide older rows.
-pub async fn list_unarchived(project: String) -> Result<Vec<SessionMeta>, String> {
-    list_with_options(project, None, false).await
+/// List every persisted, unarchived local session for bulk archive. Storage
+/// statistics and this action share the same global on-disk scope, independent
+/// of the projects currently registered in the sidebar.
+pub async fn list_unarchived() -> Result<Vec<SessionMeta>, String> {
+    let root = agent_dir().join("sessions");
+    let root_exists = root.is_dir();
+    let rows = tokio::task::spawn_blocking(move || list_sessions(&root, None, None, false))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    // 归档阶段诊断：只记录计数与根目录是否存在，不写路径或会话标识。
+    // 用户点“全部归档”却无任何反应时，这行日志可区分“枚举为空/根目录不同”。
+    crate::logs::write(
+        "sessions",
+        &format!(
+            "archive enumerate rows={} rootExist={}",
+            rows.len(),
+            if root_exists { 1 } else { 0 }
+        ),
+    );
+    Ok(rows)
 }
 
-async fn list_with_options(
-    project: String,
-    limit: Option<usize>,
-    include_archived: bool,
-) -> Result<Vec<SessionMeta>, String> {
+async fn list_with_options(project: String) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
             return Err(pix_error(
@@ -167,15 +180,17 @@ async fn list_with_options(
         normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
-        list_project_sessions(
-            &agent_dir().join("sessions"),
-            &project_norm,
-            limit,
-            include_archived,
-        )
+        list_project_history(&agent_dir().join("sessions"), &project_norm)
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Both layouts share this history. The sidebar folds rows in the UI, so a
+/// backend cap would make older sessions unreachable even after expanding.
+/// Keep archived metadata too, to suppress still-live archived runtimes.
+fn list_project_history(root: &Path, project_norm: &str) -> Result<Vec<SessionMeta>, String> {
+    list_project_sessions(root, project_norm, None, true)
 }
 
 fn creation_time(timestamp: Option<&str>) -> i64 {
@@ -188,6 +203,20 @@ fn creation_time(timestamp: Option<&str>) -> i64 {
 fn list_project_sessions(
     sessions_root: &Path,
     project_norm: &str,
+    limit: Option<usize>,
+    include_archived: bool,
+) -> Result<Vec<SessionMeta>, String> {
+    list_sessions(
+        sessions_root,
+        Some(project_norm),
+        limit,
+        include_archived,
+    )
+}
+
+fn list_sessions(
+    sessions_root: &Path,
+    project_norm: Option<&str>,
     limit: Option<usize>,
     include_archived: bool,
 ) -> Result<Vec<SessionMeta>, String> {
@@ -223,7 +252,9 @@ fn list_project_sessions(
                     creation_time(header.get("timestamp").and_then(Value::as_str)),
                 )
             };
-            if normalize(Path::new(&cwd)).unwrap_or(cwd) != project_norm {
+            if project_norm
+                .is_some_and(|project| normalize(Path::new(&cwd)).unwrap_or(cwd) != project)
+            {
                 continue;
             }
             // 只展示 PiX 纳管的会话（带 .pix.json sidecar）；pi CLI 等其他
@@ -240,16 +271,94 @@ fn list_project_sessions(
         if limit.is_some_and(|limit| out.len() >= limit) {
             break;
         }
-        // One unreadable/partial/corrupt file must not empty the sidebar.
-        if let Ok(meta) = read_session_meta(&path, mtime) {
-            // Bulk archive skips archived rows without letting them consume
-            // the sidebar's limit and hide older unarchived sessions.
-            if include_archived || !meta.archived {
-                out.push(meta);
-            }
+        // One unreadable/partial/corrupt file must not empty the sidebar, and
+        // it must not silently disappear from the lists either.
+        let Some(meta) = read_session_meta_or_degraded(&path, mtime, "list") else {
+            continue;
+        };
+        // Bulk archive skips archived rows without letting them consume
+        // the sidebar's limit and hide older unarchived sessions.
+        if include_archived || !meta.archived {
+            out.push(meta);
         }
     }
     Ok(out)
+}
+
+/// Row for a session whose transcript cannot be fully parsed.
+///
+/// Storage statistics only need the header line and the sidecar, while a full
+/// `SessionMeta` additionally scans the transcript (preview, last prompt, name).
+/// A transcript that is not valid UTF-8 therefore used to be counted by
+/// storage but dropped from every list, so "归档全部" could enumerate zero
+/// targets while the panel showed unarchived sessions. Archive itself only
+/// writes the sidecar, so such a session must stay reachable with a degraded,
+/// untitled row instead of vanishing.
+fn read_session_meta_or_degraded(path: &Path, mtime: u64, stage: &str) -> Option<SessionMeta> {
+    match read_session_meta(path, mtime) {
+        Ok(meta) => Some(meta),
+        Err(error) => {
+            crate::logs::write(
+                "sessions",
+                &format!("meta degraded stage={stage} code={}", error_code(&error)),
+            );
+            match degraded_session_meta(path, mtime) {
+                Ok(meta) => Some(meta),
+                Err(error) => {
+                    crate::logs::write(
+                        "sessions",
+                        &format!("meta skipped stage={stage} code={}", error_code(&error)),
+                    );
+                    None
+                }
+            }
+        }
+    }
+}
+
+fn degraded_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+    if let Some(cached) = cached_meta(path, mtime) {
+        return Ok(cached);
+    }
+    let Some(line) = first_line(path) else {
+        return Err("empty session file".into());
+    };
+    let header = serde_json::from_str::<serde_json::Value>(&line)
+        .map_err(|e| format!("invalid session header: {e}"))?;
+    if header.get("type").and_then(|t| t.as_str()) != Some("session") {
+        return Err("not a session file".into());
+    }
+    // Degraded row: the header survived but the transcript did not. The
+    // sidecar must still be readable — storage statistics and the lists skip
+    // an unreadable sidecar together, so the two views stay consistent.
+    let presentation = {
+        let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+        read_presentation(path)?
+    };
+    let meta = SessionMeta {
+        file: path.to_string_lossy().to_string(),
+        id: header
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        cwd: header
+            .get("cwd")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        timestamp: header
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .map(String::from),
+        mtime_ms: mtime,
+        preview: None,
+        last_user_message: None,
+        title: None,
+        archived: presentation.archived,
+    };
+    cache_meta(path, mtime, &meta);
+    Ok(meta)
 }
 
 /// Build `SessionMeta` for one session file (header + preview + presentation).
@@ -299,12 +408,18 @@ pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, 
     Ok(meta)
 }
 
-/// Parse results cache keyed by path + mtime: listing sessions repeatedly
+/// Parse results cache keyed by path, JSONL mtime and sidecar version: listing sessions repeatedly
 /// re-reads every file (header + 32 KB preview scan + full name scan); the
 /// cache skips that work until the file changes on disk.
 struct CachedMeta {
     mtime: u64,
+    presentation_version: Option<(std::time::SystemTime, u64)>,
     meta: SessionMeta,
+}
+
+fn presentation_version(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path.with_extension("pix.json")).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
     static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, CachedMeta>>> = OnceLock::new();
@@ -312,10 +427,11 @@ fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
 }
 const META_CACHE_CAP: usize = 4096;
 fn cached_meta(path: &Path, mtime: u64) -> Option<SessionMeta> {
+    let presentation_version = presentation_version(path);
     let cache = meta_cache().lock().ok()?;
     cache
         .get(path)
-        .filter(|c| c.mtime == mtime)
+        .filter(|c| c.mtime == mtime && c.presentation_version == presentation_version)
         .map(|c| c.meta.clone())
 }
 fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
@@ -327,6 +443,7 @@ fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
             path.to_path_buf(),
             CachedMeta {
                 mtime,
+                presentation_version: presentation_version(path),
                 meta: meta.clone(),
             },
         );
@@ -381,7 +498,7 @@ pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
             if !archived {
                 continue;
             }
-            if let Ok(meta) = read_session_meta(&path, mtime) {
+            if let Some(meta) = read_session_meta_or_degraded(&path, mtime, "archive-list") {
                 out.push(meta);
             }
         }
@@ -718,6 +835,28 @@ pub async fn session_mtime(file: String) -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn session_update(
+    app: AppHandle,
+    file: String,
+    title: Option<String>,
+    archived: bool,
+) -> Result<u64, String> {
+    let result = apply_session_update(app, file, title, archived).await;
+    // 归档阶段诊断：只在失败时记录错误码，不写会话路径、标题或文件内容。
+    // 现有日志无法区分“没有发起调用”和“调用失败”，这种静默失败正是本次排查的盲区。
+    if let Err(error) = &result {
+        crate::logs::write(
+            "sessions",
+            &format!(
+                "archive apply failed archived={} code={}",
+                if archived { 1 } else { 0 },
+                error_code(error)
+            ),
+        );
+    }
+    result
+}
+
+async fn apply_session_update(
     app: AppHandle,
     file: String,
     title: Option<String>,
@@ -1490,6 +1629,219 @@ if (request.op === 'read') {
                 .map(|index| format!("session-{index}"))
                 .collect::<Vec<_>>()
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_reconciles_history_bulk_and_storage() {
+        let root = std::env::temp_dir().join(format!("pix-visibility-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let project_norm = normalize(&project).unwrap();
+        // 60 active + 50 newer archived + one orphan. Neither a recent cap nor
+        // archived rows may make active project sessions unreachable.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session-visibility.json"
+        )).unwrap();
+        let active = fixture["activeIds"].as_array().unwrap();
+        let archived = fixture["archivedIds"].as_array().unwrap();
+        let orphan = fixture["orphanId"].as_str().unwrap();
+        let all_ids = active.iter().chain(archived)
+            .map(|id| id.as_str().unwrap()).chain(std::iter::once(orphan));
+        for (index, id) in all_ids.enumerate() {
+            let folder = sessions_root.join(if id == orphan { "orphan" } else { "registered" });
+            std::fs::create_dir_all(&folder).unwrap();
+            let path = folder.join(format!("{index:03}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session", "id": id,
+                "cwd": if id == orphan { root.join("removed") } else { project.clone() },
+                "timestamp": chrono::DateTime::from_timestamp(1_700_000_000 + index as i64, 0).unwrap().to_rfc3339(),
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{}}}", archived.iter().any(|value| value.as_str() == Some(id))),
+            )
+            .unwrap();
+        }
+        let ids = |rows: Vec<SessionMeta>| -> std::collections::BTreeSet<String> {
+            rows.into_iter()
+                .filter(|row| !row.archived)
+                .map(|row| row.id)
+                .collect()
+        };
+        let legacy =
+            ids(list_project_sessions(&sessions_root, &project_norm, Some(50), true).unwrap());
+        let history = ids(list_project_history(&sessions_root, &project_norm).unwrap());
+        let bulk = ids(list_sessions(&sessions_root, None, None, false).unwrap());
+        let expected = active.iter().map(|id| id.as_str().unwrap().to_string()).collect();
+        assert!(legacy.is_empty()); // Reproduces the original empty sidebar.
+        assert_eq!(history, expected);
+        assert_eq!(
+            bulk.difference(&history).cloned().collect::<Vec<_>>(),
+            ["visibility-110"]
+        );
+        let storage = crate::storage::summary_at(&sessions_root, None);
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "sessions")
+                .unwrap()
+                .item_count,
+            61
+        );
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "archivedSessions")
+                .unwrap()
+                .item_count,
+            50
+        );
+        // Re-read the same root (warm cache); no data is rewritten by listing.
+        assert_eq!(
+            ids(list_project_history(&sessions_root, &project_norm).unwrap()),
+            history
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_observes_external_archive_and_restore_with_unchanged_jsonl() {
+        let root = std::env::temp_dir().join(format!("pix-sidecar-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions/project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("session.jsonl");
+        let content = "{\"type\":\"session\",\"id\":\"external\",\"cwd\":\"C:/project\"}\n";
+        std::fs::write(&file, content).unwrap();
+        let sidecar = file.with_extension("pix.json");
+        std::fs::write(&sidecar, "{\"archived\":false}").unwrap();
+        let stamp = mtime_ms(&file);
+        assert_eq!(
+            list_sessions(&root.join("sessions"), None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+        for (presentation, count) in [("{\"archived\":true}", 0), ("{\"archived\":false}", 1)] {
+            // Simulate a different client: no explicit invalidate_meta_cache.
+            std::fs::write(&sidecar, presentation).unwrap();
+            assert_eq!(mtime_ms(&file), stamp);
+            assert_eq!(
+                list_sessions(&root.join("sessions"), None, None, false)
+                    .unwrap()
+                    .len(),
+                count
+            );
+            let storage = crate::storage::summary_at(&root.join("sessions"), None);
+            assert_eq!(
+                storage
+                    .categories
+                    .iter()
+                    .find(|row| row.id == "sessions")
+                    .unwrap()
+                    .item_count,
+                count as u64
+            );
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), content);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_transcript_stays_reachable_for_bulk_archive() {
+        // Regression: storage counted a session whose transcript was not valid
+        // UTF-8 (header + sidecar are enough for it), while every list skipped
+        // it because the full SessionMeta scan failed. "Archive all" then had
+        // zero targets although storage reported unarchived sessions.
+        let root = std::env::temp_dir().join(format!("pix-degraded-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions/project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let header = serde_json::json!({
+            "type": "session",
+            "id": "degraded",
+            "cwd": "C:/project",
+            "timestamp": "2026-11-12T00:00:00Z",
+        });
+        let path = folder.join("degraded.jsonl");
+        // Valid header line, then a transcript line that is not valid UTF-8.
+        let mut content = format!("{header}\n").into_bytes();
+        content.extend_from_slice(b"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"\xff\xfe\"}}\n");
+        std::fs::write(&path, content).unwrap();
+        std::fs::write(path.with_extension("pix.json"), "{\"archived\":false}").unwrap();
+
+        // The full scan still fails, proving the fixture reproduces the gap.
+        assert!(read_session_meta(&path, mtime_ms(&path)).is_err());
+        let storage = crate::storage::summary_at(&root.join("sessions"), None);
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "sessions")
+                .unwrap()
+                .item_count,
+            1
+        );
+
+        let rows = list_sessions(&root.join("sessions"), None, None, false).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "degraded");
+        assert_eq!(rows[0].title, None);
+        assert!(!rows[0].archived);
+        // Archive only writes the sidecar, so the degraded row can be archived.
+        update_presentation(&path, true).unwrap();
+        assert!(list_sessions(&root.join("sessions"), None, None, false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            list_sessions(&root.join("sessions"), None, None, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bulk_listing_includes_sessions_from_unregistered_projects() {
+        let root = std::env::temp_dir().join(format!("pix-list-orphaned-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        for (folder, id, cwd, archived) in [
+            ("registered", "registered", "C:/registered", false),
+            ("removed", "orphaned", "C:/removed", false),
+            ("archived", "archived", "C:/archived", true),
+        ] {
+            let directory = sessions_root.join(folder);
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("{id}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session",
+                "id": id,
+                "cwd": cwd,
+                "timestamp": "2026-11-12T00:00:00Z",
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{archived}}}"),
+            )
+            .unwrap();
+        }
+
+        // None of these cwd values need to exist or remain registered: both
+        // storage statistics and bulk archive operate on the session store.
+        let rows = list_sessions(&sessions_root, None, None, false).unwrap();
+        let mut ids: Vec<String> = rows.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["orphaned", "registered"]);
 
         std::fs::remove_dir_all(root).unwrap();
     }

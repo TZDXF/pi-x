@@ -5,13 +5,14 @@ import { Archive, Database, HardDrive, MessageSquareText, RefreshCw, Trash2 } fr
 import {
   cleanupStorage,
   getStorageSummary,
+  pixLog,
   type StorageCategory,
   type StorageCategoryId,
   type StorageSummary,
   type SessionMeta,
 } from "@/api/piClient"
 import { formatBytes, formatDateTime } from "@/lib/format"
-import { formatCodedError } from "@/lib/backendError"
+import { formatCodedError, parseCodedError } from "@/lib/backendError"
 import { navigate } from "@/lib/router"
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -29,8 +30,18 @@ import {
 const { t } = useI18n()
 const ui = useUiStore()
 const workspace = useWorkspaceStore()
-const { archivingAll, archiveAll } = useArchiveAllSessions((session, title, archived) =>
-  workspace.update(session, title, archived),
+/** 归档阶段诊断：只写阶段与计数到 ~/.pix/logs，便于区分“未发起/枚举为空/写入失败”。 */
+function logDiagnostic(message: string) {
+  if (typeof pixLog === "function") pixLog(message)
+}
+/** 失败行只记录编码错误码或 `uncoded`，不写原始错误文本（可能包含路径）。 */
+function backendErrorCode(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error ?? "")
+  return parseCodedError(text.startsWith("Error: ") ? text.slice("Error: ".length) : text)?.code ?? "uncoded"
+}
+const { archivingAll, archiveAll } = useArchiveAllSessions(
+  (session, title, archived) => workspace.update(session, title, archived),
+  error => logDiagnostic(`archive all stage=row-failed code=${backendErrorCode(error)}`),
 )
 const summary = ref<StorageSummary | null>(null)
 const loading = ref(true)
@@ -120,9 +131,17 @@ async function askArchiveAll() {
   error.value = ""
   try {
     const rows = await workspace.listArchivableSessions()
+    // 阶段诊断：只有目标数量，不含路径、标识或标题。
+    logDiagnostic(`archive all stage=enumerated targets=${rows.length}`)
     if (rows.length) pendingArchiveAll.value = rows
+    // 没有目标时也必须给出真实反馈，否则点击后界面毫无反应。
+    else ui.pushToast(t("storage.archiveAllEmpty"), "info")
   } catch (e) {
-    error.value = formatCodedError(t, e)
+    logDiagnostic("archive all stage=enumerate-failed")
+    // 枚举失败也要有可感知的反馈：只写在面板内的提示容易被忽略。
+    const message = formatCodedError(t, e)
+    error.value = message
+    ui.pushToast(message, "error")
   } finally {
     loadingArchiveAll.value = false
   }
@@ -134,6 +153,7 @@ async function confirmArchiveAll() {
   pendingArchiveAll.value = null
   error.value = ""
   const { total, failed } = await archiveAll(rows)
+  logDiagnostic(`archive all stage=done targets=${total} failed=${failed}`)
   if (!total) return
   await load()
   if (failed) ui.pushToast(t("storage.archiveAllFailed", { count: failed }), "error")

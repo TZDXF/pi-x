@@ -48,3 +48,18 @@ test("archive all blocks re-entry and resets its busy state", async () => {
   await pending
   expect(archivingAll.value).toBe(false)
 })
+
+test("archive all reports each failed row to the caller and keeps going", async () => {
+  const errors: unknown[] = []
+  const update = vi.fn(async (session: SessionMeta) => {
+    if (session.file === "second") throw new Error("archive failed")
+  })
+  const { archiveAll } = useArchiveAllSessions(update, error => errors.push(error))
+  await expect(archiveAll([saved("first"), saved("second"), saved("third")])).resolves.toEqual({
+    total: 3,
+    failed: 1,
+  })
+  expect(update).toHaveBeenCalledTimes(3)
+  expect(errors).toHaveLength(1)
+  expect(String(errors[0])).toBe("Error: archive failed")
+})

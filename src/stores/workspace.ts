@@ -488,24 +488,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       applySessionOrder(path)
     }
   }
-  /** Bulk archive reads disk directly: sidebar caches are capped and also
-   *  contain first-response previews whose files may not exist yet. */
+  /** Bulk archive and storage statistics scan the same global local directory.
+   *  Avoid capped sidebar caches, first-response previews and the registered
+   *  project list, which may omit sessions left by removed projects. */
   async function listArchivableSessions() {
-    const paths: string[] = []
-    const addPath = (path: string) => {
-      path = normalizeProjectPath(path)
-      // Match local storage statistics: SSH/WSL/Docker sessions use a different
-      // backend and must not reach the local filesystem enumerator.
-      if (path && !isRemoteProject(path) && !paths.some(existing => samePath(existing, path))) paths.push(path)
-    }
-    for (const project of orderedProjects()) {
-      for (const folder of projectFolders(project)) addPath(folder)
-    }
-    addPath(projectless.value)
-    const lists = await Promise.all(paths.map(path => listUnarchivedSessions(path)))
-    const unique = new Map<string, SessionMeta>()
-    for (const row of lists.flat()) if (!unique.has(row.file)) unique.set(row.file, row)
-    return [...unique.values()].sort((a, b) => b.mtimeMs - a.mtimeMs)
+    return listUnarchivedSessions()
   }
   // pi does not flush a new session to disk until its first assistant response.
   function preview(row: SessionMeta) {

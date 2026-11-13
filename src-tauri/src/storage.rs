@@ -100,7 +100,7 @@ fn scan_sessions(root: &Path) -> [StorageCategory; 2] {
     [active, archived]
 }
 
-fn summary_at(sessions_root: &Path, webview_root: Option<&Path>) -> StorageSummary {
+pub(crate) fn summary_at(sessions_root: &Path, webview_root: Option<&Path>) -> StorageSummary {
     let [sessions, archived_sessions] = scan_sessions(sessions_root);
     let mut categories = vec![sessions, archived_sessions];
     if let Some(root) = webview_root {

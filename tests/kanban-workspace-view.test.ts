@@ -9,6 +9,7 @@ import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
 import { kanbanLivePreview } from "@/lib/kanbanLivePreview"
 import { groupKanbanCards } from "@/lib/kanban"
+import { sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
 
 const source = readFileSync(new URL("../src/composables/useKanbanWorkspace.ts", import.meta.url), "utf8")
 const scopes: ReturnType<typeof effectScope>[] = []
@@ -106,6 +107,50 @@ function harness(historyLoaded = true) {
   return { board, workspace, owners, sessionFor, uiFor, activities, statuses, composerDrafts, enabled }
 }
 
+test("board idle and expanded sidebar reconcile IDs across statuses, previews and archive refresh", async () => {
+  const { board, workspace, statuses } = harness()
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/session-visibility.json", import.meta.url), "utf8"))
+  const rows = fixture.activeIds.map((id, index) => ({
+    id,
+    file: `/sessions/${id}.jsonl`,
+    cwd: "/root",
+    mtimeMs: index,
+  }))
+  const archived = fixture.archivedIds.map(id => ({ ...rows[0], id, file: `/sessions/${id}.jsonl`, archived: true }))
+  const orphan = { ...rows[0], id: fixture.orphanId, file: `/sessions/${fixture.orphanId}.jsonl`, cwd: "/removed" }
+  const preview = { ...rows[0], id: fixture.previewId, file: `/sessions/${fixture.previewId}.jsonl` }
+  const persisted = [...rows, ...archived, orphan]
+  workspace.histories["/root"] = [...rows, ...archived, preview]
+  workspace.histories["/removed"] = [orphan]
+  statuses.set(identities.sessionIdentityKey(`/sessions/${fixture.completedId}.jsonl`, "/root"), "completed")
+  statuses.set(identities.sessionIdentityKey(`/sessions/${fixture.runningId}.jsonl`, "/root"), "running")
+  const visible = () => sidebarSessionRows(workspace.histories["/root"], {}, "", row => row.id)
+  const files = values => values.map(row => row.file).sort()
+  const idle = () => board.cards.value.filter(card => card.status === "idle")
+  expect(visible()).toHaveLength(61) // 60 on disk + one unflushed preview.
+  expect(idle()).toHaveLength(59) // 58 idle on disk + preview.
+  expect(idle().filter(card => !visible().some(row => row.file === card.file))).toEqual([])
+  expect(files(visible().filter(row => !idle().some(card => card.file === row.file)))).toEqual(files(rows.slice(0, 2)))
+  expect(files(persisted.filter(row => !row.archived && !visible().some(item => item.file === row.file)))).toEqual([
+    orphan.file,
+  ])
+  expect(files(visible().filter(row => !persisted.some(item => item.file === row.file)))).toEqual([preview.file])
+  // Same updated history drives both projections after archive and restore.
+  workspace.refresh.mockImplementation(async folder => {
+    if (folder === "/root")
+      workspace.histories[folder] = workspace.histories[folder].map(row => ({
+        ...row,
+        archived: row.file === rows[2].file || row.archived,
+      }))
+  })
+  await board.refresh()
+  expect(visible()).toHaveLength(60)
+  expect(idle()).toHaveLength(58)
+  workspace.histories["/root"].find(row => row.file === rows[2].file).archived = false
+  expect(visible()).toHaveLength(61)
+  expect(idle()).toHaveLength(59)
+})
+
 test("the ordinary layout is the default and switching layouts survives a reload", () => {
   const storage = new Map()
   vi.stubGlobal("localStorage", { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) })
@@ -131,6 +176,85 @@ test("entering the board loads every project folder and the no-project history w
   expect(sessionFor).not.toHaveBeenCalled()
 })
 
+test("completed draft indexes absent from complete local history do not create phantom idle cards", async () => {
+  const { board, workspace, statuses, activities } = harness()
+  const saved = { file: "/sessions/current.jsonl", cwd: "/root", title: "Current", mtimeMs: 1 }
+  workspace.histories["/root"] = [saved]
+  statuses.set(identities.sessionIdentityKey(saved.file, saved.cwd), "running")
+  for (let index = 0; index < 15; index++) {
+    const id = `submitted-${index}`
+    const project = ["/root", "/root/linked", "/loose"][index % 3]
+    const file = `/sessions/missing-${index}.jsonl`
+    workspace.boardDrafts[id] = { id, project, sessionFile: file, message: "Submitted", createdAt: 1, updatedAt: 2 }
+    // Acknowledged completion projects as idle; persisted indexes are not files.
+    activities.set(identities.sessionIdentityKey(file, project), { status: "completed", updatedAt: 2 })
+  }
+  const original = JSON.stringify(workspace.boardDrafts)
+  expect(board.cards.value.map(card => card.file)).toEqual([saved.file])
+  await board.refresh()
+  expect(board.cards.value.map(card => card.file)).toEqual([saved.file])
+  expect(JSON.stringify(workspace.boardDrafts)).toBe(original)
+  expect(workspace.upsertBoardDraft).not.toHaveBeenCalled()
+  expect(workspace.flushPersistence).not.toHaveBeenCalled()
+  // Restoring the file (or selecting the right root) makes its index usable again.
+  workspace.histories["/root"].push({ file: "/sessions/missing-0.jsonl", cwd: "/root", mtimeMs: 3 })
+  expect(board.cards.value.some(card => card.draftId === "submitted-0")).toBe(true)
+})
+
+test.each(["worker", "streaming", "queue", "memory"])("an unflushed submitted draft retains a real %s source", kind => {
+  const { board, workspace, sessionFor } = harness()
+  const file = "/sessions/unflushed.jsonl"
+  workspace.boardDrafts.pending = {
+    id: "pending",
+    project: "/root",
+    sessionFile: file,
+    message: "Prompt",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  const owner = sessionFor("pending")
+  Object.assign(owner, { cwd: "/root", sessionFile: file })
+  if (kind === "worker") owner.started = true
+  if (kind === "streaming") owner.isStreaming = true
+  if (kind === "queue") owner.promptQueue.push({ text: "Pending" })
+  if (kind === "memory") owner.entries.push({ kind: "user", text: "Recoverable prompt" })
+  expect(board.cards.value).toEqual([expect.objectContaining({ file, draftId: "pending" })])
+})
+
+test.each(["empty", "reused"])("a %s runtime placeholder is insufficient to restore a missing draft", kind => {
+  const { board, workspace, sessionFor } = harness()
+  workspace.boardDrafts.old = {
+    id: "old",
+    project: "/root",
+    sessionFile: "/sessions/old.jsonl",
+    message: "Old",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  Object.assign(sessionFor("old"), {
+    cwd: "/root",
+    sessionFile: kind === "empty" ? "/sessions/old.jsonl" : "/sessions/new.jsonl",
+  })
+  expect(board.cards.value).toEqual([])
+})
+
+test("absence from a capped remote history does not suppress a saved remote draft", () => {
+  const { board, workspace } = harness()
+  const project = "ssh://server/project"
+  workspace.orderedProjects = () => [project]
+  workspace.projectFolders = () => [project]
+  workspace.histories[project] = []
+  workspace.boardDrafts.remote = {
+    id: "remote",
+    project,
+    sessionFile: "/remote/old.jsonl",
+    message: "Remote",
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  expect(board.cards.value).toEqual([expect.objectContaining({ draftId: "remote" })])
+})
+
 test.each(["/root", "/root/linked", "/loose"])(
   "restored cards in %s wait for archive metadata while unsent todos stay visible",
   async project => {
@@ -146,10 +270,11 @@ test.each(["/root", "/root/linked", "/loose"])(
         updatedAt: 2,
       }
     }
-    for (const id of ["archived", "archived-runtime", "live"]) {
+    for (const id of ["archived", "archived-runtime", "live", "not-yet-on-disk"]) {
       Object.assign(sessionFor(id), {
         cwd: project,
         sessionFile: `/sessions/${id}.jsonl`,
+        started: true,
         entries: [{ kind: "user", text: id }],
       })
     }
@@ -194,7 +319,7 @@ test.each(["/root", "/root/linked", "/loose"])(
   },
 )
 
-test("failed initial history loads keep restored cards hidden until a successful retry", async () => {
+test("failed initial history loads hide restored cards until their file is found on retry", async () => {
   const { board, workspace } = harness(false)
   workspace.boardDrafts.restored = {
     id: "restored",
@@ -215,6 +340,8 @@ test("failed initial history loads keep restored cards hidden until a successful
   })
   await board.refresh()
   expect(board.error.value).toBe("")
+  expect(board.cards.value).toEqual([])
+  workspace.histories["/root"] = [{ file: "/sessions/restored.jsonl", cwd: "/root", mtimeMs: 1 }]
   expect(board.cards.value).toEqual([expect.objectContaining({ draftId: "restored" })])
 })
 

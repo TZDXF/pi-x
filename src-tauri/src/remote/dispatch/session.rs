@@ -155,7 +155,7 @@ pub(super) async fn handle(
                 .await?,
             )?),
             "session_list_unarchived" => Ok(to_json(
-                crate::commands::session_list_unarchived(text(a, "project")?).await?,
+                crate::commands::session_list_unarchived().await?,
             )?),
             "session_list_archived" => {
                 Ok(to_json(crate::sessions::session_list_archived().await?)?)
