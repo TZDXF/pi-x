@@ -128,19 +128,26 @@ PowerShell 5.1 会去掉 `--config` 值内部的引号，第二个参数需转�
 cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package.\"*\".debug=2'
 ```
 
-改动 profile 或 crate-type 前后用同一环境对比：先 `pnpm run bench:rust -- --target-dir ../bench-before`，改完再跑 `--target-dir ../bench-after`。脚本使用独立 target 目录，打印 cargo/rustc 版本，并报告冷构建、热构建、单文件增量（touch `src/paths.rs`）与构建目录占用；两端都先预热一次再跑正式冷构建，避免磁盘缓存影响结果。
+改动 profile 或 crate-type 前后用同一环境对比：
+
+```bash
+pnpm run bench:rust                              # 冷构建：脚本在 os.tmpdir() 用 mkdtemp 新建唯一目录，结束即删除
+pnpm run bench:rust -- --keep                    # 同上，但保留临时目录便于事后检查
+pnpm run bench:rust -- --target-dir ../bench-out # 指定目录：不存在或为空才允许冷构建
+pnpm run bench:rust -- --target-dir ../bench-out --skip-cold   # 纯复用已有产物
+```
+
+脚本打印 cargo/rustc 版本，并报告冷构建、热构建、单文件增量（touch `src/paths.rs`）与构建目录占用（硬链接按 inode 去重、bigint 计算）。做前后对比时两轮用同一命令与同一工具链，并各自先预热一次再跑正式冷构建，避免磁盘缓存影响结果。
 
 ### 基准脚本的 target 目录安全约定
 
-`bench:rust` 的冷构建会清空 target 目录，因此脚本先校验、再删除：
+`bench:rust` 的冷构建需要空 target 目录。能否删除由「能力证明」决定，不依赖黑名单或标记文件：
 
-- 目标路径用它自己的真实绝对路径判断（`realpath` 解析符号链接、Windows junction 与 8.3 短名），
-  校验和删除都作用在解析后的路径上，不会顺着链接删到链接之外的内容。
-- 拒绝磁盘根、仓库根及其祖先（含误用 `--target-dir .` / `..`）、源码目录本身及其内部、
-  以及指向这些位置的链接。
-- 只清理脚本创建或带 `.pix-bench-rust-target.json` 标记的目录。目录不存在或为空时由脚本创建并写标记；
-  已存在、非空、无标记的目录直接拒绝并保持原样，绝不先清空再判断。
-- `--skip-cold` 为复用模式，不做任何删除；外来目录只读，也不写标记。若确实要清空外来缓存，请手动删除或换个新路径。
+- **删除授权只来自本进程创建的目录。** 不带 `--target-dir` 时，冷构建在 `os.tmpdir()` 下用 `mkdtemp` 新建唯一目录并登记句柄，结束时只删这一个句柄，其它路径不会被删除。全程不写标记文件，因此伪造标记不构成删除授权。
+- `--target-dir` 只在三种情形允许冷构建：路径不存在（由本进程创建并登记）、目录为空（直接使用、从不删除）、本就是本进程本轮创建的目录（删除后重建）。已存在且非空的外部目录一律拒绝冷清理，需要复用就加 `--skip-cold`。
+- 删除前重跑一次校验：`realpath` 结果、`lstat` 类型（被换成链接即拒绝）、目录身份（bigint `dev`+`ino`）都必须与登记值一致，否则拒绝。真正删除前先把目录原子重命名到带随机 nonce 的临时名，再复核一次身份；重命名后路径由本次调用独占，外部无法预先替换，因此「校验后再把路径切走」的竞态不会造成误删。
+- 保护规则按整棵源码树判断：磁盘根、仓库根及其祖先、仓库内部（不限名单子目录）全部拒绝。`\\localhost\C$\` 与 `\\?\UNC\localhost\C$\`、`\\?\C:\` 等别名写法会先归一到本地盘符再比较；无法确定归属的远端 UNC 直接拒绝，不做猜测。
+- `--skip-cold` 是纯复用：不删除、不创建、不写任何标记，且目录必须已存在。
 
 ### E2E 测试
 

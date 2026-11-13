@@ -5,17 +5,24 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
+import fs from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import {
-  MARKER_FILE,
   TargetDirUnsafeError,
+  createSessionTargetDir,
+  deleteOwnedDir,
+  identityOf,
   inspectTargetDir,
+  localizeNamespace,
   median,
+  ownedTargetDirs,
   realPathOf,
   resetTargetDir,
   reuseTargetDir,
@@ -23,16 +30,17 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, "..")
 
-function tempDir() {
-  return mkdtempSync(join(tmpdir(), "pix-bench-rust-"))
-}
-
-function withTempDir(body) {
-  const dir = tempDir()
-  try {
-    return body(dir)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+/** 一次性夹具：外壳目录 + 伪造仓库，避免碰真实源码。 */
+function fixture() {
+  const base = mkdtempSync(join(tmpdir(), "pix-bench-fixture-"))
+  const repo = join(base, "repo")
+  mkdirSync(join(repo, "src-tauri", "src"), { recursive: true })
+  writeFileSync(join(repo, "src-tauri", "src", "paths.rs"), "pub fn eq() {}\n")
+  writeFileSync(join(repo, "valuable-source.txt"), "must survive\n")
+  return {
+    base,
+    repo,
+    dispose: () => rmSync(base, { recursive: true, force: true }),
   }
 }
 
@@ -47,115 +55,257 @@ function expectRejected(target, code, options) {
   throw new Error(`应拒绝但通过了：${target}`)
 }
 
-test("拒绝磁盘根与 UNC 根", () => {
-  expectRejected(process.platform === "win32" ? "C:\\" : "/", "root")
-  if (process.platform === "win32") {
-    expectRejected("\\\\?\\C:\\", "root")
+function expectResetRejected(target, code, options) {
+  try {
+    resetTargetDir(target, options)
+  } catch (error) {
+    expect(error).toBeInstanceOf(TargetDirUnsafeError)
+    expect(error.code).toBe(code)
+    return error
+  }
+  throw new Error(`应拒绝冷清理但通过了：${target}`)
+}
+
+// 需要符号链接能力的用例：创建失败时显式 skip，不静默 return（避免假通过）。
+function linkOrSkip(ctx, target, link, type) {
+  try {
+    symlinkSync(target, link, type)
+    return true
+  } catch (error) {
+    ctx.skip(`symlink unsupported on this platform: ${error.code}`)
+    return false
+  }
+}
+
+const linkType = () => (process.platform === "win32" ? "junction" : "dir")
+
+test("默认冷构建：mkdtemp 唯一目录，登记后可回收，不写任何标记", () => {
+  const target = createSessionTargetDir()
+  expect(target).toBe(realPathOf(target))
+  expect(existsSync(target)).toBe(true)
+  expect(ownedTargetDirs()).toContain(target)
+  // 目录里不应出现任何标记文件（能力证明方案不依赖标记）。
+  expect(fs.readdirSync(target)).toEqual([])
+  deleteOwnedDir(target)
+  expect(existsSync(target)).toBe(false)
+  expect(ownedTargetDirs()).not.toContain(target)
+})
+
+test("删除走原子重命名：成功后不留下临时停放目录", () => {
+  const target = createSessionTargetDir()
+  const parent = dirname(target)
+  writeFileSync(join(target, "payload.bin"), "44")
+  deleteOwnedDir(target)
+  expect(existsSync(target)).toBe(false)
+  const leftovers = readdirSync(parent).filter(name => name.includes(".deleting-"))
+  expect(leftovers).toEqual([])
+})
+
+test("只删除本进程创建的目录：未登记目录一律拒绝", () => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-unowned-"))
+  try {
+    const foreign = join(outer, "foreign")
+    mkdirSync(foreign)
+    writeFileSync(join(foreign, "keep.txt"), "keep")
+    try {
+      deleteOwnedDir(foreign)
+      throw new Error("应拒绝")
+    } catch (error) {
+      expect(error).toBeInstanceOf(TargetDirUnsafeError)
+      expect(error.code).toBe("unowned")
+    }
+    expect(readFileSync(join(foreign, "keep.txt"), "utf8")).toBe("keep")
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
   }
 })
 
-test("拒绝仓库根及其祖先（含 --target-dir . / .. 的误用）", () => {
+test("伪造标记无效：目录里有 tool=bench-rust 的标记也拒绝冷清理", () => {
+  const fx = fixture()
+  try {
+    const directory = join(fx.repo, "src-tauri", "scripts")
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, "helper.mjs"), "export const helper = 1\n")
+    // 审查的复现：在既有源码目录里放最小伪造标记，旧实现会直接删除该目录。
+    writeFileSync(join(directory, ".pix-bench-rust-target.json"), '{"tool":"bench-rust"}')
+    writeFileSync(join(directory, ".pix-bench-rust-target.json"), '{"tool":"bench-rust","purpose":"important"}')
+    expectResetRejected(directory, "source", { repo: fx.repo })
+    expect(existsSync(join(directory, "helper.mjs"))).toBe(true)
+  } finally {
+    fx.dispose()
+  }
+})
+
+test("伪造标记 + junction 也拒绝：标记不再是任何删除授权", ctx => {
+  const fx = fixture()
+  try {
+    const directory = join(fx.base, "cache-with-fake-marker")
+    mkdirSync(directory)
+    writeFileSync(join(directory, ".pix-bench-rust-target.json"), '{"tool":"bench-rust"}')
+    writeFileSync(join(directory, "helper.mjs"), "export const helper = 1\n")
+    expectResetRejected(directory, "unowned", { repo: fx.repo })
+    expect(existsSync(join(directory, "helper.mjs"))).toBe(true)
+
+    const link = join(fx.base, "link-to-fake")
+    if (!linkOrSkip(ctx, directory, link, linkType())) return
+    expectResetRejected(link, "unowned", { repo: fx.repo })
+    expect(existsSync(join(directory, "helper.mjs"))).toBe(true)
+  } finally {
+    fx.dispose()
+  }
+})
+
+test("拒绝磁盘根与仓库根及其祖先", () => {
+  expectRejected(process.platform === "win32" ? "C:\\" : "/", "root")
   expectRejected(repoRoot, "source")
   expectRejected(resolve(repoRoot, ".."), "source")
   expectRejected(resolve(repoRoot, "..", ".."), "source")
 })
 
-test("拒绝源码目录本身与其内部", () => {
+test("拒绝仓库内部任意路径（不再依赖源码目录白名单）", () => {
   expectRejected(resolve(repoRoot, "src-tauri"), "source")
   expectRejected(resolve(repoRoot, "src-tauri", "src"), "source")
-  expectRejected(join(repoRoot, "src-tauri", "src", "target-bench"), "source")
+  expectRejected(resolve(repoRoot, "src-tauri", "scripts"), "source")
+  expectRejected(resolve(repoRoot, "docs"), "source")
+  expectRejected(join(repoRoot, "src-tauri", "target-bench"), "source")
 })
 
-test("拒绝非空且无标记的目录，且内容保持原样", () =>
-  withTempDir(parent => {
-    const foreign = join(parent, "valuable-source")
-    mkdirSync(foreign)
-    const file = join(foreign, "keep.txt")
-    writeFileSync(file, "must survive")
-    const error = expectRejected(foreign, "unowned")
-    expect(error.message).toContain(foreign)
-    expect(readFileSync(file, "utf8")).toBe("must survive")
-    expect(existsSync(join(foreign, MARKER_FILE))).toBe(false)
-  }))
+test("UNC 别名按统一身份识别，落在仓库内则拒绝", () => {
+  const fx = fixture()
+  try {
+    // 夹具仓库与真实仓库同盘，用本地盘符 + localhost share 两种写法指向它。
+    const repoPlain = fx.repo
+    const rel = repoPlain.slice(3)
+    const unc = `\\\\localhost\\C$\\${rel}`
+    const uncExtended = `\\\\?\\UNC\\localhost\\C$\\${rel}`
+    expectRejected(unc, "source", { repo: fx.repo })
+    expectRejected(uncExtended, "source", { repo: fx.repo })
+    // 对照：同一目录的本地写法同样被拒，且三者身份一致。
+    expect(identityOf(unc) ?? identityOf(repoPlain)).toBe(identityOf(repoPlain))
+  } finally {
+    fx.dispose()
+  }
+})
 
-test("拒绝把普通文件当 target-dir", () =>
-  withTempDir(parent => {
-    const file = join(parent, "not-a-dir")
+test("远端 UNC 命名空间无法归一身份时拒绝，而不是猜", () => {
+  expectRejected("\\\\otherhost\\share\\target", "namespace")
+  expectRejected("\\\\?\\UNC\\otherhost\\share\\target", "namespace")
+})
+
+test("命名空间归一：localhost share 映射回盘符路径", () => {
+  expect(localizeNamespace("\\\\localhost\\C$\\Users\\x")).toEqual({ path: "C:\\Users\\x", remote: false })
+  expect(localizeNamespace("\\\\?\\UNC\\localhost\\C$\\Users\\x")).toEqual({ path: "C:\\Users\\x", remote: false })
+  expect(localizeNamespace("\\\\?\\C:\\Users\\x")).toEqual({ path: "C:\\Users\\x", remote: false })
+  expect(localizeNamespace("\\\\server\\share\\x").remote).toBe(true)
+})
+
+test("删除前身份切换会被拒绝：不删除任何内容（确定性模拟竞态）", () => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-race-"))
+  try {
+    const owned = createSessionTargetDir()
+    const victim = join(outer, "victim")
+    mkdirSync(victim)
+    writeFileSync(join(victim, "paths.rs"), "source\n")
+    // 在两次复核之间把登记目录换掉（模拟审查里「校验后再 realpath」的窗口）。
+    let error
+    try {
+      deleteOwnedDir(owned, {
+        beforeDelete: directory => {
+          rmSync(directory, { recursive: true, force: true })
+          try {
+            symlinkSync(victim, directory, linkType())
+          } catch {
+            // 平台上建不了链接时退化为创建一个空目录，同样改变身份。
+            mkdirSync(directory, { recursive: true })
+          }
+        },
+      })
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(TargetDirUnsafeError)
+    expect(["changed", "source"]).toContain(error.code)
+    expect(readFileSync(join(victim, "paths.rs"), "utf8").trim()).toBe("source")
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+test("reuseTargetDir 纯复用：不删除、不创建、不写标记，目录必须已存在", () => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-reuse-"))
+  try {
+    const existing = join(outer, "existing")
+    mkdirSync(existing)
+    writeFileSync(join(existing, "artifact.bin"), "reuse")
+    const returned = reuseTargetDir(existing)
+    expect(returned).toBe(realPathOf(existing))
+    expect(readFileSync(join(existing, "artifact.bin"), "utf8")).toBe("reuse")
+    expect(fs.readdirSync(existing)).toEqual(["artifact.bin"])
+
+    const missing = join(outer, "missing")
+    expect(() => reuseTargetDir(missing)).toThrow(TargetDirUnsafeError)
+    expect(existsSync(missing)).toBe(false)
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+test("resetTargetDir 只接受不存在 / 空 / 本轮自建；非空外来目录拒绝", () => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-reset-"))
+  try {
+    const missing = join(outer, "new-target")
+    const applied = resetTargetDir(missing)
+    expect(existsSync(applied)).toBe(true)
+    expect(ownedTargetDirs()).toContain(applied)
+
+    const empty = join(outer, "empty")
+    mkdirSync(empty)
+    expect(resetTargetDir(empty)).toBe(realPathOf(empty))
+    expect(fs.readdirSync(empty)).toEqual([])
+
+    const foreign = join(outer, "foreign")
+    mkdirSync(foreign)
+    writeFileSync(join(foreign, "keep.txt"), "keep")
+    expectResetRejected(foreign, "unowned")
+    expect(readFileSync(join(foreign, "keep.txt"), "utf8")).toBe("keep")
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+test("普通文件、悬空链接、指向文件的链接均拒绝", ctx => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-shape-"))
+  try {
+    const file = join(outer, "plain.txt")
     writeFileSync(file, "x")
     expectRejected(file, "not-directory")
-  }))
 
-test("空目录可使用：清空后写入脚本标记", () =>
-  withTempDir(parent => {
-    const target = join(parent, "empty-target")
-    mkdirSync(target)
-    const applied = resetTargetDir(target)
-    expect(realPathOf(applied)).not.toBeNull()
-    expect(existsSync(join(applied, MARKER_FILE))).toBe(true)
-    expect(inspectTargetDir(target).owned).toBe(true)
-  }))
-
-test("带标记的目录可清理：只删除该目录内部内容", () =>
-  withTempDir(parent => {
-    const target = join(parent, "owned-target")
-    mkdirSync(target)
-    resetTargetDir(target)
-    writeFileSync(join(target, "stale-artifact.bin"), "44")
-    const sibling = join(parent, "sibling.txt")
-    writeFileSync(sibling, "untouched")
-    const applied = resetTargetDir(target)
-    expect(existsSync(join(applied, "stale-artifact.bin"))).toBe(false)
-    expect(existsSync(join(applied, MARKER_FILE))).toBe(true)
-    expect(readFileSync(sibling, "utf8")).toBe("untouched")
-  }))
-
-test("复用模式不删除任何内容，也不给外来目录写标记", () =>
-  withTempDir(parent => {
-    const foreign = join(parent, "foreign")
-    mkdirSync(foreign)
-    const file = join(foreign, "keep.txt")
-    writeFileSync(file, "reuse")
-    use(foreign)
-    expect(readFileSync(file, "utf8")).toBe("reuse")
-    expect(existsSync(join(foreign, MARKER_FILE))).toBe(false)
-    function use(dir) {
-      const applied = reuseTargetDir(dir)
-      expect(applied).toBe(realPathOf(foreign))
+    const dangling = join(outer, "dangling")
+    if (linkOrSkip(ctx, join(outer, "missing-target"), dangling, linkType())) {
+      expectRejected(dangling, "dangling-link")
+      expect(lstatSync(dangling).isSymbolicLink()).toBe(true)
     }
-  }))
 
-test("Windows junction / 符号链接按最终真实路径校验：指向源码的链接被拒绝且不影响源码", () =>
-  withTempDir(parent => {
-    if (process.platform !== "win32") {
-      // POSIX 上需要显式创建符号链接；创建失败（权限受限）时跳过该场景。
-      try {
-        symlinkSync(resolve(repoRoot, "src-tauri", "src"), join(parent, "link"), "dir")
-      } catch {
-        return
-      }
-    } else {
-      // Windows 下创建目录 junction；不需要管理员权限（符号链接则需要）。
-      symlinkSync(resolve(repoRoot, "src-tauri", "src"), join(parent, "link"), "junction")
+    const fileLink = join(outer, "file-link")
+    if (linkOrSkip(ctx, file, fileLink, "file")) {
+      expectRejected(fileLink, "not-directory")
     }
-    expect(realPathOf(join(parent, "link"))).toBe(realPathOf(resolve(repoRoot, "src-tauri", "src")))
-    expectRejected(join(parent, "link"), "source")
-  }))
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
 
-test("链接指向非空外来目录时被拒绝，且不删除链接目标中的文件", () =>
-  withTempDir(parent => {
-    const data = join(parent, "data")
-    mkdirSync(data)
-    const file = join(data, "keep.txt")
-    writeFileSync(file, "valuable")
-    const link = join(parent, "link")
-    try {
-      symlinkSync(data, link, process.platform === "win32" ? "junction" : "dir")
-    } catch {
-      return
-    }
-    expectRejected(link, "unowned")
-    expect(readFileSync(file, "utf8")).toBe("valuable")
-  }))
+test("链接指向源码目录：拒绝且源码不受影响", ctx => {
+  const outer = mkdtempSync(join(tmpdir(), "pix-bench-srclink-"))
+  try {
+    const link = join(outer, "to-src")
+    if (!linkOrSkip(ctx, resolve(repoRoot, "src-tauri", "src"), link, linkType())) return
+    expectRejected(link, "source")
+    expect(statSync(resolve(repoRoot, "src-tauri", "src", "paths.rs")).isFile()).toBe(true)
+  } finally {
+    rmSync(outer, { recursive: true, force: true })
+  }
+})
 
 test("中位数：奇数取正中，偶数取中间两个的平均值", () => {
   expect(median([19.6, 19.0, 19.3])).toBeCloseTo(19.3)
@@ -164,39 +314,3 @@ test("中位数：奇数取正中，偶数取中间两个的平均值", () => {
   expect(median([1, 2, 3, 4])).toBe(2.5)
   expect(() => median([])).toThrow()
 })
-
-test("悬空链接被拒绝，且不删除链接本身", () =>
-  withTempDir(parent => {
-    const link = join(parent, "dangling")
-    symlinkSync(join(parent, "missing-target"), link, process.platform === "win32" ? "junction" : "dir")
-    const error = expectRejected(link, "dangling-link")
-    // existsSync 跟随链接，悬空链接要用 lstat 确认「链接本身还在」。
-    expect(lstatSync(link).isSymbolicLink()).toBe(true)
-    expect(error.message).toContain("dangling")
-  }))
-
-test("指向文件的链接被拒绝为非目录", () =>
-  withTempDir(parent => {
-    const file = join(parent, "plain.txt")
-    writeFileSync(file, "x")
-    const link = join(parent, "file-link")
-    symlinkSync(file, link, "file")
-    expectRejected(link, "not-directory")
-  }))
-
-test("链接指向带标记的可丢弃缓存：清理目标内部，链接本身仍然有效", () =>
-  withTempDir(parent => {
-    const data = join(parent, "cache")
-    mkdirSync(data)
-    resetTargetDir(data)
-    writeFileSync(join(data, "stale.bin"), "44")
-    const link = join(parent, "link")
-    symlinkSync(data, link, process.platform === "win32" ? "junction" : "dir")
-    const applied = resetTargetDir(link)
-    expect(applied).toBe(realPathOf(data))
-    expect(existsSync(join(data, "stale.bin"))).toBe(false)
-    expect(existsSync(join(data, MARKER_FILE))).toBe(true)
-    // 删除的是目标目录内部条目，链接自身没有被拆掉，下次仍可复用。
-    expect(lstatSync(link).isSymbolicLink()).toBe(true)
-    expect(existsSync(join(link, MARKER_FILE))).toBe(true)
-  }))
