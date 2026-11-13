@@ -226,6 +226,8 @@ test("删除前身份切换会被拒绝：不删除任何内容（确定性模�
     expect(error).toBeInstanceOf(TargetDirUnsafeError)
     expect(["changed", "source"]).toContain(error.code)
     expect(readFileSync(join(victim, "paths.rs"), "utf8").trim()).toBe("source")
+    // 被换掉的登记目录不会被脚本删除，由用例自行清理，避免在临时目录里留垃圾。
+    rmSync(owned, { recursive: true, force: true })
   } finally {
     rmSync(outer, { recursive: true, force: true })
   }
