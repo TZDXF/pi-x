@@ -227,7 +227,14 @@ test("拒绝仓库内部任意路径（不再依赖源码目录白名单）", ()
   expectRejected(join(repoRoot, "src-tauri", "target-bench"), "source")
 })
 
-test("UNC 别名按统一身份识别，落在仓库内则拒绝", () => {
+// 下列断言依赖 Windows 命名空间语义：只有 Windows 的 path.resolve 才把 `\\\\host\\share`
+// 当绝对路径，盘符 / 8.3 短名 / localhost share 归一只在 Windows 成立。非 Windows 显式 skip，
+// 不静默 return（否则会出现"本地 18 passed、CI 却红"的假通过）。POSIX 等价覆盖见下一个用例。
+test("UNC 别名按统一身份识别，落在仓库内则拒绝（仅 Windows 命名空间语义）", ctx => {
+  if (process.platform !== "win32") {
+    ctx.skip("windows-path-semantics only")
+    return
+  }
   const fx = fixture()
   try {
     const rel = fx.repo.slice(3)
@@ -240,11 +247,23 @@ test("UNC 别名按统一身份识别，落在仓库内则拒绝", () => {
   }
 })
 
-test("远端 UNC 命名空间无法归一身份时拒绝，而不是猜", () => {
+// POSIX 上的等价正向覆盖：不依赖 UNC 写法，用真实存在的仓库内路径验证 source 拒绝。
+test("仓库内真实路径被 source 拒绝（跨平台正向覆盖）", () => {
+  expectRejected(resolve(repoRoot, "src-tauri", "src"), "source")
+  expectRejected(resolve(repoRoot, "scripts"), "source")
+  expectRejected(repoRoot, "source")
+})
+
+test("远端 UNC 命名空间无法归一身份时拒绝，而不是猜（仅 Windows 命名空间语义）", ctx => {
+  if (process.platform !== "win32") {
+    ctx.skip("windows-path-semantics only")
+    return
+  }
   expectRejected("\\\\otherhost\\share\\target", "namespace")
   expectRejected("\\\\?\\UNC\\otherhost\\share\\target", "namespace")
 })
 
+// localizeNamespace 是纯字符串归一，不含平台分支，因此三种平台期望值相同，可跨平台断言。
 test("命名空间归一：localhost share 映射回盘符路径", () => {
   expect(localizeNamespace("\\\\localhost\\C$\\Users\\x")).toEqual({ path: "C:\\Users\\x", remote: false })
   expect(localizeNamespace("\\\\?\\UNC\\localhost\\C$\\Users\\x")).toEqual({ path: "C:\\Users\\x", remote: false })
