@@ -103,6 +103,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 | `pnpm run test:web`              | Vitest 单元测试                         |
 | `pnpm run test:e2e`              | Playwright E2E 测试                     |
 | `pnpm test`                      | Rust 单元测试                           |
+| `pnpm run bench:rust`            | Rust 冷/热/单文件增量耗时与占用         |
 | `pnpm run package`               | 构建包含远程访问的桌面安装包            |
 
 Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远程页面使用编译时前端快照，不走 Vite HMR。
@@ -110,6 +111,18 @@ Rust 代码修改后需重启 `dev:desktop`；前端修改使用热更新。远�
 日常前端迭代可运行 `pnpm run check:quick` 和 `pnpm run test:web`（仅运行相对 HEAD 变动及其关联的测试）。完整的 `pnpm run check` 会并行执行独立检查，等待前端构建与默认 Rust 检查成功后再检查 `remote-access`，并输出各项耗时；提交前仍需运行完整检查及测试。
 
 类型检查缓存保存在 `node_modules/.cache/vue-tsc/`，后续运行会复用结果并检查变动。首次运行或删除缓存后需要完整检查，缓存不会提交到仓库。内存紧张或同时运行其他构建时，可使用 `pnpm run check --serial` 串行检查，减少资源争抢。
+
+### Rust 构建耗时与占用
+
+`src-tauri/Cargo.toml` 的 dev/test profile 关闭依赖的 debuginfo，本 crate 只保留行号表（`debug = "line-tables-only"`），以降低中间产物占用与增量链接耗时；release profile 不受影响。`.lib` / `.dll` 只在移动端目标需要，因此 `crate-type` 只保留 `rlib`。
+
+需要依赖内部的源码行或变量单步调试时，无需改回默认值，用 `--config` 覆盖即可：
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'
+```
+
+改动 profile 或 crate-type 前后用同一环境对比：先 `pnpm run bench:rust -- --target-dir ../bench-before`，改完再跑 `--target-dir ../bench-after`。脚本使用独立 target 目录，打印 cargo/rustc 版本，并报告冷构建、热构建、单文件增量（touch `src/paths.rs`）与构建目录占用；两端都先预热一次再跑正式冷构建，避免磁盘缓存影响结果。
 
 ### E2E 测试
 

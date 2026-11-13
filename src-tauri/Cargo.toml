@@ -7,7 +7,11 @@ edition = "2021"
 
 [lib]
 name = "pi_x_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 只供 bin crate 使用，因此只需要 rlib。Tauri 模板默认的 staticlib/cdylib 是移动端
+# （`tauri android/ios build`）产物，本仓库目前只有 Windows / macOS / Linux 桌面目标，
+# 保留它们会为每次增量构建额外产出 .lib/.dll（debug 下约 1.6G）且拖慢链接。
+# 将来接移动端时，把对应产物加回 crate-type 即可。
+crate-type = ["rlib"]
 
 [features]
 default = []
@@ -69,6 +73,19 @@ tauri-winrt-notification = "0.8"
 winreg = "0.56"
 webview2-com = "0.39"
 windows-core = "0.62"
+
+# dev 构建（`tauri dev` / `cargo build`）默认携带完整 debuginfo，依赖产生的
+# DWARF 与 PDB 占据了 target 的绝大部分体积，也让增量链接明显变慢。
+# 这里只调整 dev/test profile，release 保持原样：
+# - 本 crate 用 line-tables-only：保留文件名+行号，panic 回溯与断点仍能定位到源码行；
+# - 依赖不生成 debuginfo：回溯仍保留函数符号名，但不含依赖内部的源码行。
+# 需要依赖级变量/单步调试时，可临时用 --config 覆盖，无需改回默认值：
+#   cargo build --config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 codegen-units = 1

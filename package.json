@@ -15,6 +15,7 @@
     "fmt:check": "oxfmt --check",
     "check": "node scripts/check.mjs",
     "check:quick": "node scripts/check.mjs --quick",
+    "bench:rust": "node scripts/bench-rust.mjs",
     "clean": "cd src-tauri && cargo clean",
     "tauri": "tauri",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
