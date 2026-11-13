@@ -1,21 +1,21 @@
 // 测量 Rust 后端的冷构建、热构建、单文件增量构建耗时与构建目录占用。
 //
 // 用法：
-//   node scripts/bench-rust.mjs                    # 在 mkdtemp 唯一临时目录冷构建，结束即删除
+//   node scripts/bench-rust.mjs                    # 冷构建：本进程 mkdtemp 新建唯一目录，结束即删除
 //   node scripts/bench-rust.mjs --keep             # 同上，但保留临时目录（便于事后检查产物）
-//   node scripts/bench-rust.mjs --target-dir ../bench-before [--file src/paths.rs] [--repeats 5]
-//   node scripts/bench-rust.mjs --target-dir ../bench-after --skip-cold
+//   node scripts/bench-rust.mjs --target-dir ../bench-out --skip-cold   # 只读复用已有产物
+//   pnpm run bench:rust -- --repeats 5 --file src/paths.rs
 //
-// 清理授权来自「能力证明」而不是「黑名单 + 标记」：
-// - 冷清理只删本进程用 mkdtemp / mkdir 创建并登记过的目录。删除前重跑 realpath、比对
-//   目录身份（bigint dev+ino）与路径策略，任一项变化即拒绝；因此伪造标记、UNC 别名、
-//   校验后再切换链接都不构成删除授权。
-// - --target-dir 只在三种情形下允许冷构建：路径不存在（本进程创建并登记）、目录为空
-//   （直接使用、不删除）、本就是本进程创建的目录（删除后重建）。其它一律拒绝，提示改用
-//   --skip-cold。全程不写任何标记文件。
-// - 无论哪种模式，目标都必须不在仓库内部、不是仓库祖先、不是磁盘根、不是无法归一的远端
-//   UNC 命名空间，并且取得到可靠身份；取不到身份即拒绝，不猜。
-// - --skip-cold 是纯复用：不删除、不创建、不写标记，目录必须已存在。
+// 删除授权来自「能力证明」，而且只有一种来源：
+// - 脚本只在两种时机创建一个目录：本进程 `mkdtemp`（随机名）。该目录在创建后立刻用 `lstat`
+//   确认「是目录、不是符号链接/junction」，同一笔 stat 的 bigint `dev`+`ino` 就是登记身份，
+//   登记不再走 realpath；登记与首次使用之间再做一次身份比对，不一致就放弃并拒绝删除。
+// - 删除前先复核（路径未变、非链接、身份一致、路径策略通过），再把目录原子重命名到带
+//   `randomUUID()` 的私有临时名，按新路径复核同一身份后才 `rmSync`。
+// - 外部目录（`--target-dir`）没有冷清理能力：它只能配合 `--skip-cold` 只读复用，脚本对它
+//   不删除、不创建、不写入任何东西，也从不登记为可删对象。冷构建不接受 `--target-dir`。
+// - 被复用目录仍做保护规则校验：不在仓库内部、不是仓库祖先、不是磁盘根、不是无法归一的
+//   远端 UNC 命名空间（`\\localhost\C$`、`\\?\UNC\`、`\\?\C:\`、8.3 短名先归一再比较）。
 
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -46,11 +46,7 @@ export function realPathOf(target) {
   }
 }
 
-/**
- * 目录身份：bigint `dev:ino`。同一目录经本地盘符、`\\localhost\C$`、`\\?\UNC\`、8.3 短名
- * 等不同命名空间访问时这些值相同，因此它是跨命名空间比对的统一依据。取不到返回 null，
- * 调用方必须据此拒绝删除，而不是猜。
- */
+/** 跟随链接取身份（`dev`+`ino`，bigint）：跨命名空间比对的统一依据。取不到返回 null。 */
 export function identityOf(target) {
   try {
     const stat = fs.statSync(target, { bigint: true })
@@ -60,10 +56,25 @@ export function identityOf(target) {
   }
 }
 
+/**
+ * 不跟随链接取身份：目录被换成符号链接/junction 时返回 null，调用方必须据此拒绝。
+ * 这个 `lstat` 也是「创建即核对」的那一笔 stat，登记身份直接取自它，避免 realpath 与 stat
+ * 之间再出现窗口。
+ */
+function ownedIdentityOf(directory) {
+  try {
+    const stat = fs.lstatSync(directory, { bigint: true })
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return null
+    return `${stat.dev}:${stat.ino}`
+  } catch {
+    return null
+  }
+}
+
 const stripExtendedPrefix = value => value.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/i, "")
 
 /**
- * 把别名命名空间归一到盘符路径，仅用于保护规则比较（删除授权来自登记的身份，不来自路径）：
+ * 把别名命名空间归一到盘符路径，仅用于保护规则比较：
  * - `\\?\UNC\localhost\C$\...`、`\\?\C:\...` 先剥掉扩展长度前缀；
  * - `\\localhost\C$\...`、`\\127.0.0.1\C$\...`、`\\.\C$\...` 映射回 `C:\...`；
  * - 其它远端 UNC（`\\host\share\...`）无法确定归属，返回 remote=true，调用方必须拒绝。
@@ -98,7 +109,7 @@ function isFileSystemRoot(target) {
   return filesystemRoot !== "" && normalizePath(path.resolve(target)) === normalizePath(filesystemRoot)
 }
 
-/** 本进程创建并登记的目录（真实路径 → 登记时的身份）。删除授权只来自这张表。 */
+/** 本进程创建并登记的目录：真实路径 → 创建时那一笔 lstat 得到的身份。删除授权只来自这里。 */
 const createdThisRun = new Map()
 
 /** 已登记（本进程创建）的目录列表，供自检与测试使用。 */
@@ -106,16 +117,7 @@ export function ownedTargetDirs() {
   return [...createdThisRun.keys()]
 }
 
-function register(directory) {
-  const identity = identityOf(directory)
-  if (identity === null) {
-    createdThisRun.clear()
-    throw new TargetDirUnsafeError("identity", `无法取得目录身份，拒绝把它当作可删除缓存：${directory}`)
-  }
-  createdThisRun.set(directory, identity)
-}
-
-/** 路径策略：磁盘根、远端 UNC、仓库根及其祖先、仓库内部（源码树整体，不依赖名单）。 */
+/** 路径策略：磁盘根、远端 UNC、仓库根及其祖先、仓库内部（整棵源码树，不依赖名单）。 */
 function assertPathAllowed(candidate, { repo = repoRoot } = {}) {
   const localized = localizeNamespace(candidate)
   if (localized.remote) {
@@ -142,10 +144,10 @@ function isDanglingLink(target) {
 }
 
 /**
- * 校验 target 目录：返回 { requested, real, entries, identity }。
- * real 为 realpath 结果（不存在时为 null，此时 identity 也为 null）。
+ * 校验一个**已存在**的外部目录能否被只读复用：返回 { requested, real, entries, identity }。
+ * 只做读取与校验，绝不创建、删除或写入。
  */
-export function inspectTargetDir(targetDir, { allowMissing = true, repo = repoRoot } = {}) {
+export function inspectReusableDir(targetDir, { repo = repoRoot } = {}) {
   if (typeof targetDir !== "string" || targetDir.trim() === "") {
     throw new TargetDirUnsafeError("invalid", "缺少 --target-dir 路径")
   }
@@ -156,7 +158,6 @@ export function inspectTargetDir(targetDir, { allowMissing = true, repo = repoRo
   }
   const real = realPathOf(requested)
   if (real === null) {
-    if (allowMissing) return { requested, real: null, entries: [], identity: null }
     throw new TargetDirUnsafeError("missing", `复用模式要求 target-dir 已存在：${requested}`)
   }
   assertPathAllowed(real, { repo })
@@ -165,54 +166,91 @@ export function inspectTargetDir(targetDir, { allowMissing = true, repo = repoRo
   }
   const identity = identityOf(real)
   if (identity === null) {
-    throw new TargetDirUnsafeError("identity", `无法取得目录身份，拒绝把它当作可删除缓存：${real}`)
+    throw new TargetDirUnsafeError("identity", `无法取得目录身份：${real}`)
   }
   return { requested, real, entries: fs.readdirSync(real), identity }
 }
 
-/** 新建唯一会话目录并登记；删除授权随之建立。 */
-export function createSessionTargetDir({ repo = repoRoot, parent = os.tmpdir() } = {}) {
-  const created = fs.mkdtempSync(path.join(parent, SESSION_PREFIX))
-  const real = realPathOf(created)
-  if (real === null) throw new TargetDirUnsafeError("identity", `无法解析新建 target 目录：${created}`)
-  assertPathAllowed(real, { repo })
-  register(real)
-  return real
+/** `--skip-cold`：外部目录只读复用。不删除、不创建、不写标记、不登记。 */
+export function reuseTargetDir(targetDir, { repo = repoRoot } = {}) {
+  return inspectReusableDir(targetDir, { repo }).real
 }
 
 /**
- * 单次删除前复核：realpath 未变、不是符号链接/junction、身份与登记值一致、路径策略通过。
+ * 冷构建唯一入口：`mkdtemp` 新建随机名目录，创建后立刻用同一笔 `lstat` 完成
+ * 「是目录、不是链接、取到身份」三件事并登记，不再走 realpath，避免「mkdtemp → realpath →
+ * register」之间被换成 junction 记到受害者路径。
+ * `afterCreate` 仅供测试在该窗口内确定性模拟换向，生产调用不传。
+ */
+export function createSessionTargetDir({ repo = repoRoot, parent = os.tmpdir(), afterCreate } = {}) {
+  const created = fs.mkdtempSync(path.join(parent, SESSION_PREFIX))
+  if (afterCreate) afterCreate(created)
+  const identity = ownedIdentityOf(created)
+  if (identity === null) {
+    // 已被换成链接/非目录：只摘掉重解析点本身（unlink 不会进入链接目标），绝不递归删除。
+    try {
+      if (fs.lstatSync(created).isSymbolicLink()) fs.unlinkSync(created)
+    } catch {
+      // 清理失败不影响结论：这里本来就不允许删除。
+    }
+    throw new TargetDirUnsafeError(
+      "changed",
+      `新建 target 目录在创建后立即校验失败（已被替换成链接或非目录），放弃使用：${created}`,
+    )
+  }
+  try {
+    assertPathAllowed(created, { repo })
+  } catch (error) {
+    fs.rmSync(created, { recursive: true, force: true })
+    throw error
+  }
+  createdThisRun.set(created, identity)
+  return created
+}
+
+/**
+ * 登记与首次使用之间的身份复核：路径不变、非链接、身份仍是登记值。
+ * 不一致即拒绝（调用方随之放弃删除），把授权证明里剩下的窗口关掉。
+ */
+export function assertOwnedDirUsable(directory, { repo = repoRoot } = {}) {
+  const recorded = createdThisRun.get(directory)
+  if (recorded === undefined) {
+    throw new TargetDirUnsafeError("unowned", `目录未在本轮登记，不能用作冷构建 target：${directory}`)
+  }
+  const current = ownedIdentityOf(directory)
+  if (current !== recorded) {
+    throw new TargetDirUnsafeError(
+      "changed",
+      `首次使用前目录身份变化，放弃使用：${directory}（${recorded} → ${current}）`,
+    )
+  }
+  assertPathAllowed(directory, { repo })
+  return directory
+}
+
+/**
+ * 单次删除前复核：路径未变、不是符号链接/junction、身份与登记值一致、路径策略通过。
  * 任何一项不满足就拒绝，绝不在不确定状态下删除。
  */
 function verifyOwnedDir(directory, recorded, repo) {
-  const current = realPathOf(directory)
-  if (current !== directory) {
-    throw new TargetDirUnsafeError("changed", `删除前路径解析结果变化，拒绝删除：${directory} → ${current}`)
+  if (realPathOf(directory) !== directory) {
+    throw new TargetDirUnsafeError("changed", `删除前路径解析结果变化，拒绝删除：${directory}`)
   }
-  let stat
-  try {
-    stat = fs.lstatSync(directory)
-  } catch {
-    throw new TargetDirUnsafeError("changed", `删除前目录已不可访问，拒绝删除：${directory}`)
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    // 目录被换成符号链接/junction：内容不在本进程创建的范围内，直接拒绝。
-    throw new TargetDirUnsafeError("changed", `删除前被替换成符号链接/junction，拒绝删除：${directory}`)
-  }
-  const identity = identityOf(directory)
-  if (identity !== recorded) {
-    throw new TargetDirUnsafeError("changed", `删除前目录身份变化，拒绝删除：${directory}（${recorded} → ${identity}）`)
+  const current = ownedIdentityOf(directory)
+  if (current !== recorded) {
+    throw new TargetDirUnsafeError(
+      "changed",
+      `删除前目录身份变化或被替换成链接，拒绝删除：${directory}（${recorded} → ${current}）`,
+    )
   }
   assertPathAllowed(directory, { repo })
-  return identity
 }
 
 /**
  * 删除本进程登记过的目录。
- * 流程：复核 → （仅测试用的时序钩子）→ 复核 → 原子重命名到不可预测的非临时名 → 复核身份 → 删除。
- * 重命名之后路径由本次调用临时决定（含随机 nonce），外部无法预先替换，因此"校验后再切换"的
- * 窗口被压到只剩下"rename 前后"这两个原子动作之间，且 rename 后仍会比对 dev+ino。
- * 任何一步不一致都抛出错误并尽量把目录还原回原名，而不是"尽量删掉"。
+ * 流程：复核 → （仅测试用的时序钩子）→ 复核 → 原子重命名到带随机 nonce 的私有临时名 →
+ * 复核同一身份 → 删除。重命名之后路径由本次调用独占，外部无法预先替换。
+ * 任何一步不一致都抛出错误（并尽量还原），而不是"尽量删掉"。
  * `beforeDelete` 仅供测试确定性模拟竞态时序，生产调用不传。
  */
 export function deleteOwnedDir(directory, { repo = repoRoot, beforeDelete } = {}) {
@@ -231,10 +269,8 @@ export function deleteOwnedDir(directory, { repo = repoRoot, beforeDelete } = {}
     throw new TargetDirUnsafeError("changed", `无法原子重命名待删目录，拒绝删除：${directory}（${error.code}）`)
   }
   try {
-    // 重命名后按新路径重新取身份：与登记值不符说明路径已被换过，还原并拒绝。
-    const parkedIdentity = identityOf(parking)
-    const parkedIsLink = fs.lstatSync(parking).isSymbolicLink()
-    if (parkedIdentity !== recorded || parkedIsLink) {
+    const parkedIdentity = ownedIdentityOf(parking)
+    if (parkedIdentity !== recorded) {
       fs.renameSync(parking, directory)
       throw new TargetDirUnsafeError(
         "changed",
@@ -248,52 +284,6 @@ export function deleteOwnedDir(directory, { repo = repoRoot, beforeDelete } = {}
   if (fs.existsSync(directory) || fs.existsSync(parking) || realPathOf(directory) !== null) {
     throw new TargetDirUnsafeError("changed", `删除后仍存在残留，请检查权限：${directory}`)
   }
-}
-
-/**
- * 冷构建前调用。无参数时新建会话目录；给了路径时只接受三种情形：
- * 不存在（本进程创建并登记）、目录为空（直接使用、不删除）、本进程本轮已创建（删除后重建）。
- * 其它情况一律拒绝冷清理，并提示改用 --skip-cold。全程不写标记文件。
- */
-export function resetTargetDir(targetDir, { repo = repoRoot } = {}) {
-  if (targetDir === undefined) return createSessionTargetDir({ repo })
-
-  const { requested, real, entries, identity } = inspectTargetDir(targetDir, { repo })
-  if (real === null) {
-    try {
-      fs.mkdirSync(requested, { recursive: true })
-    } catch (error) {
-      throw new TargetDirUnsafeError(
-        "not-writable",
-        `无法创建 target-dir：${requested}（${error.code}）。检查路径是否带未转义的扩展前缀或 UNC 别名。`,
-      )
-    }
-    const created = realPathOf(requested)
-    if (created === null) throw new TargetDirUnsafeError("identity", `无法解析新建 target 目录：${requested}`)
-    assertPathAllowed(created, { repo })
-    register(created)
-    return created
-  }
-  if (createdThisRun.has(real)) {
-    deleteOwnedDir(real, { repo })
-    fs.mkdirSync(real, { recursive: true })
-    register(real)
-    return real
-  }
-  // 空目录：直接使用，不需要也不允许删除。
-  if (entries.length === 0) return real
-  throw new TargetDirUnsafeError(
-    "unowned",
-    `拒绝冷清理非本进程创建的目录：${real}（身份 ${identity}）。` +
-      "需要干净冷构建时不传 --target-dir，由脚本在临时目录里新建；" +
-      "要继续用这个目录请加 --skip-cold；确认目录可丢弃也可以先手动删除。",
-  )
-}
-
-/** `--skip-cold`：纯复用。不删除、不创建、不写任何标记；目录必须已存在。 */
-export function reuseTargetDir(targetDir, { repo = repoRoot } = {}) {
-  const { real } = inspectTargetDir(targetDir, { allowMissing: false, repo })
-  return real
 }
 
 export function parseArgs(argv) {
@@ -312,6 +302,12 @@ export function parseArgs(argv) {
   if (!Number.isInteger(options.repeats) || options.repeats < 1) throw new Error("--repeats 必须是正整数")
   if (options.skipCold && options.targetDir === undefined) {
     throw new Error("--skip-cold 需要配合 --target-dir 指定要复用的目录")
+  }
+  if (!options.skipCold && options.targetDir !== undefined) {
+    throw new Error(
+      "冷构建只在脚本自己 mkdtemp 出来的目录里进行，不接受 --target-dir；" +
+        "外部目录只读复用，请用 --target-dir <目录> --skip-cold",
+    )
   }
   return options
 }
@@ -392,14 +388,19 @@ const sec = ms => `${(ms / 1000).toFixed(1)}s`
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
-  const target = options.skipCold ? reuseTargetDir(options.targetDir) : resetTargetDir(options.targetDir)
-  // 仅会话临时目录在结束时回收；外部 --target-dir 一律保留，供前后对比复用。
-  const cleanup = options.targetDir === undefined && !options.keep
+  // 冷构建只在本进程新建的目录里跑；外部目录仅只读复用。
+  const target = options.skipCold ? reuseTargetDir(options.targetDir) : assertOwnedDirUsable(createSessionTargetDir())
+  const cleanup = !options.skipCold && !options.keep
+  const mode = options.skipCold
+    ? "复用已有目录，未删除"
+    : cleanup
+      ? "本进程 mkdtemp 新建，结束即删除"
+      : "本进程新建，--keep 保留"
   const env = { ...process.env, CARGO_TERM_COLOR: "never", CARGO_TARGET_DIR: target }
   const lines = [
     `cargo: ${await runCapture("cargo", ["--version"], env)}`,
     `rustc: ${await runCapture("rustc", ["--version"], env)}`,
-    `target-dir: ${target}（${options.skipCold ? "复用已有目录，未删除" : cleanup ? "本进程新建，结束即删除" : "本次使用，保留"}）`,
+    `target-dir: ${target}（${mode}）`,
   ]
   try {
     if (!options.skipCold) lines.push(`冷构建（空 target 后 cargo build）：${sec(await runBuild(env))}`)
