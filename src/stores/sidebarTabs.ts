@@ -1,5 +1,6 @@
 import { reactive } from "vue"
 import {
+  MAX_SIDEBAR_TAB_GROUPS,
   MAX_SIDEBAR_TABS,
   markDetachedTabs,
   normalizePersistedSidebarTabs,
@@ -27,6 +28,8 @@ interface GroupState {
   tabs: SidebarTabItem[]
   activeId: number | null
   nextId: number
+  /** 最近一次被使用的时间戳，供组数超限时按 LRU 淘汰。 */
+  usedAt: number
 }
 
 export const sidebarTabRegistry = reactive(new Map<string, GroupState>())
@@ -39,6 +42,17 @@ export const sidebarTabRegistry = reactive(new Map<string, GroupState>())
  */
 const hydratedKeys = new Set<string>()
 
+/**
+ * 仍被挂载中的 `ChatView` 持有的组（分屏会同时挂多个），淘汰时不能动这些组。
+ *
+ * 计数由调用方（`useSidebarTabs`）按"本实例实际 retain 过的键"配平：身份键
+ * 会在组件仍挂载时变化（`runtime:` → 文件键、SSH realpath 回绑），所以释放
+ * 必须按记录，而不是"当前键"。
+ */
+const liveRefs = new Map<string, number>()
+
+let clock = 0
+
 /** 会话身份键（落盘分组键）：已落盘用文件身份，尚未落盘用 runtime 键。 */
 export function groupKeyFor(runtimeId: string, sessionFile: string | null | undefined, project: string) {
   return sidebarTabGroupKey(runtimeId, sessionFile, project)
@@ -47,10 +61,15 @@ export function groupKeyFor(runtimeId: string, sessionFile: string | null | unde
 function stateFor(key: string): GroupState {
   let state = sidebarTabRegistry.get(key)
   if (!state) {
-    state = { tabs: [], activeId: null, nextId: 1 }
+    state = { tabs: [], activeId: null, nextId: 1, usedAt: ++clock }
     sidebarTabRegistry.set(key, state)
   }
   return state
+}
+
+function touch(key: string) {
+  const state = sidebarTabRegistry.get(key)
+  if (state) state.usedAt = ++clock
 }
 
 /** 该会话是否已经确定过内容（空列表也是一个有效结论）。 */
@@ -77,12 +96,18 @@ export function activeIdFor(key: string) {
   return stateFor(key).activeId
 }
 
-export function addTab(key: string, type: SidebarTabKind): number {
+/**
+ * 新增 Tab。达到单组上限时**拒绝新增并返回 `null`**：不能"先加进去、写盘时再截断"，
+ * 那会显示成功却在重启后静默丢掉最新一个 Tab。
+ */
+export function addTab(key: string, type: SidebarTabKind): number | null {
   hydratedKeys.add(key)
   const state = stateFor(key)
+  if (state.tabs.length >= MAX_SIDEBAR_TABS) return null
   const id = state.nextId++
   state.tabs.push({ id, type })
   state.activeId = id
+  touch(key)
   return id
 }
 
@@ -91,16 +116,25 @@ export function closeTab(key: string, id: number) {
   const index = state.tabs.findIndex(tab => tab.id === id)
   if (index < 0) return
   state.tabs.splice(index, 1)
-  if (state.activeId === id)
-    state.activeId = state.tabs[Math.min(index, state.tabs.length - 1)]?.id ?? null
+  if (state.activeId === id) state.activeId = state.tabs[Math.min(index, state.tabs.length - 1)]?.id ?? null
+  touch(key)
 }
 
+/**
+ * 拖拽排序。超过单组上限的尾部直接丢弃（不是拒绝整次重排），让"内存里 ≤20 条"
+ * 的不变量不只依赖 `addTab`：拖拽是唯一可能绕过它把列表变长的入口。
+ */
 export function reorderTabs(key: string, tabs: SidebarTabItem[]) {
-  stateFor(key).tabs = tabs
+  const state = stateFor(key)
+  state.tabs = tabs.slice(0, MAX_SIDEBAR_TABS)
+  if (state.activeId !== null && !state.tabs.some(tab => tab.id === state.activeId))
+    state.activeId = state.tabs[0]?.id ?? null
+  touch(key)
 }
 
 export function setActiveTab(key: string, id: number | null) {
   stateFor(key).activeId = id
+  touch(key)
 }
 
 /** 当前状态的落盘载荷；空列表返回 `null`（调用方据此删除条目）。 */
@@ -127,6 +161,7 @@ export function hydrateGroup(key: string, value: unknown): boolean {
   state.tabs = rebuilt.tabs
   state.activeId = rebuilt.activeId
   state.nextId = rebuilt.nextId
+  touch(key)
   return true
 }
 
@@ -143,6 +178,9 @@ export function hydrateGroup(key: string, value: unknown): boolean {
  * - 源非空 → 以源为准搬到目标（用户刚在草稿会话里操作过）。
  *   直接搬内存状态、不经落盘载荷重建：重建会把 terminal 一律标成 `stale`，而这条
  *   路径上 `ChatView` 并没有卸载、shell 还活着，标失联就是伪造死亡。
+ *
+ * 本函数只搬内存状态；"持有关系"（`liveRefs`）由调用方按自己的记录配平 ——
+ * 身份变化不只是 `runtime:` → 文件键这一种（SSH realpath 回绑同样会换键）。
  */
 export function rebindGroup(fromKey: string, toKey: string): boolean {
   if (fromKey === toKey) return false
@@ -152,12 +190,11 @@ export function rebindGroup(fromKey: string, toKey: string): boolean {
   sidebarTabRegistry.delete(fromKey)
   if (!source.tabs.length) return false
   const target = sidebarTabRegistry.get(toKey)
-  const state: GroupState = target ?? { tabs: [], activeId: null, nextId: 1 }
-  if (source.tabs.length) {
-    state.tabs = source.tabs
-    state.activeId = source.activeId
-    state.nextId = Math.max(state.nextId, source.nextId)
-  }
+  const state: GroupState = target ?? { tabs: [], activeId: null, nextId: 1, usedAt: ++clock }
+  state.tabs = source.tabs
+  state.activeId = source.activeId
+  state.nextId = Math.max(state.nextId, source.nextId)
+  state.usedAt = Math.max(state.usedAt, source.usedAt, ++clock)
   sidebarTabRegistry.set(toKey, state)
   hydratedKeys.add(toKey)
   return true
@@ -182,6 +219,47 @@ export function dropGroup(key: string) {
   hydratedKeys.delete(key)
 }
 
+/**
+ * 某个 `ChatView` 开始持有该组；配合 `releaseGroup` 让组数淘汰不误伤分屏中
+ * 仍在显示的会话（它们的终端 Tab 还有活进程）。
+ */
+export function retainGroup(key: string) {
+  liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
+  touch(key)
+}
+
+/** 该组当前的持有计数（供诊断与测试核对 retain/release 是否配平）。 */
+export function retainedGroupCount(key: string) {
+  return liveRefs.get(key) ?? 0
+}
+
+/** 释放一次持有。调用方必须释放**自己实际 retain 过的键**，不能按"当前键"。 */
+export function releaseGroup(key: string) {
+  const count = liveRefs.get(key) ?? 0
+  if (count <= 1) liveRefs.delete(key)
+  else liveRefs.set(key, count - 1)
+}
+
+/**
+ * 组数超限时按 LRU 淘汰内存态（落盘条目保留，重新打开该会话时再 hydrate）。
+ * 仍被挂载的组（`liveRefs`）绝不淘汰；全部组都被持有时放弃淘汰而不是误伤。
+ */
+export function pruneGroups(limit = MAX_SIDEBAR_TAB_GROUPS) {
+  while (sidebarTabRegistry.size > limit) {
+    let victim: string | null = null
+    let oldest = Infinity
+    for (const [key, state] of sidebarTabRegistry) {
+      if (liveRefs.has(key)) continue
+      if (state.usedAt < oldest) {
+        oldest = state.usedAt
+        victim = key
+      }
+    }
+    if (!victim) return
+    dropGroup(victim)
+  }
+}
+
 /** 判断某个 runtime 是否已经在注册表里（供 `ChatView` 挂载时决定是否 hydrate）。 */
 export function groupKeyForRuntime(runtimeId: string, sessionFile: string | null | undefined, project: string) {
   const fileKey = sessionFile ? groupKeyFor("", sessionFile, project) : null
@@ -191,4 +269,4 @@ export function groupKeyForRuntime(runtimeId: string, sessionFile: string | null
   return null
 }
 
-export { MAX_SIDEBAR_TABS }
+export { MAX_SIDEBAR_TAB_GROUPS, MAX_SIDEBAR_TABS }

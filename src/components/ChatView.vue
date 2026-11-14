@@ -113,12 +113,15 @@ const {
   close: closeSidebarTab,
   reorder: reorderSidebarTab,
   restartTerminal: restartSidebarTerminal,
+  limit: sidebarTabLimit,
 } = useSidebarTabs({
   runtimeId,
   sessionFile: computed(() => session.sessionFile),
   project: () => session.cwd || props.project,
   onFirstTabAdded: () => (sidebarOpen.value = true),
   onLastTabClosed: () => (sidebarOpen.value = false),
+  // 上限在注册表 `addTab` 上硬拦（不是写盘时截断）：界面显示成功、重启静默丢 Tab 不可接受。
+  onTabLimitReached: () => ui.pushToast(t("sidebarTabs.limitReached", { count: sidebarTabLimit }), "warning"),
 })
 const reviewFocus = ref<string | null>(null)
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)

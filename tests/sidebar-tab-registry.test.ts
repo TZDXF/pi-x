@@ -11,6 +11,7 @@ vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: () => fakeWorkspace,
 }))
 import {
+  MAX_SIDEBAR_TAB_GROUPS,
   MAX_SIDEBAR_TABS,
   markDetachedTabs,
   normalizePersistedSidebarTabs,
@@ -23,14 +24,19 @@ import {
   addTab,
   closeTab,
   dropGroup,
+  groupKeyFor,
   hasGroup,
   hydrateGroup,
   isHydrated,
   markGroupDetached,
   markHydrated,
   persistedFor,
+  pruneGroups,
   rebindGroup,
+  releaseGroup,
   reorderTabs,
+  retainGroup,
+  retainedGroupCount,
   sidebarTabRegistry,
   setActiveTab,
   tabsFor,
@@ -40,10 +46,18 @@ const useWorkspaceStore = () => fakeWorkspace
 
 const KEY = "C:/project\u0000C:/project/sessions/a.jsonl"
 const RUNTIME_KEY = "runtime:rt-1"
+const RUNTIME_KEY_2 = "runtime:rt-2"
+// SSH realpath 回绑：同一个挂载实例的项目身份从 alias 变成实际路径，键随之改变。
+const ALIAS_KEY = groupKeyFor("rt-1", "sessions/a.jsonl", "//host/proj/alias")
+const REBOUND_KEY = groupKeyFor("rt-1", "sessions/a.jsonl", "//host/proj")
 
 beforeEach(() => {
-  for (const key of [...sidebarTabRegistry.keys()]) sidebarTabRegistry.delete(key)
-  for (const key of [KEY, RUNTIME_KEY]) dropGroup(key)
+  for (const key of [...sidebarTabRegistry.keys()]) dropGroup(key)
+  for (const key of [KEY, RUNTIME_KEY, RUNTIME_KEY_2, ALIAS_KEY, REBOUND_KEY]) {
+    dropGroup(key)
+    // 持有计数据也清掉，避免用例之间泄漏（retain/release 是本轮修的主题）。
+    releaseGroup(key)
+  }
 })
 
 test("registry survives component unmount: state lives outside any component instance", () => {
@@ -297,4 +311,149 @@ test("rebind keeps a live terminal alive instead of faking its death", () => {
   expect(tabsFor(RUNTIME_KEY)[0]!.stale).toBeUndefined()
   rebindGroup(RUNTIME_KEY, KEY)
   expect(tabsFor(KEY)[0]!.stale).toBeUndefined()
+})
+
+// ---- TZD-96（P2 加固）：上限、写侧白名单、宽容反序列化、组数 LRU ----
+
+test("the tab limit is enforced at addTab and reported to the caller", () => {
+  fakeWorkspace.sidebarTabs = {}
+  const scope = effectScope()
+  let limitHits = 0
+  const api = scope.run(() =>
+    useSidebarTabs({
+      runtimeId: "rt-1",
+      sessionFile: ref<string | null>("C:/project/sessions/a.jsonl"),
+      project: () => "C:/project",
+      onTabLimitReached: () => (limitHits += 1),
+    }),
+  )!
+  for (let index = 0; index < MAX_SIDEBAR_TABS; index++) expect(api.add("review")).toBeTruthy()
+  // 第 21 个必须被拒绝：不能"界面成功、写盘截断、重启静默丢最新一个"。
+  expect(api.add("review")).toBeNull()
+  expect(limitHits).toBe(1)
+  expect(tabsFor(KEY)).toHaveLength(MAX_SIDEBAR_TABS)
+  expect(fakeWorkspace.sidebarTabs[KEY]!.kinds).toHaveLength(MAX_SIDEBAR_TABS)
+  expect(fakeWorkspace.sidebarTabs[KEY]!.active).toBeLessThan(MAX_SIDEBAR_TABS)
+  scope.stop()
+})
+
+test("write-side whitelist drops aux and unknown kinds before the payload leaves the frontend", () => {
+  const payload = persistedFromTabs(
+    [
+      { id: 1, type: "aux" },
+      { id: 2, type: "review" },
+      { id: 3, type: "mystery" },
+    ] as never,
+    2,
+  )
+  expect(payload).toEqual({ kinds: ["review"], active: 0 })
+})
+
+test("write-side whitelist filters kinds BEFORE the 20-tab truncation", () => {
+  // 反过来（先截断后过滤）时，前面 20 个 aux 会把合法的 review/browser 挤掉，
+  // 载荷变空 → 条目被删 → 用户的 Tab 整组消失。
+  const tabs = [
+    ...Array.from({ length: MAX_SIDEBAR_TABS }, (_, index) => ({ id: index + 1, type: "aux" as const })),
+    { id: 100, type: "review" as const },
+    { id: 101, type: "browser" as const },
+  ]
+  expect(persistedFromTabs(tabs as never, 101)).toEqual({ kinds: ["review", "browser"], active: 1 })
+})
+
+test("reorder cannot push the tab list past the limit", () => {
+  const first = addTab(KEY, "review")!
+  const rows = [
+    ...tabsFor(KEY),
+    ...Array.from({ length: MAX_SIDEBAR_TABS + 4 }, (_, index) => ({ id: 1000 + index, type: "files" as const })),
+  ]
+  reorderTabs(KEY, rows)
+  // 拖拽是唯一可能绕过 `addTab` 把列表变长的入口：内存里也必须守住 20 条。
+  expect(tabsFor(KEY)).toHaveLength(MAX_SIDEBAR_TABS)
+  expect(tabsFor(KEY)[0]!.id).toBe(first)
+  expect(persistedFor(KEY)!.kinds).toHaveLength(MAX_SIDEBAR_TABS)
+})
+
+test("group count is capped by LRU eviction, sparing groups that are still mounted", () => {
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:old-${index}`, "review")
+  addTab(RUNTIME_KEY_2, "terminal")
+  retainGroup(RUNTIME_KEY_2)
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
+  releaseGroup(RUNTIME_KEY_2)
+  pruneGroups(1)
+  // 淘汰只丢内存；磁盘条目保留（调用方不写 null），重新打开再 hydrate。
+  expect(sidebarTabRegistry.size).toBe(1)
+  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) dropGroup(`runtime:old-${index}`)
+})
+
+// ---- 缺陷修复（审查反例）：身份变化后的 retain/release 配平、首渲染组数不变量 ----
+
+test("an SSH realpath rebound keeps the mounted group out of LRU eviction", async () => {
+  // 审查反例的同一构造：alias 身份下挂载的实例，回绑后键变成实际路径。
+  // REBOUND 组先存在（分屏里另一个窗格开过它），因此它是内存里最老的候选 ——
+  // 一旦它失去持有关系，默认 24 组回收第一个就挑它。
+  addTab(REBOUND_KEY, "files")
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 2; index++) addTab(`runtime:idle-${index}`, "review")
+
+  const project = ref("//host/proj/alias")
+  const sessionFile = ref<string | null>("sessions/a.jsonl")
+  const scope = effectScope()
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-1", sessionFile, project: () => project.value })
+  })
+  expect(api.tabKey.value).toBe(ALIAS_KEY)
+
+  // SSH realpath 回绑（`src/lib/workspaceRuntime.ts:149`）：原组件仍挂载就换了项目身份。
+  project.value = "//host/proj"
+  await nextTick()
+  expect(api.tabKey.value).toBe(REBOUND_KEY)
+
+  // 第一轮：再开几个会话把组数顶过上限，跑默认 24 组回收。
+  for (let index = 0; index < 2; index++) addTab(`runtime:pressure-${index}`, "review")
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  // 旧实现只在 `runtime:` → 文件键时迁移引用，这里引用留在 alias 键上：
+  // 正在显示的 REBOUND 组没有任何保护，被当成最老的候选整组删掉。
+  expect(hasGroup(REBOUND_KEY), "回绑后正在显示的组不得被 LRU 淘汰").toBe(true)
+
+  // 持有关系按"本实例实际 retain 过的键"配平：新键 1 次、旧 alias 键 0 次。
+  expect(retainedGroupCount(REBOUND_KEY)).toBe(1)
+  expect(retainedGroupCount(ALIAS_KEY)).toBe(0)
+
+  // 第二轮：用足够多的新组把 REBOUND 重新变成最老的一组，再回收一次 ——
+  // 只有"真的 retain 了它"才能让它活下来（只 touch 一次是撑不过这一轮的）。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:later-${index}`, "review")
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  expect(hasGroup(REBOUND_KEY)).toBe(true)
+  expect(tabsFor(REBOUND_KEY).map(tab => tab.type)).toEqual(["files"])
+
+  // 卸载后按记录的键释放；否则旧 alias 键的引用永久占位，卸载后也回收不了。
+  scope.stop()
+  expect(retainedGroupCount(ALIAS_KEY)).toBe(0)
+  expect(retainedGroupCount(REBOUND_KEY)).toBe(0)
+  addTab(ALIAS_KEY, "files")
+  addTab("runtime:newest", "review")
+  pruneGroups(1)
+  expect(sidebarTabRegistry.size).toBe(1)
+  expect(hasGroup(ALIAS_KEY)).toBe(false)
+})
+
+test("first render never exposes more groups than the limit", () => {
+  // 24 个闲置组把内存占满，然后进入一个还没有内存组的会话（首渲染）。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:idle-${index}`, "review")
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-new", sessionFile, project: () => "C:/project" })
+  })
+  // 首渲染会读取 tabs —— 这一步才创建该会话的空组。旧实现先按 24 回收再让该组建出来，
+  // 于是这里能观察到 25 组；回收时机挪到"组真正可用之后/预留 1 个"才不会越界。
+  expect(api.tabs.value).toEqual([])
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+  scope.stop()
 })

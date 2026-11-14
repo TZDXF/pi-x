@@ -32,11 +32,56 @@ pub struct WorkspaceState {
     sidebar_tabs: BTreeMap<String, SidebarTabs>,
 }
 /// 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+///
+/// 反序列化刻意做成**宽容**的：单条记录格式不对（`kinds` 不是数组、项不是字符串、
+/// `active` 是字符串或负数）只按能读出来的部分重建，绝不让整份 `workspace.json`
+/// 解析失败。`active` 因此用有符号类型并在解析期钳成 0（用 `usize` 时磁盘上
+/// 出现 `-1` 会让 `read()` 直接失败，`update()` 也随之失败——用户只能手改文件）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidebarTabs {
     kinds: Vec<String>,
     active: usize,
+}
+
+/// 免责（宽容）重建：**先按白名单过滤，再限额**。
+///
+/// 顺序不能反：反过来时「20 个 aux + 1 个 review」会先把合法的 review 截掉，
+/// 该组随后在 `normalize` 里被整条丢弃 —— 用户的合法 Tab 被脏数据挤没了。
+fn lenient_sidebar_tabs(value: &serde_json::Value) -> SidebarTabs {
+    let kinds = value
+        .get("kinds")
+        .and_then(|kinds| kinds.as_array())
+        .map(|kinds| {
+            kinds
+                .iter()
+                .filter_map(|kind| kind.as_str())
+                .filter(|kind| SIDEBAR_TAB_KINDS.contains(kind))
+                .take(SIDEBAR_TAB_LIMIT)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let active = match value.get("active") {
+        Some(serde_json::Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value.trunc() as i64))
+            .unwrap_or(0),
+        _ => 0,
+    };
+    SidebarTabs { kinds, active: active.max(0) as usize }
+}
+
+impl<'de> Deserialize<'de> for SidebarTabs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 非对象（字符串/数组/null）当作空记录，同样不会让整份状态解析失败；
+        // 空记录会在 `normalize` 里被当作"没有可恢复内容"丢掉。
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(lenient_sidebar_tabs(&value))
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -693,6 +738,111 @@ mod tests {
         );
         assert_eq!(state.sidebar_tabs["runtime:blank-key"].active, 0);
         assert_eq!(state.revision, 3, "其余字段不受影响");
+        cleanup(&path);
+    }
+
+    /// **净化顺序**：白名单必须先于 `take(20)`。
+    ///
+    /// 反例：20 个 `aux` 打头 + 1 个合法 `review`。先截断的实现会把 review 截掉，
+    /// 该组随后被当作"没有可恢复内容"整条丢弃 —— 用户的合法 Tab 被脏数据挤没。
+    #[test]
+    fn sidebar_tabs_filter_unknown_kinds_before_truncating() {
+        let path = path();
+        let mut kinds: Vec<String> = std::iter::repeat("aux".to_owned())
+            .take(SIDEBAR_TAB_LIMIT)
+            .collect();
+        kinds.push("review".into());
+        kinds.push("browser".into());
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { "runtime:aux-heavy": { "kinds": kinds, "active": 0 } }
+            })),
+        )
+        .unwrap();
+        let group = state
+            .sidebar_tabs
+            .get("runtime:aux-heavy")
+            .expect("合法 review/browser 被 aux 挤掉后整组消失，就是本用例要挡的回归");
+        assert_eq!(group.kinds, vec!["review", "browser"], "合法 kind 必须按序留下");
+        assert!(group.kinds.len() <= SIDEBAR_TAB_LIMIT, "过滤后仍受 20 条上限约束");
+        cleanup(&path);
+    }
+
+    /// 宽容反序列化：`update` 的 patch 与磁盘记录都允许多种脏形状，且只做局部净化。
+    #[test]
+    fn sidebar_tabs_negative_or_string_active_is_clamped_instead_of_rejected() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:neg": { "kinds": ["review", "files"], "active": -1 },
+                    "runtime:text": { "kinds": ["review"], "active": "3" },
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": 99
+                    }
+                }
+            })),
+        )
+        .unwrap();
+        assert_eq!(state.sidebar_tabs["runtime:neg"].active, 0, "负数钳成 0，不拒写");
+        assert_eq!(state.sidebar_tabs["runtime:text"].active, 0, "非数值钳成 0，不拒写");
+        let many = &state.sidebar_tabs["runtime:many"];
+        assert_eq!(many.kinds.len(), SIDEBAR_TAB_LIMIT, "超限必须截断而不是拒绝写入");
+        assert_eq!(many.active, SIDEBAR_TAB_LIMIT - 1);
+        cleanup(&path);
+    }
+
+    /// 被污染的 workspace.json：读路径必须能读出其余状态，且脏键能被删除 patch 清掉
+    /// （否则用户只能手改文件）。
+    #[test]
+    fn sidebar_tabs_polluted_file_is_readable_and_the_dirty_key_can_be_deleted() {
+        let path = path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "revision": 1,
+                "projects": ["C:/project"],
+                "sidebarTabs": {
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": -1
+                    },
+                    "runtime:aux": { "kinds": ["aux", "mystery"], "active": 0 },
+                    "runtime:junk": "not-an-object",
+                    "runtime:numbers": { "kinds": [1, 2, null], "active": 0 },
+                    "runtime:ok": { "kinds": ["review", "browser"], "active": 1 }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let state = read(&path).expect("单条脏记录不得让整份 workspace 读取失败");
+        assert_eq!(state.projects, vec!["C:/project"]);
+        assert_eq!(state.sidebar_tabs["runtime:many"].kinds.len(), SIDEBAR_TAB_LIMIT);
+        assert!(!state.sidebar_tabs.contains_key("runtime:aux"));
+        assert!(!state.sidebar_tabs.contains_key("runtime:junk"));
+        assert!(!state.sidebar_tabs.contains_key("runtime:numbers"));
+        assert_eq!(state.sidebar_tabs["runtime:ok"].kinds, vec!["review", "browser"]);
+
+        // 删除所有脏键：`update` 内部先 `read`，所以这条同时验证"读路径不阻断更新"。
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:many": null,
+                    "runtime:aux": null,
+                    "runtime:junk": null,
+                    "runtime:numbers": null,
+                    "runtime:ok": null
+                }
+            })),
+        )
+        .expect("删除脏键必须成功");
+        assert!(state.sidebar_tabs.is_empty());
         cleanup(&path);
     }
 
