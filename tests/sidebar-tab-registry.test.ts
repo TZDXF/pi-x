@@ -708,3 +708,80 @@ test("a queued rebind that later gets admitted still writes the new identity key
   scope.stop()
   for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:fillw-${index}`)
 })
+
+// ---- 卸载顺序：先撤销排队请求，再让出名额（复审阻塞项 1）----
+
+test("disposing a held source with a pending new identity leaves no ghost retain", async () => {
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-ghost", sessionFile, project: () => "C:/project" })
+  })
+  const runtimeKey = api.tabKey.value
+  expect(runtimeKey).toBe("runtime:rt-ghost")
+
+  // 本实例持有的空 runtime 源组 + 23 个 holder = 24 组全部被挂载持有。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:gh-${index}`)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  // 换身份键：腾不出名额，只能排队。
+  sessionFile.value = "sessions/ghost.jsonl"
+  await nextTick()
+  const fileKey = api.tabKey.value
+  expect(fileKey).not.toBe(runtimeKey)
+  expect(pendingRetainCount()).toBe(1)
+
+  // 卸载。`releaseGroup` 会**同步 flush** 排队队列，所以撤销必须发生在它之前：
+  // 否则释放的那一次 flush 就把本实例排队的新键准入进来，留下无人释放的 retain=1。
+  scope.stop()
+  expect(pendingRetainCount()).toBe(0)
+  expect(hasGroup(fileKey)).toBe(false)
+  expect(retainedGroupCount(fileKey)).toBe(0)
+
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:gh-${index}`)
+})
+
+// ---- 延迟路径不得无条件写回（空源必须不写盘，复审阻塞项 2）----
+
+test("deferred empty-source rebind never persists or deletes a file key", async () => {
+  const persistLog: Array<[string, unknown]> = []
+  fakeWorkspace.sidebarTabs = {}
+  fakeWorkspace.persistSidebarTabs = (key, value) => {
+    persistLog.push([key, value])
+    if (value === null) delete fakeWorkspace.sidebarTabs[key]
+    else fakeWorkspace.sidebarTabs[key] = value as { kinds: string[]; active: number }
+  }
+
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-empty-src", sessionFile, project: () => "C:/project" })
+  })
+  const runtimeKey = api.tabKey.value
+  // 源为空：用户没在草稿会话里加过 Tab。
+  expect(tabsFor(runtimeKey)).toEqual([])
+
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) {
+    retainGroup(`runtime:es-${index}`)
+  }
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  sessionFile.value = "sessions/empty-src.jsonl"
+  await nextTick()
+  const fileKey = api.tabKey.value
+  expect(pendingRetainCount()).toBe(1)
+
+  // 名额空出 → 延迟准入。空源不得写回：写 null 会把磁盘上已有的文件键载荷删掉。
+  releaseGroup("runtime:es-0")
+  await nextTick()
+  expect(hasGroup(fileKey)).toBe(true)
+  // 空源不得产生任何一次针对新键的落盘调用（尤其不能是 `persistSidebarTabs(fileKey, null)`）。
+  expect(persistLog.filter(([key, value]) => key === fileKey && value === null)).toHaveLength(0)
+  expect(persistLog.filter(([key]) => key === fileKey)).toHaveLength(0)
+  expect(fakeWorkspace.sidebarTabs[fileKey]).toBeUndefined()
+
+  scope.stop()
+  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:es-${index}`)
+})

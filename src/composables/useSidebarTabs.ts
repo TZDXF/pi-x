@@ -173,9 +173,10 @@ export function useSidebarTabs(options: {
       next,
       () => {
         adoptKey(next)
+        // 写回只由 `applyRebind` 内部按"源非空"决定：这里不能再无条件 `persist(next)`，
+        // 否则空 runtime 源 + 名额空出这条路径会写出 null，把磁盘上已有的文件键载荷删掉。
         applyRebind(previous, next)
         if (previousHold && previousHold !== next) releaseGroup(previousHold)
-        persist(next)
         pruneForCurrentGroup()
       },
       owner,
@@ -197,10 +198,13 @@ export function useSidebarTabs(options: {
   // 释放按本实例的记录走，不按"当前键"（见 `heldKey`）。
   onScopeDispose(() => {
     markGroupDetached(tabKey.value)
-    if (heldKey) releaseGroup(heldKey)
-    // 按**实例**撤销排队请求：身份键可能变过，只撤当前键会留下已卸载实例的旧键请求，
-    // 名额空出后给它建组、retain=1 且无人释放 → 永久占名额。
+    // **顺序不可颠倒**：`releaseGroup` 会同步 flush 排队队列，若先 release 再撤销，
+    // 本实例刚让出名额的那一次 flush 会把自己排队中的新身份键准入进去 ——
+    // 已卸载实例于是留下 retain=1 的幽灵组（无人释放，永久占名额）。
+    // 先声明"本实例不再要了"（撤销它排队过的所有键），再让出名额。
+    // 按**实例**撤销：身份键可能变过，只撤当前键会留下旧键请求。
     dropPendingRetain(owner)
+    if (heldKey) releaseGroup(heldKey)
     heldKey = null
   })
 
