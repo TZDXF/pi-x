@@ -183,16 +183,20 @@ test("markDetachedTabs only flips terminal rows and reports whether it changed a
 
 // ---- 真实 composable 行为（hydrate 竞态、active 落盘、rebind 不删载荷）----
 
-function setup(project = "C:/project") {
-  fakeWorkspace.sidebarTabs = {}
+function setup(
+  options: { project?: string; runtimeId?: string; sessionFileValue?: string | null; keepDisk?: boolean } = {},
+) {
+  // `keepDisk`：模拟"重启"时复用同一份磁盘载荷，而不是清空。
+  if (!options.keepDisk) fakeWorkspace.sidebarTabs = {}
   fakeWorkspace.persistSidebarTabs = (key, value) => {
     if (value === null) delete fakeWorkspace.sidebarTabs[key]
     else fakeWorkspace.sidebarTabs[key] = value as { kinds: string[]; active: number }
   }
+  const project = options.project ?? "C:/project"
   const workspace = useWorkspaceStore()
   const scope = effectScope()
-  const sessionFile = ref<string | null>(null)
-  const runtimeId = "rt-1"
+  const sessionFile = ref<string | null>(options.sessionFileValue ?? null)
+  const runtimeId = options.runtimeId ?? "rt-1"
   let api!: ReturnType<typeof useSidebarTabs>
   scope.run(() => {
     api = useSidebarTabs({ runtimeId, sessionFile, project: () => project })
@@ -256,4 +260,41 @@ test("unmount through the scope flips terminal tabs to stale", async () => {
   expect(tabsFor(api.tabKey.value)[0]!.stale).toBeUndefined()
   scope.stop()
   expect(tabsFor("runtime:rt-1")[0]!.stale).toBe(true)
+})
+
+test("rebind writes the new identity key immediately when the draft group is non-empty", async () => {
+  // 新会话（草稿态）先加两个 Tab，`sessionFile` 之后才到位。
+  const { workspace, api, sessionFile, scope } = setup()
+  api.add("review")
+  api.add("browser")
+  expect(api.tabKey.value).toBe("runtime:rt-1")
+  expect(workspace.sidebarTabs["runtime:rt-1"]).toEqual({ kinds: ["review", "browser"], active: 1 })
+
+  sessionFile.value = "C:/project/sessions/a.jsonl"
+  await nextTick()
+
+  // 非空源迁移后必须**立即**写新身份键、并清掉旧 runtime 键。
+  // 去掉写回（回到"等下一次侧栏操作"）这一条会红：磁盘上只剩 runtime:rt-1。
+  expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["review", "browser"], active: 1 })
+  expect(workspace.sidebarTabs["runtime:rt-1"]).toBeUndefined()
+
+  // 模拟完整重启：丢掉内存组，只用磁盘载荷重建 —— 两个 Tab 必须还在。
+  dropGroup(KEY)
+  // 重启后 `sessionFile` 一开始就在：键直接是文件身份键，只能靠磁盘载荷恢复。
+  const reloaded = setup({
+    runtimeId: "rt-9",
+    sessionFileValue: "C:/project/sessions/a.jsonl",
+    keepDisk: true,
+  })
+  expect(reloaded.api.tabs.value.map(tab => tab.type)).toEqual(["review", "browser"])
+  reloaded.scope.stop()
+  scope.stop()
+})
+
+test("rebind keeps a live terminal alive instead of faking its death", () => {
+  // 迁移只是换键：`ChatView` 没有卸载、shell 还活着，不能借落盘载荷重建把它标成 stale。
+  addTab(RUNTIME_KEY, "terminal")
+  expect(tabsFor(RUNTIME_KEY)[0]!.stale).toBeUndefined()
+  rebindGroup(RUNTIME_KEY, KEY)
+  expect(tabsFor(KEY)[0]!.stale).toBeUndefined()
 })

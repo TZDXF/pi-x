@@ -104,11 +104,3 @@ export function persistedFromTabs(
 export function sidebarTabGroupKey(runtimeId: string, sessionFile: string | null | undefined, project: string): string {
   return sessionFile ? `${project}\u0000${sessionFile}` : `runtime:${runtimeId}`
 }
-
-/** 供 `rebind` 使用：把源键上的载荷迁到目标键（目标已有内容时以源为准，与 UI 一致）。 */
-export function mergePersisted(
-  existing: PersistedSidebarTabs | null,
-  incoming: PersistedSidebarTabs | null,
-): PersistedSidebarTabs | null {
-  return incoming ?? existing
-}

@@ -2,7 +2,6 @@ import { reactive } from "vue"
 import {
   MAX_SIDEBAR_TABS,
   markDetachedTabs,
-  mergePersisted,
   normalizePersistedSidebarTabs,
   persistedFromTabs,
   sidebarTabGroupKey,
@@ -134,26 +133,34 @@ export function hydrateGroup(key: string, value: unknown): boolean {
 /**
  * 会话文件首次出现时把 `runtime:<id>` 组的 Tab 迁到文件键（`rebind`）。
  *
- * 两种情形都要处理：
- * - 目标键没有内容 → 直接搬过去；
- * - 目标键已有内容（同一会话在另一实例里也被打开过）→ 以当前内存为准覆盖。
+ * 返回值 = "是否真的带着 Tab 迁过去了"。调用方据此决定要不要**立即**用新身份键
+ * 写回：源非空时不写，磁盘上就只剩 `runtime:` 条目，完整重启后 Tab 全丢
+ * （不能等下一次侧栏操作才顺带写）。
+ *
+ * - 源不存在/为空 → 不动目标，也不把新键标记 hydrated。磁盘条目可能比 sessionFile
+ *   先到，把新键标成 hydrated 会让随后到达的落盘记录被永久挡住；此时写 null 也会
+ *   把文件键上已有的载荷删掉。
+ * - 源非空 → 以源为准搬到目标（用户刚在草稿会话里操作过）。
+ *   直接搬内存状态、不经落盘载荷重建：重建会把 terminal 一律标成 `stale`，而这条
+ *   路径上 `ChatView` 并没有卸载、shell 还活着，标失联就是伪造死亡。
  */
-export function rebindGroup(fromKey: string, toKey: string) {
-  if (fromKey === toKey) return
-  hydratedKeys.delete(fromKey)
+export function rebindGroup(fromKey: string, toKey: string): boolean {
+  if (fromKey === toKey) return false
   const source = sidebarTabRegistry.get(fromKey)
-  const target = sidebarTabRegistry.get(toKey)
-  if (!source) {
-    // 源没有状态：目标保留原位（可能是更早的实例留下的）。
-    return
-  }
-  const merged = mergePersisted(
-    target ? persistedFromTabs(target.tabs, target.activeId) : null,
-    persistedFromTabs(source.tabs, source.activeId),
-  )
+  hydratedKeys.delete(fromKey)
+  if (!source) return false
   sidebarTabRegistry.delete(fromKey)
-  if (merged) hydrateGroup(toKey, merged)
-  else sidebarTabRegistry.delete(toKey)
+  if (!source.tabs.length) return false
+  const target = sidebarTabRegistry.get(toKey)
+  const state: GroupState = target ?? { tabs: [], activeId: null, nextId: 1 }
+  if (source.tabs.length) {
+    state.tabs = source.tabs
+    state.activeId = source.activeId
+    state.nextId = Math.max(state.nextId, source.nextId)
+  }
+  sidebarTabRegistry.set(toKey, state)
+  hydratedKeys.add(toKey)
+  return true
 }
 
 /**

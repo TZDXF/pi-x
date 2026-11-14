@@ -58,8 +58,8 @@ export function useSidebarTabs(options: {
   })
 
   /** 把当前 kind 顺序与 active 写进 workspace.json；空列表写入方会删除该条目。 */
-  function persist() {
-    workspace.persistSidebarTabs(tabKey.value, persistedFor(tabKey.value))
+  function persist(key = tabKey.value) {
+    workspace.persistSidebarTabs(key, persistedFor(key))
   }
 
   /**
@@ -87,9 +87,17 @@ export function useSidebarTabs(options: {
   const stopKeyWatch = watch(tabKey, (next, previous) => {
     if (!next || !previous || next === previous) return
     // 会话首次落盘：把 runtime 键上的 Tab 迁到文件键。
-    // 注意：这里**不写回**——此时 `persistedFor(next)` 可能为 null（文件键还没内容），
-    // 写回会把磁盘上已有的恢复载荷删掉。迁移后的下一次真实变更才会写回。
-    if (previous.startsWith("runtime:")) rebindGroup(previous, next)
+    if (previous.startsWith("runtime:")) {
+      // 源非空 = 用户已经在草稿会话里加过 Tab。此时必须**立即**用新身份键写回并清掉
+      // 旧 `runtime:` 条目，否则磁盘上只有草稿键，完整重启后 Tab 全丢
+      // （不能等下一次侧栏操作才顺带写）。
+      // 源为空则不写回：文件键可能已有磁盘载荷，写 null 会把它删掉；
+      // 也不能把新键标成 hydrated，否则随后到达的落盘记录永远补不进来。
+      if (rebindGroup(previous, next)) {
+        workspace.persistSidebarTabs(previous, null)
+        persist(next)
+      }
+    }
     // 新键还没有内容时，补一次 hydrate（不从磁盘删任何东西）。
     hydrateFromPersisted(next)
   })
