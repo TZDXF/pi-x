@@ -163,7 +163,8 @@ export default {
     newTerminal: "Terminal",
     terminalLost: "The terminal process exited with the previous run; reopen it to continue",
     terminalRestart: "Reopen terminal",
-    groupLimitReached: "Too many conversations are open at once ({count} sidebar limit). Close some before opening the panel.",
+    groupLimitReached:
+      "Too many conversations are open at once ({count} sidebar limit). Close some before opening the panel.",
     limitReached: "This conversation already has {count} sidebar tabs. Close one before adding another.",
     newBrowser: "Browser",
   },

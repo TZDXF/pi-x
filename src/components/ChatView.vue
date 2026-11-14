@@ -124,7 +124,8 @@ const {
   // 上限在注册表 `addTab` 上硬拦（不是写盘时截断）：界面显示成功、重启静默丢 Tab 不可接受。
   onTabLimitReached: () => ui.pushToast(t("sidebarTabs.limitReached", { count: sidebarTabLimit }), "warning"),
   // 组数准入失败时必须告知：静默不建组会被当成"侧栏打不开"。
-  onGroupLimitReached: () => ui.pushToast(t("sidebarTabs.groupLimitReached", { count: MAX_SIDEBAR_TAB_GROUPS }), "warning"),
+  onGroupLimitReached: () =>
+    ui.pushToast(t("sidebarTabs.groupLimitReached", { count: MAX_SIDEBAR_TAB_GROUPS }), "warning"),
 })
 const reviewFocus = ref<string | null>(null)
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)

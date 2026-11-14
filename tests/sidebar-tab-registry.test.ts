@@ -511,9 +511,7 @@ test("unmounting the mounted holders admits the payload that was denied entry", 
   for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 2; index++) {
     const scope = effectScope()
     const sessionFile = ref<string | null>(`sessions/h${index}.jsonl`)
-    scope.run(() =>
-      useSidebarTabs({ runtimeId: `rt-hold-${index}`, sessionFile, project: () => "C:/project" }),
-    )
+    scope.run(() => useSidebarTabs({ runtimeId: `rt-hold-${index}`, sessionFile, project: () => "C:/project" }))
     scopes.push(scope)
   }
   // 先把空闲名额用完，再让带载荷的会话被准入拒绝（载荷进 pendingHydrate）。
