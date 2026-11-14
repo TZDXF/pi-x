@@ -13,7 +13,13 @@
 //! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
 mod activity;
+pub mod aux_launch;
 mod child;
+#[cfg(test)]
+mod gateway_tests;
+mod policy;
+
+pub use policy::RuntimePolicy;
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -83,6 +89,8 @@ pub struct ProcessState {
     /// Incremented on every spawn; lets stale readers detect they are dead.
     generation: Arc<AtomicU64>,
     activity: Arc<Mutex<activity::RuntimeActivity>>,
+    /// 运行策略：`Main` 是既有会话默认值；aux 由 spawn 时显式写入，不从命令读取。
+    policy: RuntimePolicy,
 }
 
 impl ProcessState {
@@ -297,14 +305,25 @@ pub async fn spawn(
     mut extra_args: Vec<String>,
     workspace_manifest: Option<String>,
     runtime_id: Option<String>,
+    policy: RuntimePolicy,
 ) -> Result<(), String> {
     // P1 远程分支（契约 §3.1 第 7 条）：不注入 builtin extensions——它们物化的
     // 是本地文件路径（builtin_extensions.rs），对远端无效；PIX_WORKSPACE 同理不设。
-    if matches!(program, SpawnProgram::LocalPi(_)) {
+    if policy.is_aux() {
+        // aux 只用规格里的固定 argv（docs/aux-chat-spec.md §1），不叠加 PiX 扩展；
+        // `-e` 白名单由调用方构造后经 extra_args 传入。
+    } else if matches!(program, SpawnProgram::LocalPi(_)) {
         extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
         if workspace_manifest.is_some() {
             extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
         }
+    }
+    if policy.ephemeral() && session_file.is_some() {
+        // `--session` 与 `--no-session` 互斥：aux 必须无文件。
+        return Err(crate::errors::pix_error(
+            "auxSessionForbidden",
+            "辅助对话不接受会话文件",
+        ));
     }
     let id = runtime_id.unwrap_or_else(|| "default".into());
     // Probe from a snapshot: each probe can take up to PROBE_TIMEOUT, so the
@@ -360,6 +379,7 @@ pub async fn spawn(
     let process = Arc::new(ProcessState {
         runtime_id: id.clone(),
         project: Arc::new(Mutex::new(project.into())),
+        policy,
         ..Default::default()
     });
     child::process_spawn(
@@ -383,6 +403,8 @@ pub async fn request(
     runtime_id: Option<&str>,
 ) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
+    // M0：策略判定在统一入口，rewind_prompt 特判必须在其之后。
+    process.policy.guard_request(&command)?;
     if command["type"] == "rewind_prompt" {
         return crate::sessions::edit::rewind_prompt(&process, &command).await;
     }
@@ -420,6 +442,7 @@ pub async fn notify(
     runtime_id: Option<&str>,
 ) -> Result<(), String> {
     let process = state.process(runtime_id).await?;
+    process.policy.guard_notify(&command)?;
     process_notify(&process, command).await
 }
 pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
@@ -435,6 +458,13 @@ pub(crate) async fn session_endpoint(
     runtime_id: &str,
 ) -> Result<Option<crate::ssh::RemoteEndpoint>, String> {
     let process = state.process(Some(runtime_id)).await?;
+    // aux 无 session 文件，复制/导出会话属于结构类越界操作。
+    if process.policy.is_aux() {
+        return Err(crate::errors::pix_error(
+            "auxRpcDenied",
+            "辅助对话不支持会话文件操作",
+        ));
+    }
     let guard = process.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
     Ok(inner.remote.as_ref().map(|remote| remote.endpoint.clone()))
@@ -492,6 +522,10 @@ pub(crate) async fn set_session_name(
 ) -> Result<Option<String>, String> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     for process in processes {
+        // 内部 rename 绕过 rpc::request，这里复用同一策略：aux 永不收到 set_session_name。
+        if process.policy.is_aux() {
+            continue;
+        }
         if !child::process_running(&process).await {
             continue;
         }

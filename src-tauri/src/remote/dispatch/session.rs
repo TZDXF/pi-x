@@ -29,6 +29,22 @@ pub(super) async fn handle(
                 Ok(Value::Null)
             }
             "rpc_sessions" => Ok(json!(rpc::list(&state).await)),
+            // aux 的 spawn 走独立命令：策略固定为 Aux，客户端无法经 rpc_spawn 翻转。
+            "aux_spawn" => {
+                crate::commands::pi_aux::aux_spawn(
+                    app.clone(),
+                    state.clone(),
+                    text(a, "project")?,
+                    text(a, "runtimeId")?,
+                    text(a, "provider")?,
+                    text(a, "model")?,
+                    a["thinking"].as_str().map(str::to_owned),
+                    serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                )
+                .await?;
+                Ok(Value::Null)
+            }
             "rpc_running" => Ok(json!(rpc::running(&state, a["runtimeId"].as_str()).await)),
             "rpc_kill" => {
                 rpc::kill(&state, a["runtimeId"].as_str()).await?;

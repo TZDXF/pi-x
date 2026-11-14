@@ -147,8 +147,16 @@ fn drop_oversized_record(buf: &mut Vec<u8>, runtime_id: &str, stream: &str) {
     }
 }
 
-fn build_spawn_args(session_file: Option<&str>, extra_args: Vec<String>) -> Vec<String> {
+fn build_spawn_args(
+    session_file: Option<&str>,
+    extra_args: Vec<String>,
+    ephemeral: bool,
+) -> Vec<String> {
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
+    if ephemeral {
+        // aux：`--no-session` 不落盘；与 `--session` 互斥由 rpc::spawn 前置校验。
+        args.push("--no-session".into());
+    }
     if let Some(sf) = session_file {
         args.push("--session".into());
         args.push(sf.into());
@@ -228,7 +236,11 @@ async fn process_spawn_impl(
 
     let mut child = match program {
         SpawnProgram::LocalPi(pi) => {
-            let args = build_spawn_args(session_file.as_deref(), extra_args);
+            let args = build_spawn_args(
+                session_file.as_deref(),
+                extra_args,
+                state.policy.ephemeral(),
+            );
 
             // Prefer the resolved launcher (node + cli.js); never route npm .cmd
             // shims through cmd.exe — its shim trick can exit silently under pipes.
@@ -1206,6 +1218,7 @@ mod spawn_args_tests {
                 "--thinking".into(),
                 "medium".into(),
             ],
+            false,
         );
         assert_eq!(
             args,
@@ -1226,8 +1239,28 @@ mod spawn_args_tests {
 
     #[test]
     fn omits_session_flag_without_session_file() {
-        let args = build_spawn_args(None, vec!["--approve".into()]);
+        let args = build_spawn_args(None, vec!["--approve".into()], false);
         assert_eq!(args, vec!["--mode", "rpc", "--approve"]);
+    }
+
+    #[test]
+    fn ephemeral_adds_no_session_before_extra_args() {
+        let args = build_spawn_args(
+            None,
+            vec!["--no-extensions".into(), "--provider".into(), "home".into()],
+            true,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--mode",
+                "rpc",
+                "--no-session",
+                "--no-extensions",
+                "--provider",
+                "home",
+            ]
+        );
     }
 }
 
@@ -1338,6 +1371,7 @@ mod mock_ssh_spawn_tests {
             navigation: Mutex::new(()),
             generation: Arc::new(AtomicU64::new(0)),
             activity: Default::default(),
+            policy: Default::default(),
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
@@ -1473,6 +1507,7 @@ mod mock_ssh_spawn_tests {
                 navigation: Mutex::new(()),
                 generation: Arc::new(AtomicU64::new(0)),
                 activity: Default::default(),
+                policy: Default::default(),
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
