@@ -161,7 +161,7 @@ export default {
     newTerminal: "终端",
     terminalLost: "终端进程已随上次运行退出，需要重新打开",
     terminalRestart: "重新打开终端",
-    groupLimitReached: "本机同时打开的会话过多（侧栏上限 {count} 个），请先关闭部分会话后再打开侧栏。",
+    groupLimitReached: "同时打开侧栏的会话过多，请先关闭一个会话的侧栏标签页再试。",
     limitReached: "本会话的侧栏标签页已达 {count} 个上限，请先关闭一个再添加。",
     newBrowser: "浏览器",
   },
