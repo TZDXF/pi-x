@@ -672,79 +672,242 @@ test("unmounting a queued instance cancels every key it queued, not just the cur
   for (const scopeItem of holders) scopeItem.stop()
 })
 
-// ---- 延迟准入必须重跑 M1 的 rebind 写回（复审阻塞项 2）----
+// ---- 满额时 rebind 复用原名额（复审阻塞项：换身份不是新建组）----
 
-test("a queued rebind that later gets admitted still writes the new identity key and clears the runtime one", async () => {
-  // 先在还有名额时挂载并加 Tab：runtime 键的组真实存在（这是"runtime 源已有 Tab"）。
+test("a full registry still rebinds a draft group onto its file identity", async () => {
+  // 质量工程师的构造：23 个其它挂载 + 一个有 terminal 的草稿组，sessionFile 到达。
+  const others: ReturnType<typeof effectScope>[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) {
+    const otherFile = ref<string | null>(`sessions/other${index}.jsonl`)
+    const otherScope = effectScope()
+    otherScope.run(() =>
+      useSidebarTabs({ runtimeId: `rt-other-${index}`, sessionFile: otherFile, project: () => "C:/project" }),
+    )
+    others.push(otherScope)
+  }
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS - 1)
+
+  fakeWorkspace.sidebarTabs = {}
   const scope = effectScope()
   const sessionFile = ref<string | null>(null)
   let api!: ReturnType<typeof useSidebarTabs>
   scope.run(() => {
-    api = useSidebarTabs({ runtimeId: "rt-late-write", sessionFile, project: () => "C:/project" })
+    api = useSidebarTabs({ runtimeId: "rt-draft", sessionFile, project: () => "C:/project" })
   })
   const runtimeKey = api.tabKey.value
-  expect(runtimeKey).toBe("runtime:rt-late-write")
-  expect(api.add("review")).toBeTruthy()
-  expect(api.add("browser")).toBeTruthy()
-
-  // 把名额占满（其余组全被挂载持有）→ 该实例换键时只能排队。
-  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:fillw-${index}`)
+  expect(runtimeKey).toBe("runtime:rt-draft")
+  expect(api.add("terminal")).toBeTruthy()
+  // 现在满额（24 组），且这个草稿组被持有。
   expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  expect(tabsFor(runtimeKey)[0]!.stale).toBeUndefined()
+  expect(retainedGroupCount(runtimeKey)).toBe(1)
 
-  sessionFile.value = "sessions/late-write.jsonl"
-  await nextTick()
-  const fileKey = api.tabKey.value
-  expect(pendingRetainCount()).toBe(1)
-
-  // 名额空出 → 延迟准入 → 必须与立即路径跑**同一份** rebind：
-  // 新键有内容、落盘写新键、旧 runtime 条目被清。
-  releaseGroup("runtime:fillw-0")
-  await nextTick()
-  expect(hasGroup(fileKey)).toBe(true)
-  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["review", "browser"])
-  expect(fakeWorkspace.sidebarTabs[fileKey]).toEqual({ kinds: ["review", "browser"], active: 1 })
-  expect(fakeWorkspace.sidebarTabs[runtimeKey]).toBeUndefined()
-
-  scope.stop()
-  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:fillw-${index}`)
-})
-
-// ---- 卸载顺序：先撤销排队请求，再让出名额（复审阻塞项 1）----
-
-test("disposing a held source with a pending new identity leaves no ghost retain", async () => {
-  const scope = effectScope()
-  const sessionFile = ref<string | null>(null)
-  let api!: ReturnType<typeof useSidebarTabs>
-  scope.run(() => {
-    api = useSidebarTabs({ runtimeId: "rt-ghost", sessionFile, project: () => "C:/project" })
-  })
-  const runtimeKey = api.tabKey.value
-  expect(runtimeKey).toBe("runtime:rt-ghost")
-
-  // 本实例持有的空 runtime 源组 + 23 个 holder = 24 组全部被挂载持有。
-  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:gh-${index}`)
-  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
-
-  // 换身份键：腾不出名额，只能排队。
-  sessionFile.value = "sessions/ghost.jsonl"
+  sessionFile.value = "C:/project/sessions/draft.jsonl"
   await nextTick()
   const fileKey = api.tabKey.value
   expect(fileKey).not.toBe(runtimeKey)
+
+  // 换身份是同一组换键：满额也必须成功，且不排队。
+  expect(pendingRetainCount()).toBe(0)
+  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["terminal"])
+  // 活 terminal 没被伪造死亡。
+  expect(tabsFor(fileKey)[0]!.stale).toBeUndefined()
+  // 新 identity 键已落盘、旧 `runtime:` 条目被清。
+  expect(fakeWorkspace.sidebarTabs[fileKey]).toEqual({ kinds: ["terminal"], active: 0 })
+  expect(fakeWorkspace.sidebarTabs[runtimeKey]).toBeUndefined()
+  // 持有配平：新键 1、旧键 0；组数仍 ≤24。
+  expect(retainedGroupCount(fileKey)).toBe(1)
+  expect(retainedGroupCount(runtimeKey)).toBe(0)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  scope.stop()
+  for (const other of others) other.stop()
+})
+
+test("a rebind whose source is empty still waits for a slot instead of force-writing", async () => {
+  // 空源（没有 Tab 可搬）才走常规准入：满额时排队，名额空出后再 hydrate，
+  // 且**不写回**（避免删掉文件键上已有的载荷）。
+  const others: ReturnType<typeof effectScope>[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) {
+    const otherFile = ref<string | null>(`sessions/empty${index}.jsonl`)
+    const otherScope = effectScope()
+    otherScope.run(() =>
+      useSidebarTabs({ runtimeId: `rt-empty-${index}`, sessionFile: otherFile, project: () => "C:/project" }),
+    )
+    others.push(otherScope)
+  }
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  const emptySourceKey = "C:/project\u0000C:/project/sessions/empty-source.jsonl"
+  fakeWorkspace.sidebarTabs = {
+    [emptySourceKey]: { kinds: ["review", "browser"], active: 1 },
+  } as unknown as typeof fakeWorkspace.sidebarTabs
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-empty-src", sessionFile, project: () => "C:/project" })
+  })
+  sessionFile.value = "C:/project/sessions/empty-source.jsonl"
+  await nextTick()
+  const fileKey = api.tabKey.value
+  // 空源没有内容可搬：不写回（磁盘上原有的载荷必须还在）。
+  expect(fakeWorkspace.sidebarTabs[fileKey]).toEqual({ kinds: ["review", "browser"], active: 1 })
+  expect(tabsFor(fileKey)).toEqual([])
+
+  // 名额空出 → 排队者原地自愈，载荷补进内存。
+  others.shift()!.stop()
+  await nextTick()
+  expect(hasGroup(fileKey)).toBe(true)
+  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["review", "browser"])
+  expect(retainedGroupCount(fileKey)).toBe(1)
+
+  scope.stop()
+  for (const other of others) other.stop()
+  fakeWorkspace.sidebarTabs = {}
+})
+
+test("a rejected addTab never marks the key hydrated, so a late payload still lands", () => {
+  // 24 组全部被持有 → 第 25 个键 addTab 因容量准入失败返回 null。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) retainGroup(`runtime:full-${index}`)
+
+  const lateKey = "runtime:rt-late-payload"
+  expect(addTab(lateKey, "review")).toBeNull()
+  // 关键：没有组就不能标 hydrated，否则该会话磁盘上的 Tab 会被 `isHydrated` 永久挡住。
+  expect(hasGroup(lateKey)).toBe(false)
+  expect(isHydrated(lateKey)).toBe(false)
+
+  releaseGroup("runtime:full-0")
+  expect(hydrateGroup(lateKey, { kinds: ["files", "browser"], active: 1 })).toBe(true)
+  expect(tabsFor(lateKey).map(tab => tab.type)).toEqual(["files", "browser"])
+  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS; index++) releaseGroup(`runtime:full-${index}`)
+})
+
+test("an addTab rejection on a session with no slot still admits its late payload", async () => {
+  // 24 组全被持有，第 25 个窗格挂载（排队）→ add 返回 null（不是标 hydrated）。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) retainGroup(`runtime:busy-${index}`)
+  fakeWorkspace.sidebarTabs = {
+    "runtime:rt-waiting": { kinds: ["files", "browser"], active: 1 },
+  } as unknown as typeof fakeWorkspace.sidebarTabs
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-waiting", sessionFile, project: () => "C:/project" })
+  })
+  const key = api.tabKey.value
+  expect(pendingRetainCount()).toBe(1)
+  expect(isHydrated(key)).toBe(false)
+  expect(api.add("review")).toBeNull()
+
+  // 让出名额：排队的挂载自愈，磁盘上的两个 Tab 恢复出来，并被 retain 住。
+  releaseGroup("runtime:busy-0")
+  await nextTick()
+  expect(tabsFor(key).map(tab => tab.type)).toEqual(["files", "browser"])
+  expect(retainedGroupCount(key)).toBe(1)
+
+  // 再顶一次 LRU 压力，恢复出来的组不得被淘汰。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS + 2; index++) retainGroup(`runtime:press-${index}`)
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  expect(hasGroup(key)).toBe(true)
+
+  scope.stop()
+  fakeWorkspace.sidebarTabs = {}
+  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS; index++) releaseGroup(`runtime:busy-${index}`)
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS + 2; index++) releaseGroup(`runtime:press-${index}`)
+})
+
+test("mixed panes + dormant groups + a payload pane: final state keeps every live pane", async () => {
+  // 多 pane（持有）+ 休眠组（闲置）+ 携载荷新 pane：终态必须每个活挂载 retain=1 且未被淘汰。
+  const panes: ReturnType<typeof effectScope>[] = []
+  const paneKeys: string[] = []
+  for (let index = 0; index < 6; index++) {
+    const paneScope = effectScope()
+    const paneFile = ref<string | null>(`sessions/pane${index}.jsonl`)
+    let api!: ReturnType<typeof useSidebarTabs>
+    paneScope.run(() => {
+      api = useSidebarTabs({ runtimeId: `rt-pane-${index}`, sessionFile: paneFile, project: () => "C:/project" })
+    })
+    api.add(index % 2 ? "terminal" : "review")
+    panes.push(paneScope)
+    paneKeys.push(api.tabKey.value)
+  }
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - panes.length; index++)
+    addTab(`runtime:dormant-${index}`, "review")
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+
+  fakeWorkspace.sidebarTabs = {
+    "runtime:rt-payload": { kinds: ["files", "browser"], active: 1 },
+  } as unknown as typeof fakeWorkspace.sidebarTabs
+  const payloadScope = effectScope()
+  const payloadFile = ref<string | null>(null)
+  let payloadApi!: ReturnType<typeof useSidebarTabs>
+  payloadScope.run(() => {
+    payloadApi = useSidebarTabs({ runtimeId: "rt-payload", sessionFile: payloadFile, project: () => "C:/project" })
+  })
+  await nextTick()
+
+  // 释放休眠组：终态只剩"仍有挂载"的组。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - panes.length; index++) dropGroup(`runtime:dormant-${index}`)
+  await nextTick()
+
+  for (const [index, key] of paneKeys.entries()) {
+    expect(hasGroup(key), `pane ${index} 被淘汰了`).toBe(true)
+    expect(retainedGroupCount(key)).toBe(1)
+    expect(tabsFor(key).map(tab => tab.type)).toEqual([index % 2 ? "terminal" : "review"])
+  }
+  expect(payloadApi.tabs.value.map(tab => tab.type)).toEqual(["files", "browser"])
+  expect(retainedGroupCount("runtime:rt-payload")).toBe(1)
+  // 终态不变量：组数 ≤24，且没有待补载荷 / 待准入挂载。
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+  expect(pendingHydrateSizeForTest()).toBe(0)
+  expect(pendingRetainCount()).toBe(0)
+
+  for (const pane of panes) pane.stop()
+  payloadScope.stop()
+  fakeWorkspace.sidebarTabs = {}
+})
+
+// ---- 卸载顺序：先撤销排队请求，再让出名额（非 runtime 换键才会排队）----
+
+test("disposing a mount whose new identity is still queued leaves no ghost retain", async () => {
+  const scope = effectScope()
+  const project = ref("//host/proj/alias")
+  const sessionFile = ref<string | null>("sessions/ghost.jsonl")
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-ghost", sessionFile, project: () => project.value })
+  })
+  const aliasKey = api.tabKey.value
+  expect(api.add("review")).toBeTruthy()
+
+  // 24 组全部被挂载持有（含上面这组）。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:gh-${index}`)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  // SSH realpath 回绑式换键（不是 `runtime:` → 文件键那种同组改名）：新键要名额，
+  // 满额时只能排队。
+  project.value = "//host/proj"
+  await nextTick()
+  const reboundKey = api.tabKey.value
+  expect(reboundKey).not.toBe(aliasKey)
   expect(pendingRetainCount()).toBe(1)
 
   // 卸载。`releaseGroup` 会**同步 flush** 排队队列，所以撤销必须发生在它之前：
   // 否则释放的那一次 flush 就把本实例排队的新键准入进来，留下无人释放的 retain=1。
   scope.stop()
   expect(pendingRetainCount()).toBe(0)
-  expect(hasGroup(fileKey)).toBe(false)
-  expect(retainedGroupCount(fileKey)).toBe(0)
+  expect(retainedGroupCount(reboundKey)).toBe(0)
+  expect(retainedGroupCount(aliasKey)).toBe(0)
 
   for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:gh-${index}`)
+  // 名额空出后也不得为已卸载实例建组。
+  expect(hasGroup(reboundKey)).toBe(false)
 })
 
-// ---- 延迟路径不得无条件写回（空源必须不写盘，复审阻塞项 2）----
+// ---- 空源换键不得写盘：源键被丢弃后名额空出，立刻原地准入 ----
 
-test("deferred empty-source rebind never persists or deletes a file key", async () => {
+test("an empty-source rebind neither persists nor deletes the file key payload", async () => {
   const persistLog: Array<[string, unknown]> = []
   fakeWorkspace.sidebarTabs = {}
   fakeWorkspace.persistSidebarTabs = (key, value) => {
@@ -763,25 +926,27 @@ test("deferred empty-source rebind never persists or deletes a file key", async 
   // 源为空：用户没在草稿会话里加过 Tab。
   expect(tabsFor(runtimeKey)).toEqual([])
 
-  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) {
-    retainGroup(`runtime:es-${index}`)
-  }
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:es-${index}`)
   expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
 
-  sessionFile.value = "sessions/empty-src.jsonl"
-  await nextTick()
-  const fileKey = api.tabKey.value
-  expect(pendingRetainCount()).toBe(1)
+  const fileKey = "C:/project\u0000C:/project/sessions/empty-src.jsonl"
+  fakeWorkspace.sidebarTabs = {
+    [fileKey]: { kinds: ["review", "browser"], active: 1 },
+  } as unknown as typeof fakeWorkspace.sidebarTabs
 
-  // 名额空出 → 延迟准入。空源不得写回：写 null 会把磁盘上已有的文件键载荷删掉。
-  releaseGroup("runtime:es-0")
+  const writesBefore = persistLog.length
+  sessionFile.value = "C:/project/sessions/empty-src.jsonl"
   await nextTick()
+  expect(api.tabKey.value).toBe(fileKey)
+
+  // 空源没有内容可搬：`rebindGroup` 丢弃空的 runtime 组（于是名额立刻空出），
+  // 新键原地准入并 hydrate 出磁盘载荷 —— 但**不写盘**（写 null 会删掉这份载荷）。
   expect(hasGroup(fileKey)).toBe(true)
-  // 空源不得产生任何一次针对新键的落盘调用（尤其不能是 `persistSidebarTabs(fileKey, null)`）。
-  expect(persistLog.filter(([key, value]) => key === fileKey && value === null)).toHaveLength(0)
-  expect(persistLog.filter(([key]) => key === fileKey)).toHaveLength(0)
-  expect(fakeWorkspace.sidebarTabs[fileKey]).toBeUndefined()
+  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["review", "browser"])
+  expect(retainedGroupCount(fileKey)).toBe(1)
+  expect(persistLog.slice(writesBefore).filter(([key]) => key === fileKey)).toHaveLength(0)
+  expect(fakeWorkspace.sidebarTabs[fileKey]).toEqual({ kinds: ["review", "browser"], active: 1 })
 
   scope.stop()
-  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:es-${index}`)
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:es-${index}`)
 })

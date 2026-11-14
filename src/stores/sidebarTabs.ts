@@ -139,14 +139,21 @@ export function activeIdFor(key: string) {
  * 那会显示成功却在重启后静默丢掉最新一个 Tab。
  */
 export function addTab(key: string, type: SidebarTabKind): number | null {
-  hydratedKeys.add(key)
   const state = ensureGroup(key)
-  // 容量准入失败（组数已满且所有组都被挂载持有）：明确拒绝，不超限建组。
+  // 容量准入失败（组数已满且腾不出名额）：明确拒绝，不超限建组。
+  // **不**标记 hydrated：该键仍是"未确定"，迟到的磁盘载荷随后还能补进来
+  // （`hydrateFromPersisted` 会先看 `isHydrated`；这里标了就等于永久挡住它）。
   if (!state) return null
-  if (state.tabs.length >= MAX_SIDEBAR_TABS) return null
+  if (state.tabs.length >= MAX_SIDEBAR_TABS) {
+    // 组已存在 ⇒ 内容确实由这条会话决定过（用户在上面加了 20 条），标记以免旧载荷覆盖。
+    hydratedKeys.add(key)
+    return null
+  }
   const id = state.nextId++
   state.tabs.push({ id, type })
   state.activeId = id
+  // hydrated 只在**真的写进一条 Tab 之后**提交。
+  hydratedKeys.add(key)
   touch(key)
   return id
 }
