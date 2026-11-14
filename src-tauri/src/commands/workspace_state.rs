@@ -32,11 +32,53 @@ pub struct WorkspaceState {
     sidebar_tabs: BTreeMap<String, SidebarTabs>,
 }
 /// 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+///
+/// 反序列化刻意做成**宽容**的：单条记录格式不对（`kinds` 不是数组、项不是字符串、
+/// `active` 是字符串或负数）只按能读出来的部分重建，绝不让整份 `workspace.json`
+/// 解析失败。`active` 因此用有符号类型并在解析期钳成 0（用 `usize` 时磁盘上
+/// 出现 `-1` 会让 `read()` 直接失败，`update()` 也随之失败——用户只能手改文件）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidebarTabs {
     kinds: Vec<String>,
     active: usize,
+}
+
+fn lenient_sidebar_tabs(value: &serde_json::Value) -> SidebarTabs {
+    // 顺序很重要：**先过滤未知 kind、再限额**。反过来（先 take 再过滤）会在
+    // "前 20 个全是 aux/未知、合法 kind 在后面"时把合法项整批丢掉，直接丢数据。
+    let kinds = value
+        .get("kinds")
+        .and_then(|kinds| kinds.as_array())
+        .map(|kinds| {
+            kinds
+                .iter()
+                .filter_map(|kind| kind.as_str().map(str::to_owned))
+                .filter(|kind| SIDEBAR_TAB_KINDS.contains(&kind.as_str()))
+                .take(SIDEBAR_TAB_LIMIT)
+                .collect()
+        })
+        .unwrap_or_default();
+    let active = match value.get("active") {
+        Some(serde_json::Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value.trunc() as i64))
+            .unwrap_or(0),
+        _ => 0,
+    };
+    SidebarTabs { kinds, active: active.max(0) as usize }
+}
+
+impl<'de> Deserialize<'de> for SidebarTabs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 非对象（字符串/数组/null）当作空记录，同样不会让整份状态解析失败；
+        // 空记录会在 `normalize` 里被当作"没有可恢复内容"丢掉。
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(lenient_sidebar_tabs(&value))
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -647,6 +689,104 @@ mod tests {
         }
     }
 
+    /// 先过滤未知 kind、再限额：20 个 `aux` 打头、合法 kind 在后的载荷，合法项必须留下。
+    ///
+    /// 反过来的顺序（先 `take(20)` 再过滤）会把后面 20 个 `review` 全截掉 → 整组消失，
+    /// 这是真实数据丢失，不只是"顺序口味"。
+    #[test]
+    fn sidebar_tabs_filter_unknown_kinds_before_the_limit() {
+        let path = path();
+        let mut kinds: Vec<&str> = std::iter::repeat("aux").take(SIDEBAR_TAB_LIMIT).collect();
+        kinds.extend(std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT));
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { "runtime:mixed": { "kinds": kinds, "active": 0 } }
+            })),
+        )
+        .unwrap();
+        let kept = &state.sidebar_tabs["runtime:mixed"];
+        assert_eq!(kept.kinds.len(), SIDEBAR_TAB_LIMIT, "总量仍受 20 条上限约束");
+        assert!(
+            kept.kinds.iter().all(|kind| kind == "review"),
+            "合法的 review 必须按原顺序全部留下，实测: {:?}",
+            kept.kinds
+        );
+        cleanup(&path);
+    }
+
+    /// 负数/越界 `active` 与超限 kinds：反序列化与 normalize 都必须局部净化。
+    #[test]
+    fn sidebar_tabs_negative_active_deserializes_and_clamps_to_zero() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:neg": { "kinds": ["review", "files"], "active": -1 },
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": 99
+                    }
+                }
+            })),
+        )
+        .unwrap();
+        assert_eq!(state.sidebar_tabs["runtime:neg"].active, 0);
+        let many = &state.sidebar_tabs["runtime:many"];
+        assert_eq!(many.kinds.len(), SIDEBAR_TAB_LIMIT, "超限必须截断而不是拒绝写入");
+        assert_eq!(many.active, SIDEBAR_TAB_LIMIT - 1);
+        cleanup(&path);
+    }
+
+    /// 被污染的 workspace.json：读路径必须能读出其余状态，且删除脏键的 patch 必须成功
+    /// （否则用户只能手改文件）。
+    #[test]
+    fn sidebar_tabs_polluted_file_is_readable_and_the_dirty_key_can_be_deleted() {
+        let path = path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "revision": 1,
+                "projects": ["C:/project"],
+                "sidebarTabs": {
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": -1
+                    },
+                    "runtime:aux": { "kinds": ["aux", "mystery"], "active": 0 },
+                    "runtime:junk": "not-an-object",
+                    "runtime:ok": { "kinds": ["review", "browser"], "active": 1 }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let state = read(&path).expect("单条脏记录不得让整份 workspace 读取失败");
+        assert_eq!(state.projects, vec!["C:/project"]);
+        assert_eq!(state.sidebar_tabs["runtime:many"].kinds.len(), SIDEBAR_TAB_LIMIT);
+        assert!(!state.sidebar_tabs.contains_key("runtime:aux"));
+        assert_eq!(state.sidebar_tabs["runtime:ok"].kinds, vec!["review", "browser"]);
+
+        // 删除所有脏键：`update` 内部先 `read`，所以这条同时验证"读路径不阻断更新"。
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:many": null,
+                    "runtime:aux": null,
+                    "runtime:junk": null,
+                    "runtime:ok": null
+                }
+            })),
+        )
+        .expect("删除脏键必须成功");
+        assert!(state.sidebar_tabs.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
     /// **直接 `read()` 回归**：把**原始**含未知/aux/空组的 JSON 写到磁盘（不经
     /// `update()` 过滤），断言 `read()` 接受它、保留合法组、丢弃非法组。
     /// 之前两条测试都从空文件出发走 `update()`，未知组在写盘前就被过滤掉了，

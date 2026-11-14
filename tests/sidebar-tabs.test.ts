@@ -56,7 +56,7 @@ test("sidebar tab state lives in the module-level registry, keyed by session ide
   // TZD-95：Tab 状态从 ChatView 的局部 ref 搬到模块级注册表（切会话/设置页往返都卸载 ChatView）。
   expect(chat).toMatch(/} = useSidebarTabs\(\{/)
   expect(chat).toMatch(/tabs: sidebarTabs,/)
-  expect(chat).toMatch(/add: addSidebarTab,/)  // 直接来自 `useSidebarTabs`
+  expect(chat).toMatch(/add: addSidebarTab,/) // 直接来自 `useSidebarTabs`
   expect(chat).toMatch(/close: closeSidebarTab,/)
   expect(chat).toMatch(/function openReviewAt\(path: string\)/)
   expect(chat).toMatch(/else addSidebarTab\("review"\)/)

@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, vi } from "vitest"
-import { effectScope, nextTick, reactive, ref } from "vue"
+import { effectScope, nextTick, reactive, ref, type Ref } from "vue"
 
 // 真实的 workspace store 会拉到 Tauri transport（node 环境没有 sessionStorage），
 // 这里只替身出本用例需要的最小面：`sidebarTabs` 与 `persistSidebarTabs`。
@@ -11,6 +11,7 @@ vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: () => fakeWorkspace,
 }))
 import {
+  MAX_SIDEBAR_TAB_GROUPS,
   MAX_SIDEBAR_TABS,
   markDetachedTabs,
   normalizePersistedSidebarTabs,
@@ -29,21 +30,26 @@ import {
   markGroupDetached,
   markHydrated,
   persistedFor,
+  pruneGroups,
   rebindGroup,
+  retainedCount,
+  releaseGroup,
   reorderTabs,
+  retainGroup,
   sidebarTabRegistry,
   setActiveTab,
   tabsFor,
 } from "@/stores/sidebarTabs"
 import { useSidebarTabs } from "@/composables/useSidebarTabs"
 const useWorkspaceStore = () => fakeWorkspace
+const RUNTIME_KEY_2 = "runtime:rt-2"
 
 const KEY = "C:/project\u0000C:/project/sessions/a.jsonl"
 const RUNTIME_KEY = "runtime:rt-1"
 
 beforeEach(() => {
   for (const key of [...sidebarTabRegistry.keys()]) sidebarTabRegistry.delete(key)
-  for (const key of [KEY, RUNTIME_KEY]) dropGroup(key)
+  for (const key of [KEY, RUNTIME_KEY, RUNTIME_KEY_2]) dropGroup(key)
 })
 
 test("registry survives component unmount: state lives outside any component instance", () => {
@@ -183,20 +189,16 @@ test("markDetachedTabs only flips terminal rows and reports whether it changed a
 
 // ---- 真实 composable 行为（hydrate 竞态、active 落盘、rebind 不删载荷）----
 
-function setup(
-  options: { project?: string; runtimeId?: string; sessionFileValue?: string | null; keepDisk?: boolean } = {},
-) {
-  // `keepDisk`：模拟"重启"时复用同一份磁盘载荷，而不是清空。
-  if (!options.keepDisk) fakeWorkspace.sidebarTabs = {}
+function setup(project = "C:/project") {
+  fakeWorkspace.sidebarTabs = {}
   fakeWorkspace.persistSidebarTabs = (key, value) => {
     if (value === null) delete fakeWorkspace.sidebarTabs[key]
     else fakeWorkspace.sidebarTabs[key] = value as { kinds: string[]; active: number }
   }
-  const project = options.project ?? "C:/project"
   const workspace = useWorkspaceStore()
   const scope = effectScope()
-  const sessionFile = ref<string | null>(options.sessionFileValue ?? null)
-  const runtimeId = options.runtimeId ?? "rt-1"
+  const sessionFile = ref<string | null>(null)
+  const runtimeId = "rt-1"
   let api!: ReturnType<typeof useSidebarTabs>
   scope.run(() => {
     api = useSidebarTabs({ runtimeId, sessionFile, project: () => project })
@@ -234,22 +236,13 @@ test("changing the active tab is persisted", async () => {
 })
 
 test("rebinding after sessionFile arrives keeps the persisted payload for the new key", async () => {
-  // 时序必须是三步（同一 tick 改载荷 + sessionFile 会被 hydrate 抢先，掩盖旧实现的删除）：
-  // ① 预置文件键载荷；② 挂载并让 runtime 键先消费一次 watcher；③ 再改 sessionFile。
   const { workspace, api, sessionFile } = setup()
+  // 本会话还没加任何 Tab；磁盘上文件键已经有一份更早的载荷（另一个实例写的）。
   expect(api.tabKey.value).toBe("runtime:rt-1")
-
-  // ① 磁盘上文件键已经有一份更早的载荷（另一个实例写的）。
   workspace.sidebarTabs = { [KEY]: { kinds: ["files", "browser"], active: 1 } }
-  await nextTick()
-
-  // ② 读一次 runtime 键的 tabs（空），让 hydrate watcher 以 runtime 键消费掉这次更新。
-  expect(tabsFor("runtime:rt-1")).toEqual([])
-  expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["files", "browser"], active: 1 })
-
-  // ③ 会话落盘：旧实现会在这里 persist(null) 把文件键的载荷删掉。
   sessionFile.value = "C:/project/sessions/a.jsonl"
   await nextTick()
+  // 旧实现会在这里 persist(null) 把文件键的载荷删掉；修好后载荷仍在、且被恢复出来。
   expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["files", "browser"], active: 1 })
   expect(tabsFor(KEY).map(tab => tab.type)).toEqual(["files", "browser"])
 })
@@ -262,39 +255,158 @@ test("unmount through the scope flips terminal tabs to stale", async () => {
   expect(tabsFor("runtime:rt-1")[0]!.stale).toBe(true)
 })
 
-test("rebind writes the new identity key immediately when the draft group is non-empty", async () => {
-  // 新会话（草稿态）先加两个 Tab，`sessionFile` 之后才到位。
-  const { workspace, api, sessionFile, scope } = setup()
+// ---- 复审修复（本轮）：上限前移、写侧白名单、rebind 不伪造失联、组数回收 ----
+
+test("the tab limit is enforced at addTab and reported to the caller", () => {
+  fakeWorkspace.sidebarTabs = {}
+  const scope = effectScope()
+  let limitHits = 0
+  const api = scope.run(() =>
+    useSidebarTabs({
+      runtimeId: "rt-1",
+      sessionFile: ref<string | null>("C:/project/sessions/a.jsonl"),
+      project: () => "C:/project",
+      onTabLimitReached: () => (limitHits += 1),
+    }),
+  )!
+  for (let index = 0; index < MAX_SIDEBAR_TABS; index++) expect(api.add("review")).toBeTruthy()
+  // 第 21 个必须被拒绝：不能"界面成功、写盘截断、重启静默丢最新一个"。
+  expect(api.add("review")).toBeNull()
+  expect(limitHits).toBe(1)
+  expect(tabsFor(KEY)).toHaveLength(MAX_SIDEBAR_TABS)
+  expect(fakeWorkspace.sidebarTabs[KEY].kinds).toHaveLength(MAX_SIDEBAR_TABS)
+  expect(fakeWorkspace.sidebarTabs[KEY].active).toBeLessThan(MAX_SIDEBAR_TABS)
+  scope.stop()
+})
+
+test("write-side whitelist drops aux and unknown kinds before the payload leaves the frontend", () => {
+  const payload = persistedFromTabs(
+    [
+      { id: 1, type: "aux" },
+      { id: 2, type: "review" },
+      { id: 3, type: "mystery" },
+    ] as never,
+    2,
+  )
+  expect(payload).toEqual({ kinds: ["review"], active: 0 })
+})
+
+test("rebind does not fake terminal death while the pane is still mounted", () => {
+  addTab(RUNTIME_KEY, "terminal")
+  expect(tabsFor(RUNTIME_KEY)[0]!.stale).toBeUndefined()
+  rebindGroup(RUNTIME_KEY, KEY)
+  // 迁移只是换键：ChatView 没卸载、shell 还活着，不能标失联。
+  expect(tabsFor(KEY)[0]!.stale).toBeUndefined()
+})
+
+test("group count is capped by LRU eviction, sparing groups that are still mounted", () => {
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:old-${index}`, "review")
+  addTab(RUNTIME_KEY_2, "terminal")
+  retainGroup(RUNTIME_KEY_2)
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
+  releaseGroup(RUNTIME_KEY_2)
+  pruneGroups(1)
+  // 淘汰只丢内存；磁盘条目保留（调用方不写 null），重新打开再 hydrate。
+  expect(sidebarTabRegistry.size).toBe(1)
+  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) dropGroup(`runtime:old-${index}`)
+})
+
+// ---- 第三轮复审新增：两项 P2 + 一条防御 + 两条建议 ----
+
+function mount(options: { sessionFile?: Ref<string | null>; project?: () => string; runtimeId?: string } = {}) {
+  const scope = effectScope()
+  const api = scope.run(() =>
+    useSidebarTabs({
+      runtimeId: options.runtimeId ?? "rt-1",
+      sessionFile: options.sessionFile ?? ref<string | null>(null),
+      project: options.project ?? (() => "C:/project"),
+    }),
+  )!
+  return { scope, api }
+}
+
+test("P2 draft -> persisted migration writes the new identity key immediately", async () => {
+  // 新会话先加两个 Tab，`sessionFile` 之后才到。
+  const sessionFile = ref<string | null>(null)
+  const { scope, api } = mount({ sessionFile })
   api.add("review")
   api.add("browser")
   expect(api.tabKey.value).toBe("runtime:rt-1")
-  expect(workspace.sidebarTabs["runtime:rt-1"]).toEqual({ kinds: ["review", "browser"], active: 1 })
+  expect(fakeWorkspace.sidebarTabs["runtime:rt-1"]).toEqual({ kinds: ["review", "browser"], active: 1 })
 
   sessionFile.value = "C:/project/sessions/a.jsonl"
   await nextTick()
+  // 必须立即用新身份键写回并清掉旧 runtime 键：只搬内存不写盘的话，完整刷新后 Tab 全丢。
+  expect(fakeWorkspace.sidebarTabs[KEY]).toEqual({ kinds: ["review", "browser"], active: 1 })
+  expect(fakeWorkspace.sidebarTabs["runtime:rt-1"]).toBeUndefined()
 
-  // 非空源迁移后必须**立即**写新身份键、并清掉旧 runtime 键。
-  // 去掉写回（回到"等下一次侧栏操作"）这一条会红：磁盘上只剩 runtime:rt-1。
-  expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["review", "browser"], active: 1 })
-  expect(workspace.sidebarTabs["runtime:rt-1"]).toBeUndefined()
-
-  // 模拟完整重启：丢掉内存组，只用磁盘载荷重建 —— 两个 Tab 必须还在。
+  // 模拟完整重载：丢掉内存组，只用磁盘载荷重建。
   dropGroup(KEY)
-  // 重启后 `sessionFile` 一开始就在：键直接是文件身份键，只能靠磁盘载荷恢复。
-  const reloaded = setup({
+  const reloaded = mount({
     runtimeId: "rt-9",
-    sessionFileValue: "C:/project/sessions/a.jsonl",
-    keepDisk: true,
+    sessionFile: ref<string | null>("C:/project/sessions/a.jsonl"),
   })
   expect(reloaded.api.tabs.value.map(tab => tab.type)).toEqual(["review", "browser"])
   reloaded.scope.stop()
   scope.stop()
 })
 
-test("rebind keeps a live terminal alive instead of faking its death", () => {
-  // 迁移只是换键：`ChatView` 没有卸载、shell 还活着，不能借落盘载荷重建把它标成 stale。
-  addTab(RUNTIME_KEY, "terminal")
-  expect(tabsFor(RUNTIME_KEY)[0]!.stale).toBeUndefined()
-  rebindGroup(RUNTIME_KEY, KEY)
-  expect(tabsFor(KEY)[0]!.stale).toBeUndefined()
+test("retain/release stays balanced across identity changes (SSH realpath rebind)", async () => {
+  // 同一个仍挂载的实例经历两次身份变化：草稿 → 文件键 → realpath 归一化后的项目身份。
+  const sessionFile = ref<string | null>(null)
+  const project = ref("C:/project")
+  const { scope, api } = mount({ sessionFile, project: () => project.value })
+  const draftKey = "runtime:rt-1"
+  const reboundKey = "D:/rebound\u0000C:/project/sessions/a.jsonl"
+  expect(retainedCount(draftKey)).toBe(1)
+
+  sessionFile.value = "C:/project/sessions/a.jsonl"
+  await nextTick()
+  expect(retainedCount(draftKey)).toBe(0)
+  expect(retainedCount(KEY)).toBe(1)
+  expect(api.tabKey.value).toBe(KEY)
+
+  // `workspaceRuntime` 的 onSshPathBound 会在组件仍挂载时改 cwd —— 键随之变化。
+  project.value = "D:/rebound"
+  await nextTick()
+  expect(retainedCount(KEY)).toBe(0)
+  expect(retainedCount(reboundKey)).toBe(1)
+  scope.stop()
+  // 卸载后不留任何残留引用（否则旧 alias 键永远不被淘汰）。
+  expect(retainedCount(reboundKey)).toBe(0)
+  expect(retainedCount(KEY)).toBe(0)
+})
+
+test("reorder entry clamps to the tab limit and keeps active valid", () => {
+  const ids: number[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TABS; index++) ids.push(addTab(KEY, "review")!)
+  expect(tabsFor(KEY)).toHaveLength(MAX_SIDEBAR_TABS)
+
+  // 外部（例如别处越界后）传入 21 项：reorder 也必须守住上限，且不留悬空 active
+  // （被截掉的项若正好是 active，activeId 回落到最后一项）。
+  const oversize = [...ids, 0].map((id, index) => ({ id: (id ?? 0) + 1000 + index, type: "files" as const }))
+  reorderTabs(KEY, oversize)
+  expect(tabsFor(KEY).length).toBe(MAX_SIDEBAR_TABS)
+  const state = sidebarTabRegistry.get(KEY)!
+  expect(state.activeId).not.toBeNull()
+  expect(tabsFor(KEY).some(tab => tab.id === state.activeId)).toBe(true)
+
+  // 正常重排仍然生效（数量不变、顺序按传入数组）。
+  const before = tabsFor(KEY).map(tab => tab.id)
+  const swapped = [tabsFor(KEY)[1]!, tabsFor(KEY)[0]!, ...tabsFor(KEY).slice(2)]
+  reorderTabs(KEY, swapped)
+  expect(tabsFor(KEY).map(tab => tab.id)).toEqual([before[1], before[0], ...before.slice(2)])
+})
+
+test("group count never exceeds the cap, including the first render of a fresh group", () => {
+  // 24 个旧组已在使用，再挂载一个新组：观察到的组数必须始终 ≤ 24。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:old-${index}`, "review")
+  const { scope } = mount({ runtimeId: "fresh" })
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+  expect(hasGroup("runtime:fresh")).toBe(true)
+  scope.stop()
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) dropGroup(`runtime:old-${index}`)
 })
