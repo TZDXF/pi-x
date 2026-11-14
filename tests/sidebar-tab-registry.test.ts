@@ -34,11 +34,14 @@ import {
   pruneGroups,
   rebindGroup,
   releaseGroup,
+  releaseOwnerHold,
   reorderTabs,
   retainGroup,
   retainedGroupCount,
   pendingHydrateSizeForTest,
   pendingRetainCount,
+  ownerCountForTest,
+  ownerHoldCountFor,
   resetRegistryForTest,
   totalRetainedForTest,
   sidebarTabRegistry,
@@ -1078,4 +1081,89 @@ test("24 queued-then-switched rounds accumulate no ghost holds", async () => {
   expect(totalRetainedForTest()).toBe(holders.length)
   expect(pruneGroups(1)).toBeGreaterThan(0)
   for (const holder of holders) holder.stop()
+})
+
+// ---- 账本自洽：同一 (owner, key) 的 acquire 必须幂等（回滚重试是常规路径）----
+
+test("acquiring the same (owner, key) twice keeps liveRefs and the ledger in step", () => {
+  // resume 失败回滚后重试（`sessionFile: 文件键 → null → 同一文件键`）会落回同一个键；
+  // 换键路径也不检查"是否已持有该键"。无条件 +1 会让 refs=2 而账本 1 笔，
+  // `releaseOwnerHold` 每键只释放一次 —— 差的那一笔永久钉住一个空组、吃掉一个名额。
+  const key = "runtime:rt-idem"
+  // 第一次 acquire：建组 + 记一笔。
+  expect(retainGroup(key, undefined, "owner-a")).toBe(true)
+  expect(retainedGroupCount(key)).toBe(1)
+  expect(ownerHoldCountFor("owner-a")).toBe(1)
+  expect(totalRetainedForTest()).toBe(1)
+
+  // 第二次 acquire 同一个 (owner, key)：幂等 —— 不加计数、不改账本（旧实现会变 2）。
+  expect(retainGroup(key, undefined, "owner-a")).toBe(true)
+  expect(retainedGroupCount(key)).toBe(1)
+  expect(ownerHoldCountFor("owner-a")).toBe(1)
+  expect(totalRetainedForTest()).toBe(1)
+
+  // 带回调的再次 acquire 也一样（换键路径就是这种形态）。
+  expect(retainGroup(key, () => {}, "owner-a")).toBe(true)
+  expect(retainedGroupCount(key)).toBe(1)
+
+  // 卸载后归零，且该名额真的能被回收（旧实现会留下 freed=0）。
+  expect(releaseOwnerHold("owner-a")).toBe(true)
+  expect(retainedGroupCount(key)).toBe(0)
+  expect(totalRetainedForTest()).toBe(0)
+  expect(ownerCountForTest()).toBe(0)
+  expect(pruneGroups(0)).toBe(1)
+  dropGroup(key)
+})
+
+test("24 mounts each rolling back and retrying leave no ghost holds", async () => {
+  // 24 个真实挂载各经历一次"文件键 → null → 同一文件键"（resume 失败回滚后重试）。
+  const panes: Array<{ scope: ReturnType<typeof effectScope>; sessionFile: ReturnType<typeof ref<string | null>> }> = []
+  const fileKeys: string[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) {
+    const paneFile = ref<string | null>(`C:/project/sessions/rb${index}.jsonl`)
+    const paneScope = effectScope()
+    let api!: ReturnType<typeof useSidebarTabs>
+    paneScope.run(() => {
+      api = useSidebarTabs({ runtimeId: `rt-rb-${index}`, sessionFile: paneFile, project: () => "C:/project" })
+    })
+    api.add("review")
+    panes.push({ scope: paneScope, sessionFile: paneFile })
+    fileKeys.push(api.tabKey.value)
+  }
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  expect(totalRetainedForTest()).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  for (const [index, pane] of panes.entries()) {
+    pane.sessionFile.value = null
+    await nextTick()
+    pane.sessionFile.value = `C:/project/sessions/rb${index}.jsonl`
+    await nextTick()
+    // 每一次往返之后账本与引用都必须仍配平（这正是上一版会累积 24 笔的地方）。
+    expect(totalRetainedForTest()).toBe(MAX_SIDEBAR_TAB_GROUPS)
+    expect(ownerCountForTest()).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  }
+  // 回到同一键后不留任何待准入请求（中间那次为 runtime 键排的队必须作废）。
+  expect(pendingRetainCount()).toBe(0)
+  // 每个文件键仍只有一笔引用，内容还在。
+  for (const [index, key] of fileKeys.entries()) {
+    expect(retainedGroupCount(key), `pane ${index} 的引用不配平`).toBe(1)
+    expect(tabsFor(key).map(tab => tab.type)).toEqual(["review"])
+  }
+
+  for (const pane of panes) pane.scope.stop()
+  await nextTick()
+  // 终态断言（质量工程师的 X3）：幽灵为 0、账本清空、名额真能腾出来。
+  expect(totalRetainedForTest()).toBe(0)
+  expect(ownerCountForTest()).toBe(0)
+  expect(pendingRetainCount()).toBe(0)
+  expect(pruneGroups(MAX_SIDEBAR_TAB_GROUPS - 1), "pruneGroups 必须能腾出名额").toBeGreaterThan(0)
+
+  // 新开一个会话：必须能准入，且磁盘载荷恢复得出来。
+  const freshKey = "C:/project\u0000C:/project/sessions/fresh.jsonl"
+  expect(hydrateGroup(freshKey, { kinds: ["files", "browser"], active: 1 })).toBe(true)
+  expect(tabsFor(freshKey).map(tab => tab.type)).toEqual(["files", "browser"])
+  expect(pendingHydrateSizeForTest()).toBe(0)
+  for (const key of fileKeys) dropGroup(key)
+  dropGroup(freshKey)
+  fakeWorkspace.sidebarTabs = {}
 })

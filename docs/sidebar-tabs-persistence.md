@@ -106,6 +106,15 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
     - `ownerHolds: owner → 它**已被承认持有**的键集合`。准入成功（立即或排队后补准入）
       都登记在这里；卸载与换键都凭它释放，所以"排队期间换过身份键"也能一次撤干净。
     - 承认时只给**真正被承认的那个键**记 `liveRefs`，且绝不为"已无 owner 要的键"建组。
+    - **账本不变量**：每个 `(owner, key)` 至多一笔，`liveRefs` 的**每一次增量**都必须有
+      对应的账本记录。因此 `retainGroup` 对同一 `(owner, key)` 的重复 acquire 是**幂等**的
+      （只刷新 LRU 时间戳，不加计数、不改账本）。这个前提是必须的：resume 失败回滚后
+      重试（`sessionFile: 文件键 → null → 同一文件键`，见 `useSessionOpening.ts` /
+      `conversationLoader.ts`）会落回同一个键，换键路径也不检查"是否已持有该键"。
+      没有幂等守卫时 `liveRefs` 会变成 2 而账本仍 1 笔（`Set` 去重），
+      `releaseOwnerHold` 每键只释放一次 —— 差的那一笔钉死一个空组，每漏一笔吃一个名额。
+    - 上面"卸载与换键都凭它释放、都能一次撤干净"成立的前提就是这个幂等守卫
+      （连同"每笔增量都有账本"的不变量）；破坏任一条，`Set` 式释放就回收不了双记的引用。
   - **卸载顺序不可颠倒**：`releaseOwnerHold(owner)` 先撤销排队请求、再释放账本里的持有。
     `releaseGroup` 会同步 flush 队列，若先放再撤，本实例刚让出名额的那一次 flush 会把
     自己排队的键准入进来 —— 已卸载实例于是留下 `retain=1`。按 owner 记账后，这个顺序
@@ -116,8 +125,13 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
     这是有界、可自愈、不丢数据的状态 —— 关掉**任意一个** pane 后该会话侧栏立即可用
     （实测：排队期间换过身份键的实例在同一轮也被承认到**当前**键上，窗格内容与
     `retain=1` 都在新键，旧键不留空组）；磁盘载荷在排队期间也不会被删除。
-    24 轮"排队 → 换键 → 关一个 pane → 卸载"的累积终态实测为 `ghosts=0`、
-    `pruneGroups` 能腾出名额、同 `runtimeId` 重开时 `liveRefs` 不翻倍（有常驻用例守）。
+    两种形态各有一条常驻用例守终态，都是 `ghosts=0`、`ownerCount=0`、
+    `pruneGroups` 能腾出名额、新会话能准入且载荷能恢复：
+    - **排队换键**：24 轮"排队 → 换键 → 关一个 pane → 卸载"（`24 queued-then-switched
+rounds accumulate no ghost holds`）；
+    - **回滚重试**：24 个挂载各经历一次"文件键 → null → 同一文件键"再全部卸载
+      （`24 mounts each rolling back and retrying leave no ghost holds`）。
+      另有一条 `(owner, key)` 幂等的常驻护栏，同 `runtimeId` 重开时 `liveRefs` 不翻倍也由它守。
   - 量级：每组最多 20 条 `{id, type, stale?}`（约几百字节），**内存组数硬上限 24**，
     因此总量有界（≈ 十几 KB 加两份待处理队列），不随会话数量线性增长。
 

@@ -416,9 +416,26 @@ export function dropGroup(key: string) {
  * 让调用方原地自愈（用户不需要切走再切回）。
  */
 export function retainGroup(key: string, onAdmit?: () => void, owner = key): boolean {
+  // **不变量：账本里每个 (owner, key) 至多一笔，`liveRefs` 的每一次增量都必须有
+  // 对应的账本记录。** 因此 `(owner, key)` 的 acquire 必须幂等：
+  //
+  // 同一实例可能对同一个键重复 acquire —— resume 失败回滚后重试（
+  // `useSessionOpening.ts` / `conversationLoader.ts` 的 `sessionFile: 文件键 → null
+  // → 同一文件键`）就会落回同一个键；换键路径也不检查"是否已持有该键"。
+  // 若这里无条件 +1，`liveRefs` 会变成 2 而账本仍只有 1 笔（`Set` 去重），
+  // `releaseOwnerHold` 每键只释放一次 —— 差的那一笔就永久钉住一个空组，
+  // 每漏一笔吃掉一个名额，最终只能重启恢复。
   // 排队项按 owner 归属：换键时**改写**同一条，保证该 owner 始终最多一个待准入请求，
   // 且队列里不会再残留"换键前的旧键"（那里曾留下空组 + retain=1 的永久占位）。
+  // 这一行必须在幂等提前返回**之前**：回滚重试（文件键 → runtime 键 → 同一文件键）
+  // 时，中间那次为 runtime 键排的队已经没人要了，不能留在队列里被后续 flush 建出空组。
   pendingRetain.delete(owner)
+
+  if (ownerHolds.get(owner)?.has(key)) {
+    // 已经持有：只刷新 LRU 时间戳，不加计数、不改账本。
+    touch(key)
+    return true
+  }
 
   const state = sidebarTabRegistry.has(key) ? sidebarTabRegistry.get(key)! : ensureGroup(key)
   if (!state) {
@@ -429,6 +446,15 @@ export function retainGroup(key: string, onAdmit?: () => void, owner = key): boo
   recordHold(owner, key)
   touch(key)
   return true
+}
+
+/**
+ * 该 owner 当前持有多少个键（诊断与测试用；应始终 ≤ 同实例有效挂载数）。
+ *
+ * 与 `liveRefs` 的每笔增量一一对应 —— 任何"计数比账本多"的偏差都是幽灵引用。
+ */
+export function ownerHoldCountFor(owner: string) {
+  return ownerHolds.get(owner)?.size ?? 0
 }
 
 /** 排队中的挂载请求数量（诊断与测试用；每个 owner 至多一条）。 */
@@ -537,7 +563,17 @@ export function retainedGroupCount(key: string) {
   return liveRefs.get(key) ?? 0
 }
 
-/** 释放一次持有。调用方必须释放**自己实际 retain 过的键**，不能按"当前键"。 */
+/**
+ * 低层释放一次引用。**仅供账本内部调用**（`releaseOwnerHold` / `releaseOwnerKey`
+ * 以及 `rebindGroup` 的迁移路径）。
+ *
+ * 调用方必须释放**自己实际 retain 过的键**，不能按"当前键"；外部一律走
+ * `releaseOwnerHold` / `releaseOwnerKey`，否则账本与 `liveRefs` 会脱节。
+ *
+ * 直接降到 0 时会把指向该键的账本记录一并清掉（"该键已无引用"是唯一真相）——
+ * 这条路径在当前代码里**不可达**（释放都成对经过账本，不会在还有活 owner 时降到 0），
+ * 保留它是为了不变量被破坏时能自愈，而不是作为正常路径。
+ */
 export function releaseGroup(key: string) {
   const count = liveRefs.get(key) ?? 0
   if (count <= 1) {
