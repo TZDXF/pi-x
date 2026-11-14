@@ -67,21 +67,49 @@ function stateFor(key: string): GroupState | undefined {
 const pendingHydrate = new Map<string, unknown>()
 
 /**
- * 建组被拒时排队的**挂载请求**（FIFO）。与 `pendingHydrate` 是两份队列：
+ * 挂载请求账本：**按实例（owner）** 归属，而不是按"入队时的身份键"。
  *
- * - `pendingRetain`：会话正在挂载、只是没名额建组 —— 名额一空出就要补准入，
- *   让该会话的侧栏**自动**恢复（用户不必切走再切回）；
- * - `pendingHydrate`：载荷到了但没名额建组 —— 名额空出后补 hydrate。
+ * 一个实例在排队期间可能换过身份键（`runtime:` → 文件键、SSH realpath 回绑），
+ * 若账本以身份键为索引，就会出现"承认了旧键、回调却认领新键"的分叉 —— 旧键上
+ * 留下一个空组 + `retain=1`，而且没有任何 owner 能撤销它（只能等重启清掉模块级
+ * `liveRefs`）。因此：
  *
- * 合并成一份会让"没有载荷的挂载"误触发 hydrate，反之也会漏掉挂载的准入。
+ * - `pendingRetain`：`owner → 它**当前**想要的那一个键`（换键时**改写**同一条，
+ *   保证同一 owner 始终最多一个有效待准入请求，旧键的排队项随之作废）；
+ * - `ownerHolds`：`owner → 它**已被承认**持有的键`（准入成功时登记，卸载/换键
+ *   时凭它释放 —— 无论是立即准入还是排队后补准入的那一笔）。
+ *
+ * 与 `pendingHydrate`（载荷到了但没名额建组）分开，但两者承认时都走同一套 owner 登记。
  */
 interface PendingRetainEntry {
-  /** 发起请求的挂载实例（composable 生命周期 id）。卸载时按它撤销**全部**键。 */
-  owner: string
+  /** 该 owner 当前想要的键（换键时被改写，所以不会留下旧键请求）。 */
+  key: string
   onAdmit?: () => void
 }
 
-const pendingRetain = new Map<string, PendingRetainEntry[]>()
+/** owner → 当前待准入的键（每人至多一条）。 */
+const pendingRetain = new Map<string, PendingRetainEntry>()
+
+/**
+ * owner → 它**已被承认持有**的键集合。
+ *
+ * 一个人在同一时刻可能既持有旧身份键、又排队等新身份键（换键随后才释放旧的），
+ * 所以这里必须是集合而不是单个键 —— 否则换键中途会漏记一笔，卸载时释放不掉。
+ */
+const ownerHolds = new Map<string, Set<string>>()
+
+function recordHold(owner: string, key: string) {
+  const held = ownerHolds.get(owner) ?? new Set<string>()
+  held.add(key)
+  ownerHolds.set(owner, held)
+}
+
+function forgetHold(owner: string, key: string) {
+  const held = ownerHolds.get(owner)
+  if (!held) return
+  held.delete(key)
+  if (!held.size) ownerHolds.delete(owner)
+}
 
 /**
  * 新建组的**容量准入**：先尽力腾出一个名额（`limit - 1`），仍然满就打回。
@@ -139,14 +167,21 @@ export function activeIdFor(key: string) {
  * 那会显示成功却在重启后静默丢掉最新一个 Tab。
  */
 export function addTab(key: string, type: SidebarTabKind): number | null {
-  hydratedKeys.add(key)
   const state = ensureGroup(key)
-  // 容量准入失败（组数已满且所有组都被挂载持有）：明确拒绝，不超限建组。
+  // 容量准入失败（组数已满且腾不出名额）：明确拒绝，不超限建组。
+  // **不**标记 hydrated：该键仍是"未确定"，迟到的磁盘载荷随后还能补进来
+  // （`hydrateFromPersisted` 会先看 `isHydrated`；这里标了就等于永久挡住它）。
   if (!state) return null
-  if (state.tabs.length >= MAX_SIDEBAR_TABS) return null
+  if (state.tabs.length >= MAX_SIDEBAR_TABS) {
+    // 组已存在 ⇒ 内容确实由这条会话决定过（用户在上面加了 20 条），标记以免旧载荷覆盖。
+    hydratedKeys.add(key)
+    return null
+  }
   const id = state.nextId++
   state.tabs.push({ id, type })
   state.activeId = id
+  // hydrated 只在**真的写进一条 Tab 之后**提交。
+  hydratedKeys.add(key)
   touch(key)
   return id
 }
@@ -221,7 +256,28 @@ export function hydrateGroup(key: string, value: unknown): boolean {
 }
 
 /**
- * 名额空出来后，把排队中的挂载请求补准入（FIFO，按登记顺序）。
+ * 承认**某一个 owner** 的排队请求：只给"它当前想要的那个键"记持有。
+ *
+ * 返回是否承认成功。绝不为"已无 owner 要的键"建组 —— 这里唯一的键就是账本里
+ * 该 owner 的 `entry.key`，换键时旧键已被 `retainGroup` 改写掉。
+ */
+function admitQueueEntry(owner: string, entry: PendingRetainEntry): boolean {
+  const key = entry.key
+  if (!sidebarTabRegistry.has(key)) {
+    // 只有该 owner 仍然想要这个键（条目还没被撤销/改写）才会走到这里。
+    const created = ensureGroup(key)
+    if (!created) return false
+  }
+  pendingRetain.delete(owner)
+  liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
+  recordHold(owner, key)
+  touch(key)
+  entry.onAdmit?.()
+  return true
+}
+
+/**
+ * 名额空出来后，把排队中的挂载请求补准入（按登记顺序）。
  *
  * 与 `flushPendingHydrate` 分开：这里只处理"会话在挂载但没名额建组"，
  * 不碰任何载荷。腾不出名额的继续排队。
@@ -234,26 +290,9 @@ export function flushPendingRetain(): number {
   flushingRetain = true
   let admitted = 0
   try {
-    for (const [key, waiters] of [...pendingRetain]) {
-      if (!waiters.length) {
-        pendingRetain.delete(key)
-        continue
-      }
-      if (sidebarTabRegistry.has(key)) {
-        pendingRetain.delete(key)
-        liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
-        touch(key)
-        for (const entry of waiters) entry.onAdmit?.()
-        admitted += waiters.length
-        continue
-      }
-      const state = ensureGroup(key)
-      if (!state) break
-      pendingRetain.delete(key)
-      liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
-      touch(key)
-      admitted += waiters.length
-      for (const entry of waiters) entry.onAdmit?.()
+    for (const [owner, entry] of [...pendingRetain]) {
+      if (!admitQueueEntry(owner, entry)) break
+      admitted += 1
     }
     return admitted
   } finally {
@@ -377,44 +416,133 @@ export function dropGroup(key: string) {
  * 让调用方原地自愈（用户不需要切走再切回）。
  */
 export function retainGroup(key: string, onAdmit?: () => void, owner = key): boolean {
+  // **不变量：账本里每个 (owner, key) 至多一笔，`liveRefs` 的每一次增量都必须有
+  // 对应的账本记录。** 因此 `(owner, key)` 的 acquire 必须幂等：
+  //
+  // 同一实例可能对同一个键重复 acquire —— resume 失败回滚后重试（
+  // `useSessionOpening.ts` / `conversationLoader.ts` 的 `sessionFile: 文件键 → null
+  // → 同一文件键`）就会落回同一个键；换键路径也不检查"是否已持有该键"。
+  // 若这里无条件 +1，`liveRefs` 会变成 2 而账本仍只有 1 笔（`Set` 去重），
+  // `releaseOwnerHold` 每键只释放一次 —— 差的那一笔就永久钉住一个空组，
+  // 每漏一笔吃掉一个名额，最终只能重启恢复。
+  // 排队项按 owner 归属：换键时**改写**同一条，保证该 owner 始终最多一个待准入请求，
+  // 且队列里不会再残留"换键前的旧键"（那里曾留下空组 + retain=1 的永久占位）。
+  // 这一行必须在幂等提前返回**之前**：回滚重试（文件键 → runtime 键 → 同一文件键）
+  // 时，中间那次为 runtime 键排的队已经没人要了，不能留在队列里被后续 flush 建出空组。
+  pendingRetain.delete(owner)
+
+  if (ownerHolds.get(owner)?.has(key)) {
+    // 已经持有：只刷新 LRU 时间戳，不加计数、不改账本。
+    //
+    // 注意：幂等命中**不保证组存在**。`rebindGroup` 的空源分支会删掉源组而账本
+    // 那一笔仍在（账本表示"该实例仍挂在这个键上"），后续该键的组要靠调用方补建：
+    // `addTab` / `hydrateGroup` / `reorderTabs` 都先走 `ensureGroup`，`tabsFor` /
+    // `activeIdFor` 只读（返回冻结空数组）。所以不要读成"已持有 ⇒ 组一定在"。
+    touch(key)
+    return true
+  }
+
   const state = sidebarTabRegistry.has(key) ? sidebarTabRegistry.get(key)! : ensureGroup(key)
   if (!state) {
-    const waiters = pendingRetain.get(key) ?? []
-    waiters.push({ owner, onAdmit })
-    pendingRetain.set(key, waiters)
+    pendingRetain.set(owner, { key, onAdmit })
     return false
   }
   liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
+  recordHold(owner, key)
   touch(key)
   return true
 }
 
-/** 排队中的挂载请求数量（诊断与测试用）。 */
-export function pendingRetainCount() {
-  let count = 0
-  for (const waiters of pendingRetain.values()) count += waiters.length
-  return count
+/**
+ * 该 owner 当前持有多少个键（诊断与测试用；应始终 ≤ 同实例有效挂载数）。
+ *
+ * 与 `liveRefs` 的每笔增量一一对应 —— 任何"计数比账本多"的偏差都是幽灵引用。
+ */
+export function ownerHoldCountFor(owner: string) {
+  return ownerHolds.get(owner)?.size ?? 0
 }
 
-/** 仅测试用：清空两份队列（用例之间隔离）。 */
+/** 排队中的挂载请求数量（诊断与测试用；每个 owner 至多一条）。 */
+export function pendingRetainCount() {
+  return pendingRetain.size
+}
+
+/** 仅测试用：清空两份队列与持有账本（用例之间隔离）。 */
 export function resetQueuesForTest(): void {
   pendingHydrate.clear()
   pendingRetain.clear()
+  ownerHolds.clear()
 }
 
 /**
- * 撤销**某个挂载实例**自己仍在排队的全部请求（历史上所有键，不只是最后一次的键）。
+ * 仅测试用：把注册表恢复成"刚启动"的状态。
  *
- * 为什么必须按 owner 而不是按键：同一实例可能在排队期间换过身份键
- * （`runtime:` → 文件键、SSH realpath 回绑），若只撤销"当前键"，旧键的请求会留在
- * 队列里 —— 名额一空出就给一个**已经卸载**的实例建组、retain=1 且无人释放，永久占名额。
+ * 连 `liveRefs` / 队列 / 账本一起清 —— 只删组会留下"受保护的空壳"或残留引用，
+ * 让随后用例的准入腾不出名额（那是测试间泄漏，不是产品行为）。
  */
+export function resetRegistryForTest(): void {
+  sidebarTabRegistry.clear()
+  hydratedKeys.clear()
+  liveRefs.clear()
+  resetQueuesForTest()
+  clock = 0
+}
+
+/** 仅测试用：`liveRefs` 里的引用总数（用来核对"幽灵持有"是否累积）。 */
+export function totalRetainedForTest(): number {
+  let total = 0
+  for (const count of liveRefs.values()) total += count
+  return total
+}
+
+/** 仅测试用：账本里记录的 owner 数（应与活着的挂载实例数一致）。 */
+export function ownerCountForTest(): number {
+  return ownerHolds.size
+}
+
+/** 撤销某个 owner 仍在排队的请求（账本按 owner 归属，一个 owner 至多一条）。 */
 export function dropPendingRetain(owner: string): void {
-  for (const [key, waiters] of [...pendingRetain]) {
-    const remaining = waiters.filter(entry => entry.owner !== owner)
-    if (remaining.length) pendingRetain.set(key, remaining)
-    else pendingRetain.delete(key)
+  pendingRetain.delete(owner)
+}
+
+/**
+ * 释放某个 owner 的**全部**占用：先在排队账本里撤销它（"本实例不再要了"），
+ * 再释放它**已被承认**的那一笔持有（立刻重新核对，先撤后放）。
+ *
+ * 顺序不可颠倒：`releaseGroup` 会同步 flush 队列，若先放再撤，本实例刚让出名额的
+ * 那一次 flush 会把它自己排队的请求准入进来 —— 已卸载实例于是留下 `retain=1`。
+ *
+ * 账本按 owner 记，所以无论该实例排队期间换过多少次身份键，这里都能一次性撤干净。
+ */
+export function releaseOwnerHold(owner: string): boolean {
+  pendingRetain.delete(owner)
+  const held = ownerHolds.get(owner)
+  if (!held || !held.size) {
+    ownerHolds.delete(owner)
+    return false
   }
+  ownerHolds.delete(owner)
+  for (const key of [...held]) releaseGroup(key)
+  return true
+}
+
+/**
+ * 释放某个 owner 在**某一个键**上的持有（换键后释放旧身份键时用）。
+ *
+ * 走账本而不是直接 `releaseGroup`：否则账本里会留下"已释放但还记着"的一笔，
+ * 卸载时再释放一次就会把别的实例的引用减掉。
+ */
+export function releaseOwnerKey(owner: string, key: string): boolean {
+  const held = ownerHolds.get(owner)
+  if (!held || !held.has(key)) return false
+  forgetHold(owner, key)
+  releaseGroup(key)
+  return true
+}
+
+/** 某 owner 当前是否在等名额，以及等的是哪个键（诊断与测试用）。 */
+export function pendingRetainKeyFor(owner: string): string | null {
+  return pendingRetain.get(owner)?.key ?? null
 }
 
 /**
@@ -424,12 +552,15 @@ export function dropPendingRetain(owner: string): void {
  * 否则该组会处于"正在显示但没人持有"的状态，下一次 LRU 压力就会把它淘汰。
  */
 function admitPendingRetain(key: string): void {
-  const waiters = pendingRetain.get(key)
-  if (!waiters) return
-  pendingRetain.delete(key)
-  liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
-  touch(key)
-  for (const entry of waiters) entry.onAdmit?.()
+  for (const [owner, entry] of [...pendingRetain]) {
+    // 只承认"当前确实在等这个键"的 owner（换键后的旧键条目已被改写，不会命中）。
+    if (entry.key !== key) continue
+    pendingRetain.delete(owner)
+    liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
+    recordHold(owner, key)
+    touch(key)
+    entry.onAdmit?.()
+  }
 }
 
 /** 该组当前的持有计数（供诊断与测试核对 retain/release 是否配平）。 */
@@ -437,11 +568,24 @@ export function retainedGroupCount(key: string) {
   return liveRefs.get(key) ?? 0
 }
 
-/** 释放一次持有。调用方必须释放**自己实际 retain 过的键**，不能按"当前键"。 */
+/**
+ * 低层释放一次引用。**仅供账本内部调用**（`releaseOwnerHold` / `releaseOwnerKey`
+ * 以及 `rebindGroup` 的迁移路径）。
+ *
+ * 调用方必须释放**自己实际 retain 过的键**，不能按"当前键"；外部一律走
+ * `releaseOwnerHold` / `releaseOwnerKey`，否则账本与 `liveRefs` 会脱节。
+ *
+ * 直接降到 0 时会把指向该键的账本记录一并清掉（"该键已无引用"是唯一真相）——
+ * 这条路径在当前代码里**不可达**（释放都成对经过账本，不会在还有活 owner 时降到 0），
+ * 保留它是为了不变量被破坏时能自愈，而不是作为正常路径。
+ */
 export function releaseGroup(key: string) {
   const count = liveRefs.get(key) ?? 0
-  if (count <= 1) liveRefs.delete(key)
-  else liveRefs.set(key, count - 1)
+  if (count <= 1) {
+    liveRefs.delete(key)
+    // 低层释放到底时，账本里任何仍指向该键的 owner 记录都已失真，一并清掉。
+    for (const owner of [...ownerHolds.keys()]) forgetHold(owner, key)
+  } else liveRefs.set(key, count - 1)
   // 释放后组数可能已经能回到上限内：补一次回收，别等下一次挂载才收。
   pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
   // 名额空出来了：排队的挂载请求先补准入（用户不必切走再切回），

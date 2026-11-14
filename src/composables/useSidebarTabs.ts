@@ -3,7 +3,6 @@ import { MAX_SIDEBAR_TAB_GROUPS, MAX_SIDEBAR_TABS, type SidebarTabItem, type Sid
 import { useWorkspaceStore } from "@/stores/workspace"
 import {
   activeIdFor,
-  dropPendingRetain,
   addTab,
   closeTab,
   groupKeyFor,
@@ -14,7 +13,8 @@ import {
   persistedFor,
   pruneGroups,
   rebindGroup,
-  releaseGroup,
+  releaseOwnerHold,
+  releaseOwnerKey,
   reorderTabs,
   retainGroup,
   setActiveTab,
@@ -131,6 +131,8 @@ export function useSidebarTabs(options: {
    * 原地回调，用户不必切走再切回。
    */
   function adoptKey(key: string) {
+    // 排队被承认（包括换键后那次延迟准入）时也要更新 `heldKey`：
+    // 卸载时的"记录式释放"以此为准，否则那一笔释放不到（账本还有 `ownerHolds` 兜底）。
     heldKey = key
     hydrateFromPersisted(key)
     // 组刚建出来时可能还没被读取过：读一次让响应式 `tabs` 立刻有内容。
@@ -143,14 +145,19 @@ export function useSidebarTabs(options: {
    * 语义来自 `1eefeda`：源非空 → 搬内存 + 立即用新身份键写回 + 清旧 `runtime:` 条目；
    * 源为空 → 不写回、也不把新键标 hydrated（否则会删掉/挡住磁盘上已有的载荷）。
    * 活 terminal 不标 stale（`rebindGroup` 直接搬内存状态，不经落盘载荷重建）。
+   *
+   * 返回"是否真的把内容搬到了新键"。这次迁移是**同一组换身份**：`rebindGroup` 先删源键
+   * 再落目标键，组数不增加 —— 所以满额时也应该成功，调用方据此决定还要不要争名额。
    */
   function applyRebind(previous: string, next: string) {
-    if (!previous || !next || previous === next) return
-    if (previous.startsWith("runtime:") && rebindGroup(previous, next)) {
+    if (!previous || !next || previous === next) return false
+    const moved = previous.startsWith("runtime:") && rebindGroup(previous, next)
+    if (moved) {
       workspace.persistSidebarTabs(previous, null)
       persist(next)
     }
     hydrateFromPersisted(next)
+    return moved
   }
 
   // 挂载即持有：容量准入先腾名额再建组；腾不出（全部组都被挂载持有）时**排队**，
@@ -165,18 +172,26 @@ export function useSidebarTabs(options: {
   const stopKeyWatch = watch(tabKey, (next, previous) => {
     if (!next || !previous || next === previous) return
     const previousHold = heldKey
-    // 新键先受保护：迁移与 hydrate 之间它随时可能成为 LRU 的候选。
-    // 准入失败时排队；回调里必须**重跑同一份 rebind 逻辑**（立即路径与延迟路径
-    // 不许有第二份实现），否则"runtime 源已有 Tab → 排队 → 名额空出"这条路径上
-    // 新身份键 tabs=[]、落盘 undefined、旧 runtime 载荷未清。
+
+    // **顺序很重要**：先做原地迁移，再争新键的持有。
+    //
+    // 换键是"同一组换身份"：`rebindGroup` 删掉源键就已经腾出位置，所以迁移成功后
+    // 新键必然有名额、满额时也一样 —— 这正是 M1 的 rebind 语义不被跳过的方式。
+    // 反过来（先为新键额外要一个名额）在满额时会被准入挡回去，一次身份变更就把
+    // "立即写回新身份键 + 清旧 runtime 条目"整个跳过，那是回退。
+    const moved = applyRebind(previous, next)
+
+    // 迁移成功 → 新键已有组，`retainGroup` 不会再要名额；没迁移（源为空/不存在，
+    // 或非 runtime 身份变化）→ 按常规准入，满额时排队等名额。
     const admitted = retainGroup(
       next,
       () => {
         adoptKey(next)
+        // 排队期间才拿到的名额：迁移逻辑仍走同一份实现（不许有第二份）。
         // 写回只由 `applyRebind` 内部按"源非空"决定：这里不能再无条件 `persist(next)`，
         // 否则空 runtime 源 + 名额空出这条路径会写出 null，把磁盘上已有的文件键载荷删掉。
         applyRebind(previous, next)
-        if (previousHold && previousHold !== next) releaseGroup(previousHold)
+        if (previousHold && previousHold !== next) releaseOwnerKey(owner, previousHold)
         pruneForCurrentGroup()
       },
       owner,
@@ -185,26 +200,27 @@ export function useSidebarTabs(options: {
       options.onGroupLimitReached?.()
       return
     }
+    // 立即准入分支也要记（排队被承认的分支由 `adoptKey` 里记）。
     heldKey = next
-    applyRebind(previous, next)
     // 旧键必须等迁移**之后**再释放：提前释放会让旧组在 rebind 之前就被淘汰。
-    if (previousHold && previousHold !== next) releaseGroup(previousHold)
+    // 迁移已删源键时这行只回收"持有"这一笔账（组的键本来就不在了）。
+    // 走 `releaseOwnerKey`：账本那一笔同时清掉，卸载时不会再重复释放别人的引用。
+    if (previousHold && previousHold !== next) releaseOwnerKey(owner, previousHold)
+    if (moved) persist(next)
     pruneForCurrentGroup()
   })
   onScopeDispose(stopKeyWatch)
 
   // 组件卸载（切会话/设置页往返）时 shell 存活前提已破（`term_kill`），
   // 该组所有 terminal 必须转 `stale`，否则重挂载会直接挂 `TerminalPanel` 并自动开新 shell。
-  // 释放按本实例的记录走，不按"当前键"（见 `heldKey`）。
+  //
+  // 释放走**owner 账本**：注册表按 owner 记"它在排队等哪个键"与"它已被承认持有哪个键"
+  // （`releaseOwnerHold` 内部先撤销排队、再释放持有，顺序不可颠倒 —— 否则释放的那一次
+  // flush 会把本实例自己排队的键准入进来，留下无人释放的 `retain=1`）。
+  // 这样排队期间换过身份键（`runtime:` → 文件键、SSH realpath 回绑）也能一次撤干净。
   onScopeDispose(() => {
     markGroupDetached(tabKey.value)
-    // **顺序不可颠倒**：`releaseGroup` 会同步 flush 排队队列，若先 release 再撤销，
-    // 本实例刚让出名额的那一次 flush 会把自己排队中的新身份键准入进去 ——
-    // 已卸载实例于是留下 retain=1 的幽灵组（无人释放，永久占名额）。
-    // 先声明"本实例不再要了"（撤销它排队过的所有键），再让出名额。
-    // 按**实例**撤销：身份键可能变过，只撤当前键会留下旧键请求。
-    dropPendingRetain(owner)
-    if (heldKey) releaseGroup(heldKey)
+    releaseOwnerHold(owner)
     heldKey = null
   })
 
