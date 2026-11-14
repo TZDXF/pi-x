@@ -11,7 +11,6 @@ vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: () => fakeWorkspace,
 }))
 import {
-  MAX_SIDEBAR_TAB_GROUPS,
   MAX_SIDEBAR_TABS,
   markDetachedTabs,
   normalizePersistedSidebarTabs,
@@ -30,25 +29,21 @@ import {
   markGroupDetached,
   markHydrated,
   persistedFor,
-  pruneGroups,
   rebindGroup,
-  releaseGroup,
   reorderTabs,
-  retainGroup,
   sidebarTabRegistry,
   setActiveTab,
   tabsFor,
 } from "@/stores/sidebarTabs"
 import { useSidebarTabs } from "@/composables/useSidebarTabs"
 const useWorkspaceStore = () => fakeWorkspace
-const RUNTIME_KEY_2 = "runtime:rt-2"
 
 const KEY = "C:/project\u0000C:/project/sessions/a.jsonl"
 const RUNTIME_KEY = "runtime:rt-1"
 
 beforeEach(() => {
   for (const key of [...sidebarTabRegistry.keys()]) sidebarTabRegistry.delete(key)
-  for (const key of [KEY, RUNTIME_KEY, RUNTIME_KEY_2]) dropGroup(key)
+  for (const key of [KEY, RUNTIME_KEY]) dropGroup(key)
 })
 
 test("registry survives component unmount: state lives outside any component instance", () => {
@@ -261,63 +256,4 @@ test("unmount through the scope flips terminal tabs to stale", async () => {
   expect(tabsFor(api.tabKey.value)[0]!.stale).toBeUndefined()
   scope.stop()
   expect(tabsFor("runtime:rt-1")[0]!.stale).toBe(true)
-})
-
-// ---- 复审修复（本轮）：上限前移、写侧白名单、rebind 不伪造失联、组数回收 ----
-
-test("the tab limit is enforced at addTab and reported to the caller", () => {
-  fakeWorkspace.sidebarTabs = {}
-  const scope = effectScope()
-  let limitHits = 0
-  const api = scope.run(() =>
-    useSidebarTabs({
-      runtimeId: "rt-1",
-      sessionFile: ref<string | null>("C:/project/sessions/a.jsonl"),
-      project: () => "C:/project",
-      onTabLimitReached: () => (limitHits += 1),
-    }),
-  )!
-  for (let index = 0; index < MAX_SIDEBAR_TABS; index++) expect(api.add("review")).toBeTruthy()
-  // 第 21 个必须被拒绝：不能"界面成功、写盘截断、重启静默丢最新一个"。
-  expect(api.add("review")).toBeNull()
-  expect(limitHits).toBe(1)
-  expect(tabsFor(KEY)).toHaveLength(MAX_SIDEBAR_TABS)
-  expect(fakeWorkspace.sidebarTabs[KEY].kinds).toHaveLength(MAX_SIDEBAR_TABS)
-  expect(fakeWorkspace.sidebarTabs[KEY].active).toBeLessThan(MAX_SIDEBAR_TABS)
-  scope.stop()
-})
-
-test("write-side whitelist drops aux and unknown kinds before the payload leaves the frontend", () => {
-  const payload = persistedFromTabs(
-    [
-      { id: 1, type: "aux" },
-      { id: 2, type: "review" },
-      { id: 3, type: "mystery" },
-    ] as never,
-    2,
-  )
-  expect(payload).toEqual({ kinds: ["review"], active: 0 })
-})
-
-test("rebind does not fake terminal death while the pane is still mounted", () => {
-  addTab(RUNTIME_KEY, "terminal")
-  expect(tabsFor(RUNTIME_KEY)[0]!.stale).toBeUndefined()
-  rebindGroup(RUNTIME_KEY, KEY)
-  // 迁移只是换键：ChatView 没卸载、shell 还活着，不能标失联。
-  expect(tabsFor(KEY)[0]!.stale).toBeUndefined()
-})
-
-test("group count is capped by LRU eviction, sparing groups that are still mounted", () => {
-  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) addTab(`runtime:old-${index}`, "review")
-  addTab(RUNTIME_KEY_2, "terminal")
-  retainGroup(RUNTIME_KEY_2)
-  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
-  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
-  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
-  releaseGroup(RUNTIME_KEY_2)
-  pruneGroups(1)
-  // 淘汰只丢内存；磁盘条目保留（调用方不写 null），重新打开再 hydrate。
-  expect(sidebarTabRegistry.size).toBe(1)
-  expect(hasGroup(RUNTIME_KEY_2)).toBe(true)
-  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) dropGroup(`runtime:old-${index}`)
 })

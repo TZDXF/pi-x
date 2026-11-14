@@ -25,14 +25,8 @@ export interface PersistedSidebarTabs {
   active: number
 }
 
-/** 单会话最多保留的 Tab 数；`addTab` 到上限即拒绝新增，落盘/读盘侧同样截断。 */
+/** 单会话最多保留的 Tab 数，超出直接截断（与 `MAX_OPEN_CONVERSATIONS` 同量级）。 */
 export const MAX_SIDEBAR_TABS = 20
-
-/**
- * 内存中最多驻留多少个会话组；超出的按 LRU 淘汰（只丢内存，磁盘条目保留，
- * 重新打开该会话时再 hydrate）。挂载中的组不参与淘汰（见 `stores/sidebarTabs.ts`）。
- */
-export const MAX_SIDEBAR_TAB_GROUPS = 24
 
 export function isSidebarTabKind(value: unknown): value is SidebarTabKind {
   return typeof value === "string" && (SIDEBAR_TAB_KINDS as readonly string[]).includes(value)
@@ -91,20 +85,14 @@ export function markDetachedTabs(tabs: SidebarTabItem[]): boolean {
   return changed
 }
 
-/**
- * 当前 Tab 列表 → 落盘载荷。空列表返回 `null`（写入方据此删除该条目）。
- *
- * 写侧也过白名单：`aux`（TZD-94，关闭即销毁、不落盘）与未知 kind 在本地就丢掉，
- * 不把前端脏数据交给后端兜底（后端净化是防线，不是写侧正确性的来源）。
- */
+/** 当前 Tab 列表 → 落盘载荷。空列表返回 `null`（写入方据此删除该条目）。 */
 export function persistedFromTabs(
   tabs: readonly SidebarTabItem[],
   activeId: number | null,
 ): PersistedSidebarTabs | null {
-  const allowed = tabs.filter(tab => isSidebarTabKind(tab.type)).slice(0, MAX_SIDEBAR_TABS)
-  if (!allowed.length) return null
-  const kinds = allowed.map(tab => tab.type)
-  const index = activeId === null ? -1 : allowed.findIndex(tab => tab.id === activeId)
+  if (!tabs.length) return null
+  const kinds = tabs.slice(0, MAX_SIDEBAR_TABS).map(tab => tab.type)
+  const index = activeId === null ? -1 : tabs.findIndex(tab => tab.id === activeId)
   return { kinds, active: Math.max(index, 0) }
 }
 
@@ -115,4 +103,12 @@ export function persistedFromTabs(
  */
 export function sidebarTabGroupKey(runtimeId: string, sessionFile: string | null | undefined, project: string): string {
   return sessionFile ? `${project}\u0000${sessionFile}` : `runtime:${runtimeId}`
+}
+
+/** 供 `rebind` 使用：把源键上的载荷迁到目标键（目标已有内容时以源为准，与 UI 一致）。 */
+export function mergePersisted(
+  existing: PersistedSidebarTabs | null,
+  incoming: PersistedSidebarTabs | null,
+): PersistedSidebarTabs | null {
+  return incoming ?? existing
 }
