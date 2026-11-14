@@ -37,6 +37,7 @@ import {
   reorderTabs,
   retainGroup,
   retainedGroupCount,
+  pendingHydrateSizeForTest,
   sidebarTabRegistry,
   setActiveTab,
   tabsFor,
@@ -456,4 +457,79 @@ test("first render never exposes more groups than the limit", () => {
   expect(api.tabs.value).toEqual([])
   expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
   scope.stop()
+})
+
+// ---- 容量准入（复审阻塞项）：组数上限必须靠"建组前准入"守住 ----
+
+test("thirty simultaneously mounted conversations never exceed the group limit", async () => {
+  // 复审复现的构造：30 个不同会话各挂一个实例，每个都 retain=1。
+  // 旧实现"全部组被挂载持有 → pruneGroups 静默 return → stateFor 照样建组"，
+  // 于是内存里稳定 30 组。准入必须在建组前拒绝，而不是事后淘汰。
+  const scopes: ReturnType<typeof effectScope>[] = []
+  let denied = 0
+  for (let index = 0; index < 30; index++) {
+    const scope = effectScope()
+    const sessionFile = ref<string | null>(`sessions/c${index}.jsonl`)
+    scope.run(() =>
+      useSidebarTabs({
+        runtimeId: `rt-cap-${index}`,
+        sessionFile,
+        project: () => "C:/project",
+        onGroupLimitReached: () => (denied += 1),
+      }),
+    )
+    scopes.push(scope)
+  }
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+  // 超出容量的挂载必须被明确拒绝（不能静默超限建组）。
+  expect(denied).toBe(30 - MAX_SIDEBAR_TAB_GROUPS)
+  for (const scope of scopes) scope.stop()
+})
+
+test("a conversation whose payload arrives while the registry is full is admitted after space frees up", async () => {
+  // 复审的"24 闲置组 + 新组已有磁盘载荷"路径：旧实现先 hydrate 建组再 prune，
+  // 中间态冲到 25。现在 hydrate 走准入；腾不出就把载荷暂存，名额空出来后补上。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) retainGroup(`runtime:idle-${index}`)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  const lateKey = "runtime:late"
+  expect(hydrateGroup(lateKey, { kinds: ["review", "browser"], active: 1 })).toBe(false)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
+
+  releaseGroup("runtime:idle-0")
+  // 名额空出后自动补 hydrate，载荷没被丢。
+  expect(hasGroup(lateKey)).toBe(true)
+  expect(tabsFor(lateKey).map(tab => tab.type)).toEqual(["review", "browser"])
+  expect(activeIdFor(lateKey)).toBe(tabsFor(lateKey)[1]!.id)
+})
+
+test("unmounting the mounted holders admits the payload that was denied entry", () => {
+  // 复审第三条缺口：释放后没人再触发回收/hydrate，被挡在门外的载荷就永久丢失。
+  const scopes: ReturnType<typeof effectScope>[] = []
+  // 留 2 个名额，其余全被挂载持有。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 2; index++) {
+    const scope = effectScope()
+    const sessionFile = ref<string | null>(`sessions/h${index}.jsonl`)
+    scope.run(() =>
+      useSidebarTabs({ runtimeId: `rt-hold-${index}`, sessionFile, project: () => "C:/project" }),
+    )
+    scopes.push(scope)
+  }
+  // 先把空闲名额用完，再让带载荷的会话被准入拒绝（载荷进 pendingHydrate）。
+  retainGroup("runtime:filler-1")
+  retainGroup("runtime:filler-2")
+  const deniedKey = "runtime:denied-with-payload"
+  expect(hydrateGroup(deniedKey, { kinds: ["files", "browser"], active: 1 })).toBe(false)
+  expect(hasGroup(deniedKey)).toBe(false)
+  expect(pendingHydrateSizeForTest()).toBe(1)
+
+  // 全部卸载：释放路径必须补一次回收 + 补 hydrate，否则这条载荷永远进不来。
+  for (const scope of scopes) scope.stop()
+  releaseGroup("runtime:filler-1")
+  expect(hasGroup(deniedKey)).toBe(true)
+  expect(tabsFor(deniedKey).map(tab => tab.type)).toEqual(["files", "browser"])
+  expect(pendingHydrateSizeForTest()).toBe(0)
+  releaseGroup("runtime:filler-2")
+  expect(sidebarTabRegistry.size).toBeLessThanOrEqual(MAX_SIDEBAR_TAB_GROUPS)
 })

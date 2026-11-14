@@ -41,6 +41,11 @@ export function useSidebarTabs(options: {
   /** 达到单组上限（新增被拒绝）时给用户明确反馈。 */
   onTabLimitReached?: () => void
   /**
+   * 达到内存组数上限、腾不出名额（全部组都被挂载持有）时回调：此时不建组，
+   * 调用方应提示"侧栏暂不可用/请先关闭其他会话"之类的可执行动作。
+   */
+  onGroupLimitReached?: () => void
+  /**
    * 存储替身：E2E 夹具里没有 Tauri transport，无法构造真实 workspace store。
    * 生产调用点不传，走 `useWorkspaceStore()`。
    */
@@ -50,6 +55,7 @@ export function useSidebarTabs(options: {
   const tabKey = computed(() => groupKeyFor(options.runtimeId, options.sessionFile.value, options.project()))
 
   const tabs = computed<SidebarTabItem[]>({
+    // 读取不建组：组由 `retainGroup` 的容量准入创建，否则首渲染会超限。
     get: () => tabsFor(tabKey.value),
     set: next => reorder(next),
   })
@@ -101,23 +107,31 @@ export function useSidebarTabs(options: {
   /**
    * 在挂载/换键点做一次组数回收。
    *
-   * 键还没有内存组时按"预留 1 个"的口径回收（上限 - 1）：`tabs` 首次被读取时才会
-   * 创建该组，按上限回收会让首渲染短暂出现「24 旧组 + 新空组 = 25」。
+   * 容量准入已经在**建组前**做了（`retainGroup` 会先腾名额、腾不出就拒绝建组），
+   * 因此这里只需常规回收，不再用"预留 1 个"的技巧去救首渲染 25 组的中间态。
    */
   function pruneForCurrentGroup() {
-    pruneGroups(hasGroup(tabKey.value) ? MAX_SIDEBAR_TAB_GROUPS : MAX_SIDEBAR_TAB_GROUPS - 1)
+    pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
   }
 
-  // 挂载即持有：此后该组的 LRU 淘汰被挡住（分屏里另一个窗格可能还有活终端）。
-  retainGroup(tabKey.value)
-  heldKey = tabKey.value
+  // 挂载即持有：容量准入先腾名额再建组；腾不出（全部组都被挂载持有）则**不建组**，
+  // 并通过 `onGroupLimitReached` 让调用方知道这次挂载无法恢复该会话的 Tab。
+  if (!retainGroup(tabKey.value)) {
+    options.onGroupLimitReached?.()
+  } else {
+    heldKey = tabKey.value
+  }
   pruneForCurrentGroup()
 
   const stopKeyWatch = watch(tabKey, (next, previous) => {
     if (!next || !previous || next === previous) return
     const previousHold = heldKey
     // 新键先受保护：迁移与 hydrate 之间它随时可能成为 LRU 的候选。
-    retainGroup(next)
+    // 准入失败时不改 heldKey（旧键仍由本实例持有，直到卸载/下一次成功换键）。
+    if (!retainGroup(next)) {
+      options.onGroupLimitReached?.()
+      return
+    }
     heldKey = next
     if (previous.startsWith("runtime:")) {
       // 源非空 = 用户已经在草稿会话里加过 Tab。此时必须**立即**用新身份键写回并清掉
@@ -154,7 +168,8 @@ export function useSidebarTabs(options: {
   function add(type: SidebarTabKind) {
     const id = addTab(tabKey.value, type)
     if (id === null) {
-      options.onTabLimitReached?.()
+      if (hasGroup(tabKey.value)) options.onTabLimitReached?.()
+      else options.onGroupLimitReached?.()
       return null
     }
     options.onFirstTabAdded?.()

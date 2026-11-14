@@ -69,12 +69,19 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
     先 retain 新键、迁移完再释放旧键。身份键变化不止 `runtime:` → 文件键一种 ——
     SSH realpath 回绑（`src/lib/workspaceRuntime.ts:149`）同样会在组件仍挂载时换键，
     两种情况都要配平，否则正在显示的组会失去保护、旧 alias 键引用还会永久泄漏。
-  - 回收时机在组真正可用之后：键还没有内存组时按"预留 1 个"的口径回收，
-    因此首渲染也不会短暂出现「24 旧组 + 新空组 = 25」，观测到的不变量 ≤24。
-    唯一例外是所有组都仍被挂载持有（分屏极限情形）：`pruneGroups` 宁可不淘汰，
-    也不动仍在显示的会话（那会删掉有活进程的终端 Tab）。
-  - 量级：每组最多 20 条 `{id, type, stale?}`（约几百字节），24 组 ≈ 十几 KB，
-    不随会话数量线性增长。
+  - **建组前准入**（而不是先建后回收）：`ensureGroup` 先 `pruneGroups(上限 - 1)` 腾名额，
+    腾不出就**拒绝建组**并让调用方知道（`onGroupLimitReached`）。因此
+    `sidebarTabRegistry.size ≤ 24` 是真不变量，不依赖"事后淘汰"的时序。
+  - 准入覆盖所有会新建组的路径：`addTab`、`hydrateGroup`、`retainGroup`（挂载）、
+    `rebindGroup`（换键迁入）、`reorderTabs`；`tabsFor`/`activeIdFor` 读取**不建组**。
+  - 被准入拒绝的落盘载荷不会丢：`hydrateGroup` 把它存进 `pendingHydrate`，
+    名额空出来后由 `flushPendingHydrate` 补 hydrate（`releaseGroup` 与
+    `pruneGroups` 腾出名额时都会触发）。
+  - `pruneGroups` 返回实际腾出的组数（腾不出返回 0），不再静默 `return`；
+    调用方据此判断准入是否成功。全部组都被挂载持有时它确实腾不出名额 ——
+    此时的表现是**新的挂载被拒绝**（组数仍是 ≤24），而不是把上限放成 30。
+  - 量级：每组最多 20 条 `{id, type, stale?}`（约几百字节），**内存组数硬上限 24**，
+    因此总量有界（≈ 十几 KB 加待 hydrate 暂存），不随会话数量线性增长。
 
 ## 6. 边界
 

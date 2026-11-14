@@ -58,13 +58,33 @@ export function groupKeyFor(runtimeId: string, sessionFile: string | null | unde
   return sidebarTabGroupKey(runtimeId, sessionFile, project)
 }
 
-function stateFor(key: string): GroupState {
-  let state = sidebarTabRegistry.get(key)
-  if (!state) {
-    state = { tabs: [], activeId: null, nextId: 1, usedAt: ++clock }
-    sidebarTabRegistry.set(key, state)
-  }
+/** 只读：不创建组。读取（`tabsFor`/`activeIdFor`）绝不能让组数超过上限。 */
+function stateFor(key: string): GroupState | undefined {
+  return sidebarTabRegistry.get(key)
+}
+
+/** 建组被拒时暂存的落盘载荷：等腾出名额后自动补 hydrate，不丢 Tab。 */
+const pendingHydrate = new Map<string, unknown>()
+
+/**
+ * 新建组的**容量准入**：先尽力腾出一个名额（`limit - 1`），仍然满就打回。
+ *
+ * 这是组数 ≤ `MAX_SIDEBAR_TAB_GROUPS` 的唯一入口 —— 先建后回收（或"删不掉就放行"）
+ * 会让"分屏 + 休眠会话"把内存组数顶到 30 组，超限就不是不变量而是愿望。
+ */
+function ensureGroup(key: string): GroupState | null {
+  const existing = sidebarTabRegistry.get(key)
+  if (existing) return existing
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS - 1)
+  if (sidebarTabRegistry.size >= MAX_SIDEBAR_TAB_GROUPS) return null
+  const state: GroupState = { tabs: [], activeId: null, nextId: 1, usedAt: ++clock }
+  sidebarTabRegistry.set(key, state)
   return state
+}
+
+/** 当前内存组数（诊断与测试用）。 */
+export function groupCount() {
+  return sidebarTabRegistry.size
 }
 
 function touch(key: string) {
@@ -87,13 +107,14 @@ export function hasGroup(key: string) {
   return sidebarTabRegistry.has(key)
 }
 
-/** 供 UI 绑定的只读快照；每次调用都返回同一 reactive 对象，避免重建引用。 */
+/** 供 UI 绑定的只读快照；组不存在时返回同一份空数组（读取不建组）。 */
+const EMPTY_TABS: SidebarTabItem[] = []
 export function tabsFor(key: string): SidebarTabItem[] {
-  return stateFor(key).tabs
+  return stateFor(key)?.tabs ?? EMPTY_TABS
 }
 
 export function activeIdFor(key: string) {
-  return stateFor(key).activeId
+  return stateFor(key)?.activeId ?? null
 }
 
 /**
@@ -102,7 +123,9 @@ export function activeIdFor(key: string) {
  */
 export function addTab(key: string, type: SidebarTabKind): number | null {
   hydratedKeys.add(key)
-  const state = stateFor(key)
+  const state = ensureGroup(key)
+  // 容量准入失败（组数已满且所有组都被挂载持有）：明确拒绝，不超限建组。
+  if (!state) return null
   if (state.tabs.length >= MAX_SIDEBAR_TABS) return null
   const id = state.nextId++
   state.tabs.push({ id, type })
@@ -113,6 +136,7 @@ export function addTab(key: string, type: SidebarTabKind): number | null {
 
 export function closeTab(key: string, id: number) {
   const state = stateFor(key)
+  if (!state) return
   const index = state.tabs.findIndex(tab => tab.id === id)
   if (index < 0) return
   state.tabs.splice(index, 1)
@@ -125,7 +149,8 @@ export function closeTab(key: string, id: number) {
  * 的不变量不只依赖 `addTab`：拖拽是唯一可能绕过它把列表变长的入口。
  */
 export function reorderTabs(key: string, tabs: SidebarTabItem[]) {
-  const state = stateFor(key)
+  const state = ensureGroup(key)
+  if (!state) return
   state.tabs = tabs.slice(0, MAX_SIDEBAR_TABS)
   if (state.activeId !== null && !state.tabs.some(tab => tab.id === state.activeId))
     state.activeId = state.tabs[0]?.id ?? null
@@ -133,7 +158,9 @@ export function reorderTabs(key: string, tabs: SidebarTabItem[]) {
 }
 
 export function setActiveTab(key: string, id: number | null) {
-  stateFor(key).activeId = id
+  const state = stateFor(key)
+  if (!state) return
+  state.activeId = id
   touch(key)
 }
 
@@ -152,10 +179,19 @@ export function persistedFor(key: string): PersistedSidebarTabs | null {
  * 避免把用户在等待期间新加的 Tab 覆盖掉。
  */
 export function hydrateGroup(key: string, value: unknown): boolean {
-  hydratedKeys.add(key)
   const persisted = normalizePersistedSidebarTabs(value)
-  if (!persisted) return false
-  const state = stateFor(key)
+  if (!persisted) {
+    hydratedKeys.add(key)
+    return false
+  }
+  const state = ensureGroup(key)
+  if (!state) {
+    // 容量准入失败：记住这份载荷而不建组，名额空出来后由 `flushPendingHydrate` 补上。
+    // 这里**不**标记 hydrated —— 否则随后到达的载荷会被永久挡住。
+    pendingHydrate.set(key, value)
+    return false
+  }
+  hydratedKeys.add(key)
   let counter = state.nextId
   const rebuilt = tabsFromPersisted(persisted, () => counter++)
   state.tabs = rebuilt.tabs
@@ -163,6 +199,49 @@ export function hydrateGroup(key: string, value: unknown): boolean {
   state.nextId = rebuilt.nextId
   touch(key)
   return true
+}
+
+/**
+ * 名额空出来后，把因容量准入被拒而暂存的载荷补 hydrate。
+ *
+ * 只尝试一次、按插入顺序，且每次都要重新走 `ensureGroup` 的准入：
+ * 腾不出名额的继续暂存，等下一次释放。
+ */
+let flushing = false
+
+export function flushPendingHydrate(): number {
+  // 防重入：`ensureGroup` 内部会 `pruneGroups`，后者成功腾位又会回调本函数。
+  if (flushing) return 0
+  flushing = true
+  try {
+    return flushPendingHydrateOnce()
+  } finally {
+    flushing = false
+  }
+}
+
+function flushPendingHydrateOnce(): number {
+  let hydrated = 0
+  for (const [key, value] of [...pendingHydrate]) {
+    if (sidebarTabRegistry.has(key)) {
+      pendingHydrate.delete(key)
+      continue
+    }
+    if (!ensureGroup(key)) continue
+    pendingHydrate.delete(key)
+    const persisted = normalizePersistedSidebarTabs(value)
+    const state = sidebarTabRegistry.get(key)
+    if (!persisted || !state) continue
+    hydratedKeys.add(key)
+    let counter = state.nextId
+    const rebuilt = tabsFromPersisted(persisted, () => counter++)
+    state.tabs = rebuilt.tabs
+    state.activeId = rebuilt.activeId
+    state.nextId = rebuilt.nextId
+    touch(key)
+    hydrated += 1
+  }
+  return hydrated
 }
 
 /**
@@ -189,8 +268,14 @@ export function rebindGroup(fromKey: string, toKey: string): boolean {
   if (!source) return false
   sidebarTabRegistry.delete(fromKey)
   if (!source.tabs.length) return false
-  const target = sidebarTabRegistry.get(toKey)
-  const state: GroupState = target ?? { tabs: [], activeId: null, nextId: 1, usedAt: ++clock }
+  // 迁入目标同样要走容量准入：源先被删掉，所以这里实际是"原地改名"，仍受上限约束。
+  const target = ensureGroup(toKey)
+  if (!target) {
+    // 腾不出名额：把源放回去，调用方据此知道迁移失败（不会写盘、不会丢 Tab）。
+    sidebarTabRegistry.set(fromKey, source)
+    return false
+  }
+  const state: GroupState = target
   state.tabs = source.tabs
   state.activeId = source.activeId
   state.nextId = Math.max(state.nextId, source.nextId)
@@ -223,9 +308,14 @@ export function dropGroup(key: string) {
  * 某个 `ChatView` 开始持有该组；配合 `releaseGroup` 让组数淘汰不误伤分屏中
  * 仍在显示的会话（它们的终端 Tab 还有活进程）。
  */
-export function retainGroup(key: string) {
+export function retainGroup(key: string): boolean {
+  // 容量准入：已有组直接持有；新组必须先腾出名额，腾不出则**不持也不建**。
+  // 返回 false 表示"这次挂载拿不到该组"，调用方必须据此告知用户，
+  // 不能超限建组（那正是 30 组的来源）。
+  if (!sidebarTabRegistry.has(key) && !ensureGroup(key)) return false
   liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
   touch(key)
+  return true
 }
 
 /** 该组当前的持有计数（供诊断与测试核对 retain/release 是否配平）。 */
@@ -238,13 +328,19 @@ export function releaseGroup(key: string) {
   const count = liveRefs.get(key) ?? 0
   if (count <= 1) liveRefs.delete(key)
   else liveRefs.set(key, count - 1)
+  // 释放后组数可能已经能回到上限内：补一次回收，别等下一次挂载才收。
+  pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
+  // 还有被容量准入挡在门外的落盘载荷？现在腾位的机会来了 —— 它们自带数据，
+  // 值得挤掉一个闲置空组（仍是 LRU，且只会动未被持有的组）。
+  if (pendingHydrate.size > 0) flushPendingHydrate()
 }
 
 /**
  * 组数超限时按 LRU 淘汰内存态（落盘条目保留，重新打开该会话时再 hydrate）。
  * 仍被挂载的组（`liveRefs`）绝不淘汰；全部组都被持有时放弃淘汰而不是误伤。
  */
-export function pruneGroups(limit = MAX_SIDEBAR_TAB_GROUPS) {
+export function pruneGroups(limit = MAX_SIDEBAR_TAB_GROUPS): number {
+  let freed = 0
   while (sidebarTabRegistry.size > limit) {
     let victim: string | null = null
     let oldest = Infinity
@@ -255,9 +351,14 @@ export function pruneGroups(limit = MAX_SIDEBAR_TAB_GROUPS) {
         victim = key
       }
     }
-    if (!victim) return
+    // 全部组都被挂载持有：**腾不出名额**，如实返回 0，由调用方拒绝新建，
+    // 不再静默 return 让调用方以为已经腾好了（那是 30 组的直接来源）。
+    if (!victim) break
     dropGroup(victim)
+    freed += 1
   }
+  if (freed > 0) flushPendingHydrate()
+  return freed
 }
 
 /** 判断某个 runtime 是否已经在注册表里（供 `ChatView` 挂载时决定是否 hydrate）。 */
@@ -270,3 +371,8 @@ export function groupKeyForRuntime(runtimeId: string, sessionFile: string | null
 }
 
 export { MAX_SIDEBAR_TAB_GROUPS, MAX_SIDEBAR_TABS }
+
+/** 仅测试用：被容量准入挡下、暂存待 hydrate 的载荷数量。 */
+export function pendingHydrateSizeForTest() {
+  return pendingHydrate.size
+}
