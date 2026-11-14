@@ -24,6 +24,7 @@ import {
   addTab,
   closeTab,
   dropGroup,
+  groupCount,
   groupKeyFor,
   hasGroup,
   hydrateGroup,
@@ -1165,5 +1166,65 @@ test("24 mounts each rolling back and retrying leave no ghost holds", async () =
   expect(pendingHydrateSizeForTest()).toBe(0)
   for (const key of fileKeys) dropGroup(key)
   dropGroup(freshKey)
+  fakeWorkspace.sidebarTabs = {}
+})
+
+// ---- 「先撤排队、再判幂等」的顺序本身必须被独立守住 ----
+
+test("retaining an already-held key still drops the stale queued request for that owner", async () => {
+  // 质量工程师的 BH 探针：顺序写反（幂等命中在前、`pendingRetain.delete` 在后）时，
+  // 后果比"队列残留"更重 —— 空出来的名额会被**没人要的 stale runtime 键**先认领，
+  // 而真正可见的文件键那一笔引用反被打掉（`fileRefs` 1→0）。
+  // 先建 23 个持有 pane（留 1 个名额给被测窗格），再把名额占满。
+  const holders: ReturnType<typeof effectScope>[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) {
+    const holderFile = ref<string | null>(`sessions/bh${index}.jsonl`)
+    const holderScope = effectScope()
+    holderScope.run(() =>
+      useSidebarTabs({ runtimeId: `rt-bh-${index}`, sessionFile: holderFile, project: () => "C:/project" }),
+    )
+    holders.push(holderScope)
+  }
+
+  // 被测窗格先拿到第 24 个名额并加 terminal：文件键 → null（满额 ⇒ 为 runtime 键排队）
+  // → 设回同一文件键（幂等命中，同一 owner 已持有该文件键）。
+  const scope = effectScope()
+  const sessionFile = ref<string | null>("C:/project/sessions/bh.jsonl")
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-bh", sessionFile, project: () => "C:/project" })
+  })
+  expect(groupCount()).toBe(MAX_SIDEBAR_TAB_GROUPS)
+  const fileKey = api.tabKey.value
+  expect(api.add("terminal")).toBeTruthy()
+  expect(retainedGroupCount(fileKey)).toBe(1)
+
+  sessionFile.value = null
+  await nextTick()
+  const runtimeKey = api.tabKey.value
+  expect(runtimeKey).toBe("runtime:rt-bh")
+  // 满额 → 为 runtime 键排队（这条请求随后就应该被作废）。
+  expect(pendingRetainCount()).toBe(1)
+
+  sessionFile.value = "C:/project/sessions/bh.jsonl"
+  await nextTick()
+  expect(api.tabKey.value).toBe(fileKey)
+  // 幂等命中同一 (owner, fileKey)：**顺序正确**时 stale 的 runtime 键请求已被撤掉。
+  // 若把 `pendingRetain.delete(owner)` 挪到幂等命中之后，这里会是 2（残留一条）。
+  expect(pendingRetainCount(), "stale runtime-key 排队项必须已被作废").toBe(0)
+
+  // 关掉一个 pane 腾出名额：不得承认 stale runtime 空组，可见的文件键引用必须仍是 1。
+  holders.shift()!.stop()
+  await nextTick()
+  expect(hasGroup(runtimeKey), "stale runtime 空组不得被承认").toBe(false)
+  expect(retainedGroupCount(runtimeKey)).toBe(0)
+  expect(retainedGroupCount(fileKey)).toBe(1)
+  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["terminal"])
+  // 引用总数 = 仍在挂载的 pane 数（含被测窗格自己）。
+  expect(totalRetainedForTest()).toBe(holders.length + 1)
+  expect(pendingRetainCount()).toBe(0)
+
+  scope.stop()
+  for (const holder of holders) holder.stop()
   fakeWorkspace.sidebarTabs = {}
 })

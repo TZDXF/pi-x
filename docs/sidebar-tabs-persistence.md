@@ -113,8 +113,15 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
       `conversationLoader.ts`）会落回同一个键，换键路径也不检查"是否已持有该键"。
       没有幂等守卫时 `liveRefs` 会变成 2 而账本仍 1 笔（`Set` 去重），
       `releaseOwnerHold` 每键只释放一次 —— 差的那一笔钉死一个空组，每漏一笔吃一个名额。
-    - 上面"卸载与换键都凭它释放、都能一次撤干净"成立的前提就是这个幂等守卫
-      （连同"每笔增量都有账本"的不变量）；破坏任一条，`Set` 式释放就回收不了双记的引用。
+    - 上面"卸载与换键都凭它释放、都能一次撤干净"成立的前提是**三条同时成立**：
+      ① `(owner, key)` 幂等；② `liveRefs` 每笔增量都有账本记录；③
+      **先撤队列、再判幂等**（`pendingRetain.delete(owner)` 必须在幂等提前返回之前）。
+      缺 ① / ② 时 `Set` 式释放回收不了双记的引用；缺 ③ 时一个 owner 回到**已持有**
+      的键后，它此前为旧键排的队仍留在队列里 —— 名额一空出，那个 stale 旧键先被
+      承认（建出空组、记一笔），并把**可见组**的持有顶掉（`fileRefs` 1→0）。
+      三条各有独立常驻用例（`acquiring the same (owner, key) twice…`、
+      `24 mounts each rolling back and retrying…`、
+      `retaining an already-held key still drops the stale queued request for that owner`）。
   - **卸载顺序不可颠倒**：`releaseOwnerHold(owner)` 先撤销排队请求、再释放账本里的持有。
     `releaseGroup` 会同步 flush 队列，若先放再撤，本实例刚让出名额的那一次 flush 会把
     自己排队的键准入进来 —— 已卸载实例于是留下 `retain=1`。按 owner 记账后，这个顺序

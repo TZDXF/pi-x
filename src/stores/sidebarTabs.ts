@@ -433,6 +433,11 @@ export function retainGroup(key: string, onAdmit?: () => void, owner = key): boo
 
   if (ownerHolds.get(owner)?.has(key)) {
     // 已经持有：只刷新 LRU 时间戳，不加计数、不改账本。
+    //
+    // 注意：幂等命中**不保证组存在**。`rebindGroup` 的空源分支会删掉源组而账本
+    // 那一笔仍在（账本表示"该实例仍挂在这个键上"），后续该键的组要靠调用方补建：
+    // `addTab` / `hydrateGroup` / `reorderTabs` 都先走 `ensureGroup`，`tabsFor` /
+    // `activeIdFor` 只读（返回冻结空数组）。所以不要读成"已持有 ⇒ 组一定在"。
     touch(key)
     return true
   }
