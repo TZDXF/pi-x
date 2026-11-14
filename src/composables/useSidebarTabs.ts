@@ -3,6 +3,7 @@ import { MAX_SIDEBAR_TAB_GROUPS, MAX_SIDEBAR_TABS, type SidebarTabItem, type Sid
 import { useWorkspaceStore } from "@/stores/workspace"
 import {
   activeIdFor,
+  dropPendingRetain,
   addTab,
   closeTab,
   groupKeyFor,
@@ -114,12 +115,25 @@ export function useSidebarTabs(options: {
     pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
   }
 
-  // 挂载即持有：容量准入先腾名额再建组；腾不出（全部组都被挂载持有）则**不建组**，
-  // 并通过 `onGroupLimitReached` 让调用方知道这次挂载无法恢复该会话的 Tab。
-  if (!retainGroup(tabKey.value)) {
-    options.onGroupLimitReached?.()
+  /**
+   * 把"本实例获得了某个键"这件事记下来，并补齐该键应有的状态。
+   *
+   * 既在挂载时直接调用，也作为 `retainGroup` 的排队回调 —— 名额空出后由注册表
+   * 原地回调，用户不必切走再切回。
+   */
+  function adoptKey(key: string) {
+    heldKey = key
+    hydrateFromPersisted(key)
+    // 组刚建出来时可能还没被读取过：读一次让响应式 `tabs` 立刻有内容。
+    if (!tabsFor(key).length) tabsFor(key)
+  }
+
+  // 挂载即持有：容量准入先腾名额再建组；腾不出（全部组都被挂载持有）时**排队**，
+  // 名额空出后自动准入（`adoptKey` 作为回调），因此这不是终态失败。
+  if (retainGroup(tabKey.value, () => adoptKey(tabKey.value))) {
+    adoptKey(tabKey.value)
   } else {
-    heldKey = tabKey.value
+    options.onGroupLimitReached?.()
   }
   pruneForCurrentGroup()
 
@@ -127,8 +141,12 @@ export function useSidebarTabs(options: {
     if (!next || !previous || next === previous) return
     const previousHold = heldKey
     // 新键先受保护：迁移与 hydrate 之间它随时可能成为 LRU 的候选。
-    // 准入失败时不改 heldKey（旧键仍由本实例持有，直到卸载/下一次成功换键）。
-    if (!retainGroup(next)) {
+    // 准入失败时排队（回调里再配平旧键释放），旧键仍由本实例持有，不会漏释放。
+    const admitted = retainGroup(next, () => {
+      adoptKey(next)
+      if (previousHold && previousHold !== next) releaseGroup(previousHold)
+    })
+    if (!admitted) {
       options.onGroupLimitReached?.()
       return
     }
@@ -158,6 +176,7 @@ export function useSidebarTabs(options: {
   onScopeDispose(() => {
     markGroupDetached(tabKey.value)
     if (heldKey) releaseGroup(heldKey)
+    else dropPendingRetain(tabKey.value)
     heldKey = null
   })
 

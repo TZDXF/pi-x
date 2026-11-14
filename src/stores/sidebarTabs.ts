@@ -67,6 +67,17 @@ function stateFor(key: string): GroupState | undefined {
 const pendingHydrate = new Map<string, unknown>()
 
 /**
+ * 建组被拒时排队的**挂载请求**（FIFO）。与 `pendingHydrate` 是两份队列：
+ *
+ * - `pendingRetain`：会话正在挂载、只是没名额建组 —— 名额一空出就要补准入，
+ *   让该会话的侧栏**自动**恢复（用户不必切走再切回）；
+ * - `pendingHydrate`：载荷到了但没名额建组 —— 名额空出后补 hydrate。
+ *
+ * 合并成一份会让"没有载荷的挂载"误触发 hydrate，反之也会漏掉挂载的准入。
+ */
+const pendingRetain = new Map<string, Array<(() => void) | null>>()
+
+/**
  * 新建组的**容量准入**：先尽力腾出一个名额（`limit - 1`），仍然满就打回。
  *
  * 这是组数 ≤ `MAX_SIDEBAR_TAB_GROUPS` 的唯一入口 —— 先建后回收（或"删不掉就放行"）
@@ -198,7 +209,50 @@ export function hydrateGroup(key: string, value: unknown): boolean {
   state.activeId = rebuilt.activeId
   state.nextId = rebuilt.nextId
   touch(key)
+  // 该键可能正好有排队的挂载请求（迟到载荷）：建组即承认，避免"显示中被淘汰"。
+  admitPendingRetain(key)
   return true
+}
+
+/**
+ * 名额空出来后，把排队中的挂载请求补准入（FIFO，按登记顺序）。
+ *
+ * 与 `flushPendingHydrate` 分开：这里只处理"会话在挂载但没名额建组"，
+ * 不碰任何载荷。腾不出名额的继续排队。
+ */
+let flushingRetain = false
+
+export function flushPendingRetain(): number {
+  // 防重入：`ensureGroup` 会调 `pruneGroups`，后者成功腾位又会回调本函数。
+  if (flushingRetain) return 0
+  flushingRetain = true
+  let admitted = 0
+  try {
+    for (const [key, waiters] of [...pendingRetain]) {
+      if (!waiters.length) {
+        pendingRetain.delete(key)
+        continue
+      }
+      if (sidebarTabRegistry.has(key)) {
+        pendingRetain.delete(key)
+        liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
+        touch(key)
+        for (const waiter of waiters) waiter?.()
+        admitted += waiters.length
+        continue
+      }
+      const state = ensureGroup(key)
+      if (!state) break
+      pendingRetain.delete(key)
+      liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
+      touch(key)
+      admitted += waiters.length
+      for (const waiter of waiters) waiter?.()
+    }
+    return admitted
+  } finally {
+    flushingRetain = false
+  }
 }
 
 /**
@@ -239,6 +293,7 @@ function flushPendingHydrateOnce(): number {
     state.activeId = rebuilt.activeId
     state.nextId = rebuilt.nextId
     touch(key)
+    admitPendingRetain(key)
     hydrated += 1
   }
   return hydrated
@@ -308,14 +363,55 @@ export function dropGroup(key: string) {
  * 某个 `ChatView` 开始持有该组；配合 `releaseGroup` 让组数淘汰不误伤分屏中
  * 仍在显示的会话（它们的终端 Tab 还有活进程）。
  */
-export function retainGroup(key: string): boolean {
-  // 容量准入：已有组直接持有；新组必须先腾出名额，腾不出则**不持也不建**。
-  // 返回 false 表示"这次挂载拿不到该组"，调用方必须据此告知用户，
-  // 不能超限建组（那正是 30 组的来源）。
-  if (!sidebarTabRegistry.has(key) && !ensureGroup(key)) return false
+/**
+ * 某个 `ChatView` 开始持有该组。
+ *
+ * 返回值 = "现在是否已经持有"。`false` 表示**已排队**（不是终态失败）：名额全被
+ * 挂载持有时不超限建组，而是登记 FIFO 挂载请求，名额一空出就回调 `onAdmit`
+ * 让调用方原地自愈（用户不需要切走再切回）。
+ */
+export function retainGroup(key: string, onAdmit?: () => void): boolean {
+  const state = sidebarTabRegistry.has(key) ? sidebarTabRegistry.get(key)! : ensureGroup(key)
+  if (!state) {
+    const waiters = pendingRetain.get(key) ?? []
+    waiters.push(onAdmit ?? null)
+    pendingRetain.set(key, waiters)
+    return false
+  }
   liveRefs.set(key, (liveRefs.get(key) ?? 0) + 1)
   touch(key)
   return true
+}
+
+/** 排队中的挂载请求数量（诊断与测试用）。 */
+export function pendingRetainCount() {
+  return pendingRetain.size
+}
+
+/** 仅测试用：清空两份队列（用例之间隔离）。 */
+export function resetQueuesForTest(): void {
+  pendingHydrate.clear()
+  pendingRetain.clear()
+}
+
+/** 组件卸载时撤销自己仍在排队的挂载请求（否则名额空出后会为一个已卸载的实例建组）。 */
+export function dropPendingRetain(key: string): void {
+  pendingRetain.delete(key)
+}
+
+/**
+ * 某键刚被建出来时，把它排队中的挂载请求一并承认。
+ *
+ * 这是"迟到载荷建组必须同时 retain"的落点：`hydrateGroup` 成功建组后调用它，
+ * 否则该组会处于"正在显示但没人持有"的状态，下一次 LRU 压力就会把它淘汰。
+ */
+function admitPendingRetain(key: string): void {
+  const waiters = pendingRetain.get(key)
+  if (!waiters) return
+  pendingRetain.delete(key)
+  liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
+  touch(key)
+  for (const waiter of waiters) waiter?.()
 }
 
 /** 该组当前的持有计数（供诊断与测试核对 retain/release 是否配平）。 */
@@ -330,8 +426,9 @@ export function releaseGroup(key: string) {
   else liveRefs.set(key, count - 1)
   // 释放后组数可能已经能回到上限内：补一次回收，别等下一次挂载才收。
   pruneGroups(MAX_SIDEBAR_TAB_GROUPS)
-  // 还有被容量准入挡在门外的落盘载荷？现在腾位的机会来了 —— 它们自带数据，
-  // 值得挤掉一个闲置空组（仍是 LRU，且只会动未被持有的组）。
+  // 名额空出来了：排队的挂载请求先补准入（用户不必切走再切回），
+  // 再补被挡在门外的落盘载荷（它们自带数据，值得挤掉一个闲置空组）。
+  if (pendingRetain.size > 0) flushPendingRetain()
   if (pendingHydrate.size > 0) flushPendingHydrate()
 }
 
@@ -357,7 +454,10 @@ export function pruneGroups(limit = MAX_SIDEBAR_TAB_GROUPS): number {
     dropGroup(victim)
     freed += 1
   }
-  if (freed > 0) flushPendingHydrate()
+  if (freed > 0) {
+    flushPendingRetain()
+    flushPendingHydrate()
+  }
   return freed
 }
 

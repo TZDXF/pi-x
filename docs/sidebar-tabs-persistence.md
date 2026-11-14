@@ -70,16 +70,22 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
     SSH realpath 回绑（`src/lib/workspaceRuntime.ts:149`）同样会在组件仍挂载时换键，
     两种情况都要配平，否则正在显示的组会失去保护、旧 alias 键引用还会永久泄漏。
   - **建组前准入**（而不是先建后回收）：`ensureGroup` 先 `pruneGroups(上限 - 1)` 腾名额，
-    腾不出就**拒绝建组**并让调用方知道（`onGroupLimitReached`）。因此
-    `sidebarTabRegistry.size ≤ 24` 是真不变量，不依赖"事后淘汰"的时序。
+    腾不出才由调用方**排队**。因此 `sidebarTabRegistry.size ≤ 24` 是真不变量，
+    不依赖"事后淘汰"的时序。
   - 准入覆盖所有会新建组的路径：`addTab`、`hydrateGroup`、`retainGroup`（挂载）、
     `rebindGroup`（换键迁入）、`reorderTabs`；`tabsFor`/`activeIdFor` 读取**不建组**。
-  - 被准入拒绝的落盘载荷不会丢：`hydrateGroup` 把它存进 `pendingHydrate`，
-    名额空出来后由 `flushPendingHydrate` 补 hydrate（`releaseGroup` 与
-    `pruneGroups` 腾出名额时都会触发）。
-  - `pruneGroups` 返回实际腾出的组数（腾不出返回 0），不再静默 `return`；
-    调用方据此判断准入是否成功。全部组都被挂载持有时它确实腾不出名额 ——
-    此时的表现是**新的挂载被拒绝**（组数仍是 ≤24），而不是把上限放成 30。
+  - **两份队列，语义不同**（不要合并）：
+    - `pendingRetain`（FIFO）：会话**正在挂载**但没名额建组。名额一空出就补准入，
+      该会话侧栏**原地自愈**，用户不需要切走再切回；
+    - `pendingHydrate`：**载荷到了**但没名额建组。名额空出后补 hydrate。
+    两者都由 `releaseGroup` / `pruneGroups` 腾位时 flush，且各自防重入。
+  - **迟到载荷建组即被持有**：`hydrateGroup` 成功后调 `admitPendingRetain`，
+    把该键排队中的挂载请求一并承认，避免"正在显示却没人持有、下一次 LRU 就被淘汰"。
+  - `pruneGroups` 返回实际腾出的组数（腾不出返回 0）。全部组都被挂载持有时它腾不出
+    名额，此时**新挂载排队**（组数仍是 ≤24），而不是把上限放成 30。
+  - **有界极限**：`≥24` 个 pane 同时挂载时，新打开会话的侧栏会**排队**到有 pane 关闭。
+    这是有界、可自愈、不丢数据的状态 —— 关掉任意一个 pane 后该会话侧栏自动可用，
+    磁盘载荷在排队期间也不会被删除。
   - 量级：每组最多 20 条 `{id, type, stale?}`（约几百字节），**内存组数硬上限 24**，
     因此总量有界（≈ 十几 KB 加待 hydrate 暂存），不随会话数量线性增长。
 

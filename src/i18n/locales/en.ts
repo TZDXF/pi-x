@@ -163,7 +163,7 @@ export default {
     newTerminal: "Terminal",
     terminalLost: "The terminal process exited with the previous run; reopen it to continue",
     terminalRestart: "Reopen terminal",
-    groupLimitReached: "Too many conversations have sidebar tabs open. Close one before opening another.",
+    groupLimitReached: "The sidebar limit is reached: this panel recovers automatically, or immediately after closing any split pane.",
     limitReached: "This conversation already has {count} sidebar tabs. Close one before adding another.",
     newBrowser: "Browser",
   },
