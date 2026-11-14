@@ -147,6 +147,9 @@ fn drop_oversized_record(buf: &mut Vec<u8>, runtime_id: &str, stream: &str) {
     }
 }
 
+/// 正式启动的 argv 前缀。`--no-session` **不**在这里加：aux 的
+/// `--no-session` 由 `rpc::aux_launch::aux_extra_args()` 唯一产出，本地与远程
+/// 两条路径都把它拼进 `extra_args`，避免两处各拼一遍（TZD-94 M0 修复）。
 fn build_spawn_args(session_file: Option<&str>, extra_args: Vec<String>) -> Vec<String> {
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
     if let Some(sf) = session_file {
@@ -1229,6 +1232,61 @@ mod spawn_args_tests {
         let args = build_spawn_args(None, vec!["--approve".into()]);
         assert_eq!(args, vec!["--mode", "rpc", "--approve"]);
     }
+
+    /// `--no-session` 只由 `aux_extra_args()` 产出；`build_spawn_args` 原样保留它。
+    #[test]
+    fn no_session_comes_only_from_extra_args() {
+        let args = build_spawn_args(
+            None,
+            vec![
+                "--no-session".into(),
+                "--no-extensions".into(),
+                "--provider".into(),
+                "home".into(),
+            ],
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--mode",
+                "rpc",
+                "--no-session",
+                "--no-extensions",
+                "--provider",
+                "home",
+            ]
+        );
+        // 不允许出现两个 `--no-session`（重复即为两处拼接）。
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--no-session").count(),
+            1
+        );
+    }
+
+    /// 远程 payload 必须带上 `--no-session`（本次漏检的根因：远程分支绕过了
+    /// `build_spawn_args(..., ephemeral)`，只测本地就漏掉了）。
+    #[test]
+    fn remote_payload_carries_no_session_and_never_session() {
+        let args = crate::rpc::aux_launch::aux_extra_args(&crate::rpc::aux_launch::AuxLaunchSpec {
+            provider: "home".into(),
+            model: "m".into(),
+            thinking: Some("off".into()),
+            file_changes_extension: None,
+            workspace_extension: None,
+        });
+        let payload = crate::ssh::build_spawn_payload(
+            "/home/dev/proj",
+            None,
+            &args,
+        );
+        assert!(payload.contains("--no-session"), "{payload}");
+        assert!(!payload.contains("--session "), "{payload}");
+        assert_eq!(
+            payload.matches("--no-session").count(),
+            1,
+            "远程 payload 不允许重复 --no-session"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1338,6 +1396,7 @@ mod mock_ssh_spawn_tests {
             navigation: Mutex::new(()),
             generation: Arc::new(AtomicU64::new(0)),
             activity: Default::default(),
+            policy: Default::default(),
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
@@ -1473,6 +1532,7 @@ mod mock_ssh_spawn_tests {
                 navigation: Mutex::new(()),
                 generation: Arc::new(AtomicU64::new(0)),
                 activity: Default::default(),
+                policy: Default::default(),
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));

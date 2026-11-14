@@ -18,6 +18,7 @@ pub(crate) mod config;
 pub(crate) mod files;
 pub(crate) mod models;
 pub(crate) mod pi;
+pub(crate) mod pi_aux;
 pub(crate) mod prompts;
 pub(crate) mod ssh;
 pub(crate) mod workspace;
@@ -42,6 +43,8 @@ pub use pi::{
     app_version_get, pi_detect, pi_settings_get, pi_settings_save, pix_log, rpc_kill, rpc_notify,
     rpc_request, rpc_running, rpc_sessions, rpc_spawn, trust_save, trust_status,
 };
+#[allow(unused_imports)]
+pub use pi_aux::aux_spawn;
 #[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
 #[allow(unused_imports)]

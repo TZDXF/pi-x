@@ -132,6 +132,7 @@ pub fn run() {
             commands::pi::trust_status,
             commands::pi::trust_save,
             commands::pi::rpc_spawn,
+            commands::pi_aux::aux_spawn,
             commands::pi::rpc_request,
             commands::pi::rpc_notify,
             commands::pi::rpc_kill,

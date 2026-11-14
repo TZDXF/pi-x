@@ -1526,6 +1526,12 @@ export default {
   // transport layer; keys mirror the error codes at the Rust call sites.
   // tests/backend-errors.test.ts verifies the three stay in sync.
   backendErrors: {
+    auxRpcDenied: "Auxiliary chat does not allow this operation: {type}",
+    auxPiUnsupported: "The installed pi version does not support the isolation flags required by auxiliary chat",
+    auxModelMissing: "Auxiliary chat requires an explicit model",
+    auxRuntimeIdInvalid: "Auxiliary chat runtimeId must start with aux:",
+    auxSessionForbidden: "Auxiliary chat does not accept a session file",
+    builtinExtensionPathMissing: "Built-in extension path is missing",
     skillNotFound: "Skill path not found",
     projectUntrusted: "The project is not trusted; project settings cannot be accessed.",
     invalidResourcePath: "Invalid resource path",
