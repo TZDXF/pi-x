@@ -1,4 +1,4 @@
-import { computed, watch, type Ref } from "vue"
+import { computed, onScopeDispose, watch, type Ref } from "vue"
 import type { SidebarTabItem, SidebarTabKind } from "@/lib/sidebarTabs"
 import { useWorkspaceStore } from "@/stores/workspace"
 import {
@@ -8,6 +8,7 @@ import {
   groupKeyFor,
   hydrateGroup,
   isHydrated,
+  markGroupDetached,
   persistedFor,
   rebindGroup,
   reorderTabs,
@@ -21,7 +22,8 @@ import {
  * 为什么必须出组件：`ChatView` 以 `activeRuntimeId` 为 key 挂载，切会话会整实例
  * 重挂载；设置页往返则是路由级卸载整组面板并销毁 Teleport 目标。组件内 `ref`
  * 两条路径都会丢，所以状态放在 `stores/sidebarTabs.ts`，本 composable 只负责：
- * 会话键计算、异步落盘到达后补 hydrate、文件键出现时迁移、以及每次变更写回。
+ * 会话键计算、异步落盘到达后补 hydrate、文件键出现时迁移、每次变更写回，
+ * 以及卸载时把 terminal Tab 标成 `stale`。
  */
 export function useSidebarTabs(options: {
   runtimeId: string
@@ -31,8 +33,13 @@ export function useSidebarTabs(options: {
   onFirstTabAdded?: () => void
   /** 关掉最后一个 Tab 时收起侧栏。 */
   onLastTabClosed?: () => void
+  /**
+   * 存储替身：E2E 夹具里没有 Tauri transport，无法构造真实 workspace store。
+   * 生产调用点不传，走 `useWorkspaceStore()`。
+   */
+  workspaceStore?: { sidebarTabs: Record<string, unknown>; persistSidebarTabs(key: string, value: unknown): void }
 }) {
-  const workspace = useWorkspaceStore()
+  const workspace = (options.workspaceStore ?? useWorkspaceStore()) as ReturnType<typeof useWorkspaceStore>
   const tabKey = computed(() =>
     groupKeyFor(options.runtimeId, options.sessionFile.value, options.project()),
   )
@@ -43,7 +50,11 @@ export function useSidebarTabs(options: {
   })
   const activeId = computed<number | null>({
     get: () => activeIdFor(tabKey.value),
-    set: id => setActiveTab(tabKey.value, id),
+    set: id => {
+      setActiveTab(tabKey.value, id)
+      // active 也要落盘：否则重启后恢复到错误的 Tab。
+      persist()
+    },
   })
 
   /** 把当前 kind 顺序与 active 写进 workspace.json；空列表写入方会删除该条目。 */
@@ -51,27 +62,43 @@ export function useSidebarTabs(options: {
     workspace.persistSidebarTabs(tabKey.value, persistedFor(tabKey.value))
   }
 
+  /**
+   * 用落盘载荷补 hydrate。
+   *
+   * 两个约束：
+   * - **不能**用一次性监听：`workspace.sidebarTabs` 被别的会话触发更新时也会走到这里，
+   *   `once` 会被这一次消耗掉，导致本会话稍后到达的载荷永远不恢复；
+   * - **不能**覆盖用户已加的状态：`addTab` 会先 `markHydrated`，这里先看
+   *   `isHydrated` 就足够把"等待期间新加的 Tab"保护住。
+   */
   function hydrateFromPersisted(key: string) {
     if (isHydrated(key)) return
-    // 落盘是异步加载的：没有载荷时不能标记"已确定"，否则迟到的条目永远补不进来。
     const persisted = workspace.sidebarTabs?.[key]
     if (persisted) hydrateGroup(key, persisted)
   }
 
   hydrateFromPersisted(tabKey.value)
-  watch(
+  const stopHydrateWatch = watch(
     () => workspace.sidebarTabs,
     () => hydrateFromPersisted(tabKey.value),
-    { once: true },
   )
-  watch(tabKey, (next, previous) => {
+  onScopeDispose(stopHydrateWatch)
+
+  const stopKeyWatch = watch(tabKey, (next, previous) => {
     if (!next || !previous || next === previous) return
-    // 会话首次落盘：把 runtime 键上的 Tab 迁到文件键（同一会话在另一实例也可能开过）。
-    if (previous.startsWith("runtime:")) {
-      rebindGroup(previous, next)
-      persist()
-    }
+    // 会话首次落盘：把 runtime 键上的 Tab 迁到文件键。
+    // 注意：这里**不写回**——此时 `persistedFor(next)` 可能为 null（文件键还没内容），
+    // 写回会把磁盘上已有的恢复载荷删掉。迁移后的下一次真实变更才会写回。
+    if (previous.startsWith("runtime:")) rebindGroup(previous, next)
+    // 新键还没有内容时，补一次 hydrate（不从磁盘删任何东西）。
     hydrateFromPersisted(next)
+  })
+  onScopeDispose(stopKeyWatch)
+
+  // 组件卸载（切会话/设置页往返）时 shell 存活前提已破（`term_kill`），
+  // 该组所有 terminal 必须转 `stale`，否则重挂载会直接挂 `TerminalPanel` 并自动开新 shell。
+  onScopeDispose(() => {
+    markGroupDetached(tabKey.value)
   })
 
   function add(type: SidebarTabKind) {
@@ -89,13 +116,10 @@ export function useSidebarTabs(options: {
     persist()
   }
 
-  /** 重启恢复的 terminal Tab：清 stale 让面板重新挂载（瞬时 UI 状态，不落盘）。 */
+  /** 用户显式重开 terminal：清 stale，让面板重新挂载并开新 shell（不落盘）。 */
   function restartTerminal(id: number) {
     const tab = tabsFor(tabKey.value).find(item => item.id === id)
-    if (tab) {
-      tab.stale = false
-      persist()
-    }
+    if (tab) tab.stale = false
   }
 
   function reorder(next: SidebarTabItem[]) {

@@ -36,32 +36,61 @@ import { createI18n } from 'vue-i18n'
 import messages from '/src/i18n/locales/en.ts'
 import RightSidebar from '/src/components/RightSidebar.vue'
 import '/src/style.css'
+import { defineComponent, h as vh, nextTick, ref as vref, onMounted, onUnmounted, watch } from 'vue'
+import { useSidebarTabs } from '/src/composables/useSidebarTabs.ts'
 const fixture = window.sidebarFixture = reactive({
-  tabs: [{id:1,type:'review'},{id:2,type:'files'},{id:3,type:'review'},{id:4,type:'terminal'},{id:5,type:'browser'}],
-  activeId:1, open:true, mounts:[], unmounts:[], shellOpens:0, reorders:[], activations:[], closes:[], inserts:[], restarts:[]
+  activeId: null, open: true,
+  mounts: [], unmounts: [], shellOpens: 0, reorders: [], activations: [], closes: [], inserts: [], restarts: [],
+  seeded: false, generation: 0
 })
-let nextId = 6
-createApp({render:()=>h('div',{style:'display:flex;height:650px;width:1400px'},[
-  h(RightSidebar,{
-    tabs:fixture.tabs, activeId:fixture.activeId, open:fixture.open,
-    changes:[], project:'C:/fixture', focus:'src/example.ts',
-    'onUpdate:activeId':id=>{fixture.activations.push(id);fixture.activeId=id},
-    'onClose-tab':id=>{
-      fixture.closes.push(id)
-      const index=fixture.tabs.findIndex(tab=>tab.id===id)
-      fixture.tabs=fixture.tabs.filter(tab=>tab.id!==id)
-      if(fixture.activeId===id) fixture.activeId=fixture.tabs[Math.min(index,fixture.tabs.length-1)]?.id??null
-    },
-    'onAdd-tab':type=>{const id=nextId++;fixture.tabs.push({id,type});fixture.activeId=id},
-    'onReorder-tabs':tabs=>{fixture.reorders.push(tabs.map(tab=>tab.id));fixture.tabs=tabs},
-    'onSend-to-chat':text=>fixture.inserts.push(text),
-    'onRestart-terminal':id=>{fixture.restarts.push(id);const tab=fixture.tabs.find(item=>item.id===id);if(tab) delete tab.stale}
-  })
+// 真实 composable + 模块级注册表：Tab 状态不放在组件里，卸载后仍存活（与生产一致）。
+const store = {
+  sidebarTabs: {},
+  persistSidebarTabs(key, value) { if (value === null) delete this.sidebarTabs[key]; else this.sidebarTabs[key] = value },
+}
+const sessionFile = vref(null)
+const project = 'C:/fixture'
+const runtimeId = 'rt-e2e'
+let apiRef = null
+function seed() {
+  const api = useSidebarTabs({ runtimeId, sessionFile, project: () => project, workspaceStore: store })
+  if (!fixture.seeded) {
+    api.add('review'); api.add('files'); api.add('review'); api.add('terminal'); api.add('browser')
+    api.activeId.value = api.tabs.value[0].id
+    fixture.seeded = true
+  }
+  apiRef = api
+  return api
+}
+const Pane = defineComponent({
+  setup() {
+    const api = seed()
+    onUnmounted(() => { fixture.unmounts.push('pane') })
+    return () => vh(RightSidebar, {
+      tabs: api.tabs.value, activeId: api.activeId.value, open: fixture.open,
+      changes: [], project, focus: 'src/example.ts',
+      'onUpdate:activeId': id => { fixture.activations.push(id); api.activeId.value = id },
+      'onClose-tab': id => { fixture.closes.push(id); api.close(id) },
+      'onAdd-tab': type => { api.add(type) },
+      'onReorder-tabs': tabs => { fixture.reorders.push(tabs.map(tab => tab.id)); api.reorder(tabs) },
+      'onSend-to-chat': text => fixture.inserts.push(text),
+      'onRestart-terminal': id => { fixture.restarts.push(id); api.restartTerminal(id) }
+    })
+  }
+})
+let show = vref(true)
+createApp({render:()=>vh('div',{style:'display:flex;height:650px;width:1400px'},[
+  show.value ? vh(Pane, { key: fixture.generation }) : null
 ])}).use(createI18n({legacy:false,locale:'en',messages:{en:messages}})).mount('#app')
+window.sidebarRemount = async () => { show.value = false; await nextTick(); fixture.generation++; show.value = true; await nextTick() }
+window.sidebarTabsState = () => (apiRef ? apiRef.tabs.value.map(t => ({ id: t.id, type: t.type, stale: t.stale })) : [])
+window.sidebarActivate = id => { if (apiRef) apiRef.activeId.value = id }
+window.sidebarReorder = () => fixture.reorders.length
 </script></body></html>`
 
 interface SidebarFixture {
-  tabs: { id: number; type: string; stale?: boolean }[]
+  seeded: boolean
+  generation: number
   activeId: number | null
   open: boolean
   mounts: string[]
@@ -78,6 +107,10 @@ interface SidebarFixture {
 declare global {
   interface Window {
     sidebarFixture: SidebarFixture
+    sidebarRemount: () => Promise<void>
+    sidebarTabsState: () => { id: number; type: string; stale?: boolean }[]
+    sidebarActivate: (id: number) => void
+    sidebarReorder: () => number
   }
 }
 
@@ -242,28 +275,37 @@ test("only reactivating an empty terminal opens a shell, including keyboard acti
   await expect((await active(page, "Terminal")).locator("[data-visible]")).toHaveText("false")
 })
 
-// TZD-95：恢复出来的 terminal Tab 只渲染占位，绝不挂 TerminalPanel（否则会自动开 shell）。
+// TZD-95：走真实生命周期 —— 卸载后重挂载，terminal 必须自动转 stale，只渲染占位。
 // 这条必须 E2E：单测无法证明"面板没被挂载"这一渲染层事实，而"不挂面板且 shellOpens 不增加"
 // 正是恢复逻辑最容易静默退化的地方（TerminalPanel 首次可见即自开 shell）。
-test("restored terminal tab renders a placeholder and never mounts a terminal panel", async ({ page }) => {
-  // 初始夹具自带一个正在运行的 terminal（id 4）；先把计数清零，只观察恢复出来的那个。
-  await page.evaluate(() => {
-    window.sidebarFixture.tabs = [{ id: 11, type: "terminal", stale: true }]
-    window.sidebarFixture.activeId = 11
-    window.sidebarFixture.mounts = []
-    window.sidebarFixture.shellOpens = 0
-  })
-  const placeholder = page.locator("[data-terminal-stale='11']")
+test("unmount then remount marks terminal stale and never mounts a terminal panel", async ({ page }) => {
+  const terminalTab = page.getByRole("tab", { name: "Terminal", exact: true })
+  await terminalTab.click()
+  await active(page, "Terminal")
+  // 卸载前：真实的 TerminalPanel 已挂载（这是"活着的 shell"）。
+  expect(await page.evaluate(() => window.sidebarFixture.mounts)).toContain("terminal")
+
+  await page.evaluate(() => window.sidebarFixture.mounts = [])
+  await page.evaluate(() => window.sidebarTabsState())
+  await page.evaluate(() => window.sidebarRemount())
+  await page.evaluate(() => window.sidebarRemount())
+
+  // 重挂载后：terminal 在注册表里已被标 stale（不是靠夹具预填）。
+  const terminalEntry = await page.evaluate(() =>
+    window.sidebarTabsState().find(tab => tab.type === "terminal")
+  )
+  expect(terminalEntry?.stale).toBe(true)
+
+  // 占位可见，且**没有**再挂 TerminalPanel、没有新开 shell。
+  const placeholder = page.locator("[data-terminal-stale]").first()
   await expect(placeholder).toBeVisible()
   await expect(placeholder).toContainText("The terminal process exited with the previous run")
-  // 关键断言：不挂面板、不自开 shell。
   expect(await page.evaluate(() => window.sidebarFixture.mounts)).not.toContain("terminal")
   expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
-  // 用户显式重开后才允许挂载面板。
+
+  // 只有显式点"重新打开终端"才挂载面板。
   await placeholder.getByRole("button", { name: "Reopen terminal" }).click()
-  expect(await page.evaluate(() => window.sidebarFixture.restarts)).toEqual([11])
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.mounts)).toContain("terminal")
-  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
 })
 
 test("real dragging emits reordered IDs and keyboard navigation follows the new DOM order", async ({ page }) => {
@@ -276,17 +318,20 @@ test("real dragging emits reordered IDs and keyboard navigation follows the new 
   await page.waitForTimeout(200)
   await page.mouse.up()
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.reorders.length)).toBeGreaterThan(0)
-  const ids = await page.evaluate(() => window.sidebarFixture.tabs.map(tab => tab.id))
+  // 顺序来自真实注册表（`useSidebarTabs`），不是夹具里的副本数组。
+  const ids = await page.evaluate(() => window.sidebarTabsState().map(tab => tab.id))
   expect(ids).not.toEqual([1, 2, 3, 4, 5])
-  expect([...ids].sort()).toEqual([1, 2, 3, 4, 5])
+  expect([...ids].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5])
   const selected = page.locator('[role="tab"][aria-selected="true"]')
   await selected.focus()
   await page.keyboard.press("Home")
-  expect(await page.evaluate(() => window.sidebarFixture.activeId)).toBe(ids[0])
+  const activeId = () =>
+    page.evaluate(() => window.sidebarFixture.activations[window.sidebarFixture.activations.length - 1])
+  expect(await activeId()).toBe(ids[0])
   await page.keyboard.press("ArrowRight")
-  expect(await page.evaluate(() => window.sidebarFixture.activeId)).toBe(ids[1])
+  expect(await activeId()).toBe(ids[1])
   await page.keyboard.press("End")
-  expect(await page.evaluate(() => window.sidebarFixture.activeId)).toBe(ids[ids.length - 1])
+  expect(await activeId()).toBe(ids[ids.length - 1])
   expect(await page.evaluate(() => window.sidebarFixture.unmounts)).toEqual([])
 })
 

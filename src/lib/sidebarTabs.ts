@@ -69,6 +69,22 @@ export function tabsFromPersisted(
   return { tabs, activeId: activeTab?.id ?? null, nextId: cursor + 1 }
 }
 
+/**
+ * 组件卸载/重挂载所需的"detached"标记：terminal Tab 的 shell 已随旧实例退出，
+ * 因此把它们全部置为 `stale`（只改内存，不写盘、不碰 `TerminalPanel` 内部）。
+ * 返回是否改动了状态，便于调用点判断要不要重渲染。
+ */
+export function markDetachedTabs(tabs: SidebarTabItem[]): boolean {
+  let changed = false
+  for (const tab of tabs) {
+    if (tab.type === "terminal" && tab.stale !== true) {
+      tab.stale = true
+      changed = true
+    }
+  }
+  return changed
+}
+
 /** 当前 Tab 列表 → 落盘载荷。空列表返回 `null`（写入方据此删除该条目）。 */
 export function persistedFromTabs(
   tabs: readonly SidebarTabItem[],

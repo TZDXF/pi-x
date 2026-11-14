@@ -1,6 +1,7 @@
 import { reactive } from "vue"
 import {
   MAX_SIDEBAR_TABS,
+  markDetachedTabs,
   mergePersisted,
   normalizePersistedSidebarTabs,
   persistedFromTabs,
@@ -113,8 +114,9 @@ export function persistedFor(key: string): PersistedSidebarTabs | null {
 /**
  * 用落盘载荷填充内存状态。
  *
- * 只在"内存里还没有这个会话"时调用（`hydrate` 传 `onlyIfAbsent`），因此
- * "下次打开还在别的会话里"不会被旧载荷覆盖。
+ * 调用方只在"该键还没 hydrate 过"时调用；落盘条目可能晚于用户操作到达，
+ * 那种情况由 `isHydrated` 挡住（`addTab` 会先标记 hydrated），
+ * 避免把用户在等待期间新加的 Tab 覆盖掉。
  */
 export function hydrateGroup(key: string, value: unknown): boolean {
   hydratedKeys.add(key)
@@ -152,6 +154,19 @@ export function rebindGroup(fromKey: string, toKey: string) {
   sidebarTabRegistry.delete(fromKey)
   if (merged) hydrateGroup(toKey, merged)
   else sidebarTabRegistry.delete(toKey)
+}
+
+/**
+ * 组件卸载时调用：该组的所有 terminal Tab 置 `stale`。
+ *
+ * 为什么必须在卸载点做：组件卸载后注册表仍然存活（这正是持久化的目的），重挂载时
+ * `isHydrated` 会阻止从落盘重建 —— 如果此时 terminal 还是"非 stale"，它会被当成
+ * 活着的 shell 直接挂 `TerminalPanel`，而 `TerminalPanel` 首次可见会自动开一个新
+ * shell，冒充"恢复成功"。shell 的存活前提在卸载时已经破了（`term_kill`）。
+ */
+export function markGroupDetached(key: string): boolean {
+  const state = sidebarTabRegistry.get(key)
+  return state ? markDetachedTabs(state.tabs) : false
 }
 
 /** 会话关闭/被淘汰时丢弃该组状态（不做落盘删除，落盘条目由调用方决定）。 */
