@@ -757,6 +757,55 @@ mod tests {
         cleanup(&path);
     }
 
+    /// **直接 `read()` 回归**：把**原始**含未知/aux/空组的 JSON 写到磁盘（不经
+    /// `update()` 过滤），断言 `read()` 接受它、保留合法组、丢弃非法组。
+    /// 之前两条测试都从空文件出发走 `update()`，未知组在写盘前就被过滤掉了，
+    /// 根本没走到"读一个本来就有脏组的文件"这条路径。
+    #[test]
+    fn read_accepts_a_file_that_already_contains_unknown_or_empty_groups() {
+        let path = path();
+        let dir = path.parent().unwrap();
+        std::fs::create_dir_all(dir).unwrap();
+        let raw = json!({
+            "revision": 3,
+            "sidebarTabs": {
+                "runtime:aux-only": { "kinds": ["aux"], "active": 0 },
+                "runtime:unknown-only": { "kinds": ["mystery"], "active": 0 },
+                "runtime:empty": { "kinds": [], "active": 0 },
+                "runtime:blank-key": { "kinds": ["review"], "active": 5 },
+                "runtime:good": { "kinds": ["review", "aux", "browser"], "active": 9 }
+            }
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+
+        // 旧实现（空组直接 Err）会在这里整体失败。
+        let state = read(&path).expect("含未知/aux/空组的文件必须被接受");
+
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:aux-only"),
+            "只有 aux 的组要被丢弃"
+        );
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:unknown-only"),
+            "只有未知 kind 的组要被丢弃"
+        );
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:empty"),
+            "空 kinds 的组要被丢弃"
+        );
+        // 合法组保留，未知 kind 被剔除，active 被钳制。
+        assert_eq!(state.sidebar_tabs["runtime:good"].kinds, vec!["review", "browser"]);
+        assert_eq!(state.sidebar_tabs["runtime:good"].active, 1);
+        assert_eq!(
+            state.sidebar_tabs["runtime:blank-key"].kinds,
+            vec!["review"],
+            "key 不是空白（runtime:blank-key）→ 保留"
+        );
+        assert_eq!(state.sidebar_tabs["runtime:blank-key"].active, 0);
+        assert_eq!(state.revision, 3, "其余字段不受影响");
+        cleanup(&path);
+    }
+
     #[test]
     fn backend_results_survive_without_a_connected_client_and_retry_starts_do_not_rewrite() {
         let path = path();

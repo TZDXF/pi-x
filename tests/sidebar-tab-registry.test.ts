@@ -235,13 +235,22 @@ test("changing the active tab is persisted", async () => {
 })
 
 test("rebinding after sessionFile arrives keeps the persisted payload for the new key", async () => {
+  // 时序必须是三步（同一 tick 改载荷 + sessionFile 会被 hydrate 抢先，掩盖旧实现的删除）：
+  // ① 预置文件键载荷；② 挂载并让 runtime 键先消费一次 watcher；③ 再改 sessionFile。
   const { workspace, api, sessionFile } = setup()
-  // 本会话还没加任何 Tab；磁盘上文件键已经有一份更早的载荷（另一个实例写的）。
   expect(api.tabKey.value).toBe("runtime:rt-1")
+
+  // ① 磁盘上文件键已经有一份更早的载荷（另一个实例写的）。
   workspace.sidebarTabs = { [KEY]: { kinds: ["files", "browser"], active: 1 } }
+  await nextTick()
+
+  // ② 读一次 runtime 键的 tabs（空），让 hydrate watcher 以 runtime 键消费掉这次更新。
+  expect(tabsFor("runtime:rt-1")).toEqual([])
+  expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["files", "browser"], active: 1 })
+
+  // ③ 会话落盘：旧实现会在这里 persist(null) 把文件键的载荷删掉。
   sessionFile.value = "C:/project/sessions/a.jsonl"
   await nextTick()
-  // 旧实现会在这里 persist(null) 把文件键的载荷删掉；修好后载荷仍在、且被恢复出来。
   expect(workspace.sidebarTabs[KEY]).toEqual({ kinds: ["files", "browser"], active: 1 })
   expect(tabsFor(KEY).map(tab => tab.type)).toEqual(["files", "browser"])
 })

@@ -10,10 +10,18 @@ const panelTypes: Record<string, string> = {
   "/src/components/browser/BrowserPanel.vue": "browser",
 }
 
+/**
+ * 轻量面板替身。
+ *
+ * terminal 替身**刻意复刻**真实 `TerminalPanel` 的关键行为：
+ * `watch(() => props.visible, ..., { immediate: true })` —— 首次可见且没有 shell 时
+ * 自动开一个（`embedded && !tabs.length → openTerminal()`）。没有这段，
+ * `shellOpens === 0` 就不是有效反向证据：替身本来就不会自己开 shell。
+ */
 function panelSource(type: string) {
   return `<script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-defineProps(['visible', 'focus', 'project', 'changes', 'embedded'])
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+const props = defineProps(['visible', 'focus', 'project', 'changes', 'embedded'])
 const emit = defineEmits(['send-to-chat'])
 const fixture = window.sidebarFixture
 const text = ref('')
@@ -21,7 +29,14 @@ const shell = ref(false)
 onMounted(() => fixture.mounts.push('${type}'))
 onUnmounted(() => fixture.unmounts.push('${type}'))
 function openTerminal() { shell.value = true; fixture.shellOpens++; return Promise.resolve() }
-if ('${type}' === 'terminal') fixture.clearShell = () => { shell.value = false }
+if ('${type}' === 'terminal') {
+  fixture.clearShell = () => { shell.value = false }
+  // 与真实组件一致：首次可见（visible 为 true）即自开 shell。
+  watch(() => props.visible, visible => {
+    if (!visible) return
+    nextTick(() => { if (!shell.value) void openTerminal() })
+  }, { immediate: true })
+}
 defineExpose({ openTerminal, hasTerminals: () => shell.value })
 </script>
 <template><div data-panel="${type}" class="flex-1"><input aria-label="${type} state" v-model="text" />
@@ -248,27 +263,33 @@ test("duplicate-type panels retain independent state and stay mounted while hidd
   await expect(panel.locator("[data-focus]")).toHaveText("src/example.ts")
 })
 
-test("only reactivating an empty terminal opens a shell, including keyboard activation", async ({ page }) => {
+// 注：替身现在复刻真实 `TerminalPanel` 的"首次可见即自开 shell"（`watch(visible, immediate)`），
+// 因此本用例的历史期望（首次激活 shellOpens===0）按真实行为改写：首次激活就会开一个。
+test("an empty terminal opens a shell on first show and on every reactivation", async ({ page }) => {
   const terminal = page.getByRole("tab", { name: "Terminal", exact: true })
   await terminal.click()
   await active(page, "Terminal")
-  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
-  await terminal.click()
+  // 真实组件在首次可见时就自开 shell。
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(1)
   await terminal.click()
   expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(1)
+  // 再点一次但 shell 已不在了 → 重新开（RightSidebar 的 reactivateTab 语义）。
   await page.evaluate(() => window.sidebarFixture.clearShell())
-  await terminal.press("Enter")
+  await terminal.click()
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(2)
   await page.evaluate(() => window.sidebarFixture.clearShell())
-  await terminal.press("Space")
+  await terminal.press("Enter")
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(3)
+  await page.evaluate(() => window.sidebarFixture.clearShell())
+  await terminal.press("Space")
+  await expect.poll(() => page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(4)
   await page.getByRole("tab", { name: "Review 1", exact: true }).click()
   await page.evaluate(() => window.sidebarFixture.clearShell())
   await page.keyboard.press("End")
   await page.keyboard.press("ArrowLeft")
   await active(page, "Terminal")
-  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(3)
+  // 从隐藏回到可见（且没有 shell）也会自开一个。
+  await expect.poll(() => page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(5)
   await page.evaluate(() => {
     window.sidebarFixture.open = false
   })
@@ -282,8 +303,10 @@ test("unmount then remount marks terminal stale and never mounts a terminal pane
   const terminalTab = page.getByRole("tab", { name: "Terminal", exact: true })
   await terminalTab.click()
   await active(page, "Terminal")
-  // 卸载前：真实的 TerminalPanel 已挂载（这是"活着的 shell"）。
+  // 卸载前：真实的 TerminalPanel 已挂载（这是"活着的 shell"），并且替身已经自开了一个。
   expect(await page.evaluate(() => window.sidebarFixture.mounts)).toContain("terminal")
+  const shellOpensBeforeUnmount = await page.evaluate(() => window.sidebarFixture.shellOpens)
+  expect(shellOpensBeforeUnmount).toBe(1)
 
   await page.evaluate(() => window.sidebarFixture.mounts = [])
   await page.evaluate(() => window.sidebarTabsState())
@@ -301,11 +324,19 @@ test("unmount then remount marks terminal stale and never mounts a terminal pane
   await expect(placeholder).toBeVisible()
   await expect(placeholder).toContainText("The terminal process exited with the previous run")
   expect(await page.evaluate(() => window.sidebarFixture.mounts)).not.toContain("terminal")
-  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
+  // 基准是卸载前的 1，不在 0：重挂载不得让这个计数增长。
+  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(shellOpensBeforeUnmount)
 
-  // 只有显式点"重新打开终端"才挂载面板。
+  // 只有显式点"重新打开终端"才挂载面板 —— 并且**真的会自开一个 shell**
+  // （替身复刻了真实组件的"首次可见自开 shell"，所以这里 shellOpens 必须增长，
+  //  否则说明替身没模拟到位、上面的 0 也就不是有效反向证据）。
   await placeholder.getByRole("button", { name: "Reopen terminal" }).click()
   await expect.poll(() => page.evaluate(() => window.sidebarFixture.mounts)).toContain("terminal")
+  // 显式重开必须**真的**多开一个 shell —— 这才证明"替身会自开 shell"，
+  // 也就证明重挂载后的"没增长"是有效反向证据。
+  await expect
+    .poll(() => page.evaluate(() => window.sidebarFixture.shellOpens))
+    .toBe(shellOpensBeforeUnmount + 1)
 })
 
 test("real dragging emits reordered IDs and keyboard navigation follows the new DOM order", async ({ page }) => {
