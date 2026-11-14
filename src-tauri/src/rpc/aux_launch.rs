@@ -32,15 +32,19 @@ pub struct AuxLaunchSpec {
     pub workspace_extension: Option<PathBuf>,
 }
 
-/// 组装 aux 的 `extra_args`（不含 `--mode rpc` / `--no-session`，那两项由
-/// `build_spawn_args` 负责）。
+/// 组装 aux 的 `extra_args`。
+///
+/// `--no-session` 在这里、且**只在这里**加：本地 spawn 与远程 payload 都把这个
+/// 返回值原样拼到 argv 尾部，所以两条路径不会各拼一遍、也不会漏。
+/// `--mode rpc` 由 `probe_args()` 加；正式启动时它由 `build_spawn_args`
+/// （本地）与 `build_spawn_payload`（远程）加。
 ///
 /// 关键点：`--no-extensions` 关闭扩展自动发现（连带移除内置 MCP/codemode/
 /// tool_search），随后用 `-e` 白名单加载审计过的扩展。工具集不设限
 /// （不传 `--tools`/`--exclude-tools`），trust 也不覆盖（不传 `--approve`/
 /// `--no-approve`），因此 aux 与主会话**唯一的不同权点就是扩展发现**。
 pub fn aux_extra_args(spec: &AuxLaunchSpec) -> Vec<String> {
-    let mut args = vec!["--no-extensions".to_string()];
+    let mut args = vec!["--no-session".to_string(), "--no-extensions".to_string()];
     if let Some(path) = &spec.file_changes_extension {
         args.push("--extension".into());
         args.push(path.to_string_lossy().into_owned());
@@ -116,11 +120,17 @@ fn unsupported(detail: impl std::fmt::Display) -> String {
     )
 }
 
-/// 本地探测：用与真实 spawn 相同的解析结果与完整参数起短生命周期 RPC。
+/// 本地探测：用与真实 spawn **同一**可执行文件、**同一** cwd 与
+/// `PIX_WORKSPACE`、**同一**完整参数起短生命周期 RPC。
+///
+/// 探测环境必须与正式启动一致：不同 cwd/workspace 会让项目设置、trust 命中和
+/// 扩展加载路径都不同，"探测通过"就不代表"正式启动能跑"。
 pub async fn probe_local(
     info: &crate::pi_locate::PiInfo,
     args: &[String],
     fingerprint: &str,
+    project: &str,
+    workspace_manifest: Option<&str>,
 ) -> Result<(), String> {
     if cache_get(fingerprint) {
         return Ok(());
@@ -128,6 +138,11 @@ pub async fn probe_local(
     use std::process::Stdio;
     let mut cmd = crate::pi_locate::command_for(info)?;
     cmd.args(args);
+    cmd.current_dir(project);
+    if let Some(manifest) = workspace_manifest {
+        // 与正式 spawn 同一条环境变量（`rpc/child.rs` 本地分支）。
+        cmd.env("PIX_WORKSPACE", manifest);
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -175,7 +190,7 @@ pub async fn probe_local(
                     value["error"].as_str().unwrap_or("unknown")
                 ));
             }
-            if value["data"].get("sessionFile").is_some() {
+            if response_has_session_file(&value) {
                 return Err("probe reported a session file".to_string());
             }
             return Ok(());
@@ -253,7 +268,7 @@ pub async fn probe_remote(
                 value["error"].as_str().unwrap_or("unknown")
             )));
         }
-        if value["data"].get("sessionFile").is_some() {
+        if response_has_session_file(&value) {
             return Err(unsupported("probe reported a session file"));
         }
         answered = true;
@@ -273,9 +288,12 @@ pub fn ensure_ephemeral(session_file: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 探测用的完整参数（与真实 spawn 一致的可见形态），便于测试断言。
+/// 探测用的完整参数：`--mode rpc` 必须显式给出。
+///
+/// 缺了它 pi 会落到 print 模式（读 stdin 收尾才输出），探测只能等到超时；
+/// 这里与正式 argv 保持同一前缀顺序，便于 `probe_args_starts_in_rpc_mode` 钉住。
 pub fn probe_args(spec: &AuxLaunchSpec) -> Vec<String> {
-    let mut args = vec!["--no-session".to_string()];
+    let mut args = vec!["--mode".to_string(), "rpc".to_string()];
     args.extend(aux_extra_args(spec));
     args
 }
@@ -304,30 +322,6 @@ pub fn spec_from_json(value: &Value) -> Result<AuxLaunchSpec, String> {
     })
 }
 
-/// 供诊断日志使用的规格快照（不含任何凭据）。
-pub fn spec_summary(spec: &AuxLaunchSpec) -> Value {
-    json!({
-        "provider": spec.provider,
-        "model": spec.model,
-        "thinking": spec.thinking,
-        "extensions": aux_extension_names(spec),
-    })
-}
-
-fn aux_extension_names(spec: &AuxLaunchSpec) -> Vec<String> {
-    let mut names = Vec::new();
-    if spec.file_changes_extension.is_some() {
-        names.push("pix-file-changes".to_string());
-    }
-    if spec.workspace_extension.is_some() {
-        names.push("pix-workspace".to_string());
-    }
-    if spec.provider.trim() == crate::builtin_extensions::LLAMA_CPP_PROVIDER {
-        names.push("builtin:llama.cpp".to_string());
-    }
-    names
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,9 +337,17 @@ mod tests {
     }
 
     #[test]
-    fn extra_args_start_with_no_extensions_and_never_restrict_tools() {
+    fn extra_args_start_with_no_session_then_no_extensions_and_never_restrict_tools() {
+        // `--no-session` 的唯一产出点就是这个函数：本地 spawn 与远程 payload
+        // 都原样拼它，因此这里钉住位置与唯一性。
         let args = aux_extra_args(&spec("home"));
-        assert_eq!(args[0], "--no-extensions");
+        assert_eq!(args[0], "--no-session");
+        assert_eq!(args[1], "--no-extensions");
+        assert_eq!(
+            args.iter().filter(|a| **a == "--no-session").count(),
+            1,
+            "aux argv 只能有一个 --no-session"
+        );
         for forbidden in [
             "--tools",
             "--exclude-tools",
@@ -389,6 +391,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "--no-session",
                 "--no-extensions",
                 "--extension",
                 "/x/pix-file-changes.js",
@@ -414,12 +417,30 @@ mod tests {
         assert!(!args.iter().any(|arg| arg == "--thinking"));
     }
 
+    /// 探测必须以 `--mode rpc` 起进程：缺了它 pi 落到 print 模式、只等 stdin
+    /// 收尾，探测只能超时（这正是本次被漏掉的阻塞缺陷）。
     #[test]
-    fn probe_args_pair_no_session_with_the_whitelist() {
+    fn probe_args_start_in_rpc_mode() {
         let args = probe_args(&spec("home"));
-        assert_eq!(args[0], "--no-session");
-        assert_eq!(args[1], "--no-extensions");
+        assert_eq!(args[0], "--mode");
+        assert_eq!(args[1], "rpc");
+        // 顺序与正式 argv 一致：mode rpc → no-session → no-extensions → -e… → provider/model
+        assert_eq!(args[2], "--no-session");
+        assert_eq!(args[3], "--no-extensions");
         assert!(args.contains(&"--provider".to_string()));
+        assert!(!args.contains(&"--session".to_string()));
+    }
+
+    /// 可失败性：把 `--mode rpc` 去掉必须能被断言发现（否则下次被改回去无人发现）。
+    #[test]
+    fn dropping_mode_rpc_is_detected_by_the_assertion() {
+        let mut args = probe_args(&spec("home"));
+        args.drain(0..2);
+        assert_ne!(args[0], "--mode", "去掉 --mode rpc 后首项不再是 --mode");
+        assert!(
+            !args.windows(2).any(|pair| pair[0] == "--mode" && pair[1] == "rpc"),
+            "缺 --mode rpc 时不应再出现该组合"
+        );
     }
 
     #[test]

@@ -55,6 +55,7 @@ const AUX_ALLOWED: &[&str] = &[
 
 /// 结构类与写全局设置类：既不在允许清单里，也在此显式列出以便拒绝文案与测试
 /// 可读（真正的判定仍是"不在允许清单即拒绝"）。
+#[cfg_attr(not(test), allow(dead_code))]
 pub const AUX_DENIED: &[&str] = &[
     "fork",
     "clone",

@@ -57,8 +57,9 @@ pub async fn aux_spawn(
                 "未找到 pi。请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
             ));
         }
-        // 本地 aux：`-e` 白名单是代码常量，物化后传入；provider 需要时回补 llama.cpp。
-        spec.file_changes_extension = Some(materialize_file_changes()?);
+        // 本地 aux：`-e` 白名单是代码常量；`pix-file-changes` 与主会话同一条
+        // `builtin_file_changes` 开关（关闭时不注入），provider 需要时回补 llama.cpp。
+        spec.file_changes_extension = crate::builtin_extensions::file_changes_extension_path(&app)?;
         if manifest.is_some() {
             spec.workspace_extension = Some(materialize_workspace()?);
         }
@@ -68,7 +69,14 @@ pub async fn aux_spawn(
             &rpc::aux_launch::probe_args(&spec),
             info.version.as_deref().unwrap_or("unknown"),
         );
-        rpc::aux_launch::probe_local(&info, &rpc::aux_launch::probe_args(&spec), &fingerprint).await?;
+        rpc::aux_launch::probe_local(
+            &info,
+            &rpc::aux_launch::probe_args(&spec),
+            &fingerprint,
+            &project,
+            manifest.as_deref(),
+        )
+        .await?;
         return rpc::spawn(
             app,
             &state,
@@ -127,6 +135,7 @@ async fn spawn_aux_remote(
     // 部署可能换掉远端 pi，探测缓存必须作废。
     rpc::aux_launch::reset_probe_cache();
 
+    // 远程也把 aux_extra_args 原样交给 payload（`--no-session` 在其中，只有一处实现）。
     let args = rpc::aux_launch::aux_extra_args(&spec);
     let fingerprint = rpc::aux_launch::probe_fingerprint(
         endpoint.describe().as_str(),
@@ -154,14 +163,6 @@ async fn spawn_aux_remote(
     .await?;
     let _ = ssh::config::touch_connection(&connection.id);
     Ok(())
-}
-
-fn materialize_file_changes() -> Result<std::path::PathBuf, String> {
-    // `file_changes_extension_args` 返回 `["--extension", path]`。
-    let args = crate::builtin_extensions::file_changes_extension_args()?;
-    args.get(1)
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| pix_error("builtinExtensionPathMissing", "内置插件路径缺失"))
 }
 
 fn materialize_workspace() -> Result<std::path::PathBuf, String> {

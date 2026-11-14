@@ -5,9 +5,9 @@
 ## 1. 启动 argv
 
 ```
---mode rpc --no-session
+--mode rpc --no-session                    # 由 aux_extra_args 唯一产出（本地与远程共用）
 --no-extensions                 # 唯一与主会话不同权点；连带移除内置 MCP / codemode / tool_search
--e <pix-file-changes.js>        # 仅本地，受 builtin_file_changes 控制；远程分支不注入
+-e <pix-file-changes.js>        # 仅本地；与主会话同一条 builtin_file_changes 开关（关闭则整项不注入）；远程分支不注入
 -e <pix-workspace.js>           # 仅当父会话有 workspace manifest
 -e builtin:llama.cpp            # 仅当继承模型 provider 为 llama.cpp
 --provider <p> --model <m> [--thinking <l>]   # 继承父会话 state.model/thinkingLevel

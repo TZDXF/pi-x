@@ -319,7 +319,8 @@ pub async fn spawn(
         }
     }
     if policy.ephemeral() && session_file.is_some() {
-        // `--session` 与 `--no-session` 互斥：aux 必须无文件。
+        // `--session` 与 `--no-session` 互斥：aux 必须无文件（--no-session 只在
+        // `aux_launch::aux_extra_args()` 里产出，这里挡住反向用法）。
         return Err(crate::errors::pix_error(
             "auxSessionForbidden",
             "辅助对话不接受会话文件",

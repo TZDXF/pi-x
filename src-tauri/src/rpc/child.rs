@@ -147,16 +147,11 @@ fn drop_oversized_record(buf: &mut Vec<u8>, runtime_id: &str, stream: &str) {
     }
 }
 
-fn build_spawn_args(
-    session_file: Option<&str>,
-    extra_args: Vec<String>,
-    ephemeral: bool,
-) -> Vec<String> {
+/// 正式启动的 argv 前缀。`--no-session` **不**在这里加：aux 的
+/// `--no-session` 由 `rpc::aux_launch::aux_extra_args()` 唯一产出，本地与远程
+/// 两条路径都把它拼进 `extra_args`，避免两处各拼一遍（TZD-94 M0 修复）。
+fn build_spawn_args(session_file: Option<&str>, extra_args: Vec<String>) -> Vec<String> {
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
-    if ephemeral {
-        // aux：`--no-session` 不落盘；与 `--session` 互斥由 rpc::spawn 前置校验。
-        args.push("--no-session".into());
-    }
     if let Some(sf) = session_file {
         args.push("--session".into());
         args.push(sf.into());
@@ -236,11 +231,7 @@ async fn process_spawn_impl(
 
     let mut child = match program {
         SpawnProgram::LocalPi(pi) => {
-            let args = build_spawn_args(
-                session_file.as_deref(),
-                extra_args,
-                state.policy.ephemeral(),
-            );
+            let args = build_spawn_args(session_file.as_deref(), extra_args);
 
             // Prefer the resolved launcher (node + cli.js); never route npm .cmd
             // shims through cmd.exe — its shim trick can exit silently under pipes.
@@ -1218,7 +1209,6 @@ mod spawn_args_tests {
                 "--thinking".into(),
                 "medium".into(),
             ],
-            false,
         );
         assert_eq!(
             args,
@@ -1239,16 +1229,21 @@ mod spawn_args_tests {
 
     #[test]
     fn omits_session_flag_without_session_file() {
-        let args = build_spawn_args(None, vec!["--approve".into()], false);
+        let args = build_spawn_args(None, vec!["--approve".into()]);
         assert_eq!(args, vec!["--mode", "rpc", "--approve"]);
     }
 
+    /// `--no-session` 只由 `aux_extra_args()` 产出；`build_spawn_args` 原样保留它。
     #[test]
-    fn ephemeral_adds_no_session_before_extra_args() {
+    fn no_session_comes_only_from_extra_args() {
         let args = build_spawn_args(
             None,
-            vec!["--no-extensions".into(), "--provider".into(), "home".into()],
-            true,
+            vec![
+                "--no-session".into(),
+                "--no-extensions".into(),
+                "--provider".into(),
+                "home".into(),
+            ],
         );
         assert_eq!(
             args,
@@ -1260,6 +1255,36 @@ mod spawn_args_tests {
                 "--provider",
                 "home",
             ]
+        );
+        // 不允许出现两个 `--no-session`（重复即为两处拼接）。
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--no-session").count(),
+            1
+        );
+    }
+
+    /// 远程 payload 必须带上 `--no-session`（本次漏检的根因：远程分支绕过了
+    /// `build_spawn_args(..., ephemeral)`，只测本地就漏掉了）。
+    #[test]
+    fn remote_payload_carries_no_session_and_never_session() {
+        let args = crate::rpc::aux_launch::aux_extra_args(&crate::rpc::aux_launch::AuxLaunchSpec {
+            provider: "home".into(),
+            model: "m".into(),
+            thinking: Some("off".into()),
+            file_changes_extension: None,
+            workspace_extension: None,
+        });
+        let payload = crate::ssh::build_spawn_payload(
+            "/home/dev/proj",
+            None,
+            &args,
+        );
+        assert!(payload.contains("--no-session"), "{payload}");
+        assert!(!payload.contains("--session "), "{payload}");
+        assert_eq!(
+            payload.matches("--no-session").count(),
+            1,
+            "远程 payload 不允许重复 --no-session"
         );
     }
 }
