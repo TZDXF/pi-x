@@ -624,3 +624,87 @@ test("a payload that arrives when the registry is full is retained once it is ad
   scope.stop()
   for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS; index++) releaseGroup(`runtime:full-${index}`)
 })
+
+// ---- 排队期间换键的卸载泄漏（复审阻塞项 1）----
+
+test("unmounting a queued instance cancels every key it queued, not just the current one", async () => {
+  // 24 组全被挂载持有 → 新实例的挂载请求只能排队。
+  const holders: ReturnType<typeof effectScope>[] = []
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS; index++) {
+    const scope = effectScope()
+    const sessionRef = ref<string | null>(`sessions/qq${index}.jsonl`)
+    scope.run(() =>
+      useSidebarTabs({ runtimeId: `rt-qq-${index}`, sessionFile: sessionRef, project: () => "C:/project" }),
+    )
+    holders.push(scope)
+  }
+  expect(pendingRetainCount()).toBe(0)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  // 排队中：先以 runtime 键请求（A），再改身份键（B）—— 两个键都进过队列。
+  const scope = effectScope()
+  const sessionFile = ref<string | null>("sessions/queued-switch.jsonl")
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-switch", sessionFile, project: () => "C:/project" })
+  })
+  const keyA = api.tabKey.value
+  expect(pendingRetainCount()).toBe(1)
+
+  // SSH realpath 回绑式换键（同一实例、组件仍挂载）→ 第二个键也排队。
+  sessionFile.value = null
+  await nextTick()
+  const keyB = api.tabKey.value
+  expect(keyA).not.toBe(keyB)
+  expect(pendingRetainCount()).toBe(2)
+
+  // 卸载：必须按实例撤销**全部**排队键（旧实现只撤当前键 B，A 留在队列）。
+  scope.stop()
+  expect(pendingRetainCount()).toBe(0)
+
+  // 腾名额：不得为已卸载实例建组（否则 retain=1、无人释放、永久占名额）。
+  releaseGroup(`runtime:qq-0`.replace("qq", "qq"))
+  expect(hasGroup(keyA)).toBe(false)
+  expect(hasGroup(keyB)).toBe(false)
+  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS; index++) {
+    releaseGroup(`runtime:qq-${index}`)
+  }
+  for (const scopeItem of holders) scopeItem.stop()
+})
+
+// ---- 延迟准入必须重跑 M1 的 rebind 写回（复审阻塞项 2）----
+
+test("a queued rebind that later gets admitted still writes the new identity key and clears the runtime one", async () => {
+  // 先在还有名额时挂载并加 Tab：runtime 键的组真实存在（这是"runtime 源已有 Tab"）。
+  const scope = effectScope()
+  const sessionFile = ref<string | null>(null)
+  let api!: ReturnType<typeof useSidebarTabs>
+  scope.run(() => {
+    api = useSidebarTabs({ runtimeId: "rt-late-write", sessionFile, project: () => "C:/project" })
+  })
+  const runtimeKey = api.tabKey.value
+  expect(runtimeKey).toBe("runtime:rt-late-write")
+  expect(api.add("review")).toBeTruthy()
+  expect(api.add("browser")).toBeTruthy()
+
+  // 把名额占满（其余组全被挂载持有）→ 该实例换键时只能排队。
+  for (let index = 0; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) retainGroup(`runtime:fillw-${index}`)
+  expect(sidebarTabRegistry.size).toBe(MAX_SIDEBAR_TAB_GROUPS)
+
+  sessionFile.value = "sessions/late-write.jsonl"
+  await nextTick()
+  const fileKey = api.tabKey.value
+  expect(pendingRetainCount()).toBe(1)
+
+  // 名额空出 → 延迟准入 → 必须与立即路径跑**同一份** rebind：
+  // 新键有内容、落盘写新键、旧 runtime 条目被清。
+  releaseGroup("runtime:fillw-0")
+  await nextTick()
+  expect(hasGroup(fileKey)).toBe(true)
+  expect(tabsFor(fileKey).map(tab => tab.type)).toEqual(["review", "browser"])
+  expect(fakeWorkspace.sidebarTabs[fileKey]).toEqual({ kinds: ["review", "browser"], active: 1 })
+  expect(fakeWorkspace.sidebarTabs[runtimeKey]).toBeUndefined()
+
+  scope.stop()
+  for (let index = 1; index < MAX_SIDEBAR_TAB_GROUPS - 1; index++) releaseGroup(`runtime:fillw-${index}`)
+})

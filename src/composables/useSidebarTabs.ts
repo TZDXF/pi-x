@@ -106,6 +106,15 @@ export function useSidebarTabs(options: {
   let heldKey: string | null = null
 
   /**
+   * 本挂载实例的稳定标识（生命周期内不变）。
+   *
+   * 排队中的挂载请求按它归属：身份键会变（`runtime:` → 文件键、SSH realpath 回绑），
+   * 卸载时必须按**实例**撤销该实例排队过的**所有键**，只撤当前键会留下已卸载实例的
+   * 请求 —— 名额一空出就给它建组、retain=1 且无人释放，永久占名额。
+   */
+  const owner = `${options.runtimeId}:${Math.random().toString(36).slice(2)}`
+
+  /**
    * 在挂载/换键点做一次组数回收。
    *
    * 容量准入已经在**建组前**做了（`retainGroup` 会先腾名额、腾不出就拒绝建组），
@@ -128,9 +137,25 @@ export function useSidebarTabs(options: {
     if (!tabsFor(key).length) tabsFor(key)
   }
 
+  /**
+   * 身份键变化的**唯一实现**（立即路径与延迟准入路径都调它，不许第二份）。
+   *
+   * 语义来自 `1eefeda`：源非空 → 搬内存 + 立即用新身份键写回 + 清旧 `runtime:` 条目；
+   * 源为空 → 不写回、也不把新键标 hydrated（否则会删掉/挡住磁盘上已有的载荷）。
+   * 活 terminal 不标 stale（`rebindGroup` 直接搬内存状态，不经落盘载荷重建）。
+   */
+  function applyRebind(previous: string, next: string) {
+    if (!previous || !next || previous === next) return
+    if (previous.startsWith("runtime:") && rebindGroup(previous, next)) {
+      workspace.persistSidebarTabs(previous, null)
+      persist(next)
+    }
+    hydrateFromPersisted(next)
+  }
+
   // 挂载即持有：容量准入先腾名额再建组；腾不出（全部组都被挂载持有）时**排队**，
   // 名额空出后自动准入（`adoptKey` 作为回调），因此这不是终态失败。
-  if (retainGroup(tabKey.value, () => adoptKey(tabKey.value))) {
+  if (retainGroup(tabKey.value, () => adoptKey(tabKey.value), owner)) {
     adoptKey(tabKey.value)
   } else {
     options.onGroupLimitReached?.()
@@ -141,29 +166,26 @@ export function useSidebarTabs(options: {
     if (!next || !previous || next === previous) return
     const previousHold = heldKey
     // 新键先受保护：迁移与 hydrate 之间它随时可能成为 LRU 的候选。
-    // 准入失败时排队（回调里再配平旧键释放），旧键仍由本实例持有，不会漏释放。
-    const admitted = retainGroup(next, () => {
-      adoptKey(next)
-      if (previousHold && previousHold !== next) releaseGroup(previousHold)
-    })
+    // 准入失败时排队；回调里必须**重跑同一份 rebind 逻辑**（立即路径与延迟路径
+    // 不许有第二份实现），否则"runtime 源已有 Tab → 排队 → 名额空出"这条路径上
+    // 新身份键 tabs=[]、落盘 undefined、旧 runtime 载荷未清。
+    const admitted = retainGroup(
+      next,
+      () => {
+        adoptKey(next)
+        applyRebind(previous, next)
+        if (previousHold && previousHold !== next) releaseGroup(previousHold)
+        persist(next)
+        pruneForCurrentGroup()
+      },
+      owner,
+    )
     if (!admitted) {
       options.onGroupLimitReached?.()
       return
     }
     heldKey = next
-    if (previous.startsWith("runtime:")) {
-      // 源非空 = 用户已经在草稿会话里加过 Tab。此时必须**立即**用新身份键写回并清掉
-      // 旧 `runtime:` 条目，否则磁盘上只有草稿键，完整重启后 Tab 全丢
-      // （不能等下一次侧栏操作才顺带写）。
-      // 源为空则不写回：文件键可能已有磁盘载荷，写 null 会把它删掉；
-      // 也不能把新键标成 hydrated，否则随后到达的落盘记录永远补不进来。
-      if (rebindGroup(previous, next)) {
-        workspace.persistSidebarTabs(previous, null)
-        persist(next)
-      }
-    }
-    // 新键还没有内容时，补一次 hydrate（不从磁盘删任何东西）。
-    hydrateFromPersisted(next)
+    applyRebind(previous, next)
     // 旧键必须等迁移**之后**再释放：提前释放会让旧组在 rebind 之前就被淘汰。
     if (previousHold && previousHold !== next) releaseGroup(previousHold)
     pruneForCurrentGroup()
@@ -176,7 +198,9 @@ export function useSidebarTabs(options: {
   onScopeDispose(() => {
     markGroupDetached(tabKey.value)
     if (heldKey) releaseGroup(heldKey)
-    else dropPendingRetain(tabKey.value)
+    // 按**实例**撤销排队请求：身份键可能变过，只撤当前键会留下已卸载实例的旧键请求，
+    // 名额空出后给它建组、retain=1 且无人释放 → 永久占名额。
+    dropPendingRetain(owner)
     heldKey = null
   })
 

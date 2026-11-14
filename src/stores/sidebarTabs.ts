@@ -75,7 +75,13 @@ const pendingHydrate = new Map<string, unknown>()
  *
  * 合并成一份会让"没有载荷的挂载"误触发 hydrate，反之也会漏掉挂载的准入。
  */
-const pendingRetain = new Map<string, Array<(() => void) | null>>()
+interface PendingRetainEntry {
+  /** 发起请求的挂载实例（composable 生命周期 id）。卸载时按它撤销**全部**键。 */
+  owner: string
+  onAdmit?: () => void
+}
+
+const pendingRetain = new Map<string, PendingRetainEntry[]>()
 
 /**
  * 新建组的**容量准入**：先尽力腾出一个名额（`limit - 1`），仍然满就打回。
@@ -237,7 +243,7 @@ export function flushPendingRetain(): number {
         pendingRetain.delete(key)
         liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
         touch(key)
-        for (const waiter of waiters) waiter?.()
+        for (const entry of waiters) entry.onAdmit?.()
         admitted += waiters.length
         continue
       }
@@ -247,7 +253,7 @@ export function flushPendingRetain(): number {
       liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
       touch(key)
       admitted += waiters.length
-      for (const waiter of waiters) waiter?.()
+      for (const entry of waiters) entry.onAdmit?.()
     }
     return admitted
   } finally {
@@ -370,11 +376,11 @@ export function dropGroup(key: string) {
  * 挂载持有时不超限建组，而是登记 FIFO 挂载请求，名额一空出就回调 `onAdmit`
  * 让调用方原地自愈（用户不需要切走再切回）。
  */
-export function retainGroup(key: string, onAdmit?: () => void): boolean {
+export function retainGroup(key: string, onAdmit?: () => void, owner = key): boolean {
   const state = sidebarTabRegistry.has(key) ? sidebarTabRegistry.get(key)! : ensureGroup(key)
   if (!state) {
     const waiters = pendingRetain.get(key) ?? []
-    waiters.push(onAdmit ?? null)
+    waiters.push({ owner, onAdmit })
     pendingRetain.set(key, waiters)
     return false
   }
@@ -385,7 +391,9 @@ export function retainGroup(key: string, onAdmit?: () => void): boolean {
 
 /** 排队中的挂载请求数量（诊断与测试用）。 */
 export function pendingRetainCount() {
-  return pendingRetain.size
+  let count = 0
+  for (const waiters of pendingRetain.values()) count += waiters.length
+  return count
 }
 
 /** 仅测试用：清空两份队列（用例之间隔离）。 */
@@ -394,9 +402,19 @@ export function resetQueuesForTest(): void {
   pendingRetain.clear()
 }
 
-/** 组件卸载时撤销自己仍在排队的挂载请求（否则名额空出后会为一个已卸载的实例建组）。 */
-export function dropPendingRetain(key: string): void {
-  pendingRetain.delete(key)
+/**
+ * 撤销**某个挂载实例**自己仍在排队的全部请求（历史上所有键，不只是最后一次的键）。
+ *
+ * 为什么必须按 owner 而不是按键：同一实例可能在排队期间换过身份键
+ * （`runtime:` → 文件键、SSH realpath 回绑），若只撤销"当前键"，旧键的请求会留在
+ * 队列里 —— 名额一空出就给一个**已经卸载**的实例建组、retain=1 且无人释放，永久占名额。
+ */
+export function dropPendingRetain(owner: string): void {
+  for (const [key, waiters] of [...pendingRetain]) {
+    const remaining = waiters.filter(entry => entry.owner !== owner)
+    if (remaining.length) pendingRetain.set(key, remaining)
+    else pendingRetain.delete(key)
+  }
 }
 
 /**
@@ -411,7 +429,7 @@ function admitPendingRetain(key: string): void {
   pendingRetain.delete(key)
   liveRefs.set(key, (liveRefs.get(key) ?? 0) + waiters.length)
   touch(key)
-  for (const waiter of waiters) waiter?.()
+  for (const entry of waiters) entry.onAdmit?.()
 }
 
 /** 该组当前的持有计数（供诊断与测试核对 retain/release 是否配平）。 */
