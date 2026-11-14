@@ -163,6 +163,7 @@ export default {
     newTerminal: "Terminal",
     terminalLost: "The terminal process exited with the previous run; reopen it to continue",
     terminalRestart: "Reopen terminal",
+    limitReached: "This conversation already has {count} sidebar tabs. Close one before adding another.",
     newBrowser: "Browser",
   },
   split: {

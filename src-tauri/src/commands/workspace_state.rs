@@ -32,11 +32,50 @@ pub struct WorkspaceState {
     sidebar_tabs: BTreeMap<String, SidebarTabs>,
 }
 /// 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+///
+/// 反序列化刻意做成**宽容**的：单条记录格式不对（`kinds` 不是数组、项不是字符串、
+/// `active` 是字符串或负数）只按能读出来的部分重建，绝不让整份 `workspace.json`
+/// 解析失败。`active` 因此用有符号类型并在解析期钳成 0（用 `usize` 时磁盘上
+/// 出现 `-1` 会让 `read()` 直接失败，`update()` 也随之失败——用户只能手改文件）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidebarTabs {
     kinds: Vec<String>,
     active: usize,
+}
+
+fn lenient_sidebar_tabs(value: &serde_json::Value) -> SidebarTabs {
+    let kinds = value
+        .get("kinds")
+        .and_then(|kinds| kinds.as_array())
+        .map(|kinds| {
+            kinds
+                .iter()
+                .filter_map(|kind| kind.as_str().map(str::to_owned))
+                .take(SIDEBAR_TAB_LIMIT)
+                .collect()
+        })
+        .unwrap_or_default();
+    let active = match value.get("active") {
+        Some(serde_json::Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value.trunc() as i64))
+            .unwrap_or(0),
+        _ => 0,
+    };
+    SidebarTabs { kinds, active: active.max(0) as usize }
+}
+
+impl<'de> Deserialize<'de> for SidebarTabs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // 非对象（字符串/数组/null）当作空记录，同样不会让整份状态解析失败；
+        // 空记录会在 `normalize` 里被当作"没有可恢复内容"丢掉。
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(lenient_sidebar_tabs(&value))
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -645,6 +684,77 @@ mod tests {
         if path.parent().is_some_and(|dir| dir.exists()) {
             cleanup(&path);
         }
+    }
+
+    /// 负数/越界 `active` 与超限 kinds：反序列化与 normalize 都必须局部净化。
+    #[test]
+    fn sidebar_tabs_negative_active_deserializes_and_clamps_to_zero() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:neg": { "kinds": ["review", "files"], "active": -1 },
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": 99
+                    }
+                }
+            })),
+        )
+        .unwrap();
+        assert_eq!(state.sidebar_tabs["runtime:neg"].active, 0);
+        let many = &state.sidebar_tabs["runtime:many"];
+        assert_eq!(many.kinds.len(), SIDEBAR_TAB_LIMIT, "超限必须截断而不是拒绝写入");
+        assert_eq!(many.active, SIDEBAR_TAB_LIMIT - 1);
+        cleanup(&path);
+    }
+
+    /// 被污染的 workspace.json：读路径必须能读出其余状态，且删除脏键的 patch 必须成功
+    /// （否则用户只能手改文件）。
+    #[test]
+    fn sidebar_tabs_polluted_file_is_readable_and_the_dirty_key_can_be_deleted() {
+        let path = path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "revision": 1,
+                "projects": ["C:/project"],
+                "sidebarTabs": {
+                    "runtime:many": {
+                        "kinds": std::iter::repeat("review").take(SIDEBAR_TAB_LIMIT + 1).collect::<Vec<_>>(),
+                        "active": -1
+                    },
+                    "runtime:aux": { "kinds": ["aux", "mystery"], "active": 0 },
+                    "runtime:junk": "not-an-object",
+                    "runtime:ok": { "kinds": ["review", "browser"], "active": 1 }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let state = read(&path).expect("单条脏记录不得让整份 workspace 读取失败");
+        assert_eq!(state.projects, vec!["C:/project"]);
+        assert_eq!(state.sidebar_tabs["runtime:many"].kinds.len(), SIDEBAR_TAB_LIMIT);
+        assert!(!state.sidebar_tabs.contains_key("runtime:aux"));
+        assert_eq!(state.sidebar_tabs["runtime:ok"].kinds, vec!["review", "browser"]);
+
+        // 删除所有脏键：`update` 内部先 `read`，所以这条同时验证"读路径不阻断更新"。
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:many": null,
+                    "runtime:aux": null,
+                    "runtime:junk": null,
+                    "runtime:ok": null
+                }
+            })),
+        )
+        .expect("删除脏键必须成功");
+        assert!(state.sidebar_tabs.is_empty());
+        cleanup(&path);
     }
 
     #[test]
