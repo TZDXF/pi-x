@@ -1,4 +1,5 @@
 import { samePath } from "@/lib/paths"
+import type { PersistedSidebarTabs } from "@/lib/sidebarTabs"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { WorkspaceSelection } from "@/api/piClient"
 
@@ -47,6 +48,8 @@ interface KanbanWorkspaceState {
   boardDrafts: Record<string, BoardDraft>
   sessionActivities: Record<string, SessionActivity>
   sessionAcknowledgements: Record<string, string>
+  /** 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。 */
+  sidebarTabs: Record<string, PersistedSidebarTabs>
 }
 export interface WorkspaceState extends Partial<KanbanWorkspaceState> {
   revision: number
@@ -72,6 +75,7 @@ export interface WorkspaceStatePatch {
   boardDrafts?: Record<string, BoardDraft | null>
   sessionActivities?: Record<string, SessionActivity | null>
   sessionAcknowledgements?: Record<string, string | null>
+  sidebarTabs?: Record<string, PersistedSidebarTabs | null>
 }
 export function emptyWorkspaceState(): WorkspaceState & KanbanWorkspaceState {
   return {
@@ -85,6 +89,7 @@ export function emptyWorkspaceState(): WorkspaceState & KanbanWorkspaceState {
     boardDrafts: {},
     sessionActivities: {},
     sessionAcknowledgements: {},
+    sidebarTabs: {},
   }
 }
 export function diffWorkspaceState(before: WorkspaceState, after: WorkspaceState): WorkspaceStatePatch {
@@ -104,6 +109,7 @@ export function diffWorkspaceState(before: WorkspaceState, after: WorkspaceState
     "boardDrafts",
     "sessionActivities",
     "sessionAcknowledgements",
+    "sidebarTabs",
   ] as const) {
     const previous = before[key] ?? {}
     const next = after[key] ?? {}
@@ -125,6 +131,7 @@ export function applyWorkspaceStatePatch(
     boardDrafts: state.boardDrafts ?? {},
     sessionActivities: state.sessionActivities ?? {},
     sessionAcknowledgements: state.sessionAcknowledgements ?? {},
+    sidebarTabs: state.sidebarTabs ?? {},
   })
   for (const key of ["projects", "pinnedProjects", "removedProjects"] as const) {
     const changes = patch[key]
@@ -136,7 +143,7 @@ export function applyWorkspaceStatePatch(
       next[key] = [...new Set([...ordered, ...next[key]])]
     }
   }
-  for (const key of ["projectGroups", "sessionOrder", "boardColumnOrder", "boardDrafts"] as const) {
+  for (const key of ["projectGroups", "sessionOrder", "boardColumnOrder", "boardDrafts", "sidebarTabs"] as const) {
     for (const [path, value] of Object.entries(patch[key] ?? {})) {
       if (value === null) delete next[key][path]
       else Object.assign(next[key], { [path]: value })

@@ -12,6 +12,10 @@ use crate::errors::{pix_error, pix_error_detail};
 
 static STATE_LOCK: Mutex<()> = Mutex::new(());
 
+/// 与 `lib/sidebarTabs.ts` 的 `SIDEBAR_TAB_KINDS` 保持一致；`aux`/未知 kind 读盘即丢弃。
+const SIDEBAR_TAB_KINDS: [&str; 4] = ["review", "files", "terminal", "browser"];
+const SIDEBAR_TAB_LIMIT: usize = 20;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkspaceState {
@@ -25,6 +29,14 @@ pub struct WorkspaceState {
     board_drafts: BTreeMap<String, BoardDraft>,
     session_activities: BTreeMap<String, SessionActivity>,
     session_acknowledgements: BTreeMap<String, String>,
+    sidebar_tabs: BTreeMap<String, SidebarTabs>,
+}
+/// 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarTabs {
+    kinds: Vec<String>,
+    active: usize,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +116,7 @@ pub struct WorkspaceStatePatch {
     board_drafts: BTreeMap<String, Option<BoardDraft>>,
     session_activities: BTreeMap<String, Option<SessionActivity>>,
     session_acknowledgements: BTreeMap<String, Option<String>>,
+    sidebar_tabs: BTreeMap<String, Option<SidebarTabs>>,
 }
 
 fn normalize_path(path: &str) -> String {
@@ -269,6 +282,18 @@ fn normalize(state: &mut WorkspaceState) -> Result<(), String> {
             }
         }
     }
+    // 侧栏 Tab：只接受四个已知 kind；`active` 钳到合法下标，未知 kind 直接拒绝
+    // （`deny_unknown_fields` 让本 PR 的 Rust 与 TS 必须同时落地）。
+    for (key, tabs) in state.sidebar_tabs.iter_mut() {
+        if key.trim().is_empty() || tabs.kinds.len() > SIDEBAR_TAB_LIMIT {
+            return Err(pix_error("workspaceInvalid", "工作区目录列表无效"));
+        }
+        tabs.kinds.retain(|kind| SIDEBAR_TAB_KINDS.contains(&kind.as_str()));
+        if tabs.kinds.is_empty() {
+            return Err(pix_error("workspaceInvalid", "工作区目录列表无效"));
+        }
+        tabs.active = tabs.active.min(tabs.kinds.len() - 1);
+    }
     for ids in state.board_column_order.values_mut() {
         let mut seen = BTreeSet::new();
         ids.retain(|id| seen.insert(id.clone()));
@@ -303,6 +328,8 @@ fn update(path: &Path, patch: WorkspaceStatePatch) -> Result<WorkspaceState, Str
     update_map(&mut state.session_order, patch.session_order);
     update_identity_map(&mut state.board_column_order, patch.board_column_order);
     update_identity_map(&mut state.board_drafts, patch.board_drafts);
+    // 会话身份键不是路径：必须走 identity_map，否则 normalize_path 会破坏键。
+    update_identity_map(&mut state.sidebar_tabs, patch.sidebar_tabs);
     for (key, activity) in patch.session_activities {
         if let Some(activity) = activity {
             if state.session_activities.get(&key).is_none_or(|previous| {
@@ -502,6 +529,60 @@ mod tests {
     }
     fn cleanup(path: &Path) {
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn sidebar_tabs_patch_round_trips_and_keeps_identity_keys() {
+        let path = path();
+        // 会话身份键（远程项目是 JSON 数组字符串）必须原样保留，不能被当路径规整。
+        let key = "[\"ssh://dev@host:22/home/dev/proj\",\"/home/dev/proj/s.jsonl\"]";
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { key: { "kinds": ["review", "files", "terminal"], "active": 2 } }
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            state.sidebar_tabs[key].kinds,
+            vec!["review", "files", "terminal"]
+        );
+        assert_eq!(state.sidebar_tabs[key].active, 2);
+        // 删除条目（关闭最后一个 Tab）。
+        let state = update(&path, patch(json!({ "sidebarTabs": { key: null } }))).unwrap();
+        assert!(state.sidebar_tabs.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn sidebar_tabs_normalize_drops_aux_and_unknown_kinds_and_clamps_active() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { "runtime:r1": { "kinds": ["aux", "review", "mystery", "browser"], "active": 9 } }
+            })),
+        )
+        .unwrap();
+        // `aux`（TZD-94）与未知 kind 读盘即丢弃；active 钳到合法下标。
+        assert_eq!(state.sidebar_tabs["runtime:r1"].kinds, vec!["review", "browser"]);
+        assert_eq!(state.sidebar_tabs["runtime:r1"].active, 1);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn sidebar_tabs_reject_out_of_range_and_empty_payloads() {
+        let path = path();
+        for bad in [
+            json!({ "sidebarTabs": { "k": { "kinds": ["aux"], "active": 0 } } }),
+            json!({ "sidebarTabs": { "k": { "kinds": [], "active": 0 } } }),
+        ] {
+            assert!(update(&path, patch(bad)).is_err());
+        }
+        // 失败路径不会创建目录，`cleanup` 只处理存在的情形。
+        if path.parent().is_some_and(|dir| dir.exists()) {
+            cleanup(&path);
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@ import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
 import { requireSshConnectionId } from "@/lib/sshTrust"
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
+import type { PersistedSidebarTabs } from "@/lib/sidebarTabs"
 import {
   listSessions,
   listUnarchivedSessions,
@@ -58,6 +59,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const boardDrafts = ref<Record<string, BoardDraft>>({})
   const sessionActivities = ref<Record<string, SessionActivity>>({})
   const sessionAcknowledgements = ref<Record<string, string>>({})
+  /** 右侧侧栏 Tab（只存 kind 顺序 + active），按会话身份键分组。 */
+  const sidebarTabs = ref<Record<string, PersistedSidebarTabs>>({})
   /** 远程项目会话列表的加载状态（契约 §2.4），驱动侧栏刷新按钮 spinner。 */
   const remoteSessionsLoading = ref<Record<string, boolean>>({})
   /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
@@ -90,6 +93,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         boardDrafts: boardDrafts.value,
         sessionActivities: sessionActivities.value,
         sessionAcknowledgements: sessionAcknowledgements.value,
+        sidebarTabs: sidebarTabs.value,
       }),
     )
   }
@@ -118,6 +122,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     boardDrafts.value = next.boardDrafts
     sessionActivities.value = next.sessionActivities
     sessionAcknowledgements.value = next.sessionAcknowledgements
+    if (JSON.stringify(sidebarTabs.value) !== JSON.stringify(next.sidebarTabs)) sidebarTabs.value = next.sidebarTabs
     recorded = snapshot()
     for (const path of Object.keys(histories.value)) applySessionOrder(path)
   }
@@ -169,6 +174,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     changes.push(patch)
     void flushPersistence().catch(error => console.warn("[pi] workspace persistence failed:", error))
   }
+  /** 写入某会话的侧栏 Tab；`null` 表示删除该条目（关闭最后一个 Tab 时）。 */
+  function setSidebarTabs(groupKey: string, value: PersistedSidebarTabs | null) {
+    if (value === null) delete sidebarTabs.value[groupKey]
+    else sidebarTabs.value[groupKey] = value
+    persistState()
+  }
+  const persistSidebarTabs = setSidebarTabs
   const persistProjects = persistState
   const persistSessionOrder = persistState
   const persistRemovedProjects = persistState
@@ -556,6 +568,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     boardDrafts,
     sessionActivities,
     sessionAcknowledgements,
+    sidebarTabs,
+    persistSidebarTabs,
     upsertBoardDraft,
     removeBoardDraft,
     recordSessionActivity,

@@ -38,7 +38,7 @@ import RightSidebar from '/src/components/RightSidebar.vue'
 import '/src/style.css'
 const fixture = window.sidebarFixture = reactive({
   tabs: [{id:1,type:'review'},{id:2,type:'files'},{id:3,type:'review'},{id:4,type:'terminal'},{id:5,type:'browser'}],
-  activeId:1, open:true, mounts:[], unmounts:[], shellOpens:0, reorders:[], activations:[], closes:[], inserts:[]
+  activeId:1, open:true, mounts:[], unmounts:[], shellOpens:0, reorders:[], activations:[], closes:[], inserts:[], restarts:[]
 })
 let nextId = 6
 createApp({render:()=>h('div',{style:'display:flex;height:650px;width:1400px'},[
@@ -54,13 +54,14 @@ createApp({render:()=>h('div',{style:'display:flex;height:650px;width:1400px'},[
     },
     'onAdd-tab':type=>{const id=nextId++;fixture.tabs.push({id,type});fixture.activeId=id},
     'onReorder-tabs':tabs=>{fixture.reorders.push(tabs.map(tab=>tab.id));fixture.tabs=tabs},
-    'onSend-to-chat':text=>fixture.inserts.push(text)
+    'onSend-to-chat':text=>fixture.inserts.push(text),
+    'onRestart-terminal':id=>{fixture.restarts.push(id);const tab=fixture.tabs.find(item=>item.id===id);if(tab) delete tab.stale}
   })
 ])}).use(createI18n({legacy:false,locale:'en',messages:{en:messages}})).mount('#app')
 </script></body></html>`
 
 interface SidebarFixture {
-  tabs: { id: number; type: string }[]
+  tabs: { id: number; type: string; stale?: boolean }[]
   activeId: number | null
   open: boolean
   mounts: string[]
@@ -70,6 +71,7 @@ interface SidebarFixture {
   activations: number[]
   closes: number[]
   inserts: string[]
+  restarts: number[]
   clearShell: () => void
 }
 
@@ -238,6 +240,30 @@ test("only reactivating an empty terminal opens a shell, including keyboard acti
     window.sidebarFixture.open = false
   })
   await expect((await active(page, "Terminal")).locator("[data-visible]")).toHaveText("false")
+})
+
+// TZD-95：恢复出来的 terminal Tab 只渲染占位，绝不挂 TerminalPanel（否则会自动开 shell）。
+// 这条必须 E2E：单测无法证明"面板没被挂载"这一渲染层事实，而"不挂面板且 shellOpens 不增加"
+// 正是恢复逻辑最容易静默退化的地方（TerminalPanel 首次可见即自开 shell）。
+test("restored terminal tab renders a placeholder and never mounts a terminal panel", async ({ page }) => {
+  // 初始夹具自带一个正在运行的 terminal（id 4）；先把计数清零，只观察恢复出来的那个。
+  await page.evaluate(() => {
+    window.sidebarFixture.tabs = [{ id: 11, type: "terminal", stale: true }]
+    window.sidebarFixture.activeId = 11
+    window.sidebarFixture.mounts = []
+    window.sidebarFixture.shellOpens = 0
+  })
+  const placeholder = page.locator("[data-terminal-stale='11']")
+  await expect(placeholder).toBeVisible()
+  await expect(placeholder).toContainText("The terminal process exited with the previous run")
+  // 关键断言：不挂面板、不自开 shell。
+  expect(await page.evaluate(() => window.sidebarFixture.mounts)).not.toContain("terminal")
+  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
+  // 用户显式重开后才允许挂载面板。
+  await placeholder.getByRole("button", { name: "Reopen terminal" }).click()
+  expect(await page.evaluate(() => window.sidebarFixture.restarts)).toEqual([11])
+  await expect.poll(() => page.evaluate(() => window.sidebarFixture.mounts)).toContain("terminal")
+  expect(await page.evaluate(() => window.sidebarFixture.shellOpens)).toBe(0)
 })
 
 test("real dragging emits reordered IDs and keyboard navigation follows the new DOM order", async ({ page }) => {

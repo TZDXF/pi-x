@@ -161,6 +161,8 @@ export default {
     newReview: "Review",
     newFiles: "Project files",
     newTerminal: "Terminal",
+    terminalLost: "The terminal process exited with the previous run; reopen it to continue",
+    terminalRestart: "Reopen terminal",
     newBrowser: "Browser",
   },
   split: {

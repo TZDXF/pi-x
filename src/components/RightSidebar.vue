@@ -14,12 +14,10 @@ import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import type { FileChange } from "@/lib/sessionChanges"
 import { usePointerDrag } from "@/composables/usePointerDrag"
-
-export type SidebarTabType = "review" | "files" | "terminal" | "browser"
-export interface SidebarTabItem {
-  id: number
-  type: SidebarTabType
-}
+// 类型定义移到 `lib/sidebarTabs.ts`（TZD-95 需要落盘/恢复它们），这里只做再导出。
+import type { SidebarTabItem, SidebarTabKind } from "@/lib/sidebarTabs"
+export type SidebarTabType = SidebarTabKind
+export type { SidebarTabItem }
 
 const props = defineProps<{
   open: boolean
@@ -36,6 +34,7 @@ const emit = defineEmits<{
   "close-tab": [id: number]
   "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
+  "restart-terminal": [id: number]
 }>()
 
 const { t } = useI18n()
@@ -74,6 +73,11 @@ function setTerminalPanel(id: number, el: unknown) {
   if (el) terminalPanels.set(id, el as TerminalPanelExposed)
   else terminalPanels.delete(id)
 }
+/** 用户明确要求重开：交给宿主清掉 stale，TerminalPanel 才会重新挂载并开新 shell。 */
+function restartTerminal(id: number) {
+  emit("restart-terminal", id)
+}
+
 function reactivateTab(tab: SidebarTabItem) {
   // 已激活的终端 tab 再点一次时，若面板里没有 shell 则直接新建，避免停留在空状态。
   if (tab.type === "terminal") {
@@ -327,6 +331,20 @@ onBeforeUnmount(() => {
             :focus="tab.id === activeId ? focus : null"
           />
           <ProjectFiles v-else-if="tab.type === 'files'" :project="project" />
+          <!-- 恢复出来的 terminal Tab 只渲染占位：进程已随旧实例退出，
+               挂 TerminalPanel 会在首次可见时自动新开 shell（见 00:58 实测）。 -->
+          <div
+            v-else-if="tab.type === 'terminal' && tab.stale"
+            class="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 p-6 text-sm"
+            role="status"
+            :data-terminal-stale="tab.id"
+          >
+            <SquareTerminal class="size-6 shrink-0 opacity-60" aria-hidden="true" />
+            <p class="text-center">{{ t("sidebarTabs.terminalLost") }}</p>
+            <Button type="button" variant="outline" size="sm" @click="restartTerminal(tab.id)">
+              {{ t("sidebarTabs.terminalRestart") }}
+            </Button>
+          </div>
           <TerminalPanel
             v-else-if="tab.type === 'terminal'"
             :ref="el => setTerminalPanel(tab.id, el)"
