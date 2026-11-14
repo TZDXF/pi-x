@@ -159,6 +159,8 @@ export default {
     newReview: "代码审查",
     newFiles: "项目文件",
     newTerminal: "终端",
+    terminalLost: "终端进程已随上次运行退出，需要重新打开",
+    terminalRestart: "重新打开终端",
     newBrowser: "浏览器",
   },
   split: {

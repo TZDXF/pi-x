@@ -36,9 +36,10 @@ import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
+import { useSidebarTabs } from "@/composables/useSidebarTabs"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import RightSidebar, { type SidebarTabItem, type SidebarTabType } from "@/components/RightSidebar.vue"
+import RightSidebar from "@/components/RightSidebar.vue"
 
 const localSidebarOpen = ref(false)
 const sidebarOpen = computed({
@@ -51,27 +52,6 @@ const sidebarOpen = computed({
 const sidebarVisible = computed(
   () => sidebarOpen.value && (!props.sidebarTarget || activeRuntimeId.value === runtimeId),
 )
-const sidebarTabs = ref<SidebarTabItem[]>([])
-const activeTabId = ref<number | null>(null)
-let nextTabId = 1
-const reviewFocus = ref<string | null>(null)
-function addSidebarTab(type: SidebarTabType) {
-  const id = nextTabId++
-  sidebarTabs.value.push({ id, type })
-  activeTabId.value = id
-  sidebarOpen.value = true
-}
-function closeSidebarTab(id: number) {
-  const index = sidebarTabs.value.findIndex(tab => tab.id === id)
-  if (index < 0) return
-  sidebarTabs.value.splice(index, 1)
-  if (activeTabId.value === id)
-    activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
-  if (!sidebarTabs.value.length) sidebarOpen.value = false
-}
-function reorderSidebarTab(tabs: SidebarTabItem[]) {
-  sidebarTabs.value = tabs
-}
 function openReviewAt(path: string) {
   reviewFocus.value = path
   const existing = sidebarTabs.value.find(tab => tab.type === "review")
@@ -125,6 +105,22 @@ const emit = defineEmits<{
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
+// 侧栏 Tab（TZD-95）：状态在模块级注册表里，本组件只接线。
+const {
+  tabs: sidebarTabs,
+  activeId: activeTabId,
+  add: addSidebarTab,
+  close: closeSidebarTab,
+  reorder: reorderSidebarTab,
+  restartTerminal: restartSidebarTerminal,
+} = useSidebarTabs({
+  runtimeId,
+  sessionFile: computed(() => session.sessionFile),
+  project: () => session.cwd || props.project,
+  onFirstTabAdded: () => (sidebarOpen.value = true),
+  onLastTabClosed: () => (sidebarOpen.value = false),
+})
+const reviewFocus = ref<string | null>(null)
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
 const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
 const currentTitle = computed(
@@ -487,6 +483,7 @@ onBeforeUnmount(() => {
         @add-tab="addSidebarTab"
         @close-tab="closeSidebarTab"
         @reorder-tabs="reorderSidebarTab"
+        @restart-terminal="restartSidebarTerminal"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

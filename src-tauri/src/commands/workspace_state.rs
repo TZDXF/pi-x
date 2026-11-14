@@ -12,6 +12,10 @@ use crate::errors::{pix_error, pix_error_detail};
 
 static STATE_LOCK: Mutex<()> = Mutex::new(());
 
+/// 与 `lib/sidebarTabs.ts` 的 `SIDEBAR_TAB_KINDS` 保持一致；`aux`/未知 kind 读盘即丢弃。
+const SIDEBAR_TAB_KINDS: [&str; 4] = ["review", "files", "terminal", "browser"];
+const SIDEBAR_TAB_LIMIT: usize = 20;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkspaceState {
@@ -25,6 +29,14 @@ pub struct WorkspaceState {
     board_drafts: BTreeMap<String, BoardDraft>,
     session_activities: BTreeMap<String, SessionActivity>,
     session_acknowledgements: BTreeMap<String, String>,
+    sidebar_tabs: BTreeMap<String, SidebarTabs>,
+}
+/// 右侧侧栏 Tab：只存 kind 顺序与 active 下标，按会话身份键分组。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarTabs {
+    kinds: Vec<String>,
+    active: usize,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +116,7 @@ pub struct WorkspaceStatePatch {
     board_drafts: BTreeMap<String, Option<BoardDraft>>,
     session_activities: BTreeMap<String, Option<SessionActivity>>,
     session_acknowledgements: BTreeMap<String, Option<String>>,
+    sidebar_tabs: BTreeMap<String, Option<SidebarTabs>>,
 }
 
 fn normalize_path(path: &str) -> String {
@@ -269,6 +282,30 @@ fn normalize(state: &mut WorkspaceState) -> Result<(), String> {
             }
         }
     }
+    // 侧栏 Tab：只接受四个已知 kind，`active` 钳到合法下标。
+    //
+    // 丢弃未知/aux kind 后若某组为空，**删除该组键**而不是整体报错：`read()` 里
+    // 一次 normalize 失败会拒绝整个 workspace.json，把其余项目的侧栏状态一起丢掉，
+    // 与"丢掉未知 Tab、保留其余状态"的备份/降级语义不符。
+    for (key, tabs) in std::mem::take(&mut state.sidebar_tabs) {
+        if key.trim().is_empty() {
+            continue;
+        }
+        let mut kinds: Vec<String> = tabs
+            .kinds
+            .into_iter()
+            .filter(|kind| SIDEBAR_TAB_KINDS.contains(&kind.as_str()))
+            .take(SIDEBAR_TAB_LIMIT)
+            .collect();
+        if kinds.is_empty() {
+            continue;
+        }
+        let active = tabs.active.min(kinds.len() - 1);
+        kinds.shrink_to_fit();
+        state
+            .sidebar_tabs
+            .insert(key, SidebarTabs { kinds, active });
+    }
     for ids in state.board_column_order.values_mut() {
         let mut seen = BTreeSet::new();
         ids.retain(|id| seen.insert(id.clone()));
@@ -303,6 +340,8 @@ fn update(path: &Path, patch: WorkspaceStatePatch) -> Result<WorkspaceState, Str
     update_map(&mut state.session_order, patch.session_order);
     update_identity_map(&mut state.board_column_order, patch.board_column_order);
     update_identity_map(&mut state.board_drafts, patch.board_drafts);
+    // 会话身份键不是路径：必须走 identity_map，否则 normalize_path 会破坏键。
+    update_identity_map(&mut state.sidebar_tabs, patch.sidebar_tabs);
     for (key, activity) in patch.session_activities {
         if let Some(activity) = activity {
             if state.session_activities.get(&key).is_none_or(|previous| {
@@ -505,6 +544,158 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_tabs_patch_round_trips_and_keeps_identity_keys() {
+        let path = path();
+        // 本地身份键是 `project\0file`，project 可能是 Windows 路径（带反斜杠）。
+        // `update_map` 会把它当路径走 `normalize_path`（反斜杠→斜杠、去尾斜杠），
+        // 因此必须用真实的 Windows 反斜杠 + NUL 键，才能区分 identity_map 与 update_map。
+        let key = "C:\\Users\\dev\\proj\0C:\\Users\\dev\\proj\\sessions\\a.jsonl";
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { key: { "kinds": ["review", "files", "terminal"], "active": 2 } }
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            state.sidebar_tabs.keys().next().map(String::as_str),
+            Some(key),
+            "Windows 反斜杠 + NUL 的身份键必须原样保留"
+        );
+        assert_eq!(
+            state.sidebar_tabs[key].kinds,
+            vec!["review", "files", "terminal"]
+        );
+        assert_eq!(state.sidebar_tabs[key].active, 2);
+
+        // 远程项目的 JSON 数组身份键同样原样保留（键里含 / 与引号）。
+        let remote_key = "[\"ssh://dev@host:22/home/dev/proj\",\"/home/dev/proj/s.jsonl\"]";
+        let state = update(
+            &path,
+            patch(json!({ "sidebarTabs": { remote_key: { "kinds": ["browser"], "active": 0 } } })),
+        )
+        .unwrap();
+        assert!(state.sidebar_tabs.contains_key(remote_key));
+
+        // 删除条目（关闭最后一个 Tab），两个键都要能精确命中。
+        let state = update(
+            &path,
+            patch(json!({ "sidebarTabs": { key: null, remote_key: null } })),
+        )
+        .unwrap();
+        assert!(state.sidebar_tabs.is_empty());
+        cleanup(&path);
+    }
+
+    /// 仅含未知/aux kind 的组被清空 → 删除该组键，而不是让 read() 拒绝整个
+    /// workspace.json（其余组必须保留）。
+    #[test]
+    fn sidebar_tabs_group_with_only_unknown_kinds_is_dropped_not_fatal() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "runtime:a": { "kinds": ["aux"], "active": 0 },
+                    "runtime:b": { "kinds": ["review", "aux"], "active": 1 }
+                }
+            })),
+        )
+        .unwrap();
+        assert!(!state.sidebar_tabs.contains_key("runtime:a"));
+        assert_eq!(state.sidebar_tabs["runtime:b"].kinds, vec!["review"]);
+        assert_eq!(state.sidebar_tabs["runtime:b"].active, 0);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn sidebar_tabs_normalize_drops_aux_and_unknown_kinds_and_clamps_active() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": { "runtime:r1": { "kinds": ["aux", "review", "mystery", "browser"], "active": 9 } }
+            })),
+        )
+        .unwrap();
+        // `aux`（TZD-94）与未知 kind 读盘即丢弃；active 钳到合法下标。
+        assert_eq!(state.sidebar_tabs["runtime:r1"].kinds, vec!["review", "browser"]);
+        assert_eq!(state.sidebar_tabs["runtime:r1"].active, 1);
+        cleanup(&path);
+    }
+
+    /// 空 kinds / 空白键：静默丢弃该组，不影响其余状态（与"丢未知 Tab 保留其余"一致）。
+    #[test]
+    fn sidebar_tabs_drop_empty_groups_without_failing() {
+        let path = path();
+        let state = update(
+            &path,
+            patch(json!({
+                "sidebarTabs": {
+                    "k": { "kinds": [], "active": 0 },
+                    " ": { "kinds": ["review"], "active": 0 },
+                    "runtime:ok": { "kinds": ["review"], "active": 0 }
+                }
+            })),
+        )
+        .unwrap();
+        assert!(!state.sidebar_tabs.contains_key("k"));
+        assert_eq!(state.sidebar_tabs.len(), 1, "只保留合法组");
+        assert!(state.sidebar_tabs.contains_key("runtime:ok"));
+        if path.parent().is_some_and(|dir| dir.exists()) {
+            cleanup(&path);
+        }
+    }
+
+    /// **直接 `read()` 回归**：把**原始**含未知/aux/空组的 JSON 写到磁盘（不经
+    /// `update()` 过滤），断言 `read()` 接受它、保留合法组、丢弃非法组。
+    /// 之前两条测试都从空文件出发走 `update()`，未知组在写盘前就被过滤掉了，
+    /// 根本没走到"读一个本来就有脏组的文件"这条路径。
+    #[test]
+    fn read_accepts_a_file_that_already_contains_unknown_or_empty_groups() {
+        let path = path();
+        let dir = path.parent().unwrap();
+        std::fs::create_dir_all(dir).unwrap();
+        let raw = json!({
+            "revision": 3,
+            "sidebarTabs": {
+                "runtime:aux-only": { "kinds": ["aux"], "active": 0 },
+                "runtime:unknown-only": { "kinds": ["mystery"], "active": 0 },
+                "runtime:empty": { "kinds": [], "active": 0 },
+                "runtime:blank-key": { "kinds": ["review"], "active": 5 },
+                "runtime:good": { "kinds": ["review", "aux", "browser"], "active": 9 }
+            }
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+
+        // 旧实现（空组直接 Err）会在这里整体失败。
+        let state = read(&path).expect("含未知/aux/空组的文件必须被接受");
+
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:aux-only"),
+            "只有 aux 的组要被丢弃"
+        );
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:unknown-only"),
+            "只有未知 kind 的组要被丢弃"
+        );
+        assert!(
+            !state.sidebar_tabs.contains_key("runtime:empty"),
+            "空 kinds 的组要被丢弃"
+        );
+        // 合法组保留，未知 kind 被剔除，active 被钳制。
+        assert_eq!(state.sidebar_tabs["runtime:good"].kinds, vec!["review", "browser"]);
+        assert_eq!(state.sidebar_tabs["runtime:good"].active, 1);
+        assert_eq!(
+            state.sidebar_tabs["runtime:blank-key"].kinds,
+            vec!["review"],
+            "key 不是空白（runtime:blank-key）→ 保留"
+        );
+        assert_eq!(state.sidebar_tabs["runtime:blank-key"].active, 0);
+        assert_eq!(state.revision, 3, "其余字段不受影响");
+        cleanup(&path);
+    }
+
     fn backend_results_survive_without_a_connected_client_and_retry_starts_do_not_rewrite() {
         let path = path();
         let mut event = json!({
