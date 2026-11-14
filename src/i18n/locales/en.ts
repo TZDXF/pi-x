@@ -163,6 +163,8 @@ export default {
     newTerminal: "Terminal",
     terminalLost: "The terminal process exited with the previous run; reopen it to continue",
     terminalRestart: "Reopen terminal",
+    groupLimitReached: "The sidebar limit is reached: this panel recovers automatically, or immediately after closing any split pane.",
+    limitReached: "This conversation already has {count} sidebar tabs. Close one before adding another.",
     newBrowser: "Browser",
   },
   split: {

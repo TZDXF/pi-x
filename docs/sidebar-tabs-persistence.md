@@ -51,17 +51,48 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
 - P1 **不做**能力探测/降级。若不希望每次写入都可能整体失败，需要另立事项
   加"发送前探测后端字段集合"。
 
-## 5. 边界
+## 5. 上限、白名单与内存增长（TZD-96）
+
+本分支（stacked on #14）落地四项 P2 加固：#14 本身不含这些。
+
+- 单会话 **20 条**：上限落在 `addTab` 上（到 20 就**拒绝新增**并 toast 反馈）。
+  不是"先加进去、写盘时截断"——那会让界面显示成功而重启后静默丢掉最新一个。
+  拖拽排序入口（`reorderTabs`）同样截断，内存里始终 ≤20；落盘/读盘侧各截断一次作兜底。
+- **写侧白名单**：`persistedFromTabs` 在本地丢掉 `aux` 与未知 kind，顺序是**先过滤再限额**
+  （反过来会让前面的脏 kind 把后面的合法 kind 挤掉）。
+- **Rust 宽容反序列化**：`SidebarTabs` 自定义 `Deserialize`，非对象/非数组/非数值按可读部分
+  重建，`active` 解析期钳 0；`normalize` 先按白名单过滤再 `take(20)`。单条形状不合法
+  只做局部净化，delete patch 也仍能删掉该脏键 —— 不会再让整份 `workspace.json` 读取失败。
+- **内存组数 24 个**：`stores/sidebarTabs.ts` 的 `pruneGroups` 按 LRU 淘汰内存组，只丢内存、
+  不删磁盘条目（重新打开该会话时再 hydrate）。形态：
+  - 持有关系按**实例实际 retain 过的键**记录（`useSidebarTabs` 的 `heldKey`），换键时
+    先 retain 新键、迁移完再释放旧键。身份键变化不止 `runtime:` → 文件键一种 ——
+    SSH realpath 回绑（`src/lib/workspaceRuntime.ts:149`）同样会在组件仍挂载时换键，
+    两种情况都要配平，否则正在显示的组会失去保护、旧 alias 键引用还会永久泄漏。
+  - **建组前准入**（而不是先建后回收）：`ensureGroup` 先 `pruneGroups(上限 - 1)` 腾名额，
+    腾不出才由调用方**排队**。因此 `sidebarTabRegistry.size ≤ 24` 是真不变量，
+    不依赖"事后淘汰"的时序。
+  - 准入覆盖所有会新建组的路径：`addTab`、`hydrateGroup`、`retainGroup`（挂载）、
+    `rebindGroup`（换键迁入）、`reorderTabs`；`tabsFor`/`activeIdFor` 读取**不建组**。
+  - **两份队列，语义不同**（不要合并）：
+    - `pendingRetain`（FIFO）：会话**正在挂载**但没名额建组。名额一空出就补准入，
+      该会话侧栏**原地自愈**，用户不需要切走再切回；
+    - `pendingHydrate`：**载荷到了**但没名额建组。名额空出后补 hydrate。
+    两者都由 `releaseGroup` / `pruneGroups` 腾位时 flush，且各自防重入。
+  - **迟到载荷建组即被持有**：`hydrateGroup` 成功后调 `admitPendingRetain`，
+    把该键排队中的挂载请求一并承认，避免"正在显示却没人持有、下一次 LRU 就被淘汰"。
+  - `pruneGroups` 返回实际腾出的组数（腾不出返回 0）。全部组都被挂载持有时它腾不出
+    名额，此时**新挂载排队**（组数仍是 ≤24），而不是把上限放成 30。
+  - **有界极限**：`≥24` 个 pane 同时挂载时，新打开会话的侧栏会**排队**到有 pane 关闭。
+    这是有界、可自愈、不丢数据的状态 —— 关掉任意一个 pane 后该会话侧栏自动可用，
+    磁盘载荷在排队期间也不会被删除。
+  - 量级：每组最多 20 条 `{id, type, stale?}`（约几百字节），**内存组数硬上限 24**，
+    因此总量有界（≈ 十几 KB 加待 hydrate 暂存），不随会话数量线性增长。
+
+## 6. 边界
 
 - 只做 Tab 结构恢复，不把 `RightSidebar` 提升为 App 级驻留。
-- **20 条上限、写侧白名单、Rust 宽容反序列化、组数 LRU 回收都不在本 PR**：这四项 P2 加固已拆到
-  **TZD-96**，本 PR（#14 / M1）只做持久化与恢复语义，**不声称**提供这些保证。
-  仓库里残留的只是“尽量不丢”的兼容层，不是上限机制：`addTab` 不拦截新增（新增没有上限）；
-  `persistedFromTabs` 与 `normalizePersistedSidebarTabs` 在写/读盘时各自截断到前 20 项；
-  Rust `normalize` 先按白名单过滤、再 `take(20)` 并钳 `active`，但 `SidebarTabs` 仍是严格
-  `Deserialize`（`active` 为 `usize`）——磁盘记录形状不合法时（`kinds` 非数组、`active` 为负数
-  或非数值）会让**整个 `workspace.json` 读取失败**。因此本 PR 的两处已知缺口是
-  「**第 21 个 Tab 界面上能加、写盘被静默截断**」与「**单条形状不合法会让整份状态读取失败**」，
-  都等 TZD-96 修。
-- `aux`（TZD-94 辅助对话）Tab 明确不落盘：读盘时按未知 kind 丢弃，且只含未知 kind 的
-  组会被整体丢弃（不报错，不影响其它组）。
+- `aux`（TZD-94 辅助对话）Tab 明确不落盘：写侧白名单直接丢弃，读盘时按未知 kind 丢弃，
+  且只含未知 kind 的组会被整条丢弃（不报错，不影响其它组）。
+- 后端 `normalize` 做**局部净化**（超限截断 / 全非法则丢该条 / `active` 越界与负数钳制），
+  单条脏记录不会再让整个 `workspace.json` 读取失败；被污染的键也能用删除 patch 清掉。
