@@ -494,6 +494,7 @@ async fn execute(app: &AppHandle, task: &Task) -> Result<String, String> {
             args,
             None,
             Some(id.clone()),
+            rpc::RuntimePolicy::Main,
         )
         .await?;
         let levels =

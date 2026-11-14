@@ -1475,6 +1475,12 @@ export default {
   // 后端（src-tauri）与 transport 层编码错误的当前语言文案；键与 Rust 调用点的错误码一致，
   // 回归测试（tests/backend-errors.test.ts）校验三方同步。
   backendErrors: {
+    auxRpcDenied: "辅助对话不支持该操作：{type}",
+    auxPiUnsupported: "当前 pi 版本不支持辅助对话所需的隔离参数",
+    auxModelMissing: "辅助对话需要显式指定模型",
+    auxRuntimeIdInvalid: "辅助对话的 runtimeId 必须以 aux: 开头",
+    auxSessionForbidden: "辅助对话不接受会话文件",
+    builtinExtensionPathMissing: "内置插件路径缺失",
     skillNotFound: "技能路径不存在",
     projectUntrusted: "项目未被信任，无法访问项目设置",
     invalidResourcePath: "无效的资源路径",

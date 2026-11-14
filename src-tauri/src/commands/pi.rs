@@ -78,6 +78,7 @@ pub async fn rpc_spawn(
             Vec::new(),
             workspace_manifest,
             runtime_id,
+            rpc::RuntimePolicy::Main,
         )
         .await;
     };
@@ -154,6 +155,7 @@ async fn spawn_remote(
         Vec::new(),
         None,
         runtime_id,
+        rpc::RuntimePolicy::Main,
     )
     .await?;
     // 成功 spawn 记 lastUsedAt；写回失败不影响会话。

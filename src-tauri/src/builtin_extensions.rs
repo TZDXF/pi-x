@@ -12,9 +12,9 @@ const WORKSPACE_SOURCE: &str = include_str!("../extensions/pix-workspace.js");
 const WORKSPACE_NAME: &str = "pix-workspace.js";
 
 /// pi's prefix for a built-in extension name (`builtin:mcp`, `builtin:read`).
-const BUILTIN_PREFIX: &str = "builtin:";
+pub(crate) const BUILTIN_PREFIX: &str = "builtin:";
 /// The built-in extension that registers the llama.cpp provider.
-const LLAMA_CPP_PROVIDER: &str = "llama.cpp";
+pub(crate) const LLAMA_CPP_PROVIDER: &str = "llama.cpp";
 
 fn materialize_in(dir: &std::path::Path, name: &str, source: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| {
@@ -46,17 +46,32 @@ fn materialize(name: &str, source: &str) -> Result<PathBuf, String> {
 /// CLI arguments for enabled built-in extensions. Disabled plugins are omitted
 /// entirely so pi never discovers or executes them.
 pub fn rpc_args(app: &AppHandle) -> Result<Vec<String>, String> {
-    let enabled = commands::app_config_get(app.clone())?
-        .builtin_file_changes
-        .unwrap_or(true);
-    if !enabled {
+    // 唯一开关判定点在 `file_changes_extension_path`，这里不再重复读配置。
+    let Some(path) = file_changes_extension_path(app)? else {
         return Ok(Vec::new());
-    }
-    let path = materialize(FILE_CHANGES_NAME, FILE_CHANGES_SOURCE)?;
+    };
     Ok(vec![
         "--extension".into(),
         path.to_string_lossy().into_owned(),
     ])
+}
+
+/// `pix-file-changes` 的物化路径，**受 `builtin_file_changes` 开关控制**（与主会话
+/// 同一条规则，见 `docs/aux-chat-spec.md` §1）：关闭时返回 `None`。
+pub fn file_changes_extension_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let enabled = commands::app_config_get(app.clone())?
+        .builtin_file_changes
+        .unwrap_or(true);
+    file_changes_extension_path_for(enabled)
+}
+
+/// 开关决策的纯函数形态：便于单测钉住"关闭即不注入"，无需构造 `AppHandle`。
+/// 主会话与 aux 共用这一条规则（见 `docs/aux-chat-spec.md` §1）。
+pub fn file_changes_extension_path_for(enabled: bool) -> Result<Option<PathBuf>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    Ok(Some(materialize(FILE_CHANGES_NAME, FILE_CHANGES_SOURCE)?))
 }
 
 /// Extra `--extension` arguments for a workspace session. The manifest itself
@@ -92,6 +107,16 @@ mod tests {
         assert!(FILE_CHANGES_SOURCE.contains("pix-file-change"));
         assert!(FILE_CHANGES_SOURCE.contains("tool_call"));
         assert!(FILE_CHANGES_NAME.ends_with(".js"));
+    }
+
+    /// `builtin_file_changes` 关闭时，主会话与 aux 都不注入 `pix-file-changes`
+    /// （规格 §1 与实现必须一致）。
+    #[test]
+    fn file_changes_extension_follows_the_shared_toggle() {
+        assert_eq!(file_changes_extension_path_for(false).unwrap(), None);
+        let path = file_changes_extension_path_for(true).unwrap();
+        assert!(path.is_some(), "启用时必须给出物化路径");
+        assert!(path.unwrap().ends_with(FILE_CHANGES_NAME));
     }
 
     #[test]
