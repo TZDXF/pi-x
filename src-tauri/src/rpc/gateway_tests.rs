@@ -287,12 +287,24 @@ async fn remote_aux_argv_carries_no_session_through_the_payload_builder() {
     assert_eq!(payload.matches("--no-session").count(), 1);
 }
 
-/// Web 端 `aux_spawn` 必须委托同一个命令实现，否则远程会拿到"没有 --no-session"的另一种拼法。
+/// Web 端 `aux_spawn` 的**路由**必须委托同一个命令实现。
+///
+/// 说明（诚实标注证据边界）：这里断言的是**静态路由**，不是运行期 dispatch 调用。
+/// 运行期覆盖需要 `AppHandle<MockRuntime>`，而 `rpc::spawn`/`aux_spawn`/`builtin_extensions`
+/// 全部签名绑定 `AppHandle<Wry>`；要跑通得把整条链泛型化 —— 为测试改产品代码、
+/// 换来的只是"参数没丢"的间接确认（`--no-session` 的实际产出点是
+/// `aux_launch::aux_extra_args`，已由行为测试与真实 payload builder 覆盖）。
+/// 因此按技术队长的取舍建议：**dispatch 级运行期覆盖放到后续集成验证**。
 #[test]
-fn web_dispatch_delegates_aux_spawn_to_the_same_command() {
+fn web_dispatch_routes_aux_spawn_to_the_same_command() {
     let source = include_str!("../remote/dispatch/session.rs");
     assert!(
         source.contains("\"aux_spawn\" =>") && source.contains("pi_aux::aux_spawn"),
         "remote dispatch 必须委托 commands::pi_aux::aux_spawn"
+    );
+    // dispatch 不得在远程侧另拼一份启动参数（那会绕开 aux_extra_args 的唯一产出点）。
+    assert!(
+        !source.contains("--no-session"),
+        "远程 dispatch 不应自己拼启动参数"
     );
 }

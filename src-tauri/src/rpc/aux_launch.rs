@@ -132,6 +132,30 @@ pub async fn probe_local(
     project: &str,
     workspace_manifest: Option<&str>,
 ) -> Result<(), String> {
+    probe_local_with_timeouts(
+        info,
+        args,
+        fingerprint,
+        project,
+        workspace_manifest,
+        HANDSHAKE_TIMEOUT,
+        EXIT_TIMEOUT,
+    )
+    .await
+}
+
+/// 同 [`probe_local`]，但可注入超时。行为测试用它把 25s/20s 压到可测的短值，
+/// 从而能真正断言"缺 `--mode rpc` 会超时失败"而不用等两分钟。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn probe_local_with_timeouts(
+    info: &crate::pi_locate::PiInfo,
+    args: &[String],
+    fingerprint: &str,
+    project: &str,
+    workspace_manifest: Option<&str>,
+    handshake_timeout: Duration,
+    exit_timeout: Duration,
+) -> Result<(), String> {
     if cache_get(fingerprint) {
         return Ok(());
     }
@@ -158,6 +182,7 @@ pub async fn probe_local(
         let _ = child.kill().await;
         return Err(unsupported("no stdout"));
     };
+
     use tokio::io::AsyncWriteExt;
     if let Err(e) = stdin
         .write_all(b"{\"id\":\"aux-probe\",\"type\":\"get_state\"}\n")
@@ -167,7 +192,7 @@ pub async fn probe_local(
         return Err(unsupported(format!("write failed: {e}")));
     }
     let mut lines = tokio::io::BufReader::new(stdout);
-    let handshake = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+    let handshake = tokio::time::timeout(handshake_timeout, async {
         use tokio::io::AsyncBufReadExt;
         loop {
             let mut line = String::new();
@@ -211,7 +236,7 @@ pub async fn probe_local(
             return Err(unsupported("probe timed out"));
         }
     }
-    match tokio::time::timeout(EXIT_TIMEOUT, child.wait()).await {
+    match tokio::time::timeout(exit_timeout, child.wait()).await {
         Ok(Ok(status)) if status.success() => {
             cache_put(fingerprint);
             Ok(())
@@ -325,6 +350,122 @@ pub fn spec_from_json(value: &Value) -> Result<AuxLaunchSpec, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 假 pi 可执行文件：只有收到 `--mode rpc` 才在 stdin 读到请求后回 `get_state`；
+    /// 否则一直读 stdin 到 EOF、什么都不输出 —— 与真实 pi 的 print 模式行为一致。
+    fn fake_pi_script() -> &'static str {
+        // 单文件 node 脚本：参数检查 + JSONL 应答 + EOF 退出。
+        const SCRIPT: &str = r#"
+let rpc = process.argv.includes('--mode') && process.argv.includes('rpc');
+process.stdin.resume();
+process.stdin.on('data', (chunk) => {
+  if (!rpc) return;
+  for (const line of String(chunk).split('\n')) {
+    if (!line.trim()) continue;
+    let req;
+    try { req = JSON.parse(line); } catch { continue; }
+    process.stdout.write(JSON.stringify({ id: req.id, type: 'response', command: req.type, success: true, data: {} }) + '\n');
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+"#;
+        SCRIPT
+    }
+
+    fn fake_pi_info(script_path: &std::path::Path) -> crate::pi_locate::PiInfo {
+        crate::pi_locate::PiInfo {
+            found: true,
+            path: Some(script_path.to_string_lossy().into_owned()),
+            version: Some("1.5.2".into()),
+            source: Some("config".into()),
+            hint: String::new(),
+            launcher: Some(crate::pi_locate::Launcher::Node {
+                node: std::env::var("PIX_TEST_NODE").unwrap_or_else(|_| "node".into()),
+                script: script_path.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    fn write_fake_pi(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        if crate::ssh::transport::find_test_program("node").is_none() {
+            return None;
+        }
+        let path = dir.join("fake-pi.js");
+        std::fs::write(&path, fake_pi_script()).ok()?;
+        Some(path)
+    }
+
+    fn spec_local() -> AuxLaunchSpec {
+        AuxLaunchSpec {
+            provider: "home".into(),
+            model: "m".into(),
+            thinking: Some("off".into()),
+            file_changes_extension: None,
+            workspace_extension: None,
+        }
+    }
+
+    /// **行为回归**（替代纯字符串断言）：真起进程。
+    /// - 带 `--mode rpc`：握手通过（假 pi 才应答）；
+    /// - 去掉它：假 pi 不出声，探测必须在压短的超时内失败。
+    #[tokio::test]
+    async fn probe_local_requires_rpc_mode_at_runtime_not_just_in_argv() {
+        let dir = std::env::temp_dir().join(format!("pix-aux-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(script) = write_fake_pi(&dir) else {
+            eprintln!("跳过：开发环境未找到 node");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        };
+        let info = fake_pi_info(&script);
+        let project = dir.to_string_lossy().to_string();
+        let spec = spec_local();
+
+        // 正例：完整参数（含 --mode rpc）。
+        let ok_args = probe_args(&spec);
+        assert_eq!(ok_args[0], "--mode");
+        let ok = probe_local_with_timeouts(
+            &info,
+            &ok_args,
+            "fp-ok",
+            &project,
+            None,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(ok.is_ok(), "带 --mode rpc 时必须握手成功：{ok:?}");
+
+        // 反例：去掉 --mode rpc —— 假 pi 落到 print 行为，不应答，必须超时失败。
+        let mut bad_args = probe_args(&spec);
+        bad_args.drain(0..2);
+        let start = std::time::Instant::now();
+        let bad = probe_local_with_timeouts(
+            &info,
+            &bad_args,
+            "fp-bad",
+            &project,
+            None,
+            Duration::from_millis(800),
+            Duration::from_secs(5),
+        )
+        .await;
+        let err = bad.expect_err("去掉 --mode rpc 必须失败（否则这条测试没有保护力）");
+        assert!(
+            err.contains("auxPiUnsupported") && err.contains("probe timed out"),
+            "必须是超时失败而不是别的错误：{err}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "注入超时应当立即生效，实际耗时 {:?}",
+            start.elapsed()
+        );
+
+        // 探测缓存只记录成功；失败不得写入缓存（下次仍会重探）。
+        assert!(!cache_get("fp-bad"), "失败结果不能被缓存");
+        reset_probe_cache();
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn spec(provider: &str) -> AuxLaunchSpec {
         AuxLaunchSpec {
