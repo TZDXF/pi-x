@@ -961,6 +961,10 @@ export const createSessionStore = (runtimeId = "default") =>
       refreshStats,
       refreshModels,
       refreshCommands,
+      // aux（TZD-101）自带初始化序列（`lib/auxSpawn.ts` 的 `initAuxSession`）：它在
+      // 每段之间检查"实例是否已关闭"，而公共 `init` 是原子的。这里只**加宽导出**，
+      // `init` 本身一行未改。
+      refreshThinkingLevels,
       loadOfflineModels,
       historyLoading,
       olderHistoryLoading,

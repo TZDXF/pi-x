@@ -9,7 +9,9 @@ test("right sidebar keeps parent and panel integration wired", () => {
   const chat = read("../src/components/ChatView.vue")
   const sidebar = read("../src/components/RightSidebar.vue")
   const terminal = read("../src/components/terminal/TerminalPanel.vue")
-  expect(chat).toMatch(/<RightSidebar\s+:open="sidebarVisible"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/)
+  expect(chat).toMatch(
+    /<RightSidebar\s+:aux-parent="auxParent"\s+:open="sidebarVisible"\s+:tabs="sidebarTabs"\s+:active-id="activeTabId"/,
+  )
   // 开关动画由面板自身宽度过渡驱动，ChatView 不再用 v-show 瞬时显隐。
   expect(chat).not.toMatch(/<RightSidebar\s+v-show=/)
   expect(sidebar).toMatch(/@click="addTab\('review'\)"/)
@@ -53,15 +55,16 @@ test("browser tab works on desktop and remote with chat insert support", () => {
 test("sidebar tab state lives in the module-level registry, keyed by session identity", () => {
   const chat = read("../src/components/ChatView.vue")
   const registry = read("../src/stores/sidebarTabs.ts")
-  // TZD-95：Tab 状态从 ChatView 的局部 ref 搬到模块级注册表（切会话/设置页往返都卸载 ChatView）。
-  expect(chat).toMatch(/} = useSidebarTabs\(\{/)
-  expect(chat).toMatch(/tabs: sidebarTabs,/)
-  expect(chat).toMatch(/add: addSidebarTab,/)  // 直接来自 `useSidebarTabs`
-  expect(chat).toMatch(/close: closeSidebarTab,/)
+  // TZD-95：Tab 状态在模块级注册表里；装配在 `useChatViewSidebar`（ChatView 只用返回值）。
+  const sidebarComposable = read("../src/composables/useChatViewSidebar.ts")
+  expect(sidebarComposable).toMatch(/useSidebarTabs\(\{/)
+  expect(sidebarComposable).toMatch(/tabs: sidebar\.tabs as ComputedRef<SidebarTabItem\[\]>/)
+  expect(chat).toMatch(/const sidebar = useChatViewSidebar\(\{/)
   expect(chat).toMatch(/function openReviewAt\(path: string\)/)
   expect(chat).toMatch(/else addSidebarTab\("review"\)/)
-  expect(chat).toMatch(/@add-tab="addSidebarTab"/)
-  expect(chat).toMatch(/@close-tab="closeSidebarTab"/)
+  // aux 槽位要先开/关进程，所以统一走 `useAuxTabs` 的入口（非 aux 类型内部仍调 sidebar.add）。
+  expect(chat).toMatch(/@add-tab="addTab"/)
+  expect(chat).toMatch(/@close-tab="closeTab"/)
   // 注册表本身是模块级 state，不依赖 Pinia 实例，也不持有面板内容。
   expect(registry).toMatch(/export const sidebarTabRegistry = reactive\(new Map/)
   expect(registry).toMatch(/export function rebindGroup\(/)
@@ -83,9 +86,10 @@ test("closing the last sidebar tab also closes the sidebar for clicks and shortc
   // 关闭最后一个 Tab 时收起侧栏由 composable 的 `onLastTabClosed` 回调负责。
   expect(chat).toMatch(/onLastTabClosed: \(\) => \(sidebarOpen\.value = false\)/)
   expect(chat).toMatch(/onFirstTabAdded: \(\) => \(sidebarOpen\.value = true\)/)
-  expect(chat).toMatch(/@close-tab="closeSidebarTab"/)
+  expect(chat).toMatch(/@close-tab="closeTab"/)
   expect(chat).toMatch(
-    /registerShortcutHandler\("sidebar.closeTab", \(\) => \{\s*if \(activeTabId.value !== null\) closeSidebarTab\(activeTabId.value\)/,
+    // 快捷键关 Tab 走与点击相同的入口：aux 槽位必须先销毁进程（只撤槽位会留孤儿）。
+    /registerShortcutHandler\("sidebar.closeTab", \(\) => \{\s*if \(activeTabId.value !== null\) void closeTab\(activeTabId.value\)/,
   )
   // 真正删条目与修正 active 的逻辑在注册表里（TZD-95 把状态搬出组件）。
   const registryClose = registry.match(/export function closeTab\(key: string, id: number\) \{([\s\S]*?)\r?\n\}/)?.[1]

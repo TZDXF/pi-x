@@ -5,9 +5,21 @@
  * 持久化字段经由 `workspace.json`（见 `lib/workspaceState.ts`）。
  */
 
-/** 本轮接入的四种 kind。`aux` 属于 TZD-94，读盘时按"未知 kind"丢弃。 */
+/**
+ * 可**落盘**的四种 kind（主侧栏）。
+ *
+ * `aux`（TZD-101）是第五种 kind，但它关闭即销毁、**永不落盘**：读盘与写盘两侧
+ * 都按"未知 kind"把它丢弃（见 `persistedFromTabs` / `normalizePersistedSidebarTabs`）。
+ * 它只是复用侧栏的 Tab 槽位、排序与 active，不是持久化语义的一部分。
+ */
 export const SIDEBAR_TAB_KINDS = ["review", "files", "terminal", "browser"] as const
-export type SidebarTabKind = (typeof SIDEBAR_TAB_KINDS)[number]
+export type PersistedSidebarTabKind = (typeof SIDEBAR_TAB_KINDS)[number]
+
+/** 只在内存里存在的 kind（不落盘）。 */
+export const SIDEBAR_TAB_EPHEMERAL_KINDS = ["aux"] as const
+export type EphemeralSidebarTabKind = (typeof SIDEBAR_TAB_EPHEMERAL_KINDS)[number]
+
+export type SidebarTabKind = PersistedSidebarTabKind | EphemeralSidebarTabKind
 
 export interface SidebarTabItem {
   id: number
@@ -21,7 +33,7 @@ export interface SidebarTabItem {
 
 /** 写盘载荷：只存 kind 顺序与 active 下标，不含任何面板内容。 */
 export interface PersistedSidebarTabs {
-  kinds: SidebarTabKind[]
+  kinds: PersistedSidebarTabKind[]
   active: number
 }
 
@@ -34,7 +46,17 @@ export const MAX_SIDEBAR_TABS = 20
  */
 export const MAX_SIDEBAR_TAB_GROUPS = 24
 
+/** 内存里的合法 kind（含不落盘的 `aux`）。 */
 export function isSidebarTabKind(value: unknown): value is SidebarTabKind {
+  return (
+    typeof value === "string" &&
+    ((SIDEBAR_TAB_KINDS as readonly string[]).includes(value) ||
+      (SIDEBAR_TAB_EPHEMERAL_KINDS as readonly string[]).includes(value))
+  )
+}
+
+/** 可落盘的 kind（`aux` 与未知 kind 都在这里被挡掉）。 */
+export function isPersistedSidebarTabKind(value: unknown): value is PersistedSidebarTabKind {
   return typeof value === "string" && (SIDEBAR_TAB_KINDS as readonly string[]).includes(value)
 }
 
@@ -46,10 +68,11 @@ export function normalizePersistedSidebarTabs(value: unknown): PersistedSidebarT
   if (!value || typeof value !== "object") return null
   const raw = (value as { kinds?: unknown; active?: unknown }).kinds
   if (!Array.isArray(raw)) return null
-  const kinds: SidebarTabKind[] = []
+  const kinds: PersistedSidebarTabKind[] = []
   for (const kind of raw) {
     // 同一 kind 允许重复（多个 review/terminal Tab 是合法状态）。
-    if (isSidebarTabKind(kind) && kinds.length < MAX_SIDEBAR_TABS) kinds.push(kind)
+    // 白名单在前、限额在后：反过来会让 `aux` 挤掉后面的合法 kind。
+    if (isPersistedSidebarTabKind(kind) && kinds.length < MAX_SIDEBAR_TABS) kinds.push(kind)
   }
   if (!kinds.length) return null
   const active = Number((value as { active?: unknown }).active)
@@ -102,9 +125,9 @@ export function persistedFromTabs(
   tabs: readonly SidebarTabItem[],
   activeId: number | null,
 ): PersistedSidebarTabs | null {
-  const allowed = tabs.filter(tab => isSidebarTabKind(tab.type)).slice(0, MAX_SIDEBAR_TABS)
+  const allowed = tabs.filter(tab => isPersistedSidebarTabKind(tab.type)).slice(0, MAX_SIDEBAR_TABS)
   if (!allowed.length) return null
-  const kinds = allowed.map(tab => tab.type)
+  const kinds = allowed.map(tab => tab.type as PersistedSidebarTabKind)
   const index = activeId === null ? -1 : allowed.findIndex(tab => tab.id === activeId)
   return { kinds, active: Math.max(index, 0) }
 }

@@ -165,6 +165,16 @@ export default {
       "同时在用的侧栏面板已达上限：正在显示中的会话侧栏会在名额空出后自动恢复；关闭任一分屏窗格即可立即恢复。",
     limitReached: "本会话的侧栏标签页已达 {count} 个上限，请先关闭一个再添加。",
     newBrowser: "浏览器",
+    aux: "辅助对话",
+    newAux: "辅助对话",
+    auxPending: "有待回答的扩展询问",
+  },
+  auxChat: {
+    title: "辅助对话",
+    creating: "正在启动辅助对话…",
+    spawnFailedUnknown: "辅助对话启动失败",
+    retry: "重试",
+    limitReached: "辅助对话最多同时开启 {count} 个实例，请先关闭一个再添加。",
   },
   split: {
     closePane: "关闭此窗格",

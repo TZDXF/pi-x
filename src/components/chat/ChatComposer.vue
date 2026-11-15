@@ -29,6 +29,11 @@ const props = defineProps<{
   initialDraft: string
   ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
   controls: UnwrapRef<ReturnType<typeof useChatSendControl>>
+  /**
+   * aux 面板用：aux 跟着父会话的 project 启动、不支持切换项目/分支，所以隐藏项目
+   * 选择器（默认 false = 主会话行为不变）。
+   */
+  hideWorkspaceContext?: boolean
 }>()
 const bridge = defineModel<InstanceType<typeof PromptInputBridge> | null>("bridge", { required: true })
 const workspaceSelection = defineModel<WorkspaceSelection | null>("workspaceSelection", { required: true })
@@ -60,6 +65,7 @@ const { codeComments, conversationSelections, onSendDelayWheel, onSubmit, abort 
       :initial-selection="workspaceSelection"
       :disabled="gitBusy || connecting"
       v-if="
+        !hideWorkspaceContext &&
         !session.promptQueue.length &&
         !session.entries.length &&
         !session.isStreaming &&

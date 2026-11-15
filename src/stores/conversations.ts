@@ -35,6 +35,21 @@ export function uiFor(id: string): Ui {
   }
   return store
 }
+
+/**
+ * aux（辅助对话）的 ui store 只登记进查找表，**不进** `sessions`。
+ *
+ * 这样 `ExtensionDialog` / `StatusBar` 凭 `:session-id="auxRuntimeId"` 能拿到 aux
+ * 自己的 ui（扩展询问不会落到主会话、回答不会发错进程），而 `allConversations()`
+ * 仍然看不见 aux（左侧会话列表、项目"运行中"、看板卡片都不受影响）。
+ */
+export function registerAuxUiStore(id: string, store: Ui) {
+  interfaces.set(id, store)
+}
+
+export function dropAuxUiStore(id: string) {
+  interfaces.delete(id)
+}
 export function activateSession(id: string) {
   sessionFor(id)
   uiFor(id)
@@ -80,6 +95,11 @@ export function isSessionRunning(file: string, project?: string) {
 }
 export function allConversations() {
   return [...sessions.values()]
+}
+
+/** aux 的 session store 不属于会话列表（见 `stores/auxChat.ts` 的 store 表）。 */
+export function hasConversation(id: string) {
+  return sessions.has(id)
 }
 
 // Reads follow the selected conversation, but actions are bound to the store

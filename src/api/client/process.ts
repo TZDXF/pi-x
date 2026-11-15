@@ -35,6 +35,48 @@ export const spawnPi = (
 
 export const killPi = (runtimeId = activeRuntimeId.value) => invoke<void>("rpc_kill", { runtimeId })
 
+/**
+ * aux（辅助对话）进程的启动参数。
+ *
+ * 每个字段**独立传参**（Tauri 命令参数，不做字符串拼接）：argv 由后端
+ * `rpc::aux_launch::aux_extra_args()` 按代码常量白名单组装，前端只能选 provider/model/
+ * thinking（`docs/aux-chat-spec.md` §1）。
+ */
+export interface AuxSpawnOptions {
+  /** 父（主）会话 runtimeId：aux 的归属关系，前端注册表/面板/关闭清理按它过滤。 */
+  parentRuntimeId: string
+  /** aux 自己的 runtimeId，必须 `aux:` 前缀（后端 `aux_spawn` 强校验）。 */
+  runtimeId: string
+  /** 父会话 cwd（远程为 `ssh://` 展示 URI）；aux 与父会话同目录。 */
+  project: string
+  /** 继承父会话 state.model 的 provider / model（缺省即 `auxModelMissing`）。 */
+  provider: string
+  model: string
+  /** 继承父会话 thinkingLevel；未设置时不传（后端按 pi 默认）。 */
+  thinking?: string | null
+  /** 父会话的多目录工作区上下文（仅本地；远程 P1 不支持）。 */
+  workspace?: WorkspaceContext
+  /** SSH 远程项目必传：连接选择是远程细节的唯一权威来源。 */
+  sshConnectionId?: string
+}
+
+/**
+ * 启动一个 aux 运行时（策略固定 `Aux`，客户端无法翻转）。
+ *
+ * 失败时后端返回 coded error（`auxPiUnsupported` / `auxModelMissing` /
+ * `auxRuntimeIdInvalid` …），调用方按原样展示，不要静默。
+ */
+export const spawnAuxPi = (options: AuxSpawnOptions) =>
+  invoke<void>("aux_spawn", {
+    project: options.project,
+    runtimeId: options.runtimeId,
+    provider: options.provider,
+    model: options.model,
+    thinking: options.thinking ?? null,
+    workspace: options.workspace ?? null,
+    sshConnectionId: options.sshConnectionId ?? null,
+  })
+
 export const piRunning = (runtimeId = activeRuntimeId.value) => invoke<boolean>("rpc_running", { runtimeId })
 
 /** Fire-and-forget diagnostic log line, persisted by the backend to ~/.pix/logs. */

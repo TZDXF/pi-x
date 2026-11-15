@@ -36,7 +36,7 @@ import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { useSidebarTabs } from "@/composables/useSidebarTabs"
+import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import RightSidebar from "@/components/RightSidebar.vue"
@@ -105,27 +105,18 @@ const emit = defineEmits<{
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
-// 侧栏 Tab（TZD-95）：状态在模块级注册表里，本组件只接线。
-const {
-  tabs: sidebarTabs,
-  activeId: activeTabId,
-  add: addSidebarTab,
-  close: closeSidebarTab,
-  reorder: reorderSidebarTab,
-  restartTerminal: restartSidebarTerminal,
-  limit: sidebarTabLimit,
-} = useSidebarTabs({
+// 右侧侧栏（TZD-95 槽位 + TZD-101 aux 实例）：接线全在 composable，本组件只用返回值。
+const sidebar = useChatViewSidebar({
   runtimeId,
-  sessionFile: computed(() => session.sessionFile),
+  session,
+  ui,
   project: () => session.cwd || props.project,
   onFirstTabAdded: () => (sidebarOpen.value = true),
   onLastTabClosed: () => (sidebarOpen.value = false),
-  // 上限在注册表 `addTab` 上硬拦（不是写盘时截断）：界面显示成功、重启静默丢 Tab 不可接受。
-  onTabLimitReached: () => ui.pushToast(t("sidebarTabs.limitReached", { count: sidebarTabLimit }), "warning"),
-  // 组数准入排队时必须告知（会自愈，不静默）。
-  onGroupLimitReached: () => ui.pushToast(t("sidebarTabs.groupLimitReached"), "warning"),
 })
+const { tabs: sidebarTabs, activeId: activeTabId, parent: auxParent, addTab, closeTab, addSidebarTab } = sidebar
 const reviewFocus = ref<string | null>(null)
+
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
 const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
 const currentTitle = computed(
@@ -280,7 +271,7 @@ const offShortcutHandlers = [
   registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
   registerShortcutHandler("sidebar.closeTab", () => {
-    if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)
+    if (activeTabId.value !== null) void closeTab(activeTabId.value)
   }),
   registerShortcutHandler("sidebar.nextTab", () => cycleSidebarTab(1)),
   registerShortcutHandler("sidebar.prevTab", () => cycleSidebarTab(-1)),
@@ -478,6 +469,7 @@ onBeforeUnmount(() => {
     </div>
     <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget" defer>
       <RightSidebar
+        :aux-parent="auxParent"
         :open="sidebarVisible"
         :tabs="sidebarTabs"
         :active-id="activeTabId"
@@ -485,10 +477,11 @@ onBeforeUnmount(() => {
         :project="session.cwd || project"
         :focus="reviewFocus"
         @update:active-id="activeTabId = $event"
-        @add-tab="addSidebarTab"
-        @close-tab="closeSidebarTab"
-        @reorder-tabs="reorderSidebarTab"
-        @restart-terminal="restartSidebarTerminal"
+        @add-tab="addTab"
+        @close-tab="closeTab"
+        @reorder-tabs="sidebar.reorder"
+        @restart-terminal="sidebar.restartTerminal"
+        @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

@@ -193,6 +193,9 @@ test("process materialization survives virtual row unmounting and content/action
   expect(root).toMatch(/<Teleport :to="sidebarTarget \|\| 'body'" :disabled="!sidebarTarget" defer>/)
   expect(root).toMatch(/v-model:bridge="bridge"/)
   expect(root).toMatch(/setShortcutsSuppressed\("chat-dialogs", active\)/)
+  // ChatView 的规模护栏（防止把业务逻辑继续塞进这个视图）。TZD-101 的侧栏接线
+  // （槽位 + aux 实例）整体搬进 `useChatViewSidebar`，视图只留装配与取返回值，
+  // 因此恢复 500 上限，不放宽。
   expect(root.split("\n").length).toBeLessThan(500)
 })
 

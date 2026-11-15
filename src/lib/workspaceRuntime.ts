@@ -3,6 +3,8 @@ import { copySshProjectConnection } from "@/lib/ssh"
 import type { AppConfig, RunningSession } from "@/api/piClient"
 import type { SessionStore } from "@/stores/session"
 import { debounce } from "@/lib/timing"
+import { auxEventSink } from "@/lib/auxEventSink"
+import { isAuxRuntimeId } from "@/lib/auxRuntime"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
 
@@ -85,6 +87,26 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
         [
           onPiEvent(ev => {
             const id = ev.runtimeId ?? "default"
+            // aux 的 runtime 不属于主会话：墓碑命中直接丢弃，**绝不** `sessionFor(id)`
+            // 重建（那会留下无人释放的孤儿 store）；存活实例只写 aux 自己的 store。
+            if (isAuxRuntimeId(id)) {
+              const aux = auxEventSink()
+              if (!aux) return
+              // 墓碑命中直接丢弃：迟到事件不得复活一个已关闭实例。
+              if (aux.isClosed(id)) return
+              if (ev.type === "extension_ui_resolved") {
+                aux.resolveRequest(id, ev.id)
+                return
+              }
+              if (ev.type === "extension_ui_request") {
+                aux.handleRequest(id, ev)
+                return
+              }
+              if (!aux.hasSession(id)) return
+              aux.handleEvent(id, ev)
+              if (ev.type === "agent_settled") aux.restoreRequests(id, [])
+              return
+            }
             if (ev.type === "extension_ui_resolved") {
               uiFor(id).resolveRequest(ev.id)
               return
@@ -120,6 +142,15 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
               if (phase.value === "chat") phase.value = "down"
               return
             }
+            // aux：迟到 exit（含关闭后到达的）一律按墓碑丢弃；存活实例只收尾自己的
+            // store，不触碰主会话 phase/project 选择。
+            if (isAuxRuntimeId(runtimeId)) {
+              const aux = auxEventSink()
+              // 迟到 exit（含关闭后到达的）按墓碑丢弃，不重建、不碰主会话状态。
+              if (!aux || aux.isClosed(runtimeId)) return
+              aux.onExit(runtimeId, activity)
+              return
+            }
             const owner = sessionFor(runtimeId)
             if (activity)
               setSessionRunStatus(
@@ -136,8 +167,21 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
             uiFor(runtimeId).restoreRequests([])
             if (runtimeId === activeRuntimeId.value && phase.value === "chat" && !connecting.value) phase.value = "down"
           }),
-          onPiStderr((line, runtimeId) => uiFor(runtimeId ?? activeRuntimeId.value).pushStderr(tBackendError(line))),
+          onPiStderr((line, runtimeId) => {
+            const id = runtimeId ?? activeRuntimeId.value
+            // aux 的 stderr 不落到主会话的 ui store（否则面板里会出现别的进程的报错）。
+            if (isAuxRuntimeId(id)) {
+              const aux = auxEventSink()
+              if (!aux || aux.isClosed(id)) return
+              aux.pushStderr(id, tBackendError(line))
+              return
+            }
+            uiFor(id).pushStderr(tBackendError(line))
+          }),
           onSshPathBound(({ runtimeId, project: rebound }) => {
+            // aux 的父会话回绑由父会话自己处理（它持有 project/cwd）；aux runtime
+            // 只是跟着同一个 project 启动，不需要在这里再改一次。
+            if (isAuxRuntimeId(runtimeId)) return
             // 重连 realpath 回绑（契约 §3.8）：符号链接别名归一化后与原 URI path
             // 不同时，后端回报回绑后的展示 URI。仅更新展示与项目归属，
             // 不中断会话；失败场景后端不发该事件。
@@ -196,7 +240,16 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
   async function reattachRunningSessions(activate = true): Promise<RunningSession | null> {
     const running = await listRunningSessions()
     if (isDisposed()) return null
-    for (const runtime of running) {
+    // aux 实例关闭即销毁、不参与重连恢复：这里只按 aux 注册表校验存活，
+    // 绝不 `sessionFor` 重建，也不把它们的 pending UI 灌进主会话。
+    const aux = auxEventSink()
+    if (aux)
+      for (const runtime of running.filter(item => isAuxRuntimeId(item.runtimeId))) {
+        if (aux.isClosed(runtime.runtimeId) || !aux.hasSession(runtime.runtimeId)) continue
+        aux.restoreRequests(runtime.runtimeId, runtime.pendingUiRequests ?? [])
+        if (runtime.state.isStreaming) aux.handleEvent(runtime.runtimeId, { type: "agent_start" })
+      }
+    for (const runtime of running.filter(item => !isAuxRuntimeId(item.runtimeId))) {
       const owner = sessionFor(runtime.runtimeId)
       owner.started = true
       await owner.init(runtime.project)
@@ -233,7 +286,9 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
     }
     // Never auto-activate a project the user explicitly removed, even when its
     // conversations keep running in the background.
-    const restorable = running.filter(runtime => !workspace.isRemovedProject(runtime.project))
+    const restorable = running.filter(
+      runtime => !isAuxRuntimeId(runtime.runtimeId) && !workspace.isRemovedProject(runtime.project),
+    )
     const restored = restorable.find(runtime => runtime.project === config.value.lastProject) ?? restorable[0]
     if (restored && activate) {
       activateSession(restored.runtimeId)
