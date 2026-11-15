@@ -29,17 +29,28 @@ export function useChatSendControl(deps: {
   newSession: () => void
   /** 消息实际进入对话流（非本地排队/延迟发送）后触发，用于滚动回底部。 */
   onSent?: () => void
+  /**
+   * 共享输入上下文的归属：
+   * - `shared`（默认）：代码批注/划词引用按会话存入全局 store（主会话行为不变）；
+   * - `none`：aux 面板使用。aux 不消费也不清空主会话的批注/引用桶
+   *   （引用分桶是 TZD-103 的范围），此处一律视为空，且发送后不碰那两个 store。
+   */
+  contexts?: "shared" | "none"
 }) {
   const { session, ui, workspace, bridge } = deps
   const { t } = useI18n()
+  // aux 面板不参与共享上下文（见 `contexts`）：一律视为空，且发送后不碰 store。
+  const isolated = deps.contexts === "none"
   // ---- 代码批注（项目文件页添加）与对话划词引用（会话气泡划词添加），随下一条消息发出 ----
   const codeComments = useCodeCommentsStore()
-  const pendingComments = computed(() => (codeComments.project === deps.project() ? codeComments.comments : []))
+  const pendingComments = computed(() =>
+    isolated ? [] : codeComments.project === deps.project() ? codeComments.comments : [],
+  )
   const conversationSelections = useConversationSelectionsStore()
   // 引用按会话归属；会话尚未落盘时退回项目维度，与划词入口的 scope 计算一致。
   const selectionScope = computed(() => session.sessionFile ?? deps.project())
   const pendingSelections = computed(() =>
-    conversationSelections.scope === selectionScope.value ? conversationSelections.items : [],
+    isolated ? [] : conversationSelections.scope === selectionScope.value ? conversationSelections.items : [],
   )
   const attachments = computed(() => bridge.value?.files ?? [])
   // extensions can push text into the editor (set_editor_text))

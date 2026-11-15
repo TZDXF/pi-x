@@ -37,6 +37,7 @@ import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { useSidebarTabs } from "@/composables/useSidebarTabs"
+import { useAuxTabs } from "@/composables/useAuxTabs"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import RightSidebar from "@/components/RightSidebar.vue"
@@ -126,6 +127,22 @@ const {
   onGroupLimitReached: () => ui.pushToast(t("sidebarTabs.groupLimitReached"), "warning"),
 })
 const reviewFocus = ref<string | null>(null)
+
+// ---- aux（辅助对话）：侧栏槽位 ↔ 实例注册表（TZD-101） ----
+const auxTabs = useAuxTabs({
+  runtimeId,
+  session,
+  ui,
+  workspace,
+  project: () => props.project,
+  addSidebarTab,
+  closeSidebarTab,
+  activate: id => (activeTabId.value = id),
+})
+const { parent: auxParent, addTab: handleAddTab, closeTab: handleCloseTab } = auxTabs
+// 侧栏组被 LRU 淘汰并不销毁 aux 进程：挂载时按存活的实例补回槽位，别让它变成孤儿。
+auxTabs.restoreSlots(sidebarTabs.value)
+
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
 const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
 const currentTitle = computed(
@@ -279,8 +296,9 @@ const offShortcutHandlers = [
   }),
   registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
+  // 关 aux 槽位必须先销毁实例（进程 + store），不能只撤槽位，所以走 `handleCloseTab`。
   registerShortcutHandler("sidebar.closeTab", () => {
-    if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)
+    if (activeTabId.value !== null) void handleCloseTab(activeTabId.value)
   }),
   registerShortcutHandler("sidebar.nextTab", () => cycleSidebarTab(1)),
   registerShortcutHandler("sidebar.prevTab", () => cycleSidebarTab(-1)),
@@ -478,6 +496,7 @@ onBeforeUnmount(() => {
     </div>
     <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget" defer>
       <RightSidebar
+        :aux-parent="auxParent"
         :open="sidebarVisible"
         :tabs="sidebarTabs"
         :active-id="activeTabId"
@@ -485,10 +504,11 @@ onBeforeUnmount(() => {
         :project="session.cwd || project"
         :focus="reviewFocus"
         @update:active-id="activeTabId = $event"
-        @add-tab="addSidebarTab"
-        @close-tab="closeSidebarTab"
+        @add-tab="handleAddTab"
+        @close-tab="handleCloseTab"
         @reorder-tabs="reorderSidebarTab"
         @restart-terminal="restartSidebarTerminal"
+        @aux-limit="auxTabs.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

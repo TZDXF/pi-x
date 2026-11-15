@@ -18,6 +18,11 @@ let toastSeq = 0
 export const createUiStore = (
   runtimeId = "default",
   notificationTarget: () => SessionNotificationTarget = () => ({ runtimeId }),
+  /**
+   * aux 的 ui store 传 `{ silent: true }`：`setTitle` 改的是**窗口**标题，一律不让
+   * 辅助对话覆盖主会话；`notifyQuestion` 也不弹系统通知（§5 要求三者对 aux 静默）。
+   */
+  options: { silent?: boolean } = {},
 ) =>
   defineStore(`ui:${runtimeId}`, () => {
     /** Dialog requests (select/confirm/input/editor) awaiting user input. */
@@ -51,7 +56,7 @@ export const createUiStore = (
         case "editor":
           if (dialogs.value.some(dialog => dialog.id === req.id)) break
           dialogs.value.push(req)
-          notifyQuestion(req.title || req.message || "", notificationTarget())
+          if (!options.silent) notifyQuestion(req.title || req.message || "", notificationTarget())
           break
 
         case "notify":
@@ -80,8 +85,8 @@ export const createUiStore = (
           break
 
         case "setTitle":
-          // window title; harmless in-app
-          document.title = req.text ?? document.title
+          // window title; harmless in-app — aux 静默（不抢主会话的窗口标题）。
+          if (!options.silent && typeof document !== "undefined") document.title = req.text ?? document.title
           break
       }
     }
@@ -154,6 +159,13 @@ export const createUiStore = (
       statusEntries.value = {}
       stderrLines.value = []
       pendingUserMessage.value = null
+      // 关闭/销毁一个会话时这几样也必须清：toast 定时器不清就会在 store 销毁后
+      // 继续触发（写到已废弃的 ref），待插入文本与在途询问 id 会串到下一个会话。
+      for (const timer of toastTimers.values()) clearTimeout(timer)
+      toastTimers.clear()
+      toasts.value = []
+      pendingEditorText.value = null
+      responding.clear()
     }
 
     return {

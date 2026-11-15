@@ -3,6 +3,7 @@ import { pixLog } from "@/api/piClient"
 import { contentImages, contentText } from "@/lib/content"
 import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
+import { isAuxRuntimeId } from "@/lib/auxRuntime"
 import { setSessionRunStatus, type SessionRunStatus } from "@/stores/sessionRunStatus"
 import { useWorkspaceStore } from "@/stores/workspace"
 import type { Ref } from "vue"
@@ -231,10 +232,13 @@ export function createEventHandler(ctx: EventContext) {
   } = ctx
 
   function handleEvent(ev: Record<string, any>) {
-    const runMetadata = typeof ev.pixRunId === "string" && ev.pixRunId &&
-      typeof ev.pixRunUpdatedAt === "number" && Number.isFinite(ev.pixRunUpdatedAt)
-      ? { runId: ev.pixRunId, updatedAt: ev.pixRunUpdatedAt }
-      : undefined
+    const runMetadata =
+      typeof ev.pixRunId === "string" &&
+      ev.pixRunId &&
+      typeof ev.pixRunUpdatedAt === "number" &&
+      Number.isFinite(ev.pixRunUpdatedAt)
+        ? { runId: ev.pixRunId, updatedAt: ev.pixRunUpdatedAt }
+        : undefined
     const setRunStatus = (status: SessionRunStatus | null) => {
       if (runMetadata) setSessionRunStatus(sessionFile.value, status, cwd.value, runMetadata)
       else setSessionRunStatus(sessionFile.value, status, cwd.value)
@@ -318,7 +322,8 @@ export function createEventHandler(ctx: EventContext) {
             live: true,
           })
         }
-        if (!flow.turnAborted && !flow.stopping) {
+        // aux 的完成通知一律静默（§5）：它是附属面板，不该弹系统通知或去改窗口标题。
+        if (!flow.turnAborted && !flow.stopping && !isAuxRuntimeId(runtimeId)) {
           const workspace = useWorkspaceStore()
           const file = sessionFile.value
           const row = file ? workspace.histories[cwd.value]?.find(s => s.file === file) : undefined

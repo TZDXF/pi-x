@@ -167,6 +167,16 @@ export default {
       "The sidebar limit is reached: this panel recovers as soon as a slot frees up, and immediately after you close any split pane.",
     limitReached: "This conversation already has {count} sidebar tabs. Close one before adding another.",
     newBrowser: "Browser",
+    aux: "Auxiliary chat",
+    newAux: "Auxiliary chat",
+    auxPending: "An extension question is waiting",
+  },
+  auxChat: {
+    title: "Auxiliary chat",
+    creating: "Starting auxiliary chat…",
+    spawnFailedUnknown: "Auxiliary chat failed to start",
+    retry: "Retry",
+    limitReached: "Auxiliary chat allows at most {count} open instances; close one before adding another.",
   },
   split: {
     closePane: "Close pane",

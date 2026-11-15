@@ -104,3 +104,24 @@
 - **约束违规记录（事实，已在 issue 记录）**：为设 `cacheWarming=off` 曾临时修改全局 `~/.pi/agent/settings.json`，跑完已删除该键并校验复原；仍属违反"不动全局配置"。后续同类实验**必须**使用独立 `PI_CODING_AGENT_DIR`。
 - 本机 provider 仅 `home`/`LongCat-2.5` 可用，其余 503，实验结论均带此前置。
 - 后续：内存会话编辑重发；远程差异卡物化；任意扩展放开的生命周期约束；右侧 Tab 整体持久化（TZD-95）。
+
+## 8. 前端落地（TZD-101）
+
+本规格的前端主体落在以下文件（与 §2.1 的 M0 后端落点对应）：
+
+| 职责 | 文件 |
+| --- | --- |
+| 实例注册表（Tab/序号/上限 5/关闭销毁、clientId） | `src/stores/auxChat.ts` |
+| 纯逻辑（前缀、上限、序号分配） | `src/lib/auxRuntime.ts` |
+| 草稿（仅内存） | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts` |
+| `aux_spawn` 前端调用（独立字段，无拼接） | `src/api/client/process.ts` 的 `spawnAuxPi` |
+| 启动上下文（继承模型/工作区/SSH 连接） | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用） |
+| 侧栏接线（槽位 ↔ 实例、`closeAux`） | `src/composables/useAuxTabs.ts`（`ChatView` 只留一行调用） |
+| 面板 | `src/components/aux/AuxChatPane.vue` |
+| aux 事件分流（墓碑丢弃，绝不重建 store） | `src/lib/auxEventSink.ts` + `src/lib/workspaceRuntime.ts` |
+
+与规格正文的**两处实现差异**（行为等价，记录备查）：
+
+1. §2.1 写作 `src-tauri/src/rpc/aux.rs`，M0 实际落地为 `src-tauri/src/rpc/aux_launch.rs`（本事项未改后端）。
+2. §5 "关闭置 `cancelRequested`"：实现上不新增该字段 —— 关闭时先写墓碑（`closedAuxIds`）并把实例从表里摘除，spawn 完成时发现实例已不在表里就立即 `rpc_kill`，效果就是"创建中被关闭的实例不会留下进程"。
+   `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。
