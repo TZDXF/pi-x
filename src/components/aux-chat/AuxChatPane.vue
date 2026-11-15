@@ -17,7 +17,10 @@ import { retryAuxSpawn, type AuxParentContext } from "@/lib/auxSpawn"
 import type PromptInputBridge from "@/components/PromptInputBridge.vue"
 import type { usePromptEdit } from "@/composables/usePromptEdit"
 import { useWorkspaceStore } from "@/stores/workspace"
+import type { AuxAskPayload } from "@/lib/auxSelection"
+import { describeAuxAskResult } from "@/lib/auxAsk"
 import { auxSessionFor, auxUiFor, type AuxTab } from "@/stores/auxChat"
+import { addAuxSelection } from "@/stores/auxSelections"
 
 /**
  * aux（辅助对话）面板（`docs/aux-chat-spec.md` §3/§5）。
@@ -79,8 +82,9 @@ const sendControl = useChatSendControl({
   ensureStarted: async () => ready.value,
   newSession: () => {},
   onSent: jumpToBottom,
-  // aux 不消费也不清空主会话的代码批注/划词引用桶（引用分桶是 TZD-103 的范围）。
-  contexts: "none",
+  // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，
+  // 发送成功后只清本桶，主会话的批注/引用互不影响。
+  contexts: "aux",
 })
 const controls = reactive(sendControl)
 
@@ -113,6 +117,20 @@ const errorText = computed(() =>
 /** 失败重试：同一槽位重走一次 spawn（收尾规则与首次启动同一份实现）。 */
 function retry() {
   return retryAuxSpawn(props.parent, props.tab)
+}
+
+/**
+ * 面板内划词"在辅助对话中提问"：直接进**本实例**的桶。
+ *
+ * 同一个 Tab 内的两处入口（"引用到输入框"与"在辅助对话中提问"）必须落在同一桶，
+ * 否则摘要会显示在另一个面板里。
+ */
+function onAuxAsk(payload: AuxAskPayload) {
+  const result = addAuxSelection(props.tab.runtimeId, { ...payload, sourceRuntimeId: props.tab.runtimeId })
+  const notice = result.ok
+    ? describeAuxAskResult(t, { ok: true, duplicate: result.duplicate })
+    : describeAuxAskResult(t, { ok: false, reason: "append", appendReason: result.reason })
+  if (notice) ui.pushToast(notice.message, notice.kind)
 }
 
 async function copyText(text: string) {
@@ -156,9 +174,11 @@ async function copyText(text: string) {
         :connecting="false"
         :rendered-entries="renderedEntries"
         :edit="edit"
+        :aux-runtime-id="runtimeId"
         @history-scroll="onHistoryScroll"
         @navigate="navigateToQuestion"
         @copy-text="copyText"
+        @aux-ask="onAuxAsk"
       />
       <ExtensionWidget v-if="ui.widget" :lines="ui.widget.lines" />
       <ChatComposer
@@ -176,6 +196,8 @@ async function copyText(text: string) {
         :ensure-started="async () => ready"
         :controls="controls"
         hide-workspace-context
+        @locate-selection="conversation?.locateSelection($event)"
+        @edit-selection="conversation?.editSelection($event)"
       >
         <template #model>
           <ModelThinkingSelect

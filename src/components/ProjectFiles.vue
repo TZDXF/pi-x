@@ -27,6 +27,8 @@ const props = withDefaults(
     showHeader?: boolean
     /** Static lists may request a specific initial document, without a first-file fallback. */
     defaultSelectedPath?: string | null
+    /** 所属会话 runtimeId：文件预览划词的 aux 归属（TZD-103）；缺省跟随激活会话。 */
+    auxParentRuntimeId?: string | null
   }>(),
   { filter: "", preview: true, showHeader: true },
 )
@@ -254,6 +256,7 @@ onBeforeUnmount(() => {
         :project="activeRoot"
         :path="selected"
         :comment-project="props.project"
+        :aux-parent-runtime-id="auxParentRuntimeId"
         :revision="previewRevision"
         class="min-w-0 flex-1"
         @close="selected = null"

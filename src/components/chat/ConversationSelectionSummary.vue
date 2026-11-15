@@ -4,13 +4,15 @@ import { useI18n } from "vue-i18n"
 import { ChevronUp, Pencil, TextQuote, Trash2 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import type { PendingConversationSelection } from "@/lib/conversationSelections"
+import { auxSelectionLabel, type PendingAuxSelection } from "@/lib/auxSelection"
 
 /**
  * composer 上方的划词引用摘要：折叠时只显示"N 条注释"，悬停展开列表——
  * 点击条目定位到消息里的索引标记，可编辑、删除。
  * 列表 Teleport 到 body 用 fixed 定位，避免被 composer 输入框遮挡。
  */
-const props = defineProps<{ items: PendingConversationSelection[] }>()
+/** 两种来源的引用同列展示：主会话（`PendingConversationSelection`）与 aux 桶（`PendingAuxSelection`）。 */
+const props = defineProps<{ items: (PendingConversationSelection | PendingAuxSelection)[] }>()
 const emit = defineEmits<{
   locate: [id: string]
   edit: [id: string]
@@ -44,6 +46,10 @@ function edit(id: string) {
 }
 function remove(id: string) {
   emit("remove", id)
+}
+/** 代码来源引用的 `path:起-止` 标签；会话来源返回 null（沿用"提问/回复"标签）。 */
+function label(item: PendingConversationSelection | PendingAuxSelection) {
+  return auxSelectionLabel(item)
 }
 // 列表固定宽 320px（w-80），默认在触发按钮上方展开，空间不足翻到下方。
 const style = computed(() => {
@@ -90,6 +96,10 @@ const style = computed(() => {
         <button type="button" class="min-w-0 flex-1 text-left" :title="item.text" @click="locate(item.id)">
           <span v-if="item.source === 'user'" class="block text-[10px] text-muted-foreground">{{
             t("chat.selectionFromUser")
+          }}</span>
+          <!-- 代码预览来源的引用带 path/行区间标签（TZD-103 的第二入口） -->
+          <span v-if="label(item)" class="block truncate font-mono text-[10px] text-muted-foreground">{{
+            label(item)
           }}</span>
           <span class="block truncate text-xs">{{ item.text }}</span>
           <span v-if="item.comment" class="block truncate text-xs text-muted-foreground">{{ item.comment }}</span>

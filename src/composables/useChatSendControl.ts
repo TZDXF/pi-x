@@ -7,6 +7,7 @@ import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib
 import { commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 import { runningBehavior } from "@/lib/runningBehavior"
+import { auxSelectionItems, clearAuxSelectionBucket, removeAuxSelection } from "@/stores/auxSelections"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import type { SessionStore } from "@/stores/session"
@@ -32,15 +33,18 @@ export function useChatSendControl(deps: {
   /**
    * 共享输入上下文的归属：
    * - `shared`（默认）：代码批注/划词引用按会话存入全局 store（主会话行为不变）；
-   * - `none`：aux 面板使用。aux 不消费也不清空主会话的批注/引用桶
-   *   （引用分桶是 TZD-103 的范围），此处一律视为空，且发送后不碰那两个 store。
+   * - `aux`：aux 面板使用（TZD-103）。读 **本实例** 的引用桶（`session.runtimeId`），
+   *   发送成功只清本桶；代码批注仍一律视为空（`projects` 级批注不被 aux 消费）；
+   * - `none`：完全隔离（不读不写任何桶）。
    */
-  contexts?: "shared" | "none"
+  contexts?: "shared" | "aux" | "none"
 }) {
   const { session, ui, workspace, bridge } = deps
   const { t } = useI18n()
-  // aux 面板不参与共享上下文（见 `contexts`）：一律视为空，且发送后不碰 store。
-  const isolated = deps.contexts === "none"
+  // aux 面板不参与共享上下文（见 `contexts`）：代码批注一律视为空。
+  const isolated = deps.contexts === "aux" || deps.contexts === "none"
+  // aux 只读自己的引用桶（键是 aux 的 runtimeId，一实例一桶）。
+  const auxScoped = deps.contexts === "aux"
   // ---- 代码批注（项目文件页添加）与对话划词引用（会话气泡划词添加），随下一条消息发出 ----
   const codeComments = useCodeCommentsStore()
   const pendingComments = computed(() =>
@@ -49,9 +53,12 @@ export function useChatSendControl(deps: {
   const conversationSelections = useConversationSelectionsStore()
   // 引用按会话归属；会话尚未落盘时退回项目维度，与划词入口的 scope 计算一致。
   const selectionScope = computed(() => session.sessionFile ?? deps.project())
-  const pendingSelections = computed(() =>
-    isolated ? [] : conversationSelections.scope === selectionScope.value ? conversationSelections.items : [],
-  )
+  const pendingSelections = computed(() => {
+    // aux：只读本实例的桶（绝不回退到主会话桶，两者互不消费）。
+    if (auxScoped) return [...auxSelectionItems(session.runtimeId)]
+    if (isolated) return []
+    return conversationSelections.scope === selectionScope.value ? conversationSelections.items : []
+  })
   const attachments = computed(() => bridge.value?.files ?? [])
   // extensions can push text into the editor (set_editor_text))
   watch(
@@ -210,13 +217,13 @@ export function useChatSendControl(deps: {
         session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
         delayedSend.value = false
         if (comments.length) codeComments.clear()
-        if (selections.length) conversationSelections.clear()
+        consumeSelections()
       } else {
         // 压缩中或运行中且偏好本地排队时消息不进对话流，保持阅读位置；否则发送后回底，
         // 即使此前向上翻阅过历史，也能立刻看到新消息与即将开始的回答。
         const queuedLocally = session.isCompacting || (session.isStreaming && runningBehavior.value === "queue")
         if (comments.length) codeComments.clear()
-        if (selections.length) conversationSelections.clear()
+        consumeSelections()
         await session.send(text, images.length ? images : undefined, promptWithContexts, runningBehavior.value)
         if (!queuedLocally) deps.onSent?.()
       }
@@ -224,6 +231,18 @@ export function useChatSendControl(deps: {
       // 无论启动、命令校验还是发送如何退出，都清理本次首条消息的预回显。
       if (staged) ui.pendingUserMessage = null
     }
+  }
+
+  /**
+   * 清掉本次已发出的引用：**只清自己那桶**。
+   *
+   * aux 清 `session.runtimeId` 的桶，主会话清 `conversationSelections` 单例；
+   * 两者互不影响是 TZD-103 的硬约束（abort 时都不清，文本可被 Esc 恢复）。
+   */
+  function consumeSelections() {
+    if (!pendingSelections.value.length) return
+    if (auxScoped) clearAuxSelectionBucket(session.runtimeId)
+    else conversationSelections.clear()
   }
 
   async function abort() {
@@ -238,6 +257,13 @@ export function useChatSendControl(deps: {
     pendingSelections,
     codeComments,
     conversationSelections,
+    /** 摘要列表的删除/批注编辑：aux 走桶操作，主会话仍走单例。 */
+    selections: {
+      remove: (id: string) => {
+        if (auxScoped) removeAuxSelection(session.runtimeId, id)
+        else conversationSelections.remove(id)
+      },
+    },
     delayedSend,
     delayedSendEnabled,
     showStopButton,
