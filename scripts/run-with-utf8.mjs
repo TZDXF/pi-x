@@ -24,19 +24,37 @@ if (args.length === 0) {
   process.exit(2)
 }
 
-// 先按可执行文件直接解析（PATH + PATHEXT 由 libuv 处理）；.cmd / .bat / .ps1 形态的
-// 包装在 Windows 上不能直接 spawn（EINVAL），ENOENT 也会落到这里，两者都改用 shell
-// 转一手，这样 Cargo 装成 `.cmd` 时脚本照样能跑。
-// 只给含空白或引号的参数加引号：cmd /c 收到以引号开头的整串会把它当成程序名。
+// cmd.exe 会把整串命令行再解析一次（展开 %VAR%、切开 & | ^ 等），所以命令与每个参数都要
+// 按 cmd 的规则转义，否则含空格、引号、& | ^ < > % ! 的参数会被拆开或展开。
+const META = /([()\][%!^"`<>&|;, *?])/g
+
+// 命令只转义一次：外层整串的引号由下面负责加，命令里的空格用 ^ 转义即可。
+const quoteCommand = command => command.replace(META, "^$1")
+
+// 参数要转义两次：外层 ^ 会在 cmd.exe 第一轮解析时用掉一层，剩下的才轮到参数本身。
+function quoteArgument(argument) {
+  let value = `${argument}`
+  value = value.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"')
+  value = value.replace(/(?=(\\+?)?)\1$/, "$1$1")
+  value = `"${value}"`
+  return value.replace(META, "^$1").replace(META, "^$1")
+}
+
+// 先按可执行文件直接解析（PATH + PATHEXT 由 libuv 处理），这条路径不会重新解析参数；
+// `.cmd` / `.bat` 形态的包装在 Windows 上不能直接 spawn（EINVAL），找不到目标也会是
+// ENOENT，两者都退回 cmd.exe。此时用 windowsVerbatimArguments 关掉 Node 自己的参数
+// 引用，命令行由上面两个函数保证，否则空参数会丢、带空格的参数会被拆碎。
 function runCommand() {
   const direct = spawnSync(args[0], args.slice(1), { stdio: "inherit" })
   const needsShell = direct.error && (direct.error.code === "EINVAL" || direct.error.code === "ENOENT")
-  if (needsShell && process.platform === "win32") {
-    const quote = argument => (/[\s"]/.test(argument) ? `"${argument.replace(/"/g, '""')}"` : argument)
-    const line = args.map(quote).join(" ")
-    return spawnSync("cmd.exe", ["/d", "/c", line], { stdio: "inherit" }).status ?? 1
-  }
-  return direct.status ?? 1
+  if (!needsShell || process.platform !== "win32") return direct.status ?? 1
+
+  const line = `"${[quoteCommand(args[0]), ...args.slice(1).map(quoteArgument)].join(" ")}"`
+  const result = spawnSync("cmd.exe", ["/d", "/s", "/c", line], {
+    stdio: "inherit",
+    windowsVerbatimArguments: true,
+  })
+  return result.status ?? 1
 }
 
 // chcp 的输出是本地化的，但末尾的代码页数字始终是 ASCII，按字节截取即可。
@@ -56,8 +74,25 @@ if (process.platform !== "win32") {
   process.exit(runCommand())
 }
 
+// 切不过去就如实提示，别让构建悄悄退回到“build script 结果不入缓存、下游每次重编”的状态。
 const originalCodePage = readCodePage()
-const switched = originalCodePage !== null && originalCodePage !== UTF8_CODE_PAGE && setCodePage(UTF8_CODE_PAGE)
+let switched = false
+if (originalCodePage === null) {
+  console.warn(
+    "[run-with-utf8] 读不到当前控制台代码页，按原样运行；若控制台不是 UTF-8，mbx 会丢弃部分 build script 结果",
+  )
+} else if (originalCodePage !== UTF8_CODE_PAGE) {
+  if (setCodePage(UTF8_CODE_PAGE)) {
+    switched = true
+  } else {
+    console.warn(
+      `[run-with-utf8] 无法把控制台代码页从 ${originalCodePage} 切到 ${UTF8_CODE_PAGE}，按原样运行；若控制台不是 UTF-8，mbx 会丢弃部分 build script 结果`,
+    )
+  }
+}
+
 const status = runCommand()
-if (switched) setCodePage(originalCodePage)
+if (switched && !setCodePage(originalCodePage)) {
+  console.warn(`[run-with-utf8] 未能把控制台代码页恢复为 ${originalCodePage}，当前终端仍是 ${UTF8_CODE_PAGE}`)
+}
 process.exit(status)
