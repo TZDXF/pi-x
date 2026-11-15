@@ -1,5 +1,7 @@
 import { computed, type ComputedRef } from "vue"
 import { useI18n } from "vue-i18n"
+import type { AuxAskPayload } from "@/lib/auxSelection"
+import { askAuxSelection } from "@/lib/auxAsk"
 import { MAX_SIDEBAR_TABS, type SidebarTabItem, type SidebarTabKind } from "@/lib/sidebarTabs"
 import type { AuxParentContext } from "@/lib/auxSpawn"
 import { useAuxTabs } from "@/composables/useAuxTabs"
@@ -51,9 +53,30 @@ export function useChatViewSidebar(deps: {
     closeSidebarTab: sidebar.close,
     activate: (id: number) => (sidebar.activeId.value = id),
     tabs: () => sidebar.tabs.value,
+    // 划词入口的路由判据："有激活的 aux Tab"就是侧栏当前激活槽位。
+    activeTabId: () => sidebar.activeId.value,
   })
 
+  /**
+   * 会话正文划词的"在辅助对话中提问"（TZD-103）。
+   *
+   * 视图只把事件转过来：路由（复用激活实例 → 复用存活实例 → 新建）在注册表里，
+   * 结果文案在 `lib/auxAsk.ts`，展开侧栏在这一层（视图不新增业务分支）。
+   */
+  async function askAux(payload: AuxAskPayload) {
+    const outcome = await askAuxSelection({
+      parentRuntimeId: deps.runtimeId,
+      payload,
+      t,
+      toast: (message, kind) => deps.ui.pushToast(message, kind),
+    })
+    // 复用与新建都要让面板可见，否则引用进了桶但用户看不到它。
+    if (outcome.ok) deps.onFirstTabAdded()
+    return outcome
+  }
+
   return {
+    askAux,
     /** 槽位列表（含 `aux`；`aux` 永不落盘）。 */
     tabs: sidebar.tabs as ComputedRef<SidebarTabItem[]>,
     activeId: sidebar.activeId,

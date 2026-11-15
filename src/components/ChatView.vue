@@ -396,6 +396,7 @@ onBeforeUnmount(() => {
         @edit-textarea="editTextarea = $event"
         @open-review="openReviewAt"
         @fork="forkFromAnswer"
+        @aux-ask="sidebar.askAux"
       />
 
       <!-- extension widget -->

@@ -170,3 +170,39 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    只在 store 内部用，`initAuxSession` 需要逐段调用它，因此进了 store 的返回值；
    `init()` 本身一行未改（主会话行为不变）。
    `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。
+
+## 9. 划词入口与引用分桶（TZD-103）
+
+两个入口共用**同一份**浮层（`src/components/chat/ConversationSelectionMenu.vue`），
+只新增动作，锚点/翻转/钳制算法与 document 级监听一字未改：
+
+| 入口         | 挂载点                                                | 模式   | payload                                             |
+| ------------ | ----------------------------------------------------- | ------ | --------------------------------------------------- |
+| 会话正文划词 | `ChatTurnList.vue`（`ChatView` / `AuxChatPane` 共用） | `chat` | `{text, source, messageId, startOffset, endOffset}` |
+| 文件预览划词 | `ProjectFilePreview.vue`（代码视图与渲染态 Markdown） | `code` | `{text, path, lineRange?}`                          |
+
+- 代码模式下"引用到输入框"不出现（批注仍走行号栏的 gutter 拖拽/按钮）；渲染态
+  Markdown 没有 `[data-line]`，此时只带 `path`，不猜行号。
+- 内置浏览器 iframe 内的划词**不做**（跨域，需扩 `preview_proxy` bridge，另列）。
+
+**引用按 runtime 分桶**（`src/stores/auxSelections.ts`）：`Map<runtimeId, entries>`，
+键是 aux 自己的 `runtimeId`（一实例一桶，不需要 scope 漂移判断）；主会话继续用
+`stores/conversationSelections.ts` 的单例，语义不变。`projects` 级 `codeComments`
+**不被 aux 消费**（aux 的发送控制 `contexts: "aux"` 一律视为空）。
+
+**路由**（`stores/auxChat.ts` 的 `askInAux`）：有激活的 aux Tab → 追加到它的桶并把
+槽位切成激活；没有激活但有存活实例 → 复用最近一个；一个都没有 → 新建后投递。连点
+同一手势只建一个实例（`pendingCreations` 复用 + `appendConversationSelection` 判重）。
+入口缺失/名额满/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。
+
+**发送与清理同源**（`composables/useChatSendControl.ts`）：`contexts` 从
+`"shared" | "none"` 扩为 `"shared" | "aux" | "none"`；`"aux"` 读本桶、序列化仍走
+`serializeComposerPromptContexts`（`# userselect:` 契约不变），发送成功后**只清本桶**
+（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可被 Esc 恢复）。关闭
+实例（`closeAux`）与迟到收尾（`settleLateAux`）都清本桶。
+
+验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、
+`tests/aux-send-control.test.ts`（prompt 组装含 `# userselect:`、只清本桶、批注不消费、
+abort 不清）、`tests/aux-selection-routing.test.ts`（激活优先 / 复用 / 新建 / 去重 /
+清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
+`tests/aux-selection-entries.test.ts`（两处入口接线）。

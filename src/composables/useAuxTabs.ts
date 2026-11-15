@@ -1,4 +1,4 @@
-import { computed, type ComputedRef } from "vue"
+import { computed, onScopeDispose, type ComputedRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import { auxParentContext, spawnAuxRuntime, type AuxParentContext } from "@/lib/auxSpawn"
@@ -10,9 +10,11 @@ import {
   auxCanOpen,
   auxCreationPending,
   auxInstancesFor,
+  auxPendingCreation,
   auxTabBySidebarId,
   closeAux,
   openAux,
+  registerAuxAskRouter,
   setAuxTabId,
 } from "@/stores/auxChat"
 
@@ -36,6 +38,8 @@ export function useAuxTabs(deps: {
   activate: (id: number) => void
   /** 当前槽位快照（构造时核对"存活实例是否还有入口"）。 */
   tabs: () => readonly SidebarTabItem[]
+  /** 当前激活槽位 id（划词路由的"有激活的 aux Tab"判据）。 */
+  activeTabId: () => number | null
 }) {
   const { t } = useI18n()
 
@@ -120,6 +124,52 @@ export function useAuxTabs(deps: {
 
   // 构造即补齐：侧栏组被 LRU 淘汰只丢槽位（进程与 store 仍在），这里按存活实例补回。
   restoreSlots(deps.tabs())
+
+  /**
+   * 划词入口（会话正文 / 代码预览）的路由能力（TZD-103）。
+   *
+   * `active` 只看**侧栏 active 槽位**：分屏时两个 `ChatView` 各有自己的注册表路由，
+   * 用"最近一个实例"会让隐藏窗格抢到落到本窗格的划词手势。
+   */
+  function activeAuxTab() {
+    const id = deps.activeTabId()
+    if (id === null) return null
+    const aux = auxTabBySidebarId(id)
+    return aux && aux.parentRuntimeId === deps.runtimeId ? aux : null
+  }
+
+  /** 复用/新建之后把该实例的槽位切成激活（`reveal` 只做激活，不新开）。 */
+  function reveal(tab: { tabId: number }) {
+    deps.activate(tab.tabId)
+  }
+
+  /**
+   * 划词入口的新建：与 `addAux` 同一条创建规则（同一父会话的在途创建复用，
+   * 不叠加槽位），差别是**返回实例**而不是 `void`。
+   */
+  async function openForAsk() {
+    const pending = auxPendingCreation(deps.runtimeId)
+    if (pending) return (await pending) ?? null
+    if (!auxCanOpen()) return null
+    const tabId = deps.addSidebarTab("aux")
+    if (tabId === null) return null
+    const tab = await openAux(deps.runtimeId, {
+      tabId,
+      titlePrefix: t("auxChat.title"),
+      spawn: async created => {
+        await spawnAuxRuntime(parent.value, created)
+      },
+    })
+    if (!tab) {
+      deps.closeSidebarTab(tabId)
+      return null
+    }
+    if (tab.status === "ready") reveal(tab)
+    return tab
+  }
+
+  registerAuxAskRouter(deps.runtimeId, { active: activeAuxTab, open: openForAsk, reveal })
+  onScopeDispose(() => registerAuxAskRouter(deps.runtimeId, null))
 
   return { parent: parent as ComputedRef<AuxParentContext>, addTab, closeTab, addAux, notifyLimit }
 }

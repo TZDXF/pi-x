@@ -29,6 +29,7 @@ import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
 import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import type { AuxAskPayload } from "@/lib/auxSelection"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { isWaitingForReply, type useChatTurnList } from "@/composables/useChatTurnList"
@@ -45,6 +46,11 @@ const props = defineProps<{
   selectingProject?: boolean
   renderedEntries: ReturnType<typeof useChatTurnList>["renderedEntries"]["value"]
   edit: UnwrapRef<ReturnType<typeof usePromptEdit>>
+  /**
+   * aux 面板传入自己的 runtimeId（TZD-103）：划词"引用到输入框"必须写进**本实例**
+   * 的引用桶，不能落到主会话的单例（同项目下两者 scope 相同，会真的串）。
+   */
+  auxRuntimeId?: string
 }>()
 const emit = defineEmits<{
   historyScroll: [event: Event]
@@ -54,6 +60,8 @@ const emit = defineEmits<{
   editTextarea: [textarea: PromptEditTextarea | null]
   openReview: [path: string]
   fork: [index: number]
+  /** 划词菜单的"在辅助对话中提问"（TZD-103）：由父层路由到 aux 注册表。 */
+  auxAsk: [payload: AuxAskPayload]
 }>()
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
@@ -101,6 +109,7 @@ const {
   project: () => props.project,
   renderedEntries: () => props.renderedEntries,
   conversation,
+  auxRuntimeId: props.auxRuntimeId,
 })
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
@@ -310,6 +319,7 @@ onBeforeUnmount(() => {
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     @quote="onSelectionQuote"
+    @aux-ask="emit('auxAsk', $event)"
   />
   <ConversationSelectionPopup
     :state="selectionPopup"

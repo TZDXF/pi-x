@@ -15,6 +15,11 @@ import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
+import ConversationSelectionMenu from "@/components/chat/ConversationSelectionMenu.vue"
+import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import type { AuxAskPayload } from "@/lib/auxSelection"
+import { askAuxSelection } from "@/lib/auxAsk"
+import { activeRuntimeId } from "@/stores/conversations"
 import { useCodeCommentsStore } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
@@ -38,6 +43,11 @@ const props = withDefaults(
     commentProject?: string
     /** Bumped by the file tree when the file changed on disk; reloads the content. */
     revision?: number
+    /**
+     * 所属会话的 runtimeId（TZD-103 划词入口的 aux 归属）。
+     * 侧栏按 ChatView 传入；独立打开（资源预览等）时缺省跟随当前激活会话。
+     */
+    auxParentRuntimeId?: string | null
   }>(),
   { closable: true, revision: 0 },
 )
@@ -144,6 +154,23 @@ watch(
   },
   { flush: "post" },
 )
+// ---- 划词入口（TZD-103）：复用会话正文那份浮层（mode="code"），只加动作 ----
+//
+// 与代码批注的关系：批注仍走行号栏的 gutter 拖拽/按钮，浮层只提供"在辅助对话中提问"，
+// payload 带 path + 行区间；渲染态 Markdown 没有 [data-line]，只带 path（不猜行号）。
+const markdownRoot = ref<HTMLElement | null>(null)
+const menuRoot = computed<HTMLElement | null>(() => (showCode.value ? codeRoot.value : markdownRoot.value))
+async function onAuxAsk(payload: AuxAskPayload) {
+  const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
+  if (!parentRuntimeId) return
+  // 投递路由（复用激活实例 / 新建）与失败文案都在 `lib/auxAsk.ts`：这里只转事件。
+  await askAuxSelection({
+    parentRuntimeId,
+    payload,
+    t,
+    toast: (message, kind) => ui.pushToast(message, kind),
+  })
+}
 const commentOpen = ref(false)
 const commentText = ref("")
 const commentRange = ref<CodeCommentRange | null>(null)
@@ -364,6 +391,7 @@ onBeforeUnmount(() => {
         <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
         <div
           v-else-if="showRenderedMarkdown"
+          ref="markdownRoot"
           data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
@@ -482,6 +510,14 @@ onBeforeUnmount(() => {
       </template>
     </div>
   </section>
+  <!-- code 模式的同一浮层：只提供"在辅助对话中提问"，定位/翻转/钳制算法与会话正文一致 -->
+  <ConversationSelectionMenu
+    mode="code"
+    :root="menuRoot"
+    :path="path"
+    :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
+    @aux-ask="onAuxAsk"
+  />
 </template>
 
 <style scoped>

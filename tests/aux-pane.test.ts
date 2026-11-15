@@ -31,8 +31,9 @@ test("the aux pane reuses the shared list/composer without adding edits or recei
   expect(pane).not.toMatch(/loadOlderHistory/)
   // 编辑态是恒不可用的桩：公共组件模板一行未改，编辑入口不出现。
   expect(pane).toMatch(/editBlocked: true/)
-  // aux 不消费主会话的批注/引用桶（引用分桶属于 TZD-103）。
-  expect(pane).toMatch(/contexts: "none"/)
+  // aux 读**自己的**引用桶、不消费主会话的批注/引用（TZD-103 的 `contexts: "aux"`）。
+  expect(pane).toMatch(/contexts: "aux"/)
+  expect(pane).not.toMatch(/contexts: "none"/)
 })
 
 test("aux tabs are driven by the registry: add opens a process, close destroys it", () => {
