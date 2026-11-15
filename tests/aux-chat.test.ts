@@ -64,6 +64,7 @@ const {
   auxCanOpen,
   auxCreationPending,
   auxLiveCount,
+  auxSessionExisting,
   auxSessionFor,
   auxTabByRuntime,
   auxTabBySidebarId,
@@ -258,6 +259,10 @@ test("closing destroys stores in the documented order and tombstones the runtime
   expect(auxLiveCount()).toBe(0)
   // uiFor 的查找表也要摘掉：否则 `ExtensionDialog` 还能按旧 id 解析到已销毁的 store。
   expect(uiFor(runtimeId) === ui).toBe(false)
+  // aux 自己的 session/ui 表（Pinia 之外的另一半）也要摘掉。只断言 Pinia 侧会漏掉
+  // `closeAux` 里 `auxSessions.delete` 被删掉的情形（迟到路径用的是只查不建，
+  // 正常关闭路径才是唯一真正会留下 map 条目的地方）。
+  expect(auxSessionExisting(runtimeId)).toBeUndefined()
 })
 
 test("closeAux is idempotent and kills exactly once", async () => {
@@ -304,7 +309,13 @@ test("aux ui store is resolvable by session id without entering the conversation
 
 test("aux turns never raise the system completion notification (§5)", async () => {
   // §5 验收：aux 的 notifyTurnComplete 静默。用一个真实 session store 走一遍
-  // agent_start → agent_end，断言通知回调**没有**被调用；主会话 id 作为对照。
+  // agent_start → agent_settled（settled 才是终态边界），断言通知回调**没有**被调用；
+  // 主会话 id 走同一路径作为对照。
+  // `vi.resetModules()` 必须在这里：vitest 配置是 `isolate: false`，模块缓存与
+  // `vi.mock` 注册表跨测试文件共享。别的文件把 `@/lib/notifications` 替成空实现后，
+  // 本文件再 import `@/stores/session` 会拿到**那份**缓存实例 —— 主会话对照就会
+  // 拿到 0 次通知，出现与代码无关的假红。
+  vi.resetModules()
   const { createSessionStore } = await import("@/stores/session")
   controls.notifyTurn.mockClear()
   const aux = createSessionStore("aux:silent")()
