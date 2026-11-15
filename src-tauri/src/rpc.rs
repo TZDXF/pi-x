@@ -126,6 +126,12 @@ impl ProcessState {
             .map(SessionTransport::snapshot)
     }
 
+    /// 该对象是否**真的启动过**进程：`process_kill` 的 `inner == None` 早退分支据此
+    /// 决定是否发一条 `pi://exit`（从未启动的对象没有可报告的终止）。
+    pub(crate) async fn has_spawned_once(&self) -> bool {
+        self.activity.lock().await.has_spawned()
+    }
+
     /// Current session generation; stale callers detect a respawn by
     /// comparing against the value captured with their transport snapshot.
     pub(crate) fn current_generation(&self) -> u64 {
@@ -502,7 +508,8 @@ pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), Stri
         Err(error) => {
             // 终止未确认：**放回池里**，否则句柄随 `Arc` 一起落地、谁也没法再重试
             // （复审第四轮 P1-2 的同一类问题）。放回后回收器/下一次 `rpc_kill` 仍能
-            // 找到它，`kill_on_drop` 也在 Arc 真正释放时兜底。
+            // 找到它；只有在 **Arc 真正释放**（进程条目从池里消失）时才由 Child 自身的
+            // `kill_on_drop` 尽力终止 —— 那是**本次**进程内的尽力兜底，没有跨启动保证。
             state
                 .processes
                 .lock()
@@ -518,10 +525,13 @@ pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     crate::aux_leases::clear();
     crate::aux_reap::clear_pending_kills();
     for process in processes.values() {
-        // 应用退出路径用**短确认超时**（500ms）：`kill_all` 在 `RunEvent::Exit` 里
-        // `block_on`，N 个进程 × 5s 会把退出拖住。单条失败也不转成 `Err` 中断循环 ——
-        // 退出时必须尽力把所有进程都杀掉，失败降级为日志（进程泄漏由下次启动的
-        // `kill_on_drop`/孤儿回收兜底，不能让用户卡在"关不掉"）。
+        // 应用退出路径用**短总 budget**（500ms/实例，覆盖远程段 + OS 终止段 + 确认
+        // 退出，不是只压最后那段 wait）：`kill_all` 在 `RunEvent::Exit` 里 `block_on`，
+        // N 个进程 × 5s 会把退出拖住。单条失败也不转成 `Err` 中断循环 —— 退出时必须
+        // 尽力把所有进程都杀掉，失败降级为日志。
+        // 退出路径**不做后台重试**：池已 `take` 走、待重试表也清了，终止失败只剩日志。
+        // 这些 Child 由**本次**的 `kill_on_drop`（LocalPi 分支已设）尽力终止；内存表
+        // 不跨启动恢复，所以没有"下次启动再收尾"的保证。
         if let Err(error) = child::process_kill_fast(process, "kill_all (app exit)").await {
             crate::logs::write(&process.runtime_id, &format!("exit kill failed: {error}"));
         }
@@ -846,6 +856,9 @@ mod pending_cleanup_tests {
 
     #[tokio::test]
     async fn backpressured_notify_does_not_block_kill_or_lose_idle_exit_metadata() {
+        // 与 kill 注入（budget / OS 延迟）串行，避免进程级静态被别的用例改乱。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let _guard = crate::aux_leases::test_lock();
         let (state, mut stdin_rx, sink) = backpressured_state().await;
         state
             .activity

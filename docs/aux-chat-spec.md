@@ -361,8 +361,12 @@ token**。
 
 **页面重载丢 token 的前端行为**：`aux_claim` 回 `auxLeaseConflict` 时**不重试、不停用
 Tab**（实例与进程都还活着），前端进入 `AUX_LEASE_TTL_MS`（90s）静默窗口，窗口过后自动
-再试 —— 届时旧条目已被后端惰性摘掉，这次算首次领取、签发新 token 成功。期间回收**不会**
-误杀：空闲门槛（用户活动 > 30 分钟）远未到账。
+再试 —— 届时旧条目已被后端惰性摘掉，这次算首次领取、签发新 token 成功。
+
+**但这期间不保证"不会被回收"**：丢 token 之后**心跳保护被撤掉**，而原 Tab **已经累计的
+空闲仍然计入**。若它接近/超过 30 分钟（**符合规格的空闲 Tab**），只要回收器先于心跳跑
+一轮，该实例就会被正常回收 —— 这是 §5"用户活动超过 30 分钟即回收"的预期结果，规格不给
+唤醒宽限（见本节末尾已知边界）。
 
 **clientId 的可信来源（取舍，未做）**：本轮**没有**把 clientId 绑到宿主侧身份（桌面恒为
 本地、远程用连接/会话 id）。理由是改动会跨桌面 `lib.rs`、远程 dispatch 与前端三处，而
@@ -408,7 +412,9 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
 **终止事件只在确认退出后提交（复审第四轮 P1-1/P1-2）**：`child::process_kill` 现在
 
 1. **先**置"这是主动 kill"的意图位（不发事件、不动代际）；
-2. 调 `kill_inner`（`taskkill`/`start_kill` + `child.wait()` **确认退出**，默认 5s 超时）；
+2. 调 `kill_inner`：**所有阶段共享一个总 deadline**（默认 5s，退出路径 500ms）——
+   远程 `kill -TERM`、OS 终止命令（`taskkill`/`start_kill`）、`child.wait()` **确认退出**
+   各段都从这份 budget 里扣，耗尽即判失败（不是"每段单独 5s"）；
 3. 只有**确认退出**之后才 `commit_exit`：递增代际 + 发 `pi://exit`，且按
    `RuntimeActivity::has_exited` 去重（stdout reader 的 EOF 与 kill 的确认可能同时到，
    `pi://exit` 只发一次；主动 kill 期间的 EOF 记 `idle`，不是 `error`）；
@@ -416,9 +422,15 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
    不发 exit、不清 pending**，把 `SessionInner` 放回 `ProcessState`（进程仍被追踪，
    重试才有对象）。`inner == None` 不再是"已退出"的依据。
 
-`kill_all`（`RunEvent::Exit` 里 `block_on`）用 `process_kill_fast`：确认超时压到
-**500ms**，且单条失败只记日志、不中断循环 —— 退出时宁可放弃确认也不能卡住 N×5s。
-`respawn`（丢弃旧句柄）用 `confirm = None`，不引入额外等待。
+`kill_all`（`RunEvent::Exit` 里 `block_on`）用 `process_kill_fast`：**总 deadline 500ms
+/ 实例**（覆盖远程段 + OS 终止段 + 确认退出，不是只压最后那段 wait），且单条失败只记
+日志、不中断循环 —— 最坏约 N×500ms，不会像分段超时那样"远程 5s + taskkill 无超时"把
+退出拖住。OS 终止命令的 helper 进程设 `kill_on_drop(true)`，超时后由它收掉，不会变成
+新的孤儿。
+
+**退出路径不做后台重试**：`kill_all` 会 `take` 整个进程池并 `clear_pending_kills()`，
+所以退出时的终止失败**只记日志、不再重试**（也不跨启动恢复）—— 这些 Child 由**本次**
+的 `kill_on_drop` 尽力终止。`respawn`（丢弃旧句柄）用 `deadline = None`，不引入额外等待。
 
 **已知边界（团队裁定，不是缺陷）**：
 
@@ -428,10 +440,18 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
 2. **首次 claim 不校验身份**：见上文"残余风险"。要求宿主控制面权限（该权限已可直接
    `rpc_kill`；规格 §2 明确 aux 只保 pi 的控制面，不是沙箱）。表现是"过期窗口内被抢先
    领取会阻挠原持有者恢复"。不做宿主级身份绑定（等有远程目标时一起做）。
-3. **永久 kill 失败**：某个实例的 kill 一直无法确认退出时，它会在回收器的待重试表里
+3. **退出路径不重试**：`kill_all` 结束时就清空了待重试表（`take` 池 + `clear_pending_kills`），
+   退出阶段的终止失败只有日志；残留 Child 由本次进程的 `kill_on_drop` 尽力终止，内存表
+   **不跨启动恢复**，因此"下次启动收尾"不是保证。
+4. **永久 kill 失败**：某个实例的 kill 一直无法确认退出时，它会在回收器的待重试表里
    长期保留（一份 `Arc<ProcessState>` 句柄），并在租约侧一直回 `auxLeaseReaping`
    （前端已进退避，不再每 20s 打一次）。这是**有意的**：宁可留下一条可重试句柄，也不
    假装已回收（假装会在孤儿进程与"日志显示已回收"之间制造矛盾）。
+
+5. **远程三项未验（缺远程环境）**：远端 `probe_remote`、Web→远程 aux 的实际启动参数、
+   远程 `aux_*` 的运行期归属/认证，本机无可用 SSH/WSL/Docker 目标，**本轮未验**；只有
+   单测与静态路由断言（`web_dispatch_routes_aux_lease_commands_to_the_host_commands`）。
+   按团队裁定以"本地范围收口"，这三项标注为未验、不作为本单完成的前置。
 
 **重连归属**（第 4 条）：`reattachRunningSessions` 先调 `aux_list`，只对
 `clientId == 本机 && parentRuntimeId 在本地注册表` 的条目恢复 pending UI 与流式标记；

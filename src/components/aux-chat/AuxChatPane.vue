@@ -70,7 +70,13 @@ const ready = computed(() => props.tab.status === "ready")
  * 为什么不能只看 `tab.status`：后端确认退出后（`pi://exit`）`session.started` 会被
  * 置 false，但实例注册表里的 status 仍是 `ready`（关闭/销毁由关闭动作负责）。若只判
  * `ready`，用户会看到一个"能发但发不出去"的输入框 —— 那正是复审第四轮观察到的
- * "streaming 被清但 Tab 仍可发"的中间态。这里把两处状态绑在一起，退出即禁用发送。
+ * "streaming 被清但 Tab 仍可发"的中间态。
+ *
+ * 后端的可见行为要写准：确认退出后**输入区仍可交互**（能继续打字、点击计数照常），
+ * 只是**发送会被拦下**（`ensureStarted` 返回 false → `useChatSendControl` 抛
+ * `completion.startFailed` 并回填文本）。这里把 `connected` 同时接到
+ * `:connected`、`:ensure-started` 与模型选择禁用条件，做到的是"**发送被拦、输入区
+ * 保留**"，不是"输入区被禁用"。
  */
 const connected = computed(() => ready.value && session.started)
 

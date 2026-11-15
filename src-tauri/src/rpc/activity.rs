@@ -39,6 +39,12 @@ pub(super) struct RuntimeActivity {
     /// 动手**之前**先置这个意图位；reader 读到 EOF 时据此把 exit 记成 `idle`。
     /// 它**不**发事件、不改代际，因此 kill 失败时清掉它即可恢复。
     expected_stop: bool,
+    /// 这个 `ProcessState` 是否**真的启动过**进程。
+    ///
+    /// 为什么要它：`process_kill` 的 `inner == None` 早退分支不能再"凭空发一条
+    /// exit"（复审第五轮）。只有真 spawn 过的对象才有可报告的终止；从未启动的对象
+    /// 终止是 no-op。
+    spawned: bool,
     /// 终止事件（`pi://exit`）是否**已经**发布过。
     ///
     /// 为什么需要它：确认退出由两条路径竞争（`process_kill` 的确认，与 stdout reader
@@ -69,6 +75,15 @@ impl RuntimeActivity {
 
     pub(super) fn is_current(&self, generation: u64) -> bool {
         self.generation == generation
+    }
+
+    /// 标记"本对象已真实 spawn 过"（由 `process_spawn_impl` 在装配 reader 之前调用）。
+    pub(super) fn mark_spawned(&mut self) {
+        self.spawned = true;
+    }
+
+    pub(super) fn has_spawned(&self) -> bool {
+        self.spawned
     }
 
     fn running(&self) -> bool {

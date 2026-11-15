@@ -575,6 +575,68 @@ mod tests {
         crate::aux_leases::reset_for_test();
     }
 
+    /// **复审第五轮 P1 的回归**：退出路径的总 deadline 必须覆盖**所有阶段**。
+    ///
+    /// 注入：让 OS 终止命令延迟 1200ms 再返回非零（旧实现在这一段完全没有超时）。
+    /// 退出路径（`rpc::kill_all` → `process_kill_fast`）的 budget 是 500ms/实例，
+    /// N=2 时必须：两个实例都判失败，且**总耗时 < 1500ms**（= N×500ms + 上界），
+    /// 而不是质量实测的 3644ms。
+    #[tokio::test]
+    async fn the_exit_budget_covers_the_os_kill_stage_for_every_instance() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:d1", RuntimePolicy::Aux).await;
+        test_harness::install(&state, "aux:d2", RuntimePolicy::Aux).await;
+        crate::rpc::aux_probe::set_os_kill_delay_ms(1200);
+        let started = Instant::now();
+        crate::rpc::kill_all(&state)
+            .await
+            .expect("kill_all 不因单条失败而报错");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "总耗时必须受 N×500ms 的总 deadline 约束，实测 {elapsed:?}"
+        );
+        assert_eq!(
+            test_harness::process_count(&state).await,
+            0,
+            "退出路径会 take 整个池（不再做后台重试）"
+        );
+        crate::rpc::aux_probe::clear_kill_failures();
+        crate::aux_leases::reset_for_test();
+    }
+
+    /// 非退出路径（默认 5s budget）同样覆盖 OS 阶段：延迟超过 budget 时不挂死。
+    #[tokio::test]
+    async fn the_default_budget_also_covers_the_os_kill_stage() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = Arc::new(RpcState::default());
+        let (process, _rx) =
+            test_harness::install_recording(&state, "aux:slow", RuntimePolicy::Aux).await;
+        // budget 1500ms、OS 阶段延迟 3s：必须在 budget 内失败，而不是等 3s。
+        crate::rpc::aux_probe::set_kill_budget_ms(1500);
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let started = Instant::now();
+        let err = crate::rpc::aux_probe::kill_handle(&process, "test")
+            .await
+            .expect_err("OS 阶段超预算必须失败");
+        let elapsed = started.elapsed();
+        assert!(
+            err.contains("budget exhausted") || err.contains("not confirmed"),
+            "{err}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(2000),
+            "budget 必须切断 OS 阶段，实测 {elapsed:?}"
+        );
+        crate::rpc::aux_probe::clear_kill_failures();
+        crate::aux_leases::reset_for_test();
+    }
+
     /// 连续多轮失败：始终不 push `Reaped`、始终保留句柄，直到某轮成功。
     #[tokio::test]
     async fn repeated_kill_failures_never_report_a_reap() {
