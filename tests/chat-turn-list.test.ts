@@ -193,10 +193,10 @@ test("process materialization survives virtual row unmounting and content/action
   expect(root).toMatch(/<Teleport :to="sidebarTarget \|\| 'body'" :disabled="!sidebarTarget" defer>/)
   expect(root).toMatch(/v-model:bridge="bridge"/)
   expect(root).toMatch(/setShortcutsSuppressed\("chat-dialogs", active\)/)
-  // ChatView 的规模护栏（防止把面板逻辑继续塞进这个视图）。TZD-101 的 aux 接线
-  // 只留了 13 行 `useAuxTabs` 调用（实例状态、事件分发与销毁序列都在 composable/注册表里），
-  // 因此上限从 500 提到 520；再往上就该先抽 composable，而不是抬上限。
-  expect(root.split("\n").length).toBeLessThan(520)
+  // ChatView 的规模护栏（防止把业务逻辑继续塞进这个视图）。TZD-101 的侧栏接线
+  // （槽位 + aux 实例）整体搬进 `useChatViewSidebar`，视图只留装配与取返回值，
+  // 因此恢复 500 上限，不放宽。
+  expect(root.split("\n").length).toBeLessThan(500)
 })
 
 test("error records stay outside answer/process rendering and failed turns have no actions", () => {

@@ -39,12 +39,15 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   const chat = read("components/ChatView.vue")
   const auxTabs = read("composables/useAuxTabs.ts")
   const sidebar = read("components/RightSidebar.vue")
-  // 接线在 `useAuxTabs`（ChatView 只留一行调用 + 传入口）。
-  expect(chat).toMatch(/const auxTabs = useAuxTabs\(\{/)
-  expect(chat).toMatch(/@close-tab="handleCloseTab"/)
-  expect(chat).toMatch(/@add-tab="handleAddTab"/)
+  // 接线在 `useAuxTabs`（ChatView 经 `useChatViewSidebar` 装配，只用返回值）。
+  expect(chat).toMatch(/const sidebar = useChatViewSidebar\(\{/)
+  expect(chat).toMatch(
+    /const \{ tabs: sidebarTabs, activeId: activeTabId, parent: auxParent, addTab, closeTab, addSidebarTab } = sidebar/,
+  )
+  expect(chat).toMatch(/@close-tab="closeTab"/)
+  expect(chat).toMatch(/@add-tab="addTab"/)
   // 快捷键关 Tab 也走同一入口（不能只撤槽位留下孤儿进程）。
-  expect(chat).toMatch(/void handleCloseTab\(activeTabId\.value\)/)
+  expect(chat).toMatch(/void closeTab\(activeTabId\.value\)/)
   // 添加：先开进程（openAux 同步入表再 await spawn），没有名额就撤销槽位并提示。
   expect(auxTabs).toMatch(/const tab = await openAux\(deps\.runtimeId, \{/)
   expect(auxTabs).toMatch(/deps\.ui\.pushToast\(t\("auxChat\.limitReached"/)
@@ -63,13 +66,13 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
 
 test("a mount restores the aux slot when the sidebar group was evicted", () => {
   const auxTabs = read("composables/useAuxTabs.ts")
-  const chat = read("components/ChatView.vue")
   // 侧栏组被 LRU 淘汰只丢槽位，进程与 store 仍在（实例存活是规格要求）：
   // 挂载时按存活实例补回槽位，否则实例会变成没有入口的孤儿。
   expect(auxTabs).toMatch(/function restoreSlots\(tabs: readonly SidebarTabItem\[\]\)/)
   expect(auxTabs).toMatch(/for \(const instance of auxInstancesFor\(deps\.runtimeId\)\)/)
   expect(auxTabs).toMatch(/setAuxTabId\(instance\.runtimeId, slot\)/)
-  expect(chat).toMatch(/auxTabs\.restoreSlots\(sidebarTabs\.value\)/)
+  // 构造即补齐（接线方不需要额外调一行，ChatView 因此少 3 行）。
+  expect(auxTabs).toMatch(/restoreSlots\(deps\.tabs\(\)\)/)
 })
 
 test("the aux composer hides the workspace/project picker it cannot use", () => {

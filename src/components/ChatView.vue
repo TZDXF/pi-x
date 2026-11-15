@@ -36,8 +36,7 @@ import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { useSidebarTabs } from "@/composables/useSidebarTabs"
-import { useAuxTabs } from "@/composables/useAuxTabs"
+import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import RightSidebar from "@/components/RightSidebar.vue"
@@ -106,42 +105,17 @@ const emit = defineEmits<{
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
-// 侧栏 Tab（TZD-95）：状态在模块级注册表里，本组件只接线。
-const {
-  tabs: sidebarTabs,
-  activeId: activeTabId,
-  add: addSidebarTab,
-  close: closeSidebarTab,
-  reorder: reorderSidebarTab,
-  restartTerminal: restartSidebarTerminal,
-  limit: sidebarTabLimit,
-} = useSidebarTabs({
-  runtimeId,
-  sessionFile: computed(() => session.sessionFile),
-  project: () => session.cwd || props.project,
-  onFirstTabAdded: () => (sidebarOpen.value = true),
-  onLastTabClosed: () => (sidebarOpen.value = false),
-  // 上限在注册表 `addTab` 上硬拦（不是写盘时截断）：界面显示成功、重启静默丢 Tab 不可接受。
-  onTabLimitReached: () => ui.pushToast(t("sidebarTabs.limitReached", { count: sidebarTabLimit }), "warning"),
-  // 组数准入排队时必须告知（会自愈，不静默）。
-  onGroupLimitReached: () => ui.pushToast(t("sidebarTabs.groupLimitReached"), "warning"),
-})
-const reviewFocus = ref<string | null>(null)
-
-// ---- aux（辅助对话）：侧栏槽位 ↔ 实例注册表（TZD-101） ----
-const auxTabs = useAuxTabs({
+// 右侧侧栏（TZD-95 槽位 + TZD-101 aux 实例）：接线全在 composable，本组件只用返回值。
+const sidebar = useChatViewSidebar({
   runtimeId,
   session,
   ui,
-  workspace,
-  project: () => props.project,
-  addSidebarTab,
-  closeSidebarTab,
-  activate: id => (activeTabId.value = id),
+  project: () => session.cwd || props.project,
+  onFirstTabAdded: () => (sidebarOpen.value = true),
+  onLastTabClosed: () => (sidebarOpen.value = false),
 })
-const { parent: auxParent, addTab: handleAddTab, closeTab: handleCloseTab } = auxTabs
-// 侧栏组被 LRU 淘汰并不销毁 aux 进程：挂载时按存活的实例补回槽位，别让它变成孤儿。
-auxTabs.restoreSlots(sidebarTabs.value)
+const { tabs: sidebarTabs, activeId: activeTabId, parent: auxParent, addTab, closeTab, addSidebarTab } = sidebar
+const reviewFocus = ref<string | null>(null)
 
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
 const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
@@ -296,9 +270,8 @@ const offShortcutHandlers = [
   }),
   registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
-  // 关 aux 槽位必须先销毁实例（进程 + store），不能只撤槽位，所以走 `handleCloseTab`。
   registerShortcutHandler("sidebar.closeTab", () => {
-    if (activeTabId.value !== null) void handleCloseTab(activeTabId.value)
+    if (activeTabId.value !== null) void closeTab(activeTabId.value)
   }),
   registerShortcutHandler("sidebar.nextTab", () => cycleSidebarTab(1)),
   registerShortcutHandler("sidebar.prevTab", () => cycleSidebarTab(-1)),
@@ -504,11 +477,11 @@ onBeforeUnmount(() => {
         :project="session.cwd || project"
         :focus="reviewFocus"
         @update:active-id="activeTabId = $event"
-        @add-tab="handleAddTab"
-        @close-tab="handleCloseTab"
-        @reorder-tabs="reorderSidebarTab"
-        @restart-terminal="restartSidebarTerminal"
-        @aux-limit="auxTabs.notifyLimit"
+        @add-tab="addTab"
+        @close-tab="closeTab"
+        @reorder-tabs="sidebar.reorder"
+        @restart-terminal="sidebar.restartTerminal"
+        @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

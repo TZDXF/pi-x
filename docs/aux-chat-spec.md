@@ -116,12 +116,22 @@
 | 草稿（仅内存） | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts` |
 | `aux_spawn` 前端调用（独立字段，无拼接） | `src/api/client/process.ts` 的 `spawnAuxPi` |
 | 启动上下文（继承模型/工作区/SSH 连接） | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用） |
-| 侧栏接线（槽位 ↔ 实例、`closeAux`） | `src/composables/useAuxTabs.ts`（`ChatView` 只留一行调用） |
-| 面板 | `src/components/aux/AuxChatPane.vue` |
+| 侧栏接线（槽位 ↔ 实例、`closeAux`） | `src/composables/useAuxTabs.ts` + `src/composables/useChatViewSidebar.ts` |
+| 面板 | `src/components/aux-chat/AuxChatPane.vue` |
 | aux 事件分流（墓碑丢弃，绝不重建 store） | `src/lib/auxEventSink.ts` + `src/lib/workspaceRuntime.ts` |
 
 与规格正文的**两处实现差异**（行为等价，记录备查）：
 
 1. §2.1 写作 `src-tauri/src/rpc/aux.rs`，M0 实际落地为 `src-tauri/src/rpc/aux_launch.rs`（本事项未改后端）。
-2. §5 "关闭置 `cancelRequested`"：实现上不新增该字段 —— 关闭时先写墓碑（`closedAuxIds`）并把实例从表里摘除，spawn 完成时发现实例已不在表里就立即 `rpc_kill`，效果就是"创建中被关闭的实例不会留下进程"。
+2. §5 "关闭置 `cancelRequested`"：实现上不新增该字段，改由**墓碑 + 迟到进程收尾函数**承担。
+   `closeAux` 首先写墓碑（`closedAuxIds`）并把实例从表里摘除；此后所有迟到路径
+   （`spawnAuxPi` 返回、`session.init` 抛错、面板重试）都先走同一个
+   `settleLateAux(runtimeId)`：它按"墓碑命中**或**实例已不在表里"判定，命中时
+   `rpc_kill` + 拆掉可能残留的 store，且**不建 store、不写实例状态、不推 UI**；
+   `lateSettled` 记幂等，同一 runtime 只收尾一次。
+   迟到路径上的 store 读取一律用**只查不建**的 `auxSessionExisting`：`auxSessionFor`
+   是"缺席即创建"，只允许在"实例已登记且存活"的路径上调用（否则迟到返回会把关闭时
+   已释放的 session store 重建出来，形成幽灵 store 并对已 kill 的 runtime 继续发 RPC）。
+   `spawnAuxRuntime` / `retryAuxSpawn` 的**入口**同样先过一次 `settleLateAux`，因此
+   拿着已关闭实例的旧引用再调也起不了第二个进程。
    `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。

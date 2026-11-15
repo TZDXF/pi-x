@@ -125,6 +125,7 @@ export function currentAuxClientId() {
 export function resetAuxChatForTest() {
   tabs.splice(0)
   closedAuxIds.clear()
+  lateSettled.clear()
   pendingCreations.clear()
   auxSessions.clear()
   auxUis.clear()
@@ -182,7 +183,18 @@ export function activeAuxFor(parentRuntimeId: string): AuxTab | undefined {
   return undefined
 }
 
-/** aux 的 session store（缺席时创建）。 */
+/**
+ * aux 的 session store —— **只查不建**。
+ *
+ * 迟到路径（`spawnAuxPi` 已返回、`init` 之前）必须用它：此时实例可能已被关闭，
+ * 用 `auxSessionFor` 会"缺席即创建"，把刚被 `closeAux` 释放的 store 又重建出来
+ * （幽灵 store + 对已 kill 的 runtime 继续发 RPC）。
+ */
+export function auxSessionExisting(runtimeId: string): SessionStore | undefined {
+  return auxSessions.get(runtimeId)
+}
+
+/** aux 的 session store（缺席时创建）。**只允许在实例活着且已登记时调用**。 */
 export function auxSessionFor(runtimeId: string): SessionStore {
   let store = auxSessions.get(runtimeId)
   if (!store) {
@@ -253,24 +265,23 @@ export async function openAux(
   const creation = (async () => {
     try {
       await options.spawn(tab)
+      // 创建期间被关闭（spawn 成功、init 之前或之后）：统一收尾，不复活、不写状态。
+      if (await settleLateAux(runtimeId)) return null
       const current = auxTabByRuntime(runtimeId)
-      if (!current) {
-        // 创建期间被关闭：spawn 成功也不复活，直接收掉进程。
-        await bridge?.kill(runtimeId).catch(() => {})
-        return null
-      }
+      if (!current) return null
       current.status = "ready"
       delete current.error
       return current
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      // 失败也要先判"是否已关闭"：关闭后不能落在"留在表里带 error"那条路径上。
+      if (await settleLateAux(runtimeId)) return null
       const current = auxTabByRuntime(runtimeId)
-      if (current) {
-        // 失败留在表里并带原因：面板要显示为什么失败，由用户决定关掉它。
-        current.status = "error"
-        current.error = message
-      }
-      return current ?? null
+      if (!current) return null
+      // 失败留在表里并带原因：面板要显示为什么失败，由用户决定关掉它。
+      current.status = "error"
+      current.error = message
+      return current
     } finally {
       pendingCreations.delete(parentRuntimeId)
     }
@@ -297,6 +308,44 @@ export function markAuxRetrying(runtimeId: string) {
   if (!tab) return
   tab.status = "creating"
   delete tab.error
+}
+
+/**
+ * 已经为某个 runtime 做过"迟到进程收尾"的标记（同一 runtime 只收尾一次）。
+ *
+ * 三处迟到出口（`openAux` 的成功/失败分支、`spawnAuxRuntime` 的完成路径、面板的
+ * `retry`）都会调 `settleLateAux`；这里保证它们不会各杀一次。
+ */
+const lateSettled = new Set<string>()
+
+/**
+ * **唯一**的"迟到进程收尾"出口。
+ *
+ * 判据只有一个：该实例是"已关闭（墓碑命中）"或"已不在表里"。命中时收掉进程并丢弃
+ * 可能残留的 store —— **不建 store、不写实例状态、不推 UI**。返回是否发生了收尾。
+ *
+ * 为什么必须集中：判据散在各调用点就会出现"某个出口忘了 kill"的漏杀窗口（
+ * `spawnAuxPi` 迟到返回、`init` 抛错、面板重试各有一次），而且无法用测试统一覆盖。
+ */
+export async function settleLateAux(runtimeId: string): Promise<boolean> {
+  const gone = closedAuxIds.has(runtimeId) || !tabs.some(tab => tab.runtimeId === runtimeId)
+  if (!gone) return false
+  if (lateSettled.has(runtimeId)) return true
+  lateSettled.add(runtimeId)
+  // 先杀进程：迟到的 spawn 可能刚好在这一刻才真正起来，`rpc_kill` 必须落在它之后。
+  await bridge?.kill(runtimeId).catch(() => {})
+  // 再拆可能残留的 store（关闭后才被重建的那份）。**不**清内容、不写状态。
+  dropAuxUiStore(runtimeId)
+  const session = auxSessions.get(runtimeId)
+  const ui = auxUis.get(runtimeId)
+  auxSessions.delete(runtimeId)
+  auxUis.delete(runtimeId)
+  const pinia = getActivePinia() as unknown as { _s?: Map<string, unknown> } | null
+  pinia?._s?.delete(`session:${runtimeId}`)
+  pinia?._s?.delete(`ui:${runtimeId}`)
+  session?.$dispose?.()
+  ui?.$dispose?.()
+  return true
 }
 
 /**

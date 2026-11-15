@@ -13,11 +13,11 @@ import { useChatTurnList } from "@/composables/useChatTurnList"
 import { useAuxDraft } from "@/composables/useAuxDraft"
 import { useConversationModel } from "@/composables/useConversationModel"
 import { formatCodedError } from "@/lib/backendError"
-import { spawnAuxRuntime, type AuxParentContext } from "@/lib/auxSpawn"
+import { retryAuxSpawn, type AuxParentContext } from "@/lib/auxSpawn"
 import type PromptInputBridge from "@/components/PromptInputBridge.vue"
 import type { usePromptEdit } from "@/composables/usePromptEdit"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { auxSessionFor, auxTabByRuntime, auxUiFor, markAuxRetrying, type AuxTab } from "@/stores/auxChat"
+import { auxSessionFor, auxUiFor, type AuxTab } from "@/stores/auxChat"
 
 /**
  * aux（辅助对话）面板（`docs/aux-chat-spec.md` §3/§5）。
@@ -110,21 +110,9 @@ const errorText = computed(() =>
   props.tab.error ? formatCodedError(t, props.tab.error) : t("auxChat.spawnFailedUnknown"),
 )
 
-/** 失败重试：同一槽位重走一次 spawn（不复用旧进程）。 */
-async function retry() {
-  markAuxRetrying(props.tab.runtimeId)
-  try {
-    await spawnAuxRuntime(props.parent, props.tab)
-    const tab = auxTabByRuntime(props.tab.runtimeId)
-    if (!tab) return
-    tab.status = "ready"
-    delete tab.error
-  } catch (error) {
-    const tab = auxTabByRuntime(props.tab.runtimeId)
-    if (!tab) return
-    tab.status = "error"
-    tab.error = error instanceof Error ? error.message : String(error)
-  }
+/** 失败重试：同一槽位重走一次 spawn（收尾规则与首次启动同一份实现）。 */
+function retry() {
+  return retryAuxSpawn(props.parent, props.tab)
 }
 
 async function copyText(text: string) {

@@ -34,6 +34,8 @@ export function useAuxTabs(deps: {
   closeSidebarTab: (id: number) => void
   /** 新实例就绪后把它切成激活 Tab。 */
   activate: (id: number) => void
+  /** 当前槽位快照（构造时核对"存活实例是否还有入口"）。 */
+  tabs: () => readonly SidebarTabItem[]
 }) {
   const { t } = useI18n()
 
@@ -116,5 +118,8 @@ export function useAuxTabs(deps: {
     deps.closeSidebarTab(id)
   }
 
-  return { parent: parent as ComputedRef<AuxParentContext>, addTab, closeTab, addAux, notifyLimit, restoreSlots }
+  // 构造即补齐：侧栏组被 LRU 淘汰只丢槽位（进程与 store 仍在），这里按存活实例补回。
+  restoreSlots(deps.tabs())
+
+  return { parent: parent as ComputedRef<AuxParentContext>, addTab, closeTab, addAux, notifyLimit }
 }

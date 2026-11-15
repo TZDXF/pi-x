@@ -10,6 +10,7 @@ import { createPinia, getActivePinia, setActivePinia } from "pinia"
 const controls = vi.hoisted(() => ({
   rpcRequest: vi.fn(),
   kill: vi.fn(async () => {}),
+  notifyTurn: vi.fn(),
 }))
 
 vi.mock("@/api/piClient", () => ({
@@ -30,7 +31,10 @@ vi.mock("@/i18n", () => ({
   tBackendError: value => String(value ?? ""),
 }))
 vi.mock("@/lib/fileRewind", () => ({ fileRewindState: async () => [] }))
-vi.mock("@/lib/notifications", () => ({ notifyTurnComplete() {}, notifyQuestion() {} }))
+vi.mock("@/lib/notifications", () => ({
+  notifyTurnComplete: (...args: unknown[]) => controls.notifyTurn(...(args as [])),
+  notifyQuestion() {},
+}))
 vi.mock("@/stores/sessionRunStatus", () => ({
   setSessionRunStatus() {},
   sessionRunStatus: () => undefined,
@@ -89,6 +93,10 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
   reset.fn?.()
   controls.kill.mockClear()
+  // 真实 session store 在 `agent_settled` 后会补 get_state/get_session_stats；
+  // 默认实现必须返回 resolved，否则留下未处理的 rejection（CI 会把 Errors 判失败）。
+  controls.rpcRequest.mockReset()
+  controls.rpcRequest.mockImplementation(async () => ({ success: true, data: {} }))
   registerAuxRuntimeBridge({ kill: controls.kill })
 })
 
@@ -287,10 +295,29 @@ test("aux ui store is resolvable by session id without entering the conversation
   // 但 aux 不进会话表（allConversations 不见它），主会话 ui 也不受影响。
   const { allConversations, hasConversation } = await import("@/stores/conversations")
   expect(hasConversation(tab!.runtimeId)).toBe(false)
-  expect(allConversations().length).toBe(0)
+  // 与运行顺序无关：只断言 aux 的 id 不在会话表里（其他测试文件可能建过主会话 store）。
+  expect(allConversations().some(owner => owner.runtimeId === tab!.runtimeId)).toBe(false)
   auxUi.handleRequest({ type: "extension_ui_request", id: "q", method: "select", options: ["a"] } as never)
   expect(auxUi.dialogs).toHaveLength(1)
   expect(uiFor("main-ui").dialogs).toHaveLength(0)
+})
+
+test("aux turns never raise the system completion notification (§5)", async () => {
+  // §5 验收：aux 的 notifyTurnComplete 静默。用一个真实 session store 走一遍
+  // agent_start → agent_end，断言通知回调**没有**被调用；主会话 id 作为对照。
+  const { createSessionStore } = await import("@/stores/session")
+  controls.notifyTurn.mockClear()
+  const aux = createSessionStore("aux:silent")()
+  aux.handleEvent({ type: "agent_start" })
+  aux.handleEvent({ type: "agent_settled" })
+  expect(controls.notifyTurn).not.toHaveBeenCalled()
+
+  // 对照：主会话 id 在同一个 settled 路径上仍会通知（证明静默是 aux 专属）。
+  const main = createSessionStore("main:loud")()
+  main.handleEvent({ type: "agent_start" })
+  main.handleEvent({ type: "agent_settled" })
+  // 主会话仍然通知（对照：证明上面的静默是 aux 专属，不是把通知关了）。
+  expect(controls.notifyTurn).toHaveBeenCalled()
 })
 
 test("aux ui store keeps an unanswered question visible for the sidebar badge", async () => {
