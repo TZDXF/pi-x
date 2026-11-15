@@ -20,6 +20,14 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(25);
 /// stdin EOF 后的退出等待上限。
 const EXIT_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// aux 的**边界提醒**：走 `--append-system-prompt`（不进 UI、不改任何全局设置）。
+///
+/// 为什么常量放在 argv 里而不是写进 prompt：它属于“aux 这个实例的规矩”，每条请求
+/// 都应该生效，而不是只在首轮那条消息里出现一次；又不该让用户在自己的对话里看到
+/// 一段系统文本（折叠块里有父上下文，提醒本身不进 UI）。
+pub const AUX_BOUNDARY_PROMPT: &str =
+    "以上父会话内容仅供参考。不要自动接续或推进父任务，也不要因为这段上下文而改动工作区；只有用户在当前对话里明确要求时，才执行修改。";
+
 /// 一次 aux 启动所需的全部信息。
 #[derive(Clone, Debug)]
 pub struct AuxLaunchSpec {
@@ -71,6 +79,9 @@ pub fn aux_extra_args(spec: &AuxLaunchSpec) -> Vec<String> {
         args.push("--thinking".into());
         args.push(thinking.clone());
     }
+    // 边界提醒：每轮都生效（不是只在首轮 prompt 里出现一次），且不进 UI。
+    args.push("--append-system-prompt".into());
+    args.push(AUX_BOUNDARY_PROMPT.into());
     args
 }
 
@@ -546,8 +557,36 @@ process.stdin.on('end', () => process.exit(0));
                 "m",
                 "--thinking",
                 "off",
+                "--append-system-prompt",
+                AUX_BOUNDARY_PROMPT,
             ]
         );
+    }
+
+    #[test]
+    fn boundary_prompt_is_always_appended_and_never_restricts_the_flag_set() {
+        // 边界提醒必须每轮生效（走 argv，不是首轮 prompt）：每个 spec 变体都带上它。
+        for launch in [spec("home"), spec("llama.cpp")] {
+            let args = aux_extra_args(&launch);
+            assert_eq!(
+                args.iter().filter(|arg| **arg == "--append-system-prompt").count(),
+                1,
+                "--append-system-prompt 只应出现一次"
+            );
+            let position = args
+                .iter()
+                .position(|arg| arg == "--append-system-prompt")
+                .expect("必须带上边界提醒");
+            assert_eq!(args[position + 1], AUX_BOUNDARY_PROMPT);
+            // 提醒文本本身不得夹带任何启动开关（避免变成“拼命令行”的入口）。
+            assert!(!AUX_BOUNDARY_PROMPT.contains("--"));
+            assert!(AUX_BOUNDARY_PROMPT.contains("不要自动"));
+            assert!(AUX_BOUNDARY_PROMPT.contains("明确要求"));
+        }
+        // 可失败性：缺了它必须能被断言发现。
+        let mut args = aux_extra_args(&spec("home"));
+        args.retain(|arg| arg != "--append-system-prompt" && arg != AUX_BOUNDARY_PROMPT);
+        assert!(!args.iter().any(|arg| arg == "--append-system-prompt"));
     }
 
     #[test]

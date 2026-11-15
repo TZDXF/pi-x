@@ -1,4 +1,5 @@
 import { contentText } from "@/lib/content"
+import { withoutAuxParentContext } from "@/lib/auxParentContext"
 import type { Block, Entry, UserEntry } from "@/stores/session"
 
 export interface ConversationTurn {
@@ -18,7 +19,8 @@ export interface TimelineTurn extends ConversationTurn {
 }
 
 const excerpt = (text: string) => {
-  const normalized = text.replace(/\s+/g, " ").trim()
+  // aux 的父上下文块不是用户的问题：摘要（时间线/导航）只用可见正文。
+  const normalized = withoutAuxParentContext(text).replace(/\s+/g, " ").trim()
   return normalized.length > 180 ? `${normalized.slice(0, 180)}…` : normalized
 }
 
@@ -89,8 +91,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
         turns.push({ id: entry.id, question: excerpt(entry.text), answer: "", entryId: entry.id })
       else if (entry.kind === "compaction")
         turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
-      else if (entry.kind === "context_edit")
-        turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
+      else if (entry.kind === "context_edit") turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
       else if (entry.kind === "assistant" && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
     }
     return turns

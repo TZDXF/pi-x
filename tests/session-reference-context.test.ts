@@ -13,7 +13,8 @@ test("reloaded session references hide agent instructions while preserving the c
   const persisted = withSessionReferences(text, sessions)
   expect(persisted).toContain("Referenced conversations")
   const parsed = parseComposerPromptContexts(persisted)
-  expect(parsed).toEqual({ visibleContent: text, comments: [], selections: [] })
+  expect(parsed).toMatchObject({ visibleContent: text, comments: [], selections: [] })
+  expect(parsed.parentContext).toBeNull()
   expect(composerParts(parsed.visibleContent, { [sessions[0].file]: sessions[0].title }, undefined, "message")).toEqual(
     [
       { kind: "session", raw: sessionReference(sessions[0].file), label: sessions[0].title },

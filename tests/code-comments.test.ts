@@ -386,7 +386,9 @@ test("composer retains both context blocks if mixed code comments cannot be pars
     comments: [roundTripDraft, roundTripDraft],
     selections: [{ text: "引用" }],
   }).replace("Lines: 4-9", "Lines: 9-4")
-  expect(parseComposerPromptContexts(prompt)).toEqual({ visibleContent: prompt, comments: [], selections: [] })
+  const parsed = parseComposerPromptContexts(prompt)
+  expect(parsed).toMatchObject({ visibleContent: prompt, comments: [], selections: [] })
+  expect(parsed.parentContext).toBeNull()
 })
 
 test.each([3, 4, 8])("protected comments round-trip with a %i-backtick fence", length => {

@@ -8,10 +8,11 @@ import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { buildPromptWithCodeComments, commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
+import { claimAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
 
 // Execute the production composable with real Vue reactivity and pure helpers,
 // replacing only application boundaries (RPC/config, i18n, project comments).
-function harness(config = Promise.resolve({})) {
+function harness(config = Promise.resolve({}), extra = {}) {
   const behavior = ref("steer")
   const onSent = vi.fn()
   const comments = reactive({ project: "repo", comments: [], clear: vi.fn() })
@@ -68,6 +69,7 @@ function harness(config = Promise.resolve({})) {
       ensureStarted,
       newSession,
       onSent,
+      ...extra,
     })
   })
   return {
@@ -87,6 +89,89 @@ function harness(config = Promise.resolve({})) {
     newSession,
   }
 }
+
+const parentContextBlock = (inner: string) => ["<aux_parent_context>", inner, "</aux_parent_context>"].join("\n")
+
+/** 用真实的 `claimAuxParentContext`（模块级记账）包一层：返回值的“仅首轮”语义才是被测对象。 */
+function injectedParentContext(runtimeId: string, inner: string, options: { hasUserEntry?: () => boolean } = {}) {
+  return () =>
+    claimAuxParentContext(runtimeId, {
+      hasUserEntry: options.hasUserEntry ?? (() => false),
+      collect: async () =>
+        ({
+          source: "entries",
+          hasContext: true,
+          omittedGroups: 0,
+          overLimit: false,
+          groupCount: 1,
+          inner,
+          block: "",
+          errors: [],
+        }) as never,
+    })
+}
+
+test("aux parent context is injected only on the first turn of one aux runtime", async () => {
+  // 连续三轮：首轮带块，第 2/3 轮 promptText 不含 `<aux_parent_context>`。
+  resetAuxParentContextForTest()
+  const h = harness(Promise.resolve({}), {
+    parentContext: injectedParentContext("aux:first-turn", "父会话已提交内容"),
+  })
+  try {
+    for (const text of ["第一轮", "第二轮", "第三轮"]) await h.controls.onSubmit({ text })
+    const prompts = h.session.send.mock.calls.map(call => call[2])
+    expect(prompts[0].startsWith(parentContextBlock("父会话已提交内容"))).toBe(true)
+    expect(prompts[0]).toContain("第一轮")
+    expect(prompts[1]).not.toContain("<aux_parent_context>")
+    expect(prompts[2]).not.toContain("<aux_parent_context>")
+    // 另一个 aux 实例有自己的记账：它的首轮仍然带块。
+    const other = harness(Promise.resolve({}), {
+      parentContext: injectedParentContext("aux:second-runtime", "另一份父上下文"),
+    })
+    try {
+      await other.controls.onSubmit({ text: "另一个实例的首轮" })
+      expect(other.session.send.mock.calls[0][2].startsWith(parentContextBlock("另一份父上下文"))).toBe(true)
+    } finally {
+      other.scope.stop()
+    }
+    // 已有 user 条目（重载/竞态）时永不再拼块，即便记账被清。
+    resetAuxParentContextForTest()
+    const reloaded = harness(Promise.resolve({}), {
+      parentContext: injectedParentContext("aux:reloaded", "不该出现的父上下文", { hasUserEntry: () => true }),
+    })
+    try {
+      await reloaded.controls.onSubmit({ text: "已有历史" })
+      expect(reloaded.session.send.mock.calls[0][2]).toBe("已有历史")
+    } finally {
+      reloaded.scope.stop()
+    }
+    // 主会话不传 parentContext：promptText 保持原样（行为不变）。
+    const main = harness()
+    try {
+      await main.controls.onSubmit({ text: "主会话提问" })
+      expect(main.session.send.mock.calls[0][2]).toBe("主会话提问")
+    } finally {
+      main.scope.stop()
+    }
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("a failing parent-context read never blocks the send", async () => {
+  const h = harness(Promise.resolve({}), {
+    parentContext: async () => {
+      throw new Error("collect failed")
+    },
+  })
+  try {
+    await h.controls.onSubmit({ text: "仍然要发出去" })
+    expect(h.session.send).toHaveBeenCalledOnce()
+    expect(h.session.send.mock.calls[0][2]).toBe("仍然要发出去")
+  } finally {
+    h.scope.stop()
+  }
+})
 const image = "data:image/png;base64,aGVsbG8="
 
 test.each(["", "Keep this draft"])("rejects non-image attachments without consuming text or files", async text => {

@@ -3,6 +3,8 @@ import { sessionHistory, sessionLastError, type SessionLastError, type rpcReques
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
 import { contentImages, contentText } from "@/lib/content"
+import { withoutAuxParentContext } from "@/lib/auxParentContext"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import { blocksFromMessage, errorBlock } from "./events"
 import type { Block, Entry, ToolRun } from "./types"
 
@@ -154,8 +156,28 @@ export function createSessionHistory(context: HistoryContext) {
                 .filter((c: any) => c.type === "image" && c.data && c.mimeType)
                 .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
             : []
-          if (text.trim() || images.length)
-            page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
+          // 落盘的是**完整 prompt**：aux 的 `<aux_parent_context>` 前置块要从可见正文里
+          // 拆出去（气泡默认收起地展开回看）。这里走**同一个**解析器
+          // （`parseComposerPromptContexts`），与首发/气泡/摘要的分拆规则因此不会漂。
+          // 无块时 `text` 保持原样：主会话的 userselect / Code comments 尾块仍由气泡渲染
+          // chips（行为不变）。
+          const parsed = parseComposerPromptContexts(text)
+          const visible = parsed.parentContext === null ? text : withoutAuxParentContext(text)
+          if (visible.trim() || images.length)
+            page.push({
+              kind: "user",
+              id: nextId(),
+              text: visible,
+              images,
+              timestamp: msg.timestamp,
+              ...(parsed.parentContext === null
+                ? {}
+                : {
+                    contextText: text,
+                    parentContext: parsed.parentContext,
+                    parentContextBlock: parsed.parentContextBlock,
+                  }),
+            })
         } else if (msg.role === "assistant") {
           const blocks = blocksFromMessage(msg)
           if (msg.stopReason === "error" && msg.errorMessage) {

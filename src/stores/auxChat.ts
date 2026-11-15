@@ -4,6 +4,7 @@ import { AUX_MAX_TABS, createAuxRuntimeId, nextAuxOrdinal } from "@/lib/auxRunti
 import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
 import { clearAuxDraft } from "@/stores/auxDrafts"
+import { clearAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
 import { dropAuxUiStore, registerAuxUiStore } from "@/stores/conversations"
 import { createSessionStore, type SessionStore } from "@/stores/session"
 import { createUiStore, type UiStore } from "@/stores/ui"
@@ -130,6 +131,7 @@ export function resetAuxChatForTest() {
   auxSessions.clear()
   auxUis.clear()
   bridge = null
+  resetAuxParentContextForTest()
 }
 
 /** 只读快照（响应式数组本身）。 */
@@ -385,6 +387,8 @@ export async function closeAux(runtimeId: string): Promise<void> {
   ui?.clear()
   // 3) 草稿（仅内存）。
   clearAuxDraft(runtimeId)
+  // 3b) 父上下文“只注入首轮”的记账：关闭即清（同一 runtimeId 不会再被复用）。
+  clearAuxParentContext(runtimeId)
   // 4) 进程：先杀，再拆 store —— 顺序反过来会让迟到事件找到仍有 store 的 id。
   await bridge?.kill(runtimeId).catch(() => {})
   // 5) 会话表与 Pinia 实例表。

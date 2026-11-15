@@ -6,13 +6,16 @@ import vm from "node:vm"
 const source = readFileSync(new URL("../src/lib/conversationTimeline.ts", import.meta.url), "utf8")
 const tsCompile = code => ts.transpile(code, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 })
 // conversationTimeline now shares contentText with the session store via
-// '@/lib/content'; load the real module so its behavior is under test too.
+// '@/lib/content', and strips aux parent-context blocks via
+// '@/lib/auxParentContext'; load the real modules so their behavior is under test too.
+const loadSrc = id => {
+  const file = id.replace(/^@\//, "../src/")
+  const content = { exports: {} }
+  vm.runInNewContext(tsCompile(readFileSync(new URL(`${file}.ts`, import.meta.url), "utf8")), content)
+  return content.exports
+}
 const require = id => {
-  if (id === "@/lib/content") {
-    const content = { exports: {} }
-    vm.runInNewContext(tsCompile(readFileSync(new URL("../src/lib/content.ts", import.meta.url), "utf8")), content)
-    return content.exports
-  }
+  if (id === "@/lib/content" || id === "@/lib/auxParentContext") return loadSrc(id)
   throw new Error(`unexpected module: ${id}`)
 }
 const context = { exports: {}, require }
@@ -56,6 +59,12 @@ test("handles empty/image questions, unanswered turns, and bounded excerpts", ()
   expect(turns([user(1, "x".repeat(300))])[0].question.length).toBe(181)
   expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
+test("timeline question ignores an aux parent-context block", () => {
+  const prompt = ["<aux_parent_context>", "【用户】父会话问题", "</aux_parent_context>", "", "本轮的提问"].join("\n")
+  expect(turns([user(1, prompt)])[0].question).toBe("本轮的提问")
+  expect(buildTimelineTurns([], 0, [user(1, prompt)])[0].question).toBe("本轮的提问")
+})
+
 test("rendered entries have anchors and navigation respects reduced motion", () => {
   const chat = turnSources()
   expect(chat).toMatch(/:data-message-id="entry.id"/)
