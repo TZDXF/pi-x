@@ -199,6 +199,18 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    正文、编辑重发原样拼回块）。历史重建仍用同一个解析器
    `parseComposerPromptContexts`，因此首发/读回不会漂。
 
+**身份判据（rev.2 补）**：`get_entries` 成功且**非空**时它的 entry id 集合是三路的权威
+判据；`get_entries` 失败或返回空（`leafId: null`、尚无已提交条目）时**不**把"无集合"
+当成"全部已提交"，另两路改为**来源自证**（每条消息必须自带 `_entryId`），无 id 的消息
+一律丢弃。`get_entries` 成功但为空按"无权威集合"处理 —— 否则会把随后已落盘的文件内容
+过滤掉（实测竞态）。结果里的 `identity`（`authoritative`/`source`/`none`）用于诊断。
+
+**回落顺序（rev.2 补）**：`get_entries` → `get_messages` → `session_history`，历史返回
+null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态常在几十毫秒内自愈），
+仍无内容才收口成空提示；`attempts` 记录实际调用次数（测试断言 `history ≥ 1`、
+`entries ≥ 2`）。并发首轮按先来先得：同一 aux 的后续提交等领头采集落地再发，后续轮次
+不排队；采集 reject 时如实提示（`chat.parentContextFailed`）后不带块发送。
+
 **已知代价（如实）**：父上下文前缀在后续每一轮都作为历史**全价**重发，本事项不主张任何
 前缀缓存收益；32k 是硬护栏。`overLimit`（单轮自身超限）时整组保留、不按字符切断工具
 调用与结果配对 —— 护栏宁可略微超限，也不制造互不配对的历史。
