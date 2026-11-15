@@ -48,10 +48,11 @@
 截断规则（三源同一）：以**本轮已提交的 realUser** 为锚点，**排除其后**所有 assistant/toolResult；不是"删掉全部 assistant/tool 只留 user 文本"。32k 护栏按**整组**丢弃（user + 其后 assistant/tool 一起），不按字符切。
 
 三类情形：
+
 1. 确实尚无已提交输入 → 只带选段 + 顶部提示；
 2. 已提交但文件暂不可读（`sessionFile` 已预留、文件未落盘，实测存在）→ 回落 `get_entries`；
 3. 读取竞态失败 → 回落 `get_entries`。
-后两类**不得**降级为"未取到父上下文"。`live`/乐观插入**不作为**提交判据，锚定到已接纳的 entry 身份。
+   后两类**不得**降级为"未取到父上下文"。`live`/乐观插入**不作为**提交判据，锚定到已接纳的 entry 身份。
 
 **只注入首轮**：父上下文只写在 aux 第一条 user 消息；按 aux runtimeId 记 `contextInjected`，`entries` 已有 user 则永不拼块（单测断言第 2/3 轮 promptText 不含 `<aux_parent_context>`）。
 
@@ -61,13 +62,13 @@
 
 格式（置于 prompt 最前）：`<aux_parent_context>…</aux_parent_context>` + 空行 + 提问正文。
 
-| # | 文件 | 实现 | 验收 |
-| --- | --- | --- | --- |
-| 1 | `src/lib/promptContexts.ts:32` | 剥离/重组该前缀块，首发与读回共用 | 单测四种输入；序列化与解析互逆 |
-| 2 | `src/stores/session/history.ts:150` | 重建 user entry 存完整 prompt + 拆分后的可见正文 | `loadHistory` 后 parentContext 有值、visibleText 无块；老历史不变 |
-| 3 | `src/components/chat/ChatUserPrompt.vue:32/126` | 折叠块默认收起；复制只用 visibleText | 复制字符串不含 `<aux_parent_context>` |
-| 4 | `src/composables/usePromptEdit.ts:62/93` | P1：aux **仅改显示、不重发**；主会话保存时块原样保留 | 块字节不变；aux 下 transport 零写入（无 `rewind_prompt`） |
-| 5 | `src/lib/conversationTimeline.ts:89/105` | 两处摘要用 visibleText | question 不含块；rank/entryId 对齐不变 |
+| #   | 文件                                            | 实现                                                 | 验收                                                              |
+| --- | ----------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
+| 1   | `src/lib/promptContexts.ts:32`                  | 剥离/重组该前缀块，首发与读回共用                    | 单测四种输入；序列化与解析互逆                                    |
+| 2   | `src/stores/session/history.ts:150`             | 重建 user entry 存完整 prompt + 拆分后的可见正文     | `loadHistory` 后 parentContext 有值、visibleText 无块；老历史不变 |
+| 3   | `src/components/chat/ChatUserPrompt.vue:32/126` | 折叠块默认收起；复制只用 visibleText                 | 复制字符串不含 `<aux_parent_context>`                             |
+| 4   | `src/composables/usePromptEdit.ts:62/93`        | P1：aux **仅改显示、不重发**；主会话保存时块原样保留 | 块字节不变；aux 下 transport 零写入（无 `rewind_prompt`）         |
+| 5   | `src/lib/conversationTimeline.ts:89/105`        | 两处摘要用 visibleText                               | question 不含块；rank/entryId 对齐不变                            |
 
 **编辑重发**：`session.ts:499` 必发 `rewind_prompt`（M0 拒绝、aux 无文件）→ P1 不做，不绕过。"内存会话的编辑重发"（追加修正 prompt 而非回滚）列为后续事项。
 
@@ -83,21 +84,21 @@
 
 ## 6. 验收矩阵
 
-| # | 场景 | 覆盖 |
-| --- | --- | --- |
-| a | 草稿不落盘；主会话同项目草稿不被覆盖 | 单测 + 手工 |
-| b | 引用互不消费；aux 桶与主桶独立 | 单测 |
-| c | 结构命令被拒 + stdin 零写入 + 无新 session 文件；Main 对照成功 | Rust 单测 |
-| d | 执行类放行且**真有 stdin 写入**（防假放行） | Rust 单测 |
-| e | `set_steering_mode` 等 5 条被拒；`set_thinking_level` 放行且 settings 不变 | Rust 单测 |
-| f | 重连只恢复本机 clientId + 父匹配；他客户端不被杀 | Rust 单测 + 双窗口手工 |
-| g | 活跃流/待答/有租约不被回收 | Rust 单测 + 手工 |
-| h | 关闭与 spawn 竞态：无孤儿进程、无可见 Tab、迟到 exit 不复活 | 单测 + 手工 |
-| i | 折叠块五处落点逐项 | 单测/组件测试 |
-| j | 只注入首轮：第 2/3 轮无前缀 | 单测 |
-| k | 流式中取材三源快照（文件无 partial、store 有、`get_messages` 无 partial） | 夹具（本地 stub） |
-| l | 劫持：默认发现成功 / `--no-extensions` 不可达 / 显式 `-e` 仍触发 | 夹具 |
-| m | 远端能力不足 `auxPiUnsupported`，不降级重试 | Rust 单测 + 手工 |
+| #   | 场景                                                                       | 覆盖                   |
+| --- | -------------------------------------------------------------------------- | ---------------------- |
+| a   | 草稿不落盘；主会话同项目草稿不被覆盖                                       | 单测 + 手工            |
+| b   | 引用互不消费；aux 桶与主桶独立                                             | 单测                   |
+| c   | 结构命令被拒 + stdin 零写入 + 无新 session 文件；Main 对照成功             | Rust 单测              |
+| d   | 执行类放行且**真有 stdin 写入**（防假放行）                                | Rust 单测              |
+| e   | `set_steering_mode` 等 5 条被拒；`set_thinking_level` 放行且 settings 不变 | Rust 单测              |
+| f   | 重连只恢复本机 clientId + 父匹配；他客户端不被杀                           | Rust 单测 + 双窗口手工 |
+| g   | 活跃流/待答/有租约不被回收                                                 | Rust 单测 + 手工       |
+| h   | 关闭与 spawn 竞态：无孤儿进程、无可见 Tab、迟到 exit 不复活                | 单测 + 手工            |
+| i   | 折叠块五处落点逐项                                                         | 单测/组件测试          |
+| j   | 只注入首轮：第 2/3 轮无前缀                                                | 单测                   |
+| k   | 流式中取材三源快照（文件无 partial、store 有、`get_messages` 无 partial）  | 夹具（本地 stub）      |
+| l   | 劫持：默认发现成功 / `--no-extensions` 不可达 / 显式 `-e` 仍触发           | 夹具                   |
+| m   | 远端能力不足 `auxPiUnsupported`，不降级重试                                | Rust 单测 + 手工       |
 
 ## 7. 已知约束与后续事项
 
@@ -109,29 +110,63 @@
 
 本规格的前端主体落在以下文件（与 §2.1 的 M0 后端落点对应）：
 
-| 职责 | 文件 |
-| --- | --- |
-| 实例注册表（Tab/序号/上限 5/关闭销毁、clientId） | `src/stores/auxChat.ts` |
-| 纯逻辑（前缀、上限、序号分配） | `src/lib/auxRuntime.ts` |
-| 草稿（仅内存） | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts` |
-| `aux_spawn` 前端调用（独立字段，无拼接） | `src/api/client/process.ts` 的 `spawnAuxPi` |
-| 启动上下文（继承模型/工作区/SSH 连接） | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用） |
-| 侧栏接线（槽位 ↔ 实例、`closeAux`） | `src/composables/useAuxTabs.ts` + `src/composables/useChatViewSidebar.ts` |
-| 面板 | `src/components/aux-chat/AuxChatPane.vue` |
-| aux 事件分流（墓碑丢弃，绝不重建 store） | `src/lib/auxEventSink.ts` + `src/lib/workspaceRuntime.ts` |
+| 职责                                                                | 文件                                                                      |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 实例注册表（Tab/序号/上限 5/关闭销毁、clientId）                    | `src/stores/auxChat.ts`                                                   |
+| 纯逻辑（前缀、上限、序号分配）                                      | `src/lib/auxRuntime.ts`                                                   |
+| 草稿（仅内存）                                                      | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts`              |
+| `aux_spawn` 前端调用（独立字段，无拼接）                            | `src/api/client/process.ts` 的 `spawnAuxPi`                               |
+| 启动上下文（继承模型/工作区/SSH 连接）+ 逐段判活的 `initAuxSession` | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用）           |
+| 侧栏接线（槽位 ↔ 实例、`closeAux`）                                 | `src/composables/useAuxTabs.ts` + `src/composables/useChatViewSidebar.ts` |
+| 面板                                                                | `src/components/aux-chat/AuxChatPane.vue`                                 |
+| aux 事件分流（墓碑丢弃，绝不重建 store）                            | `src/lib/auxEventSink.ts` + `src/lib/workspaceRuntime.ts`                 |
 
-与规格正文的**两处实现差异**（行为等价，记录备查）：
+**维护待办（`ChatView.vue` 规模护栏 500 行）**：`ChatView` 的侧栏接线已整体搬进
+`src/composables/useChatViewSidebar.ts`（TZD-101），行数 498 → 491。再往这个视图里
+加侧栏/面板相关代码就该先抽 composable，**不要抬** `tests/chat-turn-list.test.ts` 的
+500 行护栏；若还需继续瘦身，下一步是把 TZD-95 的 `useSidebarTabs` 接线也搬走
+（属 TZD-95 范围，需单独授权）。
+
+**为 TZD-104 预留 / 兜底说明**（本轮不清，非死代码）：
+
+- `activeAuxFor` / `closeAllFor` / `AuxTab.clientId`：④ 的租约（`aux_claim/aux_release`
+  按 clientId 归属）与重连恢复（只恢复本机 clientId 条目）要用；
+- `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受；
+- `RightSidebar` 的 `aux-limit` 事件：名额已满时入口本就禁用，该事件是"用户仍点到
+  禁用态"的可执行提示兜底，实际几乎不可达但保留。
+
+与规格正文的**两处写法差异**（**非等价**：§5 的 `cancelRequested` 语义由下面的机制实现）：
 
 1. §2.1 写作 `src-tauri/src/rpc/aux.rs`，M0 实际落地为 `src-tauri/src/rpc/aux_launch.rs`（本事项未改后端）。
-2. §5 "关闭置 `cancelRequested`"：实现上不新增该字段，改由**墓碑 + 迟到进程收尾函数**承担。
-   `closeAux` 首先写墓碑（`closedAuxIds`）并把实例从表里摘除；此后所有迟到路径
-   （`spawnAuxPi` 返回、`session.init` 抛错、面板重试）都先走同一个
-   `settleLateAux(runtimeId)`：它按"墓碑命中**或**实例已不在表里"判定，命中时
-   `rpc_kill` + 拆掉可能残留的 store，且**不建 store、不写实例状态、不推 UI**；
-   `lateSettled` 记幂等，同一 runtime 只收尾一次。
-   迟到路径上的 store 读取一律用**只查不建**的 `auxSessionExisting`：`auxSessionFor`
-   是"缺席即创建"，只允许在"实例已登记且存活"的路径上调用（否则迟到返回会把关闭时
-   已释放的 session store 重建出来，形成幽灵 store 并对已 kill 的 runtime 继续发 RPC）。
-   `spawnAuxRuntime` / `retryAuxSpawn` 的**入口**同样先过一次 `settleLateAux`，因此
-   拿着已关闭实例的旧引用再调也起不了第二个进程。
+2. §5 "关闭置 `cancelRequested`"：不新增该字段，语义由三个机制承担。
+
+   **(a) 墓碑 + 唯一收尾函数**。`closeAux` 首先写墓碑（`closedAuxIds`）并把实例从表里
+   摘除；此后所有迟到路径（`spawnAuxPi` 返回、`init` 抛错、面板重试）都先走同一个
+   `settleLateAux(runtimeId)`，判据只有一条：**墓碑命中 _或_ 实例已不在表里**。命中时
+   `rpc_kill` + 拆掉可能残留的 store，**不建 store、不写实例状态、不推 UI**。
+   迟到路径上的 store 读取一律用**只查不建**的 `auxSessionExisting`（`auxSessionFor`
+   是"缺席即创建"，只允许在"实例已登记且存活"的路径上调用，否则迟到返回会把关闭时
+   已释放的 store 重建出来）。`spawnAuxRuntime` / `retryAuxSpawn` 的**入口**同样先过
+   一次 `settleLateAux`，拿着已关闭实例的旧引用再调也起不了第二个进程。
+
+   **(b) kill 不幂等、只拆 store 幂等**。每次命中都真调一次 `bridge.kill`
+   （`rpc_kill` 对不存在的 runtime 无害）；幂等只用于拆 store（`sweptStores`：
+   `auxSessions`/`auxUis`/`pinia._s`/`$dispose`）。原因：迟到的 spawn 可能在第一次
+   收尾**之后**才真正把进程拉起来，若 kill 也被幂等挡掉，那一次就耗尽了额度，后面
+   落地的进程永远杀不到（上一版 `lateSettled` 就是这么漏的，实测 kill 次数不变、
+   进程仍活）。
+
+   **(c) init 期间逐段判活**。`lib/auxSpawn.ts` 的 `initAuxSession(session, project)`
+   取代公共 `session.init()`（后者原子地 `Promise.all(4 段) → applyConfiguredModes →
+refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行中时尾部照样
+   打到一个已 kill 的 runtime）。它每段之间查一次 `settleLateAux`，命中立刻返回、
+   **不进入**后续段；跳过的两段是 `applyConfiguredModes`（`set_follow_up_mode` 在
+   Aux 策略里被拒，且写 pi 全局 settings）与 `applyRememberedSelection`（aux 的
+   provider/model 由启动 argv 继承父会话）。验收判据：关闭之后对该 runtime **零**
+   续发 RPC（`tests/aux-spawn-close.test.ts` ① 断言 `get_available_thinking_levels`
+   零调用且 RPC 日志不再增长；①d 是不关闭的对照，证明尾部确实会发）。
+
+   **对公共 `stores/session.ts` 的唯一改动是加宽导出**：`refreshThinkingLevels` 原本
+   只在 store 内部用，`initAuxSession` 需要逐段调用它，因此进了 store 的返回值；
+   `init()` 本身一行未改（主会话行为不变）。
    `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。

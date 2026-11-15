@@ -7,6 +7,7 @@ import {
   type AuxModelTarget,
 } from "@/lib/auxLaunch"
 import { terminalConnectionId } from "@/lib/sshTrust"
+import type { SessionStore } from "@/stores/session"
 import {
   auxSessionExisting,
   auxTabByRuntime,
@@ -79,11 +80,47 @@ export async function spawnAuxRuntime(parent: AuxParentContext, tab: AuxTab): Pr
     await settleLateAux(tab.runtimeId)
     return
   }
-  session.cwd = parent.project
-  session.started = true
-  await session.init(parent.project)
+  // 用 aux 自己的初始化序列，而不是公共 `session.init`（后者是原子的：四段 RPC
+  // 一口气发完，中间被关闭时尾部照样打到一个已 kill 的 runtime）。
+  await initAuxSession(session, parent.project)
   // `init` 也可能抛错（进程已退出/超时）。抛错交给 `openAux` 的 catch，那一支同样
   // 先判"是否已关闭"，命中就走同一个收尾函数，不会漏杀。
+}
+
+/**
+ * aux 的初始化序列：**每段之间检查实例是否已被关闭**。
+ *
+ * 为什么不能直接用 `session.init()`：它内部是
+ * `Promise.all([refreshState, refreshCommands, refreshModels, refreshStats])` →
+ * `applyConfiguredModes()` → `refreshThinkingLevels()` → `applyRememberedSelection()`，
+ * 整条链一把梭。关闭落在首批请求的飞行中时，尾部两段仍会向**已 kill 的 runtime**
+ * 续发 `get_available_thinking_levels`（甚至 `set_follow_up_mode`），既无意义也会
+ * 在策略层拿到 `auxRpcDenied`。
+ *
+ * 逐段检查的代价只是多几次同步判活，收益是"关闭之后零续发 RPC"。
+ *
+ * 跳过的两段：
+ * - `applyConfiguredModes()`：它会把 pi 全局 settings 里的 `followUpMode` 推给运行时
+ *   走 `set_follow_up_mode`，而这条**在 Aux 策略里被拒**（写 agent settings 的跨会话
+ *   副作用），对 aux 无意义；
+ * - `applyRememberedSelection()`：aux 的 provider/model 由启动 argv 继承父会话，本来就
+ *   不是"记住的选择"。
+ */
+export async function initAuxSession(session: SessionStore, project: string): Promise<boolean> {
+  session.cwd = project
+  session.started = true
+  // 首批：四段并发（Aux 白名单内的只读 + 列表查询）。
+  await Promise.all([
+    session.refreshState(),
+    session.refreshCommands(),
+    session.refreshModels(),
+    session.refreshStats(),
+  ])
+  if (await settleLateAux(session.runtimeId)) return false
+  // 第二段：思考等级（`get_available_thinking_levels`）。
+  await session.refreshThinkingLevels()
+  if (await settleLateAux(session.runtimeId)) return false
+  return true
 }
 
 /**

@@ -125,7 +125,7 @@ export function currentAuxClientId() {
 export function resetAuxChatForTest() {
   tabs.splice(0)
   closedAuxIds.clear()
-  lateSettled.clear()
+  sweptStores.clear()
   pendingCreations.clear()
   auxSessions.clear()
   auxUis.clear()
@@ -311,12 +311,16 @@ export function markAuxRetrying(runtimeId: string) {
 }
 
 /**
- * 已经为某个 runtime 做过"迟到进程收尾"的标记（同一 runtime 只收尾一次）。
+ * 已经为某个 runtime **拆过** store 的标记。
  *
- * 三处迟到出口（`openAux` 的成功/失败分支、`spawnAuxRuntime` 的完成路径、面板的
- * `retry`）都会调 `settleLateAux`；这里保证它们不会各杀一次。
+ * 只幂等"拆 store"这一半 —— `$dispose()` 重复调用、重复 `_s.delete` 没有意义，
+ * 而且要防止同一份 store 被两处收尾各自 dispose 一次。
+ *
+ * **kill 不参与这个幂等**：`rpc_kill` 对一个已不存在的 runtime 是无害的，而漏一次
+ * 就留下一个活进程。所以每次 `settleLateAux` 命中都真调一次 kill，只有拆 store
+ * 按 `sweptStores` 记一次。
  */
-const lateSettled = new Set<string>()
+const sweptStores = new Set<string>()
 
 /**
  * **唯一**的"迟到进程收尾"出口。
@@ -326,25 +330,31 @@ const lateSettled = new Set<string>()
  *
  * 为什么必须集中：判据散在各调用点就会出现"某个出口忘了 kill"的漏杀窗口（
  * `spawnAuxPi` 迟到返回、`init` 抛错、面板重试各有一次），而且无法用测试统一覆盖。
+ *
+ * 为什么 kill **不**幂等：迟到的 spawn 可能在第一次收尾之后才真正把进程拉起来
+ * （`spawnAuxPi` 的 resolve 与后端起进程之间没有同步点）。若 kill 也"只做一次"，
+ * 那一次收尾就把额度用光了，后面真正落地的进程再也杀不到 —— 这正是上一版
+ * `lateSettled` 的语义错误（实测 kill 次数不变、进程仍活）。
  */
 export async function settleLateAux(runtimeId: string): Promise<boolean> {
   const gone = closedAuxIds.has(runtimeId) || !tabs.some(tab => tab.runtimeId === runtimeId)
   if (!gone) return false
-  if (lateSettled.has(runtimeId)) return true
-  lateSettled.add(runtimeId)
-  // 先杀进程：迟到的 spawn 可能刚好在这一刻才真正起来，`rpc_kill` 必须落在它之后。
+  // 1) 进程：**每次命中都杀**。`rpc_kill` 幂等且对不存在的 runtime 无害。
   await bridge?.kill(runtimeId).catch(() => {})
-  // 再拆可能残留的 store（关闭后才被重建的那份）。**不**清内容、不写状态。
-  dropAuxUiStore(runtimeId)
-  const session = auxSessions.get(runtimeId)
-  const ui = auxUis.get(runtimeId)
-  auxSessions.delete(runtimeId)
-  auxUis.delete(runtimeId)
-  const pinia = getActivePinia() as unknown as { _s?: Map<string, unknown> } | null
-  pinia?._s?.delete(`session:${runtimeId}`)
-  pinia?._s?.delete(`ui:${runtimeId}`)
-  session?.$dispose?.()
-  ui?.$dispose?.()
+  // 2) store：只拆一次（重复 dispose 会踩到已释放的实例）。
+  if (!sweptStores.has(runtimeId)) {
+    sweptStores.add(runtimeId)
+    dropAuxUiStore(runtimeId)
+    const session = auxSessions.get(runtimeId)
+    const ui = auxUis.get(runtimeId)
+    auxSessions.delete(runtimeId)
+    auxUis.delete(runtimeId)
+    const pinia = getActivePinia() as unknown as { _s?: Map<string, unknown> } | null
+    pinia?._s?.delete(`session:${runtimeId}`)
+    pinia?._s?.delete(`ui:${runtimeId}`)
+    session?.$dispose?.()
+    ui?.$dispose?.()
+  }
   return true
 }
 
