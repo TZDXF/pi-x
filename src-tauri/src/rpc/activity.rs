@@ -64,6 +64,17 @@ impl RuntimeActivity {
             .is_some_and(|run| run["status"] == "running")
     }
 
+    /// 回收探针用：本实例是否在跑一轮 agent（`agent_start` 到 `agent_settled`）。
+    pub(super) fn busy(&self) -> bool {
+        self.running()
+    }
+
+    /// 回收探针用：仍然待答的扩展询问数（先按 deadline 过期，与 `snapshot` 同一规则）。
+    pub(super) fn pending_ui_count(&mut self) -> usize {
+        self.expire(Instant::now());
+        self.pending.len()
+    }
+
     fn timestamp(&self) -> u64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

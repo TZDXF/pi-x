@@ -93,14 +93,31 @@ pub fn probe_fingerprint(program_id: &str, args: &[String], version: &str) -> St
 static PROBES: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
 
 fn cache_get(key: &str) -> bool {
+    cache_get_at(key, Instant::now())
+}
+
+/// 同一判定的可注入时间版本：单测用它验证 TTL 边界，不必真等 10 分钟
+/// （`Instant` 是单调时钟，不能回拨，所以只能让"现在"往前走）。
+fn cache_get_at(key: &str, now: Instant) -> bool {
     let guard = match PROBES.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
+    guard.as_ref().and_then(|map| map.get(key)).is_some_and(|at| {
+        now.saturating_duration_since(*at) < PROBE_TTL
+    })
+}
+
+/// 把某个键按"现在"记进缓存（`cache_put` 的显式时间版本，供单测构造边界）。
+#[cfg(test)]
+fn cache_put_at(key: &str, at: Instant) {
+    let mut guard = match PROBES.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     guard
-        .as_ref()
-        .and_then(|map| map.get(key))
-        .is_some_and(|at| at.elapsed() < PROBE_TTL)
+        .get_or_insert_with(HashMap::new)
+        .insert(key.to_string(), at);
 }
 
 fn cache_put(key: &str) {
@@ -362,6 +379,14 @@ pub fn spec_from_json(value: &Value) -> Result<AuxLaunchSpec, String> {
 mod tests {
     use super::*;
 
+    /// `PROBES` 是进程级全局缓存，而 `cargo test` 并行跑用例：动缓存的用例必须
+    /// 串行，否则一个用例的 `reset_probe_cache()` 会让另一个用例的断言随机失败。
+    fn cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// 假 pi 可执行文件：只有收到 `--mode rpc` 才在 stdin 读到请求后回 `get_state`；
     /// 否则一直读 stdin 到 EOF、什么都不输出 —— 与真实 pi 的 print 模式行为一致。
     fn fake_pi_script() -> &'static str {
@@ -421,6 +446,7 @@ process.stdin.on('end', () => process.exit(0));
     /// - 去掉它：假 pi 不出声，探测必须在压短的超时内失败。
     #[tokio::test]
     async fn probe_local_requires_rpc_mode_at_runtime_not_just_in_argv() {
+        let _guard = cache_test_lock();
         let dir = std::env::temp_dir().join(format!("pix-aux-probe-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let Some(script) = write_fake_pi(&dir) else {
@@ -649,6 +675,176 @@ process.stdin.on('end', () => process.exit(0));
             &json!({"data": {"sessionFile": "x"}})
         ));
         assert!(!response_has_session_file(&json!({"data": {}})));
+    }
+
+
+    /// 探测缓存的 TTL 边界（10 分钟）。用注入时间而不是真等：`Instant` 单调，
+    /// 只能让"现在"往前跑。
+    #[test]
+    fn probe_cache_expires_after_ten_minutes_and_survives_just_before_it() {
+        let _guard = cache_test_lock();
+        reset_probe_cache();
+        let key = probe_fingerprint("pi", &probe_args(&spec_local()), "1.5.2");
+        let at = Instant::now();
+        cache_put_at(&key, at);
+        assert!(cache_get_at(&key, at + PROBE_TTL - Duration::from_secs(1)));
+        assert!(!cache_get_at(&key, at + PROBE_TTL), "TTL 到点即失效");
+        assert!(!cache_get_at(&key, at + PROBE_TTL + Duration::from_secs(60)));
+        // 失效之后 `probe_local` 会重新探测（入口判据就是 `cache_get`）。
+        assert!(!cache_get_at(&key, at + PROBE_TTL));
+        // 部署后失效：`reset_probe_cache` 清空所有键。
+        cache_put_at(&key, Instant::now());
+        assert!(cache_get(&key));
+        reset_probe_cache();
+        assert!(!cache_get(&key));
+    }
+
+    /// 缓存键必须区分"参数集"与"版本"：任一变化都不该命中旧的成功结果
+    /// （否则升级/改白名单后会跳过一次必须的探测）。
+    #[test]
+    fn cache_keys_do_not_collide_across_flags_or_versions() {
+        let base: Vec<String> = probe_args(&spec_local());
+        let mut narrowed = base.clone();
+        narrowed.retain(|arg| arg != "--no-extensions");
+        let reference = probe_fingerprint("pi", &base, "1.5.2");
+        for other in [
+            probe_fingerprint("pi", &narrowed, "1.5.2"),
+            probe_fingerprint("pi", &base, "1.5.3"),
+            probe_fingerprint("other-pi", &base, "1.5.2"),
+        ] {
+            assert_ne!(other, reference, "缓存键必须逐项区分");
+        }
+    }
+
+    /// **失败即 `auxPiUnsupported` 且不重试**：探测抛错的真实路径上不得"去掉某个
+    /// flag 再起一次"。判据是「探测次数」——用同一份 `fingerprint` 连调两次，
+    /// 失败路径必须**真的再探一次**（失败不入缓存），且第二次仍然失败；
+    /// 而失败本身自始至终只有 `auxPiUnsupported` 一种编码，没有"降级重试"的出口。
+    #[tokio::test]
+    async fn unsupported_probe_fails_without_retrying_a_narrower_flag_set() {
+        let _guard = cache_test_lock();
+        let dir = std::env::temp_dir().join(format!("pix-aux-retry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(script) = write_fake_pi(&dir) else {
+            eprintln!("跳过：开发环境未找到 node");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        };
+        // 让假 pi **拒绝** get_state（模拟旧版 pi 不认识某个 flag 时的握手失败）。
+        std::fs::write(
+            &script,
+            r#"
+process.stdin.resume();
+process.stdin.on('data', (chunk) => {
+  for (const line of String(chunk).split('
+')) {
+    if (!line.trim()) continue;
+    let req;
+    try { req = JSON.parse(line); } catch { continue; }
+    process.stdout.write(JSON.stringify({ id: req.id, type: 'response', success: false, error: 'unknown option' }) + '
+');
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+"#,
+        )
+        .unwrap();
+        let info = fake_pi_info(&script);
+        let project = dir.to_string_lossy().to_string();
+        let args = probe_args(&spec_local());
+        // 与真实调用点同一个指纹：`commands::pi_aux::aux_spawn` 也是先算它再探测。
+        let fingerprint = probe_fingerprint("fake-pi", &args, "1.5.2");
+        for attempt in 1..=2 {
+            let err = probe_local_with_timeouts(
+                &info,
+                &args,
+                &fingerprint,
+                &project,
+                None,
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+            )
+            .await
+            .expect_err("手被拒绝时必须失败");
+            assert!(
+                err.contains("auxPiUnsupported"),
+                "第 {attempt} 次必须是 auxPiUnsupported：{err}"
+            );
+            assert!(
+                !cache_get(&fingerprint),
+                "失败结果不得进缓存（否则下一次会假通过）"
+            );
+            // 不重试的判据：错误里只有一次探测的细节，没有"去掉 flag 后再来一次"的
+            // 痕迹；参数集也一字未改（`args` 在两次调用之间保持同一份）。
+            assert_eq!(args, probe_args(&spec_local()));
+        }
+        reset_probe_cache();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 未知 flag 的探测同样只回 `auxPiUnsupported`，且**不**降级去 flag重试。
+    ///
+    /// 这一条钉住"禁止去 flag 重试"的落点：`probe_args` 是唯一产出点，探测失败时
+    /// 没有任何代码路径会删掉 `--no-extensions`/`--no-session` 再试一次
+    /// （删了就等于把一个旧 pi 上的"失败"变成"成功"，但白名单同时也失效了）。
+    #[tokio::test]
+    async fn unknown_flag_is_reported_without_dropping_flags() {
+        let _guard = cache_test_lock();
+        let dir = std::env::temp_dir().join(format!("pix-aux-flag-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(script) = write_fake_pi(&dir) else {
+            eprintln!("跳过：开发环境未找到 node");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        };
+        // 只接受完全一致的参数集：多一个未知 flag 就退出非零（模拟旧 pi 的
+        // "unexpected argument" 行为）。
+        std::fs::write(
+            &script,
+            r#"
+const expected = ['--mode','rpc','--no-session','--no-extensions','--provider','home','--model','m','--thinking','off','--append-system-prompt'];
+const argv = process.argv.slice(2);
+const known = argv.every((arg, i) => expected[i] === arg || (i === expected.length || expected[i] === undefined));
+if (!known) { process.stderr.write('error: unexpected argument
+'); process.exit(2); }
+process.stdin.resume();
+process.stdin.on('data', (chunk) => {
+  for (const line of String(chunk).split('
+')) {
+    if (!line.trim()) continue;
+    let req;
+    try { req = JSON.parse(line); } catch { continue; }
+    process.stdout.write(JSON.stringify({ id: req.id, type: 'response', success: true, data: {} }) + '
+');
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+"#,
+        )
+        .unwrap();
+        let info = fake_pi_info(&script);
+        let project = dir.to_string_lossy().to_string();
+        // 伪造一个旧 pi 不认识的 flag（模拟"参数集不再被接受"）。
+        let mut args = probe_args(&spec_local());
+        args.push("--future-flag".into());
+        let fingerprint = probe_fingerprint("fake-pi", &args, "1.5.2");
+        let err = probe_local_with_timeouts(
+            &info,
+            &args,
+            &fingerprint,
+            &project,
+            None,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect_err("未知 flag 必须失败");
+        assert!(err.contains("auxPiUnsupported"), "{err}");
+        assert!(!cache_get(&fingerprint));
+        // **不**去 flag重试：探测之后我们手上的参数集与探测前一模一样。
+        assert_eq!(args, probe_args(&spec_local()).into_iter().chain(["--future-flag".to_string()]).collect::<Vec<_>>());
+        reset_probe_cache();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

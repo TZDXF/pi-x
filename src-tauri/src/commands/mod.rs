@@ -14,6 +14,7 @@
 //! 命令实现位于子模块，lib.rs 的 generate_handler 以 `commands::<域>::<cmd>`
 //! 路径解析命令名与其包装宏；命令名字符串保持与拆分前完全一致。
 
+pub(crate) mod aux_leases;
 pub(crate) mod config;
 pub(crate) mod files;
 pub(crate) mod models;
@@ -44,7 +45,7 @@ pub use pi::{
     rpc_request, rpc_running, rpc_sessions, rpc_spawn, trust_save, trust_status,
 };
 #[allow(unused_imports)]
-pub use pi_aux::aux_spawn;
+pub use aux_leases::{aux_claim, aux_list, aux_release};
 #[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
 #[allow(unused_imports)]

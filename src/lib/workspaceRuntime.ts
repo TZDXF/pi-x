@@ -243,9 +243,15 @@ export function createWorkspaceRuntime(context: RuntimeContext) {
     // aux 实例关闭即销毁、不参与重连恢复：这里只按 aux 注册表校验存活，
     // 绝不 `sessionFor` 重建，也不把它们的 pending UI 灌进主会话。
     const aux = auxEventSink()
+    // 租约归属（规格 §5 第 4 条）：先按 `aux_list` 对齐本机租约，拿回"应当恢复"
+    // 的 runtimeId 集合。**他客户端**（别的窗口/别的机器）开的实例不在其中，
+    // 下面的恢复循环一律跳过它们 —— 既不改状态也不 kill，交给回收器兜底。
+    // 宿主没实现 `reconcileLeases`（测试替身）时退化为按本地注册表判活。
+    const ownAux = aux?.reconcileLeases ? await aux.reconcileLeases().catch(() => []) : null
     if (aux)
       for (const runtime of running.filter(item => isAuxRuntimeId(item.runtimeId))) {
         if (aux.isClosed(runtime.runtimeId) || !aux.hasSession(runtime.runtimeId)) continue
+        if (ownAux && !ownAux.includes(runtime.runtimeId)) continue
         aux.restoreRequests(runtime.runtimeId, runtime.pendingUiRequests ?? [])
         if (runtime.state.isStreaming) aux.handleEvent(runtime.runtimeId, { type: "agent_start" })
       }

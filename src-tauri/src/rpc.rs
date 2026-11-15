@@ -13,11 +13,14 @@
 //! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
 mod activity;
+pub(crate) mod aux_probe;
 pub mod aux_launch;
 mod child;
 #[cfg(test)]
 mod gateway_tests;
 mod policy;
+#[cfg(test)]
+pub(crate) mod test_harness;
 
 pub use policy::RuntimePolicy;
 
@@ -91,6 +94,14 @@ pub struct ProcessState {
     activity: Arc<Mutex<activity::RuntimeActivity>>,
     /// 运行策略：`Main` 是既有会话默认值；aux 由 spawn 时显式写入，不从命令读取。
     policy: RuntimePolicy,
+    /// aux 的归属父会话（主会话恒为 `None`）。只在 spawn 之后由
+    /// [`set_aux_parent`] 写入，回收日志与重连过滤按它归类。
+    pub(crate) parent_runtime: Mutex<Option<String>>,
+    /// **用户活动**时钟（`docs/aux-chat-spec.md` §5）：只在
+    /// `prompt`/`steer`/`follow_up` 时前进，`get_state`/`get_messages`/探针/租约心跳
+    /// 都不动它。刻意不复用池级的 [`RpcState::last_activity`] —— 那里的每次
+    /// `process()` 调用都会刷新，会让"空闲 30 分钟"的判据永远不成立。
+    pub(crate) user_activity: Mutex<aux_probe::UserActivityClock>,
 }
 
 impl ProcessState {
@@ -242,6 +253,10 @@ async fn accept_command(
     };
     permit.send(command.to_string());
     activity.command(command);
+    drop(activity);
+    // 用户活动时钟只在真正写进 stdin 之后转录（与 `activity.command` 同一时刻）；
+    // 上面已释放 `activity`/`inner` 的守卫，这里只拿 `user_activity` 一把锁。
+    state.note_user_activity(command).await;
     Ok((id, generation))
 }
 /// Fire-and-forget write (e.g. `extension_ui_response`).
@@ -480,12 +495,15 @@ pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), Stri
     if let Some(process) = process {
         child::process_kill(&process, "rpc_kill").await?;
         state.last_activity.lock().await.remove(&process.runtime_id);
+        // 进程没了，租约也就没有意义：留着会让 `aux_list` 一直报一个不存在的实例。
+        crate::aux_leases::forget(&process.runtime_id);
     }
     Ok(())
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
+    crate::aux_leases::clear();
     for process in processes.values() {
         child::process_kill(process, "kill_all (app exit)").await?;
     }

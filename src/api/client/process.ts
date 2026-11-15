@@ -75,7 +75,22 @@ export const spawnAuxPi = (options: AuxSpawnOptions) =>
     thinking: options.thinking ?? null,
     workspace: options.workspace ?? null,
     sshConnectionId: options.sshConnectionId ?? null,
+    // 归属父会话：回收日志与 `aux_list` 的重连过滤按它归类（规格 §5）。
+    parentRuntimeId: options.parentRuntimeId,
   })
+
+/** 登记本客户端对某 aux 实例的持有（心跳每 20s 重复调用，后端幂等）。 */
+export const auxClaim = (runtimeId: string, clientId: string) => invoke<void>("aux_claim", { runtimeId, clientId })
+
+/**
+ * 释放本客户端的租约。关闭实例时**先于** `rpc_kill` 调用（顺序与规格 §5 销毁段一致）：
+ * 先 release 再 kill，回收器就不会把一个正在关闭的实例当成"有租约"而跳过，
+ * 也不会让残租约留在 `aux_list` 里。
+ */
+export const auxRelease = (runtimeId: string, clientId: string) => invoke<void>("aux_release", { runtimeId, clientId })
+
+/** 列出全部租约条目（重连时只恢复本机 clientId 且父会话在本地注册表的那几条）。 */
+export const auxList = () => invoke<unknown>("aux_list")
 
 export const piRunning = (runtimeId = activeRuntimeId.value) => invoke<boolean>("rpc_running", { runtimeId })
 

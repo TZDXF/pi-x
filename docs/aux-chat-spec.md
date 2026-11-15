@@ -19,7 +19,7 @@
 - **不承诺完整工具集**：`--no-extensions` 使 `mcp`/`codemode`/`tool_search` 缺失，`llama`/`mcp` 命令消失；llama.cpp provider 需 `-e builtin:llama.cpp` 回补。
 - 代价：已 trusted 项目的本地扩展**不会**在 aux 自动加载。
 - `--session-dir <aux 临时目录>` 仅作纵深防御（让意外持久化落到可清理位置），**不构成保证**：挡不住 `switchSession` 指向既有文件。
-- 能力探测：版本表（`AUX_MIN_PI`）+ 同可执行文件/同 PATH 规则下完整参数起 RPC、25s 内收到 `get_state` 成功且无 `sessionFile`、stdin EOF 后 20s 内 exit 0；失败即 `auxPiUnsupported`，禁止去 flag 重试。探测通过只证明"选项集被接受"，**不证明白名单生效**。探测结果**本地缓存**键 = program_id + version + flags_hash，TTL 10 分钟 + 部署后失效（与模型侧前缀缓存无关，本规格不主张任何前缀缓存收益）。
+- 能力探测（TZD-104 的调用点与缓存单测见 §11）：同可执行文件/同 PATH 规则下完整参数起 RPC、25s 内收到 `get_state` 成功且无 `sessionFile`、stdin EOF 后 20s 内 exit 0；失败即 `auxPiUnsupported`，禁止去 flag 重试。探测通过只证明"选项集被接受"，**不证明白名单生效**。探测结果**本地缓存**键 = program_id + version + flags_hash，TTL 10 分钟 + 部署后失效（与模型侧前缀缓存无关，本规格不主张任何前缀缓存收益）。**失败不入缓存**（同一条命令下次仍会真探一次，既不是"假通过"，也不是"去 flag 重试"）。
 
 ## 2. M0：RPC 网关（`rpc.rs` 的 request/notify 单一入口，按 `ProcessState.policy` 判定）
 
@@ -77,7 +77,7 @@
 - Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。
 - 草稿仅内存 `src/stores/auxDrafts.ts`（不写 localStorage、不改 `composerDrafts`）；附件保留原始 `File`，blob URL 由 `PromptInput.onBeforeUnmount` revoke。
 - 引用按 runtime 分桶 `src/stores/auxSelections.ts`，捕获/展示/发送/清理同源；主会话 `useChatSendControl` 的 clear 时机不变。
-- 回收：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s）+ 三条件（非流式非待答无在途 ∧ 无租约 ∧ 空闲 >30 分钟）。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
+- 回收（TZD-104 落地位置见 §11）：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s）+ 三条件（非流式非待答无在途 ∧ 无租约 ∧ 空闲 >30 分钟）。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
 - 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例计入上限（5），关闭置 `cancelRequested`。
 - 对话框：`ExtensionDialog` 传 aux `session-id`；`StatusBar` 只展示；隐藏 Tab 不渲染弹框并出未答标记；有 timeout 由 `activity.rs` 过期，无 timeout 关闭时先发 `cancelled`；aux 的 `notifyQuestion`/`notifyTurnComplete`/`setTitle` 静默。
 - 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；上限 5 → 约 0.75GB 空闲基线。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
@@ -127,11 +127,12 @@
 500 行护栏；若还需继续瘦身，下一步是把 TZD-95 的 `useSidebarTabs` 接线也搬走
 （属 TZD-95 范围，需单独授权）。
 
-**为 TZD-104 预留 / 兜底说明**（本轮不清，非死代码）：
+**④ 落地后这几处的实到位置**（原"为 TZD-104 预留"，现已被 TZD-104 消费，非死代码）：
 
-- `activeAuxFor` / `closeAllFor` / `AuxTab.clientId`：④ 的租约（`aux_claim/aux_release`
-  按 clientId 归属）与重连恢复（只恢复本机 clientId 条目）要用；
-- `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受；
+- `AuxTab.clientId` / `currentAuxClientId()`：租约归属（`aux_claim`/`aux_release` 按它
+  记名）与重连恢复（只恢复本机 clientId 条目，见 §11）。**不另生成第二份标识**。
+- `activeAuxFor` / `closeAllFor`：划词复用与"父会话关闭即销毁"（§5/§10 已在用）。
+- `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受。
 - `RightSidebar` 的 `aux-limit` 事件：名额已满时入口本就禁用，该事件是"用户仍点到
   禁用态"的可执行提示兜底，实际几乎不可达但保留。
 
@@ -274,3 +275,77 @@ abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活�
 `tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
 `tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
 `tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。
+
+## 11. 生命周期、租约与孤儿回收（TZD-104 落地）
+
+§1 能力探测与 §5 生命周期的实现落点：
+
+| 职责                                                           | 文件                                                       |
+| -------------------------------------------------------------- | ---------------------------------------------------------- |
+| 不续期探针（独立用户活动时钟、只读、不写 stdin）               | `src-tauri/src/rpc/aux_probe.rs`                           |
+| 用户活动时钟的更新点（`accept_command`，只认三个 type）        | `src-tauri/src/rpc.rs`（`ProcessState.user_activity`）     |
+| 活跃/待答判据（`RuntimeActivity::busy` / `pending_ui_count`）  | `src-tauri/src/rpc/activity.rs`                            |
+| 租约本体（写/删/列、入口校验、伪造归属拒绝）                   | `src-tauri/src/aux_leases.rs`                              |
+| `aux_claim` / `aux_release` / `aux_list` 宿主命令              | `src-tauri/src/commands/aux_leases.rs`                     |
+| 三条件判定 + 60s tick + `aux-reap` 日志                        | `src-tauri/src/aux_reap.rs`                                |
+| 桌面注册（`generate_handler` + setup 启动回收器）              | `src-tauri/src/lib.rs`                                     |
+| 远程注册（`dispatch/session.rs`，同一实现、同一认证）          | `src-tauri/src/remote/dispatch/session.rs`                 |
+| 探测缓存 TTL / 失败不入缓存                                    | `src-tauri/src/rpc/aux_launch.rs`（`cache_get_at`）        |
+| 心跳（模块级，20s）、关闭顺序、重连归属过滤                    | `src/stores/auxChat.ts`                                    |
+| 租约条目的宽容解析与过滤规则（纯函数）                         | `src/lib/auxLease.ts`                                      |
+| 重连恢复接线（只在 `aux_list` 承认的条目上做 pending UI 恢复） | `src/lib/workspaceRuntime.ts`（`reattachRunningSessions`） |
+
+**不续期探针为什么必须绕开 `RpcState::process()`**：那个函数每次都会
+`last_activity.insert(now)`（`rpc.rs` 的池级表，供 `schedules.rs` 的
+`SCHEDULE_RUNTIME_TTL` 判"前端是否已 attach"）。探针若复用它，`get_state` 级别的只读
+调用就会把空闲判据永久推后，30 分钟回收永远不成立。落点因此是：
+`ProcessState.user_activity`（`std::time::Instant`，spawn 时初始化）+ 只在
+`prompt`/`steer`/`follow_up` 三个 type 于 `accept_command` 里 `note()`。
+`note()` 在 `permit.send()` 之后调用（"真的写进 stdin 才算用户活动"），且不与
+`inner`/`activity` 的守卫重叠（锁序仍为 `inner` → `activity`；`user_activity` 单独一把）。
+
+**租约只做三件事**：写 / 删 / 列。入参只有 `{runtimeId, clientId}`，不接收
+`command`/`extraArgs`，不写 stdin，不改 `policy`，不起进程。入口校验两条：
+`runtimeId` 必须 `aux:` 前缀，且该 runtime 的 `policy` 必须是 `Aux`（**Main 拒绝**，
+前缀不是权威来源 —— 单靠前缀挡不住"把主会话 id 改成 aux:xxx 再来领租约"）。
+校验走 `aux_probe` 的只读通道（`policy_of`/`running_quiet`），因此 20s 心跳**不会**
+顺带刷新池级 `last_activity`。
+
+**伪造归属**：`release` 只删本客户端那一条，不持有即 `auxLeaseNotHeld`（不是静默成功）；
+不存在的 runtime → `auxLeaseDenied`；空/超长 `clientId` → `auxLeaseClientIdInvalid`。
+一个 runtime 可被多个 clientId 同时持有（分屏/双窗口），回收判据看的是"这个集合是否为空"。
+
+**回收三条件**（`aux_reap::is_reclaimable`，同时成立才 kill）：
+`busy == false && pending_ui == 0 && in_flight == 0` ∧ `claims == 0` ∧ `idle > 30 分钟`。
+`in_flight` 取 `SessionInner.pending` 长度（在途请求），`pending_ui` 用
+`RuntimeActivity::pending_ui_count`（先按 deadline 过期，与 `get_state` 快照同一规则）。
+每 60s 扫一遍 `aux:` 前缀，命中时 `logs::write("aux-reap", …)` 带
+`{runtimeId, parent, claims, idleSecs, probe{…}}`，随后 kill 并清掉该 runtime 的租约。
+"进程已消失但租约还在"（客户端崩溃、没发 release）同样在这一轮清掉，日志
+`reason: "lease-without-process"`。
+
+**重连归属**（第 4 条）：`reattachRunningSessions` 先调 `aux_list`，只对
+`clientId == 本机 && parentRuntimeId 在本地注册表` 的条目恢复 pending UI 与流式标记；
+其余条目**不动**（不改状态、不 kill），交给回收器。本机条目里"实例已不在本地表"的
+（本页已关闭过）立即释放租约，让回收器可以回收那个进程。
+
+**前端心跳的落点**：`stores/auxChat.ts` 模块级（不在 `AuxChatPane`）——
+切父会话时 Pane 卸载、进程与 store 存活，心跳必须继续，否则 30 分钟后用户切回去
+只剩一个死壳。只在存在 `aux:` 条目时跑；关掉最后一个实例即停表。关闭实例的顺序是
+**先 `aux_release` 再 `rpc_kill`**，迟到收尾（`settleLateAux`）同样先释放租约。
+
+**与规格正文的两处写法差异**（事实记录）：
+
+1. §5 的功能实现写在 `src-tauri/src/aux_reap.rs` 与 `src-tauri/src/aux_leases.rs` 两个
+   新模块，而不是全部塞进 `rpc.rs`；`rpc.rs` 只改三处：`ProcessState` 增两个字段、
+   `accept_command` 转录用户活动、`kill`/`kill_all` 连租约一起清。
+2. §1 写的缓存键"flags_hash"落地为 `probe_fingerprint(program_id, args, version)` 的
+   全量串（含 `--append-system-prompt` 文本），未做哈希；TTL 判定改为可注入时间的
+   `cache_get_at`，单测因此能钉住 10 分钟边界而不用真等。
+
+**证据边界（如实）**：`aux_*` 的远程 dispatch 覆盖与 `aux_spawn` 同级，仍是
+**静态路由断言**（`web_dispatch_routes_aux_lease_commands_to_the_host_commands`），
+运行期覆盖需要 `AppHandle<MockRuntime>`（`rpc::spawn`/`aux_spawn`/
+`builtin_extensions` 全部绑定 `AppHandle<Wry>`）。真实 pi 上的能力探测只在本机实测过
+（1.5.2：合法 argv 通过、`--future-flag` 返回 `Error: Unknown option` 且 exit 1），
+远端探测（`probe_remote`）**本轮没有可用的 SSH 目标，未实测**。

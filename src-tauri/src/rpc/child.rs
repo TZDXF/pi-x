@@ -1397,6 +1397,8 @@ mod mock_ssh_spawn_tests {
             generation: Arc::new(AtomicU64::new(0)),
             activity: Default::default(),
             policy: Default::default(),
+            parent_runtime: Default::default(),
+            user_activity: Default::default(),
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
@@ -1533,6 +1535,8 @@ mod mock_ssh_spawn_tests {
                 generation: Arc::new(AtomicU64::new(0)),
                 activity: Default::default(),
                 policy: Default::default(),
+                parent_runtime: Default::default(),
+                user_activity: Default::default(),
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
