@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use super::{child, ProcessState, RpcState, RuntimePolicy, SessionInner};
 
-struct NullSink;
+pub(crate) struct NullSink;
 impl child::EventSink for NullSink {
     fn emit(&self, _: &'static str, _: &str, _: serde_json::Value) {}
 }

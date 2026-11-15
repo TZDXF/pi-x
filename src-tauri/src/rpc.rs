@@ -856,9 +856,10 @@ mod pending_cleanup_tests {
 
     #[tokio::test]
     async fn backpressured_notify_does_not_block_kill_or_lose_idle_exit_metadata() {
-        // 与 kill 注入（budget / OS 延迟）串行，避免进程级静态被别的用例改乱。
-        crate::rpc::aux_probe::clear_kill_failures();
+        // 与 kill 注入（budget / OS 延迟）串行，避免进程级静态被别的用例改乱；
+        // 先拿锁再清注入（否则可能清掉别的用例刚设的注入）。
         let _guard = crate::aux_leases::test_lock();
+        crate::rpc::aux_probe::clear_kill_failures();
         let (state, mut stdin_rx, sink) = backpressured_state().await;
         state
             .activity

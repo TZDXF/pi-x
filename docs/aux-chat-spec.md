@@ -288,6 +288,7 @@ abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活�
 | 租约本体（写/删/列、TTL 过期、lease token 续租校验、reaping 仲裁） | `src-tauri/src/aux_leases.rs`                              |
 | `aux_claim` / `aux_release` / `aux_list` 宿主命令                  | `src-tauri/src/commands/aux_leases.rs`                     |
 | 三条件判定 + 60s tick + 待重试 kill 句柄表 + `aux-reap` 日志       | `src-tauri/src/aux_reap.rs`                                |
+| 终止的总 deadline（含**取锁**）与 `pi://exit` 幂等                 | `src-tauri/src/rpc/child.rs`（`process_kill_confirming`）  |
 | 后端双客户端场景脚本（§6 f/g 的可重跑部分）                        | `src-tauri/src/aux_lifecycle_scenarios.rs`                 |
 | 桌面注册（`generate_handler` + setup 启动回收器）                  | `src-tauri/src/lib.rs`                                     |
 | 远程注册（`dispatch/session.rs`，同一实现、同一认证）              | `src-tauri/src/remote/dispatch/session.rs`                 |
@@ -427,6 +428,12 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
 日志、不中断循环 —— 最坏约 N×500ms，不会像分段超时那样"远程 5s + taskkill 无超时"把
 退出拖住。OS 终止命令的 helper 进程设 `kill_on_drop(true)`，超时后由它收掉，不会变成
 新的孤儿。
+
+**退出路径的取锁也受同一总 deadline 约束**：`process_kill_confirming` 先取 `activity`
+锁、再取 `inner` 锁，**两把锁都用 `timeout(剩余 budget, lock())`**。否则另一条默认 kill
+在跑 OS 命令期间持有 `inner`（最长 5s）时，退出路径会白等满 5s（复审第六轮实测 N=1
+4946ms）。抢不到锁即按"未确认终止"失败：**不 take** `inner`、撤销 `expected_stop`、不
+`commit_exit`，由 `kill_all` 记日志后继续下一个实例。
 
 **退出路径不做后台重试**：`kill_all` 会 `take` 整个进程池并 `clear_pending_kills()`，
 所以退出时的终止失败**只记日志、不再重试**（也不跨启动恢复）—— 这些 Child 由**本次**
