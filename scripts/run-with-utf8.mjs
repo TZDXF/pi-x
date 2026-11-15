@@ -44,6 +44,17 @@ function quoteArgument(argument) {
 // `.cmd` / `.bat` 形态的包装在 Windows 上不能直接 spawn（EINVAL），找不到目标也会是
 // ENOENT，两者都退回 cmd.exe。此时用 windowsVerbatimArguments 关掉 Node 自己的参数
 // 引用，命令行由上面两个函数保证，否则空参数会丢、带空格的参数会被拆碎。
+//
+// 已实测（13 条用例：真实 cargo 参数、空格、空串、空格+空串、双引号、& | ^ < ()、100%、
+// %PATH%、带空格的盘符路径）：普通 `.cmd` 包装收到与传入逐字一致的 argv，含空格目录下的
+// 包装也一样。这里不宣称“与直接 spawn 完全等价”，两处残余限制来自包装自己的再次解析，
+// 本脚本无法干预：
+//   1. 包装用 `call` 转发时（`call node ... %*`）会再解析一轮参数，`^`、`%VAR%` 会被吞
+//      （实测 `a^b` → `a^^b`、`%PATH%` 被展开成实际值）；
+//   2. 包装开了 `setlocal enabledelayedexpansion` 时 `!VAR!` 会被展开、字面 `!` 会丢
+//      （实测 `a!b` → `ab`）。
+// pi-x 现有调用（shim 是 `cargo.exe` 纯 exe，走直接 spawn；参数是
+// `test --manifest-path src-tauri/Cargo.toml`）踩不到这两条。
 function runCommand() {
   const direct = spawnSync(args[0], args.slice(1), { stdio: "inherit" })
   const needsShell = direct.error && (direct.error.code === "EINVAL" || direct.error.code === "ENOENT")
