@@ -1552,6 +1552,7 @@ export default {
     auxLeaseDenied: "This runtime does not accept auxiliary-chat leases (only live Aux-policy runtimes)",
     auxLeaseClientIdInvalid: "A lease clientId must be 1–128 characters",
     auxLeaseNotHeld: "This client does not hold that lease",
+    auxLeaseReaping: "This auxiliary-chat instance is being reclaimed; new leases are refused",
     auxSessionForbidden: "Auxiliary chat does not accept a session file",
     builtinExtensionPathMissing: "Built-in extension path is missing",
     skillNotFound: "Skill path not found",

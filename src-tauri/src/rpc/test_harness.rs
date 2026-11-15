@@ -120,6 +120,26 @@ pub(crate) async fn add_in_flight_request(state: &RpcState, runtime_id: &str) {
     }
 }
 
+/// 把某个 runtime 的用户活动时钟**回拨**成"`secs` 秒前活动过"（精确边界的构造器）。
+pub(crate) async fn note_user_activity_at(state: &RpcState, runtime_id: &str, secs: u64) {
+    if let Some(process) = state.processes.lock().await.get(runtime_id).cloned() {
+        process
+            .user_activity
+            .lock()
+            .await
+            .note_at(std::time::Instant::now() - std::time::Duration::from_secs(secs));
+    }
+}
+
+/// 某个 runtime 当前的空闲秒数（`user_activity` 的只读读取）。
+pub(crate) async fn user_idle_secs(state: &RpcState, runtime_id: &str) -> u64 {
+    let process = state.processes.lock().await.get(runtime_id).cloned();
+    match process {
+        Some(process) => process.user_idle(std::time::Instant::now()).await.as_secs(),
+        None => 0,
+    }
+}
+
 /// 池里当前的进程数（回收后核对用）。
 pub(crate) async fn process_count(state: &RpcState) -> usize {
     state.processes.lock().await.len()

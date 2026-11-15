@@ -75,9 +75,15 @@ const auxUis = new Map<string, UiStore>()
 export interface AuxRuntimeBridge {
   /** 取消进程（关闭顺序里的 `rpc_kill`）。 */
   kill: (runtimeId: string) => Promise<void>
-  /** 登记/释放租约（`aux_claim` / `aux_release`，规格 §5）。 */
-  claim?: (runtimeId: string, clientId: string) => Promise<void>
-  release?: (runtimeId: string, clientId: string) => Promise<void>
+  /**
+   * 登记/续期租约（`aux_claim`），返回**服务端签发的 lease token**。
+   *
+   * clientId 只是标识（`aux_list` 会公开它），不能当凭证：`release` 必须出示这个
+   * token，因此"抄别人的 clientId 去释放"必然失败（复审 P1-2）。
+   */
+  claim?: (runtimeId: string, clientId: string) => Promise<string>
+  /** 释放租约（`aux_release`）：只认 token。 */
+  release?: (runtimeId: string, leaseToken: string) => Promise<void>
   /** 列出租约（`aux_list`；重连归属过滤用）。 */
   list?: () => Promise<unknown>
 }
@@ -88,14 +94,37 @@ export function registerAuxRuntimeBridge(next: AuxRuntimeBridge | null) {
   bridge = next
 }
 
-/** 续租一次（心跳与"实例就绪"共用；失败静默 —— 下一次心跳会再试）。 */
-async function claimAuxLease(runtimeId: string) {
-  await bridge?.claim?.(runtimeId, auxClientId()).catch(() => {})
+/**
+ * 每个实例的 lease token（服务端在 `aux_claim` 时签发，只在本页面内存里）。
+ *
+ * 为什么不落盘：它是**凭证**，页面重载后旧 token 就没意义了（重载会拿到新的
+ * clientId，旧租约交给 TTL 过期兜底，见 `docs/aux-chat-spec.md` §11）。
+ */
+const leaseTokens = new Map<string, string>()
+
+/** 本实例当前持有的 lease token（诊断与测试用）。 */
+export function auxLeaseToken(runtimeId: string): string | undefined {
+  return leaseTokens.get(runtimeId)
 }
 
-/** 释放本机对该实例的租约（关闭路径；幂等且对"从未持有"无害）。 */
+/** 续租一次（心跳与"实例就绪"共用；失败静默 —— 下一次心跳会再试）。 */
+async function claimAuxLease(runtimeId: string) {
+  const token = await bridge?.claim?.(runtimeId, auxClientId()).catch(() => undefined)
+  if (token) leaseTokens.set(runtimeId, token)
+  return token
+}
+
+/**
+ * 释放本机对该实例的租约（关闭路径）。
+ *
+ * 只认 token：没有 token（例如页面重载后旧租约还在 TTL 内）就**不动**它 ——
+ * 后端会在 TTL（90s）之后惰性清理，不会永久挡住回收。
+ */
 async function releaseAuxLease(runtimeId: string) {
-  await bridge?.release?.(runtimeId, auxClientId()).catch(() => {})
+  const token = leaseTokens.get(runtimeId)
+  if (!token) return
+  await bridge?.release?.(runtimeId, token).catch(() => undefined)
+  leaseTokens.delete(runtimeId)
 }
 
 /**
@@ -155,6 +184,8 @@ export async function reconcileAuxLeases(): Promise<string[]> {
   const own = ownAuxLeases(entries, auxClientId(), parent => knownParents.has(parent))
   for (const entry of own) {
     if (auxTabByRuntime(entry.runtimeId)) continue
+    // 本机条目但实例已不在表：能出示 token 就立即释放；拿不到 token（页面重载后
+    // 旧租约）就交给 TTL 惰性过期 —— 它不会永久挡住回收。
     await releaseAuxLease(entry.runtimeId)
   }
   // 心跳恢复：重连期间实例的租约可能已过期（对方判定 `claims` 为空就会回收）。
@@ -244,6 +275,7 @@ export function currentAuxClientId() {
 /** 仅测试用：清空注册表、墓碑、在途创建与 store 表（用例之间隔离）。 */
 export function resetAuxChatForTest() {
   stopAuxLeaseHeartbeat()
+  leaseTokens.clear()
   tabs.splice(0)
   closedAuxIds.clear()
   sweptStores.clear()

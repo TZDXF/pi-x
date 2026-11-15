@@ -48,20 +48,20 @@ pub(super) async fn handle(
             }
             // aux 的租约（§5）：写/删/列，只做这三件事。运行期执行仍在
             // `commands::aux_leases` 里，远程与桌面共用同一实现与同一条认证。
-            "aux_claim" => {
+            "aux_claim" => Ok(to_json(
                 crate::commands::aux_claim(
                     state.clone(),
                     text(a, "runtimeId")?,
                     text(a, "clientId")?,
                 )
-                .await?;
-                Ok(Value::Null)
-            }
+                .await?,
+            )?),
             "aux_release" => {
+                // 只认 lease token（clientId 是标识不是凭证，见 aux_leases 模块文档）。
                 crate::commands::aux_release(
                     state.clone(),
                     text(a, "runtimeId")?,
-                    text(a, "clientId")?,
+                    text(a, "leaseToken")?,
                 )
                 .await?;
                 Ok(Value::Null)

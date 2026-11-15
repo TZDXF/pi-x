@@ -24,7 +24,15 @@ use std::time::{Duration, Instant};
 
 /// 会**推进用户活动时钟**的命令（规格 §5：`last_user_activity` 只在
 /// `prompt`/`steer`/`follow_up` 更新）。只读查询与心跳一律不在此列。
-const USER_ACTIVITY_COMMANDS: &[&str] = &["prompt", "steer", "follow_up"];
+///
+/// 可见性是 `pub(crate)`：单测要能对这个常量本身断言（"清单恰好是这三条"），
+/// 否则把 `get_state` 塞进来只会让行为用例失败、定位不到是清单被改了。
+pub(crate) const USER_ACTIVITY_COMMANDS: &[&str] = &["prompt", "steer", "follow_up"];
+
+/// 该命令类型是否属于"用户活动"。行为用例与突变护栏共用这一条判定。
+pub(crate) fn advances_user_activity(command_type: &str) -> bool {
+    USER_ACTIVITY_COMMANDS.contains(&command_type)
+}
 
 /// 用户活动时钟。`last` 在 `ProcessState` 创建时初始化（≈ spawn 时刻），因此
 /// "从没被 prompt 过"的实例按 spawn 起算空闲，而不是永远判为活跃或永远判为空闲。
@@ -42,12 +50,21 @@ impl Default for UserActivityClock {
 }
 
 impl UserActivityClock {
-    fn note(&mut self) {
-        self.last = Instant::now();
+    /// 记录"用户刚活动过"（`now` 可注入：单测要精确断言空闲秒数，不能靠实时时钟）。
+    pub(crate) fn note_at(&mut self, now: Instant) {
+        self.last = now;
     }
 
+    /// 距最后一次用户活动的时长。`now` 由调用方给，因此断言是精确值而不是
+    /// "小于某个毫秒数"这种假阳性护栏（复审 P2）。
     pub(crate) fn idle(&self, now: Instant) -> Duration {
         now.saturating_duration_since(self.last)
+    }
+
+    /// 最后一次用户活动时刻（**精确断言**用；生产路径只读 `idle`，所以只在测试里编译）。
+    #[cfg(test)]
+    pub(crate) fn last(&self) -> Instant {
+        self.last
     }
 }
 
@@ -55,17 +72,28 @@ impl ProcessState {
     /// 记录一次**用户**活动。调用点在 [`super::accept_command`]（request 与 notify 的
     /// 唯一写入点），且只对 `prompt`/`steer`/`follow_up` 生效。
     pub(crate) async fn note_user_activity(&self, command: &Value) {
+        self.note_user_activity_at(command, Instant::now()).await;
+    }
+
+    /// 同 [`Self::note_user_activity`]，可注入"现在"（单测用它构造精确的空闲边界）。
+    pub(crate) async fn note_user_activity_at(&self, command: &Value, now: Instant) {
         let Some(command_type) = command["type"].as_str() else {
             return;
         };
-        if !USER_ACTIVITY_COMMANDS.contains(&command_type) {
+        if !advances_user_activity(command_type) {
             return;
         }
-        self.user_activity.lock().await.note();
+        self.user_activity.lock().await.note_at(now);
     }
 
     pub(crate) async fn user_idle(&self, now: Instant) -> Duration {
         self.user_activity.lock().await.idle(now)
+    }
+
+    /// 最后一次用户活动的时刻（精确断言用；探针不写它）。
+    #[cfg(test)]
+    pub(crate) async fn last_user_activity(&self) -> Instant {
+        self.user_activity.lock().await.last()
     }
 
     /// aux 的归属父会话（spawn 后由 `rpc::set_aux_parent` 写入；主会话恒为 `None`）。
@@ -216,6 +244,11 @@ mod tests {
     use super::*;
     use crate::rpc::{test_harness, RuntimePolicy};
 
+    /// 时钟的精确断言基准：先写一个**固定的**最后活动时刻，再在固定的 `now` 上取
+    /// `idle`。以前这里是 `idle < 500ms` —— 那对"时钟被错误刷新"和"时钟完全不刷新"
+    /// 两种错误都会通过（复审 P2 的假阳性）。
+    const BASE_OFFSET: Duration = Duration::from_secs(3600);
+
     #[tokio::test]
     async fn probe_never_touches_the_pool_activity_clock() {
         let state = RpcState::default();
@@ -301,6 +334,10 @@ mod tests {
             .insert(7, tx);
         let snapshot = probe(&state, "aux:inflight", Instant::now()).await.unwrap();
         assert_eq!(snapshot.in_flight, 1, "在途请求必须计入回收判据");
+        // 探针自身不入表：再探一次仍然是 1（否则"读在途"会把自己算进去、
+        // 三条件永远不成立 —— 回收器等于空转）。
+        let snapshot = probe(&state, "aux:inflight", Instant::now()).await.unwrap();
+        assert_eq!(snapshot.in_flight, 1);
     }
 
     #[tokio::test]
@@ -311,41 +348,97 @@ mod tests {
         assert!(probe(&state, "aux:missing", Instant::now()).await.is_none());
     }
 
+    /// 活动时钟的**精确**断言（复审 P2 的修复）：
+    /// - 非用户活动命令：最后一次活动时刻**逐位不变**，`idle` 在固定 `now` 上是精确值；
+    /// - 用户活动命令：最后一次活动时刻**恰好**变成注入的 `now`。
     #[tokio::test]
     async fn only_prompt_steer_and_follow_up_advance_the_user_clock() {
         let state = RpcState::default();
         let (process, _rx) =
             test_harness::install_with_queue(&state, "aux:clock", RuntimePolicy::Aux).await;
-        // 只读查询、心跳、未知类型都不推进时钟。
+        let start = Instant::now();
+        process.user_activity.lock().await.note_at(start);
+        let later = start + BASE_OFFSET;
+
+        // 只读查询、租约心跳、未知类型都不推进时钟：精确值不变。
         for command in [
             json!({"type":"get_state"}),
             json!({"type":"get_messages"}),
             json!({"type":"get_session_stats"}),
+            json!({"type":"get_entries"}),
             json!({"type":"abort"}),
             json!({"type":"extension_ui_response","id":"x"}),
             json!({"type":"aux_claim"}),
+            json!({"type":"aux_list"}),
+            json!({"type":"aux_release"}),
         ] {
-            process.note_user_activity(&command).await;
-        }
-        let read_only = probe(&state, "aux:clock", Instant::now()).await.unwrap().idle;
-        assert!(
-            read_only < Duration::from_millis(500),
-            "只读命令不得改动用户活动时钟：{read_only:?}"
-        );
-        // prompt/steer/follow_up 必须能把时钟推到现在（清零空闲）。
-        for command in [
-            json!({"type":"prompt","message":"hi"}),
-            json!({"type":"steer","message":"go"}),
-            json!({"type":"follow_up","message":"more"}),
-        ] {
-            process.note_user_activity(&command).await;
-            let idle = probe(&state, "aux:clock", Instant::now()).await.unwrap().idle;
-            assert!(
-                idle < Duration::from_millis(500),
-                "{} 必须推进用户活动时钟：{idle:?}",
+            process.note_user_activity_at(&command, later).await;
+            assert_eq!(
+                process.last_user_activity().await,
+                start,
+                "{} 不得推进用户活动时钟（精确值必须保持 {start:?}）",
                 command["type"]
             );
         }
+        // 固定 now 的精确 idle：恰好等于 BASE_OFFSET，不是"小于 500ms"。
+        let idle = probe(&state, "aux:clock", later).await.unwrap().idle;
+        assert_eq!(
+            idle, BASE_OFFSET,
+            "只读命令之后的空闲必须精确等于注入间隔"
+        );
+
+        // 用户活动命令：精确落到注入的 now，idle 立刻归零。
+        for (index, command) in [
+            json!({"type":"prompt","message":"hi"}),
+            json!({"type":"steer","message":"go"}),
+            json!({"type":"follow_up","message":"more"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = later + Duration::from_secs(10 * (index as u64 + 1));
+            process.note_user_activity_at(&command, at).await;
+            assert_eq!(
+                process.last_user_activity().await,
+                at,
+                "{} 必须把最后活动时刻精确推进到注入的 now",
+                command["type"]
+            );
+            let idle = probe(&state, "aux:clock", at).await.unwrap().idle;
+            assert_eq!(idle, Duration::ZERO, "用户活动之后空闲必须精确为零");
+        }
+    }
+
+    /// **常驻突变护栏**（复审 D）：清单恰好是这三条。若有人把 `get_state` 之类的
+    /// 只读命令塞进 `USER_ACTIVITY_COMMANDS`，这条会直接失败并指出是哪一项 ——
+    /// 不需要靠"临时改代码跑一遍"才发现。
+    #[test]
+    fn the_user_activity_whitelist_is_exactly_three_mutating_commands() {
+        assert_eq!(
+            USER_ACTIVITY_COMMANDS,
+            &["prompt", "steer", "follow_up"],
+            "只有这三条命令算用户活动"
+        );
+        for read_only in [
+            "get_state",
+            "get_messages",
+            "get_session_stats",
+            "get_entries",
+            "aux_claim",
+            "aux_list",
+            "aux_release",
+            "abort",
+        ] {
+            assert!(
+                !advances_user_activity(read_only),
+                "{read_only} 是只读/租约命令，绝不能推进用户活动时钟"
+            );
+        }
+        // 可失败性自检：把 get_state 放进判定里必须能被这套断言发现。
+        assert!(
+            !advances_user_activity("get_state"),
+            "若此断言失败，说明 get_state 被误列为用户活动"
+        );
     }
 
     #[tokio::test]

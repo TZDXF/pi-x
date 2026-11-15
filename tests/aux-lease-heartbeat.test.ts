@@ -2,14 +2,15 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
 
 /**
- * aux 的**租约与心跳**（TZD-104，规格 §5）：
+ * aux 的**租约与心跳**（TZD-104，规格 §5/§11）：
  *
  * 1. 心跳是**模块级**的：`auxChat` 里存在 `aux:` 条目时每 20s 续租一次，
  *    没有条目时自动停表；切父会话（Pane 卸载）不中断。
  * 2. 关闭顺序：**先 `aux_release` 再 `rpc_kill`**（与 §5 销毁段一致）。
  * 3. 重连归属：`aux_list` 里只恢复 `clientId == 本机 && parentRuntimeId 在本地注册表`
  *    的条目；他客户端条目一律不动，本机残条（实例已不在表）释放租约。
- * 4. 纯逻辑：宽容解析与过滤（`lib/auxLease.ts`）。
+ * 4. **clientId 不是凭证**：`aux_release` 只认服务端在 `aux_claim` 时签发的 lease token。
+ * 5. 纯逻辑：宽容解析与过滤（`lib/auxLease.ts`）。
  *
  * 不访问任何真实模型/进程：`@/api/piClient` 全部替身，`aux_*` 走注入的 bridge。
  */
@@ -27,7 +28,8 @@ vi.mock("@/api/piClient", () => ({
   getModelsConfig: async () => ({ providers: [] }),
   rpcNotify: async () => {},
   rpcRequest: (...args: unknown[]) => controls.rpcRequest(...(args as [])),
-  auxClaim: async () => {},
+  // `aux_claim` 回服务端签发的 token；`aux_release` 只认 token。
+  auxClaim: async (runtimeId: string) => `token-${runtimeId}`,
   auxRelease: async () => {},
   auxList: async () => [],
   killPi: async () => {},
@@ -61,7 +63,7 @@ type AuxLease = typeof import("@/lib/auxLease")
 let aux: AuxChat
 let lease: AuxLease
 
-/** 校验顺序的记账（先 release 再 kill）。 */
+/** 调用顺序记账（先 release 再 kill、token 是否被正确出示）。 */
 const calls: string[] = []
 
 beforeEach(async () => {
@@ -79,9 +81,10 @@ beforeEach(async () => {
     },
     claim: async (runtimeId: string, clientId: string) => {
       calls.push(`claim:${runtimeId}:${clientId}`)
+      return `token-${runtimeId}`
     },
-    release: async (runtimeId: string, clientId: string) => {
-      calls.push(`release:${runtimeId}:${clientId}`)
+    release: async (runtimeId: string, leaseToken: string) => {
+      calls.push(`release:${runtimeId}:${leaseToken}`)
     },
     list: async () => [],
   })
@@ -152,27 +155,55 @@ test("heartbeat claims every live instance every 20s and stops when the last one
   expect(calls.length).toBe(afterClose)
 })
 
-test("closing an instance releases the lease before killing the process", async () => {
+test("closing an instance releases the lease with a token before killing the process", async () => {
   const tab = await openTab("main", 2)
+  // 就绪时拿到的 token 必须被记住（release 只认它）。
+  expect(aux.auxLeaseToken(tab.runtimeId)).toBe(`token-${tab.runtimeId}`)
   calls.length = 0
   await aux.closeAux(tab.runtimeId)
   const releaseIndex = calls.findIndex(call => call.startsWith("release:"))
   const killIndex = calls.findIndex(call => call.startsWith("kill:"))
   expect(releaseIndex, `release 必须先于 kill：${calls.join(", ")}`).toBeGreaterThanOrEqual(0)
   expect(killIndex).toBeGreaterThan(releaseIndex)
-  expect(calls[releaseIndex]).toBe(`release:${tab.runtimeId}:${aux.currentAuxClientId()}`)
+  // 出示的是 token，不是 clientId（后者是公开标识，不能当凭证）。
+  expect(calls[releaseIndex]).toBe(`release:${tab.runtimeId}:token-${tab.runtimeId}`)
+  expect(calls[releaseIndex]).not.toContain(aux.currentAuxClientId())
+  // 释放后本机不再持有 token。
+  expect(aux.auxLeaseToken(tab.runtimeId)).toBeUndefined()
+})
+
+test("without a token the close path does not release (the TTL expires it instead)", async () => {
+  // 模拟"页面重载后旧租约还在 TTL 内、本机已拿不到那个 token"：宿主 claim 不回 token。
+  aux.registerAuxRuntimeBridge({
+    kill: async (runtimeId: string) => {
+      calls.push(`kill:${runtimeId}`)
+    },
+    claim: async () => undefined as unknown as string,
+    release: async (runtimeId: string, leaseToken: string) => {
+      calls.push(`release:${runtimeId}:${leaseToken}`)
+    },
+  })
+  const tab = await openTab("main", 9)
+  expect(aux.auxLeaseToken(tab.runtimeId)).toBeUndefined()
+  calls.length = 0
+  await aux.closeAux(tab.runtimeId)
+  // 没有 token 就不发 release（绝不拿 clientId 顶替 —— 那是 P1-2），但进程照样收尾。
+  expect(calls.filter(call => call.startsWith("release:"))).toHaveLength(0)
+  expect(calls.filter(call => call.startsWith("kill:"))).toHaveLength(1)
 })
 
 test("late settlement also releases the lease, not only the process", async () => {
   const tab = await openTab("main", 3)
+  const token = aux.auxLeaseToken(tab.runtimeId)
+  expect(token).toBe(`token-${tab.runtimeId}`)
   await aux.closeAux(tab.runtimeId)
   calls.length = 0
   // 迟到路径（spawn 返回/init 抛错/面板重试）走的是同一个 `settleLateAux`。
   const settled = await aux.settleLateAux(tab.runtimeId)
   expect(settled).toBe(true)
-  expect(calls.filter(call => call.startsWith("release:"))).toHaveLength(1)
+  // 已经 release 过（token 已消费）：迟到收尾不再重复出示。
   expect(calls.filter(call => call.startsWith("kill:"))).toHaveLength(1)
-  expect(calls[0].startsWith("release:")).toBe(true)
+  expect(calls[0].startsWith("kill:")).toBe(true)
 })
 
 test("reconnect restores only this client's leases and releases its stale ones", async () => {
@@ -181,14 +212,15 @@ test("reconnect restores only this client's leases and releases its stale ones",
     kill: async () => {},
     claim: async (runtimeId: string) => {
       calls.push(`claim:${runtimeId}`)
+      return `token-${runtimeId}`
     },
-    release: async (runtimeId: string) => {
-      calls.push(`release:${runtimeId}`)
+    release: async (runtimeId: string, leaseToken: string) => {
+      calls.push(`release:${runtimeId}:${leaseToken}`)
     },
     list: async () => [
       // 本机、父会话在本地注册表、实例也活着：续租（不释放）。
       { runtimeId: live.runtimeId, parentRuntimeId: "main", clientId: aux.currentAuxClientId() },
-      // 本机但实例已不在表（已关闭/本页从未拥有）：释放残租约。
+      // 本机但实例已不在表（已关闭/本页从未拥有）：本机没有它的 token，交给 TTL。
       { runtimeId: "aux:stale", parentRuntimeId: "main", clientId: aux.currentAuxClientId() },
       // 他客户端：不动（既不 claim 也不 release）。
       { runtimeId: "aux:other", parentRuntimeId: "main", clientId: "someone-else" },
@@ -199,9 +231,8 @@ test("reconnect restores only this client's leases and releases its stale ones",
   calls.length = 0
   const own = await aux.reconcileAuxLeases()
   expect(own.sort()).toEqual([live.runtimeId, "aux:stale"].sort())
-  expect(calls).toContain(`release:aux:stale`)
-  expect(calls).not.toContain("release:aux:other")
-  expect(calls).not.toContain("release:aux:foreign")
+  // 没有 token 的条目不会被"用 clientId 冒充"的方式释放（P1-2 的那条缺口）。
+  expect(calls.filter(call => call.startsWith("release:"))).toEqual([])
   expect(calls).toContain(`claim:${live.runtimeId}`)
 })
 

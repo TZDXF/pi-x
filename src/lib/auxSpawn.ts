@@ -33,7 +33,8 @@ registerAuxRuntimeBridge({
   kill: (runtimeId: string) => killPi(runtimeId),
   // 租约（规格 §5）：心跳每 20s 续一次；关闭时先 release 再 kill。
   claim: (runtimeId, clientId) => auxClaim(runtimeId, clientId),
-  release: (runtimeId, clientId) => auxRelease(runtimeId, clientId),
+  // 只认 token：clientId 是标识不是凭证（复审 P1-2）。
+  release: (runtimeId, leaseToken) => auxRelease(runtimeId, leaseToken),
   list: () => auxList(),
 })
 

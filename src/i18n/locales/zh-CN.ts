@@ -1504,6 +1504,7 @@ export default {
     auxLeaseDenied: "该 runtime 不接受辅助对话租约（仅 aux: 前缀且策略为 Aux 的实例）",
     auxLeaseClientIdInvalid: "租约的 clientId 必须是 1..=128 个字符",
     auxLeaseNotHeld: "本客户端不持有该租约",
+    auxLeaseReaping: "该辅助对话实例正在被回收，暂不接受新租约",
     auxSessionForbidden: "辅助对话不接受会话文件",
     builtinExtensionPathMissing: "内置插件路径缺失",
     skillNotFound: "技能路径不存在",

@@ -1,6 +1,8 @@
 mod app_update;
 mod atomic_write;
 mod aux_leases;
+#[cfg(test)]
+mod aux_lifecycle_scenarios;
 mod aux_reap;
 mod builtin_extensions;
 mod commands;
