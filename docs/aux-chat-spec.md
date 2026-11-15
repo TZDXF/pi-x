@@ -429,6 +429,22 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
 退出拖住。OS 终止命令的 helper 进程设 `kill_on_drop(true)`，超时后由它收掉，不会变成
 新的孤儿。
 
+**取锁顺序与修改时机（复审第七轮）**：`process_kill_confirming` 固定 **先 `inner`、
+后 `activity`**（与 `process_spawn_impl` 同一锁序），并且**两把锁都拿到之后才动共享
+状态**（`mark_expected_stop()` 与 `take` 都发生在这一步）。上一版是"先置意图位、
+再取 `inner`"，`inner` 超时后必须回头**无 budget** 地重取 `activity` 去撤销，于是 500ms
+预算被打到 2083ms。现在：
+
+- `inner` 抢不到 → 直接失败，**一行共享状态都没改**（无需撤销）；
+- `activity` 抢不到 → 归还 `inner` 守卫（不 take）后失败，仍未改动；
+- 收尾（提交 exit / 撤销意图位）也用 `timeout(remaining, …)`：**绝不无界等待**。
+
+**停止意图优先于精确终止原因**：若收尾那次取 `activity` 也超 budget，会**保留**
+`expected_stop = true` 并记日志。此时后续 EOF 会被记成 `idle` 而不是 `error` —— 因为
+"我们确实已经请求过终止"，而不代表我们精确识别了终止原因。质量工程师确认这个窗口
+**真实可达**（worker 可能在 OS kill 尚未执行时自行退出），但无害：进程确实已退出、
+`pi://exit` 只发一次，不会把活进程判死。
+
 **退出路径的取锁也受同一总 deadline 约束**：`process_kill_confirming` 先取 `activity`
 锁、再取 `inner` 锁，**两把锁都用 `timeout(剩余 budget, lock())`**。否则另一条默认 kill
 在跑 OS 命令期间持有 `inner`（最长 5s）时，退出路径会白等满 5s（复审第六轮实测 N=1

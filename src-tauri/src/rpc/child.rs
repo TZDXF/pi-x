@@ -1107,13 +1107,59 @@ pub(super) async fn process_kill_fast(state: &ProcessState, reason: &str) -> Res
     process_kill_confirming(state, reason, Instant::now() + budget).await
 }
 
-/// 终止状态（`pi://exit` + 代际递增）**只在确认退出后提交**，且只提交一次。
-///
-/// 上一版在 `kill_inner` 之前就 `stop_and_emit` 并递增代际：kill 失败时前端已经
-/// 收到一次假 exit、旧 reader 的代际被作废、pending 被孤立，重试还会再发一次
-/// （复审第四轮 P1-1）。
-async fn commit_exit(state: &ProcessState, unexpected: bool) {
-    let mut activity = state.activity.lock().await;
+/// 在总 budget 内取 `inner` 锁（**先**取的锁，与 `process_spawn_impl` 的锁序一致）。
+async fn lock_inner_within<'a>(
+    state: &'a ProcessState,
+    deadline: Instant,
+) -> Result<tokio::sync::MutexGuard<'a, Option<SessionInner>>, String> {
+    match tokio::time::timeout(
+        remaining(Some(deadline)).unwrap_or_default(),
+        state.inner.lock(),
+    )
+    .await
+    {
+        Ok(guard) => Ok(guard),
+        Err(_) => {
+            crate::logs::write(
+                &state.runtime_id,
+                "kill budget exhausted waiting for the inner lock",
+            );
+            Err("kill budget exhausted waiting for the inner lock".to_string())
+        }
+    }
+}
+
+/// 在总 budget 内取 `activity` 锁（**后**取的锁）。
+async fn lock_activity_within<'a>(
+    state: &'a ProcessState,
+    deadline: Instant,
+    stage: &str,
+) -> Result<tokio::sync::MutexGuard<'a, RuntimeActivity>, String> {
+    match tokio::time::timeout(
+        remaining(Some(deadline)).unwrap_or_default(),
+        state.activity.lock(),
+    )
+    .await
+    {
+        Ok(guard) => Ok(guard),
+        Err(_) => {
+            crate::logs::write(
+                &state.runtime_id,
+                &format!("kill budget exhausted waiting for the activity lock ({stage})"),
+            );
+            Err(format!(
+                "kill budget exhausted waiting for the activity lock ({stage})"
+            ))
+        }
+    }
+}
+
+/// 提交终止状态（调用方**已经持有** activity 守卫）。按 `has_exited` 去重。
+fn commit_exit_locked(
+    state: &ProcessState,
+    activity: &mut RuntimeActivity,
+    unexpected: bool,
+) {
     if activity.has_exited() {
         // 已由 stdout reader（EOF）或更早的一次成功 kill 提交过：不重复发。
         return;
@@ -1122,16 +1168,52 @@ async fn commit_exit(state: &ProcessState, unexpected: bool) {
     activity.stop_and_emit(generation, unexpected);
 }
 
+/// 在总 budget 内取 activity 锁并提交终止状态。抢不到锁就**不提交**（绝不无界等待）：
+/// Reader 在 EOF 时自己会发 `pi://exit`，所以这里放弃不会丢事件。
+async fn commit_exit(state: &ProcessState, unexpected: bool, deadline: Option<Instant>) {
+    let lock = match deadline {
+        Some(deadline) => lock_activity_within(state, deadline, "commit exit").await,
+        None => Ok(state.activity.lock().await),
+    };
+    match lock {
+        Ok(mut activity) => commit_exit_locked(state, &mut activity, unexpected),
+        Err(error) => crate::logs::write(
+            &state.runtime_id,
+            &format!("confirmed exit but terminal state not published yet ({error})"),
+        ),
+    }
+}
+
+/// 在总 budget 内撤销"主动 kill"意图位。抢不到锁就**保留**意图位并记日志 ——
+/// 见 §11"停止意图优先于精确终止原因"：那种情况下后续 EOF 会记 `idle` 而不是
+/// `error`，但进程确实在被终止，这个偏差可接受，好过无界等待。
+async fn clear_expected_stop(state: &ProcessState, deadline: Instant) {
+    match lock_activity_within(state, deadline, "clear expected_stop").await {
+        Ok(mut activity) => activity.clear_expected_stop(),
+        Err(error) => crate::logs::write(
+            &state.runtime_id,
+            &format!("expected_stop kept (activity lock not available: {error})"),
+        ),
+    }
+}
+
 /// `process_kill` 与 `process_kill_fast` 的**唯一**实现，只差一个 budget。
 ///
-/// **取锁也在 budget 之内**（复审第六轮 P1）：`activity` / `inner` 两把锁都用
-/// `timeout(remaining, lock())` 获取。否则另一条默认 kill 在跑 OS 命令期间持有 `inner`
-/// 最长 5s，退出路径会白等满 5s（质量实测 N=1 退出 4946ms）。
+/// ## 顺序（复审第七轮：上一版的根因是"先改共享状态、再取锁"）
 ///
-/// 超时/失败时必须保住所有权与意图状态：
-/// - 没抢到 `inner` 锁 → 不 take、不改动、撤销 `expected_stop`，按"未确认终止"失败；
-/// - 已 take 到 inner 但 kill 失败 → 放回 inner、撤销意图位、不 `commit_exit`；
-/// - **只在**确认退出且仍持有锁时才 `commit_exit`。
+/// 1. **先**取 `inner`（`timeout(remaining, lock())`）。抢不到 → 直接 `Err`，
+///    **一行共享状态都没动**（意图位此刻还没置，因此不需要回头撤销 —— 上一版正是在
+///    `inner` 超时后无 budget 地重取 `activity` 去撤销，500ms 预算被打到 2083ms）。
+/// 2. **再**取 `activity`（同一 budget）。抢不到 → 归还 `inner` 守卫（没 `take`）、
+///    仍然一行未改，`Err`。
+/// 3. **两把锁都持有**之后才 `mark_expected_stop()`，然后 `take` inner、**放掉 activity
+///    守卫**，再走 `kill_inner`。`inner` 守卫**继续持有**：它保证 `inner` 字段不会被
+///    别人拿走（否则并发 kill 会看到 `None` 而误判"已退出"），而慢操作期间对 `inner`
+///    的等待由**调用方的 budget** 兜住（抢不到就 500ms 失败），不会像旧版那样无界阻塞。
+/// 4. 收尾（成功提交 / 失败撤销意图位）都用 `timeout(remaining, …)` 取 `activity`；
+///    超时则记日志、保留现状而**绝不**无界等待。
+///
+/// 锁序固定 `inner` → `activity`（与 `process_spawn_impl` 一致），因此不存在反向持锁。
 async fn process_kill_confirming(
     state: &ProcessState,
     reason: &str,
@@ -1146,72 +1228,50 @@ async fn process_kill_confirming(
         return Err(format!("injected kill failure: {reason}"));
     }
 
-    // ① 取 activity 锁也要吃 budget（它可能与 reader 的 update 竞争）。
-    let activity_lock = tokio::time::timeout(
-        remaining(Some(deadline)).unwrap_or_default(),
-        state.activity.lock(),
-    )
-    .await;
-    let mut activity = match activity_lock {
-        Ok(guard) => guard,
-        Err(_) => {
-            // 没抢到锁：什么都没改（意图位也没置），按未确认终止失败。
-            crate::logs::write(&state.runtime_id, "kill budget exhausted waiting for activity lock");
-            return Err("kill budget exhausted waiting for the activity lock".to_string());
-        }
-    };
-    // 先置"这是主动 kill"的意图位（不发事件、不动代际）：stdout reader 若在这次 kill
-    // 期间读到 EOF，会把退出记成 `idle` 而不是 `error`。
+    // ① inner 优先。抢不到：什么都不改（意图位未置），直接失败。
+    let mut inner_guard = lock_inner_within(state, deadline).await?;
+
+    // ② 再取 activity。抢不到：inner 原样归还（没 take）、什么都不改。
+    let mut activity = lock_activity_within(state, deadline, "acquire").await?;
+
+    // ③ **两把锁都持有**之后才改共享状态：置意图位 → take inner → 立刻放掉 activity
+    //    （它是 reader/事件出口热用的锁，不能跨慢操作持有）。
     activity.mark_expected_stop();
+    let taken = inner_guard.take();
     drop(activity);
 
-    // ② 取 inner 锁同样吃 budget：另一条默认 kill 可能正持有它跑 OS 命令。
-    let inner_lock = tokio::time::timeout(
-        remaining(Some(deadline)).unwrap_or_default(),
-        state.inner.lock(),
-    )
-    .await;
-    let mut guard = match inner_lock {
-        Ok(guard) => guard,
-        Err(_) => {
-            // 没抢到：**不 take、不改动**，撤销刚置上的意图位（否则这个对象后续真崩溃
-            // 会被误报成 idle），按未确认终止失败返回，由调用方继续下一个实例。
-            state.activity.lock().await.clear_expected_stop();
-            crate::logs::write(
-                &state.runtime_id,
-                "kill budget exhausted waiting for the inner lock",
-            );
-            return Err("kill budget exhausted waiting for the inner lock".to_string());
-        }
-    };
-    let Some(mut inner) = guard.take() else {
-        // 没有内层会话：要么已确认退出过（reader 收了尾 / 更早的一次成功 kill），要么
-        // **从未 spawn**。两者都不该在这里凭空发一条 `pi://exit`：
-        // - 已退出：`commit_exit` 按 `has_exited` 幂等跳过；
-        // - 从未启动：没有可报告的终止，且必须撤掉刚置上的意图位。
-        drop(guard);
-        state.activity.lock().await.clear_expected_stop();
+    let Some(mut inner) = taken else {
+        // 没有内层会话：要么已确认退出过（reader 收了尾 / 更早的一次成功 kill），
+        // 要么**从未 spawn**（spawn 失败不会入池，公共路径不可达）。
+        // 此时仍持有 inner 守卫，别人拿不到 inner，因此这个判断没有竞态。
+        drop(inner_guard);
+        // 撤销刚置上的意图位（budget 内；超时就保留并记日志，见 §11）。
+        clear_expected_stop(state, deadline).await;
         if state.has_spawned_once().await {
-            commit_exit(state, false).await;
+            commit_exit(state, false, Some(deadline)).await;
         }
         return Ok(());
     };
+    // 慢操作（远端 exec / OS 终止 / 等退出）期间**不持有 activity**（只持 inner 守卫）：
+    // activity 是所有 reader/事件出口热用的锁，不能在这里长期占住。
     match kill_inner(&state.runtime_id, &mut inner, reason, Some(deadline)).await {
         Ok(()) => {
             drop(inner);
+            drop(inner_guard);
             // **确认退出之后**才提交终止状态（递增代际 + 发 exit，且只发一次）。
-            commit_exit(state, false).await;
-            drop(guard);
+            commit_exit(state, false, Some(deadline)).await;
             Ok(())
         }
         Err(error) => {
-            // 失败：把会话放回，代际不变、pending 与旧 reader 仍然可用，也不发 exit；
-            // 同时撤销意图位，让后续真正的崩溃仍能报成 `error`。
-            state.activity.lock().await.clear_expected_stop();
-            if guard.is_none() {
-                *guard = Some(inner);
+            // 失败：把会话**放回同一个守卫**（所有权不丢、不需要重新取锁），
+            // 代际不变、pending 与旧 reader 仍然可用、不发 exit。
+            if inner_guard.is_none() {
+                *inner_guard = Some(inner);
             }
-            drop(guard);
+            drop(inner_guard);
+            // 撤意图位走 budget；超时就保留 `expected_stop=true` 并记日志
+            // （§11"停止意图优先于精确终止原因"）。
+            clear_expected_stop(state, deadline).await;
             Err(error)
         }
     }
@@ -1319,26 +1379,146 @@ mod kill_confirmation_tests {
             err.contains("inner lock") || err.contains("budget"),
             "错误必须指向取锁超 budget：{err}"
         );
-        // 未确认终止：不发 exit，意图位被撤销。
+        // 未确认终止：不发 exit；`inner` 仍被 holder 持有（**没有**被 take 掉）。
         assert_eq!(sink.exits().len(), 0, "抢不到锁时不得发 pi://exit");
-        assert!(
-            !process.activity.lock().await.expects_stop(),
-            "抢不到锁时必须撤销 expected_stop（否则后续真崩溃会被误报成 idle）"
-        );
-        // `inner` 仍被 holder 持有（**没有**被 take 掉）。
         assert!(
             process.inner.try_lock().is_err(),
             "被占住的实例 inner 必须保持完整（不得 take 掉）"
         );
 
-        // holder 结束后：它自己也失败（延迟导致的未确认终止），inner 放回、进程仍存活。
+        // holder 结束后：它自己也失败（延迟导致的未确认终止），inner 放回、进程仍存活，
+        // 且它撤销了意图位 —— 退出路径全程**没有**改过共享状态（意图位是 holder 置的，
+        // 由 holder 自己清）。
         let holder_result = holder.await.expect("holder 任务");
         assert!(holder_result.is_err(), "holder 自身也应失败：{holder_result:?}");
         assert!(
             process_running(&process).await,
             "holder 失败后 inner 必须放回，进程仍被追踪"
         );
+        assert!(
+            !process.activity.lock().await.expects_stop(),
+            "holder 失败后必须撤销 expected_stop（后续真崩溃不能被误报成 idle）"
+        );
         assert_eq!(sink.exits().len(), 0, "两次失败都不该发 exit");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第七轮 P1 的第二条回归**：**只有 `activity` 被长时间持有**（`inner` 空闲）
+    /// 时，退出路径也必须在 budget 内返回，而且**没有在未拿锁的情况下改过共享状态**。
+    ///
+    /// 为什么必须测这一条：上一版把 `mark_expected_stop()` 放在取 `inner` **之前**，
+    /// 于是 `inner` 超时后要"回头"取 `activity` 去撤销 —— 那次取锁是无 budget 的。
+    /// 现在的顺序是 inner → activity，所以 activity 慢时它在取锁阶段就失败，
+    /// 一行共享状态都没改。
+    #[tokio::test]
+    async fn the_exit_path_returns_within_budget_when_only_activity_is_held() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:actheld", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:actheld").await;
+
+        // 用真实持有模拟 reader 的临界区：reader 在 dispatch 里持着 activity 调事件出口，
+        // 出口慢时锁就是这么被占住的（2000ms ≫ 退出路径的 500ms budget）。
+        let activity_holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        let err = process_kill_fast(&process, "exit")
+            .await
+            .expect_err("activity 抢不到必须失败");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "activity 被占时退出路径也必须受 budget 约束，实测 {elapsed:?}"
+        );
+        assert!(err.contains("activity lock"), "{err}");
+        assert_eq!(sink.exits().len(), 0, "失败时不得发 exit");
+        // 一行未改：意图位仍未被设。
+        let observed = {
+            let guard = process.activity.lock().await;
+            guard.expects_stop()
+        };
+        assert!(!observed, "取锁失败时不得改过共享状态（意图位必须仍未设置）");
+        activity_holder.await.expect("activity holder");
+        assert!(process_running(&process).await, "inner 从未被 take，进程仍被追踪");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第七轮 P1 的第三条回归（两条锁都被占）**：`inner` 由默认 kill 持有、
+    /// `activity` 由慢事件出口持有 —— 这正是质量实测 2083ms 的形状。新版必须
+    /// **< 1000ms** 返回，且不发 exit、一行共享状态都不改。
+    #[tokio::test]
+    async fn the_exit_path_returns_within_budget_when_both_locks_are_held() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:both", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:both").await;
+        // inner：默认 kill 的 OS 阶段占用 3000ms。
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let inner_holder = {
+            let process = process.clone();
+            tokio::spawn(async move { process_kill(&process, "holder").await })
+        };
+        let inner_held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.inner.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(inner_held.is_ok(), "inner 必须真的被占住");
+        // activity：模拟 reader 在 dispatch 里持锁、事件出口慢 2000ms。
+        let activity_holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let activity_held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(activity_held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        let err = process_kill_fast(&process, "exit")
+            .await
+            .expect_err("两把锁都抢不到时必须失败");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "两把锁都被占时也必须受 budget 约束（质量实测 2083ms），实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 0, "失败时不得发 exit");
+        activity_holder.await.expect("activity holder");
+        let _ = inner_holder.await;
         crate::rpc::aux_probe::clear_kill_failures();
     }
 
