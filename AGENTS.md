@@ -23,6 +23,20 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run test:web` / `pnpm run test:web:all` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别按增量（仅相对 HEAD 变动的测试）、全量、watch 模式运行 Vitest 单元测试，以及运行 Playwright E2E 与 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
 
+## 可选：Rust 构建缓存（Mr. Boxington / mbx）
+
+`src-tauri` 的 Cargo 编译（`build` / `test` / `clippy`）可接入 [mbx](https://mr-boxington.jdx.dev) 本地缓存，跨 checkout 与 profile 复用 rustc 产物；前端 pnpm 流程不受影响。**CI 不接入**：`ci.yml` 的 rust job 继续用 `swatinem/rust-cache`，本机缓存只服务本地开发。
+
+1. 安装：按官方 installation 的 Windows x86-64 归档解压到 `%LOCALAPPDATA%\Programs\mbx` 并加入 `PATH`（校验 `SHA256SUMS`）。
+2. `cache_dir` 必须与 target 目录**同处 ReFS 卷**，否则还原退化为逐字节复制（`mbx doctor` 会明确报 `every restored byte is copied`）；在 `%APPDATA%\mbx\config.toml` 写 `cache_dir = 'D:\mbx-cache'`，或用 `MBX_CACHE_DIR`。同卷且可克隆时 `mbx doctor` 的 `restore` 行报 `cloning is supported`。
+3. 显式跑（在 `src-tauri/` 下）：`mbx build --locked` / `mbx test --locked` / `mbx clippy --locked --all-targets`。`pnpm test` 与 `pnpm run check` 里的 `cargo` 不经 mbx，行为不变。
+4. **带 `remote-access` feature 时先 `pnpm run build`**：`build.rs` 会把 `dist/` 静态嵌入二进制，缺少 `dist` 会 panic（`Missing frontend assets`）。含该 feature 的完整打包用 `mbx build --release --locked --features remote-access`（等价 `cargo` 参数）。
+5. **控制台代码页必须是 UTF-8（65001）**：`aws-lc-sys`、`vswhom-sys`、`ring` 的 build script 会把 MSVC 的中文警告原样输出（GBK/CP936 字节），mbx 读不了非 UTF-8 的 `build-script stdout`，会退化为 `build-script-declarations-pending` 与逐条 `build-script result was not stored` 警告，少存上千次编译结果。Git Bash / `bash -lc` 跑前先 `chcp.com 65001`，或直接 `cmd /c "chcp 65001 >nul && mbx ..."`。
+6. 首次构建会把 `src-tauri/target` 换成指向 `cache_dir/targets` 的 symlink；`src-tauri/gen/schemas` 由 tauri-build 生成，仍被 `.gitignore` 忽略。`mbx clean` 只回收本 workspace 的 target 与增量态，共享 store 保留，下一次构建从 store 还原。
+7. 回收/清理：`mbx clean`（本 workspace）、`mbx cache stats` / `mbx stats` / `mbx gc --dry-run`。仓库 `cargo clean` 不清 mbx 私有增量态。
+
+不提交 `.mbx.toml`：机器相关路径（`cache_dir`、`target.root`）属于全局配置，`.mbx.toml` 会拒绝；其余工作区策略（`incremental`、`share_workspace_root`、`scheduler.*`）在本仓库用默认值更划算（`share_workspace_root` 会把源码路径换成占位符影响调试信息与 panic 位置，`scheduler.reserve_cpus` 会削减并行度）。
+
 ## 代码风格与命名
 
 遵循邻近代码：Vue/TypeScript 通常使用两空格缩进、省略分号；Rust 使用四空格缩进。组件采用 PascalCase（如 `ChatView.vue`），变量与函数使用 camelCase，Rust 模块与函数使用 snake_case。前端内部导入可使用 `@/` 别名。
