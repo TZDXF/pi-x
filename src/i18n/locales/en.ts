@@ -177,6 +177,7 @@ export default {
     spawnFailedUnknown: "Auxiliary chat failed to start",
     retry: "Retry",
     limitReached: "Auxiliary chat allows at most {count} open instances; close one before adding another.",
+    askFailed: "Cannot ask in auxiliary chat: no auxiliary chat entry is available for this session.",
   },
   split: {
     closePane: "Close pane",
@@ -994,6 +995,7 @@ export default {
     commands: "Commands",
     inputPlaceholder: "Ask Pi, {'@'} to reference sessions or files, / for commands…",
     selectionAdd: "Add to prompt",
+    selectionAskAux: "Ask in auxiliary chat",
     selectionCommentPlaceholder: "Add a comment (optional)…",
     selectionSummary: "{count} comments",
     selectionEdit: "Edit",

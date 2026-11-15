@@ -54,7 +54,7 @@ const {
   sendDelaySeconds,
   showStopButton,
 } = toRefs(props.controls)
-const { codeComments, conversationSelections, onSendDelayWheel, onSubmit, abort } = props.controls
+const { codeComments, selections, onSendDelayWheel, onSubmit, abort } = props.controls
 </script>
 
 <template>
@@ -104,7 +104,7 @@ const { codeComments, conversationSelections, onSendDelayWheel, onSubmit, abort 
               :items="pendingSelections"
               @locate="emit('locateSelection', $event)"
               @edit="emit('editSelection', $event)"
-              @remove="conversationSelections.remove($event)"
+              @remove="selections.remove($event)"
             />
           </div>
         </PromptInputHeader>

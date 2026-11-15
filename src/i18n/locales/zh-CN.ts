@@ -175,6 +175,7 @@ export default {
     spawnFailedUnknown: "辅助对话启动失败",
     retry: "重试",
     limitReached: "辅助对话最多同时开启 {count} 个实例，请先关闭一个再添加。",
+    askFailed: "无法在辅助对话中提问：当前会话没有可用的辅助对话入口。",
   },
   split: {
     closePane: "关闭此窗格",
@@ -966,6 +967,7 @@ export default {
     commands: "命令",
     inputPlaceholder: "向 Pi 提问，{'@'} 引用会话或文件，/ 使用命令…",
     selectionAdd: "引用到输入框",
+    selectionAskAux: "在辅助对话中提问",
     selectionCommentPlaceholder: "添加批注（可选）…",
     selectionSummary: "{count} 条注释",
     selectionEdit: "编辑",

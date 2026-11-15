@@ -175,14 +175,14 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
 
 §3/§4 的实现落点与两处**写法差异**（差异是事实记录，不是等价说明）：
 
-| 职责 | 文件 |
-| --- | --- |
-| 归一化、锚点截断、32k 整组丢弃、块拼装/剥离（零依赖） | `src/lib/auxParentContext.ts` |
-| 三源取材（只打父 runtime；`get_entries` → `get_messages` → `session_history`） | `src/lib/auxContextCollect.ts` |
-| “只注入首轮”记账（模块级，按 aux `runtimeId`） | `src/stores/auxContext.ts` |
-| 面板接线（`streaming` 读父 store 实时值） | `src/composables/useAuxParentContext.ts` |
-| 首轮拼块（`serializeComposerPromptContexts` 的 `parentContext`） | `src/composables/useChatSendControl.ts` |
-| 边界提醒（`--append-system-prompt` 常量） | `src-tauri/src/rpc/aux_launch.rs` |
+| 职责                                                                           | 文件                                     |
+| ------------------------------------------------------------------------------ | ---------------------------------------- |
+| 归一化、锚点截断、32k 整组丢弃、块拼装/剥离（零依赖）                          | `src/lib/auxParentContext.ts`            |
+| 三源取材（只打父 runtime；`get_entries` → `get_messages` → `session_history`） | `src/lib/auxContextCollect.ts`           |
+| “只注入首轮”记账（模块级，按 aux `runtimeId`）                                 | `src/stores/auxContext.ts`               |
+| 面板接线（`streaming` 读父 store 实时值）                                      | `src/composables/useAuxParentContext.ts` |
+| 首轮拼块（`serializeComposerPromptContexts` 的 `parentContext`）               | `src/composables/useChatSendControl.ts`  |
+| 边界提醒（`--append-system-prompt` 常量）                                      | `src-tauri/src/rpc/aux_launch.rs`        |
 
 **提交判据**：`live:true` 不作为判据（最终消息同样标 live）。已提交由来源身份定义 ——
 `get_entries` 的 entry id 集合（同时用于给 `get_messages` / `session_history` 的
@@ -214,3 +214,63 @@ null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态�
 **已知代价（如实）**：父上下文前缀在后续每一轮都作为历史**全价**重发，本事项不主张任何
 前缀缓存收益；32k 是硬护栏。`overLimit`（单轮自身超限）时整组保留、不按字符切断工具
 调用与结果配对 —— 护栏宁可略微超限，也不制造互不配对的历史。
+
+## 10. 划词入口与引用分桶（TZD-103）
+
+两个入口共用**同一份**浮层（`src/components/chat/ConversationSelectionMenu.vue`），
+只新增动作，锚点/翻转/钳制算法与 document 级监听一字未改：
+
+| 入口         | 挂载点                                                | 模式   | payload                                             |
+| ------------ | ----------------------------------------------------- | ------ | --------------------------------------------------- |
+| 会话正文划词 | `ChatTurnList.vue`（`ChatView` / `AuxChatPane` 共用） | `chat` | `{text, source, messageId, startOffset, endOffset}` |
+| 文件预览划词 | `ProjectFilePreview.vue`（代码视图与渲染态 Markdown） | `code` | `{text, path, lineRange?}`                          |
+
+- 代码模式下"引用到输入框"不出现（批注仍走行号栏的 gutter 拖拽/按钮）；渲染态
+  Markdown 没有 `[data-line]`，此时只带 `path`，不猜行号。
+- 内置浏览器 iframe 内的划词**不做**（跨域，需扩 `preview_proxy` bridge，另列）。
+
+**引用按 runtime 分桶**（`src/stores/auxSelections.ts`）：`Map<runtimeId, entries>`，
+键是 aux 自己的 `runtimeId`（一实例一桶，不需要 scope 漂移判断）；主会话继续用
+`stores/conversationSelections.ts` 的单例，语义不变。`projects` 级 `codeComments`
+**不被 aux 消费**（aux 的发送控制 `contexts: "aux"` 一律视为空）。
+
+**路由**（`stores/auxChat.ts` 的 `askInAux`）：**入口优先** —— 先确认该父会话的
+router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸载）返回 `unavailable`
+且**不写任何桶**。入口可用时：有激活的 aux Tab → 追加到它的桶并把槽位切成激活；
+没有激活但有存活实例 → 复用最近一个（不新开，避免撞 5 个上限与面板碎片化）；
+一个都没有 → 新建后投递。连点同一手势只建一个实例（`pendingCreations` 复用 +
+`appendConversationSelection` 判重）。入口缺失/名额满/引用超限各有一次用户可见提示
+（`lib/auxAsk.ts`）。
+
+**来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。
+消息 `messageId`/字符区间只在该 runtime 里有意义，因此 aux 正文的选区恢复与索引徽标
+只在 `sourceRuntimeId === 本面板 runtimeId` 时生效；跨 runtime（含未标注的旧条目）一律
+不猜位置（只在摘要里列出）。文件来源引用（`{path, lineRange}`，无 `messageId`）没有可
+定位正文，但编辑动作仍给一个可用的视口锚点（摘要里的"编辑"不会点了没反应）。
+`AuxChatPane` 的 `ChatComposer` 必须接 `@locate-selection` / `@edit-selection` 到
+`ChatTurnList` 已 expose 的 `locateSelection` / `editSelection`，否则动作在子组件 emit
+处中断。
+
+**浮层定位**（P2-1）：锚点仍是 `selectionEndRect`（多行取最后一行），翻转阈值 48px、
+间距 4px、左边距 8px、四个 document 级监听与控件内选区排除**全部不变**；**只有横向
+钳制**从写死的 168px 换成浮层**实测宽度**（`lib/selectionMenuPlacement.ts` 纯函数：
+左缘不早于 8px、右缘不超出视口）。1280px 视口右缘划词时双按钮整体在视口内。
+
+**`ProjectFilePreview` 的两个根**：模板是 `<section>` + 覆盖层浮层（fragment 下 Vue 3
+**不再自动继承 attrs**），因此显式 `defineOptions({ inheritAttrs: false })` 并把
+`v-bind="$attrs"` 只绑到 section；否则调用方的 `data-package-resource-preview` 与
+`class` 会静默丢失（`e2e/package-resources.spec.ts` 会红）。
+
+**发送与清理同源**（`composables/useChatSendControl.ts`）：`contexts` 从
+`"shared" | "none"` 扩为 `"shared" | "aux" | "none"`；`"aux"` 读本桶、序列化仍走
+`serializeComposerPromptContexts`（`# userselect:` 契约不变），发送成功后**只清本桶**
+（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可被 Esc 恢复）。关闭
+实例（`closeAux`）与迟到收尾（`settleLateAux`）都清本桶。
+
+验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、
+`tests/aux-send-control.test.ts`（prompt 组装含 `# userselect:`、只清本桶、批注不消费、
+abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活优先 / 复用 / 新建 /
+去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
+`tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
+`tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
+`tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。

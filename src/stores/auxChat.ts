@@ -3,7 +3,10 @@ import { reactive } from "vue"
 import { AUX_MAX_TABS, createAuxRuntimeId, nextAuxOrdinal } from "@/lib/auxRuntime"
 import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
+import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { ConversationSelectionLimitReason } from "@/lib/conversationSelections"
 import { clearAuxDraft } from "@/stores/auxDrafts"
+import { addAuxSelection, clearAuxSelectionBucket } from "@/stores/auxSelections"
 import { clearAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
 import { dropAuxUiStore, registerAuxUiStore } from "@/stores/conversations"
 import { createSessionStore, type SessionStore } from "@/stores/session"
@@ -80,6 +83,37 @@ export function registerAuxRuntimeBridge(next: AuxRuntimeBridge | null) {
 }
 
 /**
+ * 划词入口（会话正文 / 代码预览）的 aux 路由能力，由 `useAuxTabs` 注入。
+ *
+ * 为什么放在这里而不是让两个入口各自拼：`askInAux` 必须先判断"这个父会话有没有
+ * 激活中的 aux"再决定复用还是新建；新建要动侧栏槽位与 spawn，那是 `useAuxTabs`
+ * 的职责，注册表只知道实例。路由放在注册表里，两个入口就只剩 emit。
+ */
+export interface AuxAskRouter {
+  /** 该父会话当前**激活**的 aux（侧栏 active 槽位指向它）；没有则 `null`。 */
+  active: (parentRuntimeId: string) => AuxTab | null
+  /** 新建一个 aux（加槽位 + spawn）；无名额/失败返回 `null`。 */
+  open: (parentRuntimeId: string) => Promise<AuxTab | null>
+  /** 把该实例的槽位切成激活并展开侧栏（复用与新建后都要做）。 */
+  reveal: (tab: AuxTab) => void
+}
+
+/**
+ * 按**父会话**登记路由：分屏时同一页面里有多个 `ChatView`，各父会话的路由互不
+ * 覆盖（用单个全局变量会让先挂载的那个永远收不到自己的划词手势）。
+ */
+const askRouters = new Map<string, AuxAskRouter>()
+
+export function registerAuxAskRouter(parentRuntimeId: string, next: AuxAskRouter | null) {
+  if (next) askRouters.set(parentRuntimeId, next)
+  else askRouters.delete(parentRuntimeId)
+}
+
+export function auxAskRouter(parentRuntimeId: string): AuxAskRouter | null {
+  return askRouters.get(parentRuntimeId) ?? null
+}
+
+/**
  * 事件入口（`lib/workspaceRuntime.ts` 通过 `lib/auxEventSink` 调到）。
  *
  * 关键约束：**绝不** `sessionFor` 重建 store —— 墓碑命中直接丢弃，store 不存在
@@ -130,6 +164,7 @@ export function resetAuxChatForTest() {
   pendingCreations.clear()
   auxSessions.clear()
   auxUis.clear()
+  askRouters.clear()
   bridge = null
   resetAuxParentContextForTest()
 }
@@ -304,6 +339,11 @@ export function auxCreationPending(parentRuntimeId: string) {
   return pendingCreations.has(parentRuntimeId)
 }
 
+/** 该父会话在途创建的 promise（同一手势复用，不再叠加进程/槽位）。 */
+export function auxPendingCreation(parentRuntimeId: string): Promise<AuxTab | null> | undefined {
+  return pendingCreations.get(parentRuntimeId)
+}
+
 /** 失败态重试前清掉错误（不复用旧进程，重试仍走 spawn）。 */
 export function markAuxRetrying(runtimeId: string) {
   const tab = auxTabByRuntime(runtimeId)
@@ -346,6 +386,8 @@ export async function settleLateAux(runtimeId: string): Promise<boolean> {
   // 2) store：只拆一次（重复 dispose 会踩到已释放的实例）。
   if (!sweptStores.has(runtimeId)) {
     sweptStores.add(runtimeId)
+    // 迟到收尾同样是"实例消失"：引用桶不走墓碑就会永远留在内存里。
+    clearAuxSelectionBucket(runtimeId)
     dropAuxUiStore(runtimeId)
     const session = auxSessions.get(runtimeId)
     const ui = auxUis.get(runtimeId)
@@ -385,8 +427,9 @@ export async function closeAux(runtimeId: string): Promise<void> {
   session?.clear()
   // 2) ui store：对话框/widget/状态栏/stderr + toasts/计时器/待插文本/在途询问。
   ui?.clear()
-  // 3) 草稿（仅内存）。
+  // 3) 草稿（仅内存）与**本实例**的划词引用桶（TZD-103：关闭即销毁，不落盘）。
   clearAuxDraft(runtimeId)
+  clearAuxSelectionBucket(runtimeId)
   // 3b) 父上下文“只注入首轮”的记账：关闭即清（同一 runtimeId 不会再被复用）。
   clearAuxParentContext(runtimeId)
   // 4) 进程：先杀，再拆 store —— 顺序反过来会让迟到事件找到仍有 store 的 id。
@@ -413,6 +456,59 @@ async function cancelPendingDialogs(ui: UiStore) {
     if (dialog.timeout !== undefined) continue
     await ui.respond(dialog, { cancelled: true }).catch(() => {})
   }
+}
+
+/**
+ * 划词入口的路由结果。`ok: false` 的三种原因对应三种用户可见反馈：
+ *
+ * - `noParent` / `unavailable`：没有可投递的 aux（父会话不可用、或入口未接线），
+ *   调用方给一句通用失败提示；
+ * - `limit`：名额已满（5 个实例全占用），提示先关一个；
+ * - `append`：引用本身被上限/总长拒绝（`appendReason` 复用主会话的三种文案）。
+ */
+export type AuxAskOutcome =
+  | { ok: true; tab: AuxTab; duplicate: boolean }
+  | {
+      ok: false
+      reason: "noParent" | "unavailable" | "limit" | "append"
+      appendReason?: ConversationSelectionLimitReason
+    }
+
+/**
+ * **划词入口的统一投递**（TZD-103）：会话正文与代码预览两个入口都走这里。
+ *
+ * 路由规则（`docs/aux-chat-spec.md` §5）：
+ * 1. 该父会话有**激活**的 aux → 追加到它的引用桶并切回那个 Tab（复用，不新开）；
+ * 2. 没有激活但有存活实例 → 复用最近一个（同样切过去），避免每划一次词就多开一个进程；
+ * 3. 一个都没有 → 新建 aux 再投递（名额满则原样返回 `limit`，引用不入任何桶）。
+ *
+ * 同一手势去重：连点时第一次就把实例同步登记进表（`openAux` 先入表再 `await` spawn），
+ * 第二次直接命中"存活实例"分支；同一段文字再进桶时 `appendConversationSelection`
+ * 判重，因此**只建一个实例、引用不重复**。
+ *
+ * **入口优先**（TZD-103 P2-2，成员裁定）：先确认该父会话的 router 存在，再谈复用或
+ * 新建。父 `ChatView` 卸载后 router 注销、`reveal` 也无人接，此时即便实例还活着也
+ * 返回 `unavailable` 并且**不写任何桶** —— 否则会留下一条投不进也看不到的引用。
+ */
+export async function askInAux(parentRuntimeId: string, payload: AuxAskPayload): Promise<AuxAskOutcome> {
+  if (!parentRuntimeId) return { ok: false, reason: "noParent" }
+  const router = auxAskRouter(parentRuntimeId)
+  if (!router) return { ok: false, reason: "unavailable" }
+  // 复用（激活优先，其次该父会话最近一个）：两者都是"已有实例"，不新开进程。
+  const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
+  if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
+  const created = await router.open(parentRuntimeId)
+  if (!created) return { ok: false, reason: "limit" }
+  // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。
+  if (isClosedAux(created.runtimeId)) return { ok: false, reason: "unavailable" }
+  return deliverToAux(created, payload)
+}
+
+function deliverToAux(tab: AuxTab, payload: AuxAskPayload): AuxAskOutcome {
+  const result = addAuxSelection(tab.runtimeId, payload)
+  if (!result.ok) return { ok: false, reason: "append", appendReason: result.reason }
+  auxAskRouter(tab.parentRuntimeId)?.reveal(tab)
+  return { ok: true, tab, duplicate: result.duplicate }
 }
 
 /** 关闭某父会话的全部实例（父会话关闭/被淘汰时用）。 */
