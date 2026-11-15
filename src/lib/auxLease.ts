@@ -24,6 +24,18 @@ export function isAuxLeaseConflict(error: unknown): boolean {
   return text.includes("auxLeaseConflict")
 }
 
+/**
+ * 该错误是否表示"这个实例正在被回收，不再接受新租约"（`auxLeaseReaping`）。
+ *
+ * 回收墓碑是**永久**的（runtimeId 一实例一个 UUID、永不复用），所以这条错误意味着
+ * 实例已经（或正在）被回收 —— 前端同样要进退避窗口：继续每 20s 打一次只会刷无效
+ * 请求（复审第三轮观察到 10 次 tick 发 10 次 claim）。
+ */
+export function isAuxLeaseReaping(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error ?? "")
+  return text.includes("auxLeaseReaping")
+}
+
 /** 一条租约（后端 `aux_list` 的条目）。`parentRuntimeId` 可能为 `null`（未知归属）。 */
 export interface AuxLeaseEntry {
   runtimeId: string

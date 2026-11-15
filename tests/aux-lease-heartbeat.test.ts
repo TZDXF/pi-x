@@ -216,6 +216,28 @@ test("a lost token backs off until the lease TTL instead of retrying or closing 
   expect(aux.auxTabByRuntime(tab.runtimeId)).toBeDefined()
 })
 
+test("auxLeaseReaping also backs off instead of retrying every tick", async () => {
+  // 该实例已被回收器接管（永久墓碑）：再 claim 永远是同一个错误。
+  let claims = 0
+  aux.registerAuxRuntimeBridge({
+    kill: async () => {},
+    claim: async () => {
+      claims += 1
+      throw new Error('PIXERR:{"code":"auxLeaseReaping","fallback":"该实例正在被回收"}')
+    },
+    release: async () => {},
+    list: async () => [],
+  })
+  const tab = await openTab("main", 12)
+  // Tab 必须仍然存活（拿不到租约不等于把实例判死）。
+  expect(aux.auxTabByRuntime(tab.runtimeId)).toBeDefined()
+  const afterOpen = claims
+  expect(afterOpen).toBeGreaterThanOrEqual(1)
+  // 10 次心跳只应该打出 1 次请求（复审第三轮的"每分钟 3 次无效请求"）。
+  await vi.advanceTimersByTimeAsync(lease.AUX_LEASE_HEARTBEAT_MS * 10)
+  expect(claims).toBe(afterOpen)
+})
+
 test("without a token the close path does not release (the TTL expires it instead)", async () => {
   // 模拟"页面重载后旧租约还在 TTL 内、本机已拿不到那个 token"：宿主 claim 不回 token。
   aux.registerAuxRuntimeBridge({

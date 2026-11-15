@@ -203,6 +203,25 @@ pub(crate) fn fail_next_kills(count: u64) {
 #[cfg(test)]
 pub(crate) fn clear_kill_failures() {
     child::FAIL_NEXT_KILLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    child::SKIP_OS_KILL.store(false, std::sync::atomic::Ordering::Relaxed);
+    child::KILL_CONFIRM_TIMEOUT_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 测试用：模拟"OS 终止调用返回成功、但进程其实没被终止"（复审第四轮 P1-2 的 seam）。
+///
+/// 实现方式是跳过真实 `taskkill`/`start_kill`，再让确认超时极短 —— 于是
+/// `kill_inner` 走"确认超时 → Err"分支。这与"taskkill 报非零后进程仍在"是同一类
+/// 事实（未确认退出），回收器都必须判为失败。
+#[cfg(test)]
+pub(crate) fn simulate_unconfirmed_kill(confirm_ms: u64) {
+    child::SKIP_OS_KILL.store(true, std::sync::atomic::Ordering::Relaxed);
+    child::KILL_CONFIRM_TIMEOUT_MS.store(confirm_ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 测试用：把确认超时压短（不跳过 OS 终止调用）。
+#[cfg(test)]
+pub(crate) fn set_kill_confirm_timeout_ms(ms: u64) {
+    child::KILL_CONFIRM_TIMEOUT_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 当前存活的 aux runtime id 快照（回收器扫描用；**不**刷新任何时钟）。

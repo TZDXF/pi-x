@@ -36,6 +36,21 @@ test("the aux pane reuses the shared list/composer without adding edits or recei
   expect(pane).not.toMatch(/contexts: "none"/)
 })
 
+test("the composer is only usable while the pane is actually connected to its process", () => {
+  // 复审第四轮观察到的中间态：后端确认退出后 `session.started` 会置 false，但实例注册表
+  // 里的 `tab.status` 仍是 `ready`。若只判 `status`，用户会看到一个"能发但发不出去"的
+  // 输入框。面板必须把两处状态绑在一起（`connected = ready && session.started`）。
+  const pane = read("components/aux-chat/AuxChatPane.vue")
+  expect(pane).toMatch(/const connected = computed\(\(\) => ready\.value && session\.started\)/)
+  expect(pane).toMatch(/ensureStarted: async \(\) => connected\.value/)
+  expect(pane).toMatch(/:connected="connected"/)
+  expect(pane).toMatch(/:ensure-started="async \(\) => connected"/)
+  // 反向护栏：不允许再退回只判 `ready` 的三处旧写法。
+  expect(pane).not.toMatch(/:connected="ready"/)
+  expect(pane).not.toMatch(/:ensure-started="async \(\) => ready"/)
+  expect(pane).not.toMatch(/ensureStarted: async \(\) => ready\.value/)
+})
+
 test("aux tabs are driven by the registry: add opens a process, close destroys it", () => {
   const chat = read("components/ChatView.vue")
   const auxTabs = read("composables/useAuxTabs.ts")

@@ -94,6 +94,9 @@ struct PendingKill {
     handle: Arc<ProcessState>,
     parent: Option<String>,
     idle_secs: u64,
+    /// 已经尝试过几次 kill（首轮 1，重试递增）。日志带出来，避免"无 result 的判定行"
+    /// 被读成已回收（复审第三轮的观感问题）。
+    attempts: u32,
 }
 
 static PENDING_KILLS: Mutex<BTreeMap<String, PendingKill>> = Mutex::new(BTreeMap::new());
@@ -169,6 +172,7 @@ pub(crate) async fn reap_once(
                         handle: Arc::clone(&entry.handle),
                         parent: entry.parent.clone(),
                         idle_secs: entry.idle_secs,
+                        attempts: entry.attempts + 1,
                     },
                 )
             })
@@ -189,14 +193,20 @@ pub(crate) async fn reap_once(
                 let mut line = reaped_entry.to_json();
                 line["reason"] = json!("kill-retry");
                 line["result"] = json!("exited");
+                line["attempts"] = json!(entry.attempts + 1);
                 crate::logs::write("aux-reap", &line.to_string());
                 reaped.push(reaped_entry);
             }
             KillOutcome::RetryPending => {
                 crate::logs::write(
                     "aux-reap",
-                    &json!({"runtimeId": runtime_id, "reason": "kill-retry", "result": "pending"})
-                        .to_string(),
+                    &json!({
+                        "runtimeId": runtime_id,
+                        "reason": "kill-retry",
+                        "result": "pending",
+                        "attempts": entry.attempts + 1,
+                    })
+                    .to_string(),
                 );
             }
         }
@@ -238,8 +248,13 @@ pub(crate) async fn reap_once(
         };
         // 日志留痕：parent / claims / idle 秒数（规格 §5 的判定三条件），再加探针
         // 的三个瞬时值，便于事后复盘"为什么这条被回收/没被回收"。
+        // 判定快照：显式标 `eligible: true` / `attempt: 1` / `result: "pending"`，
+        // 免得"没有 result 的判定行"被审计读成"已经回收了"（复审第三轮第 4 条）。
         let mut line = entry.to_json();
         line["probe"] = snapshot.to_json();
+        line["eligible"] = json!(true);
+        line["attempt"] = json!(1);
+        line["result"] = json!("pending");
         crate::logs::write("aux-reap", &line.to_string());
         match try_kill(&handle).await {
             KillOutcome::Exited => {
@@ -255,6 +270,7 @@ pub(crate) async fn reap_once(
                         handle: Arc::clone(&handle),
                         parent: entry.parent.clone(),
                         idle_secs: entry.idle_secs,
+                        attempts: 1,
                     },
                 );
                 crate::logs::write(
@@ -517,6 +533,45 @@ mod tests {
         let reaped_total = first.len() + second.len();
         assert_eq!(reaped_total, 1);
         crate::rpc::aux_probe::clear_kill_failures();
+        crate::aux_leases::reset_for_test();
+    }
+
+    /// **复审第四轮 P1-2 的回归**：OS 终止调用"返回成功但进程没死"（确认超时）时
+    /// 回收器必须 `reported=0, pending=1, pool=1`；恢复后下一轮 `reported=1, pending=0`。
+    ///
+    /// 质量实测的 `os_alive=true, inner_none=true, reported=1, pending=0, pool=0` 必须翻转。
+    #[tokio::test]
+    async fn an_unconfirmed_os_kill_is_not_counted_as_reaped() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:os", RuntimePolicy::Aux).await;
+        let now = Instant::now() + Duration::from_secs(31 * 60);
+
+        // seam：跳过真实 taskkill + 极短确认超时 → kill_inner 走"确认超时"分支。
+        crate::rpc::aux_probe::simulate_unconfirmed_kill(50);
+        let first = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert!(first.is_empty(), "未确认退出不得计入回收：{first:?}");
+        assert_eq!(pending_kill_ids(), vec!["aux:os".to_string()], "必须进待重试表");
+        assert!(
+            test_harness::process_count(&state).await >= 1,
+            "进程仍在池里/句柄里（旧实现这里是 pool=0）"
+        );
+        assert!(
+            crate::rpc::aux_probe::running_handle(
+                &aux_probe::process_handle(&state, "aux:os").await.unwrap()
+            )
+            .await,
+            "OS 层进程仍然活着"
+        );
+
+        // 恢复真实终止路径：下一轮才能确认退出并计入回收。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let second = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert_eq!(second.len(), 1, "恢复后才算回收：{second:?}");
+        assert!(pending_kill_ids().is_empty(), "确认退出后移出待重试表");
+        assert_eq!(test_harness::process_count(&state).await, 0);
         crate::aux_leases::reset_for_test();
     }
 

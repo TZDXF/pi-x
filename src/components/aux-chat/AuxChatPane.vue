@@ -64,6 +64,15 @@ const { renderedEntries, navigateToQuestion, onHistoryScroll } = useChatTurnList
 const project = computed(() => props.parent.project)
 const workspaceSelection = ref(null)
 const ready = computed(() => props.tab.status === "ready")
+/**
+ * 面板是否还"连着进程"：`ready` **且** session store 认为进程在跑。
+ *
+ * 为什么不能只看 `tab.status`：后端确认退出后（`pi://exit`）`session.started` 会被
+ * 置 false，但实例注册表里的 status 仍是 `ready`（关闭/销毁由关闭动作负责）。若只判
+ * `ready`，用户会看到一个"能发但发不出去"的输入框 —— 那正是复审第四轮观察到的
+ * "streaming 被清但 Tab 仍可发"的中间态。这里把两处状态绑在一起，退出即禁用发送。
+ */
+const connected = computed(() => ready.value && session.started)
 
 // 父上下文只在**首轮**拼进 prompt（记账按 aux runtimeId；第 2/3 轮返回 null）。
 const { parentContext } = useAuxParentContext({
@@ -87,7 +96,7 @@ const sendControl = useChatSendControl({
   knownSessions: () => [],
   workspaceSelection: () => workspaceSelection.value,
   // 进程已经在跑：`ensureStarted` 只是"能不能发"的回答，不再启动任何东西。
-  ensureStarted: async () => ready.value,
+  ensureStarted: async () => connected.value,
   newSession: () => {},
   onSent: jumpToBottom,
   // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，
@@ -99,7 +108,7 @@ const sendControl = useChatSendControl({
 const controls = reactive(sendControl)
 
 const { modelKey, onThinkingChange } = useConversationModel(session, {
-  connected: () => ready.value,
+  connected: () => connected.value,
   onError: (error: unknown) => ui.pushToast(formatCodedError(t, error), "error"),
 })
 
@@ -199,11 +208,11 @@ async function copyText(text: string) {
         :project="project"
         :git-busy="false"
         :connecting="false"
-        :connected="ready"
+        :connected="connected"
         :edit-busy="false"
         :session-drag-over="false"
         :initial-draft="initialDraft"
-        :ensure-started="async () => ready"
+        :ensure-started="async () => connected"
         :controls="controls"
         hide-workspace-context
         @locate-selection="conversation?.locateSelection($event)"
@@ -215,7 +224,7 @@ async function copyText(text: string) {
             :thinking-level="session.thinkingLevel"
             :available-thinking="session.availableThinking"
             :models="session.models"
-            :disabled="!ready && session.models.length === 0"
+            :disabled="!connected && session.models.length === 0"
             @update:thinking-level="onThinkingChange"
           />
         </template>

@@ -487,18 +487,30 @@ pub(crate) async fn session_endpoint(
 }
 
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
-    let process = state
-        .processes
-        .lock()
-        .await
-        .remove(runtime_id.unwrap_or("default"));
-    if let Some(process) = process {
-        child::process_kill(&process, "rpc_kill").await?;
-        state.last_activity.lock().await.remove(&process.runtime_id);
-        // 进程没了，租约也就没有意义：留着会让 `aux_list` 一直报一个不存在的实例。
-        crate::aux_leases::forget(&process.runtime_id);
+    let id = runtime_id.unwrap_or("default").to_string();
+    let process = state.processes.lock().await.remove(&id);
+    let Some(process) = process else {
+        return Ok(());
+    };
+    match child::process_kill(&process, "rpc_kill").await {
+        Ok(()) => {
+            state.last_activity.lock().await.remove(&process.runtime_id);
+            // 进程没了，租约也就没有意义：留着会让 `aux_list` 一直报一个不存在的实例。
+            crate::aux_leases::forget(&process.runtime_id);
+            Ok(())
+        }
+        Err(error) => {
+            // 终止未确认：**放回池里**，否则句柄随 `Arc` 一起落地、谁也没法再重试
+            // （复审第四轮 P1-2 的同一类问题）。放回后回收器/下一次 `rpc_kill` 仍能
+            // 找到它，`kill_on_drop` 也在 Arc 真正释放时兜底。
+            state
+                .processes
+                .lock()
+                .await
+                .insert(process.runtime_id.clone(), process);
+            Err(error)
+        }
     }
-    Ok(())
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
@@ -506,7 +518,13 @@ pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     crate::aux_leases::clear();
     crate::aux_reap::clear_pending_kills();
     for process in processes.values() {
-        child::process_kill(process, "kill_all (app exit)").await?;
+        // 应用退出路径用**短确认超时**（500ms）：`kill_all` 在 `RunEvent::Exit` 里
+        // `block_on`，N 个进程 × 5s 会把退出拖住。单条失败也不转成 `Err` 中断循环 ——
+        // 退出时必须尽力把所有进程都杀掉，失败降级为日志（进程泄漏由下次启动的
+        // `kill_on_drop`/孤儿回收兜底，不能让用户卡在"关不掉"）。
+        if let Err(error) = child::process_kill_fast(process, "kill_all (app exit)").await {
+            crate::logs::write(&process.runtime_id, &format!("exit kill failed: {error}"));
+        }
     }
     Ok(())
 }

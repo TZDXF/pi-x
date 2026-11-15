@@ -21,6 +21,28 @@ impl child::EventSink for NullSink {
     fn emit(&self, _: &'static str, _: &str, _: serde_json::Value) {}
 }
 
+/// 记账 sink：记录每条 `pi://exit` 的 payload（回归断言 `exits_emitted` 用）。
+#[derive(Clone, Default)]
+pub(crate) struct RecordingSink(pub Arc<std::sync::Mutex<Vec<(&'static str, serde_json::Value)>>>);
+
+impl RecordingSink {
+    pub(crate) fn exits(&self) -> Vec<serde_json::Value> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(event, _)| *event == "pi://exit")
+            .map(|(_, payload)| payload.clone())
+            .collect()
+    }
+}
+
+impl child::EventSink for RecordingSink {
+    fn emit(&self, event: &'static str, _: &str, payload: serde_json::Value) {
+        self.0.lock().unwrap().push((event, payload));
+    }
+}
+
 fn long_lived_child() -> tokio::process::Child {
     let mut cmd = if cfg!(windows) {
         let mut cmd = tokio::process::Command::new("cmd");
@@ -45,6 +67,41 @@ pub(crate) async fn install(
     policy: RuntimePolicy,
 ) -> Arc<ProcessState> {
     install_with_queue(state, runtime_id, policy).await.0
+}
+
+/// 装一个带**记账 sink** 的进程：可以数 `pi://exit` 发了几次、payload 是什么。
+pub(crate) async fn install_recording(
+    state: &RpcState,
+    runtime_id: &str,
+    policy: RuntimePolicy,
+) -> (Arc<ProcessState>, RecordingSink) {
+    let sink = RecordingSink::default();
+    let process = Arc::new(ProcessState {
+        runtime_id: runtime_id.into(),
+        policy,
+        ..Default::default()
+    });
+    process.activity.lock().await.reset(
+        process.current_generation(),
+        runtime_id,
+        "project",
+        None,
+        Arc::new(sink.clone()),
+    );
+    let (stdin_tx, _rx) = mpsc::channel::<String>(8);
+    *process.inner.lock().await = Some(SessionInner {
+        child: long_lived_child(),
+        stdin_tx,
+        pending: Arc::new(Mutex::new(HashMap::new())),
+        next_id: Arc::new(AtomicU64::new(1)),
+        remote: None,
+    });
+    state
+        .processes
+        .lock()
+        .await
+        .insert(runtime_id.into(), process.clone());
+    (process, sink)
 }
 
 /// 同 [`install`]，额外返回 stdin 队列的接收端（断言"没写 stdin"用）。
@@ -138,6 +195,31 @@ pub(crate) async fn user_idle_secs(state: &RpcState, runtime_id: &str) -> u64 {
         Some(process) => process.user_idle(std::time::Instant::now()).await.as_secs(),
         None => 0,
     }
+}
+
+/// 某个 runtime 的待答/在途请求数（pending 表长度）。
+pub(crate) async fn pending_count(state: &RpcState, runtime_id: &str) -> usize {
+    let process = state.processes.lock().await.get(runtime_id).cloned();
+    match process {
+        Some(process) => {
+            let guard = process.inner.lock().await;
+            match guard.as_ref() {
+                Some(inner) => inner.pending.lock().await.len(),
+                None => 0,
+            }
+        }
+        None => 0,
+    }
+}
+
+/// 该 runtime 的当前代际（"失败不得递增代际"的判据）。
+pub(crate) async fn generation_of(state: &RpcState, runtime_id: &str) -> u64 {
+    state
+        .processes
+        .lock()
+        .await
+        .get(runtime_id)
+        .map_or(0, |process| process.current_generation())
 }
 
 /// 池里当前的进程数（回收后核对用）。

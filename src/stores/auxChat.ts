@@ -9,6 +9,7 @@ import {
   AUX_LEASE_HEARTBEAT_MS,
   AUX_LEASE_TTL_MS,
   isAuxLeaseConflict,
+  isAuxLeaseReaping,
   ownAuxLeases,
   parseAuxLeaseEntries,
   shouldHeartbeat,
@@ -115,19 +116,31 @@ export function auxLeaseToken(runtimeId: string): string | undefined {
 }
 
 /**
- * 丢了 token（页面重载）后的静默窗口：到期前**不再发 claim**。
+ * 续租被拒后的静默窗口：到期前**不再发 claim**（两种原因各自处理，见下）。
  *
- * 为什么要这个窗口：`aux_claim` 对已有条目要求出示原 token，重载后没有 token 时
- * 每次心跳都会被 `auxLeaseConflict` 拒（复审第二轮 P1-2 的正确行为）。如果继续每 20s
- * 发一次，只是刷出一串无意义的失败日志；停掉 Tab 更是错的 —— 实例与进程都还活着，
- * 后端会在 TTL 之后惰性摘掉旧条目，届时同一 clientId 变成"首次 claim"自动成功。
- * 期间回收也**不会**误杀：空闲门槛（用户活动 > 30 分钟）远未到账。
+ * 1. **`auxLeaseConflict`（页面重载丢了 token）**：`aux_claim` 对已有条目要求出示原
+ *    token。不重试、不停用 Tab（实例与进程都还活着）—— 等旧条目 TTL（90s）过期后自动
+ *    恢复。**注意**：这期间**不保证**"不会被回收"。回收门槛看的是**用户活动**，原 Tab
+ *    在重载前可能已经累计闲置接近/超过 30 分钟；那种情况下心跳停掉、`claims` 归零后
+ *    回收器要是先于心跳跑一轮，该实例就会被正常回收（规格 §5 的预期结果，见 §11
+ *    已知边界）。
+ * 2. **`auxLeaseReaping`（该实例已被回收器接管）**：墓碑是**永久**的，再打永远是同一个
+ *    错误 —— 同样进退避窗口，避免每 20s 刷一次无效请求（每分钟 3 次）。
  */
 const leaseQuietUntil = new Map<string, number>()
+
+/**
+ * 已被回收器接管的实例（永久墓碑 ⇒ 永不再续租）。
+ *
+ * 与 `leaseQuietUntil` 分开：`Conflict` 是**暂时**的（TTL 后会恢复），`Reaping` 是
+ * **永久**的 —— 那个 runtimeId 已经进了回收墓碑，再 claim 只会一直报同一个错。
+ */
+const leaseReaping = new Set<string>()
 
 /** 续租一次（心跳与"实例就绪"共用）。返回新/当前 token；被拒或静默窗口内返回 undefined。 */
 async function claimAuxLease(runtimeId: string) {
   if (!bridge?.claim) return undefined
+  if (leaseReaping.has(runtimeId)) return undefined
   const quietUntil = leaseQuietUntil.get(runtimeId)
   if (quietUntil !== undefined && Date.now() < quietUntil) return undefined
   const token = leaseTokens.get(runtimeId)
@@ -140,8 +153,11 @@ async function claimAuxLease(runtimeId: string) {
     }
     return issued
   } catch (error) {
-    if (isAuxLeaseConflict(error)) {
-      // 不重试、不停用 Tab：等旧条目 TTL 过期后自动恢复。
+    if (isAuxLeaseReaping(error)) {
+      // 永久墓碑：这个实例不会再接受任何租约，直接停掉续租（不再重试）。
+      leaseReaping.add(runtimeId)
+    } else if (isAuxLeaseConflict(error)) {
+      // 暂时性：等旧条目 TTL 过期后自动恢复（不发、不停用 Tab、不循环重试）。
       leaseQuietUntil.set(runtimeId, Date.now() + AUX_LEASE_TTL_MS)
     }
     return undefined
@@ -312,6 +328,7 @@ export function resetAuxChatForTest() {
   stopAuxLeaseHeartbeat()
   leaseTokens.clear()
   leaseQuietUntil.clear()
+  leaseReaping.clear()
   tabs.splice(0)
   closedAuxIds.clear()
   sweptStores.clear()

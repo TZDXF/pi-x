@@ -209,7 +209,8 @@ async fn process_spawn_impl(
         );
     }
     if let Some(mut old) = guard.take() {
-        let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
+        // respawn 是"旧句柄直接丢弃"，不做退出确认（避免重启路径多等最多 5s）。
+        let _ = kill_inner(&state.runtime_id, &mut old, "respawn", None).await;
     }
 
     // 远程会话上下文：endpoint 供 kill 兜底，remote_pid 由 stderr reader 回填；
@@ -378,13 +379,20 @@ async fn process_spawn_impl(
             // Only surface it if this reader still belongs to the current session.
             let mut activity = activity.lock().await;
             if activity.is_current(own_gen) && generation.load(Ordering::Relaxed) == own_gen {
+                // 主动 kill 期间读到的 EOF 是**预期内**的退出（`idle`），不是崩溃（`error`）。
+                // kill 的意图位在真正动手之前就置上了，因此这里不会把 kill 报成 error。
+                let unexpected = !activity.expects_stop();
                 crate::logs::write(
                     &runtime_id,
-                    "unexpected exit: stdout closed (pi process exited)",
+                    if unexpected {
+                        "unexpected exit: stdout closed (pi process exited)"
+                    } else {
+                        "exit: stdout closed after an explicit kill"
+                    },
                 );
                 pending.lock().await.clear();
                 let next_gen = generation.fetch_add(1, Ordering::Relaxed) + 1;
-                let exit = activity.stop(next_gen, true);
+                let exit = activity.stop(next_gen, unexpected);
                 sink.emit(EXIT_EVENT, &runtime_id, exit);
             }
         });
@@ -821,17 +829,54 @@ pub(super) async fn process_running(state: &ProcessState) -> bool {
         .is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
 }
 
+/// 终止确认的默认超时：`taskkill`/`start_kill` 之后必须**看到子进程真的退出**。
+///
+/// 超过它就按失败处理（进程可能仍在跑）。`inner == None` 不能作为"已退出"的依据 ——
+/// 那正是上一轮"OS kill 失败被吞成 Ok"的漏洞（复审第四轮 P1-2）。
+const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 应用退出路径（`kill_all`）的确认超时：短一些，避免 N 个进程 × 5s 把退出拖住。
+const KILL_CONFIRM_TIMEOUT_EXIT: Duration = Duration::from_millis(500);
+
+/// 测试用：把确认超时压短（0 = 用默认）。
+#[cfg(test)]
+pub(super) static KILL_CONFIRM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 测试用：跳过真正的 OS 终止调用（模拟"kill 没把进程杀掉"）。
+#[cfg(test)]
+pub(super) static SKIP_OS_KILL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn kill_confirm_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        let ms = KILL_CONFIRM_TIMEOUT_MS.load(Ordering::Relaxed);
+        if ms > 0 {
+            return Duration::from_millis(ms);
+        }
+    }
+    KILL_CONFIRM_TIMEOUT
+}
+
+/// 杀进程树并**确认退出**。
+///
+/// `confirm`: `Some(timeout)` 表示必须等 `child.wait()` 在超时内返回才成功；
+/// `None` 保留旧语义（不发 OS 请求之外的确认，供 respawn 这类"旧句柄直接丢弃"的
+/// 路径使用，不引入额外延迟）。
+///
+/// 失败语义（复审第四轮 P1-2）：**taskkill 非零退出、taskkill 启动失败、
+/// 非 Windows 的 `start_kill` 失败、确认超时** 全部返回 `Err`，不再吞掉。
+/// 调用方（`process_kill`）负责把失败时的 `SessionInner` 放回状态。
 async fn kill_inner(
     runtime_id: &str,
     inner: &mut SessionInner,
     reason: &str,
+    confirm: Option<Duration>,
 ) -> Result<(), String> {
     crate::logs::write(
         runtime_id,
         &format!("kill pid={:?} reason={reason}", inner.child.id()),
     );
-    // Drop pending response waiters first so callers fail fast.
-    inner.pending.lock().await.clear();
     // 远程 pid 兜底（契约 §3.9 与多后端契约 §1.4）：本地通道断开后远端 pi 可能
     // 残留，经一次独立 exec 发 kill -TERM（5s 超时，wsl 在发行版内、docker 在
     // 容器 PID 命名空间内执行，语义相同）；失败降级为日志，不阻塞本地 kill。
@@ -854,41 +899,89 @@ async fn kill_inner(
             }
         }
     }
-    if let Some(pid) = inner.child.id() {
-        #[cfg(windows)]
-        {
-            // pi.cmd runs under cmd.exe: kill the whole tree.
-            let mut tk = Command::new("taskkill");
-            tk.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            tk.creation_flags(CREATE_NO_WINDOW);
-            match tk.output().await {
-                Ok(output) if !output.status.success() => {
-                    // A failed taskkill means the process may still be running
-                    // and untracked; leave an audit trail.
-                    crate::logs::write(
-                        runtime_id,
-                        &format!(
+    // 记录 OS 终止调用的失败原因（**不立刻**判失败）：taskkill 对"已经自己退出的
+    // 进程"本来就会报非零（找不到进程），那不是错误。是否真的失败，由下面的
+    // "确认退出"决定 —— 这是本轮 P1-2 的核心：`inner == None` 或 `Ok(())` 都不算数，
+    // **看到子进程真的退出**才算数。
+    let mut os_error: Option<String> = None;
+    #[cfg(test)]
+    let skip_os_kill = SKIP_OS_KILL.load(Ordering::Relaxed);
+    #[cfg(not(test))]
+    let skip_os_kill = false;
+    if !skip_os_kill {
+        if let Some(pid) = inner.child.id() {
+            #[cfg(windows)]
+            {
+                // pi.cmd runs under cmd.exe: kill the whole tree.
+                let mut tk = Command::new("taskkill");
+                tk.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                tk.creation_flags(CREATE_NO_WINDOW);
+                match tk.output().await {
+                    Ok(output) if !output.status.success() => {
+                        let message = format!(
                             "taskkill /PID {pid} failed: {} stdout={} stderr={}",
                             output.status,
                             String::from_utf8_lossy(&output.stdout).trim_end(),
                             String::from_utf8_lossy(&output.stderr).trim_end(),
-                        ),
-                    );
+                        );
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
+                    Err(e) => {
+                        let message = format!("taskkill /PID {pid} failed to run: {e}");
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
+                    Ok(_) => {}
                 }
-                Err(e) => {
-                    crate::logs::write(
-                        runtime_id,
-                        &format!("taskkill /PID {pid} failed to run: {e}"),
-                    );
+            }
+            #[cfg(not(windows))]
+            {
+                if let Err(e) = inner.child.start_kill() {
+                    let message = format!("start_kill failed: {e}");
+                    crate::logs::write(runtime_id, &message);
+                    os_error = Some(message);
                 }
-                Ok(_) => {}
             }
         }
-        #[cfg(not(windows))]
-        {
-            let _ = inner.child.start_kill();
+    }
+    match confirm {
+        Some(timeout) => match tokio::time::timeout(timeout, inner.child.wait()).await {
+            // 确认退出：即使 taskkill 报了非零（例如进程已自行退出），也算成功。
+            Ok(Ok(_status)) => {}
+            Ok(Err(e)) => {
+                let message = match os_error {
+                    Some(os) => format!("kill could not be confirmed: {os}; wait failed: {e}"),
+                    None => format!("kill could not be confirmed (wait failed): {e}"),
+                };
+                crate::logs::write(runtime_id, &message);
+                return Err(message);
+            }
+            Err(_) => {
+                let message = match os_error {
+                    Some(os) => format!(
+                        "kill not confirmed within {}ms (process may still run): {os}",
+                        timeout.as_millis()
+                    ),
+                    None => format!(
+                        "kill not confirmed within {}ms (process may still run)",
+                        timeout.as_millis()
+                    ),
+                };
+                crate::logs::write(runtime_id, &message);
+                return Err(message);
+            }
+        },
+        None => {
+            // 不做确认的路径（respawn 丢弃旧句柄）：仍要把 OS 失败如实告诉调用方。
+            if let Some(message) = os_error {
+                return Err(message);
+            }
         }
     }
+    // 确认退出后才清空 pending：失败的 kill 必须让在途请求继续可用（否则旧 reader
+    // 的 response 回来时已经没有接收端，等于把活进程的 pending 孤立掉）。
+    inner.pending.lock().await.clear();
     Ok(())
 }
 
@@ -901,32 +994,206 @@ async fn kill_inner(
 pub(super) static FAIL_NEXT_KILLS: AtomicU64 = AtomicU64::new(0);
 
 pub(super) async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
-    let mut guard = state.inner.lock().await;
-    {
-        let mut activity = state.activity.lock().await;
-        let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        activity.stop_and_emit(generation, false);
+    process_kill_confirming(state, reason, kill_confirm_timeout()).await
+}
+
+/// 应用退出路径专用：确认超时压到 500ms，N 个进程也不会把 `RunEvent::Exit` 拖住
+/// （`kill_all` 在那里 `block_on`，宁可放弃确认也不能让退出挂起）。
+pub(super) async fn process_kill_fast(state: &ProcessState, reason: &str) -> Result<(), String> {
+    process_kill_confirming(state, reason, KILL_CONFIRM_TIMEOUT_EXIT).await
+}
+
+/// 终止状态（`pi://exit` + 代际递增）**只在确认退出后提交**，且只提交一次。
+///
+/// 上一版在 `kill_inner` 之前就 `stop_and_emit` 并递增代际：kill 失败时前端已经
+/// 收到一次假 exit、旧 reader 的代际被作废、pending 被孤立，重试还会再发一次
+/// （复审第四轮 P1-1）。
+async fn commit_exit(state: &ProcessState, unexpected: bool) {
+    let mut activity = state.activity.lock().await;
+    if activity.has_exited() {
+        // 已由 stdout reader（EOF）或更早的一次成功 kill 提交过：不重复发。
+        return;
     }
+    let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
+    activity.stop_and_emit(generation, unexpected);
+}
+
+async fn process_kill_confirming(
+    state: &ProcessState,
+    reason: &str,
+    timeout: Duration,
+) -> Result<(), String> {
     #[cfg(test)]
     if FAIL_NEXT_KILLS.load(Ordering::Relaxed) > 0 {
         FAIL_NEXT_KILLS.fetch_sub(1, Ordering::Relaxed);
-        // 与真实失败一致：**不**把 inner 摘掉，进程仍然被追踪（重试才有对象）。
+        // 与真实失败一致：**不**动 inner、**不**动活动表/代际 —— 进程仍被追踪，
+        // 前端也不该收到 exit（这正是本轮的回归判据）。
         crate::logs::write(&state.runtime_id, "kill injected failure (test seam)");
         return Err(format!("injected kill failure: {reason}"));
     }
+
+    // 先置"这是主动 kill"的意图位（不发事件、不动代际）：stdout reader 若在这次 kill
+    // 期间读到 EOF，会把退出记成 `idle` 而不是 `error`。
+    state.activity.lock().await.mark_expected_stop();
+
+    let mut guard = state.inner.lock().await;
     let Some(mut inner) = guard.take() else {
+        // 没有内层会话：要么已确认退出过（reader 收了尾），要么从未 spawn。
+        // 终止状态仍然要幂等提交（`commit_exit` 内部按 `has_exited` 去重）。
+        drop(guard);
+        commit_exit(state, false).await;
         return Ok(());
     };
-    match kill_inner(&state.runtime_id, &mut inner, reason).await {
-        Ok(()) => Ok(()),
+    match kill_inner(&state.runtime_id, &mut inner, reason, Some(timeout)).await {
+        Ok(()) => {
+            drop(inner);
+            // **确认退出之后**才提交终止状态（递增代际 + 发 exit，且只发一次）。
+            commit_exit(state, false).await;
+            drop(guard);
+            Ok(())
+        }
         Err(error) => {
-            // kill 失败必须把会话还回状态：否则重试没有对象，`process_running` 也会因为
-            // `inner == None` 误判"已退出"，回收器就会把一个仍活着的进程记成已回收。
+            // 失败：把会话放回，代际不变、pending 与旧 reader 仍然可用，也不发 exit；
+            // 同时撤销意图位，让后续真正的崩溃仍能报成 `error`。
+            state.activity.lock().await.clear_expected_stop();
             if guard.is_none() {
                 *guard = Some(inner);
             }
             Err(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod kill_confirmation_tests {
+    use super::*;
+    use crate::rpc::{test_harness, RpcState, RuntimePolicy};
+
+    /// 故障注入与确认超时都是**进程级静态**，`cargo test` 默认并行：动它们的用例
+    /// 必须串行（与 `aux_reap` 的回收用例共用同一把锁，避免交叉污染）。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::aux_leases::test_lock()
+    }
+
+    /// **复审第四轮 P1-1 的回归**：一次注入失败 → 不发 exit、不递增代际、pending 保留；
+    /// 重试成功后 `pi://exit` **恰好发 1 次**。
+    ///
+    /// 质量实测的 `generation=0→1, exits_before_confirm=1, pending=1, 累计 2 次` 必须翻成
+    /// 这里这条。
+    #[tokio::test]
+    async fn a_failed_kill_emits_no_exit_and_keeps_the_generation_usable() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (_process, sink) =
+            test_harness::install_recording(&state, "aux:exit", RuntimePolicy::Aux).await;
+        let generation_before = test_harness::generation_of(&state, "aux:exit").await;
+        test_harness::add_in_flight_request(&state, "aux:exit").await;
+        test_harness::start_agent_run(&state, "aux:exit").await;
+        assert_eq!(test_harness::pending_count(&state, "aux:exit").await, 1);
+
+        // 注入 1 次 kill 失败。
+        crate::rpc::aux_probe::fail_next_kills(1);
+        let err = process_kill(&_process, "reap").await.expect_err("注入失败");
+        // ① 不发 exit（假退出正是本轮缺陷）。
+        assert_eq!(sink.exits().len(), 0, "kill 未确认时不得发 pi://exit");
+        // ② 代际不变：旧 reader 的 response 仍能进 dispatch。
+        assert_eq!(
+            test_harness::generation_of(&state, "aux:exit").await,
+            generation_before,
+            "失败的 kill 不得作废代际"
+        );
+        // ③ pending 未被孤立（还在表里，response 回来时有接收端）。
+        assert_eq!(
+            test_harness::pending_count(&state, "aux:exit").await,
+            1,
+            "失败的 kill 不得清掉 pending"
+        );
+        assert!(process_running(&_process).await, "进程仍在跑");
+        assert!(err.contains("injected kill failure"), "{err}");
+
+        // 重试（注入已耗尽）：确认退出后才提交终止状态，且只发一次 exit。
+        crate::rpc::aux_probe::clear_kill_failures();
+        process_kill(&_process, "reap").await.expect("重试成功");
+        crate::rpc::aux_probe::clear_kill_failures();
+        let exits = sink.exits();
+        assert_eq!(exits.len(), 1, "重试成功后 pi://exit 必须恰好 1 次：{exits:?}");
+        assert_eq!(exits[0]["pixRunStatus"], "idle", "主动 kill 的退出记 idle");
+        assert!(
+            test_harness::generation_of(&state, "aux:exit").await > generation_before,
+            "确认退出后才递增代际"
+        );
+        assert_eq!(test_harness::pending_count(&state, "aux:exit").await, 0);
+        assert!(!process_running(&_process).await);
+    }
+
+    /// 连续两次成功 kill（第二层防御）：`pi://exit` 仍只发一次（幂等）。
+    #[tokio::test]
+    async fn a_repeated_kill_never_emits_a_second_exit() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:twice", RuntimePolicy::Aux).await;
+        process_kill(&process, "reap").await.expect("第一次");
+        assert_eq!(sink.exits().len(), 1);
+        // 内层会话已被摘掉；再杀一次只会幂等提交（`has_exited` 去重）。
+        process_kill(&process, "reap").await.expect("第二次");
+        assert_eq!(sink.exits().len(), 1, "不得重复发 exit");
+    }
+
+    /// **复审第四轮 P1-2 的回归**：OS 终止调用"返回成功但进程没死"时必须报失败
+    /// （不能像上一版那样因为 `inner == None` 就"确认退出"）。
+    #[tokio::test]
+    async fn an_unconfirmed_os_kill_is_reported_as_failure_and_keeps_the_session() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, _sink) =
+            test_harness::install_recording(&state, "aux:os", RuntimePolicy::Aux).await;
+        // seam：跳过真实 taskkill + 极短确认超时 → 走"确认超时"分支。
+        crate::rpc::aux_probe::simulate_unconfirmed_kill(50);
+        let err = process_kill(&process, "reap").await.expect_err("未确认退出必须失败");
+        assert!(err.contains("not confirmed"), "{err}");
+        assert!(process_running(&process).await, "会话必须被放回（进程仍被追踪）");
+        assert_eq!(
+            test_harness::pending_count(&state, "aux:os").await,
+            0,
+            "本用例没有在途请求"
+        );
+        // 恢复真实终止路径后，下一次 kill 才能"确认退出"。
+        crate::rpc::aux_probe::clear_kill_failures();
+        process_kill(&process, "reap").await.expect("恢复后应成功");
+        crate::rpc::aux_probe::clear_kill_failures();
+        assert!(!process_running(&process).await);
+    }
+
+    /// 终止意图位：主动 kill 期间的 EOF 记 `idle`，撤销意图后崩溃仍记 `error`。
+    #[tokio::test]
+    async fn the_stop_intent_decides_idle_versus_error() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:intent", RuntimePolicy::Aux).await;
+        // 有一轮进行中的 agent 运行，exit 的 payload 才会带 `pixRunStatus`。
+        test_harness::start_agent_run(&state, "aux:intent").await;
+        {
+            let mut activity = process.activity.lock().await;
+            activity.mark_expected_stop();
+            assert!(activity.expects_stop());
+            activity.clear_expected_stop();
+            assert!(!activity.expects_stop());
+        }
+        // 正常（非 kill）路径的 exit 是 error。
+        process_kill(&process, "reap").await.expect("kill");
+        crate::rpc::aux_probe::clear_kill_failures();
+        let exits = sink.exits();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(
+            exits[0]["pixRunStatus"], "idle",
+            "主动 kill 的结果必须是 idle（意图位在 kill 前置上）: {exits:?}"
+        );
     }
 }
 

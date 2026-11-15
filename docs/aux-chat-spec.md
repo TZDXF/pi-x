@@ -367,9 +367,16 @@ Tab**（实例与进程都还活着），前端进入 `AUX_LEASE_TTL_MS`（90s�
 **clientId 的可信来源（取舍，未做）**：本轮**没有**把 clientId 绑到宿主侧身份（桌面恒为
 本地、远程用连接/会话 id）。理由是改动会跨桌面 `lib.rs`、远程 dispatch 与前端三处，而
 当前方案已经把"clientId 不是凭证"这条**结构性**堵住（续租要 token、释放要 token、list
-不回 token）。代价是：同一宿主上知道某个 clientId 的恶意代码仍可**首次**抢占（若该
-clientId 尚无条目），但抢占拿到的租约只能影响它自己那次 claim 的后续 release，无法
-读取/作废他人的 token；真正的宿主级身份绑定留待有远程目标时一起做。
+不回 token）。
+
+**残余风险（如实）**：**首次** claim 不校验调用者身份。同一宿主上能调用 `aux_list`
+的代码（= 同一控制面权限）可以：`aux_list` 取某个 clientId → 若该条目已过期/不存在，
+用该 clientId **首次** claim 拿到新 token → 再 release，把 `claims` 归零。若原 Tab 的
+用户活动已超过 30 分钟（**符合规格的空闲 Tab**），下一轮扫描就会回收它。即：
+**伪装成原持有者抢先领取会阻挠原持有者恢复心跳**（竞争组被回收、无竞争对照恢复后仍活，
+质量工程师已独立复现）。这不击穿"持续有效租约"的保护（有效租约期间无法抢占），且它
+要求的正是"已可直接 `rpc_kill`"的宿主权限（规格 §2 明确 aux 只保 pi 的控制面，不是
+invoke 沙箱）。真正的宿主级身份绑定留待有远程目标时一起做。
 
 **回收仲裁（§5 的补充）**：判定与 kill 之间有并发窗口，因此在**租约表同一把锁内**
 先复核 holders 为空并置 `reaping` 墓碑（`begin_reap`），放锁后才 kill。`claim` 在锁内
@@ -398,9 +405,33 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
    回归 `a_failed_kill_is_retried_and_only_counted_once_the_process_is_gone` 与
    `repeated_kill_failures_never_report_a_reap`。
 
-**已知边界（团队裁定，不是缺陷）**：已空闲 1 小时的 Tab 停跳 100 秒后被回收是**符合
-§5** 的（门槛是"用户活动"，不是"这次睡了多久"）。规格不给唤醒宽限；用户可见的表现是
-"切回去时 Tab 已销毁、重开是全新实例"，与"关闭即销毁、不保存历史"一致。
+**终止事件只在确认退出后提交（复审第四轮 P1-1/P1-2）**：`child::process_kill` 现在
+
+1. **先**置"这是主动 kill"的意图位（不发事件、不动代际）；
+2. 调 `kill_inner`（`taskkill`/`start_kill` + `child.wait()` **确认退出**，默认 5s 超时）；
+3. 只有**确认退出**之后才 `commit_exit`：递增代际 + 发 `pi://exit`，且按
+   `RuntimeActivity::has_exited` 去重（stdout reader 的 EOF 与 kill 的确认可能同时到，
+   `pi://exit` 只发一次；主动 kill 期间的 EOF 记 `idle`，不是 `error`）；
+4. 任一步失败（taskkill 非零、启动失败、`start_kill` 失败、确认超时）：**不递增代际、
+   不发 exit、不清 pending**，把 `SessionInner` 放回 `ProcessState`（进程仍被追踪，
+   重试才有对象）。`inner == None` 不再是"已退出"的依据。
+
+`kill_all`（`RunEvent::Exit` 里 `block_on`）用 `process_kill_fast`：确认超时压到
+**500ms**，且单条失败只记日志、不中断循环 —— 退出时宁可放弃确认也不能卡住 N×5s。
+`respawn`（丢弃旧句柄）用 `confirm = None`，不引入额外等待。
+
+**已知边界（团队裁定，不是缺陷）**：
+
+1. **唤醒/漏拍时序**：已空闲 1 小时的 Tab 停跳 100 秒后被回收是**符合 §5** 的（门槛是
+   "用户活动"，不是"这次睡了多久"）。规格不给唤醒宽限；用户可见的表现是"切回去时 Tab
+   已销毁、重开是全新实例"，与"关闭即销毁、不保存历史"一致。
+2. **首次 claim 不校验身份**：见上文"残余风险"。要求宿主控制面权限（该权限已可直接
+   `rpc_kill`；规格 §2 明确 aux 只保 pi 的控制面，不是沙箱）。表现是"过期窗口内被抢先
+   领取会阻挠原持有者恢复"。不做宿主级身份绑定（等有远程目标时一起做）。
+3. **永久 kill 失败**：某个实例的 kill 一直无法确认退出时，它会在回收器的待重试表里
+   长期保留（一份 `Arc<ProcessState>` 句柄），并在租约侧一直回 `auxLeaseReaping`
+   （前端已进退避，不再每 20s 打一次）。这是**有意的**：宁可留下一条可重试句柄，也不
+   假装已回收（假装会在孤儿进程与"日志显示已回收"之间制造矛盾）。
 
 **重连归属**（第 4 条）：`reattachRunningSessions` 先调 `aux_list`，只对
 `clientId == 本机 && parentRuntimeId 在本地注册表` 的条目恢复 pending UI 与流式标记；
