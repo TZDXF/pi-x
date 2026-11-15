@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import * as vue from "vue"
+import { menuPlacement } from "@/lib/selectionMenuPlacement"
 
 /**
  * 划词浮层的两个挂载点（TZD-103）：
@@ -65,6 +66,9 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
     defineEmits: () => emits,
     useI18n: () => ({ t: (key: string) => key }),
     captureOffsets: () => ({ start: 3, end: 12 }),
+    // 纯函数按真实实现注入（像素级断言在 `aux-selection-placement.test.ts`）。
+    menuPlacement,
+    MenuPlacement: undefined,
     selectionEndRect: () => selection.anchor ?? { right: 120, top: 40, bottom: 60 },
     selectionLineRange: () => (selection.lineRange ? { ...selection.lineRange } : null),
     onBeforeUnmount: (callback: () => void) => vue.onScopeDispose(callback),
@@ -87,9 +91,11 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
   const scope = vue.effectScope()
   scope.run(() =>
     vm.runInContext(
-      ts.transpile(script + `\nglobalThis.api = { state, placement, tooLong, onMouseUp, askInAux, quoteSelection };`, {
-        target: ts.ScriptTarget.ES2022,
-      }),
+      ts.transpile(
+        script +
+          `\nglobalThis.api = { state, placement, tooLong, menuBox, measuredWidth, onMouseUp, askInAux, quoteSelection };`,
+        { target: ts.ScriptTarget.ES2022 },
+      ),
       context,
     ),
   )
@@ -236,12 +242,19 @@ test("code mode renders only the aux action and chat mode renders both", () => {
   expect(template.split("selectionAskAux").length - 1).toBe(2)
 })
 
-test("the anchor / flip / clamp algorithm and document listeners are unchanged", () => {
-  // 定位：末行行尾、左右钳到视口宽度 168、下方不足 48 像素时翻到上方。
-  expect(source).toMatch(/const left = Math\.max\(8, Math\.min\(anchor\.left, window\.innerWidth - 168\)\)/)
-  expect(source).toMatch(/const flip = window\.innerHeight - anchor\.bottom < 48/)
-  expect(source).toMatch(/bottom: `\$\{window\.innerHeight - anchor\.top \+ 4\}px`/)
-  expect(source).toMatch(/top: `\$\{anchor\.bottom \+ 4\}px`/)
+test("the anchor / flip / clamp rules are unchanged and only the width source moved", () => {
+  // 定位规则委派给纯函数（像素级用例见 `aux-selection-placement.test.ts`）：
+  // 锚点仍是 selectionEndRect（多行取最后一行），翻转阈值 48、间距 4、左边距 8 全部保留。
+  expect(source).toContain('import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"')
+  expect(source).toContain("return menuPlacement(")
+  expect(source).toContain("state.value.anchor")
+  expect(source).toContain("{ width: window.innerWidth, height: window.innerHeight }")
+  // 横向钳制改为**实测宽度**：不再有写死的 168。
+  expect(source).not.toContain("window.innerWidth - 168")
+  expect(source).toContain("measuredWidth.value || estimatedWidth.value")
+  expect(source).toContain("menuBox.value?.offsetWidth")
+  // 锚点来源仍是 selectionEndRect（不自造矩形）。
+  expect(source).toContain("const endRect = selectionEndRect(range)")
   // 四个 document 级监听（含捕获阶段的 scroll）与卸载清理。
   for (const type of ["selectionchange", "mouseup", "keyup"]) {
     expect(source).toContain(`document.addEventListener("${type}"`)

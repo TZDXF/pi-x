@@ -53,7 +53,8 @@ export function useSelectionQuotes(deps: {
    * 两条路径返回同一份 `ok/reason/duplicate` 结果，提示逻辑不分叉。
    */
   function addSelection(draft: Omit<PendingConversationSelection, "id">) {
-    if (deps.auxRuntimeId) return addAuxSelection(deps.auxRuntimeId, draft)
+    // aux 面板内的划词：消息 id 属于本 aux 正文，记下来才不会被当成跨 runtime 引用。
+    if (deps.auxRuntimeId) return addAuxSelection(deps.auxRuntimeId, { ...draft, sourceRuntimeId: deps.auxRuntimeId })
     return selectionStore.add(selectionScope.value, draft)
   }
   function updateSelection(id: string, comment: string) {
@@ -72,6 +73,28 @@ export function useSelectionQuotes(deps: {
     const { messageId, startOffset, endOffset } = item
     if (typeof messageId !== "number" || typeof startOffset !== "number" || typeof endOffset !== "number") return null
     return { messageId, startOffset, endOffset }
+  }
+  /**
+   * 该引用能否在**本面板**就近定位（TZD-103 P2-5）。
+   *
+   * 消息 id 只在产生它的那个会话里有意义：主会话的消息 1 与 aux 的消息 1 是两条无关
+   * 内容。因此只在"来源 runtime 就是自己"时才做锚点恢复与徽标；跨 runtime（含来源未
+   * 标注的旧条目）一律不猜位置 —— 宁可只在摘要里显示，也不把无关正文闪亮/加徽标。
+   */
+  function localTarget(item: SelectionItem) {
+    const target = messageTarget(item)
+    if (!target) return null
+    const sourceRuntimeId = (item as Partial<PendingAuxSelection>).sourceRuntimeId
+    if (deps.auxRuntimeId) return sourceRuntimeId === deps.auxRuntimeId ? target : null
+    // 主会话：自己产生的引用不带来源标记；带别的 runtime 标记的属于 aux，不在主表定位。
+    return sourceRuntimeId === undefined || sourceRuntimeId === session.runtimeId ? target : null
+  }
+  /** 浮层锚点：没有可定位的正文时（文件来源引用）退到一个可用的视口位置。 */
+  function fallbackAnchor(): { left: number; top: number; bottom: number } | null {
+    const rect = selectionRoot.value?.getBoundingClientRect()
+    const left = rect ? Math.min(rect.right - 16, window.innerWidth - 300) : window.innerWidth / 2
+    const top = rect ? rect.top + 24 : 24
+    return { left: Math.max(8, left), top, bottom: top + 20 }
   }
   const selectionPopup = ref<(SelectionPopupState & { id?: string }) | null>(null)
   function pushSelectionToast(result: { ok: boolean; reason?: string; duplicate?: boolean }) {
@@ -131,7 +154,7 @@ export function useSelectionQuotes(deps: {
     const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
     if (root) {
       pendingSelections.value.forEach((item, index) => {
-        const target = messageTarget(item)
+        const target = localTarget(item)
         if (!target) return
         const wrapper = root.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
         if (!wrapper) return
@@ -223,7 +246,7 @@ export function useSelectionQuotes(deps: {
   onBeforeUnmount(resetFlash)
   function flashLocatedSelection(item: SelectionItem) {
     clearFlash?.()
-    const target = messageTarget(item)
+    const target = localTarget(item)
     if (!target) return
     const wrapper = selectionRoot.value?.querySelector(
       `[data-message-id="${target.messageId}"] [data-selection-source]`,
@@ -234,7 +257,8 @@ export function useSelectionQuotes(deps: {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
     resetFlash()
-    const target = messageTarget(item)
+    const target = localTarget(item)
+    // 文件来源/跨 runtime 的引用没有本面板可定位的正文：不滚动、不闪亮（摘要仍可用）。
     if (!target) return
     const request = locateRequest
     const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
@@ -263,7 +287,7 @@ export function useSelectionQuotes(deps: {
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
     const root = selectionRoot.value
-    const target = messageTarget(item)
+    const target = localTarget(item)
     const wrapper = target
       ? root?.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
       : undefined
@@ -280,6 +304,8 @@ export function useSelectionQuotes(deps: {
       const badgeRect = badge.getBoundingClientRect()
       anchor = { left: badgeRect.right, top: badgeRect.top, bottom: badgeRect.bottom }
     }
+    // 文件来源引用（无 messageId）也必须有可用的编辑锚点：否则摘要里的"编辑"点了没反应。
+    if (!anchor) anchor = fallbackAnchor()
     if (!anchor) return
     selectionPopup.value = {
       id: item.id,

@@ -190,10 +190,32 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
 `stores/conversationSelections.ts` 的单例，语义不变。`projects` 级 `codeComments`
 **不被 aux 消费**（aux 的发送控制 `contexts: "aux"` 一律视为空）。
 
-**路由**（`stores/auxChat.ts` 的 `askInAux`）：有激活的 aux Tab → 追加到它的桶并把
-槽位切成激活；没有激活但有存活实例 → 复用最近一个；一个都没有 → 新建后投递。连点
-同一手势只建一个实例（`pendingCreations` 复用 + `appendConversationSelection` 判重）。
-入口缺失/名额满/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。
+**路由**（`stores/auxChat.ts` 的 `askInAux`）：**入口优先** —— 先确认该父会话的
+router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸载）返回 `unavailable`
+且**不写任何桶**。入口可用时：有激活的 aux Tab → 追加到它的桶并把槽位切成激活；
+没有激活但有存活实例 → 复用最近一个（不新开，避免撞 5 个上限与面板碎片化）；
+一个都没有 → 新建后投递。连点同一手势只建一个实例（`pendingCreations` 复用 +
+`appendConversationSelection` 判重）。入口缺失/名额满/引用超限各有一次用户可见提示
+（`lib/auxAsk.ts`）。
+
+**来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。
+消息 `messageId`/字符区间只在该 runtime 里有意义，因此 aux 正文的选区恢复与索引徽标
+只在 `sourceRuntimeId === 本面板 runtimeId` 时生效；跨 runtime（含未标注的旧条目）一律
+不猜位置（只在摘要里列出）。文件来源引用（`{path, lineRange}`，无 `messageId`）没有可
+定位正文，但编辑动作仍给一个可用的视口锚点（摘要里的"编辑"不会点了没反应）。
+`AuxChatPane` 的 `ChatComposer` 必须接 `@locate-selection` / `@edit-selection` 到
+`ChatTurnList` 已 expose 的 `locateSelection` / `editSelection`，否则动作在子组件 emit
+处中断。
+
+**浮层定位**（P2-1）：锚点仍是 `selectionEndRect`（多行取最后一行），翻转阈值 48px、
+间距 4px、左边距 8px、四个 document 级监听与控件内选区排除**全部不变**；**只有横向
+钳制**从写死的 168px 换成浮层**实测宽度**（`lib/selectionMenuPlacement.ts` 纯函数：
+左缘不早于 8px、右缘不超出视口）。1280px 视口右缘划词时双按钮整体在视口内。
+
+**`ProjectFilePreview` 的两个根**：模板是 `<section>` + 覆盖层浮层（fragment 下 Vue 3
+**不再自动继承 attrs**），因此显式 `defineOptions({ inheritAttrs: false })` 并把
+`v-bind="$attrs"` 只绑到 section；否则调用方的 `data-package-resource-preview` 与
+`class` 会静默丢失（`e2e/package-resources.spec.ts` 会红）。
 
 **发送与清理同源**（`composables/useChatSendControl.ts`）：`contexts` 从
 `"shared" | "none"` 扩为 `"shared" | "aux" | "none"`；`"aux"` 读本桶、序列化仍走
@@ -203,6 +225,8 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
 
 验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、
 `tests/aux-send-control.test.ts`（prompt 组装含 `# userselect:`、只清本桶、批注不消费、
-abort 不清）、`tests/aux-selection-routing.test.ts`（激活优先 / 复用 / 新建 / 去重 /
-清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
-`tests/aux-selection-entries.test.ts`（两处入口接线）。
+abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活优先 / 复用 / 新建 /
+去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
+`tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
+`tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
+`tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。

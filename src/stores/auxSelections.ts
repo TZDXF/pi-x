@@ -50,6 +50,7 @@ export function addAuxSelection(runtimeId: string, payload: AuxAskPayload): Conv
     ...auxSelectionWire(payload),
     id: createConversationSelectionId(),
     ...(payload.source ? { source: payload.source } : {}),
+    ...(payload.sourceRuntimeId?.trim() ? { sourceRuntimeId: payload.sourceRuntimeId } : {}),
     ...(typeof payload.messageId === "number" && Number.isFinite(payload.messageId)
       ? { messageId: payload.messageId }
       : {}),

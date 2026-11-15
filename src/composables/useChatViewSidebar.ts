@@ -66,7 +66,8 @@ export function useChatViewSidebar(deps: {
   async function askAux(payload: AuxAskPayload) {
     const outcome = await askAuxSelection({
       parentRuntimeId: deps.runtimeId,
-      payload,
+      // 消息 id 属于发起手势的这个会话：aux 面板据此判断"能不能在本面板就近定位"。
+      payload: { ...payload, sourceRuntimeId: deps.runtimeId },
       t,
       toast: (message, kind) => deps.ui.pushToast(message, kind),
     })

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { MessageSquarePlus, TextQuote } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { captureOffsets, selectionEndRect } from "@/lib/selectionAnchors"
+import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
 import { selectionLineRange } from "@/lib/codeComments"
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import type { ConversationSelectionSource } from "@/lib/conversationSelections"
@@ -180,21 +181,41 @@ onBeforeUnmount(() => {
   document.removeEventListener("scroll", onScroll, true)
 })
 
-// 按钮贴在划词结束处：默认在末行行尾下方，空间不足翻到上方。
-const placement = computed(() => {
+/**
+ * 浮层的实测宽度（横向钳制用）。
+ *
+ * 为什么不再写死 168：chat 模式有两个横排按钮（"引用到输入框" + "在辅助对话中提问"），
+ * 真实宽度远超 168，1280px 视口右缘划词会把按钮推出视口（TZD-103 P2-1）。这里先给
+ * 一个保守估计值，`nextTick` 后按 `offsetWidth` 实测覆盖；钳制/翻转规则本身没变
+ * （见 `lib/selectionMenuPlacement.ts`）。
+ */
+const menuBox = ref<HTMLElement | null>(null)
+const measuredWidth = ref(0)
+const estimatedWidth = computed(() => (props.mode === "code" ? 148 : 262))
+async function measureWidth() {
+  await nextTick()
+  const width = menuBox.value?.offsetWidth ?? 0
+  if (width > 0 && width !== measuredWidth.value) measuredWidth.value = width
+}
+watch(
+  () => state.value,
+  shown => (shown ? void measureWidth() : (measuredWidth.value = 0)),
+  { immediate: true },
+)
+
+// 按钮贴在划词结束处：默认在末行行尾下方，空间不足翻到上方（规则未改，只换宽度来源）。
+const placement = computed<MenuPlacement | null>(() => {
   if (!state.value) return null
-  const anchor = state.value.anchor
-  const left = Math.max(8, Math.min(anchor.left, window.innerWidth - 168))
-  const flip = window.innerHeight - anchor.bottom < 48
-  return {
-    left: `${left}px`,
-    ...(flip ? { bottom: `${window.innerHeight - anchor.top + 4}px` } : { top: `${anchor.bottom + 4}px` }),
-  }
+  return menuPlacement(
+    state.value.anchor,
+    { width: window.innerWidth, height: window.innerHeight },
+    measuredWidth.value || estimatedWidth.value,
+  )
 })
 </script>
 
 <template>
-  <div v-if="state && placement" class="fixed z-50" :style="placement">
+  <div ref="menuBox" v-if="state && placement" class="fixed z-50 max-w-[calc(100vw-16px)]" :style="placement">
     <div class="flex items-center gap-1">
       <!-- 会话正文模式保留原动作；代码模式下"引用到输入框"仍是行号栏批注，不在这里重复。 -->
       <Button

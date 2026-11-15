@@ -27,6 +27,14 @@ export interface CodeSelectionRange {
  */
 export interface AuxAskPayload {
   text: string
+  /**
+   * 该手势**发生所在**的会话 runtime（消息 id / 字符区间的归属者；TZD-103 P2-5）。
+   *
+   * 为什么必须记下来：主会话划词会把 `messageId` 写进 aux 的桶，而 aux 正文里有自己的
+   * 消息 1 —— 不记来源就会在 aux 面板里"就近"恢复到无关内容。文件来源不带（路径与
+   * 行号是文件维度，跨 runtime 仍然有效）。
+   */
+  sourceRuntimeId?: string
   /** 代码预览来源的文件路径（相对会话目录）；聊天来源不带。 */
   path?: string
   /** 代码预览来源的行区间；聊天来源不带。 */
@@ -40,6 +48,8 @@ export interface AuxAskPayload {
 /** 桶内待发送的 aux 引用：wire 字段 + 身份与定位元数据。 */
 export interface PendingAuxSelection extends ConversationSelectionText {
   id: string
+  /** 消息 id / 偏移的归属 runtime（见 `AuxAskPayload.sourceRuntimeId`）。 */
+  sourceRuntimeId?: string
   source?: ConversationSelectionSource
   messageId?: number
   startOffset?: number

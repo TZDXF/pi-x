@@ -126,7 +126,7 @@ function retry() {
  * 否则摘要会显示在另一个面板里。
  */
 function onAuxAsk(payload: AuxAskPayload) {
-  const result = addAuxSelection(props.tab.runtimeId, payload)
+  const result = addAuxSelection(props.tab.runtimeId, { ...payload, sourceRuntimeId: props.tab.runtimeId })
   const notice = result.ok
     ? describeAuxAskResult(t, { ok: true, duplicate: result.duplicate })
     : describeAuxAskResult(t, { ok: false, reason: "append", appendReason: result.reason })
@@ -196,6 +196,8 @@ async function copyText(text: string) {
         :ensure-started="async () => ready"
         :controls="controls"
         hide-workspace-context
+        @locate-selection="conversation?.locateSelection($event)"
+        @edit-selection="conversation?.editSelection($event)"
       >
         <template #model>
           <ModelThinkingSelect

@@ -1,5 +1,6 @@
 import { expect, test } from "vitest"
 import { readFileSync } from "node:fs"
+import { compileScript, parse } from "vue/compiler-sfc"
 
 /**
  * 第二入口（代码 / Markdown 预览）的接线（TZD-103）：复用**同一份**浮层、
@@ -52,7 +53,7 @@ test("the chat list forwards auxAsk and routes quotes into the aux pane's own bu
   expect(pane).toContain(':aux-runtime-id="runtimeId"')
   expect(pane).toContain('@aux-ask="onAuxAsk"')
   // 面板内的划词直接进本实例的桶（同一个 Tab 内只有一处摘要）。
-  expect(pane).toContain("addAuxSelection(props.tab.runtimeId, payload)")
+  expect(pane).toContain("addAuxSelection(props.tab.runtimeId, { ...payload, sourceRuntimeId: props.tab.runtimeId })")
 })
 
 test("ChatView routes the chat selection gesture without growing the view", () => {
@@ -75,6 +76,42 @@ test("the aux pane send control reads its own bucket instead of full isolation",
   expect(control).toContain('contexts?: "shared" | "aux" | "none"')
   expect(control).toContain("if (auxScoped) return [...auxSelectionItems(session.runtimeId)]")
   expect(control).toContain("if (auxScoped) clearAuxSelectionBucket(session.runtimeId)")
+})
+
+test("the preview keeps caller attrs on its single visible root (fragment regression)", () => {
+  // 回归（TZD-103 阻塞项）：模板有两个根（section + 覆盖层浮层）时，Vue 3 不再自动继承
+  // attrs —— `data-package-resource-preview`（E2E 定位）与 `class` 会静默丢失。
+  // 修法：显式 `inheritAttrs: false` + 只把 attrs 绑到 section 上。
+  const preview = read("components/ProjectFilePreview.vue")
+  expect(preview).toContain("defineOptions({ inheritAttrs: false })")
+  // section 起始标签带 `v-bind="$attrs"`（从模板起点找，避免命中脚本里的注释）。
+  const templateStart = preview.indexOf("</script>")
+  const sectionStart = preview.indexOf("<section", templateStart)
+  const sectionTag = preview.slice(sectionStart, preview.indexOf(">", sectionStart) + 1)
+  expect(sectionTag).toContain('v-bind="$attrs"')
+  // 浮层是覆盖层，不该接调用方属性（否则 data-* 会落到浮层上）。
+  const menu = preview.slice(preview.indexOf("<ConversationSelectionMenu"))
+  expect(menu).not.toContain('v-bind="$attrs"')
+  // 结构证据：section 仍是可见根，浮层挂在其后（不是 section 内部子节点）。
+  const section = preview.indexOf("<section", preview.indexOf("</script>"))
+  const sectionEnd = preview.indexOf("</section>")
+  const menuAt = preview.indexOf("<ConversationSelectionMenu")
+  expect(section).toBeGreaterThan(-1)
+  expect(menuAt).toBeGreaterThan(sectionEnd)
+})
+
+test("the aux composer forwards summary locate/edit to the exposed chat list", () => {
+  const pane = read("components/aux-chat/AuxChatPane.vue")
+  // P2-3：子组件 emit 了，但没接线就等于点了没反应。
+  expect(pane).toContain('@locate-selection="conversation?.locateSelection($event)"')
+  expect(pane).toContain('@edit-selection="conversation?.editSelection($event)"')
+  // 编译真实模板：两个处理器在 `ChatComposer` 上必须真的存在（不能是 undefined）。
+  const { descriptor } = parse(pane)
+  const compiled = compileScript(descriptor, { id: "aux-pane-wiring", inlineTemplate: true }).content
+  expect(compiled).toContain("onLocateSelection")
+  expect(compiled).toContain("onEditSelection")
+  expect(compiled).toMatch(/locateSelection/)
+  expect(compiled).toMatch(/editSelection/)
 })
 
 test("i18n carries the two new keys in both locales", () => {

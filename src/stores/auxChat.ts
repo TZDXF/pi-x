@@ -481,14 +481,18 @@ export type AuxAskOutcome =
  * 同一手势去重：连点时第一次就把实例同步登记进表（`openAux` 先入表再 `await` spawn），
  * 第二次直接命中"存活实例"分支；同一段文字再进桶时 `appendConversationSelection`
  * 判重，因此**只建一个实例、引用不重复**。
+ *
+ * **入口优先**（TZD-103 P2-2，成员裁定）：先确认该父会话的 router 存在，再谈复用或
+ * 新建。父 `ChatView` 卸载后 router 注销、`reveal` 也无人接，此时即便实例还活着也
+ * 返回 `unavailable` 并且**不写任何桶** —— 否则会留下一条投不进也看不到的引用。
  */
 export async function askInAux(parentRuntimeId: string, payload: AuxAskPayload): Promise<AuxAskOutcome> {
   if (!parentRuntimeId) return { ok: false, reason: "noParent" }
   const router = auxAskRouter(parentRuntimeId)
-  // 复用（激活优先，其次该父会话最近一个）：两者都是"已有实例"，不新开进程。
-  const existing = router?.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
-  if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
   if (!router) return { ok: false, reason: "unavailable" }
+  // 复用（激活优先，其次该父会话最近一个）：两者都是"已有实例"，不新开进程。
+  const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
+  if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
   const created = await router.open(parentRuntimeId)
   if (!created) return { ok: false, reason: "limit" }
   // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。

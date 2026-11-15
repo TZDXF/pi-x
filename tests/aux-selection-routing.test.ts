@@ -155,10 +155,23 @@ test("no router or no capacity writes into no bucket at all", async () => {
   expect(missing).toEqual({ ok: false, reason: "unavailable" })
   expect(aux.auxLiveCount()).toBe(0)
 
-  // 名额已满：`open` 返回 null（由 useAuxTabs 的 openForAsk 判定），引用不入任何桶。
-  for (let index = 0; index < 5; index++) await liveTab(`runtime:p${index}`, 40 + index)
+  // **入口优先**（P2-2）：实例还活着、但父 ChatView 已卸载（router 注销）时，
+  // 仍必须是 `unavailable` 且一个字都不写桶 —— 否则会留下投不进也看不到的引用。
+  const orphan = await liveTab(parent, 45)
+  const orphaned = await aux.askInAux(parent, { text: "无入口的引用" })
+  expect(orphaned).toEqual({ ok: false, reason: "unavailable" })
+  expect(buckets.auxSelectionCount(orphan.runtimeId)).toBe(0)
+
+  // 入口可用、实例也还活着 → 复用那个实例（这是裁定过的语义：有实例就别新建）。
   aux.registerAuxAskRouter(parent, { active: () => null, open: async () => null, reveal: () => {} })
-  const full = await aux.askInAux(parent, { text: "正文" })
+  const reused = await aux.askInAux(parent, { text: "入口恢复后的引用" })
+  expect(reused.ok && reused.tab.runtimeId).toBe(orphan.runtimeId)
+  expect(buckets.auxSelectionCount(orphan.runtimeId)).toBe(1)
+
+  // 名额已满且**该父会话没有实例**：`open` 返回 null（由 useAuxTabs 的 openForAsk 判定），
+  // 引用不入任何桶。
+  aux.registerAuxAskRouter("runtime:empty", { active: () => null, open: async () => null, reveal: () => {} })
+  const full = await aux.askInAux("runtime:empty", { text: "正文" })
   expect(full).toEqual({ ok: false, reason: "limit" })
 })
 

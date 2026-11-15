@@ -29,6 +29,13 @@ import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
 import "vue-stream-markdown/index.css"
 
+/**
+ * 模板有两个根（`<section>` + 浮动菜单），Vue 3 在 fragment 下**不再自动继承 attrs**：
+ * 调用方传的 `data-package-resource-preview`（E2E 定位）与 `class` 会静默丢失。
+ * 因此显式关掉隐式透传、把 attrs 只绑到 section 上（菜单是覆盖层，不该接调用方属性）。
+ */
+defineOptions({ inheritAttrs: false })
+
 const props = withDefaults(
   defineProps<{
     project: string
@@ -312,7 +319,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-1 flex-col border-r" :aria-label="t('projectFiles.preview')">
+  <section
+    v-bind="$attrs"
+    class="flex min-h-0 min-w-0 flex-1 flex-col border-r"
+    :aria-label="t('projectFiles.preview')"
+  >
     <div class="flex h-10 shrink-0 items-center gap-0.5 border-b px-1.5">
       <Button
         v-if="closable"
