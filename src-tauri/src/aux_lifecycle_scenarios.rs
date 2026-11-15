@@ -50,10 +50,10 @@ mod tests {
 
         let t0 = Instant::now();
         step(1, "两个真实 aux 子进程已起来（aux:client-a / aux:client-b）");
-        let token_a = aux_leases::claim_at(&state, "aux:client-a", "client-a", t0)
+        let token_a = aux_leases::claim_at(&state, "aux:client-a", "client-a", None, t0)
             .await
             .expect("A 领取租约");
-        let token_b = aux_leases::claim_at(&state, "aux:client-b", "client-b", t0)
+        let token_b = aux_leases::claim_at(&state, "aux:client-b", "client-b", None, t0)
             .await
             .expect("B 领取租约");
         step(
@@ -72,7 +72,7 @@ mod tests {
         let mut now = t0;
         while now < idle_now(t0, 31 * 60) {
             now += Duration::from_secs(20);
-            let renewed = aux_leases::claim_at(&state, "aux:client-b", "client-b", now)
+            let renewed = aux_leases::claim_at(&state, "aux:client-b", "client-b", Some(&token_b), now)
                 .await
                 .expect("B 心跳");
             assert_eq!(renewed, token_b, "续期必须续用同一 token");
@@ -117,10 +117,10 @@ mod tests {
         test_harness::install(&state, "aux:shared", RuntimePolicy::Aux).await;
         aux_probe::set_aux_parent(&state, "aux:shared", Some("main".into())).await;
         let t0 = Instant::now();
-        let token_a = aux_leases::claim_at(&state, "aux:shared", "client-a", t0)
+        let token_a = aux_leases::claim_at(&state, "aux:shared", "client-a", None, t0)
             .await
             .unwrap();
-        let _token_b = aux_leases::claim_at(&state, "aux:shared", "client-b", t0)
+        let token_b = aux_leases::claim_at(&state, "aux:shared", "client-b", None, t0)
             .await
             .unwrap();
         step(1, "同一实例被两个客户端同时持有（分屏/双窗口）");
@@ -132,7 +132,7 @@ mod tests {
         let mut now = t0;
         while now < idle_now(t0, 31 * 60) {
             now += Duration::from_secs(20);
-            aux_leases::claim_at(&state, "aux:shared", "client-b", now)
+            aux_leases::claim_at(&state, "aux:shared", "client-b", Some(&token_b), now)
                 .await
                 .expect("B 心跳");
         }
@@ -146,6 +146,7 @@ mod tests {
         let reaped = aux_reap::reap_once(&state, after, AUX_IDLE_LIMIT).await;
         assert_eq!(reaped.len(), 1, "两个客户端都停跳后应可回收：{reaped:?}");
         assert!(!crate::rpc::running(&state, Some("aux:shared")).await);
+        assert!(token_b.len() == 36, "B 拿到的是服务端签发的 token");
         step(3, "B 也停跳 → 租约过期 + 空闲超阈 → reaped=1，进程被 kill");
         aux_leases::reset_for_test();
     }
@@ -162,10 +163,10 @@ mod tests {
         aux_probe::set_aux_parent(&state, "aux:mine", Some("main".into())).await;
         aux_probe::set_aux_parent(&state, "aux:theirs", Some("other-window-parent".into())).await;
         let t0 = Instant::now();
-        let token = aux_leases::claim_at(&state, "aux:mine", "my-client", t0)
+        let token = aux_leases::claim_at(&state, "aux:mine", "my-client", None, t0)
             .await
             .unwrap();
-        aux_leases::claim_at(&state, "aux:theirs", "their-client", t0)
+        aux_leases::claim_at(&state, "aux:theirs", "their-client", None, t0)
             .await
             .unwrap();
         step(1, "两个客户端（本机 / 他窗口）各持有一个实例");
@@ -207,6 +208,87 @@ mod tests {
         aux_leases::reset_for_test();
     }
 
+    /// **复审第二轮 P1-2 的完整攻击链**（质量工程师的原复现，场景化）：
+    /// `aux_list` 取真实 victim clientId → 无 token `claim` 被拒 → 拿 victim 的旧
+    /// token `release` 仍成功，且 holders 全程 ≥1。
+    #[tokio::test]
+    async fn a_public_client_id_cannot_be_turned_into_a_release_credential() {
+        let _guard = aux_leases::test_lock();
+        aux_leases::reset_for_test();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:victim", RuntimePolicy::Aux).await;
+        aux_probe::set_aux_parent(&state, "aux:victim", Some("main".into())).await;
+        let t0 = Instant::now();
+        let victim_token = aux_leases::claim_at(&state, "aux:victim", "victim", None, t0)
+            .await
+            .expect("受害者首次领取");
+        step(1, "受害者首次 claim，拿到服务端签发的 token");
+
+        let parents = aux_probe::aux_runtime_parents(&state).await;
+        let list = aux_leases::entries(&parents, t0);
+        let victim_id = list[0]["clientId"].as_str().unwrap().to_string();
+        assert!(list[0].get("leaseToken").is_none(), "list 不回 token");
+        step(
+            2,
+            &format!("aux_list 只给出公开 clientId（{victim_id}），不含任何 token"),
+        );
+
+        // 攻击者用公开 clientId 重领：被拒、不回吐 token。
+        let err = aux_leases::claim_at(&state, "aux:victim", &victim_id, None, t0)
+            .await
+            .expect_err("无 token 的续租必须被拒");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+        assert!(!err.contains(&victim_token), "错误信息不得泄漏 token");
+        assert_eq!(
+            aux_leases::holder_count("aux:victim", t0),
+            1,
+            "holders 全程 ≥ 1（攻击者没挤掉受害者）"
+        );
+        step(3, "公开 clientId 重领被拒（auxLeaseConflict），holders 仍为 1");
+
+        // 受害者自己能收尾（旧 token 未被攻击作废）。
+        aux_leases::release_at(&state, "aux:victim", &victim_token, t0)
+            .await
+            .expect("受害者按自己的 token 释放");
+        assert_eq!(aux_leases::holder_count("aux:victim", t0), 0);
+        step(4, "受害者用旧 token release 成功（凭证未被作废）");
+        aux_leases::reset_for_test();
+    }
+
+    /// **复审第二轮 P1-1 的场景化**：kill 失败 → 两轮 `reaped=0` + 实例仍在登记表
+    /// → 恢复后下一轮才 `reaped=1`。
+    #[tokio::test]
+    async fn a_failed_kill_is_retried_before_the_instance_counts_as_reaped() {
+        let _guard = aux_leases::test_lock();
+        aux_leases::reset_for_test();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:stuck", RuntimePolicy::Aux).await;
+        aux_probe::set_aux_parent(&state, "aux:stuck", Some("main".into())).await;
+        let now = Instant::now() + AUX_IDLE_LIMIT + Duration::from_secs(60);
+        aux_probe::fail_next_kills(1);
+        let first = aux_reap::reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert!(first.is_empty(), "首轮 kill 失败不得计入回收：{first:?}");
+        assert_eq!(
+            aux_reap::pending_kill_ids(),
+            vec!["aux:stuck".to_string()],
+            "失败实例必须留在待重试表"
+        );
+        step(
+            1,
+            "注入 kill 失败 → 首轮 reaped=0、实例留在待重试登记表（不是已回收）",
+        );
+        let second = aux_reap::reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert_eq!(second.len(), 1, "重试成功后才计一次回收：{second:?}");
+        assert_eq!(second[0].parent.as_deref(), Some("main"), "日志沿用判定时的归属");
+        assert!(aux_reap::pending_kill_ids().is_empty());
+        step(
+            2,
+            "下一轮重试确认退出 → reaped=1（累计正好一次），待重试表清空",
+        );
+        aux_probe::clear_kill_failures();
+        aux_leases::reset_for_test();
+    }
+
     /// 停心跳（客户端崩溃）→ TTL 过期 → 空闲超阈 → 回收。这是 A 条阻塞项的端到端形态。
     #[tokio::test]
     async fn a_crashed_client_instance_is_eventually_reaped_after_the_ttl() {
@@ -215,7 +297,7 @@ mod tests {
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:crashed", RuntimePolicy::Aux).await;
         let t0 = Instant::now();
-        aux_leases::claim_at(&state, "aux:crashed", "crashed-client", t0)
+        aux_leases::claim_at(&state, "aux:crashed", "crashed-client", None, t0)
             .await
             .unwrap();
         step(1, "客户端领取租约后崩溃（不再 claim/release）");

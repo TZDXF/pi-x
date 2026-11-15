@@ -504,6 +504,7 @@ pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
     crate::aux_leases::clear();
+    crate::aux_reap::clear_pending_kills();
     for process in processes.values() {
         child::process_kill(process, "kill_all (app exit)").await?;
     }

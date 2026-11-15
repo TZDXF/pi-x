@@ -53,6 +53,7 @@ pub(super) async fn handle(
                     state.clone(),
                     text(a, "runtimeId")?,
                     text(a, "clientId")?,
+                    a["leaseToken"].as_str().map(str::to_owned),
                 )
                 .await?,
             )?),

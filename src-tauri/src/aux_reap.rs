@@ -23,12 +23,15 @@
 //! 旧实现拿"上一轮 live 快照的差集"当残条，会把扫描期间**新建并 claim** 的实例误删。
 //! 现在逐个对**当前实例**复核：只有"当前已不存在该 runtime，或它已退出"才清租约。
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::rpc::aux_probe;
+use crate::rpc::ProcessState;
 use crate::rpc::RpcState;
-use crate::rpc::{self, aux_probe};
 use tauri::Manager;
 
 /// 回收扫描周期。
@@ -73,7 +76,74 @@ impl Reaped {
     }
 }
 
-/// 扫一遍并回收（返回本次真正 kill 掉的条目）。
+/// 回收器自持的"待重试 kill 句柄"（`runtimeId → Arc<ProcessState>`）。
+///
+/// 为什么需要它：`rpc::kill` 先摘池条目再杀，杀失败也回 `Ok`；上一版回收器因此
+/// 直接把失败当成功（`forget` + `Reaped` + 一轮日志），第二轮再也找不到该 runtime
+/// （复审第二轮 P1-1）。现在：**失败保留句柄、下一轮继续尝试、不 push `Reaped`**，
+/// 只有"kill 成功 且 `running()` 为假"才 `retire_entry` + 记 `Reaped`。
+///
+/// 代价：句柄是 `Arc<ProcessState>`，句柄在手时进程即使被判"已退出"也不会被
+/// 池回收 —— 但待重试表只增不减的话会泄漏，因此确认退出后必须移除。
+/// 待重试的一条：句柄 + **判定当时的日志字段**。
+///
+/// 为什么要带字段：确认退出后进程已消失，`probe` 再也取不到 parent/idle，若这时才
+/// 读，回收日志会退化成 `parent=null, idleSecs=0` —— 与首轮日志不一致，复盘时就
+/// 看不出"它当时到底空闲多久"。
+struct PendingKill {
+    handle: Arc<ProcessState>,
+    parent: Option<String>,
+    idle_secs: u64,
+}
+
+static PENDING_KILLS: Mutex<BTreeMap<String, PendingKill>> = Mutex::new(BTreeMap::new());
+
+fn lock_pending() -> std::sync::MutexGuard<'static, BTreeMap<String, PendingKill>> {
+    PENDING_KILLS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 清空待重试登记表（应用退出/测试隔离）。句柄清掉后由 `kill_on_drop` 兜底。
+pub(crate) fn clear_pending_kills() {
+    lock_pending().clear();
+}
+
+/// 该 runtime 是否在待重试登记表里（回归用例与诊断用；生产路径不需要）。
+#[cfg(test)]
+pub(crate) fn pending_kill_ids() -> Vec<String> {
+    lock_pending().keys().cloned().collect()
+}
+
+/// 一次 kill 尝试的结果（回归用例按它断言"没算作已回收"）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub enum KillOutcome {
+    /// 已确认退出：可以 `retire_entry` + 记 `Reaped`。
+    Exited,
+    /// kill 失败或退出未确认：保留句柄，下一轮重试。
+    RetryPending,
+}
+
+/// 对一个自持句柄做一次 kill，并判定是否**确认退出**。
+///
+/// 判据是"`process_kill` 成功（或进程已被别的路径杀掉）**且** `running()` 为假"。
+/// 只用 `process_kill` 的 `Ok` 不够：Windows 上 taskkill 非零退出会被底层记日志后
+/// 转成 `Ok`（见 `child::kill_inner`），因此必须再验一次存活。
+async fn try_kill(handle: &Arc<ProcessState>) -> KillOutcome {
+    match aux_probe::kill_handle(handle, "aux-reap").await {
+        Ok(()) => {
+            if aux_probe::running_handle(handle).await {
+                KillOutcome::RetryPending
+            } else {
+                KillOutcome::Exited
+            }
+        }
+        Err(_) => KillOutcome::RetryPending,
+    }
+}
+
+/// 扫一遍并回收（返回本次**确认回收**的条目；失败重试不计入）。
 ///
 /// `now`/`idle_limit` 由调用方给：生产路径用 `Instant::now()` + [`AUX_IDLE_LIMIT`]，
 /// 单测可以注入"已经空闲 31 分钟"而不必真等半小时。
@@ -83,7 +153,61 @@ pub(crate) async fn reap_once(
     idle_limit: Duration,
 ) -> Vec<Reaped> {
     let mut reaped = Vec::new();
+
+    // ---- 0) 先处理上一轮失败的待重试句柄 ----
+    //
+    // 这一步必须在"扫池"之前：上一轮已经 `begin_reap` 接管，池里可能已被
+    // `rpc::kill` 摘掉（旧路径），只有这张表还留着句柄。
+    let retries: Vec<(String, PendingKill)> = {
+        let pending = lock_pending();
+        pending
+            .iter()
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    PendingKill {
+                        handle: Arc::clone(&entry.handle),
+                        parent: entry.parent.clone(),
+                        idle_secs: entry.idle_secs,
+                    },
+                )
+            })
+            .collect()
+    };
+    for (runtime_id, entry) in retries {
+        let outcome = try_kill(&entry.handle).await;
+        match outcome {
+            KillOutcome::Exited => {
+                let reaped_entry = Reaped {
+                    runtime_id: runtime_id.clone(),
+                    parent: entry.parent.clone(),
+                    claims: 0,
+                    idle_secs: entry.idle_secs,
+                };
+                aux_probe::retire_entry(state, &runtime_id).await;
+                lock_pending().remove(&runtime_id);
+                let mut line = reaped_entry.to_json();
+                line["reason"] = json!("kill-retry");
+                line["result"] = json!("exited");
+                crate::logs::write("aux-reap", &line.to_string());
+                reaped.push(reaped_entry);
+            }
+            KillOutcome::RetryPending => {
+                crate::logs::write(
+                    "aux-reap",
+                    &json!({"runtimeId": runtime_id, "reason": "kill-retry", "result": "pending"})
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    // ---- 1) 常规扫描 ----
     for runtime_id in aux_probe::aux_runtime_ids(state).await {
+        // 已在待重试表里的不重复走判定（上一轮已接管，本轮已在第 0 步重试过）。
+        if lock_pending().contains_key(&runtime_id) {
+            continue;
+        }
         let Some(snapshot) = aux_probe::probe(state, &runtime_id, now).await else {
             continue;
         };
@@ -98,20 +222,14 @@ pub(crate) async fn reap_once(
         ) {
             continue;
         }
-        // 仲裁：锁内复核 holders 为空 + 置墓碑。返回 false 表示"这一轮不该我杀"。
+        // 仲裁：锁内复核 holders 为空 + 置墓碑。返回 false 表示"这一轮不该我杀"
+        // （别人刚续上，或已被上一次扫描接管 —— 后者由第 0 步处理）。
         if !crate::aux_leases::begin_reap(&runtime_id, now) {
-            // 例外：上一轮**已**接管但 kill 没成功（进程仍在）。此时不再记一条回收
-            // 日志（避免重复计账），但必须重试 kill，否则那个实例会既无租约又永不被收。
-            if crate::aux_leases::is_reaping(&runtime_id) {
-                crate::logs::write(
-                    "aux-reap",
-                    &json!({"runtimeId": runtime_id, "reason": "kill-retry"}).to_string(),
-                );
-                let _ = rpc::kill(state, Some(&runtime_id)).await;
-                crate::aux_leases::forget(&runtime_id);
-            }
             continue;
         }
+        let Some(handle) = aux_probe::process_handle(state, &runtime_id).await else {
+            continue;
+        };
         let entry = Reaped {
             runtime_id: runtime_id.clone(),
             parent: snapshot.parent_runtime.clone(),
@@ -123,13 +241,37 @@ pub(crate) async fn reap_once(
         let mut line = entry.to_json();
         line["probe"] = snapshot.to_json();
         crate::logs::write("aux-reap", &line.to_string());
-        // kill 失败不阻断其它条目：单条异常不该让本轮扫描整体停摆。
-        let _ = rpc::kill(state, Some(&runtime_id)).await;
-        crate::aux_leases::forget(&runtime_id);
-        reaped.push(entry);
+        match try_kill(&handle).await {
+            KillOutcome::Exited => {
+                aux_probe::retire_entry(state, &runtime_id).await;
+                lock_pending().remove(&runtime_id);
+                reaped.push(entry);
+            }
+            KillOutcome::RetryPending => {
+                // **不算已回收**：句柄留在登记表，下一轮继续尝试。
+                lock_pending().insert(
+                    runtime_id.clone(),
+                    PendingKill {
+                        handle: Arc::clone(&handle),
+                        parent: entry.parent.clone(),
+                        idle_secs: entry.idle_secs,
+                    },
+                );
+                crate::logs::write(
+                    "aux-reap",
+                    &json!({"runtimeId": runtime_id, "reason": "kill-retry", "result": "pending"})
+                        .to_string(),
+                );
+            }
+        }
     }
-    // 残条：**逐条对当前实例复核**，不用旧快照差集（复审 P1-3 第二条）。
+
+    // ---- 2) 残条：逐条对当前实例复核（不用旧快照差集） ----
     for runtime_id in crate::aux_leases::lease_runtime_ids(now) {
+        if lock_pending().contains_key(&runtime_id) {
+            // 待重试的实例仍有租约残条：由第 0 步收尾，这里不动。
+            continue;
+        }
         if aux_probe::probe(state, &runtime_id, now).await.is_some() {
             // 当前实例仍活着：租约合法（哪怕它刚在本轮扫描之后才建立）。
             continue;
@@ -203,7 +345,7 @@ mod tests {
 
         // 客户端领取一次租约后就崩溃（不再 claim/release）。
         let t0 = Instant::now();
-        claim_at(&state, "aux:crash", "crashed", t0).await.unwrap();
+        claim_at(&state, "aux:crash", "crashed", None, t0).await.unwrap();
         assert_eq!(holder_count("aux:crash", t0), 1);
 
         // 注入"空闲一天 + 租约早已过期"。
@@ -228,12 +370,14 @@ mod tests {
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:beat", RuntimePolicy::Aux).await;
         let t0 = Instant::now();
-        let token = claim_at(&state, "aux:beat", "client-1", t0).await.unwrap();
-        // 跨过 31 分钟（空闲超阈），每 20s 一次心跳。
+        let token = claim_at(&state, "aux:beat", "client-1", None, t0).await.unwrap();
+        // 跨过 31 分钟（空闲超阈），每 20s 一次心跳（带 token 续租）。
         let mut now = t0;
         while now < t0 + Duration::from_secs(31 * 60) {
             now += Duration::from_secs(20);
-            let renewed = claim_at(&state, "aux:beat", "client-1", now).await.unwrap();
+            let renewed = claim_at(&state, "aux:beat", "client-1", Some(&token), now)
+                .await
+                .unwrap();
             assert_eq!(renewed, token, "续期续用同一 token");
         }
         let reaped = reap_once(&state, now, AUX_IDLE_LIMIT).await;
@@ -257,7 +401,7 @@ mod tests {
 
         // (a) 探针读到 claims=0 之后，另一客户端 claim 成功 → 仲裁必须放弃接管。
         assert_eq!(holder_count("aux:race", now), 0, "判定时刻确实无租约");
-        let _winner = claim_at(&state, "aux:race", "late-client", now)
+        let _winner = claim_at(&state, "aux:race", "late-client", None, now)
             .await
             .expect("判定与接管之间仍可领取");
         assert!(
@@ -274,17 +418,18 @@ mod tests {
         let state2 = Arc::new(RpcState::default());
         test_harness::install(&state2, "aux:race2", RuntimePolicy::Aux).await;
         assert!(crate::aux_leases::begin_reap("aux:race2", now), "无租约时可接管");
-        let err = claim_at(&state2, "aux:race2", "late-client", now)
+        let err = claim_at(&state2, "aux:race2", "late-client", None, now)
             .await
             .expect_err("回收开始后不得再领租约");
         assert!(err.contains("auxLeaseReaping"), "{err}");
         assert_eq!(holder_count("aux:race2", now), 0, "拒绝时不得留下半条租约");
-        // 接管的收尾（reap_once 里的同一段）：kill → forget。墓碑保留。
-        crate::rpc::kill(&state2, Some("aux:race2")).await.unwrap();
-        crate::aux_leases::forget("aux:race2");
+        // 接管的收尾（reap_once 里的同一段）：kill → 确认退出 → retire。
+        let handle = aux_probe::process_handle(&state2, "aux:race2").await.unwrap();
+        assert_eq!(try_kill(&handle).await, KillOutcome::Exited);
+        aux_probe::retire_entry(&state2, "aux:race2").await;
         assert!(!crate::rpc::running(&state2, Some("aux:race2")).await);
         // 被回收的 runtime 不得被 claim 复活（墓碑是永久的）。
-        let err = claim_at(&state2, "aux:race2", "late-client", now)
+        let err = claim_at(&state2, "aux:race2", "late-client", None, now)
             .await
             .expect_err("已回收");
         assert!(err.contains("auxLeaseReaping") || err.contains("auxLeaseDenied"), "{err}");
@@ -302,12 +447,12 @@ mod tests {
         crate::rpc::aux_probe::set_aux_parent(&state, "aux:a", Some("main".into())).await;
         crate::rpc::aux_probe::set_aux_parent(&state, "aux:b", Some("main".into())).await;
         let t0 = Instant::now();
-        let token_a = claim_at(&state, "aux:a", "client-1", t0).await.unwrap();
-        let token_b = claim_at(&state, "aux:b", "client-2", t0).await.unwrap();
+        let token_a = claim_at(&state, "aux:a", "client-1", None, t0).await.unwrap();
+        let token_b = claim_at(&state, "aux:b", "client-2", None, t0).await.unwrap();
         release_at(&state, "aux:a", &token_a, t0).await.unwrap();
-        // B 持续心跳到扫描时刻。
+        // B 持续心跳到扫描时刻（带自己的 token）。
         let now = t0 + Duration::from_secs(31 * 60);
-        claim_at(&state, "aux:b", "client-2", now).await.unwrap();
+        claim_at(&state, "aux:b", "client-2", Some(&token_b), now).await.unwrap();
         assert_eq!(holder_count("aux:b", now), 1);
 
         let reaped = reap_once(&state, now, AUX_IDLE_LIMIT).await;
@@ -321,6 +466,79 @@ mod tests {
         );
         assert_eq!(test_harness::process_count(&state).await, 1);
         let _ = token_b;
+        crate::aux_leases::reset_for_test();
+    }
+
+    /// **复审第二轮 P1-1 的故障注入回归**：一次 kill 失败 → 连扫两轮必须
+    /// `attempts≥2`、`reaped=0`、实例仍在待重试登记表；恢复注入后下一轮才 `reaped=1`。
+    ///
+    /// 质量工程师上一轮用同一注入得到 `attempts=1, alive=true, pool=0, reaping=true,
+    /// first_reported=1, next_reported=0` —— 本用例正对着它。
+    #[tokio::test]
+    async fn a_failed_kill_is_retried_and_only_counted_once_the_process_is_gone() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:stuck", RuntimePolicy::Aux).await;
+        crate::rpc::aux_probe::set_aux_parent(&state, "aux:stuck", Some("main".into())).await;
+        let now = Instant::now() + Duration::from_secs(31 * 60);
+
+        // 第一次 kill 注入失败：判定通过，但收尾不算数。
+        crate::rpc::aux_probe::fail_next_kills(1);
+        let first = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert!(first.is_empty(), "kill 失败不得计入回收：{first:?}");
+        assert!(
+            test_harness::process_count(&state).await >= 1,
+            "失败后实例必须留在池/句柄里（旧实现这里 pool=0，重试就再也找不到）"
+        );
+        assert!(
+            crate::rpc::running(&state, Some("aux:stuck")).await,
+            "进程仍活着（注入不是真杀）"
+        );
+        assert_eq!(
+            pending_kill_ids(),
+            vec!["aux:stuck".to_string()],
+            "失败实例必须进待重试登记表"
+        );
+
+        // 第二次扫描：注入已耗尽，应真的杀掉并计入回收。
+        let second = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert_eq!(second.len(), 1, "第二轮确认退出后才算回收：{second:?}");
+        assert_eq!(second[0].runtime_id, "aux:stuck");
+        assert!(
+            !crate::rpc::running(&state, Some("aux:stuck")).await,
+            "确认退出后进程必须消失"
+        );
+        assert!(pending_kill_ids().is_empty(), "确认退出后必须移出待重试表");
+        assert_eq!(test_harness::process_count(&state).await, 0);
+
+        // 两轮合计：attempts ≥ 2、reaped 合计 1（不是"第一次就记 1"）。
+        let reaped_total = first.len() + second.len();
+        assert_eq!(reaped_total, 1);
+        crate::rpc::aux_probe::clear_kill_failures();
+        crate::aux_leases::reset_for_test();
+    }
+
+    /// 连续多轮失败：始终不 push `Reaped`、始终保留句柄，直到某轮成功。
+    #[tokio::test]
+    async fn repeated_kill_failures_never_report_a_reap() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = Arc::new(RpcState::default());
+        test_harness::install(&state, "aux:stuck2", RuntimePolicy::Aux).await;
+        let now = Instant::now() + Duration::from_secs(31 * 60);
+        crate::rpc::aux_probe::fail_next_kills(3);
+        for round in 1..=3 {
+            let reaped = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+            assert!(reaped.is_empty(), "第 {round} 轮失败不得计入回收：{reaped:?}");
+            assert_eq!(pending_kill_ids(), vec!["aux:stuck2".to_string()]);
+        }
+        let last = reap_once(&state, now, AUX_IDLE_LIMIT).await;
+        assert_eq!(last.len(), 1, "第 4 轮成功才计入：{last:?}");
+        assert!(pending_kill_ids().is_empty());
+        crate::rpc::aux_probe::clear_kill_failures();
         crate::aux_leases::reset_for_test();
     }
 
@@ -366,12 +584,12 @@ mod tests {
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:old", RuntimePolicy::Aux).await;
         let now = Instant::now();
-        claim_at(&state, "aux:old", "c1", now).await.unwrap();
+        claim_at(&state, "aux:old", "c1", None, now).await.unwrap();
 
         // 扫描期间：旧实例消失（进程退出、release 没发），同时**新建并 claim** 了一个实例。
         test_harness::remove(&state, "aux:old").await;
         test_harness::install(&state, "aux:new", RuntimePolicy::Aux).await;
-        claim_at(&state, "aux:new", "c2", now).await.unwrap();
+        claim_at(&state, "aux:new", "c2", None, now).await.unwrap();
 
         reap_once(&state, now, AUX_IDLE_LIMIT).await;
         // 旧残条被清掉；新实例的租约必须完好（它不是"旧快照里没有"的残条）。
@@ -392,7 +610,7 @@ mod tests {
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:a", RuntimePolicy::Aux).await;
         let now = Instant::now();
-        claim_at(&state, "aux:a", "client-1", now)
+        claim_at(&state, "aux:a", "client-1", None, now)
             .await
             .expect("进程存活时可领取租约");
         // 模拟"客户端崩溃 + 进程已消失、release 没发"。

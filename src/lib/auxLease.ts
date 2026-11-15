@@ -9,6 +9,21 @@
 /** 心跳周期（规格 §5：20s）。回收器的判定要求 `claims` 为空，心跳就是"我还在看着它"。 */
 export const AUX_LEASE_HEARTBEAT_MS = 20_000
 
+/**
+ * 租约 TTL（与后端 `aux_leases::AUX_LEASE_TTL` 对齐，90s = 4.5 个心跳）。
+ *
+ * 前端只用它做一件事：丢了 token（页面重载）时，`aux_claim` 会返回
+ * `auxLeaseConflict` —— 此时**不重试、不停用 Tab**，而是在这个窗口过去后自动再试
+ * （旧条目届时已被后端惰性摘掉，这次算首次领取、签发新 token）。
+ */
+export const AUX_LEASE_TTL_MS = 90_000
+
+/** 该错误是否表示"这个 clientId 已被占用，续租必须出示原 token"（`auxLeaseConflict`）。 */
+export function isAuxLeaseConflict(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error ?? "")
+  return text.includes("auxLeaseConflict")
+}
+
 /** 一条租约（后端 `aux_list` 的条目）。`parentRuntimeId` 可能为 `null`（未知归属）。 */
 export interface AuxLeaseEntry {
   runtimeId: string

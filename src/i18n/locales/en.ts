@@ -1553,6 +1553,8 @@ export default {
     auxLeaseClientIdInvalid: "A lease clientId must be 1–128 characters",
     auxLeaseNotHeld: "This client does not hold that lease",
     auxLeaseReaping: "This auxiliary-chat instance is being reclaimed; new leases are refused",
+    auxLeaseConflict:
+      "This client already holds a lease on this instance; renewal must present the original lease token",
     auxSessionForbidden: "Auxiliary chat does not accept a session file",
     builtinExtensionPathMissing: "Built-in extension path is missing",
     skillNotFound: "Skill path not found",

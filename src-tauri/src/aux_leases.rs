@@ -18,21 +18,30 @@
 //!    必须出示 token（只有持有它的那次 `claim` 调用拿到了它，`aux_list` 从不回
 //!    token）。因此"抄 list 里的 clientId 去释放别人的租约"必然失败。
 //!    `clientId` 只用于**标识**（`aux_list` 的重连过滤，规格 §5 第 4 条）。
+//!
+//!    **续租也必须出示 token**（复审第二轮）：条目已存在时，`claim` 只有带上**同一条**
+//!    token 才续租并返回同一个 token；没有 token或不匹配一律 `auxLeaseConflict`，
+//!    **绝不回吐已有 token**。否则"公开 clientId → claim → 拿到 token → release"
+//!    这条攻击链会让归属形同虚设。首次 claim（该 clientId 尚无条目）才签发新 token。
+//!    单纯"轮换 token"不解决问题（攻击者轮换后自己拿新 token 照样能 release，还把
+//!    受害者的合法 token 作废），所以这里选的是**冲突拒绝**而不是轮换。
 //! 3. **判定与 kill 有仲裁**。回收器先在锁内复核 holders 为空、置 `reaping`
 //!    墓碑，再放锁 kill。墓碑是**该 runtime 的永久标记**（runtimeId 是一实例一个
 //!    UUID，永不复用），因此 `claim` 在回收开始后不可能再把租约写回去。
 //!
 //! ## 心跳漏拍（节流/睡眠）时的行为
 //!
-//! 过期只做一件事：让该条目从租约表消失，于是 `claims` 归零。**它不会直接判死
+//! 过期只做一件事：让该条目从租约表消失，于是 `claims` 归零。**漏拍本身不会判死
 //! 实例** —— 回收仍要另外两个条件（`busy/pending_ui/in_flight` 全空，且
-//! `last_user_activity` 距今 > 30 分钟）。所以：
-//! - 系统睡眠 10 分钟再醒来：租约过期，但空闲门槛还差 20 分钟；前端心跳恢复后
-//!   重新 `claim`（同一 clientId 若条目还在则续用原 token，否则新签发一个），
-//!   `claims` 立刻回到 1，实例毫发无损。
-//! - 真正睡过 30 分钟以上：即便租约过期，回收器也不会因为"过期"而误杀 —— 它按
-//!   三条件判定，用户的 Tab 早已没有活动，回收是正确的（且下次打开是全新实例，
-//!   符合"关闭即销毁、不保存历史"的规格）。
+//! `last_user_activity` 距今 > 30 分钟）。
+//!
+//! 但**这不等价于"睡多久以内都安全"**：空闲门槛看的是**用户活动**，睡前已经累计的
+//! 空闲同样计入。所以：
+//! - 新实例、睡前只闲置几分钟：醒来后租约虽已过期，可立即重新 `claim`（该 clientId
+//!   的条目已过期被摘掉，因此算首次 claim，签发新 token），`claims` 回到 1，实例存活。
+//! - **已经空闲接近/超过 30 分钟的 Tab**：停跳哪怕只有 100 秒，只要回收器先于心跳
+//!   跑一轮，就会被回收 —— 这是规格 §5"用户活动超过 30 分钟即回收"的**预期结果**，
+//!   不给唤醒宽限（团队裁定见 §11 的已知边界）。
 
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -156,15 +165,24 @@ fn validate_client_id(client_id: &str) -> Result<(), String> {
 
 /// `aux_claim`：登记/续期本客户端对该 runtime 的持有，返回**服务端签发的 lease token**。
 ///
-/// 幂等：心跳重复调用不会新增条目；同一 clientId 在条目仍有效时**续用原 token**
-/// （页面重载后心跳拿回同一个 token，关闭时仍能 `release`）。条目已过期或被回收后
-/// 再领取会签发新 token（旧 token 自然失效，因为对应条目已不存在）。
+/// 两种情形：
+/// - **首次**（该 clientId 在此 runtime 上还没有有效条目）：签发新 token；
+/// - **已有条目**：必须出示 `lease_token` 且与条目一致，续租并返回**同一个** token；
+///   没带或不匹配 → [`auxLeaseConflict`]（**绝不回吐已存在的 token**）。
+///
+/// 为什么续租也要 token：否则"从 `aux_list` 抄一个公开 clientId → `claim` 拿到
+/// token → `release`"就是完整的劫持链（复审第二轮 P1）。轮换 token 不行 —— 攻击者
+/// 轮换后自己拿着新 token，受害者既丢了租约又拿不到可用凭证。
+///
+/// 页面重载后前端没有 token：这一次 `claim` 会被 `auxLeaseConflict` 拒绝，前端**不
+/// 停用 Tab、也不反复重试**，等旧条目 TTL（90s）过期后自动变成"首次 claim"再成功。
 pub(crate) async fn claim(
     state: &rpc::RpcState,
     runtime_id: &str,
     client_id: &str,
+    lease_token: Option<&str>,
 ) -> Result<String, String> {
-    claim_at(state, runtime_id, client_id, Instant::now()).await
+    claim_at(state, runtime_id, client_id, lease_token, Instant::now()).await
 }
 
 /// 同 [`claim`]，可注入"现在"（过期/TTL 边界测试用，不必真等 90s）。
@@ -172,6 +190,7 @@ pub(crate) async fn claim_at(
     state: &rpc::RpcState,
     runtime_id: &str,
     client_id: &str,
+    lease_token: Option<&str>,
     now: Instant,
 ) -> Result<String, String> {
     validate_client_id(client_id)?;
@@ -188,13 +207,33 @@ pub(crate) async fn claim_at(
             "该辅助对话实例正在被回收，暂不接受新租约",
         ));
     }
+    let presented = lease_token.map(str::trim).filter(|token| !token.is_empty());
     let holders = book.leases.entry(runtime_id.to_string()).or_default();
-    let lease = holders.entry(client_id).or_insert_with(|| Lease {
-        token: new_token(),
-        renewed_at: now,
-    });
-    lease.renewed_at = now;
-    Ok(lease.token.clone())
+    match holders.get_mut(&client_id) {
+        // 已有条目：只有出示同一条 token 才能续租（否则拒绝，绝不回吐）。
+        Some(lease) => {
+            if presented != Some(lease.token.as_str()) {
+                return Err(pix_error(
+                    "auxLeaseConflict",
+                    "该 clientId 已持有本实例的租约，续租必须出示原 lease token",
+                ));
+            }
+            lease.renewed_at = now;
+            Ok(lease.token.clone())
+        }
+        // 首次（含过期后被摘掉的情形）：签发新 token。
+        None => {
+            let token = new_token();
+            holders.insert(
+                client_id,
+                Lease {
+                    token: token.clone(),
+                    renewed_at: now,
+                },
+            );
+            Ok(token)
+        }
+    }
 }
 
 /// `aux_release`：按 **lease token** 删除本客户端的租约。
@@ -316,7 +355,8 @@ pub(crate) fn lease_runtime_ids(now: Instant) -> Vec<String> {
     book.leases.keys().cloned().collect()
 }
 
-/// 该 runtime 是否已被回收器接管（回收器用它决定"这是重试还是首轮"）。
+/// 该 runtime 是否已被回收器接管（回归用例断言用；回收器的重试决定已改看句柄表）。
+#[cfg(test)]
 pub(crate) fn is_reaping(runtime_id: &str) -> bool {
     lock_book().reaping.contains(runtime_id)
 }
@@ -328,10 +368,12 @@ pub(crate) fn clear() {
     book.reaping.clear();
 }
 
-/// 测试隔离用。
+/// 测试隔离用（连带清掉回收器的待重试句柄表，否则用例之间会互相看到对方的重试）。
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
     clear();
+    crate::aux_reap::clear_pending_kills();
+    crate::rpc::aux_probe::clear_kill_failures();
 }
 
 /// 测试串行锁：`BOOK` 是进程级全局状态，而 `cargo test` 默认并行跑用例。
@@ -361,57 +403,108 @@ mod tests {
         test_harness::install(&state, "main", RuntimePolicy::Main).await;
 
         // ① runtimeId 前缀：复用 `commands::pi_aux::validate_aux_runtime` 的语义。
-        let err = claim(&state, "main", "c1").await.expect_err("前缀不对");
+        let err = claim(&state, "main", "c1", None).await.expect_err("前缀不对");
         assert!(err.contains("auxRuntimeIdInvalid"), "{err}");
         // ② 策略必须是 Aux：`aux:` 前缀但策略为 Main 也拒绝（前缀不是权威来源）。
         test_harness::install(&state, "aux:main-policy", RuntimePolicy::Main).await;
-        let err = claim(&state, "aux:main-policy", "c1")
+        let err = claim(&state, "aux:main-policy", "c1", None)
             .await
             .expect_err("Main 策略");
         assert!(err.contains("auxLeaseDenied"), "{err}");
         // 不存在的 runtime 同样拒绝（不能凭一个字符串就登记租约）。
-        let err = claim(&state, "aux:missing", "c1")
+        let err = claim(&state, "aux:missing", "c1", None)
             .await
             .expect_err("runtime 不存在");
         assert!(err.contains("auxLeaseDenied"), "{err}");
         // 合法调用成功并返回 token。
-        let token = claim(&state, "aux:live", "c1").await.expect("aux + 存活即合法");
+        let token = claim(&state, "aux:live", "c1", None).await.expect("aux + 存活即合法");
         assert_eq!(token.len(), 36, "token 是服务端签发的 UUID");
         assert_eq!(holder_count("aux:live", Instant::now()), 1);
         reset_for_test();
     }
 
-    /// **复审 P1-2 的正例**：拿**真实 owner 的 clientId**（从 `aux_list` 抄来的）
-    /// 当凭证去释放，必须失败。旧实现只测了不存在的 `intruder`，掩盖了这个缺口。
+    /// **复审第二轮 P1-2 的完整攻击链**（质量工程师的原复现形状）：
+    ///
+    /// ① `aux_list` 取真实 victim 的 clientId（公开信息）；
+    /// ② 用它做一次 `claim` —— **必须被拒**（`auxLeaseConflict`），且**不回吐** victim 的 token；
+    /// ③ 拿 victim 的旧 token `release` 仍然成功（受害者自己能收尾）；
+    /// ④ 全程 `holders ≥ 1`（攻击者没能把受害者挤掉）。
     #[tokio::test]
-    async fn the_real_owners_client_id_is_not_a_credential() {
+    async fn the_real_owners_client_id_cannot_steal_the_token() {
         let _guard = test_lock();
         reset_for_test();
         let state = rpc::RpcState::default();
         test_harness::install(&state, "aux:shared", RuntimePolicy::Aux).await;
-        let owner_token = claim(&state, "aux:shared", "victim").await.unwrap();
+        let t0 = Instant::now();
+        let victim_token = claim_at(&state, "aux:shared", "victim", None, t0).await.unwrap();
 
-        // 攻击者先执行一次合法 list：拿到 victim 的 clientId（公开信息）。
+        // ① 攻击者执行一次合法 list：拿到 victim 的 clientId。
         let parents = vec![("aux:shared".to_string(), Some("main".to_string()))];
-        let list = entries(&parents, Instant::now());
+        let list = entries(&parents, t0);
         assert_eq!(list[0]["clientId"], "victim");
         assert!(list[0].get("leaseToken").is_none(), "list 不得回 token");
+        let victim_client_id = list[0]["clientId"].as_str().unwrap().to_string();
 
-        // 用真实 owner 的 clientId 当 token 释放：必须失败，租约完好。
-        let err = release(&state, "aux:shared", "victim")
+        // ② 用公开 clientId 重领（re-claim）：必须被拒，且绝不回吐 victim 的 token。
+        let err = claim_at(&state, "aux:shared", &victim_client_id, None, t0)
+            .await
+            .expect_err("无 token 的续租必须被拒（否则 clientId 就是凭证）");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+        assert!(
+            !err.contains(&victim_token),
+            "错误信息不得泄漏 victim 的 token：{err}"
+        );
+        // 带错 token 同样被拒。
+        let err = claim_at(&state, "aux:shared", &victim_client_id, Some("forged"), t0)
+            .await
+            .expect_err("token 不匹配必须被拒");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+
+        // 直接拿 clientId 当 token 释放：旧路径的缺口，也必须失败。
+        let err = release(&state, "aux:shared", &victim_client_id)
             .await
             .expect_err("clientId 不是凭证");
         assert!(err.contains("auxLeaseNotHeld"), "{err}");
-        assert_eq!(holder_count("aux:shared", Instant::now()), 1);
+        assert_eq!(holder_count("aux:shared", t0), 1, "全程 holders ≥ 1");
 
-        // 只有真 token 能释放。
-        release(&state, "aux:shared", &owner_token).await.unwrap();
-        assert_eq!(holder_count("aux:shared", Instant::now()), 0);
+        // ③ 受害者拿自己的旧 token 仍能收尾（攻击没有把它的凭证作废）。
+        release_at(&state, "aux:shared", &victim_token, t0)
+            .await
+            .unwrap();
+        assert_eq!(holder_count("aux:shared", t0), 0);
         // 重复释放（token 已失效）：失败。
-        let err = release(&state, "aux:shared", &owner_token)
+        let err = release_at(&state, "aux:shared", &victim_token, t0)
             .await
             .expect_err("已不持有");
         assert!(err.contains("auxLeaseNotHeld"), "{err}");
+        reset_for_test();
+    }
+
+    /// 页面重载丢 token：不带 token 的 claim 被拒（不是静默成功），等 TTL 过期后
+    /// 再 claim 才成功（此时算首次领取，签发新 token）。
+    #[tokio::test]
+    async fn a_lost_token_is_refused_until_the_entry_expires() {
+        let _guard = test_lock();
+        reset_for_test();
+        let state = rpc::RpcState::default();
+        test_harness::install(&state, "aux:reload", RuntimePolicy::Aux).await;
+        let t0 = Instant::now();
+        let _old = claim_at(&state, "aux:reload", "c1", None, t0).await.unwrap();
+
+        // 重载后没有 token：被拒，但**条目仍在**（不被清掉、也不回吐 token）。
+        let err = claim_at(&state, "aux:reload", "c1", None, t0 + Duration::from_secs(10))
+            .await
+            .expect_err("丢 token 时续租必须被拒");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+        assert_eq!(holder_count("aux:reload", t0 + Duration::from_secs(10)), 1);
+
+        // 等 TTL 过期：条目被惰性摘掉 → 同一 clientId 再 claim 变成"首次"，成功。
+        let later = t0 + AUX_LEASE_TTL + Duration::from_secs(1);
+        let fresh = claim_at(&state, "aux:reload", "c1", None, later)
+            .await
+            .expect("过期后重新领取应当成功");
+        assert_eq!(fresh.len(), 36, "新签发一个 token");
+        assert_eq!(holder_count("aux:reload", later), 1);
         reset_for_test();
     }
 
@@ -421,13 +514,23 @@ mod tests {
         reset_for_test();
         let state = rpc::RpcState::default();
         let _process = test_harness::install_with_queue(&state, "aux:idem", RuntimePolicy::Aux).await.0;
-        let mut tokens = Vec::new();
-        for _ in 0..3 {
-            tokens.push(claim(&state, "aux:idem", "c1").await.unwrap());
+        // 首次不带 token（签发），后续心跳必须带上同一个 token（续租）。
+        let token = claim(&state, "aux:idem", "c1", None).await.unwrap();
+        for _ in 0..2 {
+            let renewed = claim(&state, "aux:idem", "c1", Some(&token)).await.unwrap();
+            assert_eq!(renewed, token, "带正确 token 的续租返回同一个 token");
         }
         assert_eq!(holder_count("aux:idem", Instant::now()), 1, "心跳重复领取只算一份");
-        // 条目仍有效时续用同一个 token（页面重载后仍能 release）。
-        assert!(tokens.iter().all(|token| token == &tokens[0]));
+        // **不**带 token 或带错 token 的续租必须被拒（复审第二轮 P1-2 的攻击链）。
+        let err = claim(&state, "aux:idem", "c1", None)
+            .await
+            .expect_err("已有条目时无 token 必须被拒");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+        let err = claim(&state, "aux:idem", "c1", Some("wrong-token"))
+            .await
+            .expect_err("token 不匹配必须被拒");
+        assert!(err.contains("auxLeaseConflict"), "{err}");
+        assert_eq!(holder_count("aux:idem", Instant::now()), 1, "被拒时不得改动条目");
         // 三件事之外什么都没发生：不写 stdin、不刷新池级活动时钟。
         let mut rx = test_harness::install_with_queue(&state, "aux:idem2", RuntimePolicy::Aux)
             .await
@@ -439,7 +542,9 @@ mod tests {
         );
         // 用户活动时钟也不许动：只读命令不是用户活动。
         test_harness::note_user_activity_at(&state, "aux:idem", 7).await;
-        claim_at(&state, "aux:idem", "c1", Instant::now()).await.unwrap();
+        claim_at(&state, "aux:idem", "c1", Some(&token), Instant::now())
+            .await
+            .unwrap();
         assert!(
             test_harness::user_idle_secs(&state, "aux:idem").await >= 7,
             "claim 不得推进用户活动时钟"
@@ -455,7 +560,7 @@ mod tests {
         test_harness::install(&state, "aux:one", RuntimePolicy::Aux).await;
         test_harness::install(&state, "aux:two", RuntimePolicy::Aux).await;
         crate::rpc::aux_probe::set_aux_parent(&state, "aux:one", Some("main".into())).await;
-        claim(&state, "aux:one", "c1").await.unwrap();
+        claim(&state, "aux:one", "c1", None).await.unwrap();
         let parents = crate::rpc::aux_probe::aux_runtime_parents(&state).await;
         let list = entries(&parents, Instant::now());
         assert_eq!(list.len(), 1, "没有租约的 aux:two 不出现");
@@ -478,7 +583,7 @@ mod tests {
         let state = rpc::RpcState::default();
         test_harness::install(&state, "aux:crash", RuntimePolicy::Aux).await;
         let t0 = Instant::now();
-        claim_at(&state, "aux:crash", "crashed-client", t0).await.unwrap();
+        claim_at(&state, "aux:crash", "crashed-client", None, t0).await.unwrap();
         assert_eq!(holder_count("aux:crash", t0), 1);
 
         // TTL 未到：仍然有效。
@@ -502,11 +607,13 @@ mod tests {
         let state = rpc::RpcState::default();
         test_harness::install(&state, "aux:beat", RuntimePolicy::Aux).await;
         let t0 = Instant::now();
-        let token = claim_at(&state, "aux:beat", "c1", t0).await.unwrap();
-        // 每 20s 续一次，跨过 5 个 TTL 周期。
+        let token = claim_at(&state, "aux:beat", "c1", None, t0).await.unwrap();
+        // 每 20s 续一次（带 token），跨过 5 个 TTL 周期。
         for step in 1..=20 {
             let now = t0 + Duration::from_secs(20 * step);
-            let renewed = claim_at(&state, "aux:beat", "c1", now).await.unwrap();
+            let renewed = claim_at(&state, "aux:beat", "c1", Some(&token), now)
+                .await
+                .unwrap();
             assert_eq!(renewed, token, "续期必须续用同一个 token");
             assert_eq!(holder_count("aux:beat", now), 1);
         }
@@ -529,7 +636,7 @@ mod tests {
         let now = Instant::now();
         assert!(begin_reap("aux:arb", now), "无持有者时回收可以接管");
         assert!(is_reaping("aux:arb"));
-        let err = claim_at(&state, "aux:arb", "late-client", now)
+        let err = claim_at(&state, "aux:arb", "late-client", None, now)
             .await
             .expect_err("回收期间不得再领租约");
         assert!(err.contains("auxLeaseReaping"), "{err}");
@@ -538,7 +645,7 @@ mod tests {
         assert!(!begin_reap("aux:arb", now));
         // 墓碑在 forget 之后依然生效（kill 已完成，claim 仍不得复活它）。
         forget("aux:arb");
-        let err = claim_at(&state, "aux:arb", "late-client", now)
+        let err = claim_at(&state, "aux:arb", "late-client", None, now)
             .await
             .expect_err("已回收的 runtime 不得复活");
         assert!(err.contains("auxLeaseReaping"), "{err}");
@@ -553,7 +660,7 @@ mod tests {
         let state = rpc::RpcState::default();
         test_harness::install(&state, "aux:held", RuntimePolicy::Aux).await;
         let now = Instant::now();
-        claim_at(&state, "aux:held", "c1", now).await.unwrap();
+        claim_at(&state, "aux:held", "c1", None, now).await.unwrap();
         assert!(!begin_reap("aux:held", now), "有持有者时不得接管");
         assert!(!is_reaping("aux:held"));
         // 持有者过期之后才允许接管 —— 这是"停心跳才可回收"的唯一入口。
@@ -569,8 +676,8 @@ mod tests {
         let state = rpc::RpcState::default();
         test_harness::install(&state, "aux:multi", RuntimePolicy::Aux).await;
         let now = Instant::now();
-        let a = claim_at(&state, "aux:multi", "client-a", now).await.unwrap();
-        let b = claim_at(&state, "aux:multi", "client-b", now).await.unwrap();
+        let a = claim_at(&state, "aux:multi", "client-a", None, now).await.unwrap();
+        let b = claim_at(&state, "aux:multi", "client-b", None, now).await.unwrap();
         assert_ne!(a, b, "不同客户端拿到不同 token");
         assert_eq!(holder_count("aux:multi", now), 2);
         release_at(&state, "aux:multi", &a, now).await.unwrap();

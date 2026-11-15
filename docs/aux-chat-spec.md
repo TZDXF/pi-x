@@ -280,21 +280,21 @@ abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活�
 
 §1 能力探测与 §5 生命周期的实现落点：
 
-| 职责                                                           | 文件                                                       |
-| -------------------------------------------------------------- | ---------------------------------------------------------- |
-| 不续期探针（独立用户活动时钟、只读、不写 stdin）               | `src-tauri/src/rpc/aux_probe.rs`                           |
-| 用户活动时钟的更新点（`accept_command`，只认三个 type）        | `src-tauri/src/rpc.rs`（`ProcessState.user_activity`）     |
-| 活跃/待答判据（`RuntimeActivity::busy` / `pending_ui_count`）  | `src-tauri/src/rpc/activity.rs`                            |
-| 租约本体（写/删/列、TTL 过期、lease token、reaping 仲裁）      | `src-tauri/src/aux_leases.rs`                              |
-| `aux_claim` / `aux_release` / `aux_list` 宿主命令              | `src-tauri/src/commands/aux_leases.rs`                     |
-| 三条件判定 + 60s tick + `aux-reap` 日志 + 残条逐条复核         | `src-tauri/src/aux_reap.rs`                                |
-| 后端双客户端场景脚本（§6 f/g 的可重跑部分）                    | `src-tauri/src/aux_lifecycle_scenarios.rs`                 |
-| 桌面注册（`generate_handler` + setup 启动回收器）              | `src-tauri/src/lib.rs`                                     |
-| 远程注册（`dispatch/session.rs`，同一实现、同一认证）          | `src-tauri/src/remote/dispatch/session.rs`                 |
-| 探测缓存 TTL / 失败不入缓存                                    | `src-tauri/src/rpc/aux_launch.rs`（`cache_get_at`）        |
-| 心跳（模块级，20s）、lease token 记账、关闭顺序、重连归属过滤  | `src/stores/auxChat.ts`                                    |
-| 租约条目的宽容解析与过滤规则（纯函数）                         | `src/lib/auxLease.ts`                                      |
-| 重连恢复接线（只在 `aux_list` 承认的条目上做 pending UI 恢复） | `src/lib/workspaceRuntime.ts`（`reattachRunningSessions`） |
+| 职责                                                               | 文件                                                       |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| 不续期探针（独立用户活动时钟、只读、不写 stdin）                   | `src-tauri/src/rpc/aux_probe.rs`                           |
+| 用户活动时钟的更新点（`accept_command`，只认三个 type）            | `src-tauri/src/rpc.rs`（`ProcessState.user_activity`）     |
+| 活跃/待答判据（`RuntimeActivity::busy` / `pending_ui_count`）      | `src-tauri/src/rpc/activity.rs`                            |
+| 租约本体（写/删/列、TTL 过期、lease token 续租校验、reaping 仲裁） | `src-tauri/src/aux_leases.rs`                              |
+| `aux_claim` / `aux_release` / `aux_list` 宿主命令                  | `src-tauri/src/commands/aux_leases.rs`                     |
+| 三条件判定 + 60s tick + 待重试 kill 句柄表 + `aux-reap` 日志       | `src-tauri/src/aux_reap.rs`                                |
+| 后端双客户端场景脚本（§6 f/g 的可重跑部分）                        | `src-tauri/src/aux_lifecycle_scenarios.rs`                 |
+| 桌面注册（`generate_handler` + setup 启动回收器）                  | `src-tauri/src/lib.rs`                                     |
+| 远程注册（`dispatch/session.rs`，同一实现、同一认证）              | `src-tauri/src/remote/dispatch/session.rs`                 |
+| 探测缓存 TTL / 失败不入缓存                                        | `src-tauri/src/rpc/aux_launch.rs`（`cache_get_at`）        |
+| 心跳（模块级，20s）、lease token 记账、关闭顺序、重连归属过滤      | `src/stores/auxChat.ts`                                    |
+| 租约条目的宽容解析与过滤规则（纯函数）                             | `src/lib/auxLease.ts`                                      |
+| 重连恢复接线（只在 `aux_list` 承认的条目上做 pending UI 恢复）     | `src/lib/workspaceRuntime.ts`（`reattachRunningSessions`） |
 
 **不续期探针为什么必须绕开 `RpcState::process()`**：那个函数每次都会
 `last_activity.insert(now)`（`rpc.rs` 的池级表，供 `schedules.rs` 的
@@ -331,24 +331,76 @@ abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活�
 TTL = `AUX_LEASE_TTL` = **90s（4.5 个 20s 心跳）**，容忍连续漏 2–3 拍。心跳即续期；
 过期在 `claim`/`list`/`reap` **任一入口惰性清理**（无额外定时器）。
 
-**心跳漏拍时会发生什么（回答"不能把活着的 Tab 判成孤儿"）**：过期只让该条目从租约表
-消失，于是 `claims` 归零 —— 它**不会**单独判死实例，回收仍要另外两个条件
-（`busy/pending_ui/in_flight` 全空，且 `last_user_activity` 距今 > 30 分钟）。所以
-App 被节流或系统睡眠 10 分钟醒来时：租约过期，但空闲门槛还差 20 分钟；前端心跳恢复后
-重新 `claim`（条目若还在则续用原 token，否则新签发一个），`claims` 立刻回到 1，实例
-毫发无损。只有真睡过 30 分钟以上、且没有任何活动，回收才会发生 —— 那时用户的 Tab 早已
-没有内容可保，且下次打开本就是全新实例（"关闭即销毁、不保存历史"）。
+**心跳漏拍时会发生什么（精确口径，别读成"睡多久以内都安全"）**：过期只让该条目从租约
+表消失，于是 `claims` 归零。**漏拍本身不会判死实例** —— 回收仍要另外两个条件
+（`busy/pending_ui/in_flight` 全空，且 `last_user_activity` 距今 > 30 分钟）。
+
+但**空闲门槛看的是"用户活动"，不是"睡了多久"**：睡前已经累计的空闲同样计入。所以
+
+- 新实例 / 睡前只闲置几分钟：醒来后租约虽已过期，可立即重新 `claim`（该 clientId 的
+  条目已被摘掉，算首次领取、签发新 token），`claims` 回到 1，实例存活。
+- **已经空闲接近或超过 30 分钟的 Tab**：停跳哪怕只有 100 秒，只要回收器先于心跳跑一轮，
+  就会被回收。这是规格 §5"**用户活动**超过 30 分钟即回收"的**预期结果**，本规格不给
+  唤醒宽限（团队裁定，见本节末尾"已知边界"）。
+
+换句话说：漏拍不会**自己**导致回收，但"漏拍 + 累计空闲已超阈"会。不要把它写成
+"只有睡过 30 分钟才回收"的一般结论。
 
 **租约凭证（§5 的补充）**：`aux_claim` 返回**服务端签发的 lease token**，`aux_release`
 只认 token。`aux_list` 只回 `clientId` + `parentRuntimeId`（重连过滤用），**从不回
-token** —— `clientId` 是标识不是凭证，否则任何能看到列表的客户端都能把别人正在用的实例
-变成"孤儿"（复审 P1-2）。页面重载后旧租约拿不到 token 时，前端**不发** release，
-交给 TTL 过期兜底。
+token**。
+
+**续租也必须出示 token（复审第二轮 P1-2）**：`aux_claim` 入参有**可选** `leaseToken`。
+条目已存在时：token 匹配 → 续租并返回**同一个** token；没带或不匹配 →
+`auxLeaseConflict`，**绝不回吐已存在的 token**（否则"公开 clientId → claim → 拿 token
+→ release"就是完整劫持链）。只有**首次** claim（该 clientId 在此 runtime 上还没有有效
+条目）才签发新 token。
+
+不采用"单纯轮换 token"：攻击者轮换后自己拿着新 token 照样能 release，还把受害者的合法
+凭证作废，等于既没修归属、又制造了新的可用性问题。
+
+**页面重载丢 token 的前端行为**：`aux_claim` 回 `auxLeaseConflict` 时**不重试、不停用
+Tab**（实例与进程都还活着），前端进入 `AUX_LEASE_TTL_MS`（90s）静默窗口，窗口过后自动
+再试 —— 届时旧条目已被后端惰性摘掉，这次算首次领取、签发新 token 成功。期间回收**不会**
+误杀：空闲门槛（用户活动 > 30 分钟）远未到账。
+
+**clientId 的可信来源（取舍，未做）**：本轮**没有**把 clientId 绑到宿主侧身份（桌面恒为
+本地、远程用连接/会话 id）。理由是改动会跨桌面 `lib.rs`、远程 dispatch 与前端三处，而
+当前方案已经把"clientId 不是凭证"这条**结构性**堵住（续租要 token、释放要 token、list
+不回 token）。代价是：同一宿主上知道某个 clientId 的恶意代码仍可**首次**抢占（若该
+clientId 尚无条目），但抢占拿到的租约只能影响它自己那次 claim 的后续 release，无法
+读取/作废他人的 token；真正的宿主级身份绑定留待有远程目标时一起做。
 
 **回收仲裁（§5 的补充）**：判定与 kill 之间有并发窗口，因此在**租约表同一把锁内**
 先复核 holders 为空并置 `reaping` 墓碑（`begin_reap`），放锁后才 kill。`claim` 在锁内
 见墓碑即 `auxLeaseReaping`；墓碑是**该 runtime 的永久标记**（runtimeId 一实例一个
 UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能发生。
+
+**kill 失败必须可重试（复审第二轮 P1-1）**：`rpc::kill` 是"先从池里摘掉、再杀"，杀失败
+也回 `Ok`；回收器若照抄这个语义，失败就会被记成"已回收"，第二轮连对象都找不到（质量
+复现 `attempts=1, alive=true, pool=0, reaping=true, first_reported=1`）。
+
+取舍：**不改 `rpc::kill` 的"先摘后杀"**（那条路同时服务 `kill_all`/`schedules`/
+`closeAux`/远程 dispatch，改它要重新论证所有主路径的失败语义）。回收器改用自己的
+**待重试句柄表**（`aux_reap::PENDING_KILLS`，`runtimeId → Arc<ProcessState>`）：
+
+1. `try_kill(handle)` = `process_kill` 成功**且** `running()` 为假 → `Exited`，否则
+   `RetryPending`。两条都要，因为 Windows taskkill 非零退出会被 `child::kill_inner`
+   记日志后转成 `Ok`，只看返回值不够。
+2. `Exited` 才 `retire_entry`（摘池 + 清池级时钟 + `forget` 租约）并 `push Reaped`；
+   `RetryPending` 把句柄留在表里、日志记 `reason: "kill-retry", result: "pending"`、
+   **不 push `Reaped`**。
+3. 每轮扫描**先**处理待重试表（池里可能已被 `rpc::kill` 摘掉，只有这张表还握着句柄），
+   再走常规判定；确认退出后移出表，否则句柄会泄漏。
+4. `process_kill` 失败时把 `SessionInner` 放回 `ProcessState`（不 `take` 掉），否则
+   `running()` 会因 `inner == None` 误判"已退出"，重试无从谈起。
+5. 故障注入：`child::FAIL_NEXT_KILLS`（`#[cfg(test)]`）+ `aux_probe::fail_next_kills(n)`，
+   回归 `a_failed_kill_is_retried_and_only_counted_once_the_process_is_gone` 与
+   `repeated_kill_failures_never_report_a_reap`。
+
+**已知边界（团队裁定，不是缺陷）**：已空闲 1 小时的 Tab 停跳 100 秒后被回收是**符合
+§5** 的（门槛是"用户活动"，不是"这次睡了多久"）。规格不给唤醒宽限；用户可见的表现是
+"切回去时 Tab 已销毁、重开是全新实例"，与"关闭即销毁、不保存历史"一致。
 
 **重连归属**（第 4 条）：`reattachRunningSessions` 先调 `aux_list`，只对
 `clientId == 本机 && parentRuntimeId 在本地注册表` 的条目恢复 pending UI 与流式标记；

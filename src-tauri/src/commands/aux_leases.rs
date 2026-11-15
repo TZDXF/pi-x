@@ -22,15 +22,18 @@ use tauri::State;
 use crate::aux_leases;
 use crate::rpc;
 
-/// 登记/续期本客户端对某 aux 实例的持有（心跳每 20s 重复调用，幂等），
-/// 返回**服务端签发的 lease token**（关闭实例时要用它 `aux_release`）。
+/// 登记/续期本客户端对某 aux 实例的持有，返回**服务端签发的 lease token**。
+///
+/// `lease_token` 可选：首次领取不需要它（服务端签发）；**续租必须带上原 token**，
+/// 否则 `auxLeaseConflict` —— 公开的 `clientId` 因此不能当凭证（复审第二轮 P1-2）。
 #[tauri::command]
 pub async fn aux_claim(
     state: State<'_, rpc::RpcState>,
     runtime_id: String,
     client_id: String,
+    lease_token: Option<String>,
 ) -> Result<String, String> {
-    aux_leases::claim(&state, &runtime_id, &client_id).await
+    aux_leases::claim(&state, &runtime_id, &client_id, lease_token.as_deref()).await
 }
 
 /// 释放租约（关闭实例时**先于** `rpc_kill` 调用）。只认 lease token；不持有即报错。

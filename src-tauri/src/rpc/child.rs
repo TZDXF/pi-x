@@ -892,6 +892,14 @@ async fn kill_inner(
     Ok(())
 }
 
+/// 测试用故障注入：接下来的 `count` 次 `process_kill` 直接返回错误。
+///
+/// 为什么需要它：`kill_inner` 的失败分支在本地生产路径上很难自然触发（Windows
+/// taskkill 的非零退出只记日志、`kill_on_drop` 尽力兜底），而"kill 失败必须可重试"
+/// 是回收器的硬要求（复审第二轮 P1-1）。没有注入就只能靠打磨真实 OS 权限错误。
+#[cfg(test)]
+pub(super) static FAIL_NEXT_KILLS: AtomicU64 = AtomicU64::new(0);
+
 pub(super) async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
     let mut guard = state.inner.lock().await;
     {
@@ -899,10 +907,27 @@ pub(super) async fn process_kill(state: &ProcessState, reason: &str) -> Result<(
         let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
         activity.stop_and_emit(generation, false);
     }
-    if let Some(mut inner) = guard.take() {
-        kill_inner(&state.runtime_id, &mut inner, reason).await?;
+    #[cfg(test)]
+    if FAIL_NEXT_KILLS.load(Ordering::Relaxed) > 0 {
+        FAIL_NEXT_KILLS.fetch_sub(1, Ordering::Relaxed);
+        // 与真实失败一致：**不**把 inner 摘掉，进程仍然被追踪（重试才有对象）。
+        crate::logs::write(&state.runtime_id, "kill injected failure (test seam)");
+        return Err(format!("injected kill failure: {reason}"));
     }
-    Ok(())
+    let Some(mut inner) = guard.take() else {
+        return Ok(());
+    };
+    match kill_inner(&state.runtime_id, &mut inner, reason).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // kill 失败必须把会话还回状态：否则重试没有对象，`process_running` 也会因为
+            // `inner == None` 误判"已退出"，回收器就会把一个仍活着的进程记成已回收。
+            if guard.is_none() {
+                *guard = Some(inner);
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

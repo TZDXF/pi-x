@@ -85,7 +85,8 @@ export const spawnAuxPi = (options: AuxSpawnOptions) =>
  * 返回**服务端签发的 lease token**。`clientId` 只是标识（`aux_list` 会公开它），
  * 不是凭证 —— `auxRelease` 必须出示这个 token，否则任何客户端都能抄走别人的租约。
  */
-export const auxClaim = (runtimeId: string, clientId: string) => invoke<string>("aux_claim", { runtimeId, clientId })
+export const auxClaim = (runtimeId: string, clientId: string, leaseToken?: string) =>
+  invoke<string>("aux_claim", { runtimeId, clientId, leaseToken: leaseToken ?? null })
 
 /**
  * 释放租约（只认 lease token）。关闭实例时**先于** `rpc_kill` 调用（顺序与规格

@@ -172,6 +172,39 @@ pub(crate) async fn probe(
     })
 }
 
+/// 取出某个 runtime 的 `Arc<ProcessState>`（回收器自持可重试句柄用）。
+///
+/// 只读、不刷新 `last_activity`：回收器拿它去 kill，失败时要能把同一个句柄留到下一轮。
+pub(crate) async fn process_handle(state: &RpcState, runtime_id: &str) -> Option<Arc<ProcessState>> {
+    state.processes.lock().await.get(runtime_id).cloned()
+}
+
+/// 对一个自持句柄执行 kill（回收器的重试路径）。
+///
+/// 为什么经由这里而不是 `rpc::kill`：`rpc::kill` 是"先从池里摘掉再杀"，杀失败时也
+/// 已经把池条目删了 —— 失败就无法重试（复审第二轮 P1-1）。回收器需要"句柄在手、失败
+/// 可重来"的语义，所以它自己拿着 `Arc<ProcessState>` 调这层薄封装。
+pub(crate) async fn kill_handle(process: &ProcessState, reason: &str) -> Result<(), String> {
+    child::process_kill(process, reason).await
+}
+
+/// 该句柄对应的进程是否仍在运行（`inner == None` 时按"已退出"处理，与生产一致）。
+pub(crate) async fn running_handle(process: &ProcessState) -> bool {
+    child::process_running(process).await
+}
+
+/// 测试用故障注入：让接下来的 `count` 次 kill 直接失败。
+#[cfg(test)]
+pub(crate) fn fail_next_kills(count: u64) {
+    child::FAIL_NEXT_KILLS.store(count, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 测试用：清掉残留的故障注入（用例之间隔离）。
+#[cfg(test)]
+pub(crate) fn clear_kill_failures() {
+    child::FAIL_NEXT_KILLS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 当前存活的 aux runtime id 快照（回收器扫描用；**不**刷新任何时钟）。
 pub(crate) async fn aux_runtime_ids(state: &RpcState) -> Vec<String> {
     state
@@ -217,6 +250,16 @@ pub(crate) async fn set_aux_parent(state: &RpcState, runtime_id: &str, parent: O
     if let Some(process) = process {
         *process.parent_runtime.lock().await = parent;
     }
+}
+
+/// 收尾一个**已确认退出**的 runtime：从池里摘掉、清池级时钟、清租约。
+///
+/// 只有"kill 成功且 `running()` 为假"之后才允许调用 —— 提前摘掉池条目正是上一版
+/// 让 kill 失败无法重试的根因（`rpc::kill` 先 remove 再 kill，失败也回 Ok）。
+pub(crate) async fn retire_entry(state: &RpcState, runtime_id: &str) {
+    state.processes.lock().await.remove(runtime_id);
+    state.last_activity.lock().await.remove(runtime_id);
+    crate::aux_leases::forget(runtime_id);
 }
 
 /// 只读的策略快照（不刷新 `last_activity`、不写 stdin）。

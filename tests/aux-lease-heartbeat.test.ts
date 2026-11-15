@@ -9,7 +9,10 @@ import { createPinia, setActivePinia } from "pinia"
  * 2. 关闭顺序：**先 `aux_release` 再 `rpc_kill`**（与 §5 销毁段一致）。
  * 3. 重连归属：`aux_list` 里只恢复 `clientId == 本机 && parentRuntimeId 在本地注册表`
  *    的条目；他客户端条目一律不动，本机残条（实例已不在表）释放租约。
- * 4. **clientId 不是凭证**：`aux_release` 只认服务端在 `aux_claim` 时签发的 lease token。
+ * 4. **clientId 不是凭证**：`aux_release` 只认服务端在 `aux_claim` 时签发的 lease token；
+ *    **续租也必须带同一个 token**，否则后端回 `auxLeaseConflict`。
+ * 4b. 丢了 token（页面重载）时：`auxLeaseConflict` → **不重试、不停用 Tab**，等 TTL
+ *    （90s）过后自动恢复。
  * 5. 纯逻辑：宽容解析与过滤（`lib/auxLease.ts`）。
  *
  * 不访问任何真实模型/进程：`@/api/piClient` 全部替身，`aux_*` 走注入的 bridge。
@@ -79,9 +82,9 @@ beforeEach(async () => {
     kill: async (runtimeId: string) => {
       calls.push(`kill:${runtimeId}`)
     },
-    claim: async (runtimeId: string, clientId: string) => {
-      calls.push(`claim:${runtimeId}:${clientId}`)
-      return `token-${runtimeId}`
+    claim: async (runtimeId: string, clientId: string, leaseToken?: string) => {
+      calls.push(`claim:${runtimeId}:${clientId}:${leaseToken ?? "-"}`)
+      return leaseToken ?? `token-${runtimeId}`
     },
     release: async (runtimeId: string, leaseToken: string) => {
       calls.push(`release:${runtimeId}:${leaseToken}`)
@@ -144,7 +147,8 @@ test("heartbeat claims every live instance every 20s and stops when the last one
   expect(aux.auxHeartbeatRunning()).toBe(true)
   calls.length = 0
   await vi.advanceTimersByTimeAsync(lease.AUX_LEASE_HEARTBEAT_MS)
-  expect(calls).toEqual([`claim:${tab.runtimeId}:${aux.currentAuxClientId()}`])
+  // 心跳必须带上已记住的 token（否则后端会回 auxLeaseConflict）。
+  expect(calls).toEqual([`claim:${tab.runtimeId}:${aux.currentAuxClientId()}:token-${tab.runtimeId}`])
   // 心跳周期是 20s，不是别处的 60s/30s。
   expect(lease.AUX_LEASE_HEARTBEAT_MS).toBe(20_000)
 
@@ -170,6 +174,46 @@ test("closing an instance releases the lease with a token before killing the pro
   expect(calls[releaseIndex]).not.toContain(aux.currentAuxClientId())
   // 释放后本机不再持有 token。
   expect(aux.auxLeaseToken(tab.runtimeId)).toBeUndefined()
+})
+
+test("a lost token backs off until the lease TTL instead of retrying or closing the tab", async () => {
+  // 页面重载后本机没有 token：后端对已有条目回 auxLeaseConflict。
+  const conflict = () => {
+    throw new Error('PIXERR:{"code":"auxLeaseConflict","fallback":"续租必须出示原 lease token"}')
+  }
+  let claims = 0
+  aux.registerAuxRuntimeBridge({
+    kill: async () => {},
+    claim: async () => {
+      claims += 1
+      conflict()
+    },
+    release: async () => {},
+    list: async () => [],
+  })
+  const tab = await openTab("main", 11)
+  // 首次（openAux 里那次）已经撞到 conflict：进入静默窗口。
+  expect(aux.auxLeaseToken(tab.runtimeId)).toBeUndefined()
+  // Tab 必须仍然存活（**不能**因为拿不到租约就把实例判死/停用）。
+  expect(aux.auxTabByRuntime(tab.runtimeId)).toBeDefined()
+  expect(aux.auxHeartbeatRunning()).toBe(true)
+
+  // 静默窗口内不再发 claim（不刷无意义的失败）。
+  const before = claims
+  await vi.advanceTimersByTimeAsync(lease.AUX_LEASE_HEARTBEAT_MS * 3)
+  expect(claims).toBe(before)
+
+  // TTL 窗口过去后自动再试：这一次后端已过期旧条目，算首次领取、签发新 token。
+  aux.registerAuxRuntimeBridge({
+    kill: async () => {},
+    claim: async (runtimeId: string) => `token-${runtimeId}`,
+    release: async () => {},
+    list: async () => [],
+  })
+  await vi.advanceTimersByTimeAsync(lease.AUX_LEASE_TTL_MS)
+  await aux.tickAuxLeases()
+  expect(aux.auxLeaseToken(tab.runtimeId)).toBe(`token-${tab.runtimeId}`)
+  expect(aux.auxTabByRuntime(tab.runtimeId)).toBeDefined()
 })
 
 test("without a token the close path does not release (the TTL expires it instead)", async () => {

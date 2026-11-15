@@ -5,7 +5,14 @@ import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import type { ConversationSelectionLimitReason } from "@/lib/conversationSelections"
-import { AUX_LEASE_HEARTBEAT_MS, ownAuxLeases, parseAuxLeaseEntries, shouldHeartbeat } from "@/lib/auxLease"
+import {
+  AUX_LEASE_HEARTBEAT_MS,
+  AUX_LEASE_TTL_MS,
+  isAuxLeaseConflict,
+  ownAuxLeases,
+  parseAuxLeaseEntries,
+  shouldHeartbeat,
+} from "@/lib/auxLease"
 import { clearAuxDraft } from "@/stores/auxDrafts"
 import { addAuxSelection, clearAuxSelectionBucket } from "@/stores/auxSelections"
 import { clearAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
@@ -81,7 +88,7 @@ export interface AuxRuntimeBridge {
    * clientId 只是标识（`aux_list` 会公开它），不能当凭证：`release` 必须出示这个
    * token，因此"抄别人的 clientId 去释放"必然失败（复审 P1-2）。
    */
-  claim?: (runtimeId: string, clientId: string) => Promise<string>
+  claim?: (runtimeId: string, clientId: string, leaseToken?: string) => Promise<string>
   /** 释放租约（`aux_release`）：只认 token。 */
   release?: (runtimeId: string, leaseToken: string) => Promise<void>
   /** 列出租约（`aux_list`；重连归属过滤用）。 */
@@ -107,11 +114,38 @@ export function auxLeaseToken(runtimeId: string): string | undefined {
   return leaseTokens.get(runtimeId)
 }
 
-/** 续租一次（心跳与"实例就绪"共用；失败静默 —— 下一次心跳会再试）。 */
+/**
+ * 丢了 token（页面重载）后的静默窗口：到期前**不再发 claim**。
+ *
+ * 为什么要这个窗口：`aux_claim` 对已有条目要求出示原 token，重载后没有 token 时
+ * 每次心跳都会被 `auxLeaseConflict` 拒（复审第二轮 P1-2 的正确行为）。如果继续每 20s
+ * 发一次，只是刷出一串无意义的失败日志；停掉 Tab 更是错的 —— 实例与进程都还活着，
+ * 后端会在 TTL 之后惰性摘掉旧条目，届时同一 clientId 变成"首次 claim"自动成功。
+ * 期间回收也**不会**误杀：空闲门槛（用户活动 > 30 分钟）远未到账。
+ */
+const leaseQuietUntil = new Map<string, number>()
+
+/** 续租一次（心跳与"实例就绪"共用）。返回新/当前 token；被拒或静默窗口内返回 undefined。 */
 async function claimAuxLease(runtimeId: string) {
-  const token = await bridge?.claim?.(runtimeId, auxClientId()).catch(() => undefined)
-  if (token) leaseTokens.set(runtimeId, token)
-  return token
+  if (!bridge?.claim) return undefined
+  const quietUntil = leaseQuietUntil.get(runtimeId)
+  if (quietUntil !== undefined && Date.now() < quietUntil) return undefined
+  const token = leaseTokens.get(runtimeId)
+  try {
+    // 首次不带 token（服务端签发）；续租必须带原 token，否则 `auxLeaseConflict`。
+    const issued = await bridge.claim(runtimeId, auxClientId(), token)
+    if (issued) {
+      leaseTokens.set(runtimeId, issued)
+      leaseQuietUntil.delete(runtimeId)
+    }
+    return issued
+  } catch (error) {
+    if (isAuxLeaseConflict(error)) {
+      // 不重试、不停用 Tab：等旧条目 TTL 过期后自动恢复。
+      leaseQuietUntil.set(runtimeId, Date.now() + AUX_LEASE_TTL_MS)
+    }
+    return undefined
+  }
 }
 
 /**
@@ -125,6 +159,7 @@ async function releaseAuxLease(runtimeId: string) {
   if (!token) return
   await bridge?.release?.(runtimeId, token).catch(() => undefined)
   leaseTokens.delete(runtimeId)
+  leaseQuietUntil.delete(runtimeId)
 }
 
 /**
@@ -276,6 +311,7 @@ export function currentAuxClientId() {
 export function resetAuxChatForTest() {
   stopAuxLeaseHeartbeat()
   leaseTokens.clear()
+  leaseQuietUntil.clear()
   tabs.splice(0)
   closedAuxIds.clear()
   sweptStores.clear()
