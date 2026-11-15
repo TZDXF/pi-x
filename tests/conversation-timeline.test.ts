@@ -1,24 +1,10 @@
 import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import ts from "typescript"
-import vm from "node:vm"
-const source = readFileSync(new URL("../src/lib/conversationTimeline.ts", import.meta.url), "utf8")
-const tsCompile = code => ts.transpile(code, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 })
-// conversationTimeline now shares contentText with the session store via
-// '@/lib/content'; load the real module so its behavior is under test too.
-const require = id => {
-  if (id === "@/lib/content") {
-    const content = { exports: {} }
-    vm.runInNewContext(tsCompile(readFileSync(new URL("../src/lib/content.ts", import.meta.url), "utf8")), content)
-    return content.exports
-  }
-  throw new Error(`unexpected module: ${id}`)
-}
-const context = { exports: {}, require }
-vm.runInNewContext(tsCompile(source), context)
-const turns = context.exports.conversationTurns
-const buildTimelineTurns = context.exports.buildTimelineTurns
+// 直接 import 真实模块：conversationTimeline 现在经 `@/lib/content` 共享文本抽取，并经
+// `@/lib/promptContexts` 与气泡/复制共用同一个上下文解析器（父上下文块与 userselect
+// 尾块都不得进摘要）。用 vm 垫片加载会绕开这条依赖链，等于没测到共用关系。
+import { conversationTurns as turns, buildTimelineTurns } from "@/lib/conversationTimeline"
 const user = (id, text = "") => ({ kind: "user", id, text })
 const text = value => ({ type: "text", text: value })
 const assistant = (...blocks) => ({ kind: "assistant", blocks })
@@ -56,6 +42,12 @@ test("handles empty/image questions, unanswered turns, and bounded excerpts", ()
   expect(turns([user(1, "x".repeat(300))])[0].question.length).toBe(181)
   expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
+test("timeline question ignores an aux parent-context block", () => {
+  const prompt = ["<aux_parent_context>", "【用户】父会话问题", "</aux_parent_context>", "", "本轮的提问"].join("\n")
+  expect(turns([user(1, prompt)])[0].question).toBe("本轮的提问")
+  expect(buildTimelineTurns([], 0, [user(1, prompt)])[0].question).toBe("本轮的提问")
+})
+
 test("rendered entries have anchors and navigation respects reduced motion", () => {
   const chat = turnSources()
   expect(chat).toMatch(/:data-message-id="entry.id"/)
@@ -67,7 +59,7 @@ test("rendered entries have anchors and navigation respects reduced motion", () 
 })
 
 // ---- buildTimelineTurns: full-session timeline over paginated history ----
-const build = context.exports.buildTimelineTurns
+const build = buildTimelineTurns
 const rawUser = (text, images = []) => ({
   role: "user",
   content: images.length ? [{ type: "text", text }, ...images] : text,

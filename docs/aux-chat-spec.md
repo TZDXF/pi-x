@@ -171,7 +171,51 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    `init()` 本身一行未改（主会话行为不变）。
    `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。
 
-## 9. 划词入口与引用分桶（TZD-103）
+## 9. 上下文取材与折叠块（TZD-102 落地）
+
+§3/§4 的实现落点与两处**写法差异**（差异是事实记录，不是等价说明）：
+
+| 职责                                                                           | 文件                                     |
+| ------------------------------------------------------------------------------ | ---------------------------------------- |
+| 归一化、锚点截断、32k 整组丢弃、块拼装/剥离（零依赖）                          | `src/lib/auxParentContext.ts`            |
+| 三源取材（只打父 runtime；`get_entries` → `get_messages` → `session_history`） | `src/lib/auxContextCollect.ts`           |
+| “只注入首轮”记账（模块级，按 aux `runtimeId`）                                 | `src/stores/auxContext.ts`               |
+| 面板接线（`streaming` 读父 store 实时值）                                      | `src/composables/useAuxParentContext.ts` |
+| 首轮拼块（`serializeComposerPromptContexts` 的 `parentContext`）               | `src/composables/useChatSendControl.ts`  |
+| 边界提醒（`--append-system-prompt` 常量）                                      | `src-tauri/src/rpc/aux_launch.rs`        |
+
+**提交判据**：`live:true` 不作为判据（最终消息同样标 live）。已提交由来源身份定义 ——
+`get_entries` 的 entry id 集合（同时用于给 `get_messages` / `session_history` 的
+`_entryId` 过滤）；流式半轮既没有 entry，也会被“最后一条已提交 user 之后全部排除”的
+锚点切掉。父会话在流式时该锚点生效，非流式时整段已提交对话都保留。
+
+**两处差异**：
+
+1. §3 写“兜底顺序：`get_entries` → `session_history`”。实际是 `get_entries` →
+   `get_messages` → `session_history`：`get_entries` 返回空（无已提交输入）或失败时才
+   下探，`get_messages` 是压缩投影语义的备选（规格 §3 也列了它），文件兜底最后。
+2. §4 的成块顺序：块在 prompt **最前**，`get_entries` 侧的重建则把块从可见正文里剥出、
+   存进 `UserEntry.parentContext` / `parentContextBlock`（气泡默认收起、复制只用可见
+   正文、编辑重发原样拼回块）。历史重建仍用同一个解析器
+   `parseComposerPromptContexts`，因此首发/读回不会漂。
+
+**身份判据（rev.2 补）**：`get_entries` 成功且**非空**时它的 entry id 集合是三路的权威
+判据；`get_entries` 失败或返回空（`leafId: null`、尚无已提交条目）时**不**把"无集合"
+当成"全部已提交"，另两路改为**来源自证**（每条消息必须自带 `_entryId`），无 id 的消息
+一律丢弃。`get_entries` 成功但为空按"无权威集合"处理 —— 否则会把随后已落盘的文件内容
+过滤掉（实测竞态）。结果里的 `identity`（`authoritative`/`source`/`none`）用于诊断。
+
+**回落顺序（rev.2 补）**：`get_entries` → `get_messages` → `session_history`，历史返回
+null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态常在几十毫秒内自愈），
+仍无内容才收口成空提示；`attempts` 记录实际调用次数（测试断言 `history ≥ 1`、
+`entries ≥ 2`）。并发首轮按先来先得：同一 aux 的后续提交等领头采集落地再发，后续轮次
+不排队；采集 reject 时如实提示（`chat.parentContextFailed`）后不带块发送。
+
+**已知代价（如实）**：父上下文前缀在后续每一轮都作为历史**全价**重发，本事项不主张任何
+前缀缓存收益；32k 是硬护栏。`overLimit`（单轮自身超限）时整组保留、不按字符切断工具
+调用与结果配对 —— 护栏宁可略微超限，也不制造互不配对的历史。
+
+## 10. 划词入口与引用分桶（TZD-103）
 
 两个入口共用**同一份**浮层（`src/components/chat/ConversationSelectionMenu.vue`），
 只新增动作，锚点/翻转/钳制算法与 document 级监听一字未改：

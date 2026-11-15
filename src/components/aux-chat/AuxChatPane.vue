@@ -9,6 +9,7 @@ import ExtensionWidget from "@/components/chat/ExtensionWidget.vue"
 import ExtensionDialog from "@/components/ExtensionDialog.vue"
 import ModelThinkingSelect from "@/components/ModelThinkingSelect.vue"
 import { useChatSendControl } from "@/composables/useChatSendControl"
+import { useAuxParentContext } from "@/composables/useAuxParentContext"
 import { useChatTurnList } from "@/composables/useChatTurnList"
 import { useAuxDraft } from "@/composables/useAuxDraft"
 import { useConversationModel } from "@/composables/useConversationModel"
@@ -64,6 +65,13 @@ const project = computed(() => props.parent.project)
 const workspaceSelection = ref(null)
 const ready = computed(() => props.tab.status === "ready")
 
+// 父上下文只在**首轮**拼进 prompt（记账按 aux runtimeId；第 2/3 轮返回 null）。
+const { parentContext } = useAuxParentContext({
+  auxRuntimeId: props.tab.runtimeId,
+  parentRuntimeId: props.parent.runtimeId,
+  session,
+})
+
 function jumpToBottom() {
   void nextTick().then(() => conversation.value?.scrollToBottom())
 }
@@ -85,6 +93,8 @@ const sendControl = useChatSendControl({
   // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，
   // 发送成功后只清本桶，主会话的批注/引用互不影响。
   contexts: "aux",
+  // 首轮带父会话已提交分支（`<aux_parent_context>` 折叠块，默认收起，TZD-102）。
+  parentContext,
 })
 const controls = reactive(sendControl)
 

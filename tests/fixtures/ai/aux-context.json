@@ -1,0 +1,16 @@
+{
+  "fixtures": [
+    {
+      "match": { "userMessage": "父会话第一轮提问" },
+      "response": { "content": "父会话第一轮回答（已提交）" }
+    },
+    {
+      "match": { "userMessage": "父会话第二轮提问" },
+      "response": { "content": "父会话第二轮回答（已提交）" }
+    },
+    {
+      "match": { "userMessage": "父会话第三轮提问" },
+      "response": { "content": "父会话第三轮回答（这是流式中半轮，不应进 aux 上下文）" }
+    }
+  ]
+}

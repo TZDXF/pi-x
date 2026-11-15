@@ -2,6 +2,8 @@ import { computed, nextTick, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { withSessionReferences } from "@/lib/completion"
 import { dataUrlToImage } from "@/lib/attachments"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
+import { withAuxParentContext } from "@/lib/auxParentContext"
 import type { KnownSession } from "@/lib/completion"
 import type { SessionStore, UserEntry } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
@@ -9,7 +11,24 @@ import { useWorkspaceStore } from "@/stores/workspace"
 
 type WorkspaceStore = ReturnType<typeof useWorkspaceStore>
 
-/** Handle of the inline edit textarea rendered inside the user message. */
+/**
+ * 重发时的 prompt：只换提问正文，`<aux_parent_context>` 块**字节不变**地留在最前
+ * （`docs/aux-chat-spec.md` §4 第 4 条落地）。
+ *
+ * 为什么不能让块跟着编辑一起重算：块是“打开面板那一刻父会话的快照”，重算会把它变成
+ * “现在”的内容，历史气泡与模型看到的前缀就不再是同一份。aux 本身不重发（`editBlocked`
+ * 恒真、`rewind_prompt` 被 M0 拒绝），这条路径服务的是主会话里出现过该块的消息。
+ *
+ * 历史重建时块原文存在 `parentContextBlock` 上；实时消息则从 `contextText`（完整 prompt）
+ * 里剥出来 —— 两者都是“原样”，不重新拼装。
+ */
+export function promptPreservingParentContextBlock(entry: UserEntry, question: string): string {
+  const block =
+    entry.parentContextBlock ?? parseComposerPromptContexts(entry.contextText ?? entry.text).parentContextBlock
+  if (!block) return question
+  return withAuxParentContext(block, question)
+}
+
 export interface PromptEditTextarea {
   $el: HTMLTextAreaElement
 }
@@ -59,7 +78,9 @@ export function usePromptEdit(deps: {
   async function startEditPrompt(entry: UserEntry) {
     if (editBlocked.value || entry.id !== lastUserPromptId.value) return
     editedPrompt.value = entry
-    editedText.value = entry.text
+    // `entry.text` 在历史重建后已经是**可见正文**（不含父上下文块与尾块），所以编辑框
+    // 里只有用户写的问题；块只在重发时原样拼回去（见 `promptPreservingParentContextBlock`）。
+    editedText.value = parseComposerPromptContexts(entry.text).visibleContent
     await nextTick()
     editTextarea.value?.$el.focus()
   }
@@ -93,7 +114,7 @@ export function usePromptEdit(deps: {
       await session.resendPrompt(
         text,
         images.length ? (images as { data: string; mimeType: string }[]) : undefined,
-        withSessionReferences(text, knownSessions()),
+        promptPreservingParentContextBlock(entry, withSessionReferences(text, knownSessions())),
       )
       editedPrompt.value = null
       deps.onResent?.()

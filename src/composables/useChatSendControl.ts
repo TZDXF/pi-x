@@ -38,6 +38,13 @@ export function useChatSendControl(deps: {
    * - `none`：完全隔离（不读不写任何桶）。
    */
   contexts?: "shared" | "aux" | "none"
+  /**
+   * aux 的**父上下文**折叠块内文（`docs/aux-chat-spec.md` §3/§4，TZD-102）。
+   *
+   * 只在**首轮**返回值：调用方（`AuxChatPane`）按 aux `runtimeId` 记账，第 2/3 轮返回
+   * `null`，于是块不会被重复拼上（单测钉住"连续三轮仅首轮注入"）。主会话不传。
+   */
+  parentContext?: () => Promise<string | null>
 }) {
   const { session, ui, workspace, bridge } = deps
   const { t } = useI18n()
@@ -205,13 +212,23 @@ export function useChatSendControl(deps: {
         commandName && session.commands.some(c => c.name === commandName && c.source === "extension")
       const expandedText = extensionCommand ? text : withSessionReferences(text, deps.knownSessions())
       // 上下文只拼进发给 agent 的 prompt；聊天气泡仍显示用户输入的原文。
-      // 序列化顺序：正文 → userselect 尾块 → Code comments 尾块。
+      // 父上下文块在最前（仅 aux 首轮），其后 userselect 尾块、Code comments 尾块。
       // 跨目录批注在这里改写为带目录前缀的路径，agent 才能按自身 cwd 之外的目录寻址。
       const comments = pendingComments.value.map(comment => ({ ...comment, path: commentFilePath(comment) }))
       const selections = [...pendingSelections.value]
+      // 首轮取父上下文（aux 才有；返回值只在首轮非空）。失败不得阻断发送：
+      // 父上下文是“带得走就拿”的内容，不是发送的前置条件；但降级要**如实**告诉用户，
+      // 不能让人只看到“没有块”而不知道原因（采集器自身已把无输入等情形做成顶部提示，
+      // 走到这里的 reject 属于意外故障）。
+      const parentContext = deps.parentContext
+        ? await deps.parentContext().catch((error: unknown) => {
+            ui.pushToast(t("chat.parentContextFailed", { reason: String(error ?? "") }), "warning")
+            return null
+          })
+        : null
       const promptWithContexts =
-        comments.length || selections.length
-          ? serializeComposerPromptContexts(expandedText, { comments, selections })
+        parentContext || comments.length || selections.length
+          ? serializeComposerPromptContexts(expandedText, { comments, selections, parentContext })
           : expandedText
       if (delayedSend.value) {
         session.schedulePrompt(text, delayMs!, images.length ? images : undefined, promptWithContexts)
