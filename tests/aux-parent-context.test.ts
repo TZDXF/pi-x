@@ -111,19 +111,47 @@ test("三源同一: the last committed realUser is the anchor, later assistant/t
     user("第一轮提问", "e1"),
     assistant("第一轮回答", "e2"),
     user("第二轮提问（本轮）", "e3"),
-    // 半轮：流式中的助手回复与工具结果，还没有 entry 身份。
-    assistant("还没提交的半截回答"),
-    { role: "toolResult", text: "还没提交的工具结果", toolCallId: "call-x" },
+    // 本轮之后的助手回复与工具结果（已写进投影/文件，但属于半轮）。
+    assistant("半截回答", "e4"),
+    { role: "toolResult", text: "半轮工具结果", toolCallId: "call-x", entryId: "e5" },
   ]
   const streaming = buildAuxParentContext({ messages, streaming: true })
   expect(streaming.inner).toContain("第一轮回答")
   expect(streaming.inner).toContain("第二轮提问（本轮）")
   expect(streaming.inner).not.toContain("半截回答")
-  expect(streaming.inner).not.toContain("还没提交的工具结果")
+  expect(streaming.inner).not.toContain("半轮工具结果")
   // 可失败性：关掉 streaming 后同一份输入里那些消息就会被算进去（说明上一条断言
   // 真的依赖锚点逻辑，而不是"本来就为空"）。
   const idle = buildAuxParentContext({ messages, streaming: false })
   expect(idle.inner).toContain("半截回答")
+})
+
+test("FAIL_identity_no_authoritative_set: 没有权威 id 集合时另两路必须自证身份", () => {
+  // `get_entries` 不可用 ⇒ 没有权威集合；此时**不能**“拿不到集合就当全部已提交”：
+  // 消息必须自带 entryId/`_entryId`，无 id 的一律丢弃。
+  const anonymous: AuxContextMessage[] = [user("无身份的提问"), assistant("无身份的回答")]
+  const dropped = buildAuxParentContext({ messages: anonymous, streaming: false })
+  expect(dropped.hasContext).toBe(false)
+  expect(dropped.inner).toBe(AUX_PARENT_CONTEXT_EMPTY_NOTICE)
+  expect(dropped.identity).toBe("none")
+  // 带身份的消息（文件/投影里的 `_entryId`）在无权威集合时照样可用，且 identity=source。
+  const identified = auxMessagesFromMessages([
+    { role: "user", content: "文件里的提问", _entryId: "f1" },
+    { role: "assistant", content: [{ type: "text", text: "文件里的回答" }], _entryId: "f2" },
+    { role: "assistant", content: [{ type: "text", text: "未提交的半轮" }] },
+  ])
+  const kept = buildAuxParentContext({ messages: identified, streaming: false })
+  expect(kept.identity).toBe("source")
+  expect(kept.inner).toContain("文件里的回答")
+  expect(kept.inner).not.toContain("未提交的半轮")
+  // 权威集合在场时改用集合判定（来源 id 在集合外的一律丢失）。
+  const authoritative = buildAuxParentContext({
+    messages: identified,
+    streaming: false,
+    committedIds: new Set(["f1"]),
+  })
+  expect(authoritative.identity).toBe("authoritative")
+  expect(authoritative.inner).not.toContain("文件里的回答")
 })
 
 test("三源同一: messages without an accepted entry identity are dropped even when live:false", () => {
@@ -187,12 +215,13 @@ test("三源同一: the three collectors produce byte-identical blocks for the s
   const fromFile = await collectAuxParentContext(
     {
       request: async () => ({ success: false, error: "get_entries unavailable" }),
+      // 文件投影自带 `_entryId`：`get_entries` 不可用（无权威集合）时靠它自证身份。
       readHistory: async () => [
-        { role: "user", content: questions[0] },
-        { role: "assistant", content: [{ type: "text", text: answers[0] }] },
-        { role: "user", content: questions[1] },
-        { role: "assistant", content: [{ type: "text", text: answers[1] }] },
-        { role: "user", content: questions[2] },
+        { role: "user", content: questions[0], _entryId: "h1" },
+        { role: "assistant", content: [{ type: "text", text: answers[0] }], _entryId: "h2" },
+        { role: "user", content: questions[1], _entryId: "h3" },
+        { role: "assistant", content: [{ type: "text", text: answers[1] }], _entryId: "h4" },
+        { role: "user", content: questions[2], _entryId: "h5" },
       ],
     },
     { ...input, sessionFile: "parent.jsonl" },
@@ -202,11 +231,11 @@ test("三源同一: the three collectors produce byte-identical blocks for the s
   const entriesOnly = buildAuxParentContext({ messages: auxMessagesFromEntries(entries), streaming: true })
   const historyOnly = buildAuxParentContext({
     messages: auxMessagesFromMessages([
-      { role: "user", content: questions[0] },
-      { role: "assistant", content: [{ type: "text", text: answers[0] }] },
-      { role: "user", content: questions[1] },
-      { role: "assistant", content: [{ type: "text", text: answers[1] }] },
-      { role: "user", content: questions[2] },
+      { role: "user", content: questions[0], _entryId: "h1" },
+      { role: "assistant", content: [{ type: "text", text: answers[0] }], _entryId: "h2" },
+      { role: "user", content: questions[1], _entryId: "h3" },
+      { role: "assistant", content: [{ type: "text", text: answers[1] }], _entryId: "h4" },
+      { role: "user", content: questions[2], _entryId: "h5" },
     ]),
     streaming: true,
   })
@@ -215,12 +244,22 @@ test("三源同一: the three collectors produce byte-identical blocks for the s
   expect(requests.every(call => call.startsWith("parent:"))).toBe(true)
 })
 
-test("已提交但文件暂不可读 / 读取竞态回落 get_entries，不降级为未取到父上下文", async () => {
+/**
+ * 两条回落路径必须**真回落**：历史返回 null / 抛错之后重取 `get_entries`，
+ * 而不是直接 `source=none`。断言 `attempts.history >= 1` 与 `attempts.entries >= 2` —
+ * 上一版这条测试 `readHistory` 实际被调用 0 次（早期 return 遮住了它），因此不可能变红。
+ */
+async function recoveryFixture(history: () => Promise<unknown[] | null>) {
   const { questions, answers } = await committedParentTurns()
-  const collected = await collectAuxParentContext(
-    {
+  let entriesCalls = 0
+  return {
+    attempts: () => ({ entriesCalls }),
+    deps: {
       request: async (command: Record<string, unknown>) => {
-        if (command.type === "get_entries")
+        if (command.type === "get_entries") {
+          entriesCalls++
+          // 第一次：父进程此刻还没有已提交条目（竞态窗口）；重取时已落地。
+          if (entriesCalls === 1) return { success: true, data: { entries: [], leafId: null } }
           return {
             success: true,
             data: {
@@ -237,19 +276,64 @@ test("已提交但文件暂不可读 / 读取竞态回落 get_entries，不降�
               leafId: "e3",
             },
           }
+        }
         return { success: false, error: "projection unavailable" }
       },
-      // 文件读取竞态：调用方拿到的 sessionFile 此刻还读不出来。
-      readHistory: async () => {
-        throw new Error("sessionFileReadFailed")
+      readHistory: history,
+    },
+    answers,
+  }
+}
+
+test.each([
+  ["FAIL_recovery_null: history 返回 null 后重取 get_entries", async () => null, 1],
+  [
+    "FAIL_recovery_throw: history 抛错后重取 get_entries",
+    async () => {
+      throw new Error("sessionFileReadFailed")
+    },
+    1,
+  ],
+])("%s", async (_name, readHistory, expectedHistoryCalls) => {
+  const fixture = await recoveryFixture(readHistory as () => Promise<unknown[] | null>)
+  const collected = await collectAuxParentContext(fixture.deps, {
+    parentRuntimeId: "parent",
+    streaming: false,
+    sessionFile: "parent.jsonl",
+  })
+  expect(collected.source).toBe("entries")
+  expect(collected.hasContext).toBe(true)
+  expect(collected.inner).not.toContain(AUX_PARENT_CONTEXT_EMPTY_NOTICE)
+  expect(collected.inner).toContain(fixture.answers[0])
+  // 回落路径**真的被调用**（不是靠早期 return 跳过的空断言）。
+  expect(collected.attempts.history).toBe(expectedHistoryCalls)
+  expect(collected.attempts.entries).toBe(2)
+  expect(fixture.attempts().entriesCalls).toBe(2)
+})
+
+test("FAIL_recovery_empty_set: 初次空集合不得过滤随后已提交的文件内容", async () => {
+  const { questions, answers } = await committedParentTurns()
+  const collected = await collectAuxParentContext(
+    {
+      request: async (command: Record<string, unknown>) => {
+        // `get_entries` 成功但为空：这是“还没有已提交条目”，不是“权威集合 = 空”。
+        if (command.type === "get_entries") return { success: true, data: { entries: [], leafId: null } }
+        return { success: false, error: "projection unavailable" }
       },
+      readHistory: async () => [
+        { role: "user", content: questions[0], _entryId: "f1" },
+        { role: "assistant", content: [{ type: "text", text: answers[0] }], _entryId: "f2" },
+        { role: "user", content: questions[1], _entryId: "f3" },
+      ],
     },
     { parentRuntimeId: "parent", streaming: false, sessionFile: "parent.jsonl" },
   )
+  expect(collected.source).toBe("history")
   expect(collected.hasContext).toBe(true)
-  expect(collected.source).toBe("entries")
-  expect(collected.inner).not.toContain(AUX_PARENT_CONTEXT_EMPTY_NOTICE)
   expect(collected.inner).toContain(answers[0])
+  expect(collected.attempts.history).toBe(1)
+  // 文件内容有身份 ⇒ 无权威集合时按“来源自证”保留。
+  expect(collected.identity).toBe("source")
 })
 
 test("父会话刚创建（尚无已提交输入）: 空提示而不是报错", async () => {
@@ -271,8 +355,13 @@ test("父会话刚创建（尚无已提交输入）: 空提示而不是报错", 
 // ---- 3. 32k 护栏：按最旧轮次组整组丢弃 ----
 
 test("32k guard drops the oldest whole turns and never splits a tool call pair", () => {
-  const call: AuxContextMessage = { role: "assistant", text: "→ bash(ls)", entryId: "a1" }
-  const result: AuxContextMessage = { role: "toolResult", text: "输出", toolCallId: "call-1", entryId: "a2" }
+  const call: AuxContextMessage = { role: "assistant", text: "→ bash(ls)", entryId: "a1", toolCallIds: ["call-1"] }
+  const result: AuxContextMessage = {
+    role: "toolResult",
+    text: "输出",
+    toolCallId: "call-1",
+    entryId: "a2",
+  }
   const groups = groupAuxContextMessages([
     user("第一轮提问", "u1"),
     call,
@@ -313,6 +402,80 @@ test("32k guard keeps a single oversized turn intact and marks it", () => {
   })
   expect(built.overLimit).toBe(true)
   expect(built.hasContext).toBe(true)
+})
+
+test("FAIL_32k_cross_turn: 跨轮工具配对被丢时不留孤立结果", () => {
+  // 调用在第 1 轮组、结果却被记进第 2 轮组（中间隔着一条 steering 的 user 消息，
+  // 真实 pi 的 steer 就会这样打断同一轮的配对）。丢掉第 1 组时若只按“组”切，
+  // 第 2 组里那条**调用已不存在**的工具结果会留下 —— 这就是本用例要钉的缺陷。
+  const call: AuxContextMessage = {
+    role: "assistant",
+    text: "→ bash(ls)",
+    entryId: "a1",
+    toolCallIds: ["call-1"],
+  }
+  const orphan: AuxContextMessage = { role: "toolResult", text: "输出", toolCallId: "call-1", entryId: "a2" }
+  const groups = groupAuxContextMessages([
+    user("第一轮提问", "u1"),
+    call,
+    user("追加要求（steer）", "u2"),
+    orphan,
+    assistant("第二轮回答", "a3"),
+    user("第三轮提问", "u3"),
+    assistant("第三轮回答", "a4"),
+  ])
+  expect(groups).toHaveLength(3)
+  const joined = list => list.map(group => group.text).join(String.fromCharCode(10, 10))
+  // 预算只装得下后两组 → 第 1 组（含调用）被整组丢弃。
+  // 预算按**成品**量：两组文本 + 1 个组分隔空行 + 省略标注（真实实现同源）。
+  const noteForOne = 2 + AUX_PARENT_CONTEXT_TRUNCATED_NOTE.replace("{count}", "1").length
+  const maxChars = groups[1].chars + groups[2].chars + 2 + noteForOne
+  const truncated = truncateAuxContextGroups(groups, maxChars)
+  expect(truncated.omittedGroups).toBe(1)
+  const text = joined(truncated.kept)
+  // 调用被丢了，它的结果也不能留（否则历史里出现“无调用来源”的工具输出）。
+  expect(text).not.toContain("bash(ls)")
+  expect(text).not.toContain("【工具结果】")
+  // 第 2/3 组其余内容完好。
+  expect(text).toContain("追加要求（steer）")
+  expect(text).toContain("第三轮回答")
+  // 可失败性对照：同一份输入**不丢第 1 组**时，配对仍在（证明上面的断言真依赖清理逻辑）。
+  const keptAll = truncateAuxContextGroups(groups, 1_000_000)
+  expect(joined(keptAll.kept)).toContain("【工具结果】")
+})
+
+test("FAIL_32k_budget: 成品长度（含分隔空行与省略标注）不超上限且 overLimit 如实", () => {
+  // 三个等长轮次组；上限卡在「两组 + 组分隔空行 + 省略标注」之下 1 个字符。
+  // 只按“组内文本之和”算预算会误判为“装得下两组”，成品就会比上限多 1 字符。
+  const filler = "x".repeat(50)
+  const groups = groupAuxContextMessages([
+    user(`第一轮写了很多内容${filler}`, "u1"),
+    assistant(`回答一${filler}`, "a1"),
+    user(`第二轮写了很多内容${filler}`, "u2"),
+    assistant(`回答二${filler}`, "a2"),
+    user(`第三轮写了很多内容${filler}`, "u3"),
+    assistant(`回答三${filler}`, "a3"),
+  ])
+  const noteForOne = 2 + AUX_PARENT_CONTEXT_TRUNCATED_NOTE.replace("{count}", "1").length
+  const twoGroups = groups.at(-2)!.chars + groups.at(-1)!.chars
+  const maxChars = twoGroups + 2 + noteForOne - 1
+  const built = buildAuxParentContext({
+    messages: groups.flatMap(group => group.messages),
+    maxChars,
+  })
+  // 真实成品（含分隔空行与省略标注）必须真的 ≤ 上限。
+  expect(built.inner.length).toBeLessThanOrEqual(maxChars)
+  expect(built.overLimit).toBe(false)
+  expect(built.omittedGroups).toBeGreaterThanOrEqual(2)
+  // 块包装不额外增字符（成品长度就是内文长度）。
+  expect(built.block).toBe(["<aux_parent_context>", built.inner, "</aux_parent_context>"].join(String.fromCharCode(10)))
+  // 单轮自身超限时整组保留并标 overLimit（允许略超，不许切半）。
+  const oversized = buildAuxParentContext({
+    messages: groups.flatMap(group => group.messages),
+    maxChars: 20,
+  })
+  expect(oversized.overLimit).toBe(true)
+  expect(oversized.inner).toContain("回答三")
 })
 
 test("the default guard is 32k and the tail note names the omitted turn count", () => {

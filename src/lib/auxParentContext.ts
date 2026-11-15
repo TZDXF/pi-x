@@ -50,6 +50,8 @@ export interface AuxContextMessage {
   entryId?: string
   /** 工具调用与结果的配对键；同一组内的配对绝不按字符拆开。 */
   toolCallId?: string
+  /** assistant 消息里的工具调用 id（跨组配对的另一半）。 */
+  toolCallIds?: string[]
 }
 
 /** 一个"轮次组"：一条 user 消息 + 其后的 assistant/toolResult，直到下一条 user。 */
@@ -144,6 +146,19 @@ function toolCallLines(content: unknown): string[] {
   return lines
 }
 
+/** 工具调用的 id 列表（跨组配对修复用：组被丢弃后不留孤立的工具结果）。 */
+function toolCallIds(content: unknown): string[] {
+  if (!Array.isArray(content)) return []
+  const ids: string[] = []
+  for (const part of content) {
+    const block = part as { type?: unknown; id?: unknown; callId?: unknown }
+    if (block?.type !== "toolCall") continue
+    const id = typeof block.id === "string" ? block.id : typeof block.callId === "string" ? block.callId : ""
+    if (id) ids.push(id)
+  }
+  return ids
+}
+
 /**
  * 从 `get_entries` 的条目数组重建**已提交活动分支**：`leafId` 沿 `parentId` 回溯。
  *
@@ -195,7 +210,13 @@ export function auxMessagesFromEntries(entries: readonly unknown[]): AuxContextM
         const text = [auxContextText(message.content), ...toolCallLines(message.content)]
           .filter(part => part.trim())
           .join("\n")
-        messages.push({ role: "assistant", text, ...(entryId ? { entryId } : {}) })
+        const calls = toolCallIds(message.content)
+        messages.push({
+          role: "assistant",
+          text,
+          ...(entryId ? { entryId } : {}),
+          ...(calls.length ? { toolCallIds: calls } : {}),
+        })
       } else if (role === "toolResult") {
         messages.push({
           role: "toolResult",
@@ -265,7 +286,13 @@ export function auxMessagesFromMessages(messages: readonly unknown[]): AuxContex
       const text = [auxContextText(message.content), ...toolCallLines(message.content)]
         .filter(part => part.trim())
         .join("\n")
-      result.push({ role: "assistant", text, ...(entryId ? { entryId } : {}) })
+      const calls = toolCallIds(message.content)
+      result.push({
+        role: "assistant",
+        text,
+        ...(entryId ? { entryId } : {}),
+        ...(calls.length ? { toolCallIds: calls } : {}),
+      })
     } else if (role === "toolResult") {
       result.push({
         role: "toolResult",
@@ -287,27 +314,39 @@ export function auxMessagesFromMessages(messages: readonly unknown[]): AuxContex
 export interface AuxCommittedAnchorOptions {
   /** 父会话是否正在流式：是则只保留到最后一条已提交 user（其后是半轮）。 */
   streaming?: boolean
-  /** 已接纳的 entry 身份集合；不在集合里的消息视为**未提交**（流式半轮）。 */
+  /**
+   * 已接纳的 entry 身份集合（`get_entries` 的成功返回）。
+   *
+   * - 给了集合 → **权威**判据：消息必须带 `entryId` 且在集合里；无 id 的一律丢掉。
+   * - 没给集合 → **不能**当“全部已提交”：改用**来源自证**（消息必须自带
+   *   `entryId`/`_entryId`），无 id 的一律丢掉。这正是“拿不到集合就全放行”的反面。
+   */
   committedIds?: ReadonlySet<string>
 }
+
+/** 身份判据来源（诊断/测试用）：权威集合 / 来源自证 / 没有可用身份。 */
+export type AuxContextIdentity = "authoritative" | "source" | "none"
 
 /**
  * 截断规则（三源同一）：身份过滤 + 锚点切片。
  *
- * 1. **身份**：给了 `committedIds` 就丢掉"有 id 但不在集合里"的消息。这是
- *    `live:true` 之外唯一可靠的提交判据 —— 最终消息也标 live，所以不能用它。
+ * 1. **身份**（见 `committedIds`）：权威集合优先；没有集合时只接受**自带 id** 的消息。
+ *    两条都不成立的输入不算已提交 —— `live:true` 之外，身份是唯一可靠判据（最终
+ *    消息也标 live，所以不能用它）。
  * 2. **锚点**：父会话正在流式时，最后一条 user 就是本轮提问，**其后**的
- *    assistant/toolResult 属于半轮，必须排除（不是"删掉所有 assistant"）。
+ *    assistant/toolResult 属于半轮，必须排除（不是“删掉所有 assistant”）。
  *    非流式时整段对话都是已提交内容，一条不删。
  */
 export function applyCommittedAnchor(
   messages: readonly AuxContextMessage[],
   options: AuxCommittedAnchorOptions = {},
-): AuxContextMessage[] {
-  let kept = [...messages]
+): { messages: AuxContextMessage[]; identity: AuxContextIdentity } {
   const ids = options.committedIds
-  if (ids) kept = kept.filter(message => !message.entryId || ids.has(message.entryId))
-  if (!options.streaming) return kept
+  const kept = ids
+    ? messages.filter(message => !!message.entryId && ids.has(message.entryId))
+    : messages.filter(message => !!message.entryId)
+  const identity: AuxContextIdentity = !kept.length ? "none" : ids ? "authoritative" : "source"
+  if (!options.streaming) return { messages: kept, identity }
   let anchor = -1
   for (let index = kept.length - 1; index >= 0; index--) {
     if (kept[index]?.role === "user") {
@@ -315,7 +354,7 @@ export function applyCommittedAnchor(
       break
     }
   }
-  return anchor < 0 ? kept : kept.slice(0, anchor + 1)
+  return { messages: anchor < 0 ? kept : kept.slice(0, anchor + 1), identity }
 }
 
 function renderMessage(message: AuxContextMessage): string {
@@ -342,8 +381,6 @@ export function groupAuxContextMessages(messages: readonly AuxContextMessage[]):
   return groups.filter(group => group.text)
 }
 
-const NOTE_CHARS = AUX_PARENT_CONTEXT_TRUNCATED_NOTE.replace("{count}", "99").length
-
 export interface AuxContextTruncation {
   kept: AuxContextGroup[]
   omittedGroups: number
@@ -354,23 +391,59 @@ export interface AuxContextTruncation {
 /**
  * 32k 护栏：按**最旧完整轮次组整组丢弃**，绝不在组内按字符切。
  *
- * 边界：若只剩一组且它自身超限，保留该组并标 `overLimit` —— 掐断工具调用与结果
- * 的配对（或把人话切成半句）比略微超限更糟；调用方据此在块尾保留省略标注。
+ * 两条边界：
+ * - **预算真实**：分隔空行（`\n\n`）与尾部省略标注都计入成品长度，否则“刚好不超”
+ *   的成品能比上限多出几十字符。
+ * - **跨组配对**：工具调用在组 A、结果在组 B（中间隔着一条 steering 的 user 消息）时，
+ *   丢掉 A 会留下无调用的结果。切完预算后再清一遍孤儿结果（调用已不在保留集里）。
  */
 export function truncateAuxContextGroups(
   groups: readonly AuxContextGroup[],
   maxChars: number = AUX_PARENT_CONTEXT_MAX_CHARS,
 ): AuxContextTruncation {
+  // 成品长度 = 组内文本 + 组分隔空行 + 尾部标注（标注自身也算“成品”）。
+  const bodyChars = (list: readonly AuxContextGroup[]) =>
+    list.reduce((sum, group) => sum + group.chars, 0) + Math.max(0, list.length - 1) * 2
+  const noteChars = (omitted: number) =>
+    omitted > 0 ? 2 + AUX_PARENT_CONTEXT_TRUNCATED_NOTE.replace("{count}", String(omitted)).length : 0
+
   let kept = [...groups]
-  const total = () => kept.reduce((sum, group) => sum + group.chars, 0)
   while (kept.length > 1) {
     const omitted = groups.length - kept.length
-    const note = omitted > 0 ? NOTE_CHARS + String(omitted).length - 2 : 0
-    if (total() + note <= maxChars) break
+    if (bodyChars(kept) + noteChars(omitted) <= maxChars) break
     kept = kept.slice(1)
   }
+  // 跨组配对：先按预算切完，再清掉“调用被丢、结果留下”的孤儿结果（只缩不胀）。
+  kept = dropOrphanToolResults(kept)
   const omittedGroups = groups.length - kept.length
-  return { kept, omittedGroups, overLimit: kept.length === 1 && total() > maxChars }
+  const innerChars = bodyChars(kept) + noteChars(omittedGroups)
+  return { kept, omittedGroups, overLimit: kept.length > 0 && innerChars > maxChars }
+}
+
+/** 保留集里现有的全部工具调用 id（assistant 消息的 `toolCallIds`）。 */
+function keptToolCallIds(groups: readonly AuxContextGroup[]): Set<string> {
+  const ids = new Set<string>()
+  for (const group of groups) {
+    for (const message of group.messages) {
+      if (message.role !== "assistant") continue
+      for (const id of message.toolCallIds ?? []) ids.add(id)
+    }
+  }
+  return ids
+}
+
+/** 丢掉“调用已不在保留集里”的孤立工具结果；组被洗干净为空则整组移除。 */
+function dropOrphanToolResults(groups: readonly AuxContextGroup[]): AuxContextGroup[] {
+  const calls = keptToolCallIds(groups)
+  const result: AuxContextGroup[] = []
+  for (const group of groups) {
+    const messages = group.messages.filter(
+      message => message.role !== "toolResult" || !message.toolCallId || calls.has(message.toolCallId),
+    )
+    const text = messages.map(renderMessage).filter(Boolean).join("\n")
+    if (text) result.push({ messages, text, chars: text.length })
+  }
+  return result
 }
 
 export interface AuxParentContextInput {
@@ -392,15 +465,20 @@ export interface AuxParentContextResult {
   overLimit: boolean
   /** 参与拼装的轮次组数（诊断/测试用）。 */
   groupCount: number
+  /** 身份判据来源：权威集合 / 来源自证 / 没有任何可用身份。 */
+  identity: AuxContextIdentity
 }
 
 /** 父上下文块：取材归一 → 锚点截断 → 32k 整组丢弃 → 折叠块正文。 */
 export function buildAuxParentContext(input: AuxParentContextInput): AuxParentContextResult {
   const anchored = applyCommittedAnchor(
     input.messages.filter(message => message.text.trim()),
-    { streaming: input.streaming, committedIds: input.committedIds },
+    {
+      streaming: input.streaming,
+      committedIds: input.committedIds,
+    },
   )
-  const groups = groupAuxContextMessages(anchored)
+  const groups = groupAuxContextMessages(anchored.messages)
   if (!groups.length) {
     return {
       block: buildAuxParentContextBlock(AUX_PARENT_CONTEXT_EMPTY_NOTICE),
@@ -409,9 +487,22 @@ export function buildAuxParentContext(input: AuxParentContextInput): AuxParentCo
       omittedGroups: 0,
       overLimit: false,
       groupCount: 0,
+      identity: anchored.identity,
     }
   }
   const truncated = truncateAuxContextGroups(groups, input.maxChars)
+  if (!truncated.kept.length) {
+    // 跨组配对清理后可能什么都不剩（保留集里只有孤儿工具结果）：仍按“没有可用内容”收口。
+    return {
+      block: buildAuxParentContextBlock(AUX_PARENT_CONTEXT_EMPTY_NOTICE),
+      inner: AUX_PARENT_CONTEXT_EMPTY_NOTICE,
+      hasContext: false,
+      omittedGroups: truncated.omittedGroups,
+      overLimit: false,
+      groupCount: 0,
+      identity: anchored.identity,
+    }
+  }
   const body = truncated.kept.map(group => group.text).join("\n\n")
   const note =
     truncated.omittedGroups > 0
@@ -425,5 +516,6 @@ export function buildAuxParentContext(input: AuxParentContextInput): AuxParentCo
     omittedGroups: truncated.omittedGroups,
     overLimit: truncated.overLimit,
     groupCount: truncated.kept.length,
+    identity: anchored.identity,
   }
 }

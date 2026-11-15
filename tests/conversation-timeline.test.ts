@@ -1,27 +1,10 @@
 import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import ts from "typescript"
-import vm from "node:vm"
-const source = readFileSync(new URL("../src/lib/conversationTimeline.ts", import.meta.url), "utf8")
-const tsCompile = code => ts.transpile(code, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 })
-// conversationTimeline now shares contentText with the session store via
-// '@/lib/content', and strips aux parent-context blocks via
-// '@/lib/auxParentContext'; load the real modules so their behavior is under test too.
-const loadSrc = id => {
-  const file = id.replace(/^@\//, "../src/")
-  const content = { exports: {} }
-  vm.runInNewContext(tsCompile(readFileSync(new URL(`${file}.ts`, import.meta.url), "utf8")), content)
-  return content.exports
-}
-const require = id => {
-  if (id === "@/lib/content" || id === "@/lib/auxParentContext") return loadSrc(id)
-  throw new Error(`unexpected module: ${id}`)
-}
-const context = { exports: {}, require }
-vm.runInNewContext(tsCompile(source), context)
-const turns = context.exports.conversationTurns
-const buildTimelineTurns = context.exports.buildTimelineTurns
+// 直接 import 真实模块：conversationTimeline 现在经 `@/lib/content` 共享文本抽取，并经
+// `@/lib/promptContexts` 与气泡/复制共用同一个上下文解析器（父上下文块与 userselect
+// 尾块都不得进摘要）。用 vm 垫片加载会绕开这条依赖链，等于没测到共用关系。
+import { conversationTurns as turns, buildTimelineTurns } from "@/lib/conversationTimeline"
 const user = (id, text = "") => ({ kind: "user", id, text })
 const text = value => ({ type: "text", text: value })
 const assistant = (...blocks) => ({ kind: "assistant", blocks })
@@ -76,7 +59,7 @@ test("rendered entries have anchors and navigation respects reduced motion", () 
 })
 
 // ---- buildTimelineTurns: full-session timeline over paginated history ----
-const build = context.exports.buildTimelineTurns
+const build = buildTimelineTurns
 const rawUser = (text, images = []) => ({
   role: "user",
   content: images.length ? [{ type: "text", text }, ...images] : text,

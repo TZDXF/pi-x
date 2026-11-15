@@ -1,5 +1,5 @@
 import { contentText } from "@/lib/content"
-import { withoutAuxParentContext } from "@/lib/auxParentContext"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import type { Block, Entry, UserEntry } from "@/stores/session"
 
 export interface ConversationTurn {
@@ -19,8 +19,9 @@ export interface TimelineTurn extends ConversationTurn {
 }
 
 const excerpt = (text: string) => {
-  // aux 的父上下文块不是用户的问题：摘要（时间线/导航）只用可见正文。
-  const normalized = withoutAuxParentContext(text).replace(/\s+/g, " ").trim()
+  // 摘要只取提问正文：与气泡/复制共用**同一个**解析器，父上下文块与尾部
+  // `# userselect:` / `# Code comments:` 块都不进时间线导航（否则导航变一围 JSON）。
+  const normalized = parseComposerPromptContexts(text).visibleContent.replace(/\s+/g, " ").trim()
   return normalized.length > 180 ? `${normalized.slice(0, 180)}…` : normalized
 }
 

@@ -99,11 +99,25 @@ test("history rebuild keeps the full prompt and exposes only the question", asyn
   )
 })
 
-test("timeline 摘要只用提问文本，块不进时间线", async () => {
+test("FAIL_timeline_*: 摘要走同一解析器，区块与 userselect 尾块都不进时间线", async () => {
   const store = await historyHarness()
   const turns = store.timelineTurns
   expect(turns.map(turn => turn.question)).toContain("本轮的提问")
   expect(turns.every(turn => !turn.question.includes("aux_parent_context"))).toBe(true)
+  // 尾块同样不是用户写的问题：`# userselect:` 与 `# Code comments:` 不得进摘要。
+  const { buildTimelineTurns } = await import("@/lib/conversationTimeline")
+  const selections = [{ text: "引用的回复" }]
+  const { serializeComposerPromptContexts } = await import("@/lib/promptContexts")
+  const prompt = serializeComposerPromptContexts("真实提问", { comments: [], selections })
+  const timeline = buildTimelineTurns([], 0, [{ kind: "user", id: 7, text: prompt }])
+  expect(timeline[0].question).toBe("真实提问")
+  expect(timeline[0].question).not.toContain("userselect")
+  expect(timeline[0].question).not.toContain("引用的回复")
+  // 可失败性对照：绕过解析器直接截取原文时，尾块确实会出现在摘要里。
+  expect(prompt).toContain("# userselect:")
+  // 父上下文块 + 尾块同时存在时也只留提问正文。
+  const both = serializeComposerPromptContexts("第二轮提问", { comments: [], selections, parentContext: "父会话内容" })
+  expect(buildTimelineTurns([], 0, [{ kind: "user", id: 8, text: both }])[0].question).toBe("第二轮提问")
 })
 
 test("copy uses only the visible question (no `<aux_parent_context>`)", () => {

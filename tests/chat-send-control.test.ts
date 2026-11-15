@@ -104,9 +104,11 @@ function injectedParentContext(runtimeId: string, inner: string, options: { hasU
           omittedGroups: 0,
           overLimit: false,
           groupCount: 1,
+          identity: "authoritative",
           inner,
           block: "",
           errors: [],
+          attempts: { entries: 1, messages: 0, history: 0 },
         }) as never,
     })
 }
@@ -158,7 +160,62 @@ test("aux parent context is injected only on the first turn of one aux runtime",
   }
 })
 
-test("a failing parent-context read never blocks the send", async () => {
+test("FAIL_concurrent_submit_*: 并发首轮等领头采集，先发者先落地且块在它身上", async () => {
+  // 同一 aux 的两次首轮提交：第二次必须**等**第一次采集完成再发，否则对话区第一条
+  // 是没有父上下文的（块随后才到）。断言两件事：顺序（发送调用次序 = 提交次序）与
+  // 归属（块只在第一次那一条上）。
+  resetAuxParentContextForTest()
+  let release,
+    collected = 0
+  const gate = new Promise(resolve => {
+    release = resolve
+  })
+  const h = harness(Promise.resolve({}), {
+    parentContext: () =>
+      claimAuxParentContext("aux:concurrent", {
+        hasUserEntry: () => false,
+        collect: async () => {
+          collected++
+          await gate
+          return {
+            source: "entries",
+            hasContext: true,
+            omittedGroups: 0,
+            overLimit: false,
+            groupCount: 1,
+            identity: "authoritative",
+            inner: "并发父上下文",
+            block: "",
+            errors: [],
+            attempts: { entries: 1, messages: 0, history: 0 },
+          } as never
+        },
+      }),
+  })
+  try {
+    const first = h.controls.onSubmit({ text: "先发者" })
+    // 让第一次提交先进入采集（等待闸门），再发起第二次。
+    await Promise.resolve()
+    const second = h.controls.onSubmit({ text: "后发者" })
+    await Promise.resolve()
+    // 采集还没放行：第二次提交**不能**先发出去。
+    expect(h.session.send).toHaveBeenCalledTimes(0)
+    release()
+    await Promise.all([first, second])
+    const prompts = h.session.send.mock.calls.map(call => [call[0], call[2]])
+    expect(prompts.map(row => row[0])).toEqual(["先发者", "后发者"])
+    // 先发者带块，后发者不带（同一段父上下文只进一次）。
+    expect(prompts[0][1]).toContain("<aux_parent_context>")
+    expect(prompts[0][1]).toContain("并发父上下文")
+    expect(prompts[1][1]).toBe("后发者")
+    // 并发只采集一次（不是各拼一份）。
+    expect(collected).toBe(1)
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("a failing parent-context read never blocks the send and says so", async () => {
   const h = harness(Promise.resolve({}), {
     parentContext: async () => {
       throw new Error("collect failed")
@@ -168,6 +225,8 @@ test("a failing parent-context read never blocks the send", async () => {
     await h.controls.onSubmit({ text: "仍然要发出去" })
     expect(h.session.send).toHaveBeenCalledOnce()
     expect(h.session.send.mock.calls[0][2]).toBe("仍然要发出去")
+    // 降级必须**如实**：先发者不会“无声无块”，至少有一条 warning 说明原因。
+    expect(h.ui.pushToast).toHaveBeenCalledWith("chat.parentContextFailed", "warning")
   } finally {
     h.scope.stop()
   }

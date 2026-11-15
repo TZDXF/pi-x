@@ -210,8 +210,15 @@ export function useChatSendControl(deps: {
       const comments = pendingComments.value.map(comment => ({ ...comment, path: commentFilePath(comment) }))
       const selections = [...pendingSelections.value]
       // 首轮取父上下文（aux 才有；返回值只在首轮非空）。失败不得阻断发送：
-      // 父上下文是“带得走就拿”的内容，不是发送的前置条件。
-      const parentContext = deps.parentContext ? await deps.parentContext().catch(() => null) : null
+      // 父上下文是“带得走就拿”的内容，不是发送的前置条件；但降级要**如实**告诉用户，
+      // 不能让人只看到“没有块”而不知道原因（采集器自身已把无输入等情形做成顶部提示，
+      // 走到这里的 reject 属于意外故障）。
+      const parentContext = deps.parentContext
+        ? await deps.parentContext().catch((error: unknown) => {
+            ui.pushToast(t("chat.parentContextFailed", { reason: String(error ?? "") }), "warning")
+            return null
+          })
+        : null
       const promptWithContexts =
         parentContext || comments.length || selections.length
           ? serializeComposerPromptContexts(expandedText, { comments, selections, parentContext })
