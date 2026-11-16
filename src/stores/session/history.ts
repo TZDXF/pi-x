@@ -157,7 +157,8 @@ export function createSessionHistory(context: HistoryContext) {
                 .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
             : []
           // 落盘的是**完整 prompt**：aux 的 `<aux_parent_context>` 前置块要从可见正文里
-          // 拆出去（气泡默认收起地展开回看）。这里走**同一个**解析器
+          // 拆出去（气泡只显示用户原文，块留在 `parentContext` 里供数据层使用）。
+          // 这里走**同一个**解析器
           // （`parseComposerPromptContexts`），与首发/气泡/摘要的分拆规则因此不会漂。
           // 无块时 `text` 保持原样：主会话的 userselect / Code comments 尾块仍由气泡渲染
           // chips（行为不变）。

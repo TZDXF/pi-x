@@ -62,13 +62,13 @@
 
 格式（置于 prompt 最前）：`<aux_parent_context>…</aux_parent_context>` + 空行 + 提问正文。
 
-| #   | 文件                                            | 实现                                                 | 验收                                                              |
-| --- | ----------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| 1   | `src/lib/promptContexts.ts:32`                  | 剥离/重组该前缀块，首发与读回共用                    | 单测四种输入；序列化与解析互逆                                    |
-| 2   | `src/stores/session/history.ts:150`             | 重建 user entry 存完整 prompt + 拆分后的可见正文     | `loadHistory` 后 parentContext 有值、visibleText 无块；老历史不变 |
-| 3   | `src/components/chat/ChatUserPrompt.vue:32/126` | 折叠块默认收起；复制只用 visibleText                 | 复制字符串不含 `<aux_parent_context>`                             |
-| 4   | `src/composables/usePromptEdit.ts:62/93`        | P1：aux **仅改显示、不重发**；主会话保存时块原样保留 | 块字节不变；aux 下 transport 零写入（无 `rewind_prompt`）         |
-| 5   | `src/lib/conversationTimeline.ts:89/105`        | 两处摘要用 visibleText                               | question 不含块；rank/entryId 对齐不变                            |
+| #   | 文件                                           | 实现                                                             | 验收                                                                    |
+| --- | ---------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 1   | `src/lib/promptContexts.ts:32`                 | 剥离/重组该前缀块，首发与读回共用                                | 单测四种输入；序列化与解析互逆                                          |
+| 2   | `src/stores/session/history.ts:150`            | 重建 user entry 存完整 prompt + 拆分后的可见正文                 | `loadHistory` 后 parentContext 有值、visibleText 无块；老历史不变       |
+| 3   | `src/components/chat/ChatUserPrompt.vue:32/88` | 气泡**不渲染**该块（TZD-119 移除了折叠块）；复制只用 visibleText | 复制字符串不含 `<aux_parent_context>`；气泡无 `data-aux-parent-context` |
+| 4   | `src/composables/usePromptEdit.ts:62/93`       | P1：aux **仅改显示、不重发**；主会话保存时块原样保留             | 块字节不变；aux 下 transport 零写入（无 `rewind_prompt`）               |
+| 5   | `src/lib/conversationTimeline.ts:89/105`       | 两处摘要用 visibleText                                           | question 不含块；rank/entryId 对齐不变                                  |
 
 **编辑重发**：`session.ts:499` 必发 `rewind_prompt`（M0 拒绝、aux 无文件）→ P1 不做，不绕过。"内存会话的编辑重发"（追加修正 prompt 而非回滚）列为后续事项。
 
@@ -196,7 +196,7 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    `get_messages` → `session_history`：`get_entries` 返回空（无已提交输入）或失败时才
    下探，`get_messages` 是压缩投影语义的备选（规格 §3 也列了它），文件兜底最后。
 2. §4 的成块顺序：块在 prompt **最前**，`get_entries` 侧的重建则把块从可见正文里剥出、
-   存进 `UserEntry.parentContext` / `parentContextBlock`（气泡默认收起、复制只用可见
+   存进 `UserEntry.parentContext` / `parentContextBlock`（**气泡不显示该块**、复制只用可见
    正文、编辑重发原样拼回块）。历史重建仍用同一个解析器
    `parseComposerPromptContexts`，因此首发/读回不会漂。
 

@@ -53,13 +53,14 @@ export interface UserEntry {
   /** Expanded prompt retains attachments for live bubbles; text stays editable user input. */
   contextText?: string
   /**
-   * aux 父上下文折叠块的**内文**（不含 `<aux_parent_context>` 标签）。历史重建时
-   * 从落盘的完整 prompt 里拆出来，气泡默认收起显示；`null`/缺失表示没有该块。
+   * aux 父上下文块的**内文**（不含 `<aux_parent_context>` 标签）。历史重建时从落盘的
+   * 完整 prompt 里拆出来，**仅供数据层使用**（气泡不渲染该块，见 TZD-119）；
+   * `null`/缺失表示没有该块。
    */
   parentContext?: string | null
   /**
-   * aux 父上下文折叠块的**原文**（含 `<aux_parent_context>` 标签、不含分隔空行）。
-   * 编辑重发时原样拼回去（字节不变），气泡折叠展示用 `parentContext`。
+   * aux 父上下文块的**原文**（含 `<aux_parent_context>` 标签、不含分隔空行）。
+   * 编辑重发时原样拼回去（字节不变）；与 `parentContext` 一样不参与气泡渲染。
    */
   parentContextBlock?: string | null
   modelChange?: { from: string; to: string }

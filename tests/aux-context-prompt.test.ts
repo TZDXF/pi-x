@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from "pinia"
 /**
  * 折叠块的**五处落点**（`docs/aux-chat-spec.md` §4）里可单测的三处：
  * 1. `stores/session/history.ts`：重建 user entry 时存完整 prompt + 拆出可见正文；
- * 2. `ChatUserPrompt.vue`：复制只用可见正文、折叠块默认收起；
+ * 2. `ChatUserPrompt.vue`：复制只用可见正文、气泡**不渲染**该块（只在数据里）；
  * 3. `usePromptEdit.ts`：编辑只改提问，块字节原样保留。
  *
  * 解析/序列化（第 1 处落点）在 `tests/aux-parent-context.test.ts`；
@@ -127,10 +127,10 @@ test("copy uses only the visible question (no `<aux_parent_context>`)", () => {
     /const visibleText = computed\(\(\) => parseComposerPromptContexts\(props\.entry\.text\)\.visibleContent\)/,
   )
   expect(chat).toMatch(/@click="emit\('copyText', visibleText\)"/)
-  // 折叠块默认收起：展开态是本地 ref，初值 false。
-  expect(chat).toMatch(/const parentContextOpen = ref\(false\)/)
-  expect(chat).toMatch(/data-aux-parent-context-toggle/)
-  expect(chat).toMatch(/v-if="parentContextOpen"/)
+  // 气泡**不再展示**父上下文块（也不再有折叠块/展开态）：块只存在于 prompt 数据里。
+  expect(chat).not.toMatch(/data-aux-parent-context/)
+  expect(chat).not.toMatch(/parentContextOpen/)
+  expect(chat).not.toMatch(/chat\.parentContext/)
   // 展示正文也来自解析器（与读回同源）。
   expect(chat).toMatch(/parseComposerPromptContexts\(props\.entry\.contextText \?\? props\.entry\.text\)/)
 })

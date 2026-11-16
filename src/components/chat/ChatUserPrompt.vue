@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, toRefs, type ComponentPublicInstance } from "vue"
+import { computed, toRefs, type ComponentPublicInstance } from "vue"
 import { useI18n } from "vue-i18n"
-import { ChevronRight, Copy, MessageSquareQuote, Pencil, TextQuote } from "@lucide/vue"
+import { Copy, MessageSquareQuote, Pencil, TextQuote } from "@lucide/vue"
 import { MessageContent, MessageActions, MessageAction } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { parseComposerPromptContexts } from "@/lib/promptContexts"
-import type { ParsedCodeComment } from "@/lib/codeComments"
+import { commentLineLabel, commentPathLabel, type ParsedCodeComment } from "@/lib/codeComments"
 import ComposerText from "@/components/ComposerText.vue"
 import { formatMessageTime } from "@/lib/format"
 import type { UserEntry } from "@/stores/session"
@@ -30,13 +30,13 @@ function bindEditTextarea(value: Element | ComponentPublicInstance | null) {
 // `<aux_parent_context>` 前置块；重载历史时解析回附件，气泡只显示用户原文
 // （同 ZCode ConversationRowView 的 parseComposerPromptContexts）。
 const parsedPrompt = computed(() => parseComposerPromptContexts(props.entry.contextText ?? props.entry.text))
-// 折叠块内文：历史重建时已拆出来（`entry.parentContext`），实时消息则从 contextText 里解析。
-const parentContext = computed(() => props.entry.parentContext ?? parsedPrompt.value.parentContext)
+// aux 的 `<aux_parent_context>` 前置块**只存在数据里**（`entry.parentContext` /
+// `contextText`），气泡不再给它任何 UI：块依旧随 prompt 送给模型、编辑重发原样保留、
+// 展示/复制只用剥掉块之后的可见正文。
 // 复制只给可见正文：父上下文块不属于用户写的问题（§4 验收）。
 // `entry.text` 在两种形态下都已是可见正文（实时回显取用户输入、历史重建取拆分结果），
 // 仍然过一遍解析器，保证与展示走同一套契约 —— 别在这里另写一份剥离逻辑。
 const visibleText = computed(() => parseComposerPromptContexts(props.entry.text).visibleContent)
-const parentContextOpen = ref(false)
 </script>
 
 <template>
@@ -55,8 +55,10 @@ const parentContextOpen = ref(false)
     </button>
   </div>
   <MessageContent>
-    <div class="text-sm">
-      <div v-if="editedPrompt?.id === entry.id" class="w-[min(36rem,75vw)] space-y-2">
+    <div class="min-w-0 text-sm">
+      <!-- 宽度跟气泡走（`w-full` + `max-w`），不用 `vw`：气泡可能落在侧栏窄面板里，
+           按视口算宽度会撑破容器。 -->
+      <div v-if="editedPrompt?.id === entry.id" class="w-full max-w-[36rem] min-w-0 space-y-2">
         <Textarea
           :ref="bindEditTextarea"
           v-model="editedText"
@@ -83,58 +85,52 @@ const parentContextOpen = ref(false)
         </div>
       </div>
       <ComposerText v-else :text="parsedPrompt.visibleContent" />
-      <!-- aux 父上下文折叠块：默认收起、可展开（§4 折叠块 b-1）。它在 prompt 里位于
-           最前，但在气泡里放在提问正文下方，避免压住用户真正写的问题。 -->
-      <div v-if="parentContext" class="mt-1.5 w-[min(36rem,75vw)]" data-aux-parent-context>
-        <button
-          type="button"
-          class="inline-flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent focus-visible:outline-ring"
-          :aria-expanded="parentContextOpen"
-          data-aux-parent-context-toggle
-          @click="parentContextOpen = !parentContextOpen"
-        >
-          <ChevronRight
-            class="size-3.5 shrink-0 transition-transform"
-            :class="parentContextOpen ? 'rotate-90' : 'rotate-0'"
-          />
-          {{ t("chat.parentContext") }}
-        </button>
-        <pre
-          v-if="parentContextOpen"
-          class="mt-1.5 max-h-80 overflow-auto rounded-md border bg-muted/30 p-2 text-xs whitespace-pre-wrap"
-          data-aux-parent-context-body
-          >{{ parentContext }}</pre>
-      </div>
       <!-- 历史消息里解析回的划词引用：只读展示，样式对齐 composer 的待发送 chips -->
-      <div v-if="parsedPrompt.selections.length" class="mt-1.5 flex flex-wrap gap-1.5">
+      <div v-if="parsedPrompt.selections.length" class="mt-1.5 flex min-w-0 flex-wrap gap-1.5">
         <div
           v-for="s in parsedPrompt.selections"
           :key="s.id"
           class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
         >
           <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
-          <span class="min-w-0 truncate" :title="s.text">{{ s.text }}</span>
-          <span v-if="s.comment" class="min-w-0 truncate text-muted-foreground" :title="s.comment">{{
-            s.comment
-          }}</span>
+          <!-- 两段都从 0 起按比例增长（`basis-0` + `grow`）：`flex-1`（basis 0）与
+               `basis-auto` 混用时，后者的 max-content 会吃掉全部宽度、把前一段压成 0。
+               两段都只占**一行**（`truncate`：nowrap + ellipsis），全文由 `title` 给出。 -->
+          <span class="min-w-0 basis-0 grow-[3] truncate" data-chip-text :title="s.text">{{ s.text }}</span>
+          <span
+            v-if="s.comment"
+            class="min-w-0 basis-0 grow-[2] truncate text-muted-foreground"
+            data-chip-text
+            :title="s.comment"
+            >{{ s.comment }}</span
+          >
         </div>
       </div>
       <!-- 即时消息与历史消息使用同一批注标签；原生按钮支持键盘打开文件。 -->
-      <div v-if="parsedPrompt.comments.length" class="mt-1.5 flex flex-wrap gap-1.5">
+      <div v-if="parsedPrompt.comments.length" class="mt-1.5 flex min-w-0 flex-wrap gap-1.5">
         <button
           v-for="c in parsedPrompt.comments"
           :key="c.id"
           type="button"
           data-code-comment-tag
           class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-ring"
-          :title="[c.path, c.selectedText, c.comment].filter(Boolean).join('\n')"
+          :title="[commentPathLabel(c), c.selectedText, c.comment].filter(Boolean).join('\n')"
           @click="emit('openCodeComment', c)"
         >
           <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
-          <span class="min-w-0 truncate font-mono"
-            >{{ c.path }}:{{ c.startLine }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span
-          >
-          <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
+          <!-- 路径不再 `shrink-0`：超长路径曾把 chip 顶出气泡，横向溢出后被裁切。
+               行号**独立成后缀段**（`shrink-0`）：与路径共用一个 truncate span 时，长路径会把
+               行号一起省略（380px 面板实测），而"这条批注在文件的哪几行"是必须可读的信息。
+               路径与批注都只占**一行**（`truncate`）：路径按 `basis-0 + grow` 分到剩余宽度，
+               行号后缀固定不截断；`title` 给完整 `path:行号`（chip 与路径段都用它），
+               点击后的批注弹窗给出更完整的上下文。 -->
+          <span class="min-w-0 basis-0 grow-[3] truncate font-mono" data-chip-text :title="commentPathLabel(c)">{{
+            c.path
+          }}</span>
+          <span class="shrink-0 font-mono" data-code-comment-lines>{{ commentLineLabel(c.startLine, c.endLine) }}</span>
+          <span class="min-w-0 basis-0 grow-[2] truncate text-muted-foreground" data-chip-text :title="c.comment">{{
+            c.comment
+          }}</span>
         </button>
       </div>
     </div>
