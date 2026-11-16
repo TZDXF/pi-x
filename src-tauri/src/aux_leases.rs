@@ -368,6 +368,27 @@ pub(crate) fn clear() {
     book.reaping.clear();
 }
 
+/// 测试用：插入一条已知 token / 续租时刻的租约（跨模块的"机制证明"类用例用它）。
+#[cfg(test)]
+pub(crate) fn test_insert_lease(
+    runtime_id: &str,
+    client_id: &str,
+    token: &str,
+    renewed_at: Instant,
+) {
+    lock_book()
+        .leases
+        .entry(runtime_id.to_string())
+        .or_default()
+        .insert(
+            client_id.to_string(),
+            Lease {
+                token: token.to_string(),
+                renewed_at,
+            },
+        );
+}
+
 /// 测试隔离用（连带清掉回收器的待重试句柄表，否则用例之间会互相看到对方的重试）。
 #[cfg(test)]
 pub(crate) fn reset_for_test() {

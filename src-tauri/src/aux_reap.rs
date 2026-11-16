@@ -320,6 +320,34 @@ mod tests {
     use crate::rpc::{test_harness, RuntimePolicy, RpcState};
     use std::sync::Arc;
 
+    /// **CI 红（复审第八轮）的机制证明**（确定性，不依赖调度巧合）。
+    ///
+    /// `reap_once` 的 `now` 是**注入的未来时刻**（"已空闲 31 分钟"），它经
+    /// `holder_count(_, now)` → `expire_at(now)` 把**全局租约表**里按真实时间刚领到的
+    /// 条目整条过期掉。所以任何调用 `reap_once` 的用例都会踩到别人的租约 ——
+    /// 必须持 `test_lock`（串行），否则 CI 的多核并行就会让别的用例的 token 断言随机失败。
+    ///
+    /// 这条用例把该事实钉住：同一条租约，用真实 `now` 查是 1，用未来 `now` 查是 0。
+    #[test]
+    fn a_future_now_expires_a_lease_that_is_current_in_real_time() {
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
+        let real_now = Instant::now();
+        crate::aux_leases::test_insert_lease("aux:other", "other-client", "tok", real_now);
+        assert_eq!(
+            crate::aux_leases::holder_count("aux:other", real_now),
+            1,
+            "真实时刻：租约有效"
+        );
+        // 这正是 `reap_once(state, now + 31min, …)` 内部发生的事。
+        assert_eq!(
+            crate::aux_leases::holder_count("aux:other", real_now + AUX_IDLE_LIMIT + Duration::from_secs(60)),
+            0,
+            "注入的未来时刻会把它过期掉 —— 这就是必须串行的原因"
+        );
+        crate::aux_leases::reset_for_test();
+    }
+
     #[test]
     fn all_three_conditions_must_hold() {
         let idle = AUX_IDLE_LIMIT + Duration::from_secs(1);
