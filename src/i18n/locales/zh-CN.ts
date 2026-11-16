@@ -672,6 +672,7 @@ export default {
     cancel: "取消",
     clear: "清除",
     noProject: "未打开项目",
+    retry: "重试",
   },
 
   app: {

@@ -81,16 +81,16 @@ const pathLabelKey = computed(() =>
 /** 远程模式：连接与路径就绪即可提交；probe 仅做校验提示，不阻塞（目录校验由 spawn 侧兜底）。 */
 const remoteValid = computed(() => !!selectedConnection.value && normalizeSshPath(remotePath.value.trim()) !== null)
 const submitValid = computed(() => (mode.value === "remote" ? remoteValid.value : valid.value))
-const trustProjects = computed(() => {
-  if (!props.editPath) return []
-  if (mode.value === "local") return folders.value
+/** 编辑项目时逐目录给出信任标注；远程项目按当前连接与路径合成唯一 URI（新项目尚无信任状态，不标注）。 */
+const remoteTrustProject = computed(() => {
+  if (!props.editPath) return null
   const connection = selectedConnection.value
   const path = normalizeSshPath(remotePath.value.trim())
-  if (!connection || !path) return []
+  if (!connection || !path) return null
   try {
-    return [remoteUriFor(connection, path)]
+    return remoteUriFor(connection, path)
   } catch {
-    return []
+    return null
   }
 })
 
@@ -296,15 +296,6 @@ function submit() {
         </TabsList>
       </Tabs>
       <form class="min-w-0 space-y-5" @submit.prevent="submit">
-        <div v-if="trustProjects.length" class="max-h-64 space-y-2 overflow-y-auto">
-          <ProjectTrustControl
-            v-for="path in trustProjects"
-            :key="path"
-            :project="path"
-            :active="props.open"
-            :connections="connections"
-          />
-        </div>
         <template v-if="mode === 'remote'">
           <div class="flex items-end gap-2">
             <label class="min-w-0 flex-1 space-y-2 text-sm font-medium" for="ssh-project-connection">
@@ -347,6 +338,9 @@ function submit() {
               <PlugZap v-else :size="15" />
               {{ t("ssh.testConnection") }}
             </Button>
+          </div>
+          <div v-if="remoteTrustProject" class="flex justify-end">
+            <ProjectTrustControl :project="remoteTrustProject" :active="props.open" :connections="connections" />
           </div>
           <p v-if="probeResult" class="rounded-md border border-border px-3 py-2 text-xs">
             <span v-if="probeResult.ok" class="text-green-700 dark:text-green-400">
@@ -423,6 +417,14 @@ function submit() {
                     t("projectDialog.primary")
                   }}</span>
                 </label>
+                <!-- 已信任的目录不显示任何信任状态；仅未信任项目在行内标注并可直接信任。
+                     放在 label 外，避免点信任时顺带切换主项目。 -->
+                <ProjectTrustControl
+                  v-if="props.editPath"
+                  :project="path"
+                  :active="props.open"
+                  :connections="connections"
+                />
                 <Button
                   type="button"
                   variant="ghost"

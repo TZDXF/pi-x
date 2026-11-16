@@ -692,6 +692,7 @@ export default {
     cancel: "Cancel",
     clear: "Clear",
     noProject: "No project open",
+    retry: "Retry",
   },
 
   app: {
