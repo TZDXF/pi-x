@@ -18,7 +18,7 @@
     "bench:rust": "node scripts/bench-rust.mjs",
     "clean": "cd src-tauri && cargo clean",
     "tauri": "tauri",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "node scripts/run-with-utf8.mjs cargo test --manifest-path src-tauri/Cargo.toml",
     "test:web": "vitest run --config vitest.config.ts --changed HEAD --passWithNoTests",
     "test:web:all": "vitest run --config vitest.config.ts",
     "test:web:watch": "vitest --config vitest.config.ts",

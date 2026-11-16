@@ -4,13 +4,18 @@ import path from "node:path"
 import { performance } from "node:perf_hooks"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
+// Cargo 一律经 UTF-8 包装器启动：控制台代码页决定 mbx 是否丢弃 build script 结果，
+// 详见 AGENTS.md 的 mbx 章节与 scripts/run-with-utf8.mjs。
+const utf8Runner = fileURLToPath(new URL("run-with-utf8.mjs", import.meta.url))
 
 // Support both JS package managers and standalone pnpm executables, without a shell.
 export function checkCommand(name, packageManager = process.env.npm_execpath) {
   if (name.startsWith("rust")) {
     return {
-      command: "cargo",
+      command: process.execPath,
       args: [
+        utf8Runner,
+        "cargo",
         "check",
         "--manifest-path",
         "src-tauri/Cargo.toml",
