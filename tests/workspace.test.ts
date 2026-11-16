@@ -349,6 +349,30 @@ test("rename and archive persist and update shared state; restore keeps title", 
   expect(row.title).toBe("new title")
   expect(h.writes[0]).toEqual(["one.jsonl", "new title", true])
 })
+test("archive broadcasts the archived session once, and restore/failed writes never do", async () => {
+  const h = await harness()
+  // harness 会 resetModules：必须在重置之后再取事件模块，否则拿到的是上一份实例。
+  const { onSessionArchived } = await import("@/lib/sessionArchiveEvents")
+  const events: unknown[] = []
+  const off = onSessionArchived((event: unknown) => events.push(event))
+  const row = { file: "one.jsonl", cwd: "project", preview: "first message" }
+  h.store.histories.project = [row]
+  await h.store.update(row, "title", true)
+  expect(events).toEqual([{ file: "one.jsonl", project: "project" }])
+  // 已经是归档态再写一次（例如改标题）不重复广播。
+  await h.store.update(row, "renamed", true)
+  expect(events).toHaveLength(1)
+  // 恢复（取消归档）不广播：面板不应该因为撤销而被收起。
+  await h.store.update(row, "renamed", false)
+  expect(events).toHaveLength(1)
+  // 写入失败不广播。
+  h.updateSession = async () => {
+    throw new Error("disk full")
+  }
+  await expect(h.store.update(row, "fail", true)).rejects.toThrow(/disk full/)
+  expect(events).toHaveLength(1)
+  off()
+})
 test("failed metadata write does not change visible title", async () => {
   const h = await harness()
   const row = { file: "one", title: "original", archived: false }
