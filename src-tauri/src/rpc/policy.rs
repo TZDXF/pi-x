@@ -28,7 +28,7 @@ pub enum RuntimePolicy {
 /// fork 消息）、写 agent settings 的四条（`set_steering_mode`/`set_follow_up_mode`/
 /// `set_auto_compaction`/`set_auto_retry`，实测落盘且有跨会话副作用）以及
 /// `abort_retry`。
-const AUX_ALLOWED: &[&str] = &[
+pub(crate) const AUX_ALLOWED: &[&str] = &[
     "prompt",
     "steer",
     "follow_up",

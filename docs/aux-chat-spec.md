@@ -19,7 +19,7 @@
 - **不承诺完整工具集**：`--no-extensions` 使 `mcp`/`codemode`/`tool_search` 缺失，`llama`/`mcp` 命令消失；llama.cpp provider 需 `-e builtin:llama.cpp` 回补。
 - 代价：已 trusted 项目的本地扩展**不会**在 aux 自动加载。
 - `--session-dir <aux 临时目录>` 仅作纵深防御（让意外持久化落到可清理位置），**不构成保证**：挡不住 `switchSession` 指向既有文件。
-- 能力探测：版本表（`AUX_MIN_PI`）+ 同可执行文件/同 PATH 规则下完整参数起 RPC、25s 内收到 `get_state` 成功且无 `sessionFile`、stdin EOF 后 20s 内 exit 0；失败即 `auxPiUnsupported`，禁止去 flag 重试。探测通过只证明"选项集被接受"，**不证明白名单生效**。探测结果**本地缓存**键 = program_id + version + flags_hash，TTL 10 分钟 + 部署后失效（与模型侧前缀缓存无关，本规格不主张任何前缀缓存收益）。
+- 能力探测（TZD-104 的调用点与缓存单测见 §11）：同可执行文件/同 PATH 规则下完整参数起 RPC、25s 内收到 `get_state` 成功且无 `sessionFile`、stdin EOF 后 20s 内 exit 0；失败即 `auxPiUnsupported`，禁止去 flag 重试。探测通过只证明"选项集被接受"，**不证明白名单生效**。探测结果**本地缓存**键 = program_id + version + flags_hash，TTL 10 分钟 + 部署后失效（与模型侧前缀缓存无关，本规格不主张任何前缀缓存收益）。**失败不入缓存**（同一条命令下次仍会真探一次，既不是"假通过"，也不是"去 flag 重试"）。
 
 ## 2. M0：RPC 网关（`rpc.rs` 的 request/notify 单一入口，按 `ProcessState.policy` 判定）
 
@@ -77,7 +77,7 @@
 - Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。
 - 草稿仅内存 `src/stores/auxDrafts.ts`（不写 localStorage、不改 `composerDrafts`）；附件保留原始 `File`，blob URL 由 `PromptInput.onBeforeUnmount` revoke。
 - 引用按 runtime 分桶 `src/stores/auxSelections.ts`，捕获/展示/发送/清理同源；主会话 `useChatSendControl` 的 clear 时机不变。
-- 回收：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s）+ 三条件（非流式非待答无在途 ∧ 无租约 ∧ 空闲 >30 分钟）。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
+- 回收（TZD-104 落地位置见 §11）：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s，**租约 TTL 90s**：停心跳的条目在 claim/list/reap 任一入口惰性过期，过期只让 `claims` 归零、仍由 30 分钟空闲门槛兜底）+ 三条件（非流式非待答无在途 ∧ 无未过期租约 ∧ 空闲 >30 分钟）。判定与 kill 在租约表同一把锁内仲裁（`begin_reap` 置 `reaping` 墓碑，`claim` 见墓碑即 `auxLeaseReaping`）；`aux_release` **只认 lease token**，clientId 只是标识不是凭证。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
 - 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例计入上限（5），关闭置 `cancelRequested`。
 - 对话框：`ExtensionDialog` 传 aux `session-id`；`StatusBar` 只展示；隐藏 Tab 不渲染弹框并出未答标记；有 timeout 由 `activity.rs` 过期，无 timeout 关闭时先发 `cancelled`；aux 的 `notifyQuestion`/`notifyTurnComplete`/`setTitle` 静默。
 - 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；上限 5 → 约 0.75GB 空闲基线。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
@@ -127,11 +127,12 @@
 500 行护栏；若还需继续瘦身，下一步是把 TZD-95 的 `useSidebarTabs` 接线也搬走
 （属 TZD-95 范围，需单独授权）。
 
-**为 TZD-104 预留 / 兜底说明**（本轮不清，非死代码）：
+**④ 落地后这几处的实到位置**（原"为 TZD-104 预留"，现已被 TZD-104 消费，非死代码）：
 
-- `activeAuxFor` / `closeAllFor` / `AuxTab.clientId`：④ 的租约（`aux_claim/aux_release`
-  按 clientId 归属）与重连恢复（只恢复本机 clientId 条目）要用；
-- `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受；
+- `AuxTab.clientId` / `currentAuxClientId()`：租约归属（`aux_claim`/`aux_release` 按它
+  记名）与重连恢复（只恢复本机 clientId 条目，见 §11）。**不另生成第二份标识**。
+- `activeAuxFor` / `closeAllFor`：划词复用与"父会话关闭即销毁"（§5/§10 已在用）。
+- `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受。
 - `RightSidebar` 的 `aux-limit` 事件：名额已满时入口本就禁用，该事件是"用户仍点到
   禁用态"的可执行提示兜底，实际几乎不可达但保留。
 
@@ -274,3 +275,253 @@ abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活�
 `tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
 `tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
 `tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。
+
+## 11. 生命周期、租约与孤儿回收（TZD-104 落地）
+
+§1 能力探测与 §5 生命周期的实现落点：
+
+| 职责                                                               | 文件                                                       |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| 不续期探针（独立用户活动时钟、只读、不写 stdin）                   | `src-tauri/src/rpc/aux_probe.rs`                           |
+| 用户活动时钟的更新点（`accept_command`，只认三个 type）            | `src-tauri/src/rpc.rs`（`ProcessState.user_activity`）     |
+| 活跃/待答判据（`RuntimeActivity::busy` / `pending_ui_count`）      | `src-tauri/src/rpc/activity.rs`                            |
+| 租约本体（写/删/列、TTL 过期、lease token 续租校验、reaping 仲裁） | `src-tauri/src/aux_leases.rs`                              |
+| `aux_claim` / `aux_release` / `aux_list` 宿主命令                  | `src-tauri/src/commands/aux_leases.rs`                     |
+| 三条件判定 + 60s tick + 待重试 kill 句柄表 + `aux-reap` 日志       | `src-tauri/src/aux_reap.rs`                                |
+| 终止的总 deadline（含**取锁**）与 `pi://exit` 幂等                 | `src-tauri/src/rpc/child.rs`（`process_kill_confirming`）  |
+| 后端双客户端场景脚本（§6 f/g 的可重跑部分）                        | `src-tauri/src/aux_lifecycle_scenarios.rs`                 |
+| 桌面注册（`generate_handler` + setup 启动回收器）                  | `src-tauri/src/lib.rs`                                     |
+| 远程注册（`dispatch/session.rs`，同一实现、同一认证）              | `src-tauri/src/remote/dispatch/session.rs`                 |
+| 探测缓存 TTL / 失败不入缓存                                        | `src-tauri/src/rpc/aux_launch.rs`（`cache_get_at`）        |
+| 心跳（模块级，20s）、lease token 记账、关闭顺序、重连归属过滤      | `src/stores/auxChat.ts`                                    |
+| 租约条目的宽容解析与过滤规则（纯函数）                             | `src/lib/auxLease.ts`                                      |
+| 重连恢复接线（只在 `aux_list` 承认的条目上做 pending UI 恢复）     | `src/lib/workspaceRuntime.ts`（`reattachRunningSessions`） |
+
+**不续期探针为什么必须绕开 `RpcState::process()`**：那个函数每次都会
+`last_activity.insert(now)`（`rpc.rs` 的池级表，供 `schedules.rs` 的
+`SCHEDULE_RUNTIME_TTL` 判"前端是否已 attach"）。探针若复用它，`get_state` 级别的只读
+调用就会把空闲判据永久推后，30 分钟回收永远不成立。落点因此是：
+`ProcessState.user_activity`（`std::time::Instant`，spawn 时初始化）+ 只在
+`prompt`/`steer`/`follow_up` 三个 type 于 `accept_command` 里 `note()`。
+`note()` 在 `permit.send()` 之后调用（"真的写进 stdin 才算用户活动"），且不与
+`inner`/`activity` 的守卫重叠（锁序仍为 `inner` → `activity`；`user_activity` 单独一把）。
+
+**租约只做三件事**：写 / 删 / 列。入参只有 `{runtimeId, clientId}`（claim）与
+`{runtimeId, leaseToken}`（release），不接收
+`command`/`extraArgs`，不写 stdin，不改 `policy`，不起进程。入口校验两条：
+`runtimeId` 必须 `aux:` 前缀，且该 runtime 的 `policy` 必须是 `Aux`（**Main 拒绝**，
+前缀不是权威来源 —— 单靠前缀挡不住"把主会话 id 改成 aux:xxx 再来领租约"）。
+校验走 `aux_probe` 的只读通道（`policy_of`/`running_quiet`），因此 20s 心跳**不会**
+顺带刷新池级 `last_activity`。
+
+**伪造归属**：`release` 只删本客户端那一条，不持有即 `auxLeaseNotHeld`（不是静默成功）；
+不存在的 runtime → `auxLeaseDenied`；空/超长 `clientId` → `auxLeaseClientIdInvalid`。
+一个 runtime 可被多个 clientId 同时持有（分屏/双窗口），回收判据看的是"这个集合是否为空"。
+
+**回收三条件**（`aux_reap::is_reclaimable`，同时成立才 kill）：
+`busy == false && pending_ui == 0 && in_flight == 0` ∧ `claims == 0` ∧ `idle > 30 分钟`。
+`in_flight` 取 `SessionInner.pending` 长度（在途请求），`pending_ui` 用
+`RuntimeActivity::pending_ui_count`（先按 deadline 过期，与 `get_state` 快照同一规则）。
+每 60s 扫一遍 `aux:` 前缀，命中时 `logs::write("aux-reap", …)` 带
+`{runtimeId, parent, claims, idleSecs, probe{…}}`，随后 kill 并清掉该 runtime 的租约。
+"进程已消失但租约还在"（客户端崩溃、没发 release）同样在这一轮清掉，日志
+`reason: "lease-without-process"`；**残条不是"上一轮 live 快照的差集"**，而是逐个对
+**当前实例**复核（旧差集会把扫描期间新建并 claim 的实例误删）。
+
+**租约 TTL 与过期（§5 的补充）**：每条租约是 `clientId → { token, renewedAt }`，
+TTL = `AUX_LEASE_TTL` = **90s（4.5 个 20s 心跳）**，容忍连续漏 2–3 拍。心跳即续期；
+过期在 `claim`/`list`/`reap` **任一入口惰性清理**（无额外定时器）。
+
+**心跳漏拍时会发生什么（精确口径，别读成"睡多久以内都安全"）**：过期只让该条目从租约
+表消失，于是 `claims` 归零。**漏拍本身不会判死实例** —— 回收仍要另外两个条件
+（`busy/pending_ui/in_flight` 全空，且 `last_user_activity` 距今 > 30 分钟）。
+
+但**空闲门槛看的是"用户活动"，不是"睡了多久"**：睡前已经累计的空闲同样计入。所以
+
+- 新实例 / 睡前只闲置几分钟：醒来后租约虽已过期，可立即重新 `claim`（该 clientId 的
+  条目已被摘掉，算首次领取、签发新 token），`claims` 回到 1，实例存活。
+- **已经空闲接近或超过 30 分钟的 Tab**：停跳哪怕只有 100 秒，只要回收器先于心跳跑一轮，
+  就会被回收。这是规格 §5"**用户活动**超过 30 分钟即回收"的**预期结果**，本规格不给
+  唤醒宽限（团队裁定，见本节末尾"已知边界"）。
+
+换句话说：漏拍不会**自己**导致回收，但"漏拍 + 累计空闲已超阈"会。不要把它写成
+"只有睡过 30 分钟才回收"的一般结论。
+
+**租约凭证（§5 的补充）**：`aux_claim` 返回**服务端签发的 lease token**，`aux_release`
+只认 token。`aux_list` 只回 `clientId` + `parentRuntimeId`（重连过滤用），**从不回
+token**。
+
+**续租也必须出示 token（复审第二轮 P1-2）**：`aux_claim` 入参有**可选** `leaseToken`。
+条目已存在时：token 匹配 → 续租并返回**同一个** token；没带或不匹配 →
+`auxLeaseConflict`，**绝不回吐已存在的 token**（否则"公开 clientId → claim → 拿 token
+→ release"就是完整劫持链）。只有**首次** claim（该 clientId 在此 runtime 上还没有有效
+条目）才签发新 token。
+
+不采用"单纯轮换 token"：攻击者轮换后自己拿着新 token 照样能 release，还把受害者的合法
+凭证作废，等于既没修归属、又制造了新的可用性问题。
+
+**页面重载丢 token 的前端行为**：`aux_claim` 回 `auxLeaseConflict` 时**不重试、不停用
+Tab**（实例与进程都还活着），前端进入 `AUX_LEASE_TTL_MS`（90s）静默窗口，窗口过后自动
+再试 —— 届时旧条目已被后端惰性摘掉，这次算首次领取、签发新 token 成功。
+
+**但这期间不保证"不会被回收"**：丢 token 之后**心跳保护被撤掉**，而原 Tab **已经累计的
+空闲仍然计入**。若它接近/超过 30 分钟（**符合规格的空闲 Tab**），只要回收器先于心跳跑
+一轮，该实例就会被正常回收 —— 这是 §5"用户活动超过 30 分钟即回收"的预期结果，规格不给
+唤醒宽限（见本节末尾已知边界）。
+
+**clientId 的可信来源（取舍，未做）**：本轮**没有**把 clientId 绑到宿主侧身份（桌面恒为
+本地、远程用连接/会话 id）。理由是改动会跨桌面 `lib.rs`、远程 dispatch 与前端三处，而
+当前方案已经把"clientId 不是凭证"这条**结构性**堵住（续租要 token、释放要 token、list
+不回 token）。
+
+**残余风险（如实）**：**首次** claim 不校验调用者身份。同一宿主上能调用 `aux_list`
+的代码（= 同一控制面权限）可以：`aux_list` 取某个 clientId → 若该条目已过期/不存在，
+用该 clientId **首次** claim 拿到新 token → 再 release，把 `claims` 归零。若原 Tab 的
+用户活动已超过 30 分钟（**符合规格的空闲 Tab**），下一轮扫描就会回收它。即：
+**伪装成原持有者抢先领取会阻挠原持有者恢复心跳**（竞争组被回收、无竞争对照恢复后仍活，
+质量工程师已独立复现）。这不击穿"持续有效租约"的保护（有效租约期间无法抢占），且它
+要求的正是"已可直接 `rpc_kill`"的宿主权限（规格 §2 明确 aux 只保 pi 的控制面，不是
+invoke 沙箱）。真正的宿主级身份绑定留待有远程目标时一起做。
+
+**回收仲裁（§5 的补充）**：判定与 kill 之间有并发窗口，因此在**租约表同一把锁内**
+先复核 holders 为空并置 `reaping` 墓碑（`begin_reap`），放锁后才 kill。`claim` 在锁内
+见墓碑即 `auxLeaseReaping`；墓碑是**该 runtime 的永久标记**（runtimeId 一实例一个
+UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能发生。
+
+**kill 失败必须可重试（复审第二轮 P1-1）**：`rpc::kill` 是"先从池里摘掉、再杀"，杀失败
+也回 `Ok`；回收器若照抄这个语义，失败就会被记成"已回收"，第二轮连对象都找不到（质量
+复现 `attempts=1, alive=true, pool=0, reaping=true, first_reported=1`）。
+
+取舍：**不改 `rpc::kill` 的"先摘后杀"**（那条路同时服务 `kill_all`/`schedules`/
+`closeAux`/远程 dispatch，改它要重新论证所有主路径的失败语义）。回收器改用自己的
+**待重试句柄表**（`aux_reap::PENDING_KILLS`，`runtimeId → Arc<ProcessState>`）：
+
+1. `try_kill(handle)` = `process_kill` 成功**且** `running()` 为假 → `Exited`，否则
+   `RetryPending`。两条都要，因为 Windows taskkill 非零退出会被 `child::kill_inner`
+   记日志后转成 `Ok`，只看返回值不够。
+2. `Exited` 才 `retire_entry`（摘池 + 清池级时钟 + `forget` 租约）并 `push Reaped`；
+   `RetryPending` 把句柄留在表里、日志记 `reason: "kill-retry", result: "pending"`、
+   **不 push `Reaped`**。
+3. 每轮扫描**先**处理待重试表（池里可能已被 `rpc::kill` 摘掉，只有这张表还握着句柄），
+   再走常规判定；确认退出后移出表，否则句柄会泄漏。
+4. `process_kill` 失败时把 `SessionInner` 放回 `ProcessState`（不 `take` 掉），否则
+   `running()` 会因 `inner == None` 误判"已退出"，重试无从谈起。
+5. 故障注入：`child::FAIL_NEXT_KILLS`（`#[cfg(test)]`）+ `aux_probe::fail_next_kills(n)`，
+   回归 `a_failed_kill_is_retried_and_only_counted_once_the_process_is_gone` 与
+   `repeated_kill_failures_never_report_a_reap`。
+
+**终止事件只在确认退出后提交（复审第四轮 P1-1/P1-2）**：`child::process_kill` 现在
+
+1. **先**置"这是主动 kill"的意图位（不发事件、不动代际）；
+2. 调 `kill_inner`：**所有阶段共享一个总 deadline**（默认 5s，退出路径 500ms）——
+   远程 `kill -TERM`、OS 终止命令（`taskkill`/`start_kill`）、`child.wait()` **确认退出**
+   各段都从这份 budget 里扣，耗尽即判失败（不是"每段单独 5s"）；
+3. 只有**确认退出**之后才 `commit_exit`：递增代际 + 发 `pi://exit`，且按
+   `RuntimeActivity::has_exited` 去重（stdout reader 的 EOF 与 kill 的确认可能同时到，
+   `pi://exit` 只发一次；主动 kill 期间的 EOF 记 `idle`，不是 `error`）；
+4. 任一步失败（taskkill 非零、启动失败、`start_kill` 失败、确认超时）：**不递增代际、
+   不发 exit、不清 pending**，把 `SessionInner` 放回 `ProcessState`（进程仍被追踪，
+   重试才有对象）。`inner == None` 不再是"已退出"的依据。
+
+`kill_all`（`RunEvent::Exit` 里 `block_on`）用 `process_kill_fast`：**总 deadline 500ms
+/ 实例**（覆盖远程段 + OS 终止段 + 确认退出，不是只压最后那段 wait），且单条失败只记
+日志、不中断循环 —— 最坏约 N×500ms，不会像分段超时那样"远程 5s + taskkill 无超时"把
+退出拖住。OS 终止命令的 helper 进程设 `kill_on_drop(true)`，超时后由它收掉，不会变成
+新的孤儿。
+
+**取锁顺序与修改时机（复审第七轮）**：`process_kill_confirming` 固定 **先 `inner`、
+后 `activity`**（与 `process_spawn_impl` 同一锁序），并且**两把锁都拿到之后才动共享
+状态**（`mark_expected_stop()` 与 `take` 都发生在这一步）。上一版是"先置意图位、
+再取 `inner`"，`inner` 超时后必须回头**无 budget** 地重取 `activity` 去撤销，于是 500ms
+预算被打到 2083ms。现在：
+
+- `inner` 抢不到 → 直接失败，**一行共享状态都没改**（无需撤销）；
+- `activity` 抢不到 → 归还 `inner` 守卫（不 take）后失败，仍未改动；
+- 收尾（提交 exit / 撤销意图位）也用 `timeout(remaining, …)`：**绝不无界等待**。
+
+**停止意图优先于精确终止原因**：若收尾那次取 `activity` 也超 budget，会**保留**
+`expected_stop = true` 并记日志。此时后续 EOF 会被记成 `idle` 而不是 `error` —— 因为
+"我们确实已经请求过终止"，而不代表我们精确识别了终止原因。质量工程师确认这个窗口
+**真实可达**（worker 可能在 OS kill 尚未执行时自行退出），但无害：进程确实已退出、
+`pi://exit` 只发一次，不会把活进程判死。
+
+**退出路径的取锁也受同一总 deadline 约束**：`process_kill_confirming` **先取 `inner`
+锁、再取 `activity` 锁**（锁序与 `process_spawn_impl` 一致），**两把锁都用
+`timeout(剩余 budget, lock())`**。否则另一条默认 kill 在跑 OS 命令期间持有 `inner`
+（最长 5s）时，退出路径会白等满 5s（复审第六轮实测 N=1 4946ms）。抢不到锁即按"未确认
+终止"失败：**一行共享状态都不动**（`inner` 不 take、意图位不置）、不 `commit_exit`，
+由 `kill_all` 记日志后继续下一个实例。
+
+> **早期版本的 `activity` → `inner` 顺序已废弃**（复审第七轮）：那个顺序要求"先置意图位
+> 再取 `inner`"，`inner` 抢不到就必须回头无 budget 地重取 `activity` 去撤销，500ms 预算
+> 被打到 2083ms。现在的顺序是"**先取锁、再改共享状态**"。
+
+**`inner == None` 的幂等分支**：此时 `inner` 守卫与 `activity` 守卫**都仍在手上**，
+撤销意图位与提交 `pi://exit` 直接使用这把 activity 守卫完成 —— **不再回头取锁**
+（复审第八轮：旧版在这里调 `has_spawned_once()` 裸取 activity，实测 2001ms）。
+
+**退出路径不做后台重试**：`kill_all` 会 `take` 整个进程池并 `clear_pending_kills()`，
+所以退出时的终止失败**只记日志、不再重试**（也不跨启动恢复）—— 这些 Child 由**本次**
+的 `kill_on_drop` 尽力终止。`respawn`（丢弃旧句柄）用 `deadline = None`，不引入额外等待。
+
+**已知边界（团队裁定，不是缺陷）**：
+
+1. **唤醒/漏拍时序**：已空闲 1 小时的 Tab 停跳 100 秒后被回收是**符合 §5** 的（门槛是
+   "用户活动"，不是"这次睡了多久"）。规格不给唤醒宽限；用户可见的表现是"切回去时 Tab
+   已销毁、重开是全新实例"，与"关闭即销毁、不保存历史"一致。
+2. **首次 claim 不校验身份**：见上文"残余风险"。要求宿主控制面权限（该权限已可直接
+   `rpc_kill`；规格 §2 明确 aux 只保 pi 的控制面，不是沙箱）。表现是"过期窗口内被抢先
+   领取会阻挠原持有者恢复"。不做宿主级身份绑定（等有远程目标时一起做）。
+3. **退出路径不重试**：`kill_all` 结束时就清空了待重试表（`take` 池 + `clear_pending_kills`），
+   退出阶段的终止失败只有日志；残留 Child 由本次进程的 `kill_on_drop` 尽力终止，内存表
+   **不跨启动恢复**，因此"下次启动收尾"不是保证。
+4. **永久 kill 失败**：某个实例的 kill 一直无法确认退出时，它会在回收器的待重试表里
+   长期保留（一份 `Arc<ProcessState>` 句柄），并在租约侧一直回 `auxLeaseReaping`
+   （前端已进退避，不再每 20s 打一次）。这是**有意的**：宁可留下一条可重试句柄，也不
+   假装已回收（假装会在孤儿进程与"日志显示已回收"之间制造矛盾）。
+
+5. **远程三项未验（缺远程环境）**：远端 `probe_remote`、Web→远程 aux 的实际启动参数、
+   远程 `aux_*` 的运行期归属/认证，本机无可用 SSH/WSL/Docker 目标，**本轮未验**；只有
+   单测与静态路由断言（`web_dispatch_routes_aux_lease_commands_to_the_host_commands`）。
+   按团队裁定以"本地范围收口"，这三项标注为未验、不作为本单完成的前置。
+
+**重连归属**（第 4 条）：`reattachRunningSessions` 先调 `aux_list`，只对
+`clientId == 本机 && parentRuntimeId 在本地注册表` 的条目恢复 pending UI 与流式标记；
+其余条目**不动**（不改状态、不 kill），交给回收器。本机条目里"实例已不在本地表"的
+（本页已关闭过）立即释放租约，让回收器可以回收那个进程。
+
+**前端心跳的落点**：`stores/auxChat.ts` 模块级（不在 `AuxChatPane`）——
+切父会话时 Pane 卸载、进程与 store 存活，心跳必须继续，否则 30 分钟后用户切回去
+只剩一个死壳。只在存在 `aux:` 条目时跑；关掉最后一个实例即停表。关闭实例的顺序是
+**先 `aux_release` 再 `rpc_kill`**，迟到收尾（`settleLateAux`）同样先释放租约。
+
+**与规格正文的两处写法差异**（事实记录）：
+
+1. §5 的功能实现写在 `src-tauri/src/aux_reap.rs` 与 `src-tauri/src/aux_leases.rs` 两个
+   新模块，而不是全部塞进 `rpc.rs`；`rpc.rs` 只改三处：`ProcessState` 增两个字段、
+   `accept_command` 转录用户活动、`kill`/`kill_all` 连租约一起清。
+   §5 原文只写了"心跳 20s"，没有写过期与凭证；本轮补的 TTL/惰性过期、lease token、
+   reaping 仲裁三条写进本节（属**补充**，不是对 §5 的重写）。
+2. §1 写的缓存键"flags_hash"落地为 `probe_fingerprint(program_id, args, version)` 的
+   全量串（含 `--append-system-prompt` 文本），未做哈希；TTL 判定改为可注入时间的
+   `cache_get_at`，单测因此能钉住 10 分钟边界而不用真等。
+
+**后端双客户端场景脚本（§6 f/g 的自动可重跑部分）**：`src-tauri/src/aux_lifecycle_scenarios.rs`
+（`#[cfg(test)]`），用**真实长命子进程 + 真实租约表 + 两个模拟客户端**跑完整时序：
+
+```text
+cargo test --manifest-path src-tauri/Cargo.toml --lib aux_lifecycle_scenarios -- --nocapture
+```
+
+4 个用例、每条打印可粘贴的步骤（`[aux-lifecycle NN] …`）：① A 释放 + B 心跳到 31 分钟
+→ 只回收 A；② 同一实例双客户端持有，A 释放后 B 仍持有则不回收、B 也停跳才回收；
+③ `aux_list` 的归属字段够前端做重连过滤、且不含 token（拿他客户端 clientId 释放被拒）；
+④ 客户端崩溃 → TTL 过期但空闲未到 → 不回收，31 分钟后才回收。GUI 双窗口手工留成员验收，
+本脚本只证明后端状态机。
+
+**证据边界（如实）**：`aux_*` 的远程 dispatch 覆盖与 `aux_spawn` 同级，仍是
+**静态路由断言**（`web_dispatch_routes_aux_lease_commands_to_the_host_commands`），
+运行期覆盖需要 `AppHandle<MockRuntime>`（`rpc::spawn`/`aux_spawn`/
+`builtin_extensions` 全部绑定 `AppHandle<Wry>`）。真实 pi 上的能力探测只在本机实测过
+（1.5.2：合法 argv 通过、`--future-flag` 返回 `Error: Unknown option` 且 exit 1），
+远端探测（`probe_remote`）**本轮没有可用的 SSH 目标，未实测**。

@@ -13,7 +13,7 @@ use super::ssh::remote_error_coded;
 use super::workspace::{workspace_manifest_for, WorkspaceContext};
 
 /// 校验 aux 的 runtimeId：必须是 `aux:` 前缀，避免把主会话进程改成 aux 策略。
-fn validate_aux_runtime(runtime_id: &str) -> Result<(), String> {
+pub(crate) fn validate_aux_runtime(runtime_id: &str) -> Result<(), String> {
     if runtime_id.starts_with("aux:") {
         Ok(())
     } else {
@@ -25,6 +25,8 @@ fn validate_aux_runtime(runtime_id: &str) -> Result<(), String> {
 }
 
 /// Spawn an aux runtime. `session_file` is always `None` (`--no-session`).
+/// `parent_runtime_id` 是归属父会话：回收日志与 `aux_list` 的重连过滤按它归类
+/// （`docs/aux-chat-spec.md` §5）。缺省即"归属未知"，不影响起进程。
 #[tauri::command]
 pub async fn aux_spawn(
     app: AppHandle,
@@ -36,6 +38,7 @@ pub async fn aux_spawn(
     thinking: Option<String>,
     workspace: Option<WorkspaceContext>,
     ssh_connection_id: Option<String>,
+    parent_runtime_id: Option<String>,
 ) -> Result<(), String> {
     validate_aux_runtime(&runtime_id)?;
     let spec_json = serde_json::json!({
@@ -77,7 +80,7 @@ pub async fn aux_spawn(
             manifest.as_deref(),
         )
         .await?;
-        return rpc::spawn(
+        rpc::spawn(
             app,
             &state,
             &rpc::SpawnProgram::LocalPi(info),
@@ -85,10 +88,12 @@ pub async fn aux_spawn(
             None,
             args,
             manifest,
-            Some(runtime_id),
+            Some(runtime_id.clone()),
             rpc::RuntimePolicy::Aux,
         )
-        .await;
+        .await?;
+        record_parent(&state, &runtime_id, parent_runtime_id).await;
+        return Ok(());
     };
 
     spawn_aux_remote(
@@ -99,9 +104,17 @@ pub async fn aux_spawn(
         spec,
         workspace.is_some(),
         ssh_connection_id,
-        runtime_id,
+        runtime_id.clone(),
+        parent_runtime_id,
     )
     .await
+}
+
+/// 把归属父会话写进 `ProcessState`（spawn 之后补一次，避免给公共 `rpc::spawn`
+/// 再加一个只有 aux 用得到的参数）。失败不报错：父会话归属只用于日志与列表，
+/// 缺了它照样能回收（`aux_list` 会返回 `null` 由前端丢弃）。
+async fn record_parent(state: &rpc::RpcState, runtime_id: &str, parent: Option<String>) {
+    rpc::aux_probe::set_aux_parent(state, runtime_id, parent).await;
 }
 
 /// 远程 aux：扩展文件不上传，因此 `-e` 白名单为空（差异卡不承诺，见规格 §1/§5）。
@@ -115,6 +128,7 @@ async fn spawn_aux_remote(
     has_workspace: bool,
     ssh_connection_id: Option<String>,
     runtime_id: String,
+    parent_runtime_id: Option<String>,
 ) -> Result<(), String> {
     let connection = ssh::config::resolve_connection_for_target(target, ssh_connection_id.as_deref())?;
     if has_workspace {
@@ -157,10 +171,11 @@ async fn spawn_aux_remote(
         None,
         args,
         None,
-        Some(runtime_id),
+        Some(runtime_id.clone()),
         rpc::RuntimePolicy::Aux,
     )
     .await?;
+    record_parent(state, &runtime_id, parent_runtime_id).await;
     let _ = ssh::config::touch_connection(&connection.id);
     Ok(())
 }

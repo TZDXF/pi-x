@@ -21,6 +21,13 @@ export interface AuxEventSink {
   pushStderr(runtimeId: string, line: string): void
   /** `pi://exit` 的收尾（不改主会话的 phase/project 选择）。 */
   onExit(runtimeId: string, activity?: SessionActivity): void
+  /**
+   * 重连后按 `aux_list` 重新对齐租约（规格 §5 第 4 条）。
+   *
+   * 只恢复本机 clientId 且父会话仍在本地注册表的条目；他客户端的条目一律不动，
+   * 交给回收器。可选：没有租约能力的宿主（测试替身）可以不实现。
+   */
+  reconcileLeases?(): Promise<string[]>
 }
 
 let sink: AuxEventSink | null = null

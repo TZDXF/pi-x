@@ -1,4 +1,4 @@
-import { killPi, spawnAuxPi, sshConnectionList } from "@/api/piClient"
+import { auxClaim, auxList, auxRelease, killPi, spawnAuxPi, sshConnectionList } from "@/api/piClient"
 import {
   auxModelMissing,
   auxModelTarget,
@@ -29,7 +29,14 @@ import type { useWorkspaceStore } from "@/stores/workspace"
  * - **关闭**通过注入的 bridge 调 `rpc_kill`：进程生命周期归后端，前端只负责"什么时候
  *   该关"，与 `stores/session.ts` 的进程管理边界一致。
  */
-registerAuxRuntimeBridge({ kill: (runtimeId: string) => killPi(runtimeId) })
+registerAuxRuntimeBridge({
+  kill: (runtimeId: string) => killPi(runtimeId),
+  // 租约（规格 §5）：心跳每 20s 续一次；关闭时先 release 再 kill。
+  claim: (runtimeId, clientId, leaseToken) => auxClaim(runtimeId, clientId, leaseToken),
+  // 只认 token：clientId 是标识不是凭证（复审 P1-2）。
+  release: (runtimeId, leaseToken) => auxRelease(runtimeId, leaseToken),
+  list: () => auxList(),
+})
 
 /** 启动一个 aux 实例需要从父会话带过来的上下文。 */
 export interface AuxParentContext {

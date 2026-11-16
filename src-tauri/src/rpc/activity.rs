@@ -32,6 +32,25 @@ pub(super) struct RuntimeActivity {
     aborted: bool,
     pending: Vec<PendingUi>,
     next_token: u64,
+    /// 本次终止是否是**我们主动 kill**（预期内）。
+    ///
+    /// 为什么需要它：确认退出由两条路径竞争 —— `process_kill` 的 `child.wait()` 与
+    /// stdout reader 看到 EOF。为避免"主动 kill 被 reader 先报成 error"，kill 在真正
+    /// 动手**之前**先置这个意图位；reader 读到 EOF 时据此把 exit 记成 `idle`。
+    /// 它**不**发事件、不改代际，因此 kill 失败时清掉它即可恢复。
+    expected_stop: bool,
+    /// 这个 `ProcessState` 是否**真的启动过**进程。
+    ///
+    /// 为什么要它：`process_kill` 的 `inner == None` 早退分支不能再"凭空发一条
+    /// exit"（复审第五轮）。只有真 spawn 过的对象才有可报告的终止；从未启动的对象
+    /// 终止是 no-op。
+    spawned: bool,
+    /// 终止事件（`pi://exit`）是否**已经**发布过。
+    ///
+    /// 为什么需要它：确认退出由两条路径竞争（`process_kill` 的确认，与 stdout reader
+    /// 看到 EOF）。谁先到都要保证只发**一次** `pi://exit`；重试路径因此不能再凭空多
+    /// 发一次（复审第四轮 P1-1）。
+    exited: bool,
 }
 
 impl RuntimeActivity {
@@ -58,10 +77,30 @@ impl RuntimeActivity {
         self.generation == generation
     }
 
+    /// 标记"本对象已真实 spawn 过"（由 `process_spawn_impl` 在装配 reader 之前调用）。
+    pub(super) fn mark_spawned(&mut self) {
+        self.spawned = true;
+    }
+
+    pub(super) fn has_spawned(&self) -> bool {
+        self.spawned
+    }
+
     fn running(&self) -> bool {
         self.run
             .as_ref()
             .is_some_and(|run| run["status"] == "running")
+    }
+
+    /// 回收探针用：本实例是否在跑一轮 agent（`agent_start` 到 `agent_settled`）。
+    pub(super) fn busy(&self) -> bool {
+        self.running()
+    }
+
+    /// 回收探针用：仍然待答的扩展询问数（先按 deadline 过期，与 `snapshot` 同一规则）。
+    pub(super) fn pending_ui_count(&mut self) -> usize {
+        self.expire(Instant::now());
+        self.pending.len()
     }
 
     fn timestamp(&self) -> u64 {
@@ -304,12 +343,36 @@ impl RuntimeActivity {
     pub(super) fn stop(&mut self, generation: u64, unexpected: bool) -> Value {
         self.finish(if unexpected { "error" } else { "idle" });
         self.generation = generation;
+        self.exited = true;
         let mut exit = json!({"runtimeId": self.runtime_id});
         self.stamp(&mut exit);
         exit
     }
 
+    /// 是否已发布过终止事件（`process_kill` 在"确认退出后再提交终止状态"时用它去重）。
+    pub(super) fn has_exited(&self) -> bool {
+        self.exited
+    }
+
+    /// 标记/撤销"本次终止是我们主动 kill"的意图（不发事件、不动代际）。
+    pub(super) fn mark_expected_stop(&mut self) {
+        self.expected_stop = true;
+    }
+
+    pub(super) fn clear_expected_stop(&mut self) {
+        self.expected_stop = false;
+    }
+
+    /// 本次退出是否是主动 kill 的结果（reader 据此决定 `idle` / `error`）。
+    pub(super) fn expects_stop(&self) -> bool {
+        self.expected_stop
+    }
+
+    /// 发布终止事件；**已经发过就跳过**（stdout reader 与 kill 确认可能同时到达）。
     pub(super) fn stop_and_emit(&mut self, generation: u64, unexpected: bool) {
+        if self.exited {
+            return;
+        }
         let exit = self.stop(generation, unexpected);
         if let Some(sink) = &self.sink {
             sink.emit(EXIT_EVENT, &self.runtime_id, exit);

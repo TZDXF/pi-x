@@ -13,11 +13,14 @@
 //! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
 mod activity;
+pub(crate) mod aux_probe;
 pub mod aux_launch;
 mod child;
 #[cfg(test)]
 mod gateway_tests;
 mod policy;
+#[cfg(test)]
+pub(crate) mod test_harness;
 
 pub use policy::RuntimePolicy;
 
@@ -91,6 +94,14 @@ pub struct ProcessState {
     activity: Arc<Mutex<activity::RuntimeActivity>>,
     /// 运行策略：`Main` 是既有会话默认值；aux 由 spawn 时显式写入，不从命令读取。
     policy: RuntimePolicy,
+    /// aux 的归属父会话（主会话恒为 `None`）。只在 spawn 之后由
+    /// [`set_aux_parent`] 写入，回收日志与重连过滤按它归类。
+    pub(crate) parent_runtime: Mutex<Option<String>>,
+    /// **用户活动**时钟（`docs/aux-chat-spec.md` §5）：只在
+    /// `prompt`/`steer`/`follow_up` 时前进，`get_state`/`get_messages`/探针/租约心跳
+    /// 都不动它。刻意不复用池级的 [`RpcState::last_activity`] —— 那里的每次
+    /// `process()` 调用都会刷新，会让"空闲 30 分钟"的判据永远不成立。
+    pub(crate) user_activity: Mutex<aux_probe::UserActivityClock>,
 }
 
 impl ProcessState {
@@ -113,6 +124,16 @@ impl ProcessState {
             .await
             .as_ref()
             .map(SessionTransport::snapshot)
+    }
+
+    /// 该对象是否**真的启动过**进程（**只读、仅测试使用**）。
+    ///
+    /// 生产路径**不**用它：`process_kill` 的 `inner == None` 早退分支直接从**已持有**
+    /// 的 `activity` 守卫里读 `has_spawned()` —— 放锁后再取一次是裸等待，会把总预算
+    /// 打穿（复审第八轮 P1）。
+    #[cfg(test)]
+    pub(crate) async fn has_spawned_once(&self) -> bool {
+        self.activity.lock().await.has_spawned()
     }
 
     /// Current session generation; stale callers detect a respawn by
@@ -242,6 +263,10 @@ async fn accept_command(
     };
     permit.send(command.to_string());
     activity.command(command);
+    drop(activity);
+    // 用户活动时钟只在真正写进 stdin 之后转录（与 `activity.command` 同一时刻）；
+    // 上面已释放 `activity`/`inner` 的守卫，这里只拿 `user_activity` 一把锁。
+    state.note_user_activity(command).await;
     Ok((id, generation))
 }
 /// Fire-and-forget write (e.g. `extension_ui_response`).
@@ -472,22 +497,48 @@ pub(crate) async fn session_endpoint(
 }
 
 pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
-    let process = state
-        .processes
-        .lock()
-        .await
-        .remove(runtime_id.unwrap_or("default"));
-    if let Some(process) = process {
-        child::process_kill(&process, "rpc_kill").await?;
-        state.last_activity.lock().await.remove(&process.runtime_id);
+    let id = runtime_id.unwrap_or("default").to_string();
+    let process = state.processes.lock().await.remove(&id);
+    let Some(process) = process else {
+        return Ok(());
+    };
+    match child::process_kill(&process, "rpc_kill").await {
+        Ok(()) => {
+            state.last_activity.lock().await.remove(&process.runtime_id);
+            // 进程没了，租约也就没有意义：留着会让 `aux_list` 一直报一个不存在的实例。
+            crate::aux_leases::forget(&process.runtime_id);
+            Ok(())
+        }
+        Err(error) => {
+            // 终止未确认：**放回池里**，否则句柄随 `Arc` 一起落地、谁也没法再重试
+            // （复审第四轮 P1-2 的同一类问题）。放回后回收器/下一次 `rpc_kill` 仍能
+            // 找到它；只有在 **Arc 真正释放**（进程条目从池里消失）时才由 Child 自身的
+            // `kill_on_drop` 尽力终止 —— 那是**本次**进程内的尽力兜底，没有跨启动保证。
+            state
+                .processes
+                .lock()
+                .await
+                .insert(process.runtime_id.clone(), process);
+            Err(error)
+        }
     }
-    Ok(())
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
+    crate::aux_leases::clear();
+    crate::aux_reap::clear_pending_kills();
     for process in processes.values() {
-        child::process_kill(process, "kill_all (app exit)").await?;
+        // 应用退出路径用**短总 budget**（500ms/实例，覆盖远程段 + OS 终止段 + 确认
+        // 退出，不是只压最后那段 wait）：`kill_all` 在 `RunEvent::Exit` 里 `block_on`，
+        // N 个进程 × 5s 会把退出拖住。单条失败也不转成 `Err` 中断循环 —— 退出时必须
+        // 尽力把所有进程都杀掉，失败降级为日志。
+        // 退出路径**不做后台重试**：池已 `take` 走、待重试表也清了，终止失败只剩日志。
+        // 这些 Child 由**本次**的 `kill_on_drop`（LocalPi 分支已设）尽力终止；内存表
+        // 不跨启动恢复，所以没有"下次启动再收尾"的保证。
+        if let Err(error) = child::process_kill_fast(process, "kill_all (app exit)").await {
+            crate::logs::write(&process.runtime_id, &format!("exit kill failed: {error}"));
+        }
     }
     Ok(())
 }
@@ -809,6 +860,10 @@ mod pending_cleanup_tests {
 
     #[tokio::test]
     async fn backpressured_notify_does_not_block_kill_or_lose_idle_exit_metadata() {
+        // 与 kill 注入（budget / OS 延迟）串行，避免进程级静态被别的用例改乱；
+        // 先拿锁再清注入（否则可能清掉别的用例刚设的注入）。
+        let _guard = crate::aux_leases::test_lock();
+        crate::rpc::aux_probe::clear_kill_failures();
         let (state, mut stdin_rx, sink) = backpressured_state().await;
         state
             .activity

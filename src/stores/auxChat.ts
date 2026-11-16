@@ -5,6 +5,15 @@ import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import type { ConversationSelectionLimitReason } from "@/lib/conversationSelections"
+import {
+  AUX_LEASE_HEARTBEAT_MS,
+  AUX_LEASE_TTL_MS,
+  isAuxLeaseConflict,
+  isAuxLeaseReaping,
+  ownAuxLeases,
+  parseAuxLeaseEntries,
+  shouldHeartbeat,
+} from "@/lib/auxLease"
 import { clearAuxDraft } from "@/stores/auxDrafts"
 import { addAuxSelection, clearAuxSelectionBucket } from "@/stores/auxSelections"
 import { clearAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
@@ -74,12 +83,170 @@ const auxUis = new Map<string, UiStore>()
 export interface AuxRuntimeBridge {
   /** 取消进程（关闭顺序里的 `rpc_kill`）。 */
   kill: (runtimeId: string) => Promise<void>
+  /**
+   * 登记/续期租约（`aux_claim`），返回**服务端签发的 lease token**。
+   *
+   * clientId 只是标识（`aux_list` 会公开它），不能当凭证：`release` 必须出示这个
+   * token，因此"抄别人的 clientId 去释放"必然失败（复审 P1-2）。
+   */
+  claim?: (runtimeId: string, clientId: string, leaseToken?: string) => Promise<string>
+  /** 释放租约（`aux_release`）：只认 token。 */
+  release?: (runtimeId: string, leaseToken: string) => Promise<void>
+  /** 列出租约（`aux_list`；重连归属过滤用）。 */
+  list?: () => Promise<unknown>
 }
 
 let bridge: AuxRuntimeBridge | null = null
 
 export function registerAuxRuntimeBridge(next: AuxRuntimeBridge | null) {
   bridge = next
+}
+
+/**
+ * 每个实例的 lease token（服务端在 `aux_claim` 时签发，只在本页面内存里）。
+ *
+ * 为什么不落盘：它是**凭证**，页面重载后旧 token 就没意义了（重载会拿到新的
+ * clientId，旧租约交给 TTL 过期兜底，见 `docs/aux-chat-spec.md` §11）。
+ */
+const leaseTokens = new Map<string, string>()
+
+/** 本实例当前持有的 lease token（诊断与测试用）。 */
+export function auxLeaseToken(runtimeId: string): string | undefined {
+  return leaseTokens.get(runtimeId)
+}
+
+/**
+ * 续租被拒后的静默窗口：到期前**不再发 claim**（两种原因各自处理，见下）。
+ *
+ * 1. **`auxLeaseConflict`（页面重载丢了 token）**：`aux_claim` 对已有条目要求出示原
+ *    token。不重试、不停用 Tab（实例与进程都还活着）—— 等旧条目 TTL（90s）过期后自动
+ *    恢复。**注意**：这期间**不保证**"不会被回收"。回收门槛看的是**用户活动**，原 Tab
+ *    在重载前可能已经累计闲置接近/超过 30 分钟；那种情况下心跳停掉、`claims` 归零后
+ *    回收器要是先于心跳跑一轮，该实例就会被正常回收（规格 §5 的预期结果，见 §11
+ *    已知边界）。
+ * 2. **`auxLeaseReaping`（该实例已被回收器接管）**：墓碑是**永久**的，再打永远是同一个
+ *    错误 —— 同样进退避窗口，避免每 20s 刷一次无效请求（每分钟 3 次）。
+ */
+const leaseQuietUntil = new Map<string, number>()
+
+/**
+ * 已被回收器接管的实例（永久墓碑 ⇒ 永不再续租）。
+ *
+ * 与 `leaseQuietUntil` 分开：`Conflict` 是**暂时**的（TTL 后会恢复），`Reaping` 是
+ * **永久**的 —— 那个 runtimeId 已经进了回收墓碑，再 claim 只会一直报同一个错。
+ */
+const leaseReaping = new Set<string>()
+
+/** 续租一次（心跳与"实例就绪"共用）。返回新/当前 token；被拒或静默窗口内返回 undefined。 */
+async function claimAuxLease(runtimeId: string) {
+  if (!bridge?.claim) return undefined
+  if (leaseReaping.has(runtimeId)) return undefined
+  const quietUntil = leaseQuietUntil.get(runtimeId)
+  if (quietUntil !== undefined && Date.now() < quietUntil) return undefined
+  const token = leaseTokens.get(runtimeId)
+  try {
+    // 首次不带 token（服务端签发）；续租必须带原 token，否则 `auxLeaseConflict`。
+    const issued = await bridge.claim(runtimeId, auxClientId(), token)
+    if (issued) {
+      leaseTokens.set(runtimeId, issued)
+      leaseQuietUntil.delete(runtimeId)
+    }
+    return issued
+  } catch (error) {
+    if (isAuxLeaseReaping(error)) {
+      // 永久墓碑：这个实例不会再接受任何租约，直接停掉续租（不再重试）。
+      leaseReaping.add(runtimeId)
+    } else if (isAuxLeaseConflict(error)) {
+      // 暂时性：等旧条目 TTL 过期后自动恢复（不发、不停用 Tab、不循环重试）。
+      leaseQuietUntil.set(runtimeId, Date.now() + AUX_LEASE_TTL_MS)
+    }
+    return undefined
+  }
+}
+
+/**
+ * 释放本机对该实例的租约（关闭路径）。
+ *
+ * 只认 token：没有 token（例如页面重载后旧租约还在 TTL 内）就**不动**它 ——
+ * 后端会在 TTL（90s）之后惰性清理，不会永久挡住回收。
+ */
+async function releaseAuxLease(runtimeId: string) {
+  const token = leaseTokens.get(runtimeId)
+  if (!token) return
+  await bridge?.release?.(runtimeId, token).catch(() => undefined)
+  leaseTokens.delete(runtimeId)
+  leaseQuietUntil.delete(runtimeId)
+}
+
+/**
+ * 模块级心跳定时器（**不在 pane 上**）：切父会话时 Pane 会卸载，但实例与进程还活着，
+ * 心跳必须继续 —— 否则回收器会在 30 分钟后把一个"用户随时会切回去"的 Tab 当成孤儿。
+ */
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+/** 心跳是否在跑（诊断与测试用）。 */
+export function auxHeartbeatRunning() {
+  return heartbeatTimer !== null
+}
+
+/**
+ * 对所有 `aux:` 实例续租一次。没有 aux 条目时**自动停表**：
+ * 无实例还每秒空转的定时器会一直吊着事件循环（单测/退出时都难受）。
+ */
+export async function tickAuxLeases(): Promise<void> {
+  const runtimeIds = tabs.map(tab => tab.runtimeId)
+  if (!shouldHeartbeat(runtimeIds)) {
+    stopAuxLeaseHeartbeat()
+    return
+  }
+  for (const runtimeId of runtimeIds) await claimAuxLease(runtimeId)
+}
+
+/** 启动心跳（幂等；间隔默认 20s，见 `AUX_LEASE_HEARTBEAT_MS`）。 */
+export function startAuxLeaseHeartbeat(intervalMs = AUX_LEASE_HEARTBEAT_MS): void {
+  if (heartbeatTimer !== null) return
+  heartbeatTimer = setInterval(() => {
+    void tickAuxLeases()
+  }, intervalMs)
+  // Node 单测：别让一个定时器把进程吊住（浏览器里没有 unref）。
+  ;(heartbeatTimer as unknown as { unref?: () => void }).unref?.()
+}
+
+/** 停心跳（关闭最后一个实例、测试重置、应用退出）。 */
+export function stopAuxLeaseHeartbeat(): void {
+  if (heartbeatTimer !== null) clearInterval(heartbeatTimer)
+  heartbeatTimer = null
+}
+
+/**
+ * 重连后按 `aux_list` 重新对齐租约（规格 §5 第 4 条）。
+ *
+ * 只认两类条目：**本机 clientId** 且 **parentRuntimeId 在本地注册表里**。其余条目
+ * （别的窗口/别的机器开的、父会话已不在本地）一律**不动** —— 不 kill、不改状态，
+ * 交给回收器按三条件兜底。这就是"重连不把全部 aux 当孤儿"的落点。
+ *
+ * 本机条目里，实例已在本地表上的继续由心跳续租；实例已不在表（已关闭或本页从未拥有）
+ * 则**释放残租约**，让回收器可以回收那个进程。
+ */
+export async function reconcileAuxLeases(): Promise<string[]> {
+  const raw = await bridge?.list?.().catch(() => null)
+  const entries = parseAuxLeaseEntries(raw)
+  const knownParents = new Set(tabs.map(tab => tab.parentRuntimeId))
+  const own = ownAuxLeases(entries, auxClientId(), parent => knownParents.has(parent))
+  for (const entry of own) {
+    if (auxTabByRuntime(entry.runtimeId)) continue
+    // 本机条目但实例已不在表：能出示 token 就立即释放；拿不到 token（页面重载后
+    // 旧租约）就交给 TTL 惰性过期 —— 它不会永久挡住回收。
+    await releaseAuxLease(entry.runtimeId)
+  }
+  // 心跳恢复：重连期间实例的租约可能已过期（对方判定 `claims` 为空就会回收）。
+  if (tabs.length > 0) {
+    startAuxLeaseHeartbeat()
+    await tickAuxLeases()
+  }
+  // 返回"本机应当在重连里恢复的 runtimeId"：调用方（`workspaceRuntime`）只对这批
+  // 条目做 pending UI 恢复，其余 aux runtime 一律不动（等回收器）。
+  return own.map(entry => entry.runtimeId)
 }
 
 /**
@@ -139,7 +306,7 @@ export const auxChatEventSink: AuxEventSink = {
   },
 }
 
-registerAuxEventSink(auxChatEventSink)
+registerAuxEventSink({ ...auxChatEventSink, reconcileLeases: () => reconcileAuxLeases() })
 
 /**
  * 本机客户端标识：同一页面会话内稳定（④ 的租约与重连恢复按它筛选）。
@@ -158,6 +325,10 @@ export function currentAuxClientId() {
 
 /** 仅测试用：清空注册表、墓碑、在途创建与 store 表（用例之间隔离）。 */
 export function resetAuxChatForTest() {
+  stopAuxLeaseHeartbeat()
+  leaseTokens.clear()
+  leaseQuietUntil.clear()
+  leaseReaping.clear()
   tabs.splice(0)
   closedAuxIds.clear()
   sweptStores.clear()
@@ -298,6 +469,9 @@ export async function openAux(
   // 先建 store：spawn 期间的 `pi://event` / `extension_ui_request` 要有落点。
   auxSessionFor(runtimeId)
   auxUiFor(runtimeId)
+  // 心跳立即起（模块级）：实例一入表就开始续租，创建中的那几次失败由下一拍补上。
+  startAuxLeaseHeartbeat()
+  void claimAuxLease(runtimeId)
 
   const creation = (async () => {
     try {
@@ -308,6 +482,8 @@ export async function openAux(
       if (!current) return null
       current.status = "ready"
       delete current.error
+      // 进程就绪：租约此时一定能登记成功（入口校验要求 runtime 存活）。
+      await claimAuxLease(runtimeId)
       return current
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -381,6 +557,8 @@ const sweptStores = new Set<string>()
 export async function settleLateAux(runtimeId: string): Promise<boolean> {
   const gone = closedAuxIds.has(runtimeId) || !tabs.some(tab => tab.runtimeId === runtimeId)
   if (!gone) return false
+  // 0) 租约：迟到的实例同样要释放，否则残租约把回收判据卡死。
+  await releaseAuxLease(runtimeId)
   // 1) 进程：**每次命中都杀**。`rpc_kill` 幂等且对不存在的 runtime 无害。
   await bridge?.kill(runtimeId).catch(() => {})
   // 2) store：只拆一次（重复 dispose 会踩到已释放的实例）。
@@ -417,6 +595,8 @@ export async function closeAux(runtimeId: string): Promise<void> {
   closedAuxIds.add(runtimeId)
   const index = tabs.findIndex(tab => tab.runtimeId === runtimeId)
   if (index >= 0) tabs.splice(index, 1)
+  // 关掉最后一个实例就停表（不必等下一拍自己发现"没有 aux 条目"）。
+  if (tabs.length === 0) stopAuxLeaseHeartbeat()
 
   const session = auxSessions.get(runtimeId)
   const ui = auxUis.get(runtimeId)
@@ -432,6 +612,9 @@ export async function closeAux(runtimeId: string): Promise<void> {
   clearAuxSelectionBucket(runtimeId)
   // 3b) 父上下文“只注入首轮”的记账：关闭即清（同一 runtimeId 不会再被复用）。
   clearAuxParentContext(runtimeId)
+  // 3c) 租约：**先释放再 kill**（规格 §5 销毁段的顺序）。反过来的话，回收器在
+  //     进程消失、租约还在的空档里会把这条残租约一直留在 `aux_list` 里。
+  await releaseAuxLease(runtimeId)
   // 4) 进程：先杀，再拆 store —— 顺序反过来会让迟到事件找到仍有 store 的 id。
   await bridge?.kill(runtimeId).catch(() => {})
   // 5) 会话表与 Pinia 实例表。

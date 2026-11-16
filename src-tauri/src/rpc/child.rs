@@ -207,9 +207,14 @@ async fn process_spawn_impl(
             session_file.clone(),
             sink.clone(),
         );
+        // 注意：`mark_spawned()` **不在这里**。它必须在"子进程真的创建成功之后"才置，
+        // 否则 spawn 失败（例如可执行文件缺失）会留下 has_spawned=true + inner=None，
+        // 之后 kill 会凭空发一条 `pi://exit`（复审第六轮整理项 1）。落点在下面
+        // child 创建成功之后（local 与 remote 两支共用一处）。
     }
     if let Some(mut old) = guard.take() {
-        let _ = kill_inner(&state.runtime_id, &mut old, "respawn").await;
+        // respawn 是"旧句柄直接丢弃"，不做退出确认（避免重启路径多等最多 5s）。
+        let _ = kill_inner(&state.runtime_id, &mut old, "respawn", None).await;
     }
 
     // 远程会话上下文：endpoint 供 kill 兜底，remote_pid 由 stderr reader 回填；
@@ -269,6 +274,11 @@ async fn process_spawn_impl(
                 .map_err(|e| crate::commands::ssh::remote_error_coded(&spec.endpoint, &e))?
         }
     };
+
+    // 子进程真的创建成功（local: `cmd.spawn()` 返回 Ok；remote: `remote_exec_stream`
+    // 返回 Ok，且 `wait_ssh_ready` 已确认远端 ready）。**这里**才置"曾经启动过"：
+    // 之后 `process_kill` 的 `inner == None` 早退分支才知道这个对象有一个可报告的终止。
+    state.activity.lock().await.mark_spawned();
 
     let session_label = session_file.clone().unwrap_or_else(|| "<new>".into());
     match program {
@@ -378,13 +388,20 @@ async fn process_spawn_impl(
             // Only surface it if this reader still belongs to the current session.
             let mut activity = activity.lock().await;
             if activity.is_current(own_gen) && generation.load(Ordering::Relaxed) == own_gen {
+                // 主动 kill 期间读到的 EOF 是**预期内**的退出（`idle`），不是崩溃（`error`）。
+                // kill 的意图位在真正动手之前就置上了，因此这里不会把 kill 报成 error。
+                let unexpected = !activity.expects_stop();
                 crate::logs::write(
                     &runtime_id,
-                    "unexpected exit: stdout closed (pi process exited)",
+                    if unexpected {
+                        "unexpected exit: stdout closed (pi process exited)"
+                    } else {
+                        "exit: stdout closed after an explicit kill"
+                    },
                 );
                 pending.lock().await.clear();
                 let next_gen = generation.fetch_add(1, Ordering::Relaxed) + 1;
-                let exit = activity.stop(next_gen, true);
+                let exit = activity.stop(next_gen, unexpected);
                 sink.emit(EXIT_EVENT, &runtime_id, exit);
             }
         });
@@ -821,88 +838,1054 @@ pub(super) async fn process_running(state: &ProcessState) -> bool {
         .is_some_and(|inner| matches!(inner.child.try_wait(), Ok(None)))
 }
 
+/// 一次 kill 的**总 deadline**（不是分段超时）——默认路径 5s、退出路径 500ms。
+///
+/// 为什么必须是总 deadline：分段超时（远程 5s + taskkill 无超时 + wait 500ms）会让
+/// "命令不返回"时最后那段 500ms 根本不会开始 —— 复审第五轮实测 N=2 的退出耗时
+/// 3644ms，远大于 N×500ms。现在**所有阶段**（远程 `kill -TERM`、OS 终止命令、
+/// `child.wait()` 确认退出）都从同一个 budget 里扣，耗尽即判失败。
+const KILL_BUDGET_DEFAULT: Duration = Duration::from_secs(5);
+
+/// 应用退出路径（`kill_all` 在 `RunEvent::Exit` 里 `block_on`）的总 budget：500ms/实例。
+const KILL_BUDGET_EXIT: Duration = Duration::from_millis(500);
+
+/// 测试用：覆盖总 budget（0 = 用路径默认值）。
+#[cfg(test)]
+pub(super) static KILL_BUDGET_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 测试用：跳过真正的 OS 终止调用（模拟"kill 没把进程杀掉"）。
+#[cfg(test)]
+pub(super) static SKIP_OS_KILL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 测试用：在 `inner == None` 分支**放锁之后、若还要回头取锁之前**插入一个确定窗口。
+///
+/// 为什么需要它：那处缺陷只在"本任务放锁之后、竞争者立刻抢到 activity"时才显形，
+/// 纯靠调度抖动写的用例会 false negative。窗口让竞争者有一个确定的机会拿锁，
+/// 于是"回头裸取"的回归必然被检出；**只影响测试**，生产路径该窗口为 0。
+#[cfg(test)]
+pub(super) static NONE_BRANCH_WINDOW_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 测试用：把 OS 终止命令换成"先睡 D 毫秒、再返回非零"的等价物。
+///
+/// 这是复审第五轮要求的可重跑注入：不需要造真实 OS 权限拒绝，就能证明总 deadline
+/// 覆盖到 OS 命令那一段（旧实现里这一段完全没有超时）。
+#[cfg(test)]
+pub(super) static OS_KILL_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+fn kill_budget(fallback: Duration) -> Duration {
+    #[cfg(test)]
+    {
+        let ms = KILL_BUDGET_MS.load(Ordering::Relaxed);
+        if ms > 0 {
+            return Duration::from_millis(ms);
+        }
+    }
+    fallback
+}
+
+/// 从总 budget 里"借"一段时间给某个阶段：返回剩余时长，或 `None`（不做确认的路径）。
+fn remaining(deadline: Option<Instant>) -> Option<Duration> {
+    deadline.map(|d| d.saturating_duration_since(Instant::now()))
+}
+
+/// 在总 budget 内跑一个阶段：超时即返回 `Err(说明)`（不让任一阶段单独卡住整次 kill）。
+async fn within_budget<F: std::future::Future>(
+    deadline: Option<Instant>,
+    stage: &str,
+    future: F,
+) -> Result<F::Output, String> {
+    match remaining(deadline) {
+        Some(left) => tokio::time::timeout(left, future)
+            .await
+            .map_err(|_| format!("kill budget exhausted during {stage}")),
+        None => Ok(future.await),
+    }
+}
+
+/// 杀进程树并**确认退出**。
+///
+/// `deadline`：`Some(deadline)` 表示**所有阶段**（远程 `kill -TERM`、OS 终止命令、
+/// `child.wait()` 确认退出）共享同一个总预算；`None` 是**无界等待**（不设超时），
+/// **只**给 respawn 这类"丢弃旧句柄"的路径使用 —— 公共 replace 不走这里
+/// （`rpc::spawn` 每次都新建 `ProcessState`、成功后才入池，替换也用新对象）。
+///
+///
+/// 失败语义（复审第四轮 P1-2）：**taskkill 非零退出、taskkill 启动失败、
+/// 非 Windows 的 `start_kill` 失败、确认超时** 全部返回 `Err`，不再吞掉。
+/// 调用方（`process_kill`）负责把失败时的 `SessionInner` 放回状态。
+///
+/// `deadline = None` 表示**无界等待**（不设任何超时）：只给 respawn 这类"丢弃旧句柄、
+/// 不进公共池"的路径使用。公共 replace 不走这里 —— `rpc::spawn` 每次新建
+/// `ProcessState`、成功后才入池，替换也用新对象（所以 `None` 当前不可达于用户点击路径）。
 async fn kill_inner(
     runtime_id: &str,
     inner: &mut SessionInner,
     reason: &str,
+    deadline: Option<Instant>,
 ) -> Result<(), String> {
     crate::logs::write(
         runtime_id,
         &format!("kill pid={:?} reason={reason}", inner.child.id()),
     );
-    // Drop pending response waiters first so callers fail fast.
-    inner.pending.lock().await.clear();
-    // 远程 pid 兜底（契约 §3.9 与多后端契约 §1.4）：本地通道断开后远端 pi 可能
-    // 残留，经一次独立 exec 发 kill -TERM（5s 超时，wsl 在发行版内、docker 在
-    // 容器 PID 命名空间内执行，语义相同）；失败降级为日志，不阻塞本地 kill。
-    // 绝不调用 wsl --terminate / docker stop：后端只杀自己 spawn 的本地子进程
-    // 与远端 pid（多后端契约 §1.4）。
+    // 远端 pid 兜底（契约 §3.9 与多后端契约 §1.4）：本地通道断开后远端 pi 可能
+    // 残留，经一次独立 exec 发 kill -TERM（wsl 在发行版内、docker 在容器 PID 命名
+    // 空间内执行，语义相同）；失败降级为日志，不阻塞本地 kill。绝不调用
+    // wsl --terminate / docker stop：后端只杀自己 spawn 的本地子进程与远端 pid。
+    //
+    // **这一段也吃同一个 budget**：旧实现固定 5s，退出路径的 500ms 根本管不到它。
     if let Some(remote) = &inner.remote {
         let pid = remote.remote_pid.lock().await.take();
         if let Some(pid) = pid {
             let script = format!("kill -TERM {pid} 2>/dev/null\n");
-            match crate::ssh::remote_exec(&remote.endpoint, &script, Duration::from_secs(5)).await {
-                Ok(_) => {
+            let exec = crate::ssh::remote_exec(&remote.endpoint, &script, Duration::from_secs(5));
+            match within_budget(deadline, "remote kill -TERM", exec).await {
+                Ok(Ok(_)) => {
                     crate::logs::write(runtime_id, &format!("remote kill -TERM {pid} sent"));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     crate::logs::write(
                         runtime_id,
                         &format!("remote kill -TERM {pid} failed (ignored): {}", e.detail),
                     );
                 }
+                Err(message) => {
+                    // 预算耗尽：这一段不值得再等，直接按"终止未确认"失败。
+                    crate::logs::write(runtime_id, &message);
+                    return Err(format!("{message} (remote kill -TERM {pid})"));
+                }
             }
         }
     }
-    if let Some(pid) = inner.child.id() {
+    // OS 终止阶段。失败原因（含 taskkill 的非零退出）**不立刻**判失败：`taskkill`
+    // 对"已经自己退出的进程"本来就会报非零（找不到进程），那不是错误。最终成败由
+    // 后面的"确认退出"决定 —— `inner == None` 或 `Ok(())` 都不算数，**看到子进程真的
+    // 退出**才算数（复审第四轮 P1-2）。
+    let mut os_error: Option<String> = None;
+    #[cfg(test)]
+    let skip_os_kill = SKIP_OS_KILL.load(Ordering::Relaxed);
+    #[cfg(not(test))]
+    let skip_os_kill = false;
+    #[cfg(test)]
+    let injected_delay = OS_KILL_DELAY_MS.load(Ordering::Relaxed);
+    #[cfg(not(test))]
+    let injected_delay = 0u64;
+    if !skip_os_kill {
         #[cfg(windows)]
         {
-            // pi.cmd runs under cmd.exe: kill the whole tree.
-            let mut tk = Command::new("taskkill");
-            tk.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            tk.creation_flags(CREATE_NO_WINDOW);
-            match tk.output().await {
-                Ok(output) if !output.status.success() => {
-                    // A failed taskkill means the process may still be running
-                    // and untracked; leave an audit trail.
-                    crate::logs::write(
-                        runtime_id,
-                        &format!(
+            if let Some(pid) = inner.child.id() {
+                // 注入优先：模拟"OS 命令延迟 D 后返回非零"，它同样受总 budget 约束。
+                let attempt = async {
+                    if injected_delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(injected_delay)).await;
+                        return Err(format!("injected os kill delay {injected_delay}ms"));
+                    }
+                    // pi.cmd runs under cmd.exe: kill the whole tree.
+                    let mut tk = Command::new("taskkill");
+                    tk.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                    tk.creation_flags(CREATE_NO_WINDOW);
+                    tk.stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped());
+                    // helper 自己也可能卡住：超时后由 kill_on_drop 终止它，不让它变成
+                    // 新的孤儿（这正是"清理本次起的 helper"的落点）。
+                    tk.kill_on_drop(true);
+                    match tk.output().await {
+                        Ok(output) if !output.status.success() => Err(format!(
                             "taskkill /PID {pid} failed: {} stdout={} stderr={}",
                             output.status,
                             String::from_utf8_lossy(&output.stdout).trim_end(),
                             String::from_utf8_lossy(&output.stderr).trim_end(),
-                        ),
-                    );
+                        )),
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(format!("taskkill /PID {pid} failed to run: {e}")),
+                    }
+                };
+                match within_budget(deadline, "taskkill", attempt).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(message)) => {
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
+                    Err(message) => {
+                        // 超时：helper 已被 kill_on_drop 收掉，记为失败继续走确认。
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
                 }
-                Err(e) => {
-                    crate::logs::write(
-                        runtime_id,
-                        &format!("taskkill /PID {pid} failed to run: {e}"),
-                    );
-                }
-                Ok(_) => {}
             }
         }
         #[cfg(not(windows))]
         {
-            let _ = inner.child.start_kill();
+            if inner.child.id().is_some() {
+                // `start_kill` 不阻塞；注入延迟在别的平台上也用 sleep 表达。
+                let attempt = async {
+                    if injected_delay > 0 {
+                        tokio::time::sleep(Duration::from_millis(injected_delay)).await;
+                        return Err(format!("injected os kill delay {injected_delay}ms"));
+                    }
+                    inner
+                        .child
+                        .start_kill()
+                        .map_err(|e| format!("start_kill failed: {e}"))
+                };
+                match within_budget(deadline, "start_kill", attempt).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(message)) => {
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
+                    Err(message) => {
+                        crate::logs::write(runtime_id, &message);
+                        os_error = Some(message);
+                    }
+                }
+            }
         }
     }
+    match deadline {
+        Some(_) => match remaining(deadline) {
+            Some(left) if !left.is_zero() => {
+                match tokio::time::timeout(left, inner.child.wait()).await {
+                    // 确认退出：即使 OS 命令报了非零（例如进程已自行退出），也算成功。
+                    Ok(Ok(_status)) => {}
+                    Ok(Err(e)) => {
+                        let message = match os_error {
+                            Some(os) => {
+                                format!("kill could not be confirmed: {os}; wait failed: {e}")
+                            }
+                            None => format!("kill could not be confirmed (wait failed): {e}"),
+                        };
+                        crate::logs::write(runtime_id, &message);
+                        return Err(message);
+                    }
+                    Err(_) => {
+                        let message = match os_error {
+                            Some(os) => format!(
+                                "kill budget exhausted before exit was confirmed: {os}"
+                            ),
+                            None => "kill budget exhausted before exit was confirmed".to_string(),
+                        };
+                        crate::logs::write(runtime_id, &message);
+                        return Err(message);
+                    }
+                }
+            }
+            // 预算已在前面几段用光：不再等 wait，直接判失败。
+            _ => {
+                let message = match os_error {
+                    Some(os) => format!("kill budget exhausted (process may still run): {os}"),
+                    None => "kill budget exhausted (process may still run)".to_string(),
+                };
+                crate::logs::write(runtime_id, &message);
+                return Err(message);
+            }
+        },
+        None => {
+            // 不做确认的路径（respawn 丢弃旧句柄）：仍要把 OS 失败如实告诉调用方。
+            if let Some(message) = os_error {
+                return Err(message);
+            }
+        }
+    }
+    // 确认退出后才清空 pending：失败的 kill 必须让在途请求继续可用（否则旧 reader
+    // 的 response 回来时已经没有接收端，等于把活进程的 pending 孤立掉）。
+    inner.pending.lock().await.clear();
     Ok(())
 }
 
+/// 测试用故障注入：接下来的 `count` 次 `process_kill` 直接返回错误。
+///
+/// 为什么需要它：`kill_inner` 的失败分支在本地生产路径上很难自然触发（Windows
+/// taskkill 的非零退出只记日志、`kill_on_drop` 尽力兜底），而"kill 失败必须可重试"
+/// 是回收器的硬要求（复审第二轮 P1-1）。没有注入就只能靠打磨真实 OS 权限错误。
+#[cfg(test)]
+pub(super) static FAIL_NEXT_KILLS: AtomicU64 = AtomicU64::new(0);
+
 pub(super) async fn process_kill(state: &ProcessState, reason: &str) -> Result<(), String> {
-    let mut guard = state.inner.lock().await;
+    let budget = kill_budget(KILL_BUDGET_DEFAULT);
+    process_kill_confirming(state, reason, Instant::now() + budget).await
+}
+
+/// 应用退出路径专用：总 budget 压到 500ms/实例，N 个进程最坏约 N×500ms（**所有阶段**
+/// 共享这一份预算），不会像旧实现那样"远程 5s + taskkill 无超时"把退出拖住。
+/// `kill_all` 在 `RunEvent::Exit` 里 `block_on`，宁可放弃确认也不能让退出挂起。
+pub(super) async fn process_kill_fast(state: &ProcessState, reason: &str) -> Result<(), String> {
+    let budget = kill_budget(KILL_BUDGET_EXIT);
+    process_kill_confirming(state, reason, Instant::now() + budget).await
+}
+
+/// 在总 budget 内取 `inner` 锁（**先**取的锁，与 `process_spawn_impl` 的锁序一致）。
+async fn lock_inner_within<'a>(
+    state: &'a ProcessState,
+    deadline: Instant,
+) -> Result<tokio::sync::MutexGuard<'a, Option<SessionInner>>, String> {
+    match tokio::time::timeout(
+        remaining(Some(deadline)).unwrap_or_default(),
+        state.inner.lock(),
+    )
+    .await
     {
-        let mut activity = state.activity.lock().await;
-        let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        activity.stop_and_emit(generation, false);
+        Ok(guard) => Ok(guard),
+        Err(_) => {
+            crate::logs::write(
+                &state.runtime_id,
+                "kill budget exhausted waiting for the inner lock",
+            );
+            Err("kill budget exhausted waiting for the inner lock".to_string())
+        }
     }
-    if let Some(mut inner) = guard.take() {
-        kill_inner(&state.runtime_id, &mut inner, reason).await?;
+}
+
+/// 在总 budget 内取 `activity` 锁（**后**取的锁）。
+async fn lock_activity_within<'a>(
+    state: &'a ProcessState,
+    deadline: Instant,
+    stage: &str,
+) -> Result<tokio::sync::MutexGuard<'a, RuntimeActivity>, String> {
+    match tokio::time::timeout(
+        remaining(Some(deadline)).unwrap_or_default(),
+        state.activity.lock(),
+    )
+    .await
+    {
+        Ok(guard) => Ok(guard),
+        Err(_) => {
+            crate::logs::write(
+                &state.runtime_id,
+                &format!("kill budget exhausted waiting for the activity lock ({stage})"),
+            );
+            Err(format!(
+                "kill budget exhausted waiting for the activity lock ({stage})"
+            ))
+        }
     }
-    Ok(())
+}
+
+/// 提交终止状态（调用方**已经持有** activity 守卫）。按 `has_exited` 去重。
+fn commit_exit_locked(
+    state: &ProcessState,
+    activity: &mut RuntimeActivity,
+    unexpected: bool,
+) {
+    if activity.has_exited() {
+        // 已由 stdout reader（EOF）或更早的一次成功 kill 提交过：不重复发。
+        return;
+    }
+    let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
+    activity.stop_and_emit(generation, unexpected);
+}
+
+/// 在总 budget 内取 activity 锁并提交终止状态。抢不到锁就**不提交**（绝不无界等待）：
+/// Reader 在 EOF 时自己会发 `pi://exit`，所以这里放弃不会丢事件。
+async fn commit_exit(state: &ProcessState, unexpected: bool, deadline: Option<Instant>) {
+    let lock = match deadline {
+        Some(deadline) => lock_activity_within(state, deadline, "commit exit").await,
+        None => Ok(state.activity.lock().await),
+    };
+    match lock {
+        Ok(mut activity) => commit_exit_locked(state, &mut activity, unexpected),
+        Err(error) => crate::logs::write(
+            &state.runtime_id,
+            &format!("confirmed exit but terminal state not published yet ({error})"),
+        ),
+    }
+}
+
+/// 在总 budget 内撤销"主动 kill"意图位。抢不到锁就**保留**意图位并记日志 ——
+/// 见 §11"停止意图优先于精确终止原因"：那种情况下后续 EOF 会记 `idle` 而不是
+/// `error`，但进程确实在被终止，这个偏差可接受，好过无界等待。
+async fn clear_expected_stop(state: &ProcessState, deadline: Instant) {
+    match lock_activity_within(state, deadline, "clear expected_stop").await {
+        Ok(mut activity) => activity.clear_expected_stop(),
+        Err(error) => crate::logs::write(
+            &state.runtime_id,
+            &format!("expected_stop kept (activity lock not available: {error})"),
+        ),
+    }
+}
+
+/// `process_kill` 与 `process_kill_fast` 的**唯一**实现，只差一个 budget。
+///
+/// ## 顺序（复审第七轮：上一版的根因是"先改共享状态、再取锁"）
+///
+/// 1. **先**取 `inner`（`timeout(remaining, lock())`）。抢不到 → 直接 `Err`，
+///    **一行共享状态都没动**（意图位此刻还没置，因此不需要回头撤销 —— 上一版正是在
+///    `inner` 超时后无 budget 地重取 `activity` 去撤销，500ms 预算被打到 2083ms）。
+/// 2. **再**取 `activity`（同一 budget）。抢不到 → 归还 `inner` 守卫（没 `take`）、
+///    仍然一行未改，`Err`。
+/// 3. **两把锁都持有**之后才 `mark_expected_stop()`，然后 `take` inner、**放掉 activity
+///    守卫**，再走 `kill_inner`。`inner` 守卫**继续持有**：它保证 `inner` 字段不会被
+///    别人拿走（否则并发 kill 会看到 `None` 而误判"已退出"），而慢操作期间对 `inner`
+///    的等待由**调用方的 budget** 兜住（抢不到就 500ms 失败），不会像旧版那样无界阻塞。
+/// 4. 收尾（成功提交 / 失败撤销意图位）都用 `timeout(remaining, …)` 取 `activity`；
+///    超时则记日志、保留现状而**绝不**无界等待。
+///
+/// 锁序固定 `inner` → `activity`（与 `process_spawn_impl` 一致），因此不存在反向持锁。
+async fn process_kill_confirming(
+    state: &ProcessState,
+    reason: &str,
+    deadline: Instant,
+) -> Result<(), String> {
+    #[cfg(test)]
+    if FAIL_NEXT_KILLS.load(Ordering::Relaxed) > 0 {
+        FAIL_NEXT_KILLS.fetch_sub(1, Ordering::Relaxed);
+        // 与真实失败一致：**不**动 inner、**不**动活动表/代际 —— 进程仍被追踪，
+        // 前端也不该收到 exit（这正是回归判据）。
+        crate::logs::write(&state.runtime_id, "kill injected failure (test seam)");
+        return Err(format!("injected kill failure: {reason}"));
+    }
+
+    // ① inner 优先。抢不到：什么都不改（意图位未置），直接失败。
+    let mut inner_guard = lock_inner_within(state, deadline).await?;
+
+    // ② 再取 activity。抢不到：inner 原样归还（没 take）、什么都不改。
+    let mut activity = lock_activity_within(state, deadline, "acquire").await?;
+
+    // ③ **两把锁都持有**之后才改共享状态：置意图位 → take inner。
+    activity.mark_expected_stop();
+    let taken = inner_guard.take();
+
+    let Some(mut inner) = taken else {
+        // 测试窗口（生产恒为 0）：此刻我们**仍持有** activity 守卫，让竞争者先排队，
+        // 于是"放锁后再裸取 activity"的回归会被确定地检出（不依赖调度抖动）。
+        #[cfg(test)]
+        if NONE_BRANCH_WINDOW_MS.load(Ordering::Relaxed) > 0 {
+            tokio::time::sleep(Duration::from_millis(
+                NONE_BRANCH_WINDOW_MS.load(Ordering::Relaxed),
+            ))
+            .await;
+        }
+        // 没有内层会话：要么已确认退出过（reader 收了尾 / 更早的一次成功 kill），
+        // 要么**从未 spawn**（spawn 失败不会入池，公共路径不可达）。
+        // 此时 inner 守卫仍在我们手上（别人拿不到 inner，判断无竞态），**activity 守卫
+        // 也仍在手上** —— 所以撤销意图位与提交终止状态都直接用这把守卫完成，
+        // **不再回头取一次 activity 锁**（上一版正是在这里裸取，把 500ms 预算打到 2001ms）。
+        activity.clear_expected_stop();
+        if activity.has_spawned() {
+            commit_exit_locked(state, &mut activity, false);
+        }
+        drop(activity);
+        drop(inner_guard);
+        return Ok(());
+    };
+    // 慢操作（远端 exec / OS 终止 / 等退出）期间**不持有 activity**（只持 inner 守卫）：
+    // activity 是所有 reader/事件出口热用的锁，不能在这里长期占住。
+    drop(activity);
+    match kill_inner(&state.runtime_id, &mut inner, reason, Some(deadline)).await {
+        Ok(()) => {
+            drop(inner);
+            drop(inner_guard);
+            // **确认退出之后**才提交终止状态（递增代际 + 发 exit，且只发一次）。
+            commit_exit(state, false, Some(deadline)).await;
+            Ok(())
+        }
+        Err(error) => {
+            // 失败：把会话**放回同一个守卫**（所有权不丢、不需要重新取锁），
+            // 代际不变、pending 与旧 reader 仍然可用、不发 exit。
+            if inner_guard.is_none() {
+                *inner_guard = Some(inner);
+            }
+            drop(inner_guard);
+            // 撤意图位走 budget；超时就保留 `expected_stop=true` 并记日志
+            // （§11"停止意图优先于精确终止原因"）。
+            clear_expected_stop(state, deadline).await;
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod kill_confirmation_tests {
+    use super::*;
+    use crate::rpc::{test_harness, RpcState, RuntimePolicy};
+
+    /// 故障注入与确认超时都是**进程级静态**，`cargo test` 默认并行：动它们的用例
+    /// 必须串行（与 `aux_reap` 的回收用例共用同一把锁，避免交叉污染）。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::aux_leases::test_lock()
+    }
+
+    /// **复审第六轮整理项 1**：`mark_spawned()` 必须在**子进程真的创建成功之后**，
+    /// 不能在 `cmd.spawn()` 之前。造法：让 local 分支的 spawn 必然失败（可执行文件
+    /// 不存在），断言 `has_spawned == false` —— 否则 kill 会凭空发一条 `pi://exit`。
+    #[tokio::test]
+    async fn a_failed_spawn_does_not_mark_the_state_as_spawned() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let dir = tempfile::tempdir().unwrap();
+        let program = SpawnProgram::LocalPi(PiInfo {
+            path: Some(dir.path().join("does-not-exist-pi").to_string_lossy().into_owned()),
+            found: true,
+            ..Default::default()
+        });
+        let process = std::sync::Arc::new(ProcessState {
+            runtime_id: "aux:spawnfail".into(),
+            ..Default::default()
+        });
+        let result = process_spawn_impl(
+            std::sync::Arc::new(test_harness::NullSink),
+            &process,
+            &program,
+            dir.path().to_str().unwrap(),
+            None,
+            vec![],
+            None,
+        )
+        .await;
+        assert!(result.is_err(), "spawn 必然失败：{result:?}");
+        assert!(
+            !process.has_spawned_once().await,
+            "spawn 失败时不得标记 has_spawned（否则 kill 会凭空发 exit）"
+        );
+        // 且 kill 对这样的对象确实是 no-op：不发 exit。
+        assert!(process_kill(&process, "reap").await.is_ok());
+        assert!(process.activity.lock().await.has_exited() == false);
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第六轮 P1 的回归**：取锁本身也必须在同一个总 budget 之内。
+    ///
+    /// 造法是**生产代码持有锁**，不是测试里的加锁 sleep：先起一条**默认**
+    /// `process_kill`（budget 5s），让它的 OS 终止阶段延迟 3000ms —— 在这段时间里
+    /// `inner` 由 `process_kill_confirming` 的 guard 持有（与质量报告的"另一条默认 kill
+    /// 在跑 OS 命令期间持有 inner"同一形状）。然后并发调退出路径的
+    /// `process_kill_fast`（budget 500ms），断言：
+    /// - 它在 **< 1000ms** 内返回失败（旧实现会等满 holder 的 5s，质量实测 N=1 4946ms）；
+    /// - **不发 exit**、`expected_stop` 被撤销；
+    /// - 被占住的实例 `inner` 仍完整（没有被 take 掉），holder 结束后进程仍被追踪。
+    #[tokio::test]
+    async fn the_exit_path_does_not_wait_for_the_inner_lock_beyond_its_budget() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:locked", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:locked").await;
+
+        // holder：默认 kill（5s budget），OS 阶段延迟 3s —— 期间持有 `inner`。
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let holder = {
+            let process = process.clone();
+            tokio::spawn(async move { process_kill(&process, "holder").await })
+        };
+        // 等 holder 真的拿住 `inner`（try_lock 失败即被持有）。
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.inner.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "holder 必须真的持住 inner，否则本用例没有保护力");
+
+        // 退出路径：500ms budget 必须也覆盖**取锁**。
+        let started = std::time::Instant::now();
+        let err = process_kill_fast(&process, "exit")
+            .await
+            .expect_err("抢不到 inner 锁必须按未确认终止失败");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "退出路径不得等另一条默认 kill 的 5s，实测 {elapsed:?}"
+        );
+        assert!(
+            err.contains("inner lock") || err.contains("budget"),
+            "错误必须指向取锁超 budget：{err}"
+        );
+        // 未确认终止：不发 exit；`inner` 仍被 holder 持有（**没有**被 take 掉）。
+        assert_eq!(sink.exits().len(), 0, "抢不到锁时不得发 pi://exit");
+        assert!(
+            process.inner.try_lock().is_err(),
+            "被占住的实例 inner 必须保持完整（不得 take 掉）"
+        );
+
+        // holder 结束后：它自己也失败（延迟导致的未确认终止），inner 放回、进程仍存活，
+        // 且它撤销了意图位 —— 退出路径全程**没有**改过共享状态（意图位是 holder 置的，
+        // 由 holder 自己清）。
+        let holder_result = holder.await.expect("holder 任务");
+        assert!(holder_result.is_err(), "holder 自身也应失败：{holder_result:?}");
+        assert!(
+            process_running(&process).await,
+            "holder 失败后 inner 必须放回，进程仍被追踪"
+        );
+        assert!(
+            !process.activity.lock().await.expects_stop(),
+            "holder 失败后必须撤销 expected_stop（后续真崩溃不能被误报成 idle）"
+        );
+        assert_eq!(sink.exits().len(), 0, "两次失败都不该发 exit");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第七轮 P1 的第二条回归**：**只有 `activity` 被长时间持有**（`inner` 空闲）
+    /// 时，退出路径也必须在 budget 内返回，而且**没有在未拿锁的情况下改过共享状态**。
+    ///
+    /// 为什么必须测这一条：上一版把 `mark_expected_stop()` 放在取 `inner` **之前**，
+    /// 于是 `inner` 超时后要"回头"取 `activity` 去撤销 —— 那次取锁是无 budget 的。
+    /// 现在的顺序是 inner → activity，所以 activity 慢时它在取锁阶段就失败，
+    /// 一行共享状态都没改。
+    #[tokio::test]
+    async fn the_exit_path_returns_within_budget_when_only_activity_is_held() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:actheld", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:actheld").await;
+
+        // 用真实持有模拟 reader 的临界区：reader 在 dispatch 里持着 activity 调事件出口，
+        // 出口慢时锁就是这么被占住的（2000ms ≫ 退出路径的 500ms budget）。
+        let activity_holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        let err = process_kill_fast(&process, "exit")
+            .await
+            .expect_err("activity 抢不到必须失败");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "activity 被占时退出路径也必须受 budget 约束，实测 {elapsed:?}"
+        );
+        assert!(err.contains("activity lock"), "{err}");
+        assert_eq!(sink.exits().len(), 0, "失败时不得发 exit");
+        // 一行未改：意图位仍未被设。
+        let observed = {
+            let guard = process.activity.lock().await;
+            guard.expects_stop()
+        };
+        assert!(!observed, "取锁失败时不得改过共享状态（意图位必须仍未设置）");
+        activity_holder.await.expect("activity holder");
+        assert!(process_running(&process).await, "inner 从未被 take，进程仍被追踪");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第七轮 P1 的第三条回归（两条锁都被占）**：`inner` 由默认 kill 持有、
+    /// `activity` 由慢事件出口持有 —— 这正是质量实测 2083ms 的形状。新版必须
+    /// **< 1000ms** 返回，且不发 exit、一行共享状态都不改。
+    #[tokio::test]
+    async fn the_exit_path_returns_within_budget_when_both_locks_are_held() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:both", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:both").await;
+        // inner：默认 kill 的 OS 阶段占用 3000ms。
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let inner_holder = {
+            let process = process.clone();
+            tokio::spawn(async move { process_kill(&process, "holder").await })
+        };
+        let inner_held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.inner.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(inner_held.is_ok(), "inner 必须真的被占住");
+        // activity：模拟 reader 在 dispatch 里持锁、事件出口慢 2000ms。
+        let activity_holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let activity_held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(activity_held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        let err = process_kill_fast(&process, "exit")
+            .await
+            .expect_err("两把锁都抢不到时必须失败");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "两把锁都被占时也必须受 budget 约束（质量实测 2083ms），实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 0, "失败时不得发 exit");
+        activity_holder.await.expect("activity holder");
+        let _ = inner_holder.await;
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第八轮 P1 的回归（`inner == None` 分支 + activity 被抢）**。
+    ///
+    /// 复现质量的时序：先让一次成功 kill 把 `inner` 摘成 `None`；kill 的第 ② 步拿到
+    /// activity、放掉之后由**抢占者**立刻接手并持有 2000ms。旧版在 None 分支会"回头
+    /// 裸取 activity"，于是 500ms 预算被打到 2001ms（质量实测）；现在它直接用仍持有的
+    /// 守卫，立刻返回。
+    ///
+    /// "放锁 → 被抢"这个窗口用测试专用 `set_none_branch_window_ms`（分支入口处的确定
+    /// 延迟，生产恒为 0）来钉住 —— 否则纯靠调度抖动，回归可能漏检（false negative）。
+    #[tokio::test]
+    async fn the_idempotent_none_branch_also_stays_within_budget() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:none", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:none").await;
+
+        // 先确认退出：inner → None，活动表已发过一次 exit。
+        process_kill(&process, "first").await.expect("首次 kill 成功");
+        assert!(process.inner.lock().await.is_none(), "inner 必须已是 None");
+        assert_eq!(sink.exits().len(), 1, "首次 kill 已发 exit");
+
+        // 抢占者：分支入口窗口一打开就抢 activity，并持有 2000ms。
+        let grabber = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                loop {
+                    if process.activity.try_lock().is_err() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                let _held = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+
+        // 窗口 50ms ≪ 断言上界 1000ms。
+        crate::rpc::aux_probe::set_none_branch_window_ms(50);
+        let started = std::time::Instant::now();
+        let _ = process_kill_fast(&process, "second").await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "inner==None 分支也不得无界等 activity（质量实测 2001ms），实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 1, "幂等分支不得重复发 exit");
+        grabber.await.expect("grabber");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第八轮 P1 的回归（`inner == None` + 两把锁的形态）**：生产 `kill_all` 在
+    /// 幂等分支上遇到被占的 activity，N=1 也必须 **< 1000ms**。
+    #[tokio::test]
+    async fn kill_all_on_an_already_exited_instance_stays_within_budget() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:none2", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:none2").await;
+        process_kill(&process, "first").await.expect("首次 kill");
+        assert!(process.inner.lock().await.is_none());
+
+        let holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        crate::rpc::kill_all(&state).await.expect("kill_all Ok");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "kill_all 在幂等分支上也不得无界等 activity，实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 1, "不得重复发 exit");
+        holder.await.expect("activity holder");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// 同一场景走 `kill_all`（生产退出路径）：N=1 也必须**小于 1000ms**，而不是等
+    /// holder 的 5s。`kill_all` 会 take 整个池，所以这里只断言耗时与"不发 exit"。
+    #[tokio::test]
+    async fn kill_all_does_not_block_on_a_locked_instance() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:locked2", RuntimePolicy::Aux).await;
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let holder = {
+            let process = process.clone();
+            tokio::spawn(async move { process_kill(&process, "holder").await })
+        };
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.inner.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "holder 必须持住 inner");
+
+        let started = std::time::Instant::now();
+        crate::rpc::kill_all(&state).await.expect("kill_all 返回 Ok");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "退出调用不得等 holder 的 5s，实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 0, "未确认终止不得发 exit");
+        let _ = holder.await;
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第五轮 P1 的回归（默认路径）**：非退出路径（5s 总 budget）也必须覆盖
+    /// **OS 终止阶段**。注入"OS 命令延迟 3s"，budget 压到 1.2s：必须在 budget 内失败，
+    /// 而不是先等 3s（旧实现这一段完全没有超时）。
+    #[tokio::test]
+    async fn the_default_kill_budget_covers_the_os_stage_not_just_the_wait() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:osbudget", RuntimePolicy::Aux).await;
+        crate::rpc::aux_probe::set_kill_budget_ms(1200);
+        crate::rpc::aux_probe::set_os_kill_delay_ms(3000);
+        let started = std::time::Instant::now();
+        let err = process_kill(&process, "reap").await.expect_err("超预算必失败");
+        let elapsed = started.elapsed();
+        assert!(
+            err.contains("budget") || err.contains("not confirmed"),
+            "错误必须指向 budget/未确认：{err}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1800),
+            "总 budget 必须切断 OS 阶段（旧实现会等满 3000ms），实测 {elapsed:?}"
+        );
+        // 失败：不发 exit、进程仍被追踪。
+        assert_eq!(sink.exits().len(), 0);
+        assert!(process_running(&process).await);
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第五轮 P1 的回归（退出路径，N=2）**：`kill_all` 用 500ms/实例的总 budget，
+    /// OS 阶段延迟 1200ms 时两个实例都失败，且**总耗时 < 1500ms**（不是质量实测的
+    /// 3644ms）。
+    #[tokio::test]
+    async fn the_exit_path_total_budget_bounds_n_instances() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (_a, sink_a) =
+            test_harness::install_recording(&state, "aux:e1", RuntimePolicy::Aux).await;
+        let (_b, sink_b) =
+            test_harness::install_recording(&state, "aux:e2", RuntimePolicy::Aux).await;
+        crate::rpc::aux_probe::set_os_kill_delay_ms(1200);
+        let started = std::time::Instant::now();
+        crate::rpc::kill_all(&state).await.expect("kill_all 返回 Ok");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "N=2 的总耗时必须 < 1500ms（N×500ms + 上界），实测 {elapsed:?}"
+        );
+        assert_eq!(sink_a.exits().len(), 0, "未确认退出不得发 exit");
+        assert_eq!(sink_b.exits().len(), 0, "未确认退出不得发 exit");
+        assert_eq!(test_harness::process_count(&state).await, 0, "退出路径 take 整个池");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第四轮 P1-1 的回归**：一次注入失败 → 不发 exit、不递增代际、pending 保留；
+    /// 重试成功后 `pi://exit` **恰好发 1 次**。
+    ///
+    /// 质量实测的 `generation=0→1, exits_before_confirm=1, pending=1, 累计 2 次` 必须翻成
+    /// 这里这条。
+    #[tokio::test]
+    async fn a_failed_kill_emits_no_exit_and_keeps_the_generation_usable() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (_process, sink) =
+            test_harness::install_recording(&state, "aux:exit", RuntimePolicy::Aux).await;
+        let generation_before = test_harness::generation_of(&state, "aux:exit").await;
+        test_harness::add_in_flight_request(&state, "aux:exit").await;
+        test_harness::start_agent_run(&state, "aux:exit").await;
+        assert_eq!(test_harness::pending_count(&state, "aux:exit").await, 1);
+
+        // 注入 1 次 kill 失败。
+        crate::rpc::aux_probe::fail_next_kills(1);
+        let err = process_kill(&_process, "reap").await.expect_err("注入失败");
+        // ① 不发 exit（假退出正是本轮缺陷）。
+        assert_eq!(sink.exits().len(), 0, "kill 未确认时不得发 pi://exit");
+        // ② 代际不变：旧 reader 的 response 仍能进 dispatch。
+        assert_eq!(
+            test_harness::generation_of(&state, "aux:exit").await,
+            generation_before,
+            "失败的 kill 不得作废代际"
+        );
+        // ③ pending 未被孤立（还在表里，response 回来时有接收端）。
+        assert_eq!(
+            test_harness::pending_count(&state, "aux:exit").await,
+            1,
+            "失败的 kill 不得清掉 pending"
+        );
+        assert!(process_running(&_process).await, "进程仍在跑");
+        assert!(err.contains("injected kill failure"), "{err}");
+
+        // 重试（注入已耗尽）：确认退出后才提交终止状态，且只发一次 exit。
+        crate::rpc::aux_probe::clear_kill_failures();
+        process_kill(&_process, "reap").await.expect("重试成功");
+        crate::rpc::aux_probe::clear_kill_failures();
+        let exits = sink.exits();
+        assert_eq!(exits.len(), 1, "重试成功后 pi://exit 必须恰好 1 次：{exits:?}");
+        assert_eq!(exits[0]["pixRunStatus"], "idle", "主动 kill 的退出记 idle");
+        assert!(
+            test_harness::generation_of(&state, "aux:exit").await > generation_before,
+            "确认退出后才递增代际"
+        );
+        assert_eq!(test_harness::pending_count(&state, "aux:exit").await, 0);
+        assert!(!process_running(&_process).await);
+    }
+
+    /// 连续两次成功 kill（第二层防御）：`pi://exit` 仍只发一次（幂等）。
+    #[tokio::test]
+    async fn a_repeated_kill_never_emits_a_second_exit() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:twice", RuntimePolicy::Aux).await;
+        process_kill(&process, "reap").await.expect("第一次");
+        assert_eq!(sink.exits().len(), 1);
+        // 内层会话已被摘掉；再杀一次只会幂等提交（`has_exited` 去重）。
+        process_kill(&process, "reap").await.expect("第二次");
+        assert_eq!(sink.exits().len(), 1, "不得重复发 exit");
+    }
+
+    /// **复审第四轮 P1-2 的回归**：OS 终止调用"返回成功但进程没死"时必须报失败
+    /// （不能像上一版那样因为 `inner == None` 就"确认退出"）。
+    #[tokio::test]
+    async fn an_unconfirmed_os_kill_is_reported_as_failure_and_keeps_the_session() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, _sink) =
+            test_harness::install_recording(&state, "aux:os", RuntimePolicy::Aux).await;
+        // seam：跳过真实 taskkill + 极短确认超时 → 走"确认超时"分支。
+        crate::rpc::aux_probe::simulate_unconfirmed_kill(50);
+        let err = process_kill(&process, "reap").await.expect_err("未确认退出必须失败");
+        assert!(
+            err.contains("not confirmed") || err.contains("budget exhausted"),
+            "{err}"
+        );
+        assert!(process_running(&process).await, "会话必须被放回（进程仍被追踪）");
+        assert_eq!(
+            test_harness::pending_count(&state, "aux:os").await,
+            0,
+            "本用例没有在途请求"
+        );
+        // 恢复真实终止路径后，下一次 kill 才能"确认退出"。
+        crate::rpc::aux_probe::clear_kill_failures();
+        process_kill(&process, "reap").await.expect("恢复后应成功");
+        crate::rpc::aux_probe::clear_kill_failures();
+        assert!(!process_running(&process).await);
+    }
+
+    /// **复审第五轮（非阻塞项 1）**：`inner == None` 的早退分支**不得**给"从未 spawn"
+    /// 的对象发 exit，也不得留下 `expected_stop = true`。
+    #[tokio::test]
+    async fn a_never_spawned_state_emits_no_exit_and_leaves_no_stop_intent() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let (_process, sink) =
+            test_harness::install_recording(&RpcState::default(), "aux:never", RuntimePolicy::Aux)
+                .await;
+        // 造一个"从未 spawn"的对象：没有 inner，活动表也没 mark_spawned。
+        let fresh = std::sync::Arc::new(ProcessState {
+            runtime_id: "aux:never".into(),
+            ..Default::default()
+        });
+        fresh
+            .activity
+            .lock()
+            .await
+            .reset(0, "aux:never", "project", None, std::sync::Arc::new(sink.clone()));
+        assert!(!fresh.has_spawned_once().await);
+        process_kill(&fresh, "reap").await.expect("从未启动的终止是 no-op");
+        assert_eq!(sink.exits().len(), 0, "从未 spawn 的对象不得发 exit");
+        assert!(
+            !fresh.activity.lock().await.expects_stop(),
+            "早退分支必须撤掉刚置上的意图位"
+        );
+    }
+
+    /// 终止意图位：主动 kill 期间的 EOF 记 `idle`，撤销意图后崩溃仍记 `error`。
+    #[tokio::test]
+    async fn the_stop_intent_decides_idle_versus_error() {
+        let _guard = lock();
+        // 先拿串行锁再清注入：否则可能清掉别的用例刚设的注入（复审第六轮整理项 3）。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:intent", RuntimePolicy::Aux).await;
+        // 有一轮进行中的 agent 运行，exit 的 payload 才会带 `pixRunStatus`。
+        test_harness::start_agent_run(&state, "aux:intent").await;
+        {
+            let mut activity = process.activity.lock().await;
+            activity.mark_expected_stop();
+            assert!(activity.expects_stop());
+            activity.clear_expected_stop();
+            assert!(!activity.expects_stop());
+        }
+        // 正常（非 kill）路径的 exit 是 error。
+        process_kill(&process, "reap").await.expect("kill");
+        crate::rpc::aux_probe::clear_kill_failures();
+        let exits = sink.exits();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(
+            exits[0]["pixRunStatus"], "idle",
+            "主动 kill 的结果必须是 idle（意图位在 kill 前置上）: {exits:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -930,6 +1913,10 @@ mod activity_dispatch_tests {
 
     #[tokio::test]
     async fn real_stdio_backpressure_keeps_stdout_draining_and_explicit_exit_stamped() {
+        // kill 的注入（budget / OS 延迟）是**进程级静态**：与它并行跑的用例会互相污染
+        // （表现为随机超时）。所有会走到 `process_kill` 的用例都取同一把锁。
+        crate::rpc::aux_probe::clear_kill_failures();
+        let _guard = crate::aux_leases::test_lock();
         let node = crate::ssh::transport::find_test_program("node")
             .expect("Node.js is required for the local RPC mock");
         let dir = tempfile::tempdir().unwrap();
@@ -1397,6 +2384,8 @@ mod mock_ssh_spawn_tests {
             generation: Arc::new(AtomicU64::new(0)),
             activity: Default::default(),
             policy: Default::default(),
+            parent_runtime: Default::default(),
+            user_activity: Default::default(),
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));
@@ -1533,6 +2522,8 @@ mod mock_ssh_spawn_tests {
                 generation: Arc::new(AtomicU64::new(0)),
                 activity: Default::default(),
                 policy: Default::default(),
+                parent_runtime: Default::default(),
+                user_activity: Default::default(),
             };
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(tx));

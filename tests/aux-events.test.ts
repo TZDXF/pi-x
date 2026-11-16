@@ -204,6 +204,30 @@ test("reattach never activates an aux runtime as the main conversation", async (
   expect(context.conversations.activateSession).not.toHaveBeenCalledWith("aux:orphan")
 })
 
+test("reauth only restores aux runtimes whose lease belongs to this client", async () => {
+  const sink = auxSink({})
+  // 重连归属过滤（规格 §5 第 4 条）：`aux_list` 说本机只持有 aux:mine；
+  // aux:other 是另一个窗口的实例（同父会话、别人 clientId），aux:gone 的父会话已不在本地。
+  const own = ["aux:mine"]
+  const withLeases = {
+    ...sink,
+    reconcileLeases: vi.fn(async () => own),
+    restoreRequests: vi.fn(),
+  }
+  const { runtime, context } = harness(withLeases)
+  context.api.listRunningSessions.mockResolvedValue([
+    { runtimeId: "aux:mine", project: "/project", state: { isStreaming: true }, pendingUiRequests: [{ id: "q" }] },
+    { runtimeId: "aux:other", project: "/project", state: { isStreaming: true }, pendingUiRequests: [{ id: "x" }] },
+  ])
+  await runtime.reattachRunningSessions(false)
+  expect(withLeases.reconcileLeases).toHaveBeenCalledOnce()
+  // 只恢复本机条目（含 pending UI）；别人的条目一律不动 —— 不改状态、不 kill、不恢复 UI。
+  expect(withLeases.restoreRequests).toHaveBeenCalledTimes(1)
+  expect(withLeases.restoreRequests).toHaveBeenCalledWith("aux:mine", [{ id: "q" }])
+  expect(context.api.killPi).not.toHaveBeenCalled()
+  runtime.dispose()
+})
+
 test("without a registered aux sink aux events are dropped, not misrouted", async () => {
   const { runtime, callbacks, owners, mainUi } = harness(null)
   await runtime.listen()

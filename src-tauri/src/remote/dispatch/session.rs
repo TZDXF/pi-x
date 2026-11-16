@@ -41,10 +41,33 @@ pub(super) async fn handle(
                     a["thinking"].as_str().map(str::to_owned),
                     serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
                     a["sshConnectionId"].as_str().map(str::to_owned),
+                    a["parentRuntimeId"].as_str().map(str::to_owned),
                 )
                 .await?;
                 Ok(Value::Null)
             }
+            // aux 的租约（§5）：写/删/列，只做这三件事。运行期执行仍在
+            // `commands::aux_leases` 里，远程与桌面共用同一实现与同一条认证。
+            "aux_claim" => Ok(to_json(
+                crate::commands::aux_claim(
+                    state.clone(),
+                    text(a, "runtimeId")?,
+                    text(a, "clientId")?,
+                    a["leaseToken"].as_str().map(str::to_owned),
+                )
+                .await?,
+            )?),
+            "aux_release" => {
+                // 只认 lease token（clientId 是标识不是凭证，见 aux_leases 模块文档）。
+                crate::commands::aux_release(
+                    state.clone(),
+                    text(a, "runtimeId")?,
+                    text(a, "leaseToken")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "aux_list" => crate::commands::aux_list(state.clone()).await,
             "rpc_running" => Ok(json!(rpc::running(&state, a["runtimeId"].as_str()).await)),
             "rpc_kill" => {
                 rpc::kill(&state, a["runtimeId"].as_str()).await?;

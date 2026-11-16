@@ -1,5 +1,9 @@
 mod app_update;
 mod atomic_write;
+mod aux_leases;
+#[cfg(test)]
+mod aux_lifecycle_scenarios;
+mod aux_reap;
 mod builtin_extensions;
 mod commands;
 mod data_dir;
@@ -73,6 +77,8 @@ pub fn run() {
             // 避免列表改为仅展示 PiX 会话后既有历史消失。
             sessions::adopt_known_sessions(commands::workspace_state::known_session_files());
             schedules::start(app.handle().clone())?;
+            // 辅助对话的孤儿回收（§5）：纯兜底，正常路径是关闭即 rpc_kill。
+            aux_reap::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
             let handle = app.handle().clone();
@@ -133,6 +139,9 @@ pub fn run() {
             commands::pi::trust_save,
             commands::pi::rpc_spawn,
             commands::pi_aux::aux_spawn,
+            commands::aux_leases::aux_claim,
+            commands::aux_leases::aux_release,
+            commands::aux_leases::aux_list,
             commands::pi::rpc_request,
             commands::pi::rpc_notify,
             commands::pi::rpc_kill,

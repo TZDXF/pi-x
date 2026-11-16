@@ -287,6 +287,50 @@ async fn remote_aux_argv_carries_no_session_through_the_payload_builder() {
     assert_eq!(payload.matches("--no-session").count(), 1);
 }
 
+/// `aux_*` 三条租约命令**只**是宿主命令：绝不进 JSONL 白名单。
+///
+/// 判据两条：① `AUX_ALLOWED` 里没有任何 `aux_` 条目（否则前端可以把租约命令
+/// 直接转发给 pi，绕过宿主校验）；② `{type:"aux_claim"}` 走真实 `request` 入口
+/// 被当未知 type 拒绝且 stdin 零写入（`aux_rejects_unknown_type_without_touching_stdin`）。
+#[test]
+fn aux_lease_commands_are_never_part_of_the_jsonl_whitelist() {
+    for command in ["aux_claim", "aux_release", "aux_list"] {
+        assert!(
+            !policy::AUX_ALLOWED.contains(&command),
+            "{command} 必须是宿主命令，不能进 JSONL 白名单"
+        );
+    }
+    // 白名单里也不该出现任何 `aux_` 前缀的条目（防止以后有人"顺手加一条"）。
+    assert!(
+        !policy::AUX_ALLOWED.iter().any(|item| item.starts_with("aux_")),
+        "JSONL 白名单不得包含 aux_ 前缀的条目"
+    );
+}
+
+/// Web 端 `aux_*` 租约命令的**路由**必须委托同一份宿主实现（与 `aux_spawn` 同理）。
+#[test]
+fn web_dispatch_routes_aux_lease_commands_to_the_host_commands() {
+    let source = include_str!("../remote/dispatch/session.rs");
+    for command in ["aux_claim", "aux_release", "aux_list"] {
+        assert!(
+            source.contains(&format!("\"{command}\" =>")),
+            "远程 dispatch 必须路由 {command}"
+        );
+    }
+    for target in [
+        "commands::aux_claim",
+        "commands::aux_release",
+        "commands::aux_list",
+    ] {
+        assert!(
+            source.contains(target),
+            "远程 dispatch 必须委托 {target}（不得另写一份租约逻辑）"
+        );
+    }
+    // 租约命令不得自己拼 JSONL（那会绕开宿主校验直接打到 pi）。
+    assert!(!source.contains("extension_ui_response"));
+}
+
 /// Web 端 `aux_spawn` 的**路由**必须委托同一个命令实现。
 ///
 /// 说明（诚实标注证据边界）：这里断言的是**静态路由**，不是运行期 dispatch 调用。
