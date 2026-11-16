@@ -4,6 +4,13 @@ import * as vue from "vue"
 import { compileScript, parse } from "vue/compiler-sfc"
 import ts from "typescript"
 
+/** 语言包按 vitest 的方式转译加载，避免依赖 vue-i18n 全局环境。 */
+async function loadLocale(locale: "zh-CN" | "en"): Promise<{ common?: { retry?: string } }> {
+  const source = readFileSync(`src/i18n/locales/${locale}.ts`, "utf8")
+  const output = ts.transpile(source, { module: ts.ModuleKind.ESNext })
+  return (await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`)).default
+}
+
 /**
  * 编辑项目里的信任标注只对未信任目录出现（TZD-115）：
  * 组件仍是行内小控件，不再渲染“项目信任”卡片，也不对已信任项目输出任何状态文案。
@@ -145,6 +152,16 @@ test("read failures stay retryable inline", () => {
     expect(text.join(" ")).toContain("common.retry")
   } finally {
     component.stop()
+  }
+})
+
+test("the retry action uses a defined common.retry label in both locales", async () => {
+  for (const [locale, expected] of [
+    ["zh-CN", "重试"],
+    ["en", "Retry"],
+  ] as const) {
+    const messages = await loadLocale(locale)
+    expect(messages.common?.retry, `${locale} common.retry`).toBe(expected)
   }
 })
 
