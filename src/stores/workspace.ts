@@ -5,6 +5,7 @@ import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
 import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
 import { requireSshConnectionId } from "@/lib/sshTrust"
 import { sessionIdentityKey } from "@/lib/sessionIdentity"
+import { announceSessionArchived } from "@/lib/sessionArchiveEvents"
 import type { PersistedSidebarTabs } from "@/lib/sidebarTabs"
 import {
   listSessions,
@@ -538,13 +539,24 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function update(row: SessionMeta, title: string | null, archived: boolean) {
     const mtime = await updateSession(row.file, title, archived)
     if (typeof mtime === "number") notifySessionMtimeSync(row.file, mtime)
+    // 归档成功（且此前未归档）时广播一次：正在显示该会话的面板据此收敛（TZD-121）。
+    // 派发点放在这里而不是各入口：侧栏行、右键菜单、看板卡片与「全部归档」都经过本方法。
+    let wasArchived = true
+    let folder = ""
+    let matched = false
     for (const [path, rows] of Object.entries(histories.value)) {
       const match = rows.find(s => s.file === row.file)
-      if (match) {
-        versions[path] = (versions[path] || 0) + 1
-        Object.assign(match, { title, archived })
-      }
+      if (!match) continue
+      // 同一文件可能出现在多个目录缓存里；只要有一份还没归档，这就是一次真正的转换。
+      matched = true
+      if (!match.archived) wasArchived = false
+      versions[path] = (versions[path] || 0) + 1
+      Object.assign(match, { title, archived })
+      if (!folder) folder = path
     }
+    // 还没加载历史（例如“全部归档”在别处枚举到的会话）时退回传入行自身的状态。
+    if (!matched) wasArchived = !!row.archived
+    if (archived && !wasArchived) announceSessionArchived({ file: row.file, project: folder || row.cwd })
   }
   /** Drop a deleted session from every cached history so the sidebar stays in sync. */
   function removeSession(file: string) {

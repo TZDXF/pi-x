@@ -7,6 +7,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
 import { useAppNavigation } from "@/composables/useAppNavigation"
 import { useSessionNotificationNavigation } from "@/composables/useSessionNotificationNavigation"
+import { useArchivedSessionPanel } from "@/composables/useArchivedSessionPanel"
 import { onSessionNotificationActivated } from "@/lib/notifications"
 import { useProjectActions } from "@/composables/useProjectActions"
 import { useSessionOpening, type TrustActivationBackup } from "@/composables/useSessionOpening"
@@ -340,6 +341,18 @@ const openSessionNotification = useSessionNotificationNavigation({
   navigation,
 })
 let unlistenNotifications: (() => void) | undefined
+
+// 归档成功后收敛正在显示该会话的面板（TZD-121）：清掉看板右侧会话面板的选中
+// 卡片并关闭面板，同时收起右侧面板；未归档会话的切换不受影响。
+useArchivedSessionPanel({
+  board,
+  activeSession: () => ({ file: session.sessionFile, cwd: session.cwd }),
+  closeBoardPanel: () => {
+    board.selection = null
+    board.detailsOpen = false
+  },
+  closeRightPanel: () => (rightSidebarOpen.value = false),
+})
 
 // ---- 会话分屏：状态跟随激活会话，树在非成员会话展示期间挂起保留 ----
 const splitLeaf = computed<PaneLeaf | null>(() => leafByRuntime(activeRuntimeId.value))
