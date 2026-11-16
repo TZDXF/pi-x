@@ -83,18 +83,38 @@ async function measure(page: import("@playwright/test").Page) {
     const pane = document.querySelector("#pane")!.getBoundingClientRect()
     const escaped: string[] = []
     const zeroWidthText: string[] = []
-    const spans: { label: string; width: number; scroll: number; client: number; text: string }[] = []
+    const spans: {
+      label: string
+      width: number
+      height: number
+      lineHeight: number
+      whiteSpace: string
+      textOverflow: string
+      lines: number
+      scroll: number
+      client: number
+      text: string
+    }[] = []
     for (const el of document.querySelector("#pane")!.querySelectorAll("*")) {
       const rect = el.getBoundingClientRect()
       if (el.closest("svg")) continue
       if (rect.right > pane.right + 0.5 || rect.left < pane.left - 0.5)
         escaped.push(`${el.tagName.toLowerCase()}.${el.getAttribute("class") ?? ""}`)
-      // 文本段（span）：必须有正宽度，否则"截断"变成了"消失"。
-      if (el.tagName === "SPAN" && (el.textContent ?? "").trim()) {
+      // chip 文本段（`data-chip-text`）：必须有正宽度，否则"截断"变成了"消失"。
+      // 只量 chip 内的段：气泡正文（`ComposerText`）本来就该换行，不属于"单行"范围。
+      if (el.tagName === "SPAN" && el.hasAttribute("data-chip-text") && (el.textContent ?? "").trim()) {
         const label = el.getAttribute("data-code-comment-lines") !== null ? "lines" : "text"
+        const style = getComputedStyle(el)
+        const lineHeight = Number.parseFloat(style.lineHeight)
         spans.push({
           label,
           width: rect.width,
+          height: rect.height,
+          lineHeight,
+          whiteSpace: style.whiteSpace,
+          textOverflow: style.textOverflow,
+          lines:
+            Number.parseFloat(style.webkitLineClamp) || Number.parseFloat(style.getPropertyValue("line-clamp")) || 1,
           scroll: el.scrollWidth,
           client: el.clientWidth,
           text: (el.textContent ?? "").trim(),
@@ -102,10 +122,21 @@ async function measure(page: import("@playwright/test").Page) {
         if (rect.width <= 0) zeroWidthText.push(`${label}:${(el.textContent ?? "").trim().slice(0, 20)}`)
       }
     }
+    // chip 容器里的文本段宽度：按 DOM 结构取（`[data-code-comment-tag]` 与划词卡片），
+    // 不依赖本轮新增的 `data-chip-text` 标记，便于跨版本对照。
+    const chipTextWidths: number[] = []
+    const chipContainers = [
+      ...document.querySelectorAll("[data-code-comment-tag]"),
+      ...document.querySelectorAll("#pane .rounded-md.border"),
+    ]
+    for (const chip of chipContainers)
+      for (const span of chip.querySelectorAll("span"))
+        if ((span.textContent ?? "").trim()) chipTextWidths.push(span.getBoundingClientRect().width)
     return {
       paneWidth: pane.width,
       escaped,
       zeroWidthText,
+      chipTextWidths,
       spans,
       lineLabels: [...document.querySelectorAll("[data-code-comment-lines]")].map(el => ({
         text: (el.textContent ?? "").trim(),
@@ -149,6 +180,28 @@ test("line numbers stay readable as their own suffix segment", async ({ page }) 
   }
 })
 
+test("chip text segments occupy exactly one line", async ({ page }) => {
+  // 用户要求：截图里批注文本显示成两行 → 改为只显示一行。单行 = 不换行 + 省略号 + 高度不超过一行。
+  for (const surface of ["bubble", "composer"]) {
+    for (const kind of ["token", "real"]) {
+      for (const pane of [380, 610]) {
+        await page.goto(`${harness.url}?w=${pane}&s=${surface}&k=${kind}`)
+        await page.waitForSelector(surface === "composer" ? "[data-slot=input-group]" : "[data-code-comment-tag]")
+        const m = await measure(page)
+        const textSpans = m.spans.filter(span => span.label === "text")
+        expect(textSpans.length, `${surface}/${kind}/${pane}: text segments exist`).toBeGreaterThan(0)
+        for (const span of textSpans) {
+          expect(span.lines, `${surface}/${kind}/${pane}: line clamp must stay 1: ${span.text.slice(0, 12)}`).toBe(1)
+          expect(span.whiteSpace, `${surface}/${kind}/${pane}: must not wrap: ${span.text.slice(0, 12)}`).toBe("nowrap")
+          expect(span.textOverflow, `${surface}/${kind}/${pane}: must ellipsize`).toBe("ellipsis")
+          // 单行高度上限：允许亚像素误差，但绝不接受两行（两行会是 ~2 * lineHeight）。
+          expect(span.height, `${surface}/${kind}/${pane}: single-line height`).toBeLessThan(span.lineHeight * 1.5)
+        }
+      }
+    }
+  }
+})
+
 test("overflow assertions hold without a parent-context block", async ({ page }) => {
   // 无父块 fixture：证明气泡收束不依赖父上下文块存在（dev 上的红灯曾由父块造成）。
   for (const surface of ["bubble", "composer"]) {
@@ -159,7 +212,14 @@ test("overflow assertions hold without a parent-context block", async ({ page })
       expect(m.escaped, `${surface} without parent block at ${pane}px escapes the pane`).toEqual([])
       expect(m.zeroWidthText, `${surface} without parent block at ${pane}px zero-width text`).toEqual([])
       // 文本段确实有可见宽度（引用/批注两段都在，不是被压成 0 的残骸）。
-      expect(m.spans.filter(span => span.width > 0).length).toBeGreaterThanOrEqual(2)
+      expect(
+        m.chipTextWidths.length,
+        `${surface} without parent block at ${pane}px: chip text spans`,
+      ).toBeGreaterThanOrEqual(2)
+      expect(
+        m.chipTextWidths.filter(width => width > 0).length,
+        `${surface} without parent block at ${pane}px: chip text widths`,
+      ).toBe(m.chipTextWidths.length)
     }
   }
 })

@@ -24,7 +24,11 @@ test("code comment chips never size to their content", () => {
     // 路径段不再 `shrink-0`（长路径会顶破卡片），而是可收缩 + 截断。
     expect(file, name).not.toMatch(/min-w-0 basis-0 grow-\[3\] truncate font-mono shrink-0/)
     expect(file, name).toMatch(/min-w-0 basis-0 grow-\[3\] truncate font-mono/)
-    expect(file, name).toMatch(/line-clamp-2 min-w-0 basis-0 grow-\[2\]/)
+    // 批注文本**单行**截断（用户要求：截图里显示成两行，改为只显示一行）。
+    expect(file, name).toMatch(/min-w-0 basis-0 grow-\[2\] truncate text-muted-foreground/)
+    // 反向护栏：不许再退回多行 clamp，也不许换行（换行会重新变成多行高度）。
+    expect(file, name).not.toMatch(/line-clamp-/)
+    expect(file, name).not.toMatch(/whitespace-pre-wrap|break-words|\[overflow-wrap:anywhere\]/)
     // 行号是**独立后缀段**：`shrink-0` 且不参与路径的 truncate（否则窄面板下行号被省略）。
     expect(file, name).toMatch(/shrink-0 font-mono" data-code-comment-lines/)
     // 行号不再拼进路径的截断 span 里（旧写法 `{{ c.path }}:{{ c.startLine }}`）。
@@ -39,11 +43,29 @@ test("code comment chips never size to their content", () => {
 test("selection chips keep their comment shrinkable inside the bubble", () => {
   const view = source("components/chat/ChatUserPrompt.vue")
   // 两段文本都在 chip 内：选中文本 + 批注，后者曾被固定宽度顶出气泡。
-  expect(view).toMatch(/class="line-clamp-2 min-w-0 basis-0 grow-\[3\]/)
-  expect(view).toMatch(/line-clamp-2 min-w-0 basis-0 grow-\[2\]/)
+  // 选中文本与它的批注都只占一行（`truncate`），不再 `line-clamp-2` 换行。
+  expect(view).toMatch(/class="min-w-0 basis-0 grow-\[3\] truncate" data-chip-text :title="s\.text"/)
+  expect(view).toMatch(/class="min-w-0 basis-0 grow-\[2\] truncate text-muted-foreground"/)
+  expect(view).not.toMatch(/line-clamp-/)
   // 行容器与正文容器都要能收缩（`min-w-0`），否则 chip 的 max-content 宽度仍会顶出去。
   expect(view).toMatch(/class="mt-1\.5 flex min-w-0 flex-wrap gap-1\.5"/)
   expect(view).toMatch(/<div class="min-w-0 text-sm">/)
+})
+
+test("every chip text segment is limited to a single line", () => {
+  const view = source("components/chat/ChatUserPrompt.vue")
+  const composer = source("components/chat/ChatComposer.vue")
+  for (const [file, name] of [
+    [view, "ChatUserPrompt"],
+    [composer, "ChatComposer"],
+  ] as const) {
+    // 单行的三个必备条件：不可收缩的 `min-w-0`（能分配宽度）、nowrap（不换行）、ellipsis（截断可读）。
+    // `truncate` 在 Tailwind 里就是 `overflow: hidden; text-overflow: ellipsis; white-space: nowrap`。
+    expect(file, name).not.toMatch(/line-clamp-2/)
+    expect(file, name).not.toMatch(/whitespace-pre-wrap/)
+    const chipText = file.match(/grow-\[[23]\] truncate(?: (?:font-mono|text-muted-foreground))?/g) ?? []
+    expect(chipText.length, name).toBeGreaterThanOrEqual(2)
+  }
 })
 
 test("bubble blocks never size themselves from the viewport", () => {

@@ -90,20 +90,17 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
         <div
           v-for="s in parsedPrompt.selections"
           :key="s.id"
-          class="flex max-w-full min-w-0 items-start gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
         >
           <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
           <!-- 两段都从 0 起按比例增长（`basis-0` + `grow`）：`flex-1`（basis 0）与
                `basis-auto` 混用时，后者的 max-content 会吃掉全部宽度、把前一段压成 0。
-               长文本在 chip 内换行到两行后截断（可读片段比单行截断多），全文由 `title` 给出。 -->
-          <span
-            class="line-clamp-2 min-w-0 basis-0 grow-[3] break-words whitespace-pre-wrap [overflow-wrap:anywhere]"
-            :title="s.text"
-            >{{ s.text }}</span
-          >
+               两段都只占**一行**（`truncate`：nowrap + ellipsis），全文由 `title` 给出。 -->
+          <span class="min-w-0 basis-0 grow-[3] truncate" data-chip-text :title="s.text">{{ s.text }}</span>
           <span
             v-if="s.comment"
-            class="line-clamp-2 min-w-0 basis-0 grow-[2] break-words whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+            class="min-w-0 basis-0 grow-[2] truncate text-muted-foreground"
+            data-chip-text
             :title="s.comment"
             >{{ s.comment }}</span
           >
@@ -116,7 +113,7 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
           :key="c.id"
           type="button"
           data-code-comment-tag
-          class="flex max-w-full min-w-0 items-start gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-ring"
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-ring"
           :title="[commentPathLabel(c), c.selectedText, c.comment].filter(Boolean).join('\n')"
           @click="emit('openCodeComment', c)"
         >
@@ -124,15 +121,16 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
           <!-- 路径不再 `shrink-0`：超长路径曾把 chip 顶出气泡，横向溢出后被裁切。
                行号**独立成后缀段**（`shrink-0`）：与路径共用一个 truncate span 时，长路径会把
                行号一起省略（380px 面板实测），而"这条批注在文件的哪几行"是必须可读的信息。
-               路径按 `basis-0 + grow` 分到剩余宽度并在 chip 内截断；`title` 给完整 `path:行号`
-               （chip 与路径段都用它），点击后的批注弹窗给出更完整的上下文。 -->
-          <span class="min-w-0 basis-0 grow-[3] truncate font-mono" :title="commentPathLabel(c)">{{ c.path }}</span>
+               路径与批注都只占**一行**（`truncate`）：路径按 `basis-0 + grow` 分到剩余宽度，
+               行号后缀固定不截断；`title` 给完整 `path:行号`（chip 与路径段都用它），
+               点击后的批注弹窗给出更完整的上下文。 -->
+          <span class="min-w-0 basis-0 grow-[3] truncate font-mono" data-chip-text :title="commentPathLabel(c)">{{
+            c.path
+          }}</span>
           <span class="shrink-0 font-mono" data-code-comment-lines>{{ commentLineLabel(c.startLine, c.endLine) }}</span>
-          <span
-            class="line-clamp-2 min-w-0 basis-0 grow-[2] break-words whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
-            :title="c.comment"
-            >{{ c.comment }}</span
-          >
+          <span class="min-w-0 basis-0 grow-[2] truncate text-muted-foreground" data-chip-text :title="c.comment">{{
+            c.comment
+          }}</span>
         </button>
       </div>
     </div>

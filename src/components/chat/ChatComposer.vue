@@ -120,20 +120,18 @@ const { codeComments, selections, onSendDelayWheel, onSubmit, abort } = props.co
               <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
               <!-- 路径与批注都**可收缩**：`shrink-0` 的长路径曾把 chip 顶出 composer
                    容器（宽度算成 max-content，然后被父级 overflow-hidden 裁切）。
-                   路径与批注从 0 起按比例增长（`basis-0` + `grow`）；行号是**独立后缀段**
-                   （`shrink-0`，不跟路径一起被截断），路径单行截断、批注两行截断；
+                   路径与批注从 0 起按比例增长（`basis-0` + `grow`）且各自只占**一行**
+                   （`truncate`）；行号是**独立后缀段**（`shrink-0`，不跟路径一起被截断）。
                    完整 path:行号 与批注全文由 `title` 给出。 -->
-              <span class="min-w-0 basis-0 grow-[3] truncate font-mono" :title="commentPathLabel(c)">{{
+              <span class="min-w-0 basis-0 grow-[3] truncate font-mono" data-chip-text :title="commentPathLabel(c)">{{
                 commentFile(c.path)
               }}</span>
               <span class="shrink-0 font-mono" data-code-comment-lines>{{
                 commentLineLabel(c.startLine, c.endLine)
               }}</span>
-              <span
-                class="line-clamp-2 min-w-0 basis-0 grow-[2] break-words whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
-                :title="c.comment"
-                >{{ c.comment }}</span
-              >
+              <span class="min-w-0 basis-0 grow-[2] truncate text-muted-foreground" data-chip-text :title="c.comment">{{
+                c.comment
+              }}</span>
               <Button
                 type="button"
                 variant="ghost"
