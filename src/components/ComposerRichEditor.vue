@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { usePromptInput } from "@/components/ai-elements/prompt-input/context"
 import { useSessionLabels } from "@/composables/useSessionLabels"
+import { revealEditorCaret } from "@/lib/composerCaret"
+import { desktopCommands } from "@/lib/completion"
 import {
   composerChipClass,
   composerChipText,
@@ -12,11 +14,20 @@ import {
   setEditorCaret,
 } from "@/lib/composerTokens"
 
-defineProps<{ placeholder: string; disabled?: boolean }>()
+const props = defineProps<{ placeholder: string; disabled?: boolean; commands?: readonly { name: string }[] }>()
 const { textInput, setTextInput, addFiles, files, removeFile } = usePromptInput()
 const sessionLabels = useSessionLabels()
+const commandNames = computed(
+  () => new Set([...desktopCommands, ...(props.commands ?? []).map(command => command.name)]),
+)
 const editor = ref<HTMLElement | null>(null)
 const composing = ref(false)
+
+function scheduleCaretReveal() {
+  nextTick(() => {
+    if (editor.value) revealEditorCaret(editor.value)
+  })
+}
 
 function appendText(root: HTMLElement, raw: string) {
   raw.split("\n").forEach((line, index) => {
@@ -29,7 +40,7 @@ function render(value: string, caret?: number) {
   const root = editor.value
   if (!root) return
   root.replaceChildren()
-  for (const part of composerParts(value, sessionLabels.value)) {
+  for (const part of composerParts(value, sessionLabels.value, commandNames.value)) {
     if (part.kind === "text") {
       appendText(root, part.raw)
       continue
@@ -51,12 +62,15 @@ function render(value: string, caret?: number) {
     caretBreak.dataset.editorCaret = ""
     root.append(caretBreak)
   }
-  if (caret !== undefined) setEditorCaret(root, caret)
+  if (caret !== undefined) {
+    setEditorCaret(root, caret)
+    scheduleCaretReveal()
+  }
 }
 
 function editorRequiresRender(root: HTMLElement, value: string): boolean {
   if (editorText(root) !== value) return true
-  const expected = composerParts(value, sessionLabels.value).filter(part => part.kind !== "text")
+  const expected = composerParts(value, sessionLabels.value, commandNames.value).filter(part => part.kind !== "text")
   const actual = Array.from(root.querySelectorAll<HTMLElement>("[data-raw]"))
   return expected.length !== actual.length || expected.some((part, index) => part.raw !== actual[index]?.dataset.raw)
 }
@@ -71,6 +85,11 @@ watch(sessionLabels, () => {
   render(textInput.value, document.activeElement === editor.value ? editorSelection(editor.value).start : undefined)
 })
 
+watch(commandNames, () => {
+  if (composing.value || !editor.value || !editorRequiresRender(editor.value, textInput.value)) return
+  render(textInput.value, document.activeElement === editor.value ? editorSelection(editor.value).start : undefined)
+})
+
 function onInput() {
   if (composing.value || !editor.value) return
   const value = editorText(editor.value)
@@ -78,18 +97,33 @@ function onInput() {
   setTextInput(value)
   // Native edits keep their undo history; only normalize when chips or DOM structure changed.
   if (editorRequiresRender(editor.value, value)) render(value, caret)
+  scheduleCaretReveal()
 }
 
 function insertAtSelection(value: string, lineBreak = false): boolean {
+  scheduleCaretReveal()
   if (lineBreak) return document.execCommand("insertLineBreak")
   if (!value) return true
+  value = value.replace(/\r\n?/g, "\n")
+  if (value.includes("\n")) {
+    // insertText creates block wrappers for pasted lines, but our model uses explicit BRs.
+    // Build HTML from text nodes to preserve literal markup and one native undo step.
+    const fragment = document.createElement("div")
+    appendText(fragment, value)
+    if (value.endsWith("\n")) {
+      const caretBreak = document.createElement("br")
+      caretBreak.dataset.editorCaret = ""
+      fragment.append(caretBreak)
+    }
+    return document.execCommand("insertHTML", false, fragment.innerHTML)
+  }
   return document.execCommand("insertText", false, value)
 }
 
 function deleteAtomicChip(key: "Backspace" | "Delete", caret: number): boolean {
   const root = editor.value
   if (!root) return false
-  const parts = composerParts(textInput.value, sessionLabels.value)
+  const parts = composerParts(textInput.value, sessionLabels.value, commandNames.value)
   const target = composerChipDeletion(textInput.value, parts, key, caret)
   if (!target) return false
   const updated = textInput.value.slice(0, target.start) + textInput.value.slice(target.end)
@@ -170,3 +204,22 @@ function onCompositionEnd() {
     @compositionend="onCompositionEnd"
   />
 </template>
+
+<style scoped>
+.composer-rich-editor {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.composer-rich-editor::-webkit-scrollbar {
+  width: 10px;
+}
+.composer-rich-editor::-webkit-scrollbar-track {
+  background: transparent;
+}
+.composer-rich-editor::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+</style>

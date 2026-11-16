@@ -39,29 +39,38 @@ const loaders = {
   rpc: () => import("@/api/client/rpc"),
   sessions: () => import("@/api/client/sessions"),
   skills: () => import("@/api/client/skills"),
+  storage: () => import("@/api/client/storage"),
+  ssh: () => import("@/api/client/ssh"),
   updates: () => import("@/api/client/updates"),
   workspace: () => import("@/api/client/workspace"),
 }
 
 // Freeze the pre-split public API, including erased TypeScript types.
-const originalExports = `PiInfo TrustStatus ModelRef AppConfig PiSettings getPiSettings savePiSettings
+const originalExports = `PiInfo TrustStatus ModelRef AppConfig PiSettings CacheWarmingMode getPiSettings savePiSettings
+AuxSpawnOptions spawnAuxPi auxClaim auxRelease auxList
 setTrayLabels toggleDevtools HostedSkill listHostedSkills openHostedSkillsDirectory deleteHostedSkill setHostedSkillsEnabled DiscoveredSkill
 listDiscoveredSkills skillListFiles skillReadFile detectPi PiUpdateStatus checkPiUpdate executePiUpdate
 UpdateChannel AppUpdateStatus APP_UPDATE_PROGRESS_EVENT checkAppUpdate getAppVersion installAppUpdate restartApp getConfig
-saveConfig ProjectlessDirInfo resolveProjectlessDir chooseDirectoryPath GlobalPromptFile listGlobalPrompts saveGlobalPrompt
+saveConfig saveConfigPreference onAppConfigChanged ProjectlessDirInfo resolveProjectlessDir chooseDirectoryPath GlobalPromptFile listGlobalPrompts saveGlobalPrompt
 trustStatus trustSave WorkspaceContext spawnPi killPi piRunning pixLog
-SessionMeta listSessions sessionMtime sessionHistory SessionLastError sessionLastError duplicateSessionFile
+SessionMeta SessionSearchHit listSessions searchSessions listUnarchivedSessions sessionMtime sessionHistory SessionLastError sessionLastError duplicateSessionFile
+StorageCategoryId StorageCategory StorageSummary StorageCleanupResult getStorageSummary cleanupStorage
 onSessionsChanged FileHit searchFiles openPath openTerminalInDir exportSessionHtml exportSessionFileHtml
 rpcRequest RpcImage rpcSteer rpcFollowUp rpcNotify onPiEvent onPiExit
-onPiStderr onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet PreviewProxyInfo
+onPiStderr onSshPathBound onReconnected RemoteStatus remoteStatus remoteSet remotePasswordSet PreviewProxyInfo
 previewProxyInfo ModelCostRates ModelFallbackModel ModelCompat ModelImageResize ModelImageInputLimits ModelInputLimits
 ModelPromptCache ModelEntry ProviderEntry ModelsConfig getModelsConfig saveModelsConfig FetchedModel
-fetchProviderModels updateSession listArchivedSessions deleteSession GitWorktree WorkspaceSelection prepareWorkspaceGit
-WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle CatalogPackage InstalledPackage CatalogPage
+fetchProviderModels updateSession listArchivedSessions deleteSession adoptSession GitWorktree WorkspaceSelection prepareWorkspaceGit
+getWorkspaceState updateWorkspaceState onWorkspaceStateChanged WorkspaceGitInfo workspaceGitInfo createWorkspaceGit generateSessionTitle GeneratedSessionTitle CatalogPackage InstalledPackage CatalogPage
 packageCatalog packageList packageInstall packageRemove packageUpdate PackageResource packageResources
 packageListFiles packageReadFile packageTranslate packageSetResource packageNameOf RunningSession listRunningSessions
 McpScope McpConfigFile getMcpConfig saveMcpConfig McpToolDef McpServerStatus McpStatusResult
-getMcpStatus McpCheckResult checkMcpServer`
+getMcpStatus McpCheckResult checkMcpServer
+SshProbeInfo SshConnection SshConnectionInput SshErrorKind SshProbeResult
+sshConnectionList sshConnectionSave sshConnectionDelete sshConnectionProbe sshProbeTarget sshSessions sshSessionSearch
+sshTrustStatus sshTrustSave sshDeployPi sshDeployStatus DeployResult DeployStatus
+WslDistroInfo WslDistroListResult wslDistroList
+DockerContainerInfo DockerContainerListResult dockerContainerList`
   .split(/\s+/)
   .sort()
 
@@ -157,6 +166,16 @@ test("runtime defaults are evaluated at call time and explicit runtime ids still
     sessionFile: "saved.jsonl",
     runtimeId: "explicit",
     workspace: { name: "work", primary: "/project", roots: ["/project"] },
+    sshConnectionId: null,
+  })
+  // SSH 远程项目经同一命令分流，携带选定的连接 id（契约 §3.1）。
+  await api.spawnPi("ssh://dev@host:2222/home/dev", undefined, "explicit", undefined, "ssh-1")
+  expect(mocks.invoke).toHaveBeenLastCalledWith("rpc_spawn", {
+    project: "ssh://dev@host:2222/home/dev",
+    sessionFile: null,
+    runtimeId: "explicit",
+    workspace: null,
+    sshConnectionId: "ssh-1",
   })
   await api.rpcRequest({ type: "get_state" }, "explicit")
   expect(mocks.invoke).toHaveBeenLastCalledWith("rpc_request", {
@@ -260,4 +279,42 @@ test("RPC and session listeners forward payloads, including subagent events, unc
   expect(reconnect).toHaveBeenCalledOnce()
   unsubscribe()
   expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+})
+
+test("SSH probe forwards in-memory credentials without trimming", async () => {
+  const { sshProbeTarget, sshConnectionSave } = await loaders.ssh()
+  const target = {
+    host: "host.test",
+    authMethod: "password" as const,
+    password: " secret & % ",
+    keyPassphrase: " passphrase ",
+  }
+  await sshProbeTarget(target)
+  expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_probe_target", {
+    ...target,
+    port: null,
+    user: null,
+    keyPath: null,
+  })
+  await sshConnectionSave({ ...target, name: "test" })
+  expect(mocks.invoke).toHaveBeenLastCalledWith("ssh_connection_save", { connection: { ...target, name: "test" } })
+})
+
+test("workspace metadata uses shared commands and forwards full change events", async () => {
+  const api = await import("@/api/client/workspace")
+  const patch = { projects: { add: ["project"], remove: [] } }
+  await api.getWorkspaceState()
+  await api.updateWorkspaceState(patch)
+  expect(mocks.invoke.mock.calls).toEqual([["workspace_state_get"], ["workspace_state_update", { patch }]])
+  const handler = vi.fn()
+  await api.onWorkspaceStateChanged(handler)
+  const state = { revision: 1, projects: ["project"] }
+  mocks.listeners.get("pi://workspace-state-changed")!({ payload: state })
+  expect(handler).toHaveBeenCalledWith(state)
+  const lib = readFileSync(resolve("src-tauri/src/lib.rs"), "utf8")
+  const dispatch = readFileSync(resolve("src-tauri/src/remote/dispatch/workspace.rs"), "utf8")
+  for (const command of ["workspace_state_get", "workspace_state_update"]) {
+    expect(lib).toContain(`commands::workspace_state::${command}`)
+    expect(dispatch).toContain(`"${command}" =>`)
+  }
 })

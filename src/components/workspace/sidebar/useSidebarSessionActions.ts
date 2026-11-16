@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from "vue"
+import { ref } from "vue"
 import type { SessionMeta } from "@/api/piClient"
 
 interface SidebarSessionActions {
@@ -8,33 +8,27 @@ interface SidebarSessionActions {
   resume: (session: SessionMeta) => void
   update: (session: SessionMeta, title: string | null, archived: boolean) => Promise<unknown>
   onError: (error: unknown) => void
+  onArchived?: (restore: () => Promise<unknown>) => void
 }
 
-/** One click timer across all groups, and optimistic archive state shared by both lists. */
+/** Immediate navigation and optimistic archive state shared by both lists. */
 export function useSidebarSessionActions(options: SidebarSessionActions) {
   const renaming = ref<SessionMeta | null>(null)
   const title = ref("")
   const saving = ref(false)
   const archiving = ref<Record<string, boolean>>({})
-  let openTimer: ReturnType<typeof setTimeout> | undefined
 
   function rename(session: SessionMeta) {
     renaming.value = session
     title.value = options.label(session)
   }
   function openSession(session: SessionMeta) {
-    clearTimeout(openTimer)
-    openTimer = setTimeout(() => {
-      options.resume(session)
-      openTimer = undefined
-    }, 250)
+    if (!options.navigationDisabled()) options.resume(session)
   }
   function renameOnDoubleClick(session: SessionMeta) {
-    clearTimeout(openTimer)
-    openTimer = undefined
+    // Opening on the first click must not wait for the double-click window.
     if (!options.navigationDisabled()) rename(session)
   }
-  onBeforeUnmount(() => clearTimeout(openTimer))
 
   async function saveTitle() {
     if (!renaming.value || !title.value.trim() || saving.value) return
@@ -52,8 +46,10 @@ export function useSidebarSessionActions(options: SidebarSessionActions) {
     if (options.disabled() || archiving.value[session.file]) return
     // Hide immediately; clearing the marker on failure restores the row without reordering it.
     archiving.value[session.file] = true
+    const archived = !session.archived
     try {
-      await options.update(session, session.title || null, !session.archived)
+      await options.update(session, session.title || null, archived)
+      if (archived) options.onArchived?.(() => options.update(session, session.title || null, false))
     } catch (error) {
       options.onError(error)
     } finally {

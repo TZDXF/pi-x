@@ -10,6 +10,8 @@ import {
   CircleArrowUp,
   Code,
   Folder,
+  Columns3,
+  MessageSquare,
   PanelLeft,
   PanelRight,
   Settings,
@@ -25,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { isDesktop } from "@/api/transport"
 import { openPath, openTerminalInDir } from "@/api/piClient"
+import { isRemoteProject } from "@/lib/ssh"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
 import {
   detectEditors,
@@ -38,15 +41,18 @@ import {
 } from "@/lib/openWith"
 import { useUiStore } from "@/stores/conversations"
 import { useAppUpdateStore } from "@/stores/appUpdate"
+import type { WorkspaceLayout } from "@/composables/useWorkspaceLayout"
 
 const props = defineProps<{
+  showSidebar?: boolean
   sidebarOpen?: boolean
   rightSidebarOpen?: boolean
   showRightSidebar?: boolean
   showOpenInEditor?: boolean
   openInEditorProject?: string
+  workspaceLayout?: WorkspaceLayout
 }>()
-const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: [] }>()
+const emit = defineEmits<{ toggleSidebar: []; toggleRightSidebar: []; changeLayout: [layout: WorkspaceLayout] }>()
 
 const { t } = useI18n()
 const route = useRoute()
@@ -112,7 +118,11 @@ const editorsDetected = ref(false)
 const editorIcons = ref<EditorIconMap>({})
 const openingProject = ref(false)
 
-const openInEditorVisible = computed(() => isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject)
+// 远程项目无法在本地编辑器/终端中打开（契约 §5），整块入口隐藏。
+const openInEditorVisible = computed(
+  () =>
+    isDesktop && !!props.showOpenInEditor && !!props.openInEditorProject && !isRemoteProject(props.openInEditorProject),
+)
 
 const editorLabelOf = (kind: EditorKind) =>
   kind === "system" || kind === "custom"
@@ -152,8 +162,13 @@ const openWithKind = (kind: EditorKind, project: string) =>
   kind === "system" ? openPath(project) : openProjectInEditor(project, kind)
 const openWithDefault = () => runProjectAction(project => openWithKind(defaultKind.value, project))
 // 下拉选择即设为默认，设置页的“默认打开方式”随之变更
-const chooseOpenWith = (kind: EditorKind) => {
-  setOpenWith(kind)
+const chooseOpenWith = async (kind: EditorKind) => {
+  try {
+    await setOpenWith(kind)
+  } catch (cause) {
+    ui.pushToast(String(cause), "error")
+    return
+  }
   return runProjectAction(project => openWithKind(kind, project))
 }
 const openInTerminal = () => runProjectAction(project => openTerminalInDir(project))
@@ -170,6 +185,7 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
   >
     <div class="flex h-full items-center">
       <button
+        v-if="props.showSidebar !== false"
         type="button"
         class="titlebar-control"
         :disabled="route.name === 'settings'"
@@ -219,6 +235,19 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
       >
         <CircleArrowUp :size="16" />
       </button>
+      <button
+        v-if="workspaceLayout"
+        type="button"
+        class="titlebar-control"
+        :disabled="route.name === 'settings' || route.name === 'schedules'"
+        :title="workspaceLayout === 'board' ? t('kanban.layoutChat') : t('kanban.layoutBoard')"
+        :aria-label="workspaceLayout === 'board' ? t('kanban.layoutChat') : t('kanban.layoutBoard')"
+        :aria-pressed="workspaceLayout === 'board'"
+        @click="emit('changeLayout', workspaceLayout === 'board' ? 'chat' : 'board')"
+      >
+        <MessageSquare v-if="workspaceLayout === 'board'" :size="16" />
+        <Columns3 v-else :size="16" />
+      </button>
       <Badge
         v-if="isDevelopment"
         variant="destructive"
@@ -227,7 +256,8 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
         {{ t("app.development") }}
       </Badge>
     </div>
-    <div data-tauri-drag-region class="h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
+    <!-- Modal layers disable body pointer events; keep native window dragging available. -->
+    <div data-tauri-drag-region class="pointer-events-auto h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
     <div v-if="openInEditorVisible" class="flex h-full items-center">
       <button
         type="button"

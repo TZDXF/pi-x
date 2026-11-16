@@ -2,7 +2,9 @@ import { computed, ref, shallowRef, type Ref } from "vue"
 import { sessionHistory, sessionLastError, type SessionLastError, type rpcRequest } from "@/api/piClient"
 import { buildTimelineTurns, type TimelineTurn } from "@/lib/conversationTimeline"
 import { annotateCompactionEstimates } from "@/lib/contextBreakdown"
-import { contentText } from "@/lib/content"
+import { contentImages, contentText } from "@/lib/content"
+import { withoutAuxParentContext } from "@/lib/auxParentContext"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import { blocksFromMessage, errorBlock } from "./events"
 import type { Block, Entry, ToolRun } from "./types"
 
@@ -60,9 +62,46 @@ export function createSessionHistory(context: HistoryContext) {
     olderHistoryLoading.value = false
   }
 
+  function sameEntry(left: Entry, right: Entry): boolean {
+    if (left.kind !== right.kind) return false
+    if (left.timestamp !== undefined && right.timestamp !== undefined && left.timestamp !== right.timestamp)
+      return false
+    if (left.kind === "user" && right.kind === "user")
+      return left.text === right.text && JSON.stringify(left.images ?? []) === JSON.stringify(right.images ?? [])
+    if (left.kind === "assistant" && right.kind === "assistant")
+      return left.failed === right.failed && JSON.stringify(left.blocks) === JSON.stringify(right.blocks)
+    if (left.kind === "compaction" && right.kind === "compaction") return left.summary === right.summary
+    if (left.kind === "context_edit" && right.kind === "context_edit")
+      return left.targetId === right.targetId && left.replaced === right.replaced
+    if (left.kind === "model_change" && right.kind === "model_change")
+      return left.provider === right.provider && left.modelId === right.modelId
+    return false
+  }
+
+  /** A snapshot may already contain some events received while it was loading. */
+  function mergeLiveTail(page: Entry[], liveTail: Entry[]): Entry[] {
+    let overlap = Math.min(page.length, liveTail.length)
+    while (overlap > 0) {
+      let matches = true
+      for (let index = 0; index < overlap; index++) {
+        if (!sameEntry(page[page.length - overlap + index]!, liveTail[index]!)) {
+          matches = false
+          break
+        }
+      }
+      if (matches) break
+      overlap--
+    }
+    return [...page, ...liveTail.slice(overlap)]
+  }
+
   /** Materialize only one page, yielding during large tool-heavy histories. */
-  async function loadOlderHistory() {
-    if (olderHistoryLoading.value || !historyCursor.value) return
+  async function materializeHistoryPage(
+    replace = false,
+    preserveStream = false,
+    replacedEntryIds?: ReadonlySet<number>,
+  ) {
+    if (olderHistoryLoading.value || (!replace && !historyCursor.value)) return
     const version = historyVersion
     const source = historyMessages.value
     const end = historyCursor.value
@@ -117,8 +156,28 @@ export function createSessionHistory(context: HistoryContext) {
                 .filter((c: any) => c.type === "image" && c.data && c.mimeType)
                 .map((c: any) => ({ url: `data:${c.mimeType};base64,${c.data}` }))
             : []
-          if (text.trim() || images.length)
-            page.push({ kind: "user", id: nextId(), text, images, timestamp: msg.timestamp })
+          // 落盘的是**完整 prompt**：aux 的 `<aux_parent_context>` 前置块要从可见正文里
+          // 拆出去（气泡默认收起地展开回看）。这里走**同一个**解析器
+          // （`parseComposerPromptContexts`），与首发/气泡/摘要的分拆规则因此不会漂。
+          // 无块时 `text` 保持原样：主会话的 userselect / Code comments 尾块仍由气泡渲染
+          // chips（行为不变）。
+          const parsed = parseComposerPromptContexts(text)
+          const visible = parsed.parentContext === null ? text : withoutAuxParentContext(text)
+          if (visible.trim() || images.length)
+            page.push({
+              kind: "user",
+              id: nextId(),
+              text: visible,
+              images,
+              timestamp: msg.timestamp,
+              ...(parsed.parentContext === null
+                ? {}
+                : {
+                    contextText: text,
+                    parentContext: parsed.parentContext,
+                    parentContextBlock: parsed.parentContextBlock,
+                  }),
+            })
         } else if (msg.role === "assistant") {
           const blocks = blocksFromMessage(msg)
           if (msg.stopReason === "error" && msg.errorMessage) {
@@ -142,6 +201,9 @@ export function createSessionHistory(context: HistoryContext) {
               blocks,
               failed: msg.stopReason === "error",
               timestamp: msg.timestamp,
+              model: msg.model,
+              responseModel: msg.responseModel,
+              usage: msg.usage,
             })
         } else if (msg.role === "compactionSummary" && typeof msg.summary === "string")
           page.push({
@@ -160,20 +222,41 @@ export function createSessionHistory(context: HistoryContext) {
               name: "tool",
               argsText: "",
               outputText: contentText(msg.content),
+              outputImages: contentImages(msg.content),
               state: msg.isError ? "output-error" : "output-available",
+              durationMs:
+                typeof msg.durationMs === "number" && Number.isFinite(msg.durationMs) && msg.durationMs >= 0
+                  ? msg.durationMs
+                  : undefined,
             }
         }
         if ((i - start + 1) % 20 === 0) await yieldHistory()
       }
       if (version !== historyVersion) return
-      // Keep newer/live results authoritative when prepending an older page.
-      runs.value = { ...pageRuns, ...runs.value }
-      entries.value = [...page, ...entries.value]
+      // Refreshes keep the old transcript mounted across every async yield.
+      // Publish the prepared first page together; ordinary paging still prepends.
+      const keepStream = preserveStream && isStreaming.value
+      const liveTail = replacedEntryIds ? entries.value.filter(entry => !replacedEntryIds.has(entry.id)) : []
+      runs.value = replace && !keepStream && !liveTail.length ? pageRuns : { ...pageRuns, ...runs.value }
+      entries.value = replace ? mergeLiveTail(page, liveTail) : [...page, ...entries.value]
+      // Attaching to a running worker supplements committed history only.
+      // Its in-flight message is absent from the session file and must survive
+      // every asynchronous history yield, including deltas received meanwhile.
+      if (replace && !keepStream) {
+        partialBlocks.value = null
+        streamingTurnId.value = null
+      }
       historyCursor.value = start
       if (!start) historyMessages.value = []
     } finally {
       if (version === historyVersion) olderHistoryLoading.value = false
     }
+  }
+
+  async function loadOlderHistory() {
+    // Do not prepend a page from the incoming snapshot to the old transcript.
+    if (historyLoading.value) return
+    await materializeHistoryPage()
   }
 
   /** Append the file-recorded stop reason after the loaded conversation. */
@@ -232,17 +315,20 @@ export function createSessionHistory(context: HistoryContext) {
   async function loadMessages(msgs: any[]) {
     invalidateConversation()
     invalidateHistory()
-    entries.value = []
-    runs.value = {}
-    partialBlocks.value = null
-    streamingTurnId.value = null
+    historyLoading.value = true
+    const version = historyVersion
     historyMessages.value = msgs
     historyCursor.value = msgs.length
-    await loadOlderHistory()
+    try {
+      await materializeHistoryPage(true)
+    } finally {
+      if (version === historyVersion) historyLoading.value = false
+    }
   }
 
   /** Fetch asynchronously; stale responses must never replace another session. */
   async function loadHistory() {
+    const replacedEntryIds = new Set(entries.value.map(entry => entry.id))
     invalidateHistory()
     const version = historyVersion
     historyLoading.value = true
@@ -269,16 +355,14 @@ export function createSessionHistory(context: HistoryContext) {
       void refreshFileRewindState(file)
       // History markers only know tokensBefore; estimate the after size.
       annotateCompactionEstimates(msgs)
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
       historyMessages.value = msgs
       historyCursor.value = msgs.length
       // Fetch before paging: loadOlderHistory releases historyMessages once the
       // oldest page is reached, and the final-turn check needs the full list.
       await fetchLastSessionError(version)
-      await loadOlderHistory()
+      if (version !== historyVersion) return
+      await materializeHistoryPage(true, true, replacedEntryIds)
+      if (version !== historyVersion) return
       placePendingHistoryError()
       void syncSessionFile()
     } finally {

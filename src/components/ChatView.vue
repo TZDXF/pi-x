@@ -13,7 +13,10 @@ import ChatTurnList from "@/components/chat/ChatTurnList.vue"
 import { useChatSendControl } from "@/composables/useChatSendControl"
 import { useChatTurnList, blocksText } from "@/composables/useChatTurnList"
 import { useChatContextBreakdown } from "@/composables/useChatContextBreakdown"
+import { useVisibleSnapshot } from "@/composables/useVisibleSnapshot"
 import { useComposerDraftSync } from "@/composables/useComposerDraftSync"
+import { useSessionReadReceipt } from "@/composables/useSessionReadReceipt"
+import { useBoardComposerDraft } from "@/composables/useBoardComposerDraft"
 import { useConversationModel } from "@/composables/useConversationModel"
 import {
   Context,
@@ -33,9 +36,10 @@ import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
+import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
 import { PanelRight, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import RightSidebar, { type SidebarTabItem, type SidebarTabType } from "@/components/RightSidebar.vue"
+import RightSidebar from "@/components/RightSidebar.vue"
 
 const localSidebarOpen = ref(false)
 const sidebarOpen = computed({
@@ -48,26 +52,6 @@ const sidebarOpen = computed({
 const sidebarVisible = computed(
   () => sidebarOpen.value && (!props.sidebarTarget || activeRuntimeId.value === runtimeId),
 )
-const sidebarTabs = ref<SidebarTabItem[]>([])
-const activeTabId = ref<number | null>(null)
-let nextTabId = 1
-const reviewFocus = ref<string | null>(null)
-function addSidebarTab(type: SidebarTabType) {
-  const id = nextTabId++
-  sidebarTabs.value.push({ id, type })
-  activeTabId.value = id
-  sidebarOpen.value = true
-}
-function closeSidebarTab(id: number) {
-  const index = sidebarTabs.value.findIndex(tab => tab.id === id)
-  if (index < 0) return
-  sidebarTabs.value.splice(index, 1)
-  if (activeTabId.value === id)
-    activeTabId.value = sidebarTabs.value[Math.min(index, sidebarTabs.value.length - 1)]?.id ?? null
-}
-function reorderSidebarTab(tabs: SidebarTabItem[]) {
-  sidebarTabs.value = tabs
-}
 function openReviewAt(path: string) {
   reviewFocus.value = path
   const existing = sidebarTabs.value.find(tab => tab.type === "review")
@@ -89,6 +73,7 @@ const props = defineProps<{
   /** 所属会话 id；缺省跟随当前激活会话，分屏时由父层传入各窗格的会话。 */
   sessionId?: string
   splitPane?: boolean
+  hideHeader?: boolean
   /** Render the session's tools outside the split tree, in the workspace shell. */
   sidebarTarget?: string
   rightSidebarOpen?: boolean
@@ -96,12 +81,19 @@ const props = defineProps<{
   connecting: boolean
   selectingProject?: boolean
   connected: boolean
+  /** Board cards stay completed until their details view is closed. */
+  deferReadReceipt?: boolean
 }>()
 
 // 组件按会话 id 定向绑定（单屏由 App 以 :key 重挂载切换），分屏时每个窗格各自持有 id。
 const runtimeId = props.sessionId ?? activeRuntimeId.value
 const session = sessionFor(runtimeId)
 const ui = uiFor(runtimeId)
+const sidebarChanges = useVisibleSnapshot(
+  () => sidebarVisible.value && sidebarTabs.value.some(tab => tab.id === activeTabId.value && tab.type === "review"),
+  () => session.fileChanges,
+  [],
+)
 const rpcRequest: typeof requestForRuntime = command => requestForRuntime(command, runtimeId)
 const emit = defineEmits<{
   "update:rightSidebarOpen": [open: boolean]
@@ -109,16 +101,32 @@ const emit = defineEmits<{
   selectProject: [path: string]
   openProject: []
   newSession: []
+  resumeSession: [file: string, project: string]
   splitDrop: [payload: SessionDragPayload, zone: Exclude<SplitDropZone, "center">]
 }>()
 const workspace = useWorkspaceStore()
-const workspaceSelection = ref<WorkspaceSelection | null>(null)
+// 右侧侧栏（TZD-95 槽位 + TZD-101 aux 实例）：接线全在 composable，本组件只用返回值。
+const sidebar = useChatViewSidebar({
+  runtimeId,
+  session,
+  ui,
+  project: () => session.cwd || props.project,
+  onFirstTabAdded: () => (sidebarOpen.value = true),
+  onLastTabClosed: () => (sidebarOpen.value = false),
+})
+const { tabs: sidebarTabs, activeId: activeTabId, parent: auxParent, addTab, closeTab, addSidebarTab } = sidebar
+const reviewFocus = ref<string | null>(null)
+
+const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
+const workspaceSelection = ref<WorkspaceSelection | null>(boardDraft?.selection ? { ...boardDraft.selection } : null)
 const currentTitle = computed(
   () => workspace.histories[props.project]?.find(s => s.file === session.sessionFile)?.title,
 )
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
-const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge)
+const draftOptions = useBoardComposerDraft(session, workspace, bridge, workspaceSelection)
+const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge, draftOptions)
+defineExpose({ submitDraft: () => bridge.value?.submitForm() })
 // Dragging a session row onto the view appends an @session reference to the composer.
 const knownSessions = computed(() => Object.values(workspace.histories).flat())
 const rootEl = ref<HTMLElement | null>(null)
@@ -156,6 +164,15 @@ const bottomNotch = computed(() => {
 })
 
 const conversation = ref<InstanceType<typeof ChatTurnList> | null>(null)
+useSessionReadReceipt({
+  session,
+  project: () => session.cwd || props.project,
+  viewport: () => conversation.value?.historyViewport(),
+  enabled: () => !props.connecting && !props.selectingProject,
+  deferAcknowledgement: props.deferReadReceipt,
+  loaded: () => !session.historyLoading && !props.connecting,
+  result: () => session.entries[session.entries.length - 1],
+})
 /** 发送/重发后回对话底部：向上翻阅会解除吸底跟随，发送即阅读意图，需强制回底。 */
 function jumpToConversationBottom() {
   void nextTick().then(() => conversation.value?.scrollToBottom())
@@ -170,7 +187,9 @@ const { renderedEntries, navigateToQuestion, onHistoryScroll, lastAssistantTurn,
 const previewImage = ref<string | null>(null)
 
 // ---- fork (restart from a previous prompt) ----
-const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest)
+const { forkOpen, forkMessages, forkFromAnswer, doFork } = useSessionFork(session, ui, rpcRequest, (file, project) =>
+  emit("resumeSession", file, project),
+)
 
 // Resend the edited question in this session, interrupting the current answer first.
 const editTextarea = ref<PromptEditTextarea | null>(null)
@@ -246,11 +265,13 @@ const offShortcutHandlers = [
     if (delayedSendEnabled.value) delayedSend.value = !delayedSend.value
   }),
   registerShortcutHandler("sidebar.review", () => addSidebarTab("review")),
-  registerShortcutHandler("sidebar.files", () => addSidebarTab("files")),
+  registerShortcutHandler("sidebar.files", () => {
+    addSidebarTab("files")
+  }),
   registerShortcutHandler("sidebar.terminal", () => addSidebarTab("terminal")),
   registerShortcutHandler("sidebar.browser", () => addSidebarTab("browser")),
   registerShortcutHandler("sidebar.closeTab", () => {
-    if (activeTabId.value !== null) closeSidebarTab(activeTabId.value)
+    if (activeTabId.value !== null) void closeTab(activeTabId.value)
   }),
   registerShortcutHandler("sidebar.nextTab", () => cycleSidebarTab(1)),
   registerShortcutHandler("sidebar.prevTab", () => cycleSidebarTab(-1)),
@@ -321,6 +342,7 @@ onBeforeUnmount(() => {
     </div>
     <div class="chat-workspace min-w-0 flex flex-1 flex-col min-h-0 h-full">
       <header
+        v-if="!hideHeader"
         class="workspace-header flex items-center justify-between gap-4 min-h-12 py-1.5 pl-[var(--workspace-header-left,20px)] pr-5 shrink-0 border-b border-border transition-[padding-left] duration-200 ease-out max-[900px]:flex-wrap max-[900px]:gap-1.5"
       >
         <div class="min-w-0">
@@ -374,6 +396,7 @@ onBeforeUnmount(() => {
         @edit-textarea="editTextarea = $event"
         @open-review="openReviewAt"
         @fork="forkFromAnswer"
+        @aux-ask="sidebar.askAux"
       />
 
       <!-- extension widget -->
@@ -447,16 +470,19 @@ onBeforeUnmount(() => {
     </div>
     <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget" defer>
       <RightSidebar
+        :aux-parent="auxParent"
         :open="sidebarVisible"
         :tabs="sidebarTabs"
         :active-id="activeTabId"
-        :changes="session.fileChanges"
+        :changes="sidebarChanges"
         :project="session.cwd || project"
         :focus="reviewFocus"
         @update:active-id="activeTabId = $event"
-        @add-tab="addSidebarTab"
-        @close-tab="closeSidebarTab"
-        @reorder-tabs="reorderSidebarTab"
+        @add-tab="addTab"
+        @close-tab="closeTab"
+        @reorder-tabs="sidebar.reorder"
+        @restart-terminal="sidebar.restartTerminal"
+        @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

@@ -1,19 +1,15 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
-import { Archive, Copy, FileDown, Layers, Link, Pencil } from "@lucide/vue"
+import { Archive, Layers } from "@lucide/vue"
 import type { SessionMeta } from "@/api/piClient"
 import { findConversation } from "@/stores/conversations"
 import { sessionRunStatus } from "@/stores/sessionRunStatus"
 import { Button } from "@/components/ui/button"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import SessionContextMenuContent from "../SessionContextMenuContent.vue"
 import SidebarSessionStatus from "./SidebarSessionStatus.vue"
+import { sidebarSessionProject } from "./useSidebarSessionReveal"
 
 const props = defineProps<{
   s: SessionMeta
@@ -24,6 +20,8 @@ const props = defineProps<{
   query: string
   queueNow: number
   worktree: boolean
+  /** 远程项目会话：元数据写操作（重命名/归档/删除等本地文件命令）入口隐藏（契约 §2.4）。 */
+  remote?: boolean
 }>()
 const emit = defineEmits<{
   open: [session: SessionMeta]
@@ -36,8 +34,9 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const label = computed(() => props.s.title || props.s.preview || t("sidebar.untitled"))
-const status = computed(() => sessionRunStatus(props.s.file))
-const queue = computed(() => findConversation(props.s.file)?.promptQueue)
+const status = computed(() => sessionRunStatus(props.s.file, props.path))
+const owner = computed(() => findConversation(props.s.file, sidebarSessionProject(props.s.cwd, props.path)))
+const queue = computed(() => owner.value?.promptQueue)
 </script>
 
 <template>
@@ -53,6 +52,8 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
           'pl-7': !(status && queue?.length),
         }"
         :data-file="s.file"
+        :data-cwd="sidebarSessionProject(s.cwd, path)"
+        :data-runtime-id="owner?.runtimeId"
         :data-path="path"
       >
         <SidebarSessionStatus :status="status" :queue="queue" :now="queueNow" />
@@ -71,11 +72,12 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
           :aria-current="active ? 'page' : undefined"
           :disabled="navigationDisabled"
           :title="label"
-          @click="emit('open', s)"
-          @dblclick.stop="emit('renameOnDoubleClick', s)"
+          @click="($event?.detail ?? 0) < 2 && emit('open', s)"
+          @dblclick.stop="!remote && emit('renameOnDoubleClick', s)"
           >{{ label }}</Button
         >
         <Button
+          v-if="!remote"
           variant="quiet"
           size="row-action"
           class="session-archive hover-action absolute right-1 top-[50%] [transform:translateY(-50%)] z-[1] opacity-[0] disabled:opacity-[0] pointer-events-none [@media(hover:none)]:opacity-[1] [@media(hover:none)]:pointer-events-auto"
@@ -87,17 +89,16 @@ const queue = computed(() => findConversation(props.s.file)?.promptQueue)
         /></Button>
       </div>
     </ContextMenuTrigger>
-    <ContextMenuContent
-      ><ContextMenuItem @select="emit('rename', s)"
-        ><Pencil :size="14" class="size-auto shrink-0" />{{ t("workspace.rename") }}</ContextMenuItem
-      ><ContextMenuItem @select="emit('duplicate', s)"
-        ><Copy :size="14" class="size-auto shrink-0" />{{ t("workspace.duplicate") }}</ContextMenuItem
-      ><ContextMenuItem @select="emit('copyLink', s)"
-        ><Link :size="14" class="size-auto shrink-0" />{{ t("workspace.copyLink") }}</ContextMenuItem
-      ><ContextMenuSeparator /><ContextMenuItem @select="emit('export', s.file)"
-        ><FileDown :size="14" class="size-auto shrink-0" />{{ t("chat.export") }}</ContextMenuItem
-      ></ContextMenuContent
-    >
+    <SessionContextMenuContent
+      :remote="remote"
+      :archived="s.archived"
+      @open="emit('open', s)"
+      @rename="emit('rename', s)"
+      @duplicate="emit('duplicate', s)"
+      @copy-link="emit('copyLink', s)"
+      @export="emit('export', s.file)"
+      @archive="emit('archive', s)"
+    />
   </ContextMenu>
 </template>
 

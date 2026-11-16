@@ -5,7 +5,7 @@ import { useSessionLabels } from "@/composables/useSessionLabels"
 
 const props = defineProps<{ text: string }>()
 const sessionLabels = useSessionLabels()
-const parts = computed(() => composerParts(props.text, sessionLabels.value))
+const parts = computed(() => composerParts(props.text, sessionLabels.value, undefined, "message"))
 </script>
 
 <template>

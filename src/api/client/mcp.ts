@@ -37,6 +37,8 @@ export interface McpServerStatus {
   transport: string
   state: string
   tools: string[]
+  /** Capability only: pi no longer enumerates resources during connection. */
+  resources?: boolean | null
   /** Connection error, e.g. the tail of a stdio server's stderr. */
   error?: string | null
   /** Tool definitions fetched over MCP `tools/list` (enabled connected

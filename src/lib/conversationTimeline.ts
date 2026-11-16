@@ -1,4 +1,5 @@
 import { contentText } from "@/lib/content"
+import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import type { Block, Entry, UserEntry } from "@/stores/session"
 
 export interface ConversationTurn {
@@ -18,7 +19,9 @@ export interface TimelineTurn extends ConversationTurn {
 }
 
 const excerpt = (text: string) => {
-  const normalized = text.replace(/\s+/g, " ").trim()
+  // 摘要只取提问正文：与气泡/复制共用**同一个**解析器，父上下文块与尾部
+  // `# userselect:` / `# Code comments:` 块都不进时间线导航（否则导航变一围 JSON）。
+  const normalized = parseComposerPromptContexts(text).visibleContent.replace(/\s+/g, " ").trim()
   return normalized.length > 180 ? `${normalized.slice(0, 180)}…` : normalized
 }
 
@@ -89,8 +92,7 @@ export function buildTimelineTurns(messages: any[], cursor: number, entries: Ent
         turns.push({ id: entry.id, question: excerpt(entry.text), answer: "", entryId: entry.id })
       else if (entry.kind === "compaction")
         turns.push(compactionNode(entry.id, entry.id, entry.tokensBefore, entry.tokensAfter))
-      else if (entry.kind === "context_edit")
-        turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
+      else if (entry.kind === "context_edit") turns.push(contextEditNode(entry.id, entry.id, entry.replaced))
       else if (entry.kind === "assistant" && turns.length) appendBlockText(turns[turns.length - 1], entry.blocks)
     }
     return turns

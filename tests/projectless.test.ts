@@ -13,6 +13,22 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/api/piClient", () => ({
   listSessions: async () => [],
+  getWorkspaceState: async () => ({
+    revision: 0,
+    projects: [],
+    pinnedProjects: [],
+    projectGroups: {},
+    removedProjects: [],
+    sessionOrder: {},
+  }),
+  updateWorkspaceState: async () => ({
+    revision: 1,
+    projects: ["C:/code/app"],
+    pinnedProjects: [],
+    projectGroups: {},
+    removedProjects: [],
+    sessionOrder: {},
+  }),
   updateSession: async () => 0,
   resolveProjectlessDir: (...args) => mocks.resolveProjectlessDir(...args),
   workspaceGitInfo: async () => ({}),

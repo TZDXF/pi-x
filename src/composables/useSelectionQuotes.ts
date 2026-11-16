@@ -2,8 +2,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref, t
 import { useI18n } from "vue-i18n"
 import type { Conversation } from "@/components/ai-elements/conversation"
 import type { SelectionPopupState } from "@/components/chat/ConversationSelectionPopup.vue"
-import { CONVERSATION_SELECTION_MAX_COUNT, type ConversationSelectionSource } from "@/lib/conversationSelections"
-import { boundaryRect, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
+import {
+  CONVERSATION_SELECTION_MAX_COUNT,
+  type ConversationSelectionSource,
+  type PendingConversationSelection,
+} from "@/lib/conversationSelections"
+import type { PendingAuxSelection } from "@/lib/auxSelection"
+import { boundaryRect, flashSelection, restoreSelection, selectionEndRect } from "@/lib/selectionAnchors"
+import { addAuxSelection, auxSelectionItems, removeAuxSelection, updateAuxSelection } from "@/stores/auxSelections"
 import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
@@ -21,13 +27,75 @@ export function useSelectionQuotes(deps: {
   /** 列表投影 getter：锚点深监听只在有引用时挂载（见 syncSelectionAnchors）。 */
   renderedEntries: () => unknown
   conversation: Ref<InstanceType<typeof Conversation> | null>
+  /**
+   * aux 面板的划词（TZD-103）：指定后读写的是**该实例的桶**（`stores/auxSelections.ts`），
+   * 不再碰主会话的 `conversationSelections` 单例 —— 否则 aux 里"引用到输入框"会把引用
+   * 写进主会话的桶（同项目下两者 scope 相同，会真的串）。
+   */
+  auxRuntimeId?: string
 }) {
   const { session, ui, conversation } = deps
   const { t } = useI18n()
   const selectionStore = useConversationSelectionsStore()
   const selectionScope = computed(() => session.sessionFile ?? deps.project())
   const selectionRoot = computed<HTMLElement | null>(() => (conversation.value?.$el as HTMLElement | undefined) ?? null)
-  const pendingSelections = computed(() => (selectionStore.scope === selectionScope.value ? selectionStore.items : []))
+  /** 两种来源的条目同形（wire 字段相同），只有定位元数据可能缺失。 */
+  type SelectionItem = PendingConversationSelection | PendingAuxSelection
+  const pendingSelections = computed<SelectionItem[]>(() =>
+    deps.auxRuntimeId
+      ? [...auxSelectionItems(deps.auxRuntimeId)]
+      : selectionStore.scope === selectionScope.value
+        ? selectionStore.items
+        : [],
+  )
+  /**
+   * 写入入口：主会话走单例（按 scope 归属），aux 走本实例的桶。
+   * 两条路径返回同一份 `ok/reason/duplicate` 结果，提示逻辑不分叉。
+   */
+  function addSelection(draft: Omit<PendingConversationSelection, "id">) {
+    // aux 面板内的划词：消息 id 属于本 aux 正文，记下来才不会被当成跨 runtime 引用。
+    if (deps.auxRuntimeId) return addAuxSelection(deps.auxRuntimeId, { ...draft, sourceRuntimeId: deps.auxRuntimeId })
+    return selectionStore.add(selectionScope.value, draft)
+  }
+  function updateSelection(id: string, comment: string) {
+    if (deps.auxRuntimeId) updateAuxSelection(deps.auxRuntimeId, id, comment)
+    else selectionStore.update(id, comment)
+  }
+  function removeSelection(id: string) {
+    if (deps.auxRuntimeId) removeAuxSelection(deps.auxRuntimeId, id)
+    else selectionStore.remove(id)
+  }
+  /**
+   * 消息内定位所需的三元组：代码预览来源的引用没有消息 id/字符区间，跨面板定位不了，
+   * 因此不渲染索引标记、也不参与定位（只作为摘要条目存在）。
+   */
+  function messageTarget(item: SelectionItem) {
+    const { messageId, startOffset, endOffset } = item
+    if (typeof messageId !== "number" || typeof startOffset !== "number" || typeof endOffset !== "number") return null
+    return { messageId, startOffset, endOffset }
+  }
+  /**
+   * 该引用能否在**本面板**就近定位（TZD-103 P2-5）。
+   *
+   * 消息 id 只在产生它的那个会话里有意义：主会话的消息 1 与 aux 的消息 1 是两条无关
+   * 内容。因此只在"来源 runtime 就是自己"时才做锚点恢复与徽标；跨 runtime（含来源未
+   * 标注的旧条目）一律不猜位置 —— 宁可只在摘要里显示，也不把无关正文闪亮/加徽标。
+   */
+  function localTarget(item: SelectionItem) {
+    const target = messageTarget(item)
+    if (!target) return null
+    const sourceRuntimeId = (item as Partial<PendingAuxSelection>).sourceRuntimeId
+    if (deps.auxRuntimeId) return sourceRuntimeId === deps.auxRuntimeId ? target : null
+    // 主会话：自己产生的引用不带来源标记；带别的 runtime 标记的属于 aux，不在主表定位。
+    return sourceRuntimeId === undefined || sourceRuntimeId === session.runtimeId ? target : null
+  }
+  /** 浮层锚点：没有可定位的正文时（文件来源引用）退到一个可用的视口位置。 */
+  function fallbackAnchor(): { left: number; top: number; bottom: number } | null {
+    const rect = selectionRoot.value?.getBoundingClientRect()
+    const left = rect ? Math.min(rect.right - 16, window.innerWidth - 300) : window.innerWidth / 2
+    const top = rect ? rect.top + 24 : 24
+    return { left: Math.max(8, left), top, bottom: top + 20 }
+  }
   const selectionPopup = ref<(SelectionPopupState & { id?: string }) | null>(null)
   function pushSelectionToast(result: { ok: boolean; reason?: string; duplicate?: boolean }) {
     if (!result.ok) {
@@ -37,7 +105,7 @@ export function useSelectionQuotes(deps: {
       else ui.pushToast(t("chat.selectionLimitSingle"), "error")
     } else if (result.duplicate) ui.pushToast(t("chat.selectionDuplicate"))
   }
-  // 点击"引用到输入框"立即入库：批注可选，稍后通过索引标记或摘要列表补充。
+  // 点击"引用到输入框"立即入库，并在当前选区末尾打开批注输入框。
   function onSelectionQuote(payload: {
     text: string
     source: ConversationSelectionSource
@@ -45,19 +113,33 @@ export function useSelectionQuotes(deps: {
     startOffset: number
     endOffset: number
   }) {
-    const result = selectionStore.add(selectionScope.value, { ...payload })
+    const selection = window.getSelection()
+    const rect = selection?.rangeCount ? selectionEndRect(selection.getRangeAt(0)) : null
+    const result = addSelection({ ...payload })
     pushSelectionToast(result)
-    window.getSelection()?.removeAllRanges()
+    selection?.removeAllRanges()
+    if (result.ok && !result.duplicate) {
+      const item = pendingSelections.value[pendingSelections.value.length - 1]!
+      if (rect) {
+        selectionPopup.value = {
+          id: item.id,
+          comment: "",
+          anchor: { left: rect.right, top: rect.top, bottom: rect.bottom },
+        }
+      } else {
+        void editSelection(item.id)
+      }
+    }
   }
   function onSelectionSave(comment: string) {
     const id = selectionPopup.value?.id
-    if (id) selectionStore.update(id, comment)
+    if (id) updateSelection(id, comment)
     selectionPopup.value = null
     window.getSelection()?.removeAllRanges()
   }
   function onSelectionRemove() {
     const id = selectionPopup.value?.id
-    if (id) selectionStore.remove(id)
+    if (id) removeSelection(id)
     selectionPopup.value = null
     window.getSelection()?.removeAllRanges()
   }
@@ -72,12 +154,14 @@ export function useSelectionQuotes(deps: {
     const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
     if (root) {
       pendingSelections.value.forEach((item, index) => {
-        const wrapper = root.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
+        const target = localTarget(item)
+        if (!target) return
+        const wrapper = root.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
         if (!wrapper) return
-        const rect = boundaryRect(wrapper, item.endOffset)
+        const rect = boundaryRect(wrapper, target.endOffset)
         const wrapperRect = wrapper.getBoundingClientRect()
         if (!rect) return
-        const list = map.get(item.messageId) ?? []
+        const list = map.get(target.messageId) ?? []
         list.push({
           id: item.id,
           index: index + 1,
@@ -85,10 +169,11 @@ export function useSelectionQuotes(deps: {
           // 徽标抬到划词末行上方，避免盖住正文文字。
           top: rect.top - wrapperRect.top - 16,
         })
-        map.set(item.messageId, list)
+        map.set(target.messageId, list)
       })
     }
-    anchorOverlays.value = map
+    // DOM 观察也会收到徽标自身的更新；相同坐标不再写回，避免反馈循环。
+    if (JSON.stringify([...anchorOverlays.value]) !== JSON.stringify([...map])) anchorOverlays.value = map
   }
   /** 划词引用存在时才随布局变化重算锚点。深度监听 renderedEntries 会在流式
    *  回复的每个 chunk 上触发对整个列表的深遍历；没有引用时零开销，因此仅在
@@ -120,6 +205,29 @@ export function useSelectionQuotes(deps: {
     },
     { immediate: true },
   )
+  // 虚拟正文挂载、Markdown 异步渲染不会改变 renderedEntries。
+  // 仅有待发送引用时观察 DOM，并在根节点更换时重新绑定。
+  watch(
+    [selectionRoot, () => pendingSelections.value.length],
+    ([root, count], _, onCleanup) => {
+      if (!root || !count) return
+      let frame: number | undefined
+      const observer = new MutationObserver(() => {
+        if (frame !== undefined) return
+        frame = requestAnimationFrame(() => {
+          frame = undefined
+          void recomputeAnchors()
+        })
+      })
+      observer.observe(root, { childList: true, subtree: true, characterData: true })
+      void nextTick(recomputeAnchors)
+      onCleanup(() => {
+        observer.disconnect()
+        if (frame !== undefined) cancelAnimationFrame(frame)
+      })
+    },
+    { flush: "post", immediate: true },
+  )
   onMounted(() => {
     window.addEventListener("resize", recomputeAnchors)
   })
@@ -127,28 +235,65 @@ export function useSelectionQuotes(deps: {
     window.removeEventListener("resize", recomputeAnchors)
   })
   // ---- 摘要列表动作：定位（滚动到索引标记）与编辑（回显划选后打开弹窗） ----
-  function locateSelection(id: string) {
+  let clearFlash: (() => void) | undefined
+  let locateRequest = 0
+  function resetFlash() {
+    locateRequest++
+    clearFlash?.()
+    clearFlash = undefined
+  }
+  watch([selectionScope, selectionRoot, pendingSelections], resetFlash)
+  onBeforeUnmount(resetFlash)
+  function flashLocatedSelection(item: SelectionItem) {
+    clearFlash?.()
+    const target = localTarget(item)
+    if (!target) return
+    const wrapper = selectionRoot.value?.querySelector(
+      `[data-message-id="${target.messageId}"] [data-selection-source]`,
+    )
+    if (wrapper) clearFlash = flashSelection(wrapper, target.startOffset, target.endOffset)
+  }
+  async function locateSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
+    resetFlash()
+    const target = localTarget(item)
+    // 文件来源/跨 runtime 的引用没有本面板可定位的正文：不滚动、不闪亮（摘要仍可用）。
+    if (!target) return
+    const request = locateRequest
     const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
     if (badge) {
       badge.scrollIntoView({ block: "center", behavior: "smooth" })
+      flashLocatedSelection(item)
       return
     }
-    conversation.value?.scrollToMessage(item.messageId)
-    void nextTick(recomputeAnchors)
+    const scope = selectionScope.value
+    const root = selectionRoot.value
+    await conversation.value?.scrollToMessage(target.messageId)
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
+    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    await recomputeAnchors()
+    await nextTick()
+    if (request !== locateRequest) return
+    root?.querySelector(`[data-selection-anchor="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })
+    flashLocatedSelection(item)
   }
   async function editSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)
     if (!item) return
-    locateSelection(id)
+    await locateSelection(id)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
     const root = selectionRoot.value
-    const wrapper = root?.querySelector(`[data-message-id="${item.messageId}"] [data-selection-source]`)
+    const target = localTarget(item)
+    const wrapper = target
+      ? root?.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
+      : undefined
     let anchor: { left: number; top: number; bottom: number } | null = null
     const badge = root?.querySelector(`[data-selection-anchor="${id}"]`)
-    if (wrapper && restoreSelection(wrapper, item.startOffset, item.endOffset)) {
+    if (wrapper && target && restoreSelection(wrapper, target.startOffset, target.endOffset)) {
       const selection = window.getSelection()
       if (selection?.rangeCount) {
         const endRect = selectionEndRect(selection.getRangeAt(0))
@@ -159,6 +304,8 @@ export function useSelectionQuotes(deps: {
       const badgeRect = badge.getBoundingClientRect()
       anchor = { left: badgeRect.right, top: badgeRect.top, bottom: badgeRect.bottom }
     }
+    // 文件来源引用（无 messageId）也必须有可用的编辑锚点：否则摘要里的"编辑"点了没反应。
+    if (!anchor) anchor = fallbackAnchor()
     if (!anchor) return
     selectionPopup.value = {
       id: item.id,

@@ -124,11 +124,35 @@ test("measured height is retained and changes above viewport preserve reading po
     h.close()
   }
 })
-test("small conversations are not virtualized", () => {
+test("explicitly disabled virtualization renders immediately", () => {
   const h = harness({ enabled: false })
   try {
     expect(h.rendered.value).toBe(true)
   } finally {
     h.close()
+  }
+})
+
+// A short transcript can contain very large tool results and code blocks too.
+test("chat history virtualizes even below forty entries while keeping the latest four mounted", () => {
+  const chat = readFileSync(new URL("../src/components/chat/ChatTurnList.vue", import.meta.url), "utf8")
+  expect(chat).toContain(':enabled="true"')
+  expect(chat).toContain(':pinned="entryIndex >= renderedEntries.length - 4"')
+  const rows = Array.from({ length: 10 }, (_, index) => harness({ pinned: index >= 6 }))
+  try {
+    expect(rows.map(row => row.rendered.value)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+    ])
+  } finally {
+    rows.forEach(row => row.close())
   }
 })

@@ -4,6 +4,7 @@ import ChatErrorRecord from "@/components/chat/ChatErrorRecord.vue"
 import ToolCallGroup from "@/components/chat/ToolCallGroup.vue"
 import { toolCallGroups } from "@/lib/toolCallGroups"
 import ToolRunDetails from "@/components/chat/ToolRunDetails.vue"
+import ToolImageGallery from "@/components/chat/ToolImageGallery.vue"
 import { useToolRunClock, formatToolElapsed } from "@/composables/useToolRunClock"
 import { Thinking, ThinkingContent, ThinkingTrigger } from "@/components/thinking"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -15,6 +16,7 @@ import { BrainIcon, ChevronRight, FileText, SquareTerminal } from "@lucide/vue"
 import { useI18n } from "vue-i18n"
 import { changeForCall } from "@/lib/sessionChanges"
 import { readToolTitle } from "@/lib/readToolTitle"
+import { toolDuration, toolInput } from "@/lib/toolRun"
 import { isSubagentTool } from "@/lib/subagents"
 import { processDetail, type ProcessDetail } from "@/lib/processDetail"
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
@@ -26,6 +28,7 @@ const props = withDefaults(
     blocks: Block[]
     runs: Record<string, ToolRun>
     animate?: boolean
+    streaming?: boolean
     /** Expanded concise groups reuse the detailed tool renderers without changing the preference. */
     detail?: ProcessDetail
     /** Key prefix so a rendered subset (e.g. the final summary tail of a turn)
@@ -37,7 +40,7 @@ const props = withDefaults(
 
 const displayDetail = computed(() => props.detail ?? processDetail.value)
 const conciseGroups = computed(() =>
-  displayDetail.value === "concise" ? toolCallGroups(props.blocks) : new Map<number, ToolCallBlock[]>(),
+  displayDetail.value === "concise" ? toolCallGroups(props.blocks, hasReadImages) : new Map<number, ToolCallBlock[]>(),
 )
 
 const emit = defineEmits<{ openReview: [path: string] }>()
@@ -65,7 +68,7 @@ function isBash(block: ToolCallBlock): boolean {
 }
 
 function parsedArgs(block: ToolCallBlock): any | null {
-  const text = block.argsText || runFor(block)?.argsText
+  const text = toolInput(block, runFor(block))
   if (!text) return null
   try {
     return JSON.parse(text)
@@ -79,7 +82,7 @@ function commandOf(block: ToolCallBlock): string {
   const args = parsedArgs(block)
   const direct = args?.command ?? args?.cmd ?? args?.script
   if (typeof direct === "string") return direct
-  const match = (block.argsText || "").match(/"(?:command|cmd|script)"\s*:\s*"((?:[^"\\]|\\.)*)/)
+  const match = toolInput(block, runFor(block)).match(/"(?:command|cmd|script)"\s*:\s*"((?:[^"\\]|\\.)*)/)
   if (!match) return ""
   return match[1]!.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"')
 }
@@ -95,6 +98,10 @@ function commandPreview(block: ToolCallBlock): string {
 const READ_TOOLS = new Set(["read", "read_file", "cat", "view", "open_file"])
 function isRead(block: ToolCallBlock): boolean {
   return READ_TOOLS.has(toolBase(block))
+}
+
+function hasReadImages(block: ToolCallBlock): boolean {
+  return isRead(block) && !!runFor(block)?.outputImages?.length
 }
 
 // pi-subagents is a plugin, not a pi core tool: all its knowledge lives in
@@ -120,7 +127,7 @@ function subagentGroupAt(index: number): ToolCallBlock[] | null {
 
 /** Read preview uses the same argument fallback as the other tool specializations. */
 function readTitle(block: ToolCallBlock): string {
-  return readToolTitle(block.argsText || runFor(block)?.argsText || "")
+  return readToolTitle(toolInput(block, runFor(block)))
 }
 
 function terminalText(block: ToolCallBlock): string {
@@ -141,9 +148,7 @@ const now = useToolRunClock(() => props.blocks.some(b => b.type === "toolCall" &
 
 function elapsedMs(block: ToolCallBlock): number | null {
   const run = runFor(block)
-  // Running only: completed tools hide the duration.
-  if (!run?.startedAt || run.completedAt) return null
-  return now.value - run.startedAt
+  return toolDuration(run, now.value)
 }
 
 function elapsedText(block: ToolCallBlock): string {
@@ -156,8 +161,8 @@ function elapsedText(block: ToolCallBlock): string {
 /** Long-running tools stand out: amber past 30s, destructive past 2 minutes. */
 function elapsedClass(block: ToolCallBlock): string {
   const ms = elapsedMs(block)
-  if (ms != null && ms > 120_000) return "text-destructive"
-  if (ms != null && ms > 30_000) return "text-amber-600 dark:text-amber-400"
+  if (isRunning(block) && ms != null && ms > 120_000) return "text-destructive"
+  if (isRunning(block) && ms != null && ms > 30_000) return "text-amber-600 dark:text-amber-400"
   return "text-muted-foreground"
 }
 
@@ -172,7 +177,7 @@ interface FileCard {
 // re-run the line diff for arguments that have not changed.
 const cardCache = new Map<string, { argsText: string; card: FileCard | null }>()
 function cardFor(block: ToolCallBlock): FileCard | null {
-  const argsText = block.argsText || runFor(block)?.argsText || ""
+  const argsText = toolInput(block, runFor(block))
   const hit = cardCache.get(block.callId)
   if (hit && hit.argsText === argsText) return hit.card
   let card: FileCard | null = null
@@ -207,6 +212,7 @@ const { t } = useI18n()
       <MessageResponse
         v-if="block.type === 'text'"
         :content="block.text"
+        :streaming="props.streaming"
         :enable-animate="props.animate"
         class="text-sm"
       />
@@ -246,7 +252,7 @@ const { t } = useI18n()
         />
       </ToolCallGroup>
       <!-- Later calls in a concise group are rendered only inside its expanded content. -->
-      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise'" />
+      <template v-else-if="block.type === 'toolCall' && displayDetail === 'concise' && !hasReadImages(block)" />
 
       <!-- bash: header shows the command; expanding reveals a terminal-style run -->
       <Tool v-else-if="block.type === 'toolCall' && isBash(block)" class="mb-0 overflow-hidden bg-background/50">
@@ -327,6 +333,24 @@ const { t } = useI18n()
       <!-- consumed by the group rendered at the run's first call -->
       <template v-else-if="block.type === 'toolCall' && isSubagent(block)" />
 
+      <!-- Image reads show their preview directly, without expandable input/output. -->
+      <div
+        v-else-if="block.type === 'toolCall' && hasReadImages(block)"
+        class="not-prose w-full overflow-hidden rounded-md border bg-background/50"
+      >
+        <div class="flex items-center gap-2 px-3 py-2">
+          <FileText class="size-4 shrink-0 text-muted-foreground" />
+          <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="readTitle(block)">{{
+            readTitle(block)
+          }}</span>
+          <span v-if="elapsedText(block)" class="shrink-0 text-xs tabular-nums" :class="elapsedClass(block)">{{
+            elapsedText(block)
+          }}</span>
+          <ToolStatusBadge :state="runFor(block)?.state ?? 'input-streaming'" />
+        </div>
+        <ToolImageGallery :images="runFor(block)!.outputImages!" :alt="readTitle(block)" class="px-3 pb-3" />
+      </div>
+
       <!-- other tools: generic collapsible input/output; read shows the file path and offset -->
       <Tool v-else-if="block.type === 'toolCall'" class="mb-0 overflow-hidden bg-background/50">
         <ToolHeader
@@ -349,7 +373,7 @@ const { t } = useI18n()
           {{ elapsedText(block) }}
         </div>
         <ToolContent>
-          <ToolRunDetails class="p-3" :input="block.argsText" :output="runFor(block)?.outputText" />
+          <ToolRunDetails class="p-3" :input="toolInput(block, runFor(block))" :output="runFor(block)?.outputText" />
         </ToolContent>
       </Tool>
     </template>

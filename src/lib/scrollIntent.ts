@@ -1,0 +1,37 @@
+/** A layout shrink clamps scrollTop to the new bottom without a reading gesture. */
+export function shouldReleaseBottomLockOnScroll(
+  previousScrollTop: number,
+  scrollTop: number,
+  maxScrollTop: number,
+): boolean {
+  // vue-stick-to-bottom targets max - 1, so allow its one-pixel correction too.
+  return scrollTop < previousScrollTop && scrollTop < maxScrollTop - 1
+}
+
+/** Only a genuine downward reading gesture may re-enable bottom following. */
+export function shouldResumeBottomLock(
+  previousScrollTop: number,
+  scrollTop: number,
+  maxScrollTop: number,
+  readingHistory: boolean,
+): boolean {
+  return readingHistory && scrollTop > previousScrollTop && scrollTop >= maxScrollTop - 1
+}
+
+/** Whether an upward wheel gesture can scroll the conversation viewport. */
+export function shouldReleaseBottomLock(viewport: HTMLElement, target: Element | null, deltaY: number): boolean {
+  if (deltaY >= 0 || viewport.scrollHeight <= viewport.clientHeight) return false
+
+  let element = target
+  while (element && element !== viewport) {
+    const style = getComputedStyle(element)
+    if ((style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight) {
+      // A nested scroller consumes the gesture while it can move up, or when
+      // its overscroll policy prevents chaining to the conversation.
+      if (element.scrollTop > 0 || style.overscrollBehaviorY === "contain" || style.overscrollBehaviorY === "none")
+        return false
+    }
+    element = element.parentElement
+  }
+  return element === viewport
+}

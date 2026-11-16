@@ -117,7 +117,7 @@ fn editor_command(kind: &str, executable: Option<&str>) -> Result<Command, Strin
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command.creation_flags(crate::process::CREATE_NO_WINDOW);
     }
     Ok(command)
 }

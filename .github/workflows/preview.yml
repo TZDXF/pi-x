@@ -90,6 +90,23 @@ jobs:
           git tag -a "${{ steps.detect.outputs.tag }}" -m "Preview ${{ steps.detect.outputs.version }}"
           git push origin "${{ steps.detect.outputs.tag }}"
 
+      - name: 创建预览版草稿 release
+        if: steps.detect.outputs.should-build == 'true'
+        # 串行创建草稿，避免三平台并发创建；构建期间不向客户端暴露不完整的更新清单。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.detect.outputs.tag }}
+          RELEASE_NAME: ${{ steps.detect.outputs.release-name }}
+          RELEASE_NOTES: ${{ steps.detect.outputs.changes }}
+        run: |
+          printf '%s' "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$TAG_NAME" \
+            --draft \
+            --prerelease \
+            --title "$RELEASE_NAME" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --repo "$GITHUB_REPOSITORY"
+
   build:
     name: 构建预览版 (${{ matrix.platform }})
     needs: check
@@ -136,7 +153,7 @@ jobs:
       - name: 同步版本号
         run: node scripts/set-version.mjs "${{ needs.check.outputs.version }}"
 
-      - name: 构建并发布预览版
+      - name: 构建并上传预览版到草稿
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -146,6 +163,19 @@ jobs:
           tagName: ${{ needs.check.outputs.tag }}
           releaseName: ${{ needs.check.outputs.release-name }}
           releaseBody: ${{ needs.check.outputs.changes }}
+          releaseDraft: true
           prerelease: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+  publish:
+    name: 公开预览版
+    # 默认 success() 门槛要求整个构建矩阵成功；失败、取消或跳过时保留草稿。
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 全部平台构建成功后公开 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.check.outputs.tag }}
+        run: gh release edit "$TAG_NAME" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"

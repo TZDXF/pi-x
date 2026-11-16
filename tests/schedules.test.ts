@@ -69,6 +69,34 @@ test("scheduled runs get unique Pix-owned runtimes and publish before prompting"
   expect(source).toMatch(/notify_schedules_changed\(app\);[\s\S]*published = true/)
 })
 
+test("run history records every claim and converges at finish_task", () => {
+  const source = readFileSync(new URL("../src-tauri/src/schedules.rs", import.meta.url), "utf8")
+  // claim 挂点：定时与手动两条路径都追加 running 记录，trigger 区分来源。
+  expect(source).toMatch(/trigger: "scheduled"\.into\(\)/)
+  expect(source).toMatch(/trigger: "manual"\.into\(\)/)
+  // finish_task 是唯一收尾汇聚点；publish 阶段回填会话文件。
+  expect(source).toMatch(/finalize_run_record\(current, &result, now, current\.last_run\)/)
+  expect(source).toMatch(
+    /if let Some\(record\) = current\.runs\.iter_mut\(\)\.rev\(\)\.find\(\|r\| r\.status == "running"\)/,
+  )
+  // 重启归一化把 running 记录一并标失败；旧 JSON 无 runs 字段仍可反序列化。
+  expect(source).toMatch(/mark_interrupted_by_shutdown\(task\)/)
+  expect(source).toMatch(/#\[serde\(default, skip_serializing_if = "Vec::is_empty"\)\]\s*pub runs: Vec<RunRecord>/)
+})
+
+test("the task card exposes a collapsible run history that resumes recorded sessions", () => {
+  const page = readFileSync(new URL("../src/components/ScheduledTasksPage.vue", import.meta.url), "utf8")
+  const api = readFileSync(new URL("../src/api/schedules.ts", import.meta.url), "utf8")
+  expect(api).toMatch(/interface ScheduledTaskRun/)
+  expect(api).toMatch(/runs\?: ScheduledTaskRun\[\]/)
+  expect(page).toMatch(/v-if="runsOf\(task\)\.length"/)
+  expect(page).toMatch(/:aria-expanded="expandedRuns === task\.id"/)
+  expect(page).toMatch(/t\(`schedules\.\$\{run\.status\}`\)/)
+  expect(page).toMatch(/t\(`schedules\.triggers\.\$\{run\.trigger\}`\)/)
+  expect(page).toMatch(/formatDuration\(run\.durationMs\)/)
+  expect(page).toMatch(/@click="openRun\(task, run\)"/)
+})
+
 test("scheduled workers remain visible to Pix while retaining their backend event channel", () => {
   const source = readFileSync(new URL("../src-tauri/src/rpc.rs", import.meta.url), "utf8")
   const emit = source.slice(source.indexOf("fn emit_process_event"), source.indexOf("const CREATE_NO_WINDOW"))

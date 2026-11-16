@@ -23,11 +23,51 @@ pub(super) async fn handle(
                     a["sessionFile"].as_str().map(str::to_owned),
                     a["runtimeId"].as_str().map(str::to_owned),
                     serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
                 )
                 .await?;
                 Ok(Value::Null)
             }
             "rpc_sessions" => Ok(json!(rpc::list(&state).await)),
+            // aux 的 spawn 走独立命令：策略固定为 Aux，客户端无法经 rpc_spawn 翻转。
+            "aux_spawn" => {
+                crate::commands::pi_aux::aux_spawn(
+                    app.clone(),
+                    state.clone(),
+                    text(a, "project")?,
+                    text(a, "runtimeId")?,
+                    text(a, "provider")?,
+                    text(a, "model")?,
+                    a["thinking"].as_str().map(str::to_owned),
+                    serde_json::from_value(a["workspace"].clone()).map_err(|e| e.to_string())?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                    a["parentRuntimeId"].as_str().map(str::to_owned),
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            // aux 的租约（§5）：写/删/列，只做这三件事。运行期执行仍在
+            // `commands::aux_leases` 里，远程与桌面共用同一实现与同一条认证。
+            "aux_claim" => Ok(to_json(
+                crate::commands::aux_claim(
+                    state.clone(),
+                    text(a, "runtimeId")?,
+                    text(a, "clientId")?,
+                    a["leaseToken"].as_str().map(str::to_owned),
+                )
+                .await?,
+            )?),
+            "aux_release" => {
+                // 只认 lease token（clientId 是标识不是凭证，见 aux_leases 模块文档）。
+                crate::commands::aux_release(
+                    state.clone(),
+                    text(a, "runtimeId")?,
+                    text(a, "leaseToken")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "aux_list" => crate::commands::aux_list(state.clone()).await,
             "rpc_running" => Ok(json!(rpc::running(&state, a["runtimeId"].as_str()).await)),
             "rpc_kill" => {
                 rpc::kill(&state, a["runtimeId"].as_str()).await?;
@@ -123,8 +163,18 @@ pub(super) async fn handle(
                 Ok(Value::Null)
             }
             "session_duplicate" => Ok(Value::String(
-                crate::sessions::session_duplicate(text(a, "file")?).await?,
+                crate::sessions::session_duplicate(
+                    state.clone(),
+                    text(a, "file")?,
+                    a["beforeEntryId"].as_str().map(str::to_owned),
+                    a["runtimeId"].as_str().map(str::to_owned),
+                )
+                .await?,
             )),
+            "session_adopt" => {
+                crate::sessions::session_adopt(text(a, "file")?).await?;
+                Ok(Value::Null)
+            }
             "session_last_error" => Ok(to_json(
                 crate::sessions::session_last_error(text(a, "file")?).await?,
             )?),
@@ -132,9 +182,27 @@ pub(super) async fn handle(
                 crate::sessions::session_history(text(a, "file")?).await?,
             )),
             "session_list" => Ok(to_json(crate::commands::session_list(text(a, "project")?).await?)?),
+            "session_search" => Ok(to_json(
+                crate::session_search::session_search(text(a, "query")?).await?,
+            )?),
+            "ssh_session_search" => Ok(to_json(
+                crate::ssh_sessions::ssh_session_search(
+                    text(a, "project")?,
+                    text(a, "sshConnectionId")?,
+                    text(a, "query")?,
+                )
+                .await?,
+            )?),
+            "session_list_unarchived" => Ok(to_json(
+                crate::commands::session_list_unarchived().await?,
+            )?),
             "session_list_archived" => {
                 Ok(to_json(crate::sessions::session_list_archived().await?)?)
             }
+            "storage_summary" => Ok(to_json(crate::storage::storage_summary().await?)?),
+            "storage_cleanup" => Ok(to_json(
+                crate::storage::storage_cleanup(app.clone(), text(a, "kind")?).await?,
+            )?),
             _ => return Err(UNHANDLED.to_owned()),
         }
     }

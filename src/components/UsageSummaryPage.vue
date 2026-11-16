@@ -1,0 +1,243 @@
+<script setup lang="ts">
+/** 用量汇总面板（设置 → 用量统计）：聚合 pi 会话文件中的 token 用量，仅本地会话。 */
+import { computed, onMounted, ref, watch } from "vue"
+import { useI18n } from "vue-i18n"
+import { Folder, Hash, Layers, RotateCw, SquareStack } from "@lucide/vue"
+import { fetchUsageSummary, type UsageSummary } from "@/api/usage"
+import { compactNumber } from "@/lib/format"
+import { tBackendError } from "@/i18n"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useWorkspaceStore } from "@/stores/workspace"
+
+const { t } = useI18n()
+const workspace = useWorkspaceStore()
+
+const summary = ref<UsageSummary | null>(null)
+const loading = ref(false)
+const error = ref("")
+// Select 的值是字符串；"all" 表示不过滤项目，"0" 表示全部历史。
+const days = ref("30")
+const projectFilter = ref("all")
+
+const ranges = ["7", "30", "90", "0"] as const
+
+async function load() {
+  loading.value = true
+  error.value = ""
+  try {
+    summary.value = await fetchUsageSummary(
+      Number(days.value),
+      projectFilter.value === "all" ? null : projectFilter.value,
+    )
+  } catch (e) {
+    error.value = tBackendError(e)
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(load)
+watch([days, projectFilter], load)
+
+// 与会话页一致的项目搜索下拉，但选项始终来自完整工作区，不受统计筛选结果影响。
+const projectOpen = ref(false)
+const projectQuery = ref("")
+watch(projectOpen, open => {
+  if (open) projectQuery.value = ""
+})
+const filteredProjects = computed(() => {
+  const paths = workspace.orderedProjects().filter(path => !workspace.isProjectless(path))
+  const query = projectQuery.value.trim().toLowerCase()
+  if (!query) return paths
+  return paths.filter(
+    path => workspace.projectName(path).toLowerCase().includes(query) || path.toLowerCase().includes(query),
+  )
+})
+function selectProject(path: string) {
+  projectFilter.value = path
+  projectOpen.value = false
+}
+
+const totals = computed(
+  () =>
+    summary.value?.totals ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      messages: 0,
+    },
+)
+const summaryCards = computed(() => [
+  { icon: Hash, label: t("usage.totalTokens"), value: compactNumber(totals.value.totalTokens) },
+  { icon: Layers, label: t("usage.sessionCount"), value: compactNumber(summary.value?.sessionsScanned ?? 0) },
+  { icon: SquareStack, label: t("usage.messageCount"), value: compactNumber(totals.value.messages) },
+])
+
+const byDay = computed(() => summary.value?.byDay ?? [])
+const maxDayValue = computed(() => Math.max(1e-9, ...byDay.value.map(d => d.totalTokens)))
+function barHeight(day: { totalTokens: number }): number {
+  return Math.max(2, Math.round((day.totalTokens / maxDayValue.value) * 100))
+}
+function barValue(day: { totalTokens: number }): string {
+  return compactNumber(day.totalTokens)
+}
+</script>
+
+<template>
+  <div class="space-y-5">
+    <div class="flex flex-wrap items-center gap-3">
+      <Select v-model="days">
+        <SelectTrigger class="w-36 shrink-0 text-xs" :aria-label="t('usage.range')">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="value in ranges" :key="value" :value="value">
+            {{ t(value === "0" ? "usage.rangeAll" : "usage.rangeDays", { days: value }) }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <Popover v-model:open="projectOpen">
+        <PopoverTrigger as-child>
+          <Button
+            variant="outline"
+            class="w-48 shrink-0 justify-start px-3 text-xs font-normal"
+            :aria-label="t('sessionArchive.filter')"
+            :title="projectFilter === 'all' ? undefined : projectFilter"
+          >
+            <Folder :size="14" class="size-auto shrink-0" />
+            <span class="truncate">{{
+              projectFilter === "all" ? t("sessionArchive.filterAll") : workspace.projectName(projectFilter)
+            }}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" align="start" class="w-72 p-2">
+          <Input v-model="projectQuery" :placeholder="t('workspace.searchProject')" class="h-7 text-xs" />
+          <ScrollArea v-if="filteredProjects.length" viewport-class="max-h-64">
+            <Button
+              v-for="path in filteredProjects"
+              :key="path"
+              variant="context-menu-item"
+              size="content"
+              class="context-menu-item"
+              :aria-current="path === projectFilter ? 'true' : undefined"
+              :title="path"
+              @click="selectProject(path)"
+            >
+              <Folder :size="14" class="size-auto shrink-0" />
+              <span class="truncate">{{ workspace.projectName(path) }}</span>
+              <span v-if="path === projectFilter" class="ml-auto">✓</span>
+            </Button>
+          </ScrollArea>
+          <p v-else-if="projectQuery.trim()" class="px-2 py-2 text-xs text-muted-foreground">
+            {{ t("workspace.noMatchingProject") }}
+          </p>
+          <div class="border-t border-border pt-1.5">
+            <Button
+              variant="context-menu-item"
+              size="content"
+              class="context-menu-item"
+              :aria-current="projectFilter === 'all' ? 'true' : undefined"
+              @click="selectProject('all')"
+            >
+              <Folder :size="14" class="size-auto shrink-0" />
+              <span class="truncate">{{ t("sessionArchive.filterAll") }}</span>
+              <span v-if="projectFilter === 'all'" class="ml-auto">✓</span>
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      <Button variant="outline" size="sm" class="h-8 shrink-0 gap-2 px-3 text-xs" :disabled="loading" @click="load">
+        <RotateCw :size="14" :class="{ 'animate-spin': loading }" />
+        {{ t("sessionArchive.refresh") }}
+      </Button>
+    </div>
+
+    <p v-if="error" class="text-sm text-destructive break-words">{{ error }}</p>
+    <p v-else-if="loading && !summary" class="text-sm text-muted-foreground">{{ t("usage.loading") }}</p>
+    <template v-else-if="summary">
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div v-for="card in summaryCards" :key="card.label" class="rounded-lg border border-border/60 p-3">
+          <p class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <component :is="card.icon" :size="13" />{{ card.label }}
+          </p>
+          <p class="mt-1 text-xl font-semibold tabular-nums">{{ card.value }}</p>
+        </div>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        {{
+          t("usage.tokenBreakdown", {
+            input: compactNumber(totals.input),
+            output: compactNumber(totals.output),
+            cacheRead: compactNumber(totals.cacheRead),
+            cacheWrite: compactNumber(totals.cacheWrite),
+          })
+        }}
+      </p>
+
+      <section v-if="byDay.length" class="rounded-lg border border-border/60 p-3">
+        <h3 class="text-sm font-medium">{{ t("usage.dailyTitle") }}</h3>
+        <div class="mt-3 flex h-28 items-end gap-0.5">
+          <div
+            v-for="day in byDay"
+            :key="day.day"
+            class="flex h-full min-w-[3px] flex-1 flex-col justify-end"
+            :title="`${day.day} · ${barValue(day)}`"
+          >
+            <div class="w-full rounded-sm bg-primary/70" :style="{ height: `${barHeight(day)}%` }" />
+          </div>
+        </div>
+        <div class="mt-1 flex justify-between text-[11px] text-muted-foreground tabular-nums">
+          <span>{{ byDay[0]?.day }}</span>
+          <span>{{ byDay[byDay.length - 1]?.day }}</span>
+        </div>
+      </section>
+
+      <section v-if="summary.byProject.length" class="overflow-hidden rounded-lg border border-border/60">
+        <header class="border-b border-border/60 bg-muted/40 px-3 py-2 text-sm font-medium">
+          {{ t("usage.byProject") }}
+        </header>
+        <ul class="divide-y divide-border/60">
+          <li v-for="row in summary.byProject" :key="row.project" class="flex items-center gap-3 px-3 py-2 text-sm">
+            <span class="min-w-0 flex-1 truncate" :title="row.project">{{ workspace.projectName(row.project) }}</span>
+            <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {{ t("usage.sessionsShort", { count: row.sessions }) }}
+            </span>
+            <span class="w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{{
+              compactNumber(row.totalTokens)
+            }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <section v-if="summary.byModel.length" class="overflow-hidden rounded-lg border border-border/60">
+        <header class="border-b border-border/60 bg-muted/40 px-3 py-2 text-sm font-medium">
+          {{ t("usage.byModel") }}
+        </header>
+        <ul class="divide-y divide-border/60">
+          <li
+            v-for="row in summary.byModel"
+            :key="`${row.provider}/${row.model}`"
+            class="flex items-center gap-3 px-3 py-2 text-sm"
+          >
+            <span class="min-w-0 flex-1 truncate" :title="`${row.provider}/${row.model}`">
+              {{ row.provider }}/{{ row.model }}
+            </span>
+            <span class="w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{{
+              compactNumber(row.totalTokens)
+            }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <p v-if="!summary.sessionsScanned" class="py-8 text-center text-sm text-muted-foreground">
+        {{ t("usage.empty") }}
+      </p>
+      <p class="text-xs text-muted-foreground">{{ t("usage.sourceNote") }}</p>
+    </template>
+  </div>
+</template>

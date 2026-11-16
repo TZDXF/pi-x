@@ -81,7 +81,7 @@ pub(crate) fn resource_enabled(rel: &str, patterns: Option<&[String]>) -> bool {
     let mut enabled = includes.is_empty()
         || includes
             .iter()
-            .any(|p| glob_match(p.trim_end_matches("/*"), rel) || glob_match(p, rel));
+            .any(|p| glob_match(p.strip_suffix("/*").unwrap_or(p), rel) || glob_match(p, rel));
     for p in pats {
         let marker = p.chars().next();
         let target = strip_pattern_marker(p);
@@ -122,6 +122,10 @@ mod tests {
         // force-exclude beats force-include
         let pats: Vec<String> = vec!["+a.ts".into(), "-a.ts".into()];
         assert!(!resource_enabled("a.ts", Some(&pats)));
+        // Strip only one directory wildcard, not every repeated suffix.
+        let pats: Vec<String> = vec!["a/*/*".into()];
+        assert!(!resource_enabled("a", Some(&pats)));
+        assert!(resource_enabled("a/b", Some(&pats)));
         // plain includes gate everything else
         let pats: Vec<String> = vec!["extensions/*.ts".into()];
         assert!(resource_enabled("extensions/a.ts", Some(&pats)));

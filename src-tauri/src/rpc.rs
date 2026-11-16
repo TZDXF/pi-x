@@ -12,22 +12,46 @@
 //! stdio readers, kill). Session-file surgery driven by the live transport
 //! (prompt rewind, serialized rename) lives in [`crate::sessions::edit`].
 
+mod activity;
+pub(crate) mod aux_probe;
+pub mod aux_launch;
 mod child;
+#[cfg(test)]
+mod gateway_tests;
+mod policy;
+#[cfg(test)]
+pub(crate) mod test_harness;
 
-use crate::pi_locate::PiInfo;
+pub use policy::RuntimePolicy;
+
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+pub use child::{RemoteSpawnSpec, SpawnProgram};
+// 仅实机集成测试（S-R1，`#[ignore]`）消费；对齐 commands/mod.rs 的既有做法。
+#[allow(unused_imports)]
+pub(crate) use child::{resolve_path_rebind, PathRebind};
 use child::{SessionInner, SessionTransport};
 
 // Scheduled workers also have a backend completion listener; all workers are visible to PiX.
 fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: Value) {
+    if event == EXIT_EVENT
+        || (event == EVENT
+            && matches!(
+                payload["type"].as_str(),
+                Some("agent_start" | "agent_settled")
+            ))
+    {
+        crate::commands::workspace_state::record_runtime_activity(app, &payload);
+    } else if event == SSH_PATH_BOUND_EVENT {
+        crate::commands::workspace_state::rebind_runtime_activity(app, &payload);
+    }
     if runtime_id.starts_with("schedule-") {
         use tauri::Emitter;
         let name = event.replace("pi://", "pi://schedule-");
@@ -36,10 +60,24 @@ fn emit_process_event(app: &AppHandle, event: &str, runtime_id: &str, payload: V
     crate::remote::emit(app, event, payload);
 }
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+async fn retire_process(process: &ProcessState) {
+    let guard = process.inner.lock().await;
+    let mut activity = process.activity.lock().await;
+    let generation = process.generation.fetch_add(1, Ordering::Relaxed) + 1;
+    // The process may already have exited while its stdout reader has not yet
+    // observed EOF. Publish the terminal event before invalidating that reader.
+    activity.stop_and_emit(generation, true);
+    if let Some(inner) = guard.as_ref() {
+        inner.pending.lock().await.clear();
+    }
+}
+
 const EVENT: &str = "pi://event";
 const STDERR_EVENT: &str = "pi://stderr";
 const EXIT_EVENT: &str = "pi://exit";
+/// 重连 realpath 回绑事件（契约 §3.8）：payload 为 `{ runtimeId, project, path }`，
+/// `project` 是 path 回绑后重建的 `ssh://` 展示 URI，供前端更新项目展示。
+const SSH_PATH_BOUND_EVENT: &str = "pi://sshPathBound";
 
 /// Bound for internal `get_state` probes (spawn duplicate checks, session
 /// listing). A hung pi process must never block these indefinitely.
@@ -48,11 +86,22 @@ const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 #[derive(Default)]
 pub struct ProcessState {
     runtime_id: String,
-    project: String,
+    project: Arc<Mutex<String>>,
     inner: Mutex<Option<SessionInner>>,
     navigation: Mutex<()>,
     /// Incremented on every spawn; lets stale readers detect they are dead.
     generation: Arc<AtomicU64>,
+    activity: Arc<Mutex<activity::RuntimeActivity>>,
+    /// 运行策略：`Main` 是既有会话默认值；aux 由 spawn 时显式写入，不从命令读取。
+    policy: RuntimePolicy,
+    /// aux 的归属父会话（主会话恒为 `None`）。只在 spawn 之后由
+    /// [`set_aux_parent`] 写入，回收日志与重连过滤按它归类。
+    pub(crate) parent_runtime: Mutex<Option<String>>,
+    /// **用户活动**时钟（`docs/aux-chat-spec.md` §5）：只在
+    /// `prompt`/`steer`/`follow_up` 时前进，`get_state`/`get_messages`/探针/租约心跳
+    /// 都不动它。刻意不复用池级的 [`RpcState::last_activity`] —— 那里的每次
+    /// `process()` 调用都会刷新，会让"空闲 30 分钟"的判据永远不成立。
+    pub(crate) user_activity: Mutex<aux_probe::UserActivityClock>,
 }
 
 impl ProcessState {
@@ -70,7 +119,21 @@ impl ProcessState {
     /// must not block other RPCs. If the session is respawned meanwhile, the
     /// stale transport's writes fail instead of hitting the wrong process.
     pub(crate) async fn transport(&self) -> Option<SessionTransport> {
-        self.inner.lock().await.as_ref().map(SessionTransport::snapshot)
+        self.inner
+            .lock()
+            .await
+            .as_ref()
+            .map(SessionTransport::snapshot)
+    }
+
+    /// 该对象是否**真的启动过**进程（**只读、仅测试使用**）。
+    ///
+    /// 生产路径**不**用它：`process_kill` 的 `inner == None` 早退分支直接从**已持有**
+    /// 的 `activity` 守卫里读 `has_spawned()` —— 放锁后再取一次是裸等待，会把总预算
+    /// 打穿（复审第八轮 P1）。
+    #[cfg(test)]
+    pub(crate) async fn has_spawned_once(&self) -> bool {
+        self.activity.lock().await.has_spawned()
     }
 
     /// Current session generation; stale callers detect a respawn by
@@ -96,11 +159,11 @@ pub async fn process_request(state: &ProcessState, mut command: Value) -> Result
 /// issued it is still current. `next_id` restarts at 1 on every respawn, so a
 /// stale timeout must never delete the new session's in-flight entry.
 async fn remove_pending_if_current(state: &ProcessState, id: u64, generation: u64) {
-    if state.generation.load(Ordering::Relaxed) != generation {
-        return;
-    }
-    if let Some(inner) = state.inner.lock().await.as_ref() {
-        inner.pending.lock().await.remove(&id);
+    let guard = state.inner.lock().await;
+    if state.generation.load(Ordering::Relaxed) == generation {
+        if let Some(inner) = guard.as_ref() {
+            inner.pending.lock().await.remove(&id);
+        }
     }
 }
 
@@ -126,24 +189,8 @@ pub async fn process_request_timeout(
     } else {
         None
     };
-    let guard = state.inner.lock().await;
-    let inner = guard.as_ref().ok_or("pi is not running")?;
-    // Read the generation while the session lock is held: a concurrent spawn
-    // bumps it before replacing `inner`, so this pair identifies the session
-    // the request is issued against.
-    let generation = state.generation.load(Ordering::Relaxed);
-
-    let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    command["id"] = json!(id);
-
     let (tx, rx) = oneshot::channel();
-    inner.pending.lock().await.insert(id, tx);
-
-    if let Err(e) = write_line(&inner.stdin_tx, command.to_string()).await {
-        inner.pending.lock().await.remove(&id);
-        return Err(e);
-    }
-    drop(guard);
+    let (id, generation) = accept_command(state, command, Some(tx)).await?;
 
     let result = match timeout {
         Some(t) => tokio::time::timeout(t, rx)
@@ -165,11 +212,66 @@ async fn write_line(stdin_tx: &mpsc::Sender<String>, line: String) -> Result<(),
         .map_err(|_| "pi is not running (stdin closed)".to_string())
 }
 
-/// Fire-and-forget write (e.g. `extension_ui_response`).
-pub async fn process_notify(state: &ProcessState, command: Value) -> Result<(), String> {
+/// Wait for queue capacity without blocking stdout, request expiry or kill.
+/// Queue insertion and its activity update then share one generation check and
+/// lock acquisition, so stdout cannot overtake an accepted abort/UI response.
+async fn accept_command(
+    state: &ProcessState,
+    command: &mut Value,
+    response: Option<oneshot::Sender<Value>>,
+) -> Result<(u64, u64), String> {
+    let ui_response = command["type"] == "extension_ui_response";
+    let (stdin_tx, generation, ui_token) = {
+        let guard = state.inner.lock().await;
+        let inner = guard.as_ref().ok_or("pi is not running")?;
+        let mut activity = state.activity.lock().await;
+        let generation = state.current_generation();
+        if !activity.is_current(generation) {
+            return Err("pi is not running".into());
+        }
+        let token = if ui_response {
+            Some(
+                activity
+                    .response_token(command)
+                    .ok_or("extension UI request is no longer pending")?,
+            )
+        } else {
+            None
+        };
+        (inner.stdin_tx.clone(), generation, token)
+    };
+    let permit = stdin_tx
+        .reserve_owned()
+        .await
+        .map_err(|_| "pi is not running (stdin closed)".to_string())?;
     let guard = state.inner.lock().await;
     let inner = guard.as_ref().ok_or("pi is not running")?;
-    write_line(&inner.stdin_tx, command.to_string()).await
+    let mut activity = state.activity.lock().await;
+    if state.current_generation() != generation || !activity.is_current(generation) {
+        return Err("pi session changed before accepting command".into());
+    }
+    if ui_response && activity.response_token(command) != ui_token {
+        return Err("extension UI request is no longer pending".into());
+    }
+    let id = if let Some(tx) = response {
+        let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+        command["id"] = json!(id);
+        inner.pending.lock().await.insert(id, tx);
+        id
+    } else {
+        0
+    };
+    permit.send(command.to_string());
+    activity.command(command);
+    drop(activity);
+    // 用户活动时钟只在真正写进 stdin 之后转录（与 `activity.command` 同一时刻）；
+    // 上面已释放 `activity`/`inner` 的守卫，这里只拿 `user_activity` 一把锁。
+    state.note_user_activity(command).await;
+    Ok((id, generation))
+}
+/// Fire-and-forget write (e.g. `extension_ui_response`).
+pub async fn process_notify(state: &ProcessState, mut command: Value) -> Result<(), String> {
+    accept_command(state, &mut command, None).await.map(|_| ())
 }
 
 /// Each runtime owns a process, request correlation table and navigation lock.
@@ -198,34 +300,78 @@ impl RpcState {
     }
 }
 
+// Pi reserves a session filename before its first message creates the file.
+fn local_session_key(file: &str, project: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(file);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        PathBuf::from(project).join(path)
+    };
+    match dunce::canonicalize(&path) {
+        Ok(path) => Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or("Session path has no parent")?;
+            let name = path.file_name().ok_or("Session path has no filename")?;
+            Ok(dunce::canonicalize(parent)
+                .map_err(|e| e.to_string())?
+                .join(name))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub async fn spawn(
     app: AppHandle,
     state: &RpcState,
-    pi: &PiInfo,
+    program: &SpawnProgram,
     project: &str,
     session_file: Option<String>,
     mut extra_args: Vec<String>,
     workspace_manifest: Option<String>,
     runtime_id: Option<String>,
+    policy: RuntimePolicy,
 ) -> Result<(), String> {
-    extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
-    if workspace_manifest.is_some() {
-        extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
+    // P1 远程分支（契约 §3.1 第 7 条）：不注入 builtin extensions——它们物化的
+    // 是本地文件路径（builtin_extensions.rs），对远端无效；PIX_WORKSPACE 同理不设。
+    if policy.is_aux() {
+        // aux 只用规格里的固定 argv（docs/aux-chat-spec.md §1），不叠加 PiX 扩展；
+        // `-e` 白名单由调用方构造后经 extra_args 传入。
+    } else if matches!(program, SpawnProgram::LocalPi(_)) {
+        extra_args.extend(crate::builtin_extensions::rpc_args(&app)?);
+        if workspace_manifest.is_some() {
+            extra_args.extend(crate::builtin_extensions::workspace_extension_args()?);
+        }
+    }
+    if policy.ephemeral() && session_file.is_some() {
+        // `--session` 与 `--no-session` 互斥：aux 必须无文件（--no-session 只在
+        // `aux_launch::aux_extra_args()` 里产出，这里挡住反向用法）。
+        return Err(crate::errors::pix_error(
+            "auxSessionForbidden",
+            "辅助对话不接受会话文件",
+        ));
     }
     let id = runtime_id.unwrap_or_else(|| "default".into());
     // Probe from a snapshot: each probe can take up to PROBE_TIMEOUT, so the
     // pool lock must never be held while a hung runtime is being probed.
-    let snapshot: Vec<Arc<ProcessState>> =
-        state.processes.lock().await.values().cloned().collect();
+    let snapshot: Vec<Arc<ProcessState>> = state.processes.lock().await.values().cloned().collect();
     if let Some(existing) = snapshot.iter().find(|p| p.runtime_id == id) {
         if child::process_running(existing).await {
             return Err("Runtime is already running".into());
         }
+        // A replacement uses a new ProcessState. Retire the old state's readers
+        // and timers before either worker can publish events with the same id.
+        retire_process(existing).await;
     }
     // Never open the same persisted conversation in two processes. Probes are
     // time-bounded: a hung pi process must not block spawning forever.
-    if let Some(file) = &session_file {
-        let path = dunce::canonicalize(file).map_err(|e| e.to_string())?;
+    // 远端 POSIX 会话路径不做本地 canonicalize（Windows 上必失败），按原串比对。
+    let session_key: Option<PathBuf> = match (&session_file, program) {
+        (None, _) => None,
+        (Some(file), SpawnProgram::LocalPi(_)) => Some(local_session_key(file, project)?),
+        (Some(file), SpawnProgram::Remote(_)) => Some(PathBuf::from(file)),
+    };
+    if let Some(path) = &session_key {
         for process in &snapshot {
             if !child::process_running(process).await {
                 continue;
@@ -236,12 +382,19 @@ pub async fn spawn(
             else {
                 continue;
             };
-            if response["data"]["sessionFile"]
-                .as_str()
-                .and_then(|f| dunce::canonicalize(f).ok())
-                .as_ref()
-                == Some(&path)
-            {
+            let matched = match program {
+                SpawnProgram::LocalPi(_) => {
+                    response["data"]["sessionFile"]
+                        .as_str()
+                        .and_then(|f| local_session_key(f, project).ok())
+                        .as_ref()
+                        == Some(path)
+                }
+                SpawnProgram::Remote(_) => response["data"]["sessionFile"]
+                    .as_str()
+                    .is_some_and(|f| f == path.to_string_lossy()),
+            };
+            if matched {
                 return Err(format!(
                     "Session already open in runtime {}",
                     process.runtime_id
@@ -251,13 +404,14 @@ pub async fn spawn(
     }
     let process = Arc::new(ProcessState {
         runtime_id: id.clone(),
-        project: project.into(),
+        project: Arc::new(Mutex::new(project.into())),
+        policy,
         ..Default::default()
     });
     child::process_spawn(
         app,
         &process,
-        pi,
+        program,
         project,
         session_file,
         extra_args,
@@ -275,13 +429,15 @@ pub async fn request(
     runtime_id: Option<&str>,
 ) -> Result<Value, String> {
     let process = state.process(runtime_id).await?;
+    // M0：策略判定在统一入口，rewind_prompt 特判必须在其之后。
+    process.policy.guard_request(&command)?;
     if command["type"] == "rewind_prompt" {
         return crate::sessions::edit::rewind_prompt(&process, &command).await;
     }
     let exporting = command["type"] == "export_html";
     let mut response = process_request(&process, command).await?;
     if exporting {
-        resolve_export_path(&mut response, &process.project)?;
+        resolve_export_path(&mut response, &process.project.lock().await)?;
     }
     Ok(response)
 }
@@ -296,6 +452,11 @@ fn resolve_export_path(response: &mut Value, project: &str) -> Result<(), String
     let Some(path) = response["data"]["path"].as_str() else {
         return Ok(());
     };
+    // 远程项目（ssh/wsl/docker URI）：导出路径位于远端文件系统，本地无法
+    // canonicalize，原样返回 pi 给的路径作为防御性兜底（契约 §5）。
+    if crate::ssh::is_remote_uri(project) {
+        return Ok(());
+    }
     let absolute = dunce::canonicalize(Path::new(project).join(path))
         .map_err(|e| format!("Cannot locate exported HTML {path}: {e}"))?;
     response["data"]["path"] = json!(absolute.to_string_lossy());
@@ -307,6 +468,7 @@ pub async fn notify(
     runtime_id: Option<&str>,
 ) -> Result<(), String> {
     let process = state.process(runtime_id).await?;
+    process.policy.guard_notify(&command)?;
     process_notify(&process, command).await
 }
 pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
@@ -315,23 +477,68 @@ pub async fn running(state: &RpcState, runtime_id: Option<&str>) -> bool {
         Err(_) => false,
     }
 }
-pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
-    let process = state
-        .processes
-        .lock()
-        .await
-        .remove(runtime_id.unwrap_or("default"));
-    if let Some(process) = process {
-        child::process_kill(&process, "rpc_kill").await?;
-        state.last_activity.lock().await.remove(&process.runtime_id);
+
+/// Snapshot the owning endpoint for session-file operations without navigating pi.
+pub(crate) async fn session_endpoint(
+    state: &RpcState,
+    runtime_id: &str,
+) -> Result<Option<crate::ssh::RemoteEndpoint>, String> {
+    let process = state.process(Some(runtime_id)).await?;
+    // aux 无 session 文件，复制/导出会话属于结构类越界操作。
+    if process.policy.is_aux() {
+        return Err(crate::errors::pix_error(
+            "auxRpcDenied",
+            "辅助对话不支持会话文件操作",
+        ));
     }
-    Ok(())
+    let guard = process.inner.lock().await;
+    let inner = guard.as_ref().ok_or("pi is not running")?;
+    Ok(inner.remote.as_ref().map(|remote| remote.endpoint.clone()))
+}
+
+pub async fn kill(state: &RpcState, runtime_id: Option<&str>) -> Result<(), String> {
+    let id = runtime_id.unwrap_or("default").to_string();
+    let process = state.processes.lock().await.remove(&id);
+    let Some(process) = process else {
+        return Ok(());
+    };
+    match child::process_kill(&process, "rpc_kill").await {
+        Ok(()) => {
+            state.last_activity.lock().await.remove(&process.runtime_id);
+            // 进程没了，租约也就没有意义：留着会让 `aux_list` 一直报一个不存在的实例。
+            crate::aux_leases::forget(&process.runtime_id);
+            Ok(())
+        }
+        Err(error) => {
+            // 终止未确认：**放回池里**，否则句柄随 `Arc` 一起落地、谁也没法再重试
+            // （复审第四轮 P1-2 的同一类问题）。放回后回收器/下一次 `rpc_kill` 仍能
+            // 找到它；只有在 **Arc 真正释放**（进程条目从池里消失）时才由 Child 自身的
+            // `kill_on_drop` 尽力终止 —— 那是**本次**进程内的尽力兜底，没有跨启动保证。
+            state
+                .processes
+                .lock()
+                .await
+                .insert(process.runtime_id.clone(), process);
+            Err(error)
+        }
+    }
 }
 pub async fn kill_all(state: &RpcState) -> Result<(), String> {
     let processes = std::mem::take(&mut *state.processes.lock().await);
     state.last_activity.lock().await.clear();
+    crate::aux_leases::clear();
+    crate::aux_reap::clear_pending_kills();
     for process in processes.values() {
-        child::process_kill(process, "kill_all (app exit)").await?;
+        // 应用退出路径用**短总 budget**（500ms/实例，覆盖远程段 + OS 终止段 + 确认
+        // 退出，不是只压最后那段 wait）：`kill_all` 在 `RunEvent::Exit` 里 `block_on`，
+        // N 个进程 × 5s 会把退出拖住。单条失败也不转成 `Err` 中断循环 —— 退出时必须
+        // 尽力把所有进程都杀掉，失败降级为日志。
+        // 退出路径**不做后台重试**：池已 `take` 走、待重试表也清了，终止失败只剩日志。
+        // 这些 Child 由**本次**的 `kill_on_drop`（LocalPi 分支已设）尽力终止；内存表
+        // 不跨启动恢复，所以没有"下次启动再收尾"的保证。
+        if let Err(error) = child::process_kill_fast(process, "kill_all (app exit)").await {
+            crate::logs::write(&process.runtime_id, &format!("exit kill failed: {error}"));
+        }
     }
     Ok(())
 }
@@ -342,11 +549,19 @@ pub async fn list(state: &RpcState) -> Vec<Value> {
         if !child::process_running(&process).await {
             continue;
         }
+        let generation = process.current_generation();
         let mut probe = json!({"type": "get_state"});
         if let Ok(response) =
             process_request_timeout(&process, &mut probe, Some(PROBE_TIMEOUT)).await
         {
-            result.push(json!({"runtimeId": process.runtime_id, "project": process.project, "state": response["data"]}));
+            let mut activity = process.activity.lock().await;
+            if !activity.is_current(generation) {
+                continue;
+            }
+            let project = process.project.lock().await.clone();
+            let mut snapshot = json!({"runtimeId": process.runtime_id, "project": project, "state": response["data"]});
+            activity.snapshot(&mut snapshot);
+            result.push(snapshot);
         }
     }
     result
@@ -359,6 +574,10 @@ pub(crate) async fn set_session_name(
 ) -> Result<Option<String>, String> {
     let processes: Vec<_> = state.processes.lock().await.values().cloned().collect();
     for process in processes {
+        // 内部 rename 绕过 rpc::request，这里复用同一策略：aux 永不收到 set_session_name。
+        if process.policy.is_aux() {
+            continue;
+        }
         if !child::process_running(&process).await {
             continue;
         }
@@ -372,19 +591,41 @@ pub(crate) async fn set_session_name(
             .as_str()
             .map(crate::sessions::edit::normalize_session_file);
         if active.as_deref() == Some(path) {
-            return crate::sessions::edit::process_set_session_name(&process, path, title, only_if_empty)
-                .await;
+            return crate::sessions::edit::process_set_session_name(
+                &process,
+                path,
+                title,
+                only_if_empty,
+            )
+            .await;
         }
     }
-    crate::sessions::edit::process_set_session_name(&ProcessState::default(), path, title, only_if_empty)
-        .await
+    crate::sessions::edit::process_set_session_name(
+        &ProcessState::default(),
+        path,
+        title,
+        only_if_empty,
+    )
+    .await
 }
 
 #[cfg(test)]
 mod pending_cleanup_tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::process::Stdio;
+    use std::sync::Mutex as StdMutex;
     use tokio::process::Command;
+
+    #[derive(Default)]
+    struct Sink(StdMutex<Vec<Value>>);
+
+    impl child::EventSink for Sink {
+        fn emit(&self, _: &'static str, _: &str, payload: Value) {
+            self.0.lock().unwrap().push(payload);
+        }
+    }
 
     /// `SessionInner` needs a live child handle; a trivially exiting process
     /// is enough because only the pending map is exercised here.
@@ -394,7 +635,9 @@ mod pending_cleanup_tests {
         if cfg!(windows) {
             cmd.args(["/C", "exit 0"]);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         let child = cmd.spawn().expect("spawn dummy child");
         let (stdin_tx, _stdin_rx) = mpsc::channel::<String>(8);
         *state.inner.lock().await = Some(SessionInner {
@@ -402,8 +645,50 @@ mod pending_cleanup_tests {
             stdin_tx,
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
+            remote: None,
         });
         state
+    }
+
+    #[tokio::test]
+    async fn respawn_retires_exited_process_before_eof_with_error_exit_event() {
+        #[derive(Default)]
+        struct ExitSink(StdMutex<Vec<(&'static str, Value)>>);
+        impl child::EventSink for ExitSink {
+            fn emit(&self, event: &'static str, _: &str, payload: Value) {
+                self.0.lock().unwrap().push((event, payload));
+            }
+        }
+
+        let state = state_with_session().await;
+        let sink = Arc::new(ExitSink::default());
+        state.activity.lock().await.reset(
+            0,
+            "test",
+            "project",
+            Some("session.jsonl".into()),
+            sink.clone(),
+        );
+        state
+            .activity
+            .lock()
+            .await
+            .event(json!({"type":"agent_start"}));
+        while child::process_running(&state).await {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Model the restart race: waitpid has observed exit, but no stdout EOF
+        // reader has emitted a terminal event yet.
+        retire_process(&state).await;
+        let events = sink.0.lock().unwrap();
+        let exit = events
+            .iter()
+            .find(|(event, _)| *event == EXIT_EVENT)
+            .expect("restart must emit pi://exit");
+        assert_eq!(exit.1["pixRunStatus"], "error");
+        assert_eq!(exit.1["pixSessionFile"], "session.jsonl");
+        assert!(exit.1["pixRunId"].as_str().is_some_and(|id| !id.is_empty()));
     }
 
     #[tokio::test]
@@ -411,18 +696,21 @@ mod pending_cleanup_tests {
         let state = state_with_session().await;
         let (tx, _rx) = oneshot::channel::<Value>();
         let inner = state.inner.lock().await;
-        inner
-            .as_ref()
-            .unwrap()
-            .pending
-            .lock()
-            .await
-            .insert(7, tx);
+        inner.as_ref().unwrap().pending.lock().await.insert(7, tx);
         drop(inner);
         let generation = state.generation.load(Ordering::Relaxed);
         remove_pending_if_current(&state, 7, generation).await;
         assert!(
-            state.inner.lock().await.as_ref().unwrap().pending.lock().await.is_empty(),
+            state
+                .inner
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .pending
+                .lock()
+                .await
+                .is_empty(),
             "timed-out entry of the current session is removed"
         );
     }
@@ -432,13 +720,7 @@ mod pending_cleanup_tests {
         let state = state_with_session().await;
         let (tx, _rx) = oneshot::channel::<Value>();
         let inner = state.inner.lock().await;
-        inner
-            .as_ref()
-            .unwrap()
-            .pending
-            .lock()
-            .await
-            .insert(7, tx);
+        inner.as_ref().unwrap().pending.lock().await.insert(7, tx);
         drop(inner);
         let stale = state.generation.load(Ordering::Relaxed);
         // Simulate a respawn: ids restart at 1 and the stale cleanup must not
@@ -460,6 +742,228 @@ mod pending_cleanup_tests {
         );
     }
 
+    #[tokio::test]
+    async fn accepted_ui_response_clears_snapshot_and_broadcasts_to_other_clients() {
+        let state = state_with_session().await;
+        let (stdin_tx, mut stdin_rx) = mpsc::channel(8);
+        state.inner.lock().await.as_mut().unwrap().stdin_tx = stdin_tx;
+        let sink = Arc::new(Sink::default());
+        state
+            .activity
+            .lock()
+            .await
+            .reset(0, "test", "project", None, sink.clone());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"confirm"
+        }));
+        let response = json!({"type":"extension_ui_response", "id":"question", "confirmed":true});
+        process_notify(&state, response.clone()).await.unwrap();
+        assert_eq!(stdin_rx.recv().await.unwrap(), response.to_string());
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+        let emitted = sink.0.lock().unwrap();
+        assert_eq!(emitted.last().unwrap()["type"], "extension_ui_resolved");
+        assert_eq!(emitted.last().unwrap()["id"], "question");
+        assert_eq!(emitted.last().unwrap()["runtimeId"], "test");
+    }
+
+    #[tokio::test]
+    async fn failed_ui_response_write_keeps_request_available_for_reconnect() {
+        let state = state_with_session().await;
+        let sink = Arc::new(Sink::default());
+        state
+            .activity
+            .lock()
+            .await
+            .reset(0, "test", "project", None, sink.clone());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"input"
+        }));
+        assert!(process_notify(
+            &state,
+            json!({
+                "type":"extension_ui_response", "id":"question", "value":"answer"
+            })
+        )
+        .await
+        .is_err());
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert_eq!(snapshot["pendingUiRequests"].as_array().unwrap().len(), 1);
+        assert_eq!(sink.0.lock().unwrap().len(), 1);
+    }
+
+    async fn backpressured_state() -> (ProcessState, mpsc::Receiver<String>, Arc<Sink>) {
+        let state = state_with_session().await;
+        let (stdin_tx, stdin_rx) = mpsc::channel(1);
+        stdin_tx.try_send("queued".into()).unwrap();
+        state.inner.lock().await.as_mut().unwrap().stdin_tx = stdin_tx;
+        let sink = Arc::new(Sink::default());
+        state.activity.lock().await.reset(
+            0,
+            "test",
+            "project",
+            Some("session.jsonl".into()),
+            sink.clone(),
+        );
+        (state, stdin_rx, sink)
+    }
+
+    async fn assert_pending<F: Future>(mut future: Pin<&mut F>) {
+        std::future::poll_fn(|cx| {
+            assert!(
+                future.as_mut().poll(cx).is_pending(),
+                "queue must actually apply backpressure"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn backpressured_request_releases_locks_and_registers_only_on_acceptance() {
+        let (state, mut stdin_rx, _) = backpressured_state().await;
+        let mut command = json!({"type":"get_state"});
+        let request = process_request_timeout(&state, &mut command, Some(PROBE_TIMEOUT));
+        tokio::pin!(request);
+        assert_pending(request.as_mut()).await;
+        {
+            let inner = state
+                .inner
+                .try_lock()
+                .expect("backpressure must release inner");
+            assert!(inner.as_ref().unwrap().pending.lock().await.is_empty());
+            assert!(
+                state.activity.try_lock().is_ok(),
+                "backpressure must release activity"
+            );
+        }
+        assert_eq!(stdin_rx.recv().await.as_deref(), Some("queued"));
+        assert_pending(request.as_mut()).await;
+        let accepted: Value = serde_json::from_str(&stdin_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(accepted["id"], 1);
+        let inner = state.inner.lock().await;
+        inner
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .remove(&1)
+            .unwrap()
+            .send(json!({"success":true}))
+            .unwrap();
+        drop(inner);
+        assert_eq!(request.await.unwrap()["success"], true);
+    }
+
+    #[tokio::test]
+    async fn backpressured_notify_does_not_block_kill_or_lose_idle_exit_metadata() {
+        // 与 kill 注入（budget / OS 延迟）串行，避免进程级静态被别的用例改乱；
+        // 先拿锁再清注入（否则可能清掉别的用例刚设的注入）。
+        let _guard = crate::aux_leases::test_lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let (state, mut stdin_rx, sink) = backpressured_state().await;
+        state
+            .activity
+            .lock()
+            .await
+            .event(json!({"type":"agent_start"}));
+        let started = sink.0.lock().unwrap()[0].clone();
+        let notify = process_notify(&state, json!({"type":"abort"}));
+        tokio::pin!(notify);
+        assert_pending(notify.as_mut()).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            child::process_kill(&state, "test"),
+        )
+        .await
+        .expect("kill must not wait for stdin capacity")
+        .unwrap();
+        let exit = sink.0.lock().unwrap().last().unwrap().clone();
+        assert_eq!(exit["runtimeId"], "test");
+        assert_eq!(exit["pixProject"], "project");
+        assert_eq!(exit["pixSessionFile"], "session.jsonl");
+        assert_eq!(exit["pixRunId"], started["pixRunId"]);
+        assert_eq!(exit["pixRunStatus"], "idle");
+        assert!(exit["pixRunUpdatedAt"].as_u64() > started["pixRunUpdatedAt"].as_u64());
+        stdin_rx.recv().await.unwrap();
+        assert!(notify.await.is_err());
+        assert!(
+            stdin_rx.try_recv().is_err(),
+            "retired generation cannot enqueue its command"
+        );
+    }
+
+    #[tokio::test]
+    async fn backpressured_request_cannot_register_in_a_replacement_generation() {
+        let (state, mut stdin_rx, sink) = backpressured_state().await;
+        let mut command = json!({"type":"get_state"});
+        let request = process_request_timeout(&state, &mut command, Some(PROBE_TIMEOUT));
+        tokio::pin!(request);
+        assert_pending(request.as_mut()).await;
+        {
+            let guard = state.inner.lock().await;
+            let mut activity = state.activity.lock().await;
+            state.generation.store(1, Ordering::Relaxed);
+            activity.reset(1, "test", "project", None, sink);
+            let (tx, _rx) = oneshot::channel();
+            guard.as_ref().unwrap().pending.lock().await.insert(1, tx);
+        }
+        stdin_rx.recv().await.unwrap();
+        assert!(request.await.unwrap_err().contains("session changed"));
+        assert!(stdin_rx.try_recv().is_err());
+        assert!(state
+            .inner
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .pending
+            .lock()
+            .await
+            .contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn ui_response_waiting_for_capacity_cannot_resolve_a_reused_id_after_timeout() {
+        let (state, mut stdin_rx, _) = backpressured_state().await;
+        let (token, deadline) = state
+            .activity
+            .lock()
+            .await
+            .event(json!({
+                "type":"extension_ui_request", "id":"question", "method":"input", "timeout":20
+            }))
+            .unwrap();
+        activity::schedule_timeout(Arc::downgrade(&state.activity), 0, token, deadline);
+        let response = json!({"type":"extension_ui_response", "id":"question", "value":"old"});
+        let notify = process_notify(&state, response);
+        tokio::pin!(notify);
+        assert_pending(notify.as_mut()).await;
+        tokio::time::sleep_until(deadline + std::time::Duration::from_millis(1)).await;
+        let mut snapshot = json!({});
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+        state.activity.lock().await.event(json!({
+            "type":"extension_ui_request", "id":"question", "method":"input"
+        }));
+        stdin_rx.recv().await.unwrap();
+        assert!(notify.await.unwrap_err().contains("no longer pending"));
+        assert!(stdin_rx.try_recv().is_err());
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert_eq!(snapshot["pendingUiRequests"].as_array().unwrap().len(), 1);
+        process_notify(
+            &state,
+            json!({"type":"extension_ui_response", "id":"question", "value":"new"}),
+        )
+        .await
+        .unwrap();
+        assert!(stdin_rx.recv().await.unwrap().contains("new"));
+        state.activity.lock().await.snapshot(&mut snapshot);
+        assert!(snapshot["pendingUiRequests"].as_array().unwrap().is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -518,5 +1022,22 @@ mod export_tests {
 
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(project).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod session_key_tests {
+    use super::*;
+    #[test]
+    fn accepts_allocated_but_unwritten_session_file() {
+        let dir = std::env::temp_dir().join(format!("pix-session-key-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let project = dir.to_str().unwrap();
+        let expected = dunce::canonicalize(&dir).unwrap().join("new.jsonl");
+        assert_eq!(local_session_key("new.jsonl", project).unwrap(), expected);
+        std::fs::write(&expected, "").unwrap();
+        assert_eq!(local_session_key("new.jsonl", project).unwrap(), expected);
+        assert!(local_session_key("missing/new.jsonl", project).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

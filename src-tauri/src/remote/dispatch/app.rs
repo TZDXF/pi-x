@@ -25,6 +25,14 @@ pub(super) async fn handle(
                 crate::commands::app_config_save(app.clone(), cfg)?;
                 Ok(Value::Null)
             }
+            "app_preference_set" => {
+                crate::commands::app_preference_set(
+                    app.clone(),
+                    text(a, "key")?,
+                    text(a, "value")?,
+                )?;
+                Ok(Value::Null)
+            }
             "projectless_dir_resolve" => Ok(to_json(crate::commands::projectless_dir_resolve(
                 app.clone(),
             )?)?),
@@ -81,14 +89,48 @@ pub(super) async fn handle(
                 Ok(json!({ "base": format!("/api/preview/{}", crate::preview_proxy::secret()) }))
             }
             "list_project_directory" => Ok(to_json(
-                crate::commands::list_project_directory(text(a, "project")?, text(a, "path")?).await?,
+                crate::commands::list_project_directory(
+                    text(a, "project")?,
+                    text(a, "path")?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                ).await?,
             )?),
             "read_file_preview" => Ok(to_json(
-                crate::commands::read_file_preview(text(a, "project")?, text(a, "path")?).await?,
+                crate::commands::read_file_preview(
+                    text(a, "project")?,
+                    text(a, "path")?,
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                ).await?,
             )?),
             "search_files" => Ok(to_json(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,
             )?),
+            "watch_project_files" => {
+                crate::project_watch::watch_project_files(
+                    app.clone(),
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "unwatch_project_files" => {
+                crate::project_watch::unwatch_project_files(
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
+            "set_project_files_interest" => {
+                crate::project_watch::set_project_files_interest(
+                    text(a, "project")?,
+                    text(a, "subscriber")?,
+                    serde_json::from_value(a["paths"].clone()).map_err(|e| e.to_string())?,
+                )
+                .await?;
+                Ok(Value::Null)
+            }
             _ => return Err(UNHANDLED.to_owned()),
         }
     }
@@ -185,8 +227,13 @@ mod tests {
                 pi_path: Some("host-pi".to_owned()),
                 ..Default::default()
             };
+            cfg.preferences.insert("theme".into(), "dark".into());
             apply_remote_app_config(&mut cfg, &request);
             assert_eq!(cfg.pi_path.as_deref(), Some("host-pi"));
+            assert_eq!(
+                cfg.preferences.get("theme").map(String::as_str),
+                Some("dark")
+            );
         }
     }
 }

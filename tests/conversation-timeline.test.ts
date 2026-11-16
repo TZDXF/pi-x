@@ -1,24 +1,10 @@
 import { turnSources } from "./fixtures/chatSources"
 import { test, expect } from "vitest"
 import { readFileSync } from "node:fs"
-import ts from "typescript"
-import vm from "node:vm"
-const source = readFileSync(new URL("../src/lib/conversationTimeline.ts", import.meta.url), "utf8")
-const tsCompile = code => ts.transpile(code, { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 })
-// conversationTimeline now shares contentText with the session store via
-// '@/lib/content'; load the real module so its behavior is under test too.
-const require = id => {
-  if (id === "@/lib/content") {
-    const content = { exports: {} }
-    vm.runInNewContext(tsCompile(readFileSync(new URL("../src/lib/content.ts", import.meta.url), "utf8")), content)
-    return content.exports
-  }
-  throw new Error(`unexpected module: ${id}`)
-}
-const context = { exports: {}, require }
-vm.runInNewContext(tsCompile(source), context)
-const turns = context.exports.conversationTurns
-const buildTimelineTurns = context.exports.buildTimelineTurns
+// 直接 import 真实模块：conversationTimeline 现在经 `@/lib/content` 共享文本抽取，并经
+// `@/lib/promptContexts` 与气泡/复制共用同一个上下文解析器（父上下文块与 userselect
+// 尾块都不得进摘要）。用 vm 垫片加载会绕开这条依赖链，等于没测到共用关系。
+import { conversationTurns as turns, buildTimelineTurns } from "@/lib/conversationTimeline"
 const user = (id, text = "") => ({ kind: "user", id, text })
 const text = value => ({ type: "text", text: value })
 const assistant = (...blocks) => ({ kind: "assistant", blocks })
@@ -56,19 +42,24 @@ test("handles empty/image questions, unanswered turns, and bounded excerpts", ()
   expect(turns([user(1, "x".repeat(300))])[0].question.length).toBe(181)
   expect(turns([user(1, " a\n b ")])[0].question).toBe("a b")
 })
-test("rendered entries have anchors and navigation stops automatic following", () => {
+test("timeline question ignores an aux parent-context block", () => {
+  const prompt = ["<aux_parent_context>", "【用户】父会话问题", "</aux_parent_context>", "", "本轮的提问"].join("\n")
+  expect(turns([user(1, prompt)])[0].question).toBe("本轮的提问")
+  expect(buildTimelineTurns([], 0, [user(1, prompt)])[0].question).toBe("本轮的提问")
+})
+
+test("rendered entries have anchors and navigation respects reduced motion", () => {
   const chat = turnSources()
   expect(chat).toMatch(/:data-message-id="entry.id"/)
   const conversation = readFileSync(
     new URL("../src/components/ai-elements/conversation/Conversation.vue", import.meta.url),
     "utf8",
   )
-  expect(conversation).toMatch(/context.stopScroll\(\)[\s\S]*viewport.scrollTo/)
   expect(conversation).toMatch(/prefers-reduced-motion/)
 })
 
 // ---- buildTimelineTurns: full-session timeline over paginated history ----
-const build = context.exports.buildTimelineTurns
+const build = buildTimelineTurns
 const rawUser = (text, images = []) => ({
   role: "user",
   content: images.length ? [{ type: "text", text }, ...images] : text,
@@ -200,14 +191,25 @@ test("timeline without a snapshot keeps compaction nodes from entries", () => {
 })
 
 // NOTE: 源码正则断言，不验证运行时行为（项目未引入组件挂载依赖）。
-test("timeline tracks the scroll position and reveals only the current number", () => {
+test("timeline preview contains long text instead of inheriting the tooltip flex layout", () => {
+  const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
+  const preview = component.match(/\.timeline-preview \{([^}]+)\}/)?.[1]
+  // 块级布局使内容宽度受预览框约束，避免 flex 子项的最小内容宽度撑出边界。
+  expect(preview).toMatch(/display: block;/)
+  expect(preview).toMatch(/width: min\(280px, calc\(100vw - 64px\)\);/)
+  expect(preview).toMatch(/overflow-wrap: anywhere;/)
+  expect(component).toContain('class="line-clamp-1 font-medium leading-snug"')
+  expect(component).toContain('class="line-clamp-3 leading-snug opacity-80"')
+})
+
+test("timeline tracks the scroll position and reveals visible turn numbers", () => {
   const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
   // 组件在 Conversation overlay 内自行定位 reka-ui 滚动视口并监听滚动。
   expect(component).toMatch(/parentElement\?\.querySelector<HTMLElement>\("\[data-reka-scroll-area-viewport\]"\)/)
   expect(component).toMatch(/addEventListener\("scroll", onViewportScroll/)
-  // 当前轮次 = 视口顶部越过的最后一个问题，依据 data-message-id 锚点判定。
+  // 依据 data-message-id 锚点标记所有可见轮次。
   expect(component).toMatch(/querySelector<HTMLElement>\(`\[data-message-id="\$\{turn\.entryId\}"\]`\)/)
-  expect(component).toMatch(/'is-current': currentId === turn\.id/)
+  expect(component).toMatch(/'is-current': currentIds\.has\(turn\.id\)/)
   // 当前位置只露出数字：不显示圆点，也不新增高亮样式。
   expect(component).toMatch(/\.timeline-node\.is-current \.timeline-number \{\n  opacity: 1;\n\}/)
   expect(component).toMatch(/\.timeline-node\.is-current \.timeline-dot \{\n  opacity: 0;\n\}/)

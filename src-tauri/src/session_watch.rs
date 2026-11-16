@@ -79,8 +79,43 @@ fn coalesce_loop(app: AppHandle, root: PathBuf, rx: mpsc::Receiver<NotifyResult<
 fn collect(pending: &mut HashSet<PathBuf>, root: &Path, ev: NotifyResult<Event>) {
     let Ok(ev) = ev else { return };
     for path in ev.paths {
-        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") && path.starts_with(root) {
-            pending.insert(path);
+        if !path.starts_with(root) {
+            continue;
         }
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            pending.insert(path);
+        } else if let Some(stem) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".pix.json"))
+        {
+            // Archive/restore writes only the sidecar. Refresh the owning
+            // session without pretending its JSONL content has changed.
+            pending.insert(path.with_file_name(format!("{stem}.jsonl")));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_visibility_sidecar_changes_refresh_the_same_session_once() {
+        let root = std::env::temp_dir().join("pix-session-watch");
+        let session = root.join("project/session.jsonl");
+        let mut pending = HashSet::new();
+        let mut event = Event::new(notify::EventKind::Any);
+        event.paths = vec![
+            session.with_extension("pix.json"),
+            root.join("project/session.pix.json.tmp"),
+            std::env::temp_dir().join("outside.pix.json"),
+        ];
+        collect(&mut pending, &root, Ok(event));
+        assert_eq!(pending, HashSet::from([session.clone()]));
+        let mut duplicate = Event::new(notify::EventKind::Any);
+        duplicate.paths = vec![session.clone(), session.with_extension("pix.json")];
+        collect(&mut pending, &root, Ok(duplicate));
+        assert_eq!(pending, HashSet::from([session]));
     }
 }

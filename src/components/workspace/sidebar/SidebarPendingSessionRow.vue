@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import SidebarSessionStatus from "./SidebarSessionStatus.vue"
 
 defineProps<{
-  pending: { runtimeId: string; promptQueue: QueuedPrompt[] }
+  pending: { runtimeId: string; cwd?: string; sessionFile?: string | null; promptQueue: QueuedPrompt[]; title?: string }
   active: boolean
   navigationDisabled: boolean
   queueNow: number
@@ -20,6 +20,9 @@ const { t } = useI18n()
   <div
     class="session-row relative flex min-h-8 min-w-0 items-center gap-1 rounded-md pl-7 pr-2 text-xs"
     :class="{ active: active }"
+    :data-runtime-id="pending.runtimeId"
+    :data-file="pending.sessionFile"
+    :data-cwd="pending.cwd"
   >
     <SidebarSessionStatus :queue="pending.promptQueue" :now="queueNow" />
     <Layers
@@ -36,9 +39,9 @@ const { t } = useI18n()
       class="session-link"
       :disabled="navigationDisabled"
       :aria-current="active ? 'page' : undefined"
-      :title="pending.promptQueue[0]?.text || t('chat.newSession')"
+      :title="pending.title || pending.promptQueue[0]?.text || t('chat.newSession')"
       @click="emit('select', pending.runtimeId)"
-      >{{ pending.promptQueue[0]?.text || t("chat.newSession") }}</Button
+      >{{ pending.title || pending.promptQueue[0]?.text || t("chat.newSession") }}</Button
     >
   </div>
 </template>

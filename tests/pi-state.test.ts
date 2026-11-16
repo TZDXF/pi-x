@@ -6,6 +6,7 @@ const controls = vi.hoisted(() => {
   return {
     state,
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       getModelsConfig: (...args) => state.getModelsConfig(...args),
@@ -212,9 +213,11 @@ test("a model switch is announced before the next question, without changing the
   })
   expect(calls.findLast(c => c.type === "prompt").message).toBe("queued question")
   await store.send("another question")
+  store.handleEvent({ type: "message_start", message: { role: "user", content: "another question" } })
   expect(store.entries[1].modelChange).toBe(undefined)
   await store.setModel("next", "model-b")
   await store.send("same model")
+  store.handleEvent({ type: "message_start", message: { role: "user", content: "same model" } })
   expect(store.entries[2].modelChange).toBe(undefined)
 })
 

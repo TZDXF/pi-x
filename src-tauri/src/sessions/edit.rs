@@ -132,15 +132,7 @@ pub(crate) async fn rewind_prompt(state: &ProcessState, command: &Value) -> Resu
 }
 
 fn replace_session_log(file: &str, content: &str) -> Result<(), String> {
-    let temporary = Path::new(file).with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| {
-        std::fs::write(&temporary, content)?;
-        std::fs::rename(&temporary, file)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result.map_err(|e| e.to_string())
+    crate::atomic_write::write(Path::new(file), content.as_bytes()).map_err(|e| e.to_string())
 }
 
 fn rewind_log(raw: &str, target: &str) -> Result<String, String> {

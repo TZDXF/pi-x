@@ -2,6 +2,7 @@
 import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import { groupModelsByProvider } from "@/lib/modelSelection"
+import { modelKey } from "@/lib/modelKey"
 import { ChevronDownIcon } from "@lucide/vue"
 import {
   DropdownMenu,
@@ -32,7 +33,7 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 
-const selectedModel = computed(() => props.models.find(model => `${model.provider}/${model.id}` === props.modelValue))
+const selectedModel = computed(() => props.models.find(model => modelKey(model) === props.modelValue))
 const groups = computed(() => groupModelsByProvider(props.models))
 
 /** Slider stops; fall back to the current level so the control stays usable. */
@@ -95,8 +96,8 @@ function onSliderChange(value: unknown) {
               <DropdownMenuLabel>{{ group.provider }}</DropdownMenuLabel>
               <DropdownMenuRadioItem
                 v-for="model in group.models"
-                :key="model.provider + '/' + model.id"
-                :value="model.provider + '/' + model.id"
+                :key="modelKey(model)"
+                :value="modelKey(model)"
                 class="text-xs"
                 @select="event => event.preventDefault()"
               >

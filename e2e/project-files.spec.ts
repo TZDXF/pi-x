@@ -116,6 +116,14 @@ test.describe("project files", () => {
     const listX = requireX(await page.locator('[data-slot="scroll-area-viewport"]').first().boundingBox(), "file list")
     expect(previewX, `preview x ${previewX} should be left of list x ${listX}`).toBeLessThan(listX)
 
+    // 文件树宽度可单独拖拽（此前与预览按 3:2 网格绑定，无法调整）。
+    const treeWidth = async () =>
+      requireWidth(await page.locator("[data-project-files-tree]").boundingBox(), "file tree")
+    const before = await treeWidth()
+    await dragTreeHandle(page, -80)
+    expect(await treeWidth()).toBeGreaterThan(before + 40)
+    await expect(preview).toBeVisible()
+
     // 批注入口已迁到行号栏：从第 5 行的按钮拖到第 7 行，松手后出现范围草稿。
     await dragPreviewLines(page)
     await expect(page.getByText("Lines 5-7")).toBeVisible()
@@ -167,4 +175,20 @@ async function dragPreviewLines(page: Page): Promise<void> {
 function requireX(box: ElementBox | null, label: string): number {
   if (!box) throw new Error(`${label} has no bounding box`)
   return box.x
+}
+
+function requireWidth(box: ElementBox | null, label: string): number {
+  if (!box) throw new Error(`${label} has no bounding box`)
+  return box.width
+}
+
+/** Drag the file-tree resize handle by `deltaX` (negative widens the tree). */
+async function dragTreeHandle(page: Page, deltaX: number): Promise<void> {
+  const handle = page.getByRole("separator", { name: "Drag to resize the file tree (arrow keys also work)" })
+  const box = await handle.boundingBox()
+  if (!box) throw new Error("file tree resize handle is unavailable")
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + deltaX, box.y + box.height / 2, { steps: 6 })
+  await page.mouse.up()
 }

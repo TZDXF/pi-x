@@ -1,4 +1,4 @@
-import { readonly, ref } from "vue"
+import { createConfigPreference } from "@/lib/configPreference"
 
 /** xterm 面板用到的四个核心颜色，其余颜色交给 xterm 默认调色板。 */
 export interface TerminalColors {
@@ -44,7 +44,8 @@ export const TERMINAL_PRESETS = {
   },
 } satisfies Record<string, TerminalColors>
 
-const STORAGE_KEY = "pix.terminalTheme"
+const CONFIG_KEY = "terminalTheme"
+const LEGACY_STORAGE_KEY = "pix.terminalTheme"
 const COLOR_FIELDS = ["background", "foreground", "cursor", "selectionBackground"] as const
 type ColorField = (typeof COLOR_FIELDS)[number]
 const isHexColor = (value: unknown): value is string => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
@@ -54,9 +55,9 @@ const defaultState = (): { preset: TerminalThemeKey; colors: TerminalColors } =>
   colors: { ...TERMINAL_PRESETS.default },
 })
 
-function initialState() {
+function initialState(rawValue: string | null) {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as {
+    const raw = JSON.parse(rawValue ?? "null") as {
       preset?: unknown
       colors?: Record<string, unknown>
     } | null
@@ -83,8 +84,14 @@ function initialState() {
   }
 }
 
-const state = ref(initialState())
-export const terminalTheme = readonly(state)
+const preference = createConfigPreference({
+  key: CONFIG_KEY,
+  legacyKey: LEGACY_STORAGE_KEY,
+  defaultValue: defaultState,
+  read: initialState,
+  serialize: JSON.stringify,
+})
+export const terminalTheme = preference.value
 
 export function terminalPresetLabelKey(key: TerminalThemeKey): string {
   return key === "custom"
@@ -94,42 +101,21 @@ export function terminalPresetLabelKey(key: TerminalThemeKey): string {
 
 export function setTerminalPreset(key: TerminalThemeKey) {
   if (key !== "custom" && !(key in TERMINAL_PRESETS)) return
-  state.value = {
+  return preference.set({
     preset: key,
-    colors: key === "custom" ? { ...state.value.colors } : { ...TERMINAL_PRESETS[key] },
-  }
-  persist()
+    colors: key === "custom" ? { ...terminalTheme.value.colors } : { ...TERMINAL_PRESETS[key] },
+  })
 }
 
 /** 修改单个颜色后进入自定义状态；非法值被忽略。 */
 export function setTerminalColor(field: ColorField, value: string) {
   if (!COLOR_FIELDS.includes(field) || !isHexColor(value)) return
-  state.value = { preset: "custom", colors: { ...state.value.colors, [field]: value.toLowerCase() } }
-  persist()
+  return preference.set({
+    preset: "custom",
+    colors: { ...terminalTheme.value.colors, [field]: value.toLowerCase() },
+  })
 }
 
 export function resetTerminalTheme() {
-  state.value = defaultState()
-  persist()
-}
-
-function persist() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.value))
-  } catch {
-    /* Storage is optional. */
-  }
-}
-
-function syncTerminalTheme(event: StorageEvent) {
-  if (event.key !== STORAGE_KEY && event.key !== null) return
-  state.value = initialState()
-}
-
-window.addEventListener("storage", syncTerminalTheme)
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    window.removeEventListener("storage", syncTerminalTheme)
-  })
+  return preference.set(defaultState())
 }

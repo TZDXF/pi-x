@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
+import { serializeComposerPromptContexts, parseComposerPromptContexts } from "@/lib/promptContexts"
+
+test("live user messages retain file comments while preserving the editable input", async () => {
+  const h = await harness()
+  const comment = { path: "src/main.ts", startLine: 5, endLine: 7, selectedText: "code", comment: "检查边界" }
+  const prompt = serializeComposerPromptContexts("hello", { comments: [comment], selections: [] })
+  await h.store.send("hello", undefined, prompt)
+  const entry = h.store.entries.filter(entry => entry.kind === "user").at(-1)
+  expect(entry.text).toBe("hello")
+  expect(parseComposerPromptContexts(entry.contextText ?? entry.text).comments).toMatchObject([comment])
+  expect(h.calls.find(command => command.type === "prompt").message).toBe(prompt)
+})
 
 // Regression coverage for the session store's run-flow lifecycle: symmetric
 // resets between newSession()/clear(), the resend queue-pause release and the
@@ -9,7 +21,10 @@ const controls = vi.hoisted(() => {
   const state = {}
   return {
     state,
+    notify: vi.fn(),
+    setStatus: vi.fn(),
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),
@@ -30,12 +45,78 @@ vi.mock("@/i18n", () => ({
 vi.mock("@/lib/fileRewind", () => ({
   fileRewindState: async () => [],
 }))
-vi.mock("@/lib/notifications", () => ({ notifyTurnComplete() {} }))
-vi.mock("@/stores/sessionRunStatus", () => ({ setSessionRunStatus() {} }))
+vi.mock("@/lib/notifications", () => ({ notifyTurnComplete: (...args) => controls.notify(...args) }))
+vi.mock("@/stores/sessionRunStatus", () => ({ setSessionRunStatus: (...args) => controls.setStatus(...args) }))
 vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: () => controls.workspace }))
 
 beforeEach(() => {
+  controls.notify.mockClear()
+  controls.setStatus.mockClear()
   setActivePinia(createPinia())
+})
+
+test("runtime abort without an assistant message never marks completion or notifies", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled", aborted: true })
+  expect(h.store.isStreaming).toBe(false)
+  expect(controls.setStatus).toHaveBeenLastCalledWith("one.jsonl", null, "project-one")
+  expect(controls.notify).not.toHaveBeenCalled()
+  // Late duplicate terminal events cannot report completion either.
+  h.store.handleEvent({ type: "agent_settled", aborted: false })
+  expect(controls.notify).not.toHaveBeenCalled()
+})
+
+test("settled without an abort flag remains compatible with older pi", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled" })
+  expect(controls.setStatus).toHaveBeenLastCalledWith("one.jsonl", "completed", "project-one")
+  expect(controls.notify).toHaveBeenCalledOnce()
+})
+
+test("tool execution retains RPC args, pi-schema error text and monotonic duration", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "tool_execution_start", toolCallId: "c", toolName: "read", args: { limit: 3 } })
+  h.store.handleEvent({
+    type: "tool_execution_end",
+    toolCallId: "c",
+    durationMs: 1250,
+    isError: true,
+    result: { content: [{ type: "text", text: "- path: missing\n- limit: expected number, got string" }] },
+  })
+  expect(h.store.runs.c).toMatchObject({
+    argsText: JSON.stringify({ limit: 3 }, null, 2),
+    durationMs: 1250,
+    state: "output-error",
+    outputText: "- path: missing\n- limit: expected number, got string",
+  })
+})
+
+test("assistant response metadata and provider total survive live message ingestion", async () => {
+  const h = await harness()
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 0.25, totalFromProvider: true },
+  }
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      model: "auto",
+      responseModel: "concrete-model",
+      usage,
+      stopReason: "stop",
+      content: [{ type: "text", text: "answer" }],
+    },
+  })
+  expect(h.store.entries.at(-1)).toMatchObject({ model: "auto", responseModel: "concrete-model", usage })
+  expect(h.store.lastUsage.cost.total).toBe(0.25)
 })
 
 afterEach(() => {
@@ -43,6 +124,47 @@ afterEach(() => {
 })
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+test("a streaming update recovers missed thinking and empty block indexes without duplicating its delta", async () => {
+  const h = await harness()
+  h.store.isStreaming = true
+  h.store.handleEvent({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "" },
+        { type: "thinking", thinking: "before switching and after" },
+      ],
+    },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: " and after" },
+  })
+  expect(h.store.partialBlocks).toEqual([
+    { type: "text", text: "" },
+    { type: "thinking", text: "before switching and after", streaming: true },
+  ])
+  const turnId = h.store.streamingTurnId
+  expect(turnId).not.toBeNull()
+  h.store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: " next" },
+  })
+  expect(h.store.partialBlocks[1].text).toBe("before switching and after next")
+  expect(h.store.streamingTurnId).toBe(turnId)
+})
+
+test("late full-message updates cannot restore thinking after the run settles", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "agent_settled" })
+  h.store.handleEvent({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "thinking", thinking: "late content" }] },
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "late content" },
+  })
+  expect(h.store.partialBlocks).toBeNull()
+  expect(h.store.streamingTurnId).toBeNull()
+})
 
 async function harness(rpcOverrides: Record<string, (command: any) => unknown> = {}) {
   const calls = []
@@ -124,6 +246,38 @@ test("a cancelled new_session leaves the current run untouched", async () => {
   await h.store.newSession()
   expect(h.store.isStreaming).toBe(true)
   expect(h.store.entries.map(entry => entry.text)).toEqual(["original"])
+})
+
+test("agent_settled clears transient tool/thinking blocks when message_end is missing", async () => {
+  const h = await harness()
+  h.store.handleEvent({ type: "agent_start" })
+  h.store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  h.store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "final answer" }] },
+  })
+  h.store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  for (const assistantMessageEvent of [
+    { type: "toolcall_end", contentIndex: 0, toolCall: { id: "old-tool", name: "bash", arguments: {} } },
+    { type: "thinking_start", contentIndex: 1 },
+  ])
+    h.store.handleEvent({ type: "message_update", assistantMessageEvent })
+  expect(h.store.partialBlocks).toHaveLength(2)
+  expect(h.store.streamingTurnId).not.toBe(null)
+  // agent_end can be followed by retries: only settled may discard the stream.
+  h.store.handleEvent({ type: "agent_end" })
+  expect(h.store.partialBlocks).toHaveLength(2)
+  h.store.handleEvent({ type: "agent_settled" })
+  expect(h.store.isStreaming).toBe(false)
+  expect(h.store.partialBlocks).toBe(null)
+  expect(h.store.streamingTurnId).toBe(null)
+  expect(h.store.entries.at(-1).blocks).toEqual([{ type: "text", text: "final answer" }])
+  // Delayed deltas cannot recreate a partial after the terminal boundary.
+  h.store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 1, delta: "late" },
+  })
+  expect(h.store.partialBlocks).toBe(null)
 })
 
 test("a failed resend releases the queue so delayed prompts still dispatch", async () => {

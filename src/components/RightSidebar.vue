@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { clampReviewWidth, reviewWidthBounds } from "@/lib/reviewWidth"
 import { useI18n } from "vue-i18n"
-import { FileCode, FolderTree, Globe, Plus, SquareTerminal, X } from "@lucide/vue"
+import { FileCode, FolderTree, Globe, MessageSquarePlus, Plus, SquareTerminal, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs"
 import SidebarTabTrigger from "@/components/SidebarTabTrigger.vue"
@@ -12,13 +12,16 @@ import ReviewPanel from "@/components/ReviewPanel.vue"
 import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
+import AuxChatPane from "@/components/aux-chat/AuxChatPane.vue"
+import { auxCanOpen, auxHasPendingQuestion, auxTabBySidebarId, auxTitleForSidebarId } from "@/stores/auxChat"
+import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { FileChange } from "@/lib/sessionChanges"
-
-export type SidebarTabType = "review" | "files" | "terminal" | "browser"
-export interface SidebarTabItem {
-  id: number
-  type: SidebarTabType
-}
+import { usePointerDrag } from "@/composables/usePointerDrag"
+import type { AuxParentContext } from "@/lib/auxSpawn"
+// 类型定义移到 `lib/sidebarTabs.ts`（TZD-95 需要落盘/恢复它们），这里只做再导出。
+import type { SidebarTabItem, SidebarTabKind } from "@/lib/sidebarTabs"
+export type SidebarTabType = SidebarTabKind
+export type { SidebarTabItem }
 
 const props = defineProps<{
   open: boolean
@@ -27,26 +30,65 @@ const props = defineProps<{
   changes: FileChange[]
   project: string
   focus?: string | null
+  /**
+   * aux 面板需要父会话的启动上下文（模型/工作区）。取不到（父会话还没起来）时
+   * 面板显示原因，不静默开一个空壳；只读，侧栏从不回写。
+   */
+  auxParent?: AuxParentContext | null
 }>()
+
 const emit = defineEmits<{
   close: []
   "update:activeId": [id: number | null]
   "add-tab": [type: SidebarTabType]
+  /** aux 名额已满（用户在禁用入口上仍点到了），由父层给可执行提示。 */
+  "aux-limit": []
   "close-tab": [id: number]
   "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
+  "restart-terminal": [id: number]
 }>()
 
 const { t } = useI18n()
 const addOpen = ref(false)
 function iconFor(type: SidebarTabType) {
-  return type === "review" ? FileCode : type === "files" ? FolderTree : type === "browser" ? Globe : SquareTerminal
+  if (type === "review") return FileCode
+  if (type === "files") return FolderTree
+  if (type === "browser") return Globe
+  if (type === "aux") return MessageSquarePlus
+  return SquareTerminal
 }
 function titleFor(tab: SidebarTabItem): string {
+  // aux 的标题由注册表给出（"辅助对话 2"），不按同类 Tab 序号推算：关闭后重开
+  // 会复用序号，与同类型 Tab 的"第几个"不是一回事。
+  if (tab.type === "aux") return auxTitleForSidebarId(tab.id) ?? t("sidebarTabs.aux")
   const base = t(`sidebarTabs.${tab.type}`)
   const sameType = props.tabs.filter(item => item.type === tab.type)
   if (sameType.length > 1) return `${base} ${sameType.findIndex(item => item.id === tab.id) + 1}`
   return base
+}
+/** 未答扩展询问的标记：只在标题上出圆点，不弹窗（隐藏 Tab 不抢焦点）。 */
+function pendingQuestion(tab: SidebarTabItem) {
+  return tab.type === "aux" && auxHasPendingQuestion(tab.id)
+}
+/** aux 槽位对应的实例；缺失（上限被拒/已关闭）时整格不渲染面板。 */
+function auxInstance(tabId: number) {
+  return auxTabBySidebarId(tabId)
+}
+/**
+ * 添加"辅助对话"入口的可用性：上限 5 由 aux 注册表自己计数（**创建中的实例计入**），
+ * 与侧栏的 20 条/24 组无关。名额满时禁用入口并给出原因，而不是点了没反应。
+ */
+function canAddAux() {
+  return auxCanOpen() && !!props.auxParent
+}
+function addAux() {
+  // 名额检查在注册表 `openAux` 里仍会再做一次（这是 UI 侧的提前提示）。
+  if (!canAddAux()) {
+    emit("aux-limit")
+    return
+  }
+  addTab("aux")
 }
 function addTab(type: SidebarTabType) {
   addOpen.value = false
@@ -73,6 +115,11 @@ function setTerminalPanel(id: number, el: unknown) {
   if (el) terminalPanels.set(id, el as TerminalPanelExposed)
   else terminalPanels.delete(id)
 }
+/** 用户明确要求重开：交给宿主清掉 stale，TerminalPanel 才会重新挂载并开新 shell。 */
+function restartTerminal(id: number) {
+  emit("restart-terminal", id)
+}
+
 function reactivateTab(tab: SidebarTabItem) {
   // 已激活的终端 tab 再点一次时，若面板里没有 shell 则直接新建，避免停留在空状态。
   if (tab.type === "terminal") {
@@ -111,10 +158,7 @@ watch(
     }, 240)
   },
 )
-let pointer: { id: number; x: number; width: number; target: HTMLElement } | null = null
 let observer: ResizeObserver | undefined
-let previousCursor = ""
-let previousSelect = ""
 function measure() {
   containerWidth.value = sidebar.value?.parentElement?.getBoundingClientRect().width ?? 0
   overlay.value = window.matchMedia("(max-width: 900px)").matches
@@ -127,36 +171,28 @@ function saveWidth() {
   }
 }
 function startResize(event: PointerEvent) {
-  if (event.button !== 0 || pointer) return
   measure()
-  const target = event.currentTarget as HTMLElement
-  target.focus()
-  target.setPointerCapture(event.pointerId)
-  pointer = { id: event.pointerId, x: event.clientX, width: width.value, target }
-  dragging.value = true
-  previousCursor = document.body.style.cursor
-  previousSelect = document.body.style.userSelect
-  document.body.style.cursor = "col-resize"
-  document.body.style.userSelect = "none"
-  event.preventDefault()
+  if (resizeDrag.start(event, { x: event.clientX, width: width.value })) {
+    ;(event.currentTarget as HTMLElement).focus()
+    dragging.value = true
+  }
 }
+const resizeDrag = usePointerDrag<{ x: number; width: number }>({
+  cursor: "col-resize",
+  onMove: (start, event) => {
+    preferredWidth.value = clampReviewWidth(start.width + start.x - event.clientX, containerWidth.value, overlay.value)
+  },
+  onEnd: () => {
+    dragging.value = false
+    saveWidth()
+  },
+  onCancel: () => (dragging.value = false),
+})
 function resize(event: PointerEvent) {
-  if (!pointer || pointer.id !== event.pointerId) return
-  preferredWidth.value = clampReviewWidth(
-    pointer.width + pointer.x - event.clientX,
-    containerWidth.value,
-    overlay.value,
-  )
+  resizeDrag.move(event)
 }
 function stopResize() {
-  if (!pointer) return
-  const active = pointer
-  pointer = null
-  dragging.value = false
-  if (active.target.hasPointerCapture(active.id)) active.target.releasePointerCapture(active.id)
-  document.body.style.cursor = previousCursor
-  document.body.style.userSelect = previousSelect
-  saveWidth()
+  resizeDrag.stop()
 }
 function resizeWithKeyboard(event: KeyboardEvent) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
@@ -181,6 +217,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   stopResize()
+  saveWidth()
   clearTimeout(animationTimer)
   observer?.disconnect()
   window.removeEventListener("resize", measure)
@@ -251,6 +288,13 @@ onBeforeUnmount(() => {
                   >
                     <component :is="iconFor(tab.type)" class="size-3.5 shrink-0" aria-hidden="true" />
                     <span class="truncate">{{ titleFor(tab) }}</span>
+                    <span
+                      v-if="pendingQuestion(tab)"
+                      class="bg-primary size-1.5 shrink-0 rounded-full"
+                      :title="t('sidebarTabs.auxPending')"
+                      :aria-label="t('sidebarTabs.auxPending')"
+                      :data-aux-pending="tab.id"
+                    />
                   </SidebarTabTrigger>
                   <button
                     type="button"
@@ -317,6 +361,18 @@ onBeforeUnmount(() => {
               >
                 <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
               </Button>
+              <!-- 辅助对话：上限 5 由 aux 注册表自己计数（与侧栏 20 条无关） -->
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                class="w-full justify-start gap-2"
+                :disabled="!canAddAux()"
+                :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
+                @click="addAux()"
+              >
+                <MessageSquarePlus class="size-4 shrink-0" />{{ t("sidebarTabs.newAux") }}
+              </Button>
             </PopoverContent>
           </Popover>
         </div>
@@ -335,7 +391,25 @@ onBeforeUnmount(() => {
             :project="project"
             :focus="tab.id === activeId ? focus : null"
           />
-          <ProjectFiles v-else-if="tab.type === 'files'" :project="project" />
+          <ProjectFiles
+            v-else-if="tab.type === 'files'"
+            :project="project"
+            :aux-parent-runtime-id="auxParent?.runtimeId"
+          />
+          <!-- 恢复出来的 terminal Tab 只渲染占位：进程已随旧实例退出，
+               挂 TerminalPanel 会在首次可见时自动新开 shell（见 00:58 实测）。 -->
+          <div
+            v-else-if="tab.type === 'terminal' && tab.stale"
+            class="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 p-6 text-sm"
+            role="status"
+            :data-terminal-stale="tab.id"
+          >
+            <SquareTerminal class="size-6 shrink-0 opacity-60" aria-hidden="true" />
+            <p class="text-center">{{ t("sidebarTabs.terminalLost") }}</p>
+            <Button type="button" variant="outline" size="sm" @click="restartTerminal(tab.id)">
+              {{ t("sidebarTabs.terminalRestart") }}
+            </Button>
+          </div>
           <TerminalPanel
             v-else-if="tab.type === 'terminal'"
             :ref="el => setTerminalPanel(tab.id, el)"
@@ -347,6 +421,14 @@ onBeforeUnmount(() => {
             v-else-if="tab.type === 'browser'"
             :visible="open && tab.id === activeId"
             @send-to-chat="$emit('send-to-chat', $event)"
+          />
+          <!-- 辅助对话：槽位只提供顺序与 active，实例本体在 `stores/auxChat.ts`。
+               Tab 隐藏不卸载（`force-mount` + `v-show`），关闭才卸载（父层调 `closeAux`）。 -->
+          <AuxChatPane
+            v-else-if="tab.type === 'aux' && auxParent && auxInstance(tab.id)"
+            :tab="auxInstance(tab.id)!"
+            :active="tab.id === activeId && open"
+            :parent="auxParent"
           />
         </TabsContent>
         <div v-if="tabs.length === 0" class="grid flex-1 grid-cols-2 content-center gap-3 p-6">
@@ -379,6 +461,17 @@ onBeforeUnmount(() => {
             @click="addTab('browser')"
           >
             <Globe class="size-6 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            class="h-auto flex-col gap-2 py-4"
+            :disabled="!canAddAux()"
+            :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
+            @click="addAux()"
+          >
+            <MessageSquarePlus class="size-6 shrink-0" />{{ t("sidebarTabs.newAux") }}
           </Button>
         </div>
       </div>

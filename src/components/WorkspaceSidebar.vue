@@ -1,13 +1,31 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue"
+import { computed, onUnmounted, ref, watch } from "vue"
+import {
+  DialogRoot,
+  DialogOverlay,
+  DialogContent as SearchDialogContent,
+  DialogClose,
+  ComboboxRoot,
+  ComboboxInput,
+  ComboboxContent,
+  ComboboxViewport,
+  ComboboxItem,
+} from "reka-ui"
 import { useI18n } from "vue-i18n"
 import { VueDraggable } from "vue-draggable-plus"
-import { Clock, FolderPlus, Plus, Search } from "@lucide/vue"
+import { Clock, FolderPlus, LoaderCircle, Plus, Search, X } from "@lucide/vue"
 import { parseCodedError } from "@/lib/backendError"
-import { normalizeProjectPath } from "@/lib/paths"
-import { duplicateSessionFile, type SessionMeta } from "@/api/piClient"
+import { tBackendError } from "@/i18n"
+import { normalizeProjectPath, samePath } from "@/lib/paths"
+import { isRemoteProject } from "@/lib/ssh"
+import { duplicateSessionFile, type SessionMeta, type SessionSearchHit } from "@/api/piClient"
 import { pendingConversations } from "@/lib/pendingConversations"
 import { useCountdownNow } from "@/composables/useCountdownNow"
+import {
+  useSidebarSessionReveal,
+  type SidebarSessionTarget,
+} from "@/components/workspace/sidebar/useSidebarSessionReveal"
+import type { QueuedPrompt } from "@/stores/session"
 import { copyWithToast } from "@/lib/clipboard"
 import { allConversations, useSessionStore } from "@/stores/conversations"
 import { useUiStore } from "@/stores/conversations"
@@ -15,13 +33,23 @@ import { useWorkspaceStore } from "@/stores/workspace"
 import SidebarProjectGroup from "@/components/workspace/sidebar/SidebarProjectGroup.vue"
 import SidebarSessionList from "@/components/workspace/sidebar/SidebarSessionList.vue"
 import { useSidebarSessionActions } from "@/components/workspace/sidebar/useSidebarSessionActions"
-import { sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { notifySessionArchived } from "@/lib/sessionArchiveToast"
+import { defaultSearchResults, sidebarSessionRows } from "@/components/workspace/sidebar/useSidebarSessionOrdering"
+import { projectHasRunningSession } from "@/components/workspace/sidebar/useSidebarSessionStatus"
+import { useGlobalSessionSearch } from "@/components/workspace/sidebar/useGlobalSessionSearch"
+import { Dialog, DialogContent, DialogHeader, DialogPortal, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { useRoute } from "@/lib/router"
-const props = defineProps<{ project: string; ready: boolean; busy: boolean; navigationBusy?: boolean }>()
+import { formatComboParts, registerShortcutHandler, setShortcutsSuppressed, shortcutCombo } from "@/lib/shortcuts"
+const props = defineProps<{
+  project: string
+  ready: boolean
+  busy: boolean
+  navigationBusy?: boolean
+  revealSession?: SidebarSessionTarget | null
+}>()
 const emit = defineEmits<{
   selectConversation: [runtimeId: string]
   switchProject: []
@@ -40,11 +68,40 @@ const workspace = useWorkspaceStore()
 const { t } = useI18n()
 const route = useRoute()
 const query = ref("")
+const searchOpen = ref(false)
+watch(
+  searchOpen,
+  open => {
+    query.value = ""
+    setShortcutsSuppressed("task-search", open)
+  },
+  { flush: "sync" },
+)
+const searchShortcutLabel = computed(() => formatComboParts(shortcutCombo("app.searchTasks")).join("+"))
+const unregisterSearchShortcut = registerShortcutHandler("app.searchTasks", () => {
+  searchOpen.value = true
+})
+onUnmounted(() => {
+  unregisterSearchShortcut()
+  setShortcutsSuppressed("task-search", false)
+})
 const collapsed = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
 const loading = ref<Record<string, boolean>>({})
 const tasksCollapsed = ref(false)
 const projectsCollapsed = ref(false)
+const root = ref<HTMLElement | null>(null)
+useSidebarSessionReveal(
+  root,
+  () => props.revealSession,
+  target => {
+    if (workspace.isProjectless(target.cwd)) tasksCollapsed.value = false
+    else {
+      projectsCollapsed.value = false
+      collapsed.value[workspace.projectRoot(target.cwd)] = false
+    }
+  },
+)
 // Navigation can queue during startup; the parent decides when it must be blocked.
 const navigationDisabled = computed<boolean>(() => !!props.navigationBusy || saving.value)
 const disabled = computed<boolean>(() => props.busy || workspace.gitBusy || saving.value)
@@ -57,6 +114,7 @@ const { renaming, title, saving, archiving, rename, openSession, renameOnDoubleC
     resume: s => emit("resumeSession", s.file, s.cwd),
     update: (s, nextTitle, archived) => workspace.update(s, nextTitle, archived),
     onError: error => ui.pushToast(String(error), "error"),
+    onArchived: restore => notifySessionArchived(ui, t, restore),
   })
 const sessionActions = {
   open: openSession,
@@ -69,29 +127,79 @@ const sessionActions = {
   selectConversation: (runtimeId: string) => emit("selectConversation", runtimeId),
 }
 function rows(path: string) {
-  return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, query.value, label)
+  return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label)
 }
 /** The sortable model is never query-filtered. */
 function orderedSessionFiles(path: string) {
   return sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label).map(s => s.file)
 }
+const activeBoardDraft = computed(() =>
+  Object.values(workspace.boardDrafts ?? {}).find(
+    draft => !draft.sessionFile && (draft.runtimeId || draft.id) === session.runtimeId,
+  ),
+)
 const showDraft = computed(
   () =>
     props.ready &&
+    !activeBoardDraft.value &&
     !session.sessionFile &&
     !session.promptQueue.length &&
-    !!(session.started || session.entries.length) &&
-    !query.value,
+    !!(session.started || session.entries.length),
 )
 function pendingRows(path: string) {
-  return pendingConversations(
+  const folders = workspace.projectFolders(path)
+  const pending: {
+    runtimeId: string
+    cwd: string
+    sessionFile?: string | null
+    promptQueue: QueuedPrompt[]
+    title?: string
+  }[] = pendingConversations(
     allConversations(),
-    workspace.projectFolders(path),
+    folders,
     workspace.orderedSessions(path).map(row => row.file),
-    query.value,
+    "",
   )
+  const draft = activeBoardDraft.value
+  if (
+    draft &&
+    folders.some(folder => samePath(folder, draft.project)) &&
+    !pending.some(row => row.runtimeId === session.runtimeId)
+  )
+    pending.push({ runtimeId: session.runtimeId, cwd: draft.project, promptQueue: [], title: draft.message })
+  return pending
 }
 const taskPath = computed(() => workspace.projectless)
+type SidebarSearchResult = {
+  session: SessionMeta
+  path: string
+  role?: SessionSearchHit["role"]
+  snippet?: string | null
+}
+const {
+  results: globalSearchResults,
+  searching: globalSearching,
+  failed: globalSearchFailed,
+} = useGlobalSessionSearch(query, searchOpen, () => workspace.orderedProjects())
+const searchResults = computed<SidebarSearchResult[]>(() => {
+  if (query.value.trim()) return globalSearchResults.value
+  const paths = [...new Set([...workspace.orderedProjects(), taskPath.value].filter(Boolean))]
+  const results = paths.flatMap(path =>
+    sidebarSessionRows(workspace.orderedSessions(path), archiving.value, "", label).map(session => ({
+      session,
+      path,
+    })),
+  )
+  return defaultSearchResults(results, query.value)
+})
+function selectSearchResult(result: SidebarSearchResult) {
+  if (navigationDisabled.value) return
+  // Remote search hits carry a raw POSIX cwd; use the display URI to retain
+  // the backend and connection when resuming them.
+  emit("resumeSession", result.session.file, result.path)
+  searchOpen.value = false
+}
+
 const visibleProjects = computed(() =>
   projectsCollapsed.value ? [] : workspace.orderedProjects().filter(p => !workspace.isProjectless(p)),
 )
@@ -104,8 +212,14 @@ async function refresh(path: string) {
   try {
     await workspace.refresh(path)
   } catch (error) {
-    const code = parseCodedError(String(error).replace(/^Error: /, ""))?.code
-    errors.value[path] = code === "projectDirMissing" ? "missing" : "failed"
+    if (isRemoteProject(path)) {
+      // 远程会话列表失败走 toast（translateError 渲染 coded error，契约 §2.4）；
+      // 刷新按钮由 remote 驱动，不走本地 loadFailed 行。
+      ui.pushToast(tBackendError(error), "error")
+    } else {
+      const code = parseCodedError(String(error).replace(/^Error: /, ""))?.code
+      errors.value[path] = code === "projectDirMissing" ? "missing" : "failed"
+    }
   } finally {
     loading.value[path] = false
   }
@@ -136,10 +250,15 @@ function groupState(path: string) {
     hidden: folders.length > 0 && folders.every(folder => errors.value[folder] === "missing"),
     loading: folders.some(folder => loading.value[folder]),
     hasHistory: folders.some(folder => !!workspace.histories[folder]),
+    // 远程项目会话历史来自 ssh_sessions（契约 §2.4），不再是不可用态。
+    remote: isRemoteProject(path),
   }
 }
 async function refreshGroup(path: string) {
   for (const folder of workspace.projectFolders(path)) await refresh(folder)
+}
+function projectRunning(path: string) {
+  return projectHasRunningSession(path, rows(path), allConversations(), workspace.projectRoot)
 }
 const projectStates = computed(() => Object.fromEntries(visibleProjects.value.map(path => [path, groupState(path)])))
 function onProjectDragStart(event: { item?: HTMLElement; originalEvent?: DragEvent }) {
@@ -163,12 +282,13 @@ watch(
     if (props.ready && !session.isStreaming && props.project) void refresh(props.project)
   },
 )
-for (const path of workspace.projects.flatMap(project => workspace.projectFolders(project)))
-  void workspace.rememberWorkspace(path)
 watch(
   () => workspace.projects.flatMap(path => workspace.projectFolders(path)),
   folders => {
-    for (const folder of new Set(folders)) void refresh(folder)
+    for (const folder of new Set(folders)) {
+      void workspace.registerProjectWorktrees(folder)
+      void refresh(folder)
+    }
   },
   { immediate: true },
 )
@@ -176,6 +296,7 @@ watch(
 
 <template>
   <aside
+    ref="root"
     class="workspace-sidebar h-full w-full flex flex-col bg-sidebar border-r border-border pt-3.5 pr-[7px] pb-2 pl-[7px] min-h-0 overflow-hidden transition-[transform,visibility] duration-200 ease-out max-[640px]:absolute max-[640px]:[inset:0_auto_0_0] max-[640px]:z-[30] max-[640px]:shadow-[var(--sidebar-shadow)] max-[640px]:w-55"
     :aria-label="t('sidebar.ariaLabel')"
   >
@@ -195,13 +316,18 @@ watch(
       @click="emit('schedules')"
       ><Clock :size="17" class="size-auto shrink-0" />{{ t("schedules.title") }}</Button
     >
-    <label class="sidebar-search flex items-center gap-2.5 text-muted-foreground py-1.5 px-2.5 mb-1.5 shrink-0"
-      ><Search :size="15" class="size-auto shrink-0" /><Input
-        v-model="query"
-        :placeholder="t('sidebar.search')"
+    <div class="flex items-center justify-between gap-2 px-2.5 pt-4 pb-2 shrink-0">
+      <h2 class="text-sm font-semibold">{{ t("sidebar.taskList") }}</h2>
+      <Button
+        variant="quiet"
+        size="toolbar"
+        :title="`${t('sidebar.search')} (${searchShortcutLabel})`"
         :aria-label="t('sidebar.search')"
-        class="h-auto border-0 bg-transparent px-0 text-xs focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-    /></label>
+        @click="searchOpen = true"
+      >
+        <Search :size="16" />
+      </Button>
+    </div>
     <ScrollArea class="project-groups flex-1 min-h-0 min-w-0 -mr-[7px]" viewportClass="pr-[7px]">
       <section class="project-section mb-1.5 min-w-0 max-w-full">
         <div class="sidebar-section-label flex items-center justify-between gap-1 py-[2px] pl-1 pr-1 shrink-0">
@@ -242,6 +368,7 @@ watch(
             :project="project"
             :ready="ready"
             :collapsed="!!collapsed[path]"
+            :running="projectRunning(path)"
             :error="projectStates[path]?.error"
             :hidden="projectStates[path]?.hidden"
             :disabled="disabled"
@@ -252,17 +379,19 @@ watch(
             @remove-project="emit('removeProject', $event)"
           >
             <SidebarSessionList
+              :reveal-session="props.revealSession"
               :path="path"
               :rows="rows(path)"
               :ordered-files="orderedSessionFiles(path)"
               :pending="pendingRows(path)"
-              :query="query"
+              :query="''"
               :disabled="disabled"
               :navigation-disabled="navigationDisabled"
               :queue-now="queueNow"
               :error="projectStates[path]?.listError"
               :loading="projectStates[path]?.loading"
               :has-history="projectStates[path]?.hasHistory"
+              :remote="projectStates[path]?.remote"
               :show-draft="path === workspace.projectRoot(project) && showDraft"
               :draft-worktree="workspace.isWorktree(project)"
               v-on="sessionActions"
@@ -294,11 +423,12 @@ watch(
           /></Button>
         </div>
         <SidebarSessionList
+          :reveal-session="props.revealSession"
           :path="taskPath"
           :rows="rows(taskPath)"
           :ordered-files="orderedSessionFiles(taskPath)"
           :pending="pendingRows(taskPath)"
-          :query="query"
+          :query="''"
           :disabled="disabled"
           :navigation-disabled="navigationDisabled"
           :queue-now="queueNow"
@@ -314,6 +444,80 @@ watch(
         />
       </section>
     </ScrollArea>
+    <DialogRoot v-model:open="searchOpen">
+      <DialogPortal v-slot="{ onAfterLeave }">
+        <!-- Keep both the backdrop and its content below the 36px desktop title bar. -->
+        <DialogOverlay
+          class="task-search-overlay fixed inset-x-0 bottom-0 top-9 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-[min(12vh,5rem)] backdrop-blur-sm"
+          @pointerdown.self="searchOpen = false"
+        >
+          <SearchDialogContent
+            @after-leave="onAfterLeave"
+            class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl outline-none"
+            :aria-describedby="undefined"
+          >
+            <div class="flex shrink-0 items-center justify-between px-4 py-3">
+              <DialogTitle class="text-sm font-semibold">{{ t("sidebar.search") }}</DialogTitle>
+              <DialogClose as-child>
+                <Button variant="quiet" size="toolbar" :aria-label="t('workspace.cancel')"><X :size="16" /></Button>
+              </DialogClose>
+            </div>
+            <ComboboxRoot :open="true" model-value="" ignore-filter class="flex min-h-0 flex-col">
+              <div class="flex shrink-0 items-center gap-2 border-y border-border px-4">
+                <LoaderCircle v-if="globalSearching" :size="16" class="shrink-0 animate-spin text-muted-foreground" />
+                <Search v-else :size="16" class="shrink-0 text-muted-foreground" />
+                <ComboboxInput
+                  v-model="query"
+                  auto-focus
+                  maxlength="200"
+                  :placeholder="t('sidebar.searchPlaceholder')"
+                  :aria-label="t('sidebar.search')"
+                  class="h-12 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                />
+              </div>
+              <ComboboxContent class="min-h-0 overflow-y-auto p-2" @escape-key-down="searchOpen = false">
+                <ComboboxViewport>
+                  <ComboboxItem
+                    v-for="result in searchResults"
+                    :key="`${result.path}:${result.session.file}`"
+                    :value="`${result.path}:${result.session.file}`"
+                    :disabled="navigationDisabled"
+                    class="flex cursor-pointer flex-col items-start gap-1 rounded-lg px-3 py-3 outline-none data-highlighted:bg-accent data-disabled:pointer-events-none data-disabled:opacity-50"
+                    @select="selectSearchResult(result)"
+                  >
+                    <span class="w-full truncate text-sm">{{ label(result.session) }}</span>
+                    <span class="w-full truncate text-xs text-muted-foreground">{{
+                      workspace.isProjectless(result.path) ? t("sidebar.tasks") : workspace.projectName(result.path)
+                    }}</span>
+                    <span v-if="result.snippet" class="line-clamp-2 w-full text-xs leading-5 text-muted-foreground">
+                      <span v-if="result.role" class="text-foreground/70">{{
+                        t(result.role === "user" ? "sidebar.searchUser" : "sidebar.searchAssistant")
+                      }}</span>
+                      {{ result.snippet }}
+                    </span>
+                  </ComboboxItem>
+                  <p v-if="globalSearchFailed" class="px-3 py-6 text-center text-sm text-muted-foreground">
+                    {{ t(searchResults.length ? "sidebar.searchPartialFailed" : "sidebar.searchFailed") }}
+                  </p>
+                  <p
+                    v-if="!searchResults.length && globalSearching"
+                    class="py-12 text-center text-sm text-muted-foreground"
+                  >
+                    {{ t("sidebar.searching") }}
+                  </p>
+                  <p
+                    v-if="!searchResults.length && !globalSearching && !globalSearchFailed"
+                    class="py-12 text-center text-sm text-muted-foreground"
+                  >
+                    {{ t("sidebar.noMatch") }}
+                  </p>
+                </ComboboxViewport>
+              </ComboboxContent>
+            </ComboboxRoot>
+          </SearchDialogContent>
+        </DialogOverlay>
+      </DialogPortal>
+    </DialogRoot>
     <Dialog
       :open="!!renaming"
       @update:open="

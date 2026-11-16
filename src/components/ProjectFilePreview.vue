@@ -4,40 +4,71 @@ import { useI18n } from "vue-i18n"
 import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { invoke } from "@/api/transport"
+import { invokeProjectFile } from "@/api/client/projectFiles"
+import { isRemoteProject } from "@/lib/ssh"
 import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 import { isMarkdownExt } from "@/lib/fileKind"
 import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
+import ConversationSelectionMenu from "@/components/chat/ConversationSelectionMenu.vue"
+import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import type { AuxAskPayload } from "@/lib/auxSelection"
+import { askAuxSelection } from "@/lib/auxAsk"
+import { activeRuntimeId } from "@/stores/conversations"
 import { useCodeCommentsStore } from "@/stores/codeComments"
+import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
+import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
+import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
 import "vue-stream-markdown/index.css"
+
+/**
+ * 模板有两个根（`<section>` + 浮动菜单），Vue 3 在 fragment 下**不再自动继承 attrs**：
+ * 调用方传的 `data-package-resource-preview`（E2E 定位）与 `class` 会静默丢失。
+ * 因此显式关掉隐式透传、把 attrs 只绑到 section 上（菜单是覆盖层，不该接调用方属性）。
+ */
+defineOptions({ inheritAttrs: false })
 
 const props = withDefaults(
   defineProps<{
     project: string
     path: string
+    /** Open source view at a referenced range, including Markdown and SVG. */
+    lineRange?: CodeCommentRange
     /** Custom resource reader; project-only editor and annotation actions are hidden. */
     readFile?: (path: string) => Promise<FilePreview>
     closable?: boolean
     /** Store key for pending code comments; defaults to project. When set and
      *  different, comments carry `root` so the prompt can address the file. */
     commentProject?: string
+    /** Bumped by the file tree when the file changed on disk; reloads the content. */
+    revision?: number
+    /**
+     * 所属会话的 runtimeId（TZD-103 划词入口的 aux 归属）。
+     * 侧栏按 ChatView 传入；独立打开（资源预览等）时缺省跟随当前激活会话。
+     */
+    auxParentRuntimeId?: string | null
   }>(),
-  { closable: true },
+  { closable: true, revision: 0 },
 )
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 
 const preview = ref<FilePreview | null>(null)
 const loading = ref(false)
-const error = ref("")
+const errorCause = ref<unknown>(null)
+const openError = ref<unknown>(null)
+const error = computed(() => {
+  if (openError.value != null) return t("openWith.failed", { error: formatCodedError(t, openError.value) })
+  return errorCause.value == null ? "" : formatCodedError(t, errorCause.value)
+})
 const htmlLines = ref<string[] | null>(null)
 // 序号作废旧在途请求，避免切换文件时旧内容闪现到新文件。
 let seq = 0
@@ -48,6 +79,7 @@ const wrap = ref(true)
 const isMarkdown = computed(() => isMarkdownExt(props.path))
 const isSvg = computed(() => baseName(props.path).toLowerCase().endsWith(".svg"))
 const text = computed(() => (preview.value?.kind === "text" ? (preview.value.text ?? "") : ""))
+const markdownContent = computed(() => splitMarkdownFrontmatter(text.value))
 const codeLines = computed(() => text.value.split("\n"))
 /** svg 以文本读回后可直接按 data URL 渲染（截断的 svg 不完整，只看源码） */
 const imageSrc = computed(() => {
@@ -62,18 +94,22 @@ const imageSrc = computed(() => {
 const showRenderedMarkdown = computed(() => preview.value?.kind === "text" && isMarkdown.value && mdRendered.value)
 const showCode = computed(() => preview.value?.kind === "text" && !showRenderedMarkdown.value && !imageSrc.value)
 
-async function load() {
+async function load(resetView = true) {
   const current = ++seq
   loading.value = true
-  error.value = ""
-  preview.value = null
-  htmlLines.value = null
-  mdRendered.value = true
-  svgRendered.value = true
+  errorCause.value = null
+  openError.value = null
+  if (resetView) {
+    preview.value = null
+    htmlLines.value = null
+    // dev 的行号定位要求 Markdown/SVG 直接进源码视图；磁盘变更刷新则保留用户当前视图。
+    mdRendered.value = !props.lineRange
+    svgRendered.value = !props.lineRange
+  }
   try {
     const result = props.readFile
       ? await props.readFile(props.path)
-      : await invoke<FilePreview>("read_file_preview", { project: props.project, path: props.path })
+      : await invokeProjectFile<FilePreview>("read_file_preview", props.project, props.path)
     if (current !== seq) return
     preview.value = result
     if (result.kind === "text" && result.text) {
@@ -81,12 +117,21 @@ async function load() {
       if (current === seq) htmlLines.value = lines
     }
   } catch (cause) {
-    if (current === seq) error.value = formatCodedError(t, cause)
+    if (current === seq) errorCause.value = cause
   } finally {
     if (current === seq) loading.value = false
   }
 }
-watch(() => [props.project, props.path, props.readFile] as const, load, { immediate: true })
+// 文件/项目切换时重置视图（渲染/源码切换）；仅内容因磁盘变更而刷新时保留当前视图。
+watch(
+  () => [props.project, props.path, props.readFile] as const,
+  () => void load(),
+  { immediate: true },
+)
+watch(
+  () => props.revision,
+  () => void load(false),
+)
 
 const opening = ref(false)
 async function openInEditor() {
@@ -95,7 +140,7 @@ async function openInEditor() {
   try {
     await openFileInEditor(props.path, props.project)
   } catch (cause) {
-    error.value = t("openWith.failed", { error: String(cause) })
+    openError.value = cause
   } finally {
     opening.value = false
   }
@@ -104,7 +149,35 @@ async function openInEditor() {
 // ---- 代码批注（复刻 ZCode code-viewer）：行内草稿卡挂到选中行末行下方，
 // ---- 已提交批注以内联卡片展示并可删除，随 composer 待发送列表同步。 ----
 const codeComments = useCodeCommentsStore()
+const ui = useUiStore()
 const codeRoot = ref<HTMLElement | null>(null)
+watch(
+  () => props.lineRange && ([loading.value, showCode.value, props.lineRange, htmlLines.value] as const),
+  async () => {
+    if (!props.lineRange || loading.value || !showCode.value) return
+    await nextTick()
+    const line = Math.min(Math.max(1, props.lineRange?.start ?? 1), codeLines.value.length)
+    codeRoot.value?.querySelector(`[data-line="${line}"]`)?.scrollIntoView({ block: "center" })
+  },
+  { flush: "post" },
+)
+// ---- 划词入口（TZD-103）：复用会话正文那份浮层（mode="code"），只加动作 ----
+//
+// 与代码批注的关系：批注仍走行号栏的 gutter 拖拽/按钮，浮层只提供"在辅助对话中提问"，
+// payload 带 path + 行区间；渲染态 Markdown 没有 [data-line]，只带 path（不猜行号）。
+const markdownRoot = ref<HTMLElement | null>(null)
+const menuRoot = computed<HTMLElement | null>(() => (showCode.value ? codeRoot.value : markdownRoot.value))
+async function onAuxAsk(payload: AuxAskPayload) {
+  const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
+  if (!parentRuntimeId) return
+  // 投递路由（复用激活实例 / 新建）与失败文案都在 `lib/auxAsk.ts`：这里只转事件。
+  await askAuxSelection({
+    parentRuntimeId,
+    payload,
+    t,
+    toast: (message, kind) => ui.pushToast(message, kind),
+  })
+}
 const commentOpen = ref(false)
 const commentText = ref("")
 const commentRange = ref<CodeCommentRange | null>(null)
@@ -134,6 +207,13 @@ const commentsByEndLine = computed(() => {
 })
 const annotatedLines = computed(() => {
   const lines = new Set<number>()
+  if (props.lineRange)
+    for (
+      let line = Math.max(1, props.lineRange.start);
+      line <= Math.min(props.lineRange.end, codeLines.value.length);
+      line++
+    )
+      lines.add(line)
   for (const comment of pendingComments.value)
     for (let line = comment.startLine; line <= comment.endLine; line++) lines.add(line)
   if (commentRange.value)
@@ -160,49 +240,44 @@ function focusDraft() {
 }
 // ---- gutter 拖拽多行批注（同 ZCode 的 gutter utility）：按住拖动只实时高亮范围，
 // ---- 松手才在范围末行下方打开草稿卡；单击（原地松开）即单行批注。 ----
-let dragAnchorLine: number | null = null
 const dragRange = ref<CodeCommentRange | null>(null)
-function beginGutterDrag(line: number) {
-  dragAnchorLine = line
+const gutterDrag = usePointerDrag<number>({
+  capture: false,
+  windowListeners: true,
+  onMove: (anchor, event) => {
+    // 拖动时取指针下的 [data-line] 行，把高亮范围实时扩展为 anchor→当前行。
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-line]") as HTMLElement | null
+    if (!row || !codeRoot.value?.contains(row)) return
+    const line = Number(row.dataset.line)
+    if (!Number.isFinite(line) || line < 1) return
+    dragRange.value = { start: Math.min(anchor, line), end: Math.max(anchor, line) }
+  },
+  onEnd: () => {
+    const range = dragRange.value
+    dragRange.value = null
+    if (!range) return
+    commentOpen.value = true
+    commentRange.value = range
+    commentSelected.value = codeLines.value
+      .slice(range.start - 1, range.end)
+      .join("\n")
+      .slice(0, MAX_SELECTED_TEXT_LENGTH)
+    document.addEventListener("selectionchange", onSelectionChange)
+    focusDraft()
+  },
+  onCancel: () => (dragRange.value = null),
+})
+function beginGutterDrag(line: number, event: PointerEvent) {
   dragRange.value = { start: line, end: line }
-  document.addEventListener("mousemove", onGutterDrag)
-  document.addEventListener("mouseup", endGutterDrag)
-}
-function onGutterDrag(event: MouseEvent) {
-  if (dragAnchorLine === null) return
-  // 拖动时取指针下的 [data-line] 行，把高亮范围实时扩展为 anchor→当前行。
-  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-line]") as HTMLElement | null
-  if (!row || !codeRoot.value?.contains(row)) return
-  const line = Number(row.dataset.line)
-  if (!Number.isFinite(line) || line < 1) return
-  dragRange.value = { start: Math.min(dragAnchorLine, line), end: Math.max(dragAnchorLine, line) }
-}
-function endGutterDrag() {
-  if (dragAnchorLine === null) return
-  dragAnchorLine = null
-  document.removeEventListener("mousemove", onGutterDrag)
-  document.removeEventListener("mouseup", endGutterDrag)
-  const range = dragRange.value
-  dragRange.value = null
-  if (!range) return
-  commentOpen.value = true
-  commentRange.value = range
-  commentSelected.value = codeLines.value
-    .slice(range.start - 1, range.end)
-    .join("\n")
-    .slice(0, MAX_SELECTED_TEXT_LENGTH)
-  document.addEventListener("selectionchange", onSelectionChange)
-  focusDraft()
+  gutterDrag.start(event, line)
 }
 function closeComment() {
   commentOpen.value = false
   commentText.value = ""
   commentRange.value = null
   commentSelected.value = ""
-  dragAnchorLine = null
+  gutterDrag.cancel()
   dragRange.value = null
-  document.removeEventListener("mousemove", onGutterDrag)
-  document.removeEventListener("mouseup", endGutterDrag)
   document.removeEventListener("selectionchange", onSelectionChange)
 }
 function confirmComment() {
@@ -218,7 +293,7 @@ function confirmComment() {
     comment: body,
   })
   if (!ok) {
-    alert("Code comments are full (max 20). Remove some comments before adding new ones.")
+    ui.pushToast(t("projectFiles.annotateFull"), "warning")
     return
   }
   closeComment()
@@ -244,7 +319,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-1 flex-col border-r" :aria-label="t('projectFiles.preview')">
+  <section
+    v-bind="$attrs"
+    class="flex min-h-0 min-w-0 flex-1 flex-col border-r"
+    :aria-label="t('projectFiles.preview')"
+  >
     <div class="flex h-10 shrink-0 items-center gap-0.5 border-b px-1.5">
       <Button
         v-if="closable"
@@ -288,7 +367,7 @@ onBeforeUnmount(() => {
         ><WrapText
       /></Button>
       <Button
-        v-if="isDesktop && !readFile"
+        v-if="isDesktop && !readFile && !isRemoteProject(project)"
         variant="ghost"
         size="icon-xs"
         :disabled="opening"
@@ -323,11 +402,13 @@ onBeforeUnmount(() => {
         <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
         <div
           v-else-if="showRenderedMarkdown"
+          ref="markdownRoot"
           data-file-preview-scroll
           class="scrollbar-custom min-h-0 flex-1 overflow-auto px-3 py-2 [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
         >
+          <MarkdownFrontmatter v-if="markdownContent.frontmatter !== null" :content="markdownContent.frontmatter" />
           <Markdown
-            :content="text"
+            :content="markdownContent.body"
             mode="static"
             :enable-animate="false"
             :link-options="markdownLinkOptions"
@@ -366,7 +447,7 @@ onBeforeUnmount(() => {
                     class="absolute top-1/2 right-1.5 flex h-4.5 w-4.5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border bg-background text-muted-foreground opacity-0 shadow-xs transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
                     :title="t('projectFiles.annotateAdd')"
                     :aria-label="t('projectFiles.annotateAdd')"
-                    @mousedown.prevent="beginGutterDrag(index + 1)"
+                    @pointerdown.prevent="beginGutterDrag(index + 1, $event)"
                   >
                     <Plus class="size-3" />
                   </button>
@@ -440,6 +521,14 @@ onBeforeUnmount(() => {
       </template>
     </div>
   </section>
+  <!-- code 模式的同一浮层：只提供"在辅助对话中提问"，定位/翻转/钳制算法与会话正文一致 -->
+  <ConversationSelectionMenu
+    mode="code"
+    :root="menuRoot"
+    :path="path"
+    :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
+    @aux-ask="onAuxAsk"
+  />
 </template>
 
 <style scoped>

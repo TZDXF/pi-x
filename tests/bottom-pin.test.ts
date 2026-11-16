@@ -32,10 +32,3 @@ test("pinToBottom ignores content shorter than the viewport", () => {
   expect(pinToBottom(viewport, true, false)).toBe(false)
   expect(viewport.scrollTop).toBe(0)
 })
-
-test("conversation pins synchronously in a ResizeObserver for instant resize", () => {
-  const conversation = source("../src/components/ai-elements/conversation/Conversation.vue")
-  expect(conversation).toMatch(/props\.resize !== 'instant'\) return/)
-  expect(conversation).toMatch(/new ResizeObserver\(pin\)/)
-  expect(conversation).toMatch(/pinToBottom\(scroll, context\.isAtBottom\.value, context\.escapedFromLock\.value\)/)
-})

@@ -8,7 +8,14 @@ const run = (code, context) =>
   vm.runInContext(ts.transpile(code, { target: ts.ScriptTarget.ES2022 }), vm.createContext(context))
 
 function harness(storage) {
+  const preference = source("../src/lib/localPreference.ts")
+    .replace("createLocalPreference", "createConfigPreference")
+    .replaceAll("options.key", "options.legacyKey")
+    .replace(/^import .*$/gm, "")
+    .replace(/if \(import\.meta\.hot\).*$/gm, "")
+    .replace(/^export /gm, "")
   const code =
+    preference +
     source("../src/lib/processDetail.ts")
       .replace(/^import .*$/gm, "")
       .replace(/^export /gm, "")
@@ -94,7 +101,9 @@ test("concise tool groups precede all specialized renderers and expand with a lo
   const blocks = source("../src/components/AssistantBlocks.vue")
   expect(blocks).toMatch(/props\.detail \?\? processDetail\.value/)
   expect(blocks).toMatch(/displayDetail === 'concise' && conciseGroups\.has\(i\)/)
-  expect(blocks).toMatch(/<template v-else-if="block\.type === 'toolCall' && displayDetail === 'concise'"/)
+  expect(blocks).toMatch(
+    /<template v-else-if="block\.type === 'toolCall' && displayDetail === 'concise' && !hasReadImages\(block\)"/,
+  )
   expect(blocks.indexOf("<ToolCallGroup")).toBeLessThan(blocks.indexOf("&& isBash(block)"))
   expect(blocks).toMatch(/detail="detailed"/)
   expect(blocks).toMatch(/@open-review="emit\('openReview', \$event\)"/)

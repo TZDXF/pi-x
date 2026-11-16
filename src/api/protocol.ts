@@ -34,7 +34,15 @@ export interface Usage {
   cacheRead: number
   cacheWrite: number
   totalTokens: number
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+  cost: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+    /** Whether total is provider-reported billing rather than a catalog estimate. */
+    totalFromProvider?: boolean
+  }
 }
 
 /**
@@ -127,6 +135,7 @@ export interface AssistantMessage {
   api?: string
   provider?: string
   model?: string
+  responseModel?: string
   usage?: Usage
   stopReason?: string
   errorMessage?: string

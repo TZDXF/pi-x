@@ -1,5 +1,9 @@
 mod app_update;
 mod atomic_write;
+mod aux_leases;
+#[cfg(test)]
+mod aux_lifecycle_scenarios;
+mod aux_reap;
 mod builtin_extensions;
 mod commands;
 mod data_dir;
@@ -9,6 +13,7 @@ mod editor_icon;
 mod errors;
 mod file_preview;
 mod fs_search;
+mod fs_walk;
 mod logs;
 mod mcp;
 mod notifications;
@@ -16,8 +21,11 @@ mod packages;
 mod pi_data;
 mod pi_locate;
 mod pi_update;
+mod paths;
 mod preview_guard;
 mod preview_proxy;
+mod project_watch;
+mod process;
 #[cfg(feature = "remote-access")]
 mod remote;
 #[cfg(not(feature = "remote-access"))]
@@ -27,13 +35,18 @@ mod rpc;
 mod schedules;
 mod secrets;
 mod session_file_rewind;
+mod session_search;
 mod session_watch;
 mod sessions;
 mod skills;
+mod ssh;
+mod ssh_sessions;
+mod storage;
 mod terminal;
 mod terminal_open;
 mod title_generation;
 mod trust;
+mod usage;
 mod workspace_git;
 
 use rpc::RpcState;
@@ -42,7 +55,14 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if ssh::transport::answer_askpass() {
+        return;
+    }
     tauri::Builder::default()
+        // Keep this first so duplicate launches exit before other plugins or services start.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            desktop::restore(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -53,7 +73,12 @@ pub fn run() {
         .setup(|app| {
             data_dir::initialize()?;
             logs::initialize();
+            // 一次性迁移：为侧栏历史里缺 sidecar 的会话补写纳管标记，
+            // 避免列表改为仅展示 PiX 会话后既有历史消失。
+            sessions::adopt_known_sessions(commands::workspace_state::known_session_files());
             schedules::start(app.handle().clone())?;
+            // 辅助对话的孤儿回收（§5）：纯兜底，正常路径是关闭即 rpc_kill。
+            aux_reap::start(app.handle().clone())?;
             session_watch::start(app.handle().clone());
             let config = app.config().app.windows[0].clone();
             let handle = app.handle().clone();
@@ -102,27 +127,53 @@ pub fn run() {
             app_update::app_update_restart,
             commands::pi::pi_settings_get,
             commands::pi::pi_settings_save,
+            commands::workspace_state::workspace_state_get,
+            commands::workspace_state::workspace_state_update,
             commands::config::app_config_get,
             commands::config::app_config_save,
+            commands::config::app_preference_set,
             commands::config::projectless_dir_resolve,
             commands::prompts::global_prompt_list,
             commands::prompts::global_prompt_save,
             commands::pi::trust_status,
             commands::pi::trust_save,
             commands::pi::rpc_spawn,
+            commands::pi_aux::aux_spawn,
+            commands::aux_leases::aux_claim,
+            commands::aux_leases::aux_release,
+            commands::aux_leases::aux_list,
             commands::pi::rpc_request,
             commands::pi::rpc_notify,
             commands::pi::rpc_kill,
             commands::pi::pix_log,
             commands::pi::rpc_running,
             commands::pi::rpc_sessions,
+            commands::ssh::ssh_connection_list,
+            commands::ssh::ssh_connection_save,
+            commands::ssh::ssh_connection_delete,
+            commands::ssh::ssh_connection_probe,
+            commands::ssh::ssh_probe_target,
+            commands::ssh::ssh_deploy_status,
+            commands::ssh::ssh_deploy_pi,
+            commands::ssh::ssh_trust_status,
+            commands::ssh::ssh_trust_save,
+            commands::ssh::wsl_distro_list,
+            commands::ssh::docker_container_list,
+            ssh_sessions::ssh_sessions,
+            ssh_sessions::ssh_session_search,
             commands::files::session_list,
+            session_search::session_search,
+            usage::usage_summary,
+            storage::storage_summary,
+            storage::storage_cleanup,
+            commands::files::session_list_unarchived,
             sessions::session_mtime,
             sessions::session_history,
             sessions::session_last_error,
             sessions::session_update,
             sessions::session_delete,
             sessions::session_duplicate,
+            sessions::session_adopt,
             sessions::session_list_archived,
             title_generation::session_generate_title,
             workspace_git::workspace_git_info,
@@ -134,6 +185,9 @@ pub fn run() {
             commands::files::search_files,
             commands::files::list_project_directory,
             commands::files::read_file_preview,
+            project_watch::watch_project_files,
+            project_watch::unwatch_project_files,
+            project_watch::set_project_files_interest,
             commands::files::session_export_file,
             commands::files::open_path,
             editor::open_in_editor,

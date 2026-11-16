@@ -1,10 +1,7 @@
 import { test, expect } from "vitest"
-import { readFileSync } from "node:fs"
-import ts from "typescript"
-const source = readFileSync(new URL("../src/lib/paths.ts", import.meta.url), "utf8")
-const js = ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 })
+// paths.ts 现依赖 @/lib/ssh（远程路径归一化分派），直接按模块导入而不是 data-URL 内联加载。
 const { isWindowsPath, joinDisplayPath, relativeDisplayPath, normalizeSlashes, normalizeProjectPath, baseName } =
-  await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`)
+  await import("@/lib/paths")
 
 test("windows paths use backslashes when joined", () => {
   expect(joinDisplayPath("C:\\code\\pi-x", ".pi", "settings.json")).toBe("C:\\code\\pi-x\\.pi\\settings.json")

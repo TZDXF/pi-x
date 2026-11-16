@@ -5,10 +5,10 @@
 //! pi, so we don't reconstruct it — instead we read each file's first line
 //! (the session header JSON) and filter by its `cwd` field.
 
-use crate::errors::{pix_error, pix_error_detail};
+use crate::errors::{error_code, pix_error, pix_error_detail};
 use crate::trust::agent_dir;
 use dunce::canonicalize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
@@ -21,11 +21,12 @@ use tauri::{AppHandle, Manager};
 /// 实现见 `edit.rs`，由 `crate::rpc` 池层调用。
 pub(crate) mod edit;
 
+#[cfg(test)]
 const MAX_SESSIONS: usize = 50;
 const MAX_ARCHIVED: usize = 500;
 const PREVIEW_SCAN_BYTES: u64 = 32 * 1024;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub file: String,
@@ -34,6 +35,8 @@ pub struct SessionMeta {
     pub timestamp: Option<String>,
     pub mtime_ms: u64,
     pub preview: Option<String>,
+    #[serde(default)]
+    pub last_user_message: Option<String>,
     pub title: Option<String>,
     pub archived: bool,
 }
@@ -55,6 +58,13 @@ fn first_line(path: &Path) -> Option<String> {
     let text = String::from_utf8_lossy(&buf[..n]);
     let line = text.lines().next()?;
     Some(line.to_string())
+}
+
+/// Lightweight session eligibility shared by listing and storage accounting.
+/// Full transcript parsing remains lazy until a session is actually listed.
+pub(crate) fn read_session_header(path: &Path) -> Option<Value> {
+    let header = first_line(path).and_then(|line| serde_json::from_str::<Value>(&line).ok())?;
+    (header.get("type").and_then(Value::as_str) == Some("session")).then_some(header)
 }
 
 /// Extract a short preview from the first user message in the session file.
@@ -113,7 +123,7 @@ fn first_user_preview(path: &Path) -> Option<String> {
     None
 }
 
-fn normalize(p: &Path) -> Option<String> {
+pub(crate) fn normalize(p: &Path) -> Option<String> {
     canonicalize(p)
         .ok()
         .map(|s| s.to_string_lossy().to_string())
@@ -129,8 +139,34 @@ pub(crate) fn validate_session_path(file: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// List the most recent sessions whose `cwd` matches `project`.
+/// List sessions whose `cwd` matches `project`, newest creation time first.
 pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
+    list_with_options(project).await
+}
+
+/// List every persisted, unarchived local session for bulk archive. Storage
+/// statistics and this action share the same global on-disk scope, independent
+/// of the projects currently registered in the sidebar.
+pub async fn list_unarchived() -> Result<Vec<SessionMeta>, String> {
+    let root = agent_dir().join("sessions");
+    let root_exists = root.is_dir();
+    let rows = tokio::task::spawn_blocking(move || list_sessions(&root, None, None, false))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))??;
+    // 归档阶段诊断：只记录计数与根目录是否存在，不写路径或会话标识。
+    // 用户点“全部归档”却无任何反应时，这行日志可区分“枚举为空/根目录不同”。
+    crate::logs::write(
+        "sessions",
+        &format!(
+            "archive enumerate rows={} rootExist={}",
+            rows.len(),
+            if root_exists { 1 } else { 0 }
+        ),
+    );
+    Ok(rows)
+}
+
+async fn list_with_options(project: String) -> Result<Vec<SessionMeta>, String> {
     if let Err(error) = std::fs::metadata(&project) {
         if error.kind() == std::io::ErrorKind::NotFound {
             return Err(pix_error(
@@ -144,53 +180,189 @@ pub async fn list(project: String) -> Result<Vec<SessionMeta>, String> {
         normalize(Path::new(&project)).ok_or_else(|| format!("invalid project path: {project}"))?;
 
     tokio::task::spawn_blocking(move || {
-        let sessions_root = agent_dir().join("sessions");
-        let mut candidates: Vec<(PathBuf, u64)> = Vec::new();
-
-        let dirs = match std::fs::read_dir(&sessions_root) {
-            Ok(d) => d,
-            Err(_) => return Ok(Vec::new()), // no sessions yet
-        };
-        for dir in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(dir.path()) else {
-                continue;
-            };
-            for f in files.flatten() {
-                let p = f.path();
-                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                candidates.push((p.clone(), mtime_ms(&p)));
-            }
-        }
-
-        // newest first, then parse headers until we have enough matches
-        candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
-
-        let mut out = Vec::new();
-        for (path, mtime) in candidates {
-            if out.len() >= MAX_SESSIONS {
-                break;
-            }
-            // Skip unreadable/partial/corrupt files instead of failing the
-            // whole listing (one bad file must not empty the sidebar).
-            let Ok(meta) = read_session_meta(&path, mtime) else {
-                continue;
-            };
-            let cwd_norm = normalize(Path::new(&meta.cwd)).unwrap_or_else(|| meta.cwd.clone());
-            if cwd_norm != project_norm {
-                continue;
-            }
-            out.push(meta);
-        }
-        Ok(out)
+        list_project_history(&agent_dir().join("sessions"), &project_norm)
     })
     .await
     .map_err(|e| format!("session scan failed: {e}"))?
 }
 
+/// Both layouts share this history. The sidebar folds rows in the UI, so a
+/// backend cap would make older sessions unreachable even after expanding.
+/// Keep archived metadata too, to suppress still-live archived runtimes.
+fn list_project_history(root: &Path, project_norm: &str) -> Result<Vec<SessionMeta>, String> {
+    list_project_sessions(root, project_norm, None, true)
+}
+
+fn creation_time(timestamp: Option<&str>) -> i64 {
+    timestamp
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn list_project_sessions(
+    sessions_root: &Path,
+    project_norm: &str,
+    limit: Option<usize>,
+    include_archived: bool,
+) -> Result<Vec<SessionMeta>, String> {
+    list_sessions(
+        sessions_root,
+        Some(project_norm),
+        limit,
+        include_archived,
+    )
+}
+
+fn list_sessions(
+    sessions_root: &Path,
+    project_norm: Option<&str>,
+    limit: Option<usize>,
+    include_archived: bool,
+) -> Result<Vec<SessionMeta>, String> {
+    let mut candidates = Vec::new();
+    let dirs = match std::fs::read_dir(sessions_root) {
+        Ok(d) => d,
+        Err(_) => return Ok(Vec::new()), // no sessions yet
+    };
+    for dir in dirs.flatten() {
+        let Ok(files) = std::fs::read_dir(dir.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let mtime = mtime_ms(&path);
+            // Inspect only the header until the creation order and limit are
+            // known; avoid scanning every session's transcript for its title.
+            let (cwd, created) = if let Some(meta) = cached_meta(&path, mtime) {
+                (meta.cwd, creation_time(meta.timestamp.as_deref()))
+            } else {
+                let Some(header) = read_session_header(&path) else {
+                    continue;
+                };
+                (
+                    header
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    creation_time(header.get("timestamp").and_then(Value::as_str)),
+                )
+            };
+            if project_norm
+                .is_some_and(|project| normalize(Path::new(&cwd)).unwrap_or(cwd) != project)
+            {
+                continue;
+            }
+            // 只展示 PiX 纳管的会话（带 .pix.json sidecar）；pi CLI 等其他
+            // 入口直接创建的会话没有 sidecar，不出现在项目会话列表里。
+            if !has_sidecar(&path) {
+                continue;
+            }
+            candidates.push((path, mtime, created));
+        }
+    }
+    candidates.sort_by(|a, b| b.2.cmp(&a.2).then(b.0.cmp(&a.0)));
+    let mut out = Vec::new();
+    for (path, mtime, _) in candidates {
+        if limit.is_some_and(|limit| out.len() >= limit) {
+            break;
+        }
+        // One unreadable/partial/corrupt file must not empty the sidebar, and
+        // it must not silently disappear from the lists either.
+        let Some(meta) = read_session_meta_or_degraded(&path, mtime, "list") else {
+            continue;
+        };
+        // Bulk archive skips archived rows without letting them consume
+        // the sidebar's limit and hide older unarchived sessions.
+        if include_archived || !meta.archived {
+            out.push(meta);
+        }
+    }
+    Ok(out)
+}
+
+/// Row for a session whose transcript cannot be fully parsed.
+///
+/// Storage statistics only need the header line and the sidecar, while a full
+/// `SessionMeta` additionally scans the transcript (preview, last prompt, name).
+/// A transcript that is not valid UTF-8 therefore used to be counted by
+/// storage but dropped from every list, so "归档全部" could enumerate zero
+/// targets while the panel showed unarchived sessions. Archive itself only
+/// writes the sidecar, so such a session must stay reachable with a degraded,
+/// untitled row instead of vanishing.
+fn read_session_meta_or_degraded(path: &Path, mtime: u64, stage: &str) -> Option<SessionMeta> {
+    match read_session_meta(path, mtime) {
+        Ok(meta) => Some(meta),
+        Err(error) => {
+            crate::logs::write(
+                "sessions",
+                &format!("meta degraded stage={stage} code={}", error_code(&error)),
+            );
+            match degraded_session_meta(path, mtime) {
+                Ok(meta) => Some(meta),
+                Err(error) => {
+                    crate::logs::write(
+                        "sessions",
+                        &format!("meta skipped stage={stage} code={}", error_code(&error)),
+                    );
+                    None
+                }
+            }
+        }
+    }
+}
+
+fn degraded_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+    if let Some(cached) = cached_meta(path, mtime) {
+        return Ok(cached);
+    }
+    let Some(line) = first_line(path) else {
+        return Err("empty session file".into());
+    };
+    let header = serde_json::from_str::<serde_json::Value>(&line)
+        .map_err(|e| format!("invalid session header: {e}"))?;
+    if header.get("type").and_then(|t| t.as_str()) != Some("session") {
+        return Err("not a session file".into());
+    }
+    // Degraded row: the header survived but the transcript did not. The
+    // sidecar must still be readable — storage statistics and the lists skip
+    // an unreadable sidecar together, so the two views stay consistent.
+    let presentation = {
+        let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+        read_presentation(path)?
+    };
+    let meta = SessionMeta {
+        file: path.to_string_lossy().to_string(),
+        id: header
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        cwd: header
+            .get("cwd")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        timestamp: header
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .map(String::from),
+        mtime_ms: mtime,
+        preview: None,
+        last_user_message: None,
+        title: None,
+        archived: presentation.archived,
+    };
+    cache_meta(path, mtime, &meta);
+    Ok(meta)
+}
+
 /// Build `SessionMeta` for one session file (header + preview + presentation).
-fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
+pub(crate) fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
     if let Some(cached) = cached_meta(path, mtime) {
         return Ok(cached);
     }
@@ -227,7 +399,8 @@ fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
         cwd,
         timestamp,
         mtime_ms: mtime,
-        preview,
+        preview: presentation.description.clone().or(preview),
+        last_user_message: last_user_preview(path)?,
         title: read_session_name(path)?,
         archived: presentation.archived,
     };
@@ -235,12 +408,18 @@ fn read_session_meta(path: &Path, mtime: u64) -> Result<SessionMeta, String> {
     Ok(meta)
 }
 
-/// Parse results cache keyed by path + mtime: listing sessions repeatedly
+/// Parse results cache keyed by path, JSONL mtime and sidecar version: listing sessions repeatedly
 /// re-reads every file (header + 32 KB preview scan + full name scan); the
 /// cache skips that work until the file changes on disk.
 struct CachedMeta {
     mtime: u64,
+    presentation_version: Option<(std::time::SystemTime, u64)>,
     meta: SessionMeta,
+}
+
+fn presentation_version(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path.with_extension("pix.json")).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
     static CACHE: OnceLock<std::sync::Mutex<HashMap<PathBuf, CachedMeta>>> = OnceLock::new();
@@ -248,10 +427,11 @@ fn meta_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, CachedMeta>> {
 }
 const META_CACHE_CAP: usize = 4096;
 fn cached_meta(path: &Path, mtime: u64) -> Option<SessionMeta> {
+    let presentation_version = presentation_version(path);
     let cache = meta_cache().lock().ok()?;
     cache
         .get(path)
-        .filter(|c| c.mtime == mtime)
+        .filter(|c| c.mtime == mtime && c.presentation_version == presentation_version)
         .map(|c| c.meta.clone())
 }
 fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
@@ -263,12 +443,13 @@ fn cache_meta(path: &Path, mtime: u64, meta: &SessionMeta) {
             path.to_path_buf(),
             CachedMeta {
                 mtime,
+                presentation_version: presentation_version(path),
                 meta: meta.clone(),
             },
         );
     }
 }
-fn invalidate_meta_cache(path: &Path) {
+pub(crate) fn invalidate_meta_cache(path: &Path) {
     if let Ok(mut cache) = meta_cache().lock() {
         cache.remove(path);
     }
@@ -317,7 +498,7 @@ pub async fn list_archived() -> Result<Vec<SessionMeta>, String> {
             if !archived {
                 continue;
             }
-            if let Ok(meta) = read_session_meta(&path, mtime) {
+            if let Some(meta) = read_session_meta_or_degraded(&path, mtime, "archive-list") {
                 out.push(meta);
             }
         }
@@ -373,6 +554,8 @@ pub struct Presentation {
     pub archived: bool,
     #[serde(default)]
     pub title_generation_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 pub(crate) static PRESENTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -386,10 +569,52 @@ pub(crate) fn read_presentation(file: &Path) -> Result<Presentation, String> {
 // Readers always see a complete JSON document, even while another client lists sessions.
 pub(crate) fn write_presentation(file: &Path, presentation: &Presentation) -> Result<(), String> {
     let bytes = serde_json::to_vec(presentation).map_err(|e| e.to_string())?;
-    let temporary = file.with_extension(format!("pix.{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&temporary, file.with_extension("pix.json")).map_err(|e| e.to_string())
+    crate::atomic_write::write(&file.with_extension("pix.json"), &bytes).map_err(|e| e.to_string())
 }
+/// PiX 纳管会话的标记：会话的 .pix.json sidecar 存在。
+pub(crate) fn has_sidecar(path: &Path) -> bool {
+    path.with_extension("pix.json").is_file()
+}
+
+/// 将会话纳入 PiX 管理：sidecar 缺失时写入默认值。幂等；
+/// 与 session_update 一样拒绝符号链接的 sidecar 路径。
+pub fn adopt(file: &Path) -> Result<(), String> {
+    let sidecar = file.with_extension("pix.json");
+    if std::fs::symlink_metadata(&sidecar).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
+    }
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    // 锁内复查：其他客户端可能同时纳管同一会话。
+    if sidecar.exists() {
+        return Ok(());
+    }
+    write_presentation(file, &Presentation::default())
+}
+
+/// Adopt a session into PiX so it appears in the PiX-only session listing.
+#[tauri::command]
+pub async fn session_adopt(file: String) -> Result<(), String> {
+    let path = validate_session_path(&file)?;
+    tokio::task::spawn_blocking(move || adopt(&path))
+        .await
+        .map_err(|e| format!("session adopt failed: {e}"))?
+}
+
+/// 一次性迁移：PiX 专属列表过滤引入前，侧栏已展示过的会话可能缺少
+/// sidecar；为它们补写，避免升级后用户已管理的会话从侧栏消失。
+pub fn adopt_known_sessions(files: Vec<PathBuf>) {
+    for file in files {
+        if file.extension().and_then(|s| s.to_str()) == Some("jsonl") && file.is_file() {
+            if let Err(error) = adopt(&file) {
+                crate::logs::write(
+                    "sessions",
+                    &format!("adopt {} failed: {error}", file.display()),
+                );
+            }
+        }
+    }
+}
+
 /// Error details of the last failed assistant message recorded in a session
 /// file. pi drops most retry failures from the RPC message projection via
 /// `context_edit`, so clients read the file to surface the final failure.
@@ -464,6 +689,25 @@ pub async fn session_history(file: String) -> Result<Vec<serde_json::Value>, Str
     tokio::task::spawn_blocking(move || read_session_history(&path))
         .await
         .map_err(|e| format!("session scan failed: {e}"))?
+}
+
+/// Keep the sidebar's first-message preview separate from the board's latest prompt.
+fn last_user_preview(path: &Path) -> Result<Option<String>, String> {
+    let messages = read_session_history(path)?;
+    let Some(message) = messages.iter().rev().find(|message| message["role"] == "user") else {
+        return Ok(None);
+    };
+    let text = match &message["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    Ok(Some(text.trim().chars().take(120).collect()))
 }
 
 fn read_session_history(path: &Path) -> Result<Vec<serde_json::Value>, String> {
@@ -584,7 +828,9 @@ pub async fn session_mtime(file: String) -> Result<u64, String> {
     let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
         .await
         .map_err(|e| format!("session scan failed: {e}"))??;
-    Ok(mtime_ms(&path))
+    tokio::task::spawn_blocking(move || mtime_ms(&path))
+        .await
+        .map_err(|e| format!("session scan failed: {e}"))
 }
 
 #[tauri::command]
@@ -594,17 +840,58 @@ pub async fn session_update(
     title: Option<String>,
     archived: bool,
 ) -> Result<u64, String> {
-    let path = validate_session_path(&file)?;
-    if std::fs::symlink_metadata(path.with_extension("pix.json"))
-        .is_ok_and(|m| m.file_type().is_symlink())
-    {
-        return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
+    let result = apply_session_update(app, file, title, archived).await;
+    // 归档阶段诊断：只在失败时记录错误码，不写会话路径、标题或文件内容。
+    // 现有日志无法区分“没有发起调用”和“调用失败”，这种静默失败正是本次排查的盲区。
+    if let Err(error) = &result {
+        crate::logs::write(
+            "sessions",
+            &format!(
+                "archive apply failed archived={} code={}",
+                if archived { 1 } else { 0 },
+                error_code(error)
+            ),
+        );
     }
+    result
+}
+
+async fn apply_session_update(
+    app: AppHandle,
+    file: String,
+    title: Option<String>,
+    archived: bool,
+) -> Result<u64, String> {
+    let path = tokio::task::spawn_blocking(move || {
+        let path = validate_session_path(&file)?;
+        if std::fs::symlink_metadata(path.with_extension("pix.json"))
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(pix_error("sessionMetaPathInvalid", "无效的会话元数据路径"));
+        }
+        Ok(path)
+    })
+    .await
+    .map_err(|e| format!("session scan failed: {e}"))??;
     if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
         set_session_name(&app, &path, title.trim().chars().take(120).collect(), false).await?;
     }
-    update_presentation(&path, archived)?;
-    Ok(mtime_ms(&path))
+    tokio::task::spawn_blocking(move || {
+        update_presentation(&path, archived)?;
+        Ok(mtime_ms(&path))
+    })
+    .await
+    .map_err(|e| format!("session update failed: {e}"))?
+}
+
+pub(crate) fn set_session_description(path: &Path, description: String) -> Result<(), String> {
+    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut presentation = read_presentation(path)?;
+    presentation.description = Some(description);
+    write_presentation(path, &presentation)?;
+    // The sidecar write does not change the session file's mtime.
+    invalidate_meta_cache(path);
+    Ok(())
 }
 
 fn update_presentation(path: &Path, archived: bool) -> Result<(), String> {
@@ -643,10 +930,24 @@ fn duplicate_content(content: &str, timestamp: &str, id: &str) -> Result<String,
 
 /// Copy a session file with a fresh id and timestamp; returns the new path.
 #[tauri::command]
-pub async fn session_duplicate(file: String) -> Result<String, String> {
+pub async fn session_duplicate(
+    state: tauri::State<'_, crate::rpc::RpcState>,
+    file: String,
+    before_entry_id: Option<String>,
+    runtime_id: Option<String>,
+) -> Result<String, String> {
+    if let Some(runtime_id) = runtime_id {
+        if let Some(endpoint) = crate::rpc::session_endpoint(&state, &runtime_id).await? {
+            return duplicate_remote_session(&endpoint, &file, before_entry_id.as_deref()).await;
+        }
+    }
     tokio::task::spawn_blocking(move || {
         let source = validate_session_path(&file)?;
         let content = std::fs::read_to_string(&source).map_err(|e| e.to_string())?;
+        let content = match before_entry_id {
+            Some(entry_id) => branch_before_entry(&content, &entry_id)?,
+            None => content,
+        };
         let timestamp = chrono::Utc::now()
             .format("%Y-%m-%dT%H:%M:%S%.3fZ")
             .to_string();
@@ -655,26 +956,129 @@ pub async fn session_duplicate(file: String) -> Result<String, String> {
         let name = format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-"));
         let target = source.parent().ok_or("invalid session path")?.join(name);
         std::fs::write(&target, content).map_err(|e| e.to_string())?;
+        // 复制出的会话同样是 PiX 纳管会话，缺 sidecar 会从列表里消失。
+        adopt(&target)?;
         Ok(target.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| format!("session duplicate failed: {e}"))?
 }
 
+async fn duplicate_remote_session(
+    endpoint: &crate::ssh::RemoteEndpoint,
+    file: &str,
+    before_entry_id: Option<&str>,
+) -> Result<String, String> {
+    let snapshot =
+        remote_session_snapshot(endpoint, serde_json::json!({"op": "read", "file": file})).await?;
+    let content = snapshot["content"]
+        .as_str()
+        .ok_or("Missing session snapshot")?;
+    let branch = before_entry_id
+        .map(|id| branch_before_entry(content, id))
+        .transpose()?;
+    let timestamp = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let id = uuid::Uuid::new_v4().to_string();
+    let content = duplicate_content(branch.as_deref().unwrap_or(content), &timestamp, &id)?;
+    let result = remote_session_snapshot(
+        endpoint,
+        serde_json::json!({
+            "op": "write", "file": file, "content": content,
+            "name": format!("{}_{id}.jsonl", timestamp.replace([':', '.'], "-")),
+        }),
+    )
+    .await?;
+    result["file"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or("Missing copied session path".into())
+}
+
+async fn remote_session_snapshot(
+    endpoint: &crate::ssh::RemoteEndpoint,
+    request: Value,
+) -> Result<Value, String> {
+    let script = crate::ssh::payload::build_session_snapshot_script();
+    let output = crate::ssh::transport::remote_exec_session_snapshot(
+        endpoint,
+        &script,
+        request.to_string().as_bytes(),
+        std::time::Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| crate::commands::ssh::remote_error_coded(endpoint, &e))?;
+    let json = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("PIX_SESSION_SNAPSHOT="))
+        .ok_or("Missing remote session snapshot response")?;
+    serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+/// Select the target's ancestors without navigating or modifying the live worker.
+/// Stop reading at the target so an in-progress append after it is irrelevant.
+fn branch_before_entry(content: &str, target: &str) -> Result<String, String> {
+    let mut lines = content.lines();
+    let header = lines.next().ok_or("empty session file")?;
+    let mut entries = Vec::new();
+    let mut parents = HashMap::new();
+    let mut leaf = None;
+    let mut found = false;
+    for line in lines.filter(|line| !line.trim().is_empty()) {
+        let entry: Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        if entry["id"].as_str() == Some(target) {
+            if entry["type"] != "message" || entry["message"]["role"] != "user" {
+                return Err("Fork target is not a user question".into());
+            }
+            leaf = entry["parentId"].as_str().map(str::to_owned);
+            found = true;
+            break;
+        }
+        if let Some(id) = entry["id"].as_str() {
+            parents.insert(id.to_owned(), entry["parentId"].as_str().map(str::to_owned));
+        }
+        entries.push((line, entry));
+    }
+    if !found {
+        return Err("Question no longer exists in the session".into());
+    }
+    let mut branch = std::collections::HashSet::new();
+    while let Some(id) = leaf {
+        if !branch.insert(id.clone()) {
+            return Err("Invalid session branch: cyclic parent".into());
+        }
+        leaf = parents
+            .get(&id)
+            .ok_or("Missing session branch parent")?
+            .clone();
+    }
+    let mut output = format!("{header}\n");
+    for (line, entry) in entries {
+        if entry["id"].as_str().is_some_and(|id| branch.contains(id)) {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    Ok(output)
+}
+
 /// Permanently delete a session file and its PiX presentation metadata.
 #[tauri::command]
 pub async fn session_delete(file: String) -> Result<(), String> {
-    let path = tokio::task::spawn_blocking(move || validate_session_path(&file))
-        .await
-        .map_err(|e| format!("session scan failed: {e}"))??;
-    let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
-    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    // Presentation metadata is optional; ignore a missing sidecar.
-    let _ = std::fs::remove_file(path.with_extension("pix.json"));
-    // JSONL 已删除；用验证过的路径清理撤销状态，不能依赖前端再次校验文件存在。
-    let _ = crate::session_file_rewind::delete_state_for_session(&path);
-    invalidate_meta_cache(&path);
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let path = validate_session_path(&file)?;
+        let _guard = PRESENTATION_LOCK.lock().map_err(|e| e.to_string())?;
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        // Presentation metadata is optional; ignore a missing sidecar.
+        let _ = std::fs::remove_file(path.with_extension("pix.json"));
+        let _ = crate::session_file_rewind::delete_state_for_session(&path);
+        invalidate_meta_cache(&path);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("session delete failed: {e}"))?
 }
 
 /// List archived sessions across every project, newest first.
@@ -686,6 +1090,111 @@ pub async fn session_list_archived() -> Result<Vec<SessionMeta>, String> {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn project_listing_limits_by_creation_time_and_ignores_later_writes() {
+        let root = std::env::temp_dir().join(format!("pix-list-created-{}", uuid::Uuid::new_v4()));
+        let sessions = root.join("sessions");
+        let folder = sessions.join("encoded-project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let project_norm = normalize(&root).unwrap();
+        let base = chrono::DateTime::parse_from_rfc3339("2026-10-20T00:00:00Z").unwrap();
+        for index in 0..MAX_SESSIONS + 2 {
+            let header = serde_json::json!({
+                "type": "session",
+                "id": index.to_string(),
+                "cwd": root.to_string_lossy(),
+                "timestamp": (base + chrono::Duration::minutes(index as i64)).to_rfc3339(),
+            });
+            let path = folder.join(format!("session-{index:03}.jsonl"));
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            adopt(&path).unwrap();
+            let modified = UNIX_EPOCH + std::time::Duration::from_secs(10_000 - index as u64);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        }
+        std::fs::write(folder.join("corrupt.jsonl"), "incomplete header\n").unwrap();
+        let other = serde_json::json!({
+            "type": "session",
+            "cwd": folder.to_string_lossy(),
+            "timestamp": "2026-10-21T00:00:00Z",
+        });
+        std::fs::write(folder.join("other.jsonl"), format!("{other}\n")).unwrap();
+
+        let expected: Vec<String> = (2..MAX_SESSIONS + 2).rev().map(|i| i.to_string()).collect();
+        for _ in 0..2 {
+            let rows =
+                list_project_sessions(&sessions, &project_norm, Some(MAX_SESSIONS), true).unwrap();
+            assert_eq!(
+                rows.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>(),
+                expected
+            );
+            // An older session becoming the most recently modified must not
+            // displace any of the newest-created 50, even with cached metadata.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(folder.join("session-000.jsonl"))
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+                .unwrap();
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn project_listing_shows_only_adopted_sessions() {
+        let root = std::env::temp_dir().join(format!("pix-list-adopted-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions").join("encoded-project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let project_norm = normalize(&root).unwrap();
+        for name in ["pix-owned", "cli-created"] {
+            let header = serde_json::json!({
+                "type": "session",
+                "id": name,
+                "cwd": root.to_string_lossy(),
+                "timestamp": "2026-10-22T00:00:00Z",
+            });
+            std::fs::write(folder.join(format!("{name}.jsonl")), format!("{header}\n")).unwrap();
+        }
+        // pi CLI 直接创建的会话没有 sidecar，不出现在 PiX 的列表里。
+        adopt(&folder.join("pix-owned.jsonl")).unwrap();
+
+        let rows =
+            list_project_sessions(&root.join("sessions"), &project_norm, Some(MAX_SESSIONS), true).unwrap();
+        assert_eq!(
+            rows.iter().map(|meta| meta.id.as_str()).collect::<Vec<_>>(),
+            ["pix-owned"]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn adopt_creates_sidecar_once_and_preserves_existing_metadata() {
+        let file = std::env::temp_dir().join(format!("pix-adopt-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "{\"type\":\"session\",\"id\":\"s\"}\n").unwrap();
+        adopt(&file).unwrap();
+        assert!(file.with_extension("pix.json").is_file());
+
+        // 再次纳管不得覆盖已有元数据（例如归档状态）。
+        write_presentation(
+            &file,
+            &Presentation {
+                archived: true,
+                title_generation_attempted: false,
+                description: None,
+            },
+        )
+        .unwrap();
+        adopt(&file).unwrap();
+        assert!(read_presentation(&file).unwrap().archived);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
+    }
+
     #[tokio::test]
     async fn missing_project_has_specific_error_code() {
         let path =
@@ -739,6 +1248,121 @@ mod presentation_tests {
         assert!(duplicate_content("{\"type\":\"message\"}\n", "t", "i").is_err());
         assert!(duplicate_content("", "t", "i").is_err());
     }
+
+    #[tokio::test]
+    async fn remote_duplicate_and_branch_accept_snapshots_over_default_exec_limit() {
+        use crate::ssh::transport::{env_lock, find_test_program, AuthMethod, SshEndpoint};
+        let Some(node) = find_test_program("node") else { return };
+        let script = std::env::temp_dir().join(format!(
+            "pix-snapshot-mock-{}.cjs", uuid::Uuid::new_v4()
+        ));
+        // PIX_SSH_COMMAND uses whitespace-separated arguments, just like the other mock-ssh tests.
+        if node.to_string_lossy().contains(' ') || script.to_string_lossy().contains(' ') {
+            return;
+        }
+        std::fs::write(&script, r#"
+const fs = require('node:fs');
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (request.op === 'read') {
+  const header = JSON.stringify({type:'session',id:'old'}) + '\n';
+  const blob = JSON.stringify({type:'custom',id:'blob',parentId:null,data:'x'.repeat(16*1024*1024)}) + '\n';
+  const question = JSON.stringify({type:'message',id:'q',parentId:'blob',message:{role:'user'}}) + '\n';
+  process.stdout.write('PIX_SESSION_SNAPSHOT=' + JSON.stringify({content:header+blob+question}) + '\n');
+} else {
+  const lines = request.content.trim().split('\n');
+  const branch = request.file === '/branch.jsonl';
+  if (request.content.length <= 16*1024*1024 || lines.length !== (branch ? 2 : 3)) process.exit(1);
+  process.stdout.write('PIX_SESSION_SNAPSHOT=' + JSON.stringify({file:'/copied.jsonl'}) + '\n');
+}
+"#).unwrap();
+        let _guard = env_lock();
+        let previous = std::env::var_os("PIX_SSH_COMMAND");
+        std::env::set_var(
+            "PIX_SSH_COMMAND", format!("{} {}", node.display(), script.display())
+        );
+        let endpoint = crate::ssh::RemoteEndpoint::Ssh(SshEndpoint {
+            host: "mock".into(),
+            port: 22,
+            user: None,
+            key_path: None,
+            auth_method: AuthMethod::Key,
+            password: None,
+            key_passphrase: None,
+        });
+        let duplicate = duplicate_remote_session(&endpoint, "/original.jsonl", None).await;
+        let branch = duplicate_remote_session(&endpoint, "/branch.jsonl", Some("q")).await;
+        match previous {
+            Some(value) => std::env::set_var("PIX_SSH_COMMAND", value),
+            None => std::env::remove_var("PIX_SSH_COMMAND"),
+        }
+        std::fs::remove_file(script).unwrap();
+        assert_eq!(duplicate.unwrap(), "/copied.jsonl");
+        assert_eq!(branch.unwrap(), "/copied.jsonl");
+    }
+
+    #[test]
+    fn branch_copy_keeps_ancestors_and_excludes_later_turns_and_other_branches() {
+        let lines = [
+            serde_json::json!({"type": "session", "id": "original", "version": 3, "cwd": "/tmp"}),
+            serde_json::json!({"type": "model_change", "id": "model", "parentId": null}),
+            serde_json::json!({"type": "message", "id": "q1", "parentId": "model", "message": {"role": "user", "content": "repeat"}}),
+            serde_json::json!({"type": "message", "id": "a1", "parentId": "q1", "message": {"role": "assistant", "content": []}}),
+            serde_json::json!({"type": "message", "id": "abandoned", "parentId": "q1", "message": {"role": "assistant", "content": []}}),
+            serde_json::json!({"type": "compaction", "id": "compact", "parentId": "a1", "summary": "summary", "firstKeptEntryId": "q1"}),
+            serde_json::json!({"type": "message", "id": "q2", "parentId": "compact", "message": {"role": "user", "content": "repeat"}}),
+            serde_json::json!({"type": "message", "id": "a2", "parentId": "q2", "message": {"role": "assistant", "content": []}}),
+        ];
+        let original = lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        // A live worker can be appending a partial JSON record after the target.
+        let original = format!("{original}\n{{\"type\":");
+        let branch = branch_before_entry(&original, "q2").unwrap();
+        let copy = duplicate_content(&branch, "now", "copy").unwrap();
+        let entries: Vec<Value> = copy
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(entries[0]["id"], "copy");
+        assert_eq!(
+            entries[1..],
+            [
+                lines[1].clone(),
+                lines[2].clone(),
+                lines[3].clone(),
+                lines[5].clone()
+            ]
+        );
+        assert!(original.contains("abandoned"));
+        assert!(original.contains("a2"));
+    }
+
+    #[test]
+    fn branch_copy_before_first_question_preserves_setup_entries() {
+        let original = concat!(
+            "{\"type\":\"session\",\"id\":\"old\"}\n",
+            "{\"type\":\"thinking_level_change\",\"id\":\"setup\",\"parentId\":null}\n",
+            "{\"type\":\"message\",\"id\":\"q\",\"parentId\":\"setup\",\"message\":{\"role\":\"user\"}}\n",
+        );
+        assert_eq!(
+            branch_before_entry(original, "q").unwrap(),
+            original.lines().take(2).collect::<Vec<_>>().join("\n") + "\n"
+        );
+    }
+
+    #[test]
+    fn branch_copy_rejects_missing_or_non_user_targets_and_broken_ancestry() {
+        let header = "{\"type\":\"session\",\"id\":\"old\"}\n";
+        assert!(branch_before_entry(header, "missing").is_err());
+        let assistant = format!("{header}{{\"type\":\"message\",\"id\":\"a\",\"parentId\":null,\"message\":{{\"role\":\"assistant\"}}}}\n");
+        assert!(branch_before_entry(&assistant, "a").is_err());
+        for parent in ["missing", "cycle"] {
+            let original = format!("{header}{{\"type\":\"custom\",\"id\":\"cycle\",\"parentId\":\"{parent}\"}}\n{{\"type\":\"message\",\"id\":\"q\",\"parentId\":\"cycle\",\"message\":{{\"role\":\"user\"}}}}\n");
+            assert!(branch_before_entry(&original, "q").is_err());
+        }
+    }
     #[test]
     fn native_session_names_use_latest_entry_and_support_clearing() {
         let file = std::env::temp_dir().join(format!("pix-name-{}.jsonl", uuid::Uuid::new_v4()));
@@ -766,6 +1390,58 @@ mod presentation_tests {
         std::fs::write(&file, content).unwrap();
         let meta = read_session_meta(&file, mtime_ms(&file)).unwrap();
         assert_eq!(meta.preview.as_deref(), Some("调用 3 个智能体"));
+        std::fs::remove_file(file).unwrap();
+    }
+    #[test]
+    fn generated_description_replaces_preview_and_invalidates_meta_cache() {
+        let file =
+            std::env::temp_dir().join(format!("pix-description-{}.jsonl", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &file,
+            concat!(
+                "{\"type\":\"session\",\"cwd\":\"/tmp\",\"id\":\"p\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"Original question\"}}\n",
+            ),
+        )
+        .unwrap();
+        let mtime = mtime_ms(&file);
+        assert_eq!(
+            read_session_meta(&file, mtime).unwrap().preview.as_deref(),
+            Some("Original question")
+        );
+        set_session_description(&file, "Generated task summary".into()).unwrap();
+        // Deliberately reuse the same mtime: only a sidecar changed.
+        assert_eq!(
+            read_session_meta(&file, mtime).unwrap().preview.as_deref(),
+            Some("Generated task summary")
+        );
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_file(file.with_extension("pix.json")).unwrap();
+    }
+
+    #[test]
+    fn board_preview_uses_latest_current_branch_prompt_without_changing_sidebar_preview() {
+        let file =
+            std::env::temp_dir().join(format!("pix-latest-preview-{}.jsonl", uuid::Uuid::new_v4()));
+        let entries = [
+            serde_json::json!({"type": "session", "id": "session", "cwd": "/tmp"}),
+            serde_json::json!({"type": "message", "id": "q1", "parentId": null, "message": {"role": "user", "content": "First question"}}),
+            serde_json::json!({"type": "message", "id": "q2", "parentId": "q1", "message": {"role": "user", "content": [{"type": "text", "text": "Latest"}, {"type": "text", "text": "question"}]}}),
+            serde_json::json!({"type": "message", "id": "abandoned", "parentId": "q1", "message": {"role": "user", "content": "Other branch"}}),
+            serde_json::json!({"type": "message", "id": "answer", "parentId": "q2", "message": {"role": "assistant", "content": "Answer"}}),
+        ];
+        let content = entries
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file, format!("{content}\n{{\"type\":")).unwrap();
+        let meta = read_session_meta(&file, mtime_ms(&file)).unwrap();
+        assert_eq!(meta.preview.as_deref(), Some("First question"));
+        assert_eq!(meta.last_user_message.as_deref(), Some("Latest\nquestion"));
+        let image = serde_json::json!({"type": "message", "id": "image", "parentId": "answer", "message": {"role": "user", "content": [{"type": "image", "data": "data"}]}});
+        std::fs::write(&file, format!("{content}\n{image}\n")).unwrap();
+        assert_eq!(last_user_preview(&file).unwrap().as_deref(), Some(""));
         std::fs::remove_file(file).unwrap();
     }
     #[test]
@@ -904,6 +1580,270 @@ mod presentation_tests {
         assert_eq!(messages[4]["modelId"], "m");
         assert_eq!(messages[5]["role"], "assistant");
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn bulk_listing_ignores_the_sidebar_limit_and_archived_prefix() {
+        let root = std::env::temp_dir().join(format!("pix-list-all-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let sessions_root = root.join("sessions");
+        let encoded = sessions_root.join("encoded-project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&encoded).unwrap();
+        let project_norm = normalize(&project).unwrap();
+        let base_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+        for index in 0..55 {
+            let path = encoded.join(format!("{index:03}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session",
+                "id": format!("session-{index}"),
+                "cwd": project.to_string_lossy(),
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base_time + std::time::Duration::from_secs(index))
+                .unwrap();
+            // Every row is PiX-managed; the 50 newest are archived and the five oldest are not.
+            let presentation = if index >= 5 { "true" } else { "false" };
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{presentation}}}"),
+            )
+            .unwrap();
+        }
+
+        let recent =
+            list_project_sessions(&sessions_root, &project_norm, Some(MAX_SESSIONS), true).unwrap();
+        assert_eq!(recent.len(), MAX_SESSIONS);
+        assert!(recent.iter().all(|row| row.archived));
+        let unarchived = list_project_sessions(&sessions_root, &project_norm, None, false).unwrap();
+        let mut ids: Vec<String> = unarchived.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            (0..5)
+                .map(|index| format!("session-{index}"))
+                .collect::<Vec<_>>()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_reconciles_history_bulk_and_storage() {
+        let root = std::env::temp_dir().join(format!("pix-visibility-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let project_norm = normalize(&project).unwrap();
+        // 60 active + 50 newer archived + one orphan. Neither a recent cap nor
+        // archived rows may make active project sessions unreachable.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session-visibility.json"
+        )).unwrap();
+        let active = fixture["activeIds"].as_array().unwrap();
+        let archived = fixture["archivedIds"].as_array().unwrap();
+        let orphan = fixture["orphanId"].as_str().unwrap();
+        let all_ids = active.iter().chain(archived)
+            .map(|id| id.as_str().unwrap()).chain(std::iter::once(orphan));
+        for (index, id) in all_ids.enumerate() {
+            let folder = sessions_root.join(if id == orphan { "orphan" } else { "registered" });
+            std::fs::create_dir_all(&folder).unwrap();
+            let path = folder.join(format!("{index:03}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session", "id": id,
+                "cwd": if id == orphan { root.join("removed") } else { project.clone() },
+                "timestamp": chrono::DateTime::from_timestamp(1_700_000_000 + index as i64, 0).unwrap().to_rfc3339(),
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{}}}", archived.iter().any(|value| value.as_str() == Some(id))),
+            )
+            .unwrap();
+        }
+        let ids = |rows: Vec<SessionMeta>| -> std::collections::BTreeSet<String> {
+            rows.into_iter()
+                .filter(|row| !row.archived)
+                .map(|row| row.id)
+                .collect()
+        };
+        let legacy =
+            ids(list_project_sessions(&sessions_root, &project_norm, Some(50), true).unwrap());
+        let history = ids(list_project_history(&sessions_root, &project_norm).unwrap());
+        let bulk = ids(list_sessions(&sessions_root, None, None, false).unwrap());
+        let expected = active.iter().map(|id| id.as_str().unwrap().to_string()).collect();
+        assert!(legacy.is_empty()); // Reproduces the original empty sidebar.
+        assert_eq!(history, expected);
+        assert_eq!(
+            bulk.difference(&history).cloned().collect::<Vec<_>>(),
+            ["visibility-110"]
+        );
+        let storage = crate::storage::summary_at(&sessions_root, None);
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "sessions")
+                .unwrap()
+                .item_count,
+            61
+        );
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "archivedSessions")
+                .unwrap()
+                .item_count,
+            50
+        );
+        // Re-read the same root (warm cache); no data is rewritten by listing.
+        assert_eq!(
+            ids(list_project_history(&sessions_root, &project_norm).unwrap()),
+            history
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_visibility_observes_external_archive_and_restore_with_unchanged_jsonl() {
+        let root = std::env::temp_dir().join(format!("pix-sidecar-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions/project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("session.jsonl");
+        let content = "{\"type\":\"session\",\"id\":\"external\",\"cwd\":\"C:/project\"}\n";
+        std::fs::write(&file, content).unwrap();
+        let sidecar = file.with_extension("pix.json");
+        std::fs::write(&sidecar, "{\"archived\":false}").unwrap();
+        let stamp = mtime_ms(&file);
+        assert_eq!(
+            list_sessions(&root.join("sessions"), None, None, false)
+                .unwrap()
+                .len(),
+            1
+        );
+        for (presentation, count) in [("{\"archived\":true}", 0), ("{\"archived\":false}", 1)] {
+            // Simulate a different client: no explicit invalidate_meta_cache.
+            std::fs::write(&sidecar, presentation).unwrap();
+            assert_eq!(mtime_ms(&file), stamp);
+            assert_eq!(
+                list_sessions(&root.join("sessions"), None, None, false)
+                    .unwrap()
+                    .len(),
+                count
+            );
+            let storage = crate::storage::summary_at(&root.join("sessions"), None);
+            assert_eq!(
+                storage
+                    .categories
+                    .iter()
+                    .find(|row| row.id == "sessions")
+                    .unwrap()
+                    .item_count,
+                count as u64
+            );
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), content);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_transcript_stays_reachable_for_bulk_archive() {
+        // Regression: storage counted a session whose transcript was not valid
+        // UTF-8 (header + sidecar are enough for it), while every list skipped
+        // it because the full SessionMeta scan failed. "Archive all" then had
+        // zero targets although storage reported unarchived sessions.
+        let root = std::env::temp_dir().join(format!("pix-degraded-{}", uuid::Uuid::new_v4()));
+        let folder = root.join("sessions/project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let header = serde_json::json!({
+            "type": "session",
+            "id": "degraded",
+            "cwd": "C:/project",
+            "timestamp": "2026-11-12T00:00:00Z",
+        });
+        let path = folder.join("degraded.jsonl");
+        // Valid header line, then a transcript line that is not valid UTF-8.
+        let mut content = format!("{header}\n").into_bytes();
+        content.extend_from_slice(b"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"\xff\xfe\"}}\n");
+        std::fs::write(&path, content).unwrap();
+        std::fs::write(path.with_extension("pix.json"), "{\"archived\":false}").unwrap();
+
+        // The full scan still fails, proving the fixture reproduces the gap.
+        assert!(read_session_meta(&path, mtime_ms(&path)).is_err());
+        let storage = crate::storage::summary_at(&root.join("sessions"), None);
+        assert_eq!(
+            storage
+                .categories
+                .iter()
+                .find(|row| row.id == "sessions")
+                .unwrap()
+                .item_count,
+            1
+        );
+
+        let rows = list_sessions(&root.join("sessions"), None, None, false).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "degraded");
+        assert_eq!(rows[0].title, None);
+        assert!(!rows[0].archived);
+        // Archive only writes the sidecar, so the degraded row can be archived.
+        update_presentation(&path, true).unwrap();
+        assert!(list_sessions(&root.join("sessions"), None, None, false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            list_sessions(&root.join("sessions"), None, None, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bulk_listing_includes_sessions_from_unregistered_projects() {
+        let root = std::env::temp_dir().join(format!("pix-list-orphaned-{}", uuid::Uuid::new_v4()));
+        let sessions_root = root.join("sessions");
+        for (folder, id, cwd, archived) in [
+            ("registered", "registered", "C:/registered", false),
+            ("removed", "orphaned", "C:/removed", false),
+            ("archived", "archived", "C:/archived", true),
+        ] {
+            let directory = sessions_root.join(folder);
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("{id}.jsonl"));
+            let header = serde_json::json!({
+                "type": "session",
+                "id": id,
+                "cwd": cwd,
+                "timestamp": "2026-11-12T00:00:00Z",
+            });
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+            std::fs::write(
+                path.with_extension("pix.json"),
+                format!("{{\"archived\":{archived}}}"),
+            )
+            .unwrap();
+        }
+
+        // None of these cwd values need to exist or remain registered: both
+        // storage statistics and bulk archive operate on the session store.
+        let rows = list_sessions(&sessions_root, None, None, false).unwrap();
+        let mut ids: Vec<String> = rows.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["orphaned", "registered"]);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

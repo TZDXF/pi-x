@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import { groupModelsByProvider } from "@/lib/modelSelection"
+import { modelKey, parseModelKey } from "@/lib/modelKey"
 
 function harness(custom = {}, saved = {}) {
   const source = readFileSync(new URL("../src/components/settings/ModelConfigSettings.vue", import.meta.url), "utf8")
@@ -14,6 +15,8 @@ function harness(custom = {}, saved = {}) {
     loadFailure = false
   const context = vm.createContext({
     groupModelsByProvider,
+    modelKey,
+    parseModelKey,
     ref: value => ({ value }),
     computed: definition => ({
       get value() {

@@ -2,11 +2,39 @@ import { defineStore } from "pinia"
 import { ref } from "vue"
 import { i18n } from "@/i18n"
 import { baseName, normalizeProjectPath, samePath } from "@/lib/paths"
-import { listSessions, pixLog, resolveProjectlessDir, updateSession, type SessionMeta } from "@/api/piClient"
-import { workspaceGitInfo, type WorkspaceGitInfo } from "@/api/piClient"
+import { isRemoteProject, forgetSshProjectConnection } from "@/lib/ssh"
+import { requireSshConnectionId } from "@/lib/sshTrust"
+import { sessionIdentityKey } from "@/lib/sessionIdentity"
+import type { PersistedSidebarTabs } from "@/lib/sidebarTabs"
+import {
+  listSessions,
+  listUnarchivedSessions,
+  pixLog,
+  resolveProjectlessDir,
+  updateSession,
+  sshConnectionList,
+  sshSessions,
+  getWorkspaceState,
+  updateWorkspaceState,
+  workspaceGitInfo,
+  type SessionMeta,
+  type WorkspaceGitInfo,
+} from "@/api/piClient"
+import {
+  applyWorkspaceStatePatch,
+  diffWorkspaceState,
+  emptyWorkspaceState,
+  shouldApplySessionActivity,
+  type WorkspaceState,
+  type WorkspaceStatePatch,
+  type BoardDraft,
+  type SessionActivity,
+} from "@/lib/workspaceState"
+import type { ProjectGroup } from "@/lib/workspaceState"
+export type { ProjectGroup, BoardDraft, SessionActivity } from "@/lib/workspaceState"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
 
 /** Registered by the app shell so metadata writes (rename/archive) can record
  *  the resulting mtime; lets the session watcher tell its own writes from
@@ -19,12 +47,6 @@ function notifySessionMtimeSync(file: string, mtimeMs: number) {
   sessionMtimeSync?.(file, mtimeMs)
 }
 
-export interface ProjectGroup {
-  name: string
-  folders: string[]
-  primary: string
-}
-
 export const useWorkspaceStore = defineStore("workspace", () => {
   const gitBusy = ref(false)
   const worktreeOwners = ref<Record<string, string>>({})
@@ -33,111 +55,160 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const projectGroups = ref<Record<string, ProjectGroup>>({})
   const histories = ref<Record<string, SessionMeta[]>>({})
   const sessionOrder = ref<Record<string, string[]>>({})
+  const boardColumnOrder = ref<Record<string, string[]>>({})
+  const boardDrafts = ref<Record<string, BoardDraft>>({})
+  const sessionActivities = ref<Record<string, SessionActivity>>({})
+  const sessionAcknowledgements = ref<Record<string, string>>({})
+  /** 右侧侧栏 Tab（只存 kind 顺序 + active），按会话身份键分组。 */
+  const sidebarTabs = ref<Record<string, PersistedSidebarTabs>>({})
+  /** 远程项目会话列表的加载状态（契约 §2.4），驱动侧栏刷新按钮 spinner。 */
+  const remoteSessionsLoading = ref<Record<string, boolean>>({})
   /** 无项目会话的工作目录（后端解析结果），空值表示尚未解析。 */
   const projectless = ref("")
   const projectlessDefault = ref("")
   let projectlessRequest: Promise<string> | null = null
   const pending = new Map<string, SessionMeta>()
   const versions: Record<string, number> = {}
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.recentProjects") || "[]")
-    if (Array.isArray(stored)) {
-      for (const item of stored) {
-        if (typeof item !== "string") continue
-        const path = normalizeProjectPath(item)
-        if (path && !projects.value.some(existing => samePath(existing, path))) projects.value.push(path)
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.pinnedProjects") || "[]")
-    if (Array.isArray(stored))
-      pinnedProjects.value = projects.value.filter(path => stored.some(p => typeof p === "string" && samePath(p, path)))
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.sessionOrder") || "{}")
-    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-      for (const [path, files] of Object.entries(stored)) {
-        if (Array.isArray(files)) {
-          const key = projects.value.find(project => samePath(project, path)) || normalizeProjectPath(path)
-          sessionOrder.value[key] = [
-            ...new Set([
-              ...(sessionOrder.value[key] || []),
-              ...files.filter((f): f is string => typeof f === "string"),
-            ]),
-          ]
-        }
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.projectGroups") || "{}")
-    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-      for (const [primary, value] of Object.entries(stored)) {
-        const key = projects.value.find(path => samePath(path, primary))
-        if (!key || projectGroups.value[key] || !value || typeof value !== "object") continue
-        const group = value as Partial<ProjectGroup>
-        if (
-          typeof group.name === "string" &&
-          Array.isArray(group.folders) &&
-          group.folders.every(p => typeof p === "string") &&
-          group.folders.some(folder => samePath(folder, primary))
-        ) {
-          const folders: string[] = []
-          for (const folder of group.folders) {
-            const normalized = normalizeProjectPath(folder)
-            if (!folders.some(existing => samePath(existing, normalized))) folders.push(normalized)
-          }
-          projectGroups.value[key] = { name: group.name, folders, primary: key }
-        }
-      }
-    }
-  } catch {
-    /* Optional storage. */
-  }
-  // Projects the user explicitly removed: automatic paths (activating a
-  // session, route replay, restart restore) must never re-add them. Only
-  // explicit add flows (project dialog, folder pick) clear the marker.
   const removedProjects = ref<string[]>([])
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("pix.removedProjects") || "[]")
-    if (Array.isArray(stored)) {
-      for (const item of stored) {
-        if (typeof item !== "string") continue
-        const path = normalizeProjectPath(item)
-        if (path && !removedProjects.value.some(existing => samePath(existing, path))) removedProjects.value.push(path)
+  const persistenceError = ref<unknown>(null)
+  let revision = -1
+  let recorded: WorkspaceState = emptyWorkspaceState()
+  let authoritative = emptyWorkspaceState()
+  let initialized = false
+  let loading: Promise<void> | null = null
+  let saving: Promise<void> | null = null
+  const changes: WorkspaceStatePatch[] = []
+
+  function snapshot(): WorkspaceState {
+    // JSON cloning also unwraps Vue's reactive arrays and objects.
+    return JSON.parse(
+      JSON.stringify({
+        revision,
+        projects: projects.value,
+        pinnedProjects: pinnedProjects.value,
+        projectGroups: projectGroups.value,
+        removedProjects: removedProjects.value,
+        sessionOrder: sessionOrder.value,
+        boardColumnOrder: boardColumnOrder.value,
+        boardDrafts: boardDrafts.value,
+        sessionActivities: sessionActivities.value,
+        sessionAcknowledgements: sessionAcknowledgements.value,
+        sidebarTabs: sidebarTabs.value,
+      }),
+    )
+  }
+  /** Apply authoritative state, then replay edits not yet acknowledged by the backend. */
+  function applyState(state: WorkspaceState) {
+    if (state.revision >= revision) {
+      revision = state.revision
+      const next = applyWorkspaceStatePatch(state, {})
+      for (const [key, activity] of Object.entries(next.sessionActivities)) {
+        const previous = authoritative.sessionActivities[key]
+        if (previous && !shouldApplySessionActivity(previous, activity)) next.sessionActivities[key] = { ...previous }
       }
+      authoritative = next
     }
-  } catch {
-    /* Optional storage. */
+    const next = changes.reduce(applyWorkspaceStatePatch, structuredClone(authoritative))
+    // Avoid retriggering sidebar/Git loads when only pins or session ordering changed.
+    if (JSON.stringify(projects.value) !== JSON.stringify(next.projects)) projects.value = next.projects
+    if (JSON.stringify(pinnedProjects.value) !== JSON.stringify(next.pinnedProjects))
+      pinnedProjects.value = next.pinnedProjects
+    if (JSON.stringify(projectGroups.value) !== JSON.stringify(next.projectGroups))
+      projectGroups.value = next.projectGroups
+    if (JSON.stringify(removedProjects.value) !== JSON.stringify(next.removedProjects))
+      removedProjects.value = next.removedProjects
+    sessionOrder.value = next.sessionOrder
+    boardColumnOrder.value = next.boardColumnOrder
+    boardDrafts.value = next.boardDrafts
+    sessionActivities.value = next.sessionActivities
+    sessionAcknowledgements.value = next.sessionAcknowledgements
+    if (JSON.stringify(sidebarTabs.value) !== JSON.stringify(next.sidebarTabs)) sidebarTabs.value = next.sidebarTabs
+    recorded = snapshot()
+    for (const path of Object.keys(histories.value)) applySessionOrder(path)
   }
-  function persistProjects() {
-    try {
-      localStorage.setItem("pix.recentProjects", JSON.stringify(projects.value))
-      localStorage.setItem("pix.pinnedProjects", JSON.stringify(pinnedProjects.value))
-      localStorage.setItem("pix.projectGroups", JSON.stringify(projectGroups.value))
-    } catch {
-      /* Optional storage. */
-    }
+  async function loadState() {
+    if (loading) return loading
+    loading = (async () => {
+      applyState(await getWorkspaceState())
+      initialized = true
+    })().finally(() => {
+      loading = null
+    })
+    return loading
   }
-  function persistSessionOrder() {
-    try {
-      localStorage.setItem("pix.sessionOrder", JSON.stringify(sessionOrder.value))
-    } catch {
-      /* Optional storage. */
-    }
+  async function initialize() {
+    if (!initialized) await loadState()
   }
-  // Normalize existing localStorage records once, including group keys and pinned/order metadata.
-  persistProjects()
-  persistSessionOrder()
-  function persistRemovedProjects() {
-    localStorage.setItem("pix.removedProjects", JSON.stringify(removedProjects.value))
+  /** Retry queued writes after reconnect; never replace the backend with a stale snapshot. */
+  async function flushPersistence() {
+    if (saving) return saving
+    saving = (async () => {
+      await initialize()
+      while (changes.length) {
+        const state = await updateWorkspaceState(changes[0]!)
+        changes.shift()
+        applyState(state)
+      }
+      persistenceError.value = null
+    })()
+      .catch(error => {
+        persistenceError.value = error
+        throw error
+      })
+      .finally(() => {
+        saving = null
+        if (!persistenceError.value && changes.length)
+          void flushPersistence().catch(error => console.warn("[pi] workspace persistence failed:", error))
+      })
+    return saving
+  }
+  async function syncState() {
+    await loadState()
+    await flushPersistence()
+  }
+  function persistState() {
+    const next = snapshot()
+    const patch = diffWorkspaceState(recorded, next)
+    recorded = next
+    if (!Object.keys(patch).length) return
+    changes.push(patch)
+    void flushPersistence().catch(error => console.warn("[pi] workspace persistence failed:", error))
+  }
+  /** 写入某会话的侧栏 Tab；`null` 表示删除该条目（关闭最后一个 Tab 时）。 */
+  function setSidebarTabs(groupKey: string, value: PersistedSidebarTabs | null) {
+    if (value === null) delete sidebarTabs.value[groupKey]
+    else sidebarTabs.value[groupKey] = value
+    persistState()
+  }
+  const persistSidebarTabs = setSidebarTabs
+  const persistProjects = persistState
+  const persistSessionOrder = persistState
+  const persistRemovedProjects = persistState
+  function reorderBoardColumn(key: string, orderedIds: string[]) {
+    boardColumnOrder.value[key] = [...new Set(orderedIds)]
+    persistState()
+  }
+  function upsertBoardDraft(draft: BoardDraft) {
+    boardDrafts.value[draft.id] = { ...draft }
+    persistState()
+  }
+  function removeBoardDraft(id: string) {
+    delete boardDrafts.value[id]
+    persistState()
+  }
+  function recordSessionActivity(activity: SessionActivity) {
+    const key = sessionIdentityKey(activity.file, activity.project)
+    const previous = sessionActivities.value[key]
+    if (!shouldApplySessionActivity(previous, activity)) return
+    sessionActivities.value[key] = { ...activity }
+    persistState()
+  }
+  function acknowledgeSessionActivity(file: string, project: string, runId: string) {
+    const key = sessionIdentityKey(file, project)
+    const activity = sessionActivities.value[key]
+    if (activity && activity.runId !== runId) return
+    sessionAcknowledgements.value[key] = runId
+    persistState()
   }
   /** Whether the user explicitly removed this project, so automatic paths must not re-add it. */
   function isRemovedProject(path: string) {
@@ -145,7 +216,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return !!path && removedProjects.value.some(existing => samePath(existing, path))
   }
   /** Clear the removed marker; only explicit add flows (dialog, folder pick) call this. */
-  function unremoveProject(path: string) {
+  function unremoveProject(path: string, persist = true) {
     path = normalizeProjectPath(path)
     if (!path) return
     const targets = [path]
@@ -154,7 +225,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const next = removedProjects.value.filter(existing => !targets.some(target => samePath(existing, target)))
     if (next.length === removedProjects.value.length) return
     removedProjects.value = next
-    persistRemovedProjects()
+    if (persist) persistRemovedProjects()
   }
   function orderedProjects() {
     return [...projects.value].sort(
@@ -174,10 +245,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function sortSessions(rows: SessionMeta[], order: string[]) {
     const index = new Map(order.map((f, i) => [f, i]))
+    const createdAt = (row: SessionMeta) => Date.parse(row.timestamp || "") || 0
+    // New sessions precede the saved drag order; archived rows are not in the sidebar's drag list.
+    const position = (row: SessionMeta) =>
+      index.get(row.file) ?? (order.length && row.archived ? Number.MAX_SAFE_INTEGER : -1)
     return [...rows].sort((a, b) => {
-      const ia = index.get(a.file) ?? Number.MAX_SAFE_INTEGER
-      const ib = index.get(b.file) ?? Number.MAX_SAFE_INTEGER
-      return ia - ib || b.mtimeMs - a.mtimeMs
+      const ia = position(a)
+      const ib = position(b)
+      return ia - ib || createdAt(b) - createdAt(a) || b.file.localeCompare(a.file)
     })
   }
   /** A project can span several folders; its sidebar order belongs to the project. */
@@ -218,8 +293,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     projects.value = [primary, ...projects.value]
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
     // Re-adding a project explicitly also lifts its removed marker.
-    unremoveProject(primary)
-    for (const folder of folders) unremoveProject(folder)
+    unremoveProject(primary, false)
+    for (const folder of folders) unremoveProject(folder, false)
     persistProjects()
   }
   function projectRoot(path: string) {
@@ -286,9 +361,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     projects.value = projects.value.map(path => (path === oldPrimary ? primary : path))
     pinnedProjects.value = pinnedProjects.value.map(path => (path === oldPrimary ? primary : path))
     delete projectGroups.value[oldPrimary]
+    if (oldPrimary !== primary && sessionOrder.value[oldPrimary]) {
+      sessionOrder.value[primary] = sessionOrder.value[oldPrimary]
+      delete sessionOrder.value[oldPrimary]
+    }
     projectGroups.value[primary] = { name: name.trim(), folders: [...folders], primary }
-    unremoveProject(primary)
-    for (const folder of folders) unremoveProject(folder)
+    unremoveProject(primary, false)
+    for (const folder of folders) unremoveProject(folder, false)
     persistProjects()
   }
   function projectName(path: string) {
@@ -317,9 +396,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   function removeProject(path: string) {
     path = projectRoot(path)
+    if (isRemoteProject(path)) forgetSshProjectConnection(path)
     if (!isRemovedProject(path)) {
       removedProjects.value = [path, ...removedProjects.value]
-      persistRemovedProjects()
     }
     projects.value = projects.value.filter(p => p !== path)
     pinnedProjects.value = pinnedProjects.value.filter(p => p !== path)
@@ -356,8 +435,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     persistProjects()
     persistSessionOrder()
   }
+  /** Sidebar hydration discovers worktrees but must not re-add a removed group member. */
+  async function registerProjectWorktrees(path: string) {
+    try {
+      const info = await workspaceGitInfo(path)
+      if (projects.value.some(project => samePath(project, projectRoot(path)))) registerWorktrees(info)
+    } catch {
+      // Non-Git and unavailable directories remain ordinary projects.
+    }
+  }
   async function rememberWorkspace(path: string, knownInfo?: WorkspaceGitInfo) {
     if (!path) return
+    // 远程项目跳过本地 git 查询（契约 §5），直接进项目列表。
+    if (isRemoteProject(path)) {
+      remember(path)
+      return
+    }
     try {
       registerWorktrees(knownInfo ?? (await workspaceGitInfo(path)))
     } catch {
@@ -377,6 +470,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
   async function refresh(path: string) {
     path = normalizeProjectPath(path)
+    // 远程项目走 ssh_sessions 远程列表（契约 §2.4）；失败置空并上抛由调用方 toast。
+    if (isRemoteProject(path)) {
+      const version = (versions[path] = (versions[path] || 0) + 1)
+      remoteSessionsLoading.value[path] = true
+      try {
+        const connectionId = requireSshConnectionId(path, await sshConnectionList())
+        const rows = await sshSessions(path, connectionId)
+        if (versions[path] === version) {
+          histories.value[path] = rows
+          applySessionOrder(path)
+        }
+      } catch (error) {
+        if (versions[path] === version) histories.value[path] = []
+        throw error
+      } finally {
+        remoteSessionsLoading.value[path] = false
+      }
+      return
+    }
     const version = (versions[path] = (versions[path] || 0) + 1)
     const start = nowMs()
     const rows = await listSessions(path)
@@ -384,9 +496,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (versions[path] === version) {
       for (const row of rows) pending.delete(row.file)
       const previews = [...pending.values()].filter(row => samePath(row.cwd, path))
-      histories.value[path] = [...rows, ...previews].sort((a, b) => b.mtimeMs - a.mtimeMs)
+      histories.value[path] = [...rows, ...previews]
       applySessionOrder(path)
     }
+  }
+  /** Bulk archive and storage statistics scan the same global local directory.
+   *  Avoid capped sidebar caches, first-response previews and the registered
+   *  project list, which may omit sessions left by removed projects. */
+  async function listArchivableSessions() {
+    return listUnarchivedSessions()
   }
   // pi does not flush a new session to disk until its first assistant response.
   function preview(row: SessionMeta) {
@@ -395,24 +513,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (rows.some(s => s.file === row.file)) return
     pending.set(row.file, row)
     histories.value[path] = [row, ...rows]
+    applySessionOrder(path)
   }
-  function generatedTitle(file: string, title: string) {
+  function generatedTitle(file: string, title: string, description?: string) {
     for (const rows of Object.values(histories.value)) {
       const row = rows.find(s => s.file === file)
-      if (row && !row.title) row.title = title
+      if (row && !row.title) Object.assign(row, { title, ...(description ? { preview: description } : {}) })
     }
     const draft = pending.get(file)
-    if (draft && !draft.title) draft.title = title
+    if (draft && !draft.title) Object.assign(draft, { title, ...(description ? { preview: description } : {}) })
   }
   /** Like generatedTitle, but overwrites an existing title: editing the first
    *  question replaces the wording the old title was generated from. */
-  function regeneratedTitle(file: string, title: string) {
+  function regeneratedTitle(file: string, title: string, description?: string) {
     for (const rows of Object.values(histories.value)) {
       const row = rows.find(s => s.file === file)
-      if (row) row.title = title
+      if (row) Object.assign(row, { title, ...(description ? { preview: description } : {}) })
     }
     const draft = pending.get(file)
-    if (draft) draft.title = title
+    if (draft) Object.assign(draft, { title, ...(description ? { preview: description } : {}) })
   }
   /** Lets the app shell record the mtime of metadata writes (rename/archive)
    *  so the session watcher can tell its own writes from external ones. */
@@ -439,8 +558,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
   return {
+    initialize,
+    syncState,
+    applyState,
+    flushPersistence,
+    persistenceError,
+    boardColumnOrder,
+    reorderBoardColumn,
+    boardDrafts,
+    sessionActivities,
+    sessionAcknowledgements,
+    sidebarTabs,
+    persistSidebarTabs,
+    upsertBoardDraft,
+    removeBoardDraft,
+    recordSessionActivity,
+    acknowledgeSessionActivity,
     gitBusy,
     registerWorktrees,
+    registerProjectWorktrees,
     rememberWorkspace,
     isWorktree,
     projects,
@@ -464,9 +600,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     isRemovedProject,
     unremoveProject,
     histories,
+    remoteSessionsLoading,
     reorderSessions,
     remember,
     refresh,
+    listArchivableSessions,
     update,
     removeSession,
     preview,

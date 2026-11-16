@@ -4,14 +4,15 @@ import * as vueRuntime from "vue"
 import ts from "typescript"
 import { chatSource } from "./fixtures/chatSources"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { dataUrlToImage, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { buildPromptWithCodeComments, commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
+import { claimAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
 
 // Execute the production composable with real Vue reactivity and pure helpers,
 // replacing only application boundaries (RPC/config, i18n, project comments).
-function harness(config = Promise.resolve({})) {
+function harness(config = Promise.resolve({}), extra = {}) {
   const behavior = ref("steer")
   const onSent = vi.fn()
   const comments = reactive({ project: "repo", comments: [], clear: vi.fn() })
@@ -21,7 +22,7 @@ function harness(config = Promise.resolve({})) {
     "vue-i18n": { useI18n: () => ({ t: key => key }) },
     "@/api/piClient": { getConfig: () => config },
     "@/lib/sendDelay": { parseSendDelay, stepSendDelayWheel },
-    "@/lib/attachments": { dataUrlToImage, isImageUrl },
+    "@/lib/attachments": { dataUrlToImage, isImageAttachment, isImageUrl },
     "@/lib/completion": { withSessionReferences, desktopCommands },
     "@/lib/codeComments": { commentFilePath },
     "@/lib/promptContexts": { serializeComposerPromptContexts },
@@ -68,6 +69,7 @@ function harness(config = Promise.resolve({})) {
       ensureStarted,
       newSession,
       onSent,
+      ...extra,
     })
   })
   return {
@@ -87,7 +89,167 @@ function harness(config = Promise.resolve({})) {
     newSession,
   }
 }
+
+const parentContextBlock = (inner: string) => ["<aux_parent_context>", inner, "</aux_parent_context>"].join("\n")
+
+/** 用真实的 `claimAuxParentContext`（模块级记账）包一层：返回值的“仅首轮”语义才是被测对象。 */
+function injectedParentContext(runtimeId: string, inner: string, options: { hasUserEntry?: () => boolean } = {}) {
+  return () =>
+    claimAuxParentContext(runtimeId, {
+      hasUserEntry: options.hasUserEntry ?? (() => false),
+      collect: async () =>
+        ({
+          source: "entries",
+          hasContext: true,
+          omittedGroups: 0,
+          overLimit: false,
+          groupCount: 1,
+          identity: "authoritative",
+          inner,
+          block: "",
+          errors: [],
+          attempts: { entries: 1, messages: 0, history: 0 },
+        }) as never,
+    })
+}
+
+test("aux parent context is injected only on the first turn of one aux runtime", async () => {
+  // 连续三轮：首轮带块，第 2/3 轮 promptText 不含 `<aux_parent_context>`。
+  resetAuxParentContextForTest()
+  const h = harness(Promise.resolve({}), {
+    parentContext: injectedParentContext("aux:first-turn", "父会话已提交内容"),
+  })
+  try {
+    for (const text of ["第一轮", "第二轮", "第三轮"]) await h.controls.onSubmit({ text })
+    const prompts = h.session.send.mock.calls.map(call => call[2])
+    expect(prompts[0].startsWith(parentContextBlock("父会话已提交内容"))).toBe(true)
+    expect(prompts[0]).toContain("第一轮")
+    expect(prompts[1]).not.toContain("<aux_parent_context>")
+    expect(prompts[2]).not.toContain("<aux_parent_context>")
+    // 另一个 aux 实例有自己的记账：它的首轮仍然带块。
+    const other = harness(Promise.resolve({}), {
+      parentContext: injectedParentContext("aux:second-runtime", "另一份父上下文"),
+    })
+    try {
+      await other.controls.onSubmit({ text: "另一个实例的首轮" })
+      expect(other.session.send.mock.calls[0][2].startsWith(parentContextBlock("另一份父上下文"))).toBe(true)
+    } finally {
+      other.scope.stop()
+    }
+    // 已有 user 条目（重载/竞态）时永不再拼块，即便记账被清。
+    resetAuxParentContextForTest()
+    const reloaded = harness(Promise.resolve({}), {
+      parentContext: injectedParentContext("aux:reloaded", "不该出现的父上下文", { hasUserEntry: () => true }),
+    })
+    try {
+      await reloaded.controls.onSubmit({ text: "已有历史" })
+      expect(reloaded.session.send.mock.calls[0][2]).toBe("已有历史")
+    } finally {
+      reloaded.scope.stop()
+    }
+    // 主会话不传 parentContext：promptText 保持原样（行为不变）。
+    const main = harness()
+    try {
+      await main.controls.onSubmit({ text: "主会话提问" })
+      expect(main.session.send.mock.calls[0][2]).toBe("主会话提问")
+    } finally {
+      main.scope.stop()
+    }
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("FAIL_concurrent_submit_*: 并发首轮等领头采集，先发者先落地且块在它身上", async () => {
+  // 同一 aux 的两次首轮提交：第二次必须**等**第一次采集完成再发，否则对话区第一条
+  // 是没有父上下文的（块随后才到）。断言两件事：顺序（发送调用次序 = 提交次序）与
+  // 归属（块只在第一次那一条上）。
+  resetAuxParentContextForTest()
+  let release,
+    collected = 0
+  const gate = new Promise(resolve => {
+    release = resolve
+  })
+  const h = harness(Promise.resolve({}), {
+    parentContext: () =>
+      claimAuxParentContext("aux:concurrent", {
+        hasUserEntry: () => false,
+        collect: async () => {
+          collected++
+          await gate
+          return {
+            source: "entries",
+            hasContext: true,
+            omittedGroups: 0,
+            overLimit: false,
+            groupCount: 1,
+            identity: "authoritative",
+            inner: "并发父上下文",
+            block: "",
+            errors: [],
+            attempts: { entries: 1, messages: 0, history: 0 },
+          } as never
+        },
+      }),
+  })
+  try {
+    const first = h.controls.onSubmit({ text: "先发者" })
+    // 让第一次提交先进入采集（等待闸门），再发起第二次。
+    await Promise.resolve()
+    const second = h.controls.onSubmit({ text: "后发者" })
+    await Promise.resolve()
+    // 采集还没放行：第二次提交**不能**先发出去。
+    expect(h.session.send).toHaveBeenCalledTimes(0)
+    release()
+    await Promise.all([first, second])
+    const prompts = h.session.send.mock.calls.map(call => [call[0], call[2]])
+    expect(prompts.map(row => row[0])).toEqual(["先发者", "后发者"])
+    // 先发者带块，后发者不带（同一段父上下文只进一次）。
+    expect(prompts[0][1]).toContain("<aux_parent_context>")
+    expect(prompts[0][1]).toContain("并发父上下文")
+    expect(prompts[1][1]).toBe("后发者")
+    // 并发只采集一次（不是各拼一份）。
+    expect(collected).toBe(1)
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("a failing parent-context read never blocks the send and says so", async () => {
+  const h = harness(Promise.resolve({}), {
+    parentContext: async () => {
+      throw new Error("collect failed")
+    },
+  })
+  try {
+    await h.controls.onSubmit({ text: "仍然要发出去" })
+    expect(h.session.send).toHaveBeenCalledOnce()
+    expect(h.session.send.mock.calls[0][2]).toBe("仍然要发出去")
+    // 降级必须**如实**：先发者不会“无声无块”，至少有一条 warning 说明原因。
+    expect(h.ui.pushToast).toHaveBeenCalledWith("chat.parentContextFailed", "warning")
+  } finally {
+    h.scope.stop()
+  }
+})
 const image = "data:image/png;base64,aGVsbG8="
+
+test.each(["", "Keep this draft"])("rejects non-image attachments without consuming text or files", async text => {
+  const h = harness()
+  const file = { url: "data:text/plain;base64,bm90ZXM=", mediaType: "text/plain", filename: "notes.txt" }
+  h.bridge.value.textInput = text
+  h.bridge.value.files = [{ id: "notes", ...file }]
+  try {
+    await expect(h.controls.onSubmit({ text, files: [file] })).rejects.toThrow("chat.imageAttachmentsOnly")
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.imageAttachmentsOnly", "error")
+    expect(h.session.send).not.toHaveBeenCalled()
+    expect(h.session.schedulePrompt).not.toHaveBeenCalled()
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+    expect(h.bridge.value.textInput).toBe(text)
+    expect(h.bridge.value.files).toEqual([{ id: "notes", ...file }])
+  } finally {
+    h.scope.stop()
+  }
+})
 
 test("sending scrolls back to the bottom; queued and delayed sends keep the reading position", async () => {
   const h = harness()
@@ -278,15 +440,32 @@ test("desktop slash commands reject scheduling but compact remains queued while 
   }
 })
 
-test("edit, connection and git guards do not dispatch or prepare a send", async () => {
+test.each(["/szls", "/szls 这只是消息开头", "/some/path 请检查这个路径"])(
+  "unknown slash prefix is sent as ordinary text: %s",
+  async text => {
+    const h = harness()
+    try {
+      await h.controls.onSubmit({ text, files: [{ url: image }] })
+      expect(h.session.send).toHaveBeenCalledWith(text, [{ data: "aGVsbG8=", mimeType: "image/png" }], text, "steer")
+      expect(h.ui.pushToast).not.toHaveBeenCalled()
+      expect(h.ui.pendingUserMessage).toBeNull()
+
+      h.controls.delayedSend.value = true
+      await h.controls.onSubmit({ text })
+      expect(h.session.schedulePrompt).toHaveBeenCalledWith(text, 600000, undefined, text)
+      expect(h.ui.pushToast).not.toHaveBeenCalled()
+    } finally {
+      h.scope.stop()
+    }
+  },
+)
+
+test("edit and git guards do not dispatch or prepare a send", async () => {
   const h = harness()
   try {
     h.flags.editing = true
     await h.controls.onSubmit({ text: "blocked" })
     h.flags.editing = false
-    h.flags.connecting = true
-    await h.controls.onSubmit({ text: "blocked" })
-    h.flags.connecting = false
     h.workspace.gitBusy = true
     await h.controls.onSubmit({ text: "blocked" })
     expect(h.ensureStarted).not.toHaveBeenCalled()
@@ -365,7 +544,6 @@ test.each([
   { failure: "startup false", text: "draft", error: "completion.startFailed", restoreText: true },
   { failure: "startup throw", text: "draft", error: "worker failed", restoreText: false },
   { failure: "command refresh", text: "/known", error: "refresh failed", restoreText: false },
-  { failure: "unknown command", text: "/unknown", error: "completion.unsupported", restoreText: false },
 ])(
   "$failure clears the first-message echo without consuming pending contexts",
   async ({ failure, text, error, restoreText }) => {
@@ -425,4 +603,56 @@ test("send failure also clears the first-message echo", async () => {
   } finally {
     h.scope.stop()
   }
+})
+
+test("unsupported picker or drop files show the same localized image-only error", () => {
+  const h = harness()
+  try {
+    h.controls.onInputError({ code: "accept" })
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.imageAttachmentsOnly", "error")
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("attachment read failures show a localized error without duplicating other submit errors", () => {
+  const h = harness()
+  try {
+    h.controls.onInputError({ code: "attachment_read_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledExactlyOnceWith("chat.attachmentReadFailed", "error")
+    h.controls.onInputError({ code: "submit_error" })
+    expect(h.ui.pushToast).toHaveBeenCalledOnce()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("submitting during navigation waits for the connection instead of dropping the message", async () => {
+  const h = harness()
+  try {
+    h.flags.connecting = true
+    const sending = h.controls.onSubmit({ text: "during switch" })
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+    h.flags.connecting = false
+    await sending
+    expect(h.session.send).toHaveBeenCalledWith("during switch", undefined, "during switch", "steer")
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("unmounting cancels a submit waiting for navigation", async () => {
+  const h = harness()
+  h.flags.connecting = true
+  const sending = h.controls.onSubmit({ text: "cancelled" })
+  h.scope.stop()
+  await sending
+  expect(h.ensureStarted).not.toHaveBeenCalled()
+  expect(h.session.send).not.toHaveBeenCalled()
+})
+
+test("navigation does not disable the editor or submit button", () => {
+  const composer = chatSource("components/chat/ChatComposer.vue")
+  expect(composer).not.toContain(':disabled="editBusy || gitBusy ||')
+  expect(composer.match(/:disabled="editBusy \|\| gitBusy"/g)).toHaveLength(2)
 })

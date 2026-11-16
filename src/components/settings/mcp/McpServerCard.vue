@@ -91,6 +91,7 @@ function overflowToolCount(server: McpServerStatus): number {
         {{ t("mcpConfig.unknownShape") }}
       </span>
       <template v-if="entry.status">
+        <Badge v-if="entry.status.resources" variant="secondary">{{ t("mcpConfig.supportsResources") }}</Badge>
         <Badge variant="outline" :class="stateBadgeClass(entry.status.enabled ? entry.status.state : 'disabled')">
           {{ stateLabel(entry.status) }}
         </Badge>

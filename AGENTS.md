@@ -17,11 +17,16 @@ PiX 是 pi coding agent 的桌面客户端，采用 Vue 3、TypeScript 与 Tauri
 - `pnpm run dev:desktop`：桌面开发，支持前端热更新。
 - `pnpm run dev`：仅浏览器预览，不启动 pi 进程。
 - `pnpm run dev:desktop:remote`：先构建前端，再启用远程访问；远程页面不支持热更新。
-- `pnpm run check`：依次执行 oxlint、类型检查、前端构建与 Rust 检查，**不含测试**。
+- `pnpm run check`：并行执行 oxlint、增量类型检查、前端构建与默认 Rust 检查；构建和默认 Rust 检查均成功后再检查 `remote-access`，输出各项耗时，**不含测试**。
+- `pnpm run check:quick`：仅并行执行 oxlint 与增量类型检查，适合前端日常迭代；不替代提交前的完整检查。
+- 内存紧张或同时运行其他构建时，可用 `pnpm run check --serial` 保留串行检查。
 - `pnpm run lint` / `lint:fix`：oxlint 检查 / 自动修复（配置见 `.oxlintrc.json`）。
 - `pnpm run fmt` / `fmt:check`：oxfmt 格式化 / 校验（配置见 `.oxfmtrc.json`）。
 - `pnpm run test:web` / `pnpm run test:web:all` / `pnpm run test:web:watch` / `pnpm run test:e2e` / `pnpm test`：分别按增量（仅相对 HEAD 变动的测试）、全量、watch 模式运行 Vitest 单元测试，以及运行 Playwright E2E 与 Rust 单元测试。
 - `pnpm run build` / `pnpm run package`：分别生成前端产物 / 含远程访问的桌面安装包。
+- `pnpm run bench:rust`：测 Rust 冷构建、热构建、单文件增量耗时与目录占用；改动 profile 或 `crate-type` 前后用同一命令对比。冷构建只在脚本自己 `mkdtemp` 出来的临时目录里跑（创建后立即 `lstat` 校验非链接并用同一笔 stat 的 `dev`+`ino` 登记，登记与首次使用之间再比对一次，删除前原子重命名到私有临时名并复核身份）。外部目录没有冷清理能力：`--target-dir` 必须配 `--skip-cold`，只读复用、不删除不创建不写标记，也永不登记为可删对象。磁盘根、仓库根及其祖先、仓库内部一律拒绝，别名写法先归一再比较，无法归一身份的远端 UNC 直接拒绝。
+
+Rust dev/test profile 关闭了依赖的 debuginfo、本 crate 只留行号表（见 `src-tauri/Cargo.toml`），release 不受影响。需要依赖内部源码行或变量单步调试时，用 `--config 'profile.dev.debug=2' --config 'profile.dev.package."*".debug=2'` 临时覆盖（PowerShell 5.1 下第二个值需写成 `'profile.dev.package.\"*\".debug=2'`），不要把默认值改回完整 debuginfo。
 
 ## 可选：Rust 构建缓存（Mr. Boxington / mbx）
 
@@ -53,6 +58,8 @@ TypeScript 启用严格检查；使用 `pnpm run lint` 运行 oxlint 校验（�
 ## 提交与 Pull Request
 
 沿用历史中的 `feat(scope): 描述`、`fix(scope): 描述`、`refactor(scope): 描述` 等格式；描述可中英文，emoji 非必需。提交保持单一目的。
+
+分支与 PR：开发/修复分支一律从 `dev` 切出，PR 基准 `dev`；`main` 只接受「已完成整合并通过独立验证的 `dev`」的推广 PR，功能 PR 不直接指向 `main`。若某项修复已先合入 `main`，须同期回灌 `dev`（保留合并 ancestry，不 reset、不强推），避免两支分叉成缺口。
 
 PR 应说明变更原因、影响范围、验证命令与结果，并关联相关 issue；界面修改附截图或录屏。确保 CI 的前端与 Rust 检查通过，注明未验证的平台或流程。
 

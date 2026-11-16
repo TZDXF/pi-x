@@ -1,14 +1,12 @@
 //! Resource management: enable / disable individual resources per package,
 //! mirroring `pi config` (writes +/- patterns into the package's settings entry).
 
-use serde::Serialize;
-use serde_json::Value;
-use std::collections::HashSet;
-
 use crate::{
     errors::{pix_error, pix_error_detail},
     trust,
 };
+use serde::Serialize;
+use serde_json::Value;
 
 use super::glob::{glob_match, resource_enabled, strip_pattern_marker};
 use super::runner::package_list;
@@ -56,7 +54,10 @@ fn ensure_project_trusted(project: &str) -> Result<(), String> {
         return Err(pix_error("trustDecisionRequired", "项目信任需要先做出决定"));
     }
     if status["decision"] != true {
-        return Err(pix_error("projectUntrusted", "项目未被信任，无法访问项目设置"));
+        return Err(pix_error(
+            "projectUntrusted",
+            "项目未被信任，无法访问项目设置",
+        ));
     }
     Ok(())
 }
@@ -71,6 +72,38 @@ fn find_package_entry<'a>(doc: &'a Value, source: &str) -> Option<usize> {
             Value::Object(_) => e.get("source").and_then(|v| v.as_str()) == Some(source),
             _ => false,
         })
+}
+
+/// Read and parse the scope's settings.json (shared by the commands that take
+/// a caller-supplied `source`).
+fn read_settings_doc(scope: &str, project: Option<&str>) -> Result<Value, String> {
+    let settings_file = settings_path_for(scope, project)?;
+    let raw = std::fs::read_to_string(&settings_file)
+        .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))
+}
+
+/// Reject sources that are not registered in the scope's settings file.
+/// [`package_root_dir`] adopts local paths verbatim (including absolute ones,
+/// so locally developed packages keep working); without this check a
+/// caller-supplied path like `/etc` would become the root itself and turn the
+/// containment guards in `package_read_file` into no-ops (arbitrary file
+/// read). `package_resources` has always required registration; the file
+/// listing/reading commands must apply the same rule.
+fn ensure_registered_package(
+    source: &str,
+    scope: &str,
+    project: Option<&str>,
+) -> Result<(), String> {
+    let doc = read_settings_doc(scope, project)?;
+    ensure_source_registered(source, &doc)
+}
+
+fn ensure_source_registered(source: &str, doc: &Value) -> Result<(), String> {
+    find_package_entry(doc, source)
+        .map(|_| ())
+        .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))
 }
 
 /// User filter patterns for one resource type; `None` when the key is absent
@@ -175,42 +208,34 @@ const IGNORED_DIRS: [&str; 4] = ["node_modules", ".git", ".pi", "dist"];
 const MAX_WALK_DEPTH: usize = 16;
 
 pub(crate) fn walk_files(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
-    let mut visited = HashSet::new();
-    walk_files_inner(dir, root, 0, &mut visited, out);
-}
-
-fn walk_files_inner(
-    dir: &std::path::Path,
-    root: &std::path::Path,
-    depth: usize,
-    visited: &mut HashSet<std::path::PathBuf>,
-    out: &mut Vec<String>,
-) {
-    if depth >= MAX_WALK_DEPTH {
-        return;
-    }
-    // `is_dir` below follows symlinks/junctions, so track canonical paths to
-    // break cycles instead of recursing forever.
-    let key = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    if !visited.insert(key) {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        let path = e.path();
-        if path.is_dir() {
-            if !IGNORED_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
-                walk_files_inner(&path, root, depth + 1, visited, out);
+    use crate::fs_walk::{fs_walk, WalkControl, WalkOptions};
+    let _ = fs_walk(
+        dir,
+        WalkOptions {
+            follow_links: true,
+            ignore_read_errors: true,
+            ignore_root_errors: true,
+            max_depth: Some(MAX_WALK_DEPTH),
+            ..WalkOptions::default()
+        },
+        |entry| {
+            if entry.is_dir {
+                return Ok(
+                    if IGNORED_DIRS.contains(&entry.name.as_str()) || entry.name.starts_with('.') {
+                        WalkControl::Skip
+                    } else {
+                        WalkControl::Continue
+                    },
+                );
             }
-        } else if name.starts_with('.') {
-            continue;
-        } else if let Ok(rel) = path.strip_prefix(root) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
-        }
-    }
+            if !entry.name.starts_with('.') {
+                if let Ok(rel) = entry.path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            Ok(WalkControl::Continue)
+        },
+    );
 }
 
 /// Read the `pi` manifest entry of a package's package.json, when present.
@@ -352,16 +377,22 @@ pub(crate) fn package_skill_paths(project: Option<&str>) -> Vec<PackageSkillPath
 
 /// List an installed package's resources with their enabled state.
 #[tauri::command]
-pub fn package_resources(
+pub async fn package_resources(
     source: String,
     scope: String,
     project: Option<String>,
 ) -> Result<Vec<PackageResource>, String> {
-    let settings_file = settings_path_for(&scope, project.as_deref())?;
-    let raw = std::fs::read_to_string(&settings_file)
-        .map_err(|e| pix_error_detail("settingsReadFailed", format!("读取设置失败: {e}"), e))?;
-    let doc: Value = serde_json::from_str(&raw)
-        .map_err(|e| pix_error_detail("settingsParseFailed", format!("解析设置失败: {e}"), e))?;
+    tokio::task::spawn_blocking(move || package_resources_blocking(source, scope, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_resources_blocking(
+    source: String,
+    scope: String,
+    project: Option<String>,
+) -> Result<Vec<PackageResource>, String> {
+    let doc = read_settings_doc(&scope, project.as_deref())?;
     let idx = find_package_entry(&doc, &source)
         .ok_or_else(|| pix_error("pluginNotInSettings", "设置中未找到该插件"))?;
     let entry = &doc["packages"][idx];
@@ -374,8 +405,7 @@ pub fn package_resources(
     })?;
 
     // Walk the package root once and reuse the file list for every resource
-    // type: this runs inside a synchronous command, and per-type walks made
-    // large packages stall the IPC thread.
+    // type; the command runs this work on the blocking pool.
     let manifest = read_pi_manifest(&root);
     let mut files = Vec::new();
     walk_files(&root, &root, &mut files);
@@ -399,7 +429,7 @@ pub fn package_resources(
 /// `+path` / `-path` pattern into the package's settings entry (same shape as
 /// `pi config` writes).
 #[tauri::command]
-pub fn package_set_resource(
+pub async fn package_set_resource(
     source: String,
     scope: String,
     project: Option<String>,
@@ -407,6 +437,24 @@ pub fn package_set_resource(
     path: String,
     enabled: bool,
 ) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        package_set_resource_blocking(source, scope, project, resource_type, path, enabled)
+    })
+    .await
+    .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_set_resource_blocking(
+    source: String,
+    scope: String,
+    project: Option<String>,
+    resource_type: String,
+    path: String,
+    enabled: bool,
+) -> Result<(), String> {
+    // Concurrent async commands must not lose each other's read-modify-write updates.
+    static RESOURCE_SETTINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = RESOURCE_SETTINGS_LOCK.lock().map_err(|e| e.to_string())?;
     if !RESOURCE_TYPES.contains(&resource_type.as_str()) {
         return Err(pix_error_detail(
             "unknownResourceType",
@@ -483,11 +531,22 @@ pub fn package_set_resource(
 /// mirroring the walk used for resource discovery (ignores node_modules,
 /// .git, .pi, dist and dotfiles).
 #[tauri::command]
-pub fn package_list_files(
+pub async fn package_list_files(
     source: String,
     scope: String,
     project: Option<String>,
 ) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || package_list_files_blocking(source, scope, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_list_files_blocking(
+    source: String,
+    scope: String,
+    project: Option<String>,
+) -> Result<Vec<String>, String> {
+    ensure_registered_package(&source, &scope, project.as_deref())?;
     let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
         pix_error(
             "pluginInstallDirNotFound",
@@ -500,18 +559,30 @@ pub fn package_list_files(
     Ok(files)
 }
 
-const PACKAGE_ROOT_GUARD: crate::preview_guard::RootGuardSpec = crate::preview_guard::RootGuardSpec {
-    read_failed_label: "读取资源文件失败",
-    root_resolve_label: "解析插件目录失败",
-    root_resolve_code: "pluginInstallDirNotFound",
-    outside_message: "资源路径越界",
-};
+const PACKAGE_ROOT_GUARD: crate::preview_guard::RootGuardSpec =
+    crate::preview_guard::RootGuardSpec {
+        read_failed_label: "读取资源文件失败",
+        root_resolve_label: "解析插件目录失败",
+        root_resolve_code: "pluginInstallDirNotFound",
+        outside_message: "资源路径越界",
+    };
 
 /// Read one file inside an installed package for preview. `path` is relative
 /// to the package root with forward slashes. Text files are capped at 512 KB
 /// on a UTF-8 boundary; binary content is rejected with `resourceBinary`.
 #[tauri::command]
-pub fn package_read_file(
+pub async fn package_read_file(
+    source: String,
+    scope: String,
+    path: String,
+    project: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || package_read_file_blocking(source, scope, path, project))
+        .await
+        .map_err(|e| format!("package operation failed: {e}"))?
+}
+
+fn package_read_file_blocking(
     source: String,
     scope: String,
     path: String,
@@ -519,6 +590,9 @@ pub fn package_read_file(
 ) -> Result<String, String> {
     // Reject path traversal: the relative path must stay inside the package root.
     crate::preview_guard::reject_unsafe_rel_path(&path, "无效的资源路径")?;
+    // The root itself must belong to a registered package; package_root_dir
+    // would otherwise adopt any caller-supplied absolute directory.
+    ensure_registered_package(&source, &scope, project.as_deref())?;
     let root = package_root_dir(&source, &scope, project.as_deref()).ok_or_else(|| {
         pix_error(
             "pluginInstallDirNotFound",
@@ -533,6 +607,22 @@ pub fn package_read_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_resource_commands_preserve_validation_errors() {
+        let source = "missing".to_string();
+        let scope = "global".to_string();
+        let path = "../outside".to_string();
+        let expected = package_read_file_blocking(source.clone(), scope.clone(), path.clone(), None);
+        assert_eq!(package_read_file(source, scope, path, None).await, expected);
+
+        let expected = package_set_resource_blocking(
+            "missing".into(), "global".into(), None, "invalid".into(), "x".into(), true,
+        );
+        assert_eq!(package_set_resource(
+            "missing".into(), "global".into(), None, "invalid".into(), "x".into(), true,
+        ).await, expected);
+    }
 
     #[test]
     fn package_skills_include_manifest_directories_and_files_and_honor_filters() {
@@ -603,7 +693,10 @@ mod tests {
         };
         write("extensions/a.ts", "export {}");
         write("extensions/nested/b.ts", "export {}");
-        write("skills/demo/SKILL.md", "---\nname: demo\ndescription: Demo\n---\n");
+        write(
+            "skills/demo/SKILL.md",
+            "---\nname: demo\ndescription: Demo\n---\n",
+        );
         write("prompts/plan.md", "---\ndescription: Plan\n---\n");
         write("themes/dark.json", "{}");
         write(
@@ -657,6 +750,50 @@ mod tests {
     fn npm_name_strips_version() {
         let dir = package_root_dir("npm:@scope/pkg@1.2.3", "__none__", None);
         assert!(dir.is_none()); // not installed, but must not panic
+    }
+
+    #[test]
+    fn unregistered_sources_are_rejected() {
+        let doc: Value = serde_json::from_str(
+            r#"{"packages":["npm:demo",{"source":"git:example.com/repo"},"../escape"]}"#,
+        )
+        .unwrap();
+        assert!(ensure_source_registered("npm:demo", &doc).is_ok());
+        assert!(ensure_source_registered("git:example.com/repo", &doc).is_ok());
+        // A relative path only works as the exact registered entry string.
+        assert!(ensure_source_registered("../escape", &doc).is_ok());
+        // Absolute paths and traversal are unusable unless an identical
+        // package entry was actually installed — this is what keeps
+        // package_root_dir's verbatim local-path branch from becoming an
+        // arbitrary-file-read root.
+        assert_eq!(
+            ensure_source_registered("/etc", &doc).unwrap_err(),
+            pix_error("pluginNotInSettings", "设置中未找到该插件")
+        );
+        assert!(ensure_source_registered("../../etc/passwd", &doc).is_err());
+        assert!(ensure_source_registered("C:\\Windows", &doc).is_err());
+        // Missing or malformed packages arrays reject everything.
+        let empty: Value = serde_json::from_str("{}").unwrap();
+        assert!(ensure_source_registered("npm:demo", &empty).is_err());
+    }
+
+    #[test]
+    fn package_root_dir_adopts_registered_local_paths_verbatim() {
+        // Documents the local-path branch: locally developed packages may be
+        // absolute directories (root adopted as-is), so containment relies on
+        // the registration check, not on root resolution.
+        let tmp = std::env::temp_dir().join(format!("pix-pkg-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("mypkg")).unwrap();
+        let source = tmp.join("mypkg").to_string_lossy().to_string();
+        assert_eq!(
+            package_root_dir(&source, "global", None),
+            Some(tmp.join("mypkg"))
+        );
+        assert_eq!(
+            package_root_dir("/definitely/not/a/pkg-dir", "global", None),
+            None
+        );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

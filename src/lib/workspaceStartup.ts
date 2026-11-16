@@ -3,10 +3,12 @@ import type { AppConfig, TrustStatus, WorkspaceContext, WorkspaceGitInfo, Worksp
 import type { SessionStore } from "@/stores/session"
 import type { WorkspacePhase } from "@/lib/workspaceRuntime"
 import { normalizeProjectPath, samePath } from "@/lib/paths"
+import { isRemoteProject } from "@/lib/ssh"
+import { requireSshConnectionId, loadTrustStatus, saveTrustDecision } from "@/lib/sshTrust"
 import { encodeCodedError } from "@/lib/backendError"
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
 
 type Api = typeof import("@/api/piClient")
 type Conversations = typeof import("@/stores/conversations")
@@ -19,6 +21,8 @@ interface StartupContext {
     | "spawnPi"
     | "trustStatus"
     | "trustSave"
+    | "sshTrustStatus"
+    | "sshTrustSave"
     | "saveConfig"
     | "pixLog"
   >
@@ -51,8 +55,18 @@ export function createWorkspaceStartup(context: StartupContext) {
     translateError: tBackendError,
   } = context
   const ui = { pushToast: context.pushToast }
-  const { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog } =
-    context.api
+  const {
+    prepareWorkspaceGit,
+    workspaceGitInfo,
+    killPi,
+    spawnPi,
+    trustStatus,
+    trustSave,
+    sshTrustStatus,
+    sshTrustSave,
+    saveConfig,
+    pixLog,
+  } = context.api
   const { sessionFor, uiFor, activeRuntimeId } = context.conversations
   const runtimeWorkspaces = new Map<string, string>()
   function contextFor(dir: string): WorkspaceContext | undefined {
@@ -65,9 +79,20 @@ export function createWorkspaceStartup(context: StartupContext) {
   function contextSignature(dir: string) {
     return JSON.stringify(contextFor(dir) ?? null)
   }
+  /** 远程项目的 spawn 必须携带连接 id；SSH 连接是连接细节的唯一权威来源（契约 §3.1）。 */
+  function sshConnectionIdFor(dir: string): string {
+    return requireSshConnectionId(dir, config.value.sshConnections ?? [])
+  }
   async function spawnWorkspacePi(dir: string, file?: string, runtimeId = activeRuntimeId.value) {
     // 空目录传给后端会让 CreateProcess 报晦涩的 os error 123；在入口统一拦截。
     if (!dir) throw new Error(encodeCodedError("projectDirMissing", "项目目录不存在"))
+    // 远程项目：P1 不支持多目录组，workspace 恒为 null（契约 §3.1 第 4 条）。
+    if (isRemoteProject(dir)) {
+      const connectionId = sshConnectionIdFor(dir)
+      await spawnPi(dir, file, runtimeId, undefined, connectionId)
+      runtimeWorkspaces.set(runtimeId, JSON.stringify(null))
+      return
+    }
     const context = contextFor(dir)
     await spawnPi(dir, file, runtimeId, context)
     runtimeWorkspaces.set(runtimeId, JSON.stringify(context ?? null))
@@ -83,17 +108,31 @@ export function createWorkspaceStartup(context: StartupContext) {
   }
   async function decideWorkspaceTrust(trusted: boolean, trustParent: boolean) {
     try {
-      if (workspaceTrust.value) await trustSave(workspaceTrust.value.projectPath, trusted, trustParent)
+      if (workspaceTrust.value) {
+        // 远程项目经 ssh_trust_save 落到远端（契约 §4.3）；sshTrustProject 由
+        // requestWorkspaceTrust 记录，本地决策为 null。
+        const sshProject = sshTrustProject
+        sshTrustProject = null
+        await saveTrustDecision(
+          sshProject ?? "",
+          workspaceTrust.value.projectPath,
+          trusted,
+          trustParent,
+          config.value.sshConnections ?? [],
+          { trustSave, sshTrustSave },
+        )
+      }
       finishWorkspaceTrust(trusted)
     } catch (e) {
-      ui.pushToast(String(e), "error")
+      ui.pushToast(tBackendError(String(e)), "error")
       finishWorkspaceTrust(false)
     }
   }
-  function requestWorkspaceTrust(status: TrustStatus): Promise<boolean> {
+  function requestWorkspaceTrust(status: TrustStatus, sshProject?: string | null): Promise<boolean> {
     return new Promise(resolve => {
       // Only one startup can own the dialog; reject an abandoned previous request.
       finishWorkspaceTrust(false)
+      sshTrustProject = sshProject ?? null
       resolveWorkspaceTrust = resolve
       workspaceTrust.value = status
     })
@@ -101,25 +140,39 @@ export function createWorkspaceStartup(context: StartupContext) {
   // Cache successful creation before later initialization/trust steps. Retrying a
   // failed first send must reuse its checkout, not create another one.
   const preparedWorkspaces = new Map<string, { key: string; path: string }>()
+  const runtimeStarts = new Map<string, Promise<boolean>>()
+  /** 弹信任框期间的远程项目 URI：远程决策经 ssh_trust_save 保存（契约 §4.3）。 */
+  let sshTrustProject: string | null = null
   /** 单屏入口：始终启动当前激活会话。 */
   async function start(selection?: WorkspaceSelection | null): Promise<boolean> {
     return startSession(activeRuntimeId.value, selection)
   }
 
   /** 指定会话的启动流程；分屏时各窗格携带各自 runtimeId 调用，行为与激活会话一致。 */
-  async function startSession(runtimeId: string, selection?: WorkspaceSelection | null): Promise<boolean> {
+  async function startSession(
+    runtimeId: string,
+    selection?: WorkspaceSelection | null,
+    background = false,
+  ): Promise<boolean> {
     const sessionStart = nowMs()
     pixLog(`[perf] startSession begin selection=${selection?.branch ?? "-"}`, runtimeId)
-    if (workspace.gitBusy || connecting.value || selectingProject.value || phase.value !== "chat") return false
+    if (workspace.gitBusy || connecting.value || selectingProject.value || (!background && phase.value !== "chat"))
+      return false
+    // 远程项目必须无 branch/worktree 选择（契约 §5）；正常入口不会产生，这里兜底校验。
+    if (selection?.project && isRemoteProject(selection.project) && (selection.branch || selection.worktree)) {
+      ui.pushToast(t("ssh.gitUnavailable"), "error")
+      return false
+    }
     if (selection?.worktree && !selection.branch) {
       ui.pushToast(t("workspace.selectBaseBranch"), "error")
       return false
     }
-    if (!selection || !selection.branch) return startRuntime(runtimeId)
+    if (!selection || !selection.branch) return startRuntime(runtimeId, background)
     const owner = sessionFor(runtimeId)
-    if (owner.entries.length || owner.promptQueue.length || owner.isStreaming) return startRuntime(runtimeId)
+    if (owner.entries.length || owner.promptQueue.length || owner.isStreaming)
+      return startRuntime(runtimeId, background)
     workspace.gitBusy = true
-    connecting.value = true
+    if (!background) connecting.value = true
     try {
       const prepStart = nowMs()
       const key = JSON.stringify(selection)
@@ -143,9 +196,13 @@ export function createWorkspaceStartup(context: StartupContext) {
       // The user explicitly picked this folder, so lift any earlier removal marker.
       workspace.unremoveProject(path)
       await workspace.rememberWorkspace(path, knownInfo)
-      const status = await trustStatus(path)
+      // 远程项目走远程信任命令（契约 §4.3）；本地照旧。
+      const status = await loadTrustStatus(path, config.value.sshConnections ?? [], {
+        trustStatus,
+        sshTrustStatus,
+      })
       if (status.needsDecision) {
-        const allowed = await requestWorkspaceTrust(status)
+        const allowed = await requestWorkspaceTrust(status, isRemoteProject(path) ? path : null)
         if (!allowed) return false
       }
       // Completion may already have started an empty worker in the original cwd.
@@ -154,25 +211,39 @@ export function createWorkspaceStartup(context: StartupContext) {
       owner.started = false
       owner.clear()
       owner.cwd = path
-      project.value = path
-      config.value.lastProject = path
-      await saveConfig({ ...config.value })
-      return await startRuntime(runtimeId)
+      if (!background) {
+        project.value = path
+        config.value.lastProject = path
+        await saveConfig({ ...config.value })
+      }
+      return await startRuntime(runtimeId, background)
     } catch (e) {
       lastError.value = String(e)
       uiFor(owner.runtimeId).pushToast(tBackendError(String(e)), "error")
       return false
     } finally {
-      connecting.value = false
+      if (!background) connecting.value = false
       workspace.gitBusy = false
       pixLog(`[perf] startSession total ${Math.round(nowMs() - sessionStart)}ms`, runtimeId)
     }
   }
 
-  async function startRuntime(runtimeId: string): Promise<boolean> {
+  async function startRuntime(runtimeId: string, background = false): Promise<boolean> {
+    const pending = runtimeStarts.get(runtimeId)
+    if (pending) return pending
+    const starting = initializeRuntime(runtimeId, background)
+    runtimeStarts.set(runtimeId, starting)
+    try {
+      return await starting
+    } finally {
+      runtimeStarts.delete(runtimeId)
+    }
+  }
+
+  async function initializeRuntime(runtimeId: string, background: boolean): Promise<boolean> {
     const runtimeStart = nowMs()
     // Completion can request a runtime while the draft remains editable.
-    if (selectingProject.value || phase.value !== "chat") return false
+    if (selectingProject.value || (!background && phase.value !== "chat")) return false
     const owner = sessionFor(runtimeId)
     if (owner.started && runtimeWorkspaces.get(owner.runtimeId) === contextSignature(owner.cwd || project.value))
       return true
@@ -194,7 +265,7 @@ export function createWorkspaceStartup(context: StartupContext) {
       await killPi(owner.runtimeId)
       owner.started = false
     }
-    connecting.value = true
+    if (!background) connecting.value = true
     try {
       const spawnStart = nowMs()
       await spawnWorkspacePi(owner.cwd || project.value, undefined, owner.runtimeId)
@@ -209,7 +280,7 @@ export function createWorkspaceStartup(context: StartupContext) {
       uiFor(owner.runtimeId).pushToast(String(e), "error")
       return false
     } finally {
-      connecting.value = false
+      if (!background) connecting.value = false
       pixLog(`[perf] startRuntime total ${Math.round(nowMs() - runtimeStart)}ms`, runtimeId)
     }
   }

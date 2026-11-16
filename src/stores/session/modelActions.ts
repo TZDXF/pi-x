@@ -1,4 +1,5 @@
 import type { Ref } from "vue"
+import { modelKey } from "@/lib/modelKey"
 import { i18n } from "@/i18n"
 import type { rpcRequest } from "@/api/piClient"
 import type { Model, SessionState, ThinkingLevel } from "@/api/protocol"
@@ -43,8 +44,7 @@ export function createModelActions(context: ModelActionsContext) {
     command: Record<string, unknown>,
     opts?: { recordChange?: boolean; requireModel?: boolean },
   ): Promise<boolean> {
-    const previous =
-      pendingModelChange.value?.from ?? (state.value?.model && `${state.value.model.provider}/${state.value.model.id}`)
+    const previous = pendingModelChange.value?.from ?? (state.value?.model && modelKey(state.value.model))
     const result = await rpcRequest<{ model: Model | null }>(command)
     if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.modelSwitch"))
     if (opts?.requireModel && !result.data?.model) return false
@@ -56,7 +56,7 @@ export function createModelActions(context: ModelActionsContext) {
     await refreshState()
     await refreshThinkingLevels()
     if (state.value?.model) {
-      const current = `${state.value.model.provider}/${state.value.model.id}`
+      const current = modelKey(state.value.model)
       if ((opts?.recordChange ?? true) && started.value && previous)
         pendingModelChange.value = previous === current ? null : { from: previous, to: current }
       remember(state.value.model, state.value.thinkingLevel, rpcThinkingLevels.value)

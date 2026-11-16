@@ -1,18 +1,25 @@
 import type { Block, ToolCallBlock, ToolRun } from "@/stores/conversations"
 
-/** Hidden, completed thinking does not split consecutive tool calls in concise mode. */
-export function toolCallGroups(blocks: Block[]): Map<number, ToolCallBlock[]> {
+/** Thinking never splits concise tool groups, including while it is streaming. */
+export function toolCallGroups(
+  blocks: Block[],
+  standalone: (block: ToolCallBlock) => boolean = () => false,
+): Map<number, ToolCallBlock[]> {
   const groups = new Map<number, ToolCallBlock[]>()
   let group: ToolCallBlock[] | undefined
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]!
     if (block.type === "toolCall") {
+      if (standalone(block)) {
+        group = undefined
+        continue
+      }
       if (!group) {
         group = []
         groups.set(index, group)
       }
       group.push(block)
-    } else if (block.type !== "thinking" || block.streaming) {
+    } else if (block.type !== "thinking") {
       group = undefined
     }
   }

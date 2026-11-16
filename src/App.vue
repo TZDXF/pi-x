@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { computed, onMounted, onUnmounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { useMediaQuery, useWindowSize } from "@vueuse/core"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { useWorkspaceSidebarLayout } from "@/composables/useWorkspaceSidebarLayout"
 import { useAppNavigation } from "@/composables/useAppNavigation"
+import { useSessionNotificationNavigation } from "@/composables/useSessionNotificationNavigation"
+import { onSessionNotificationActivated } from "@/lib/notifications"
 import { useProjectActions } from "@/composables/useProjectActions"
 import { useSessionOpening, type TrustActivationBackup } from "@/composables/useSessionOpening"
 import { useAppShortcuts } from "@/composables/useAppShortcuts"
+import { useWorkspaceLayout, type WorkspaceLayout } from "@/composables/useWorkspaceLayout"
+import { useKanbanWorkspace } from "@/composables/useKanbanWorkspace"
+import { submitBoardDraft } from "@/lib/submitBoardDraft"
+import { useSessionActivitySync } from "@/composables/useSessionActivitySync"
 import {
   detectPi,
   prepareWorkspaceGit,
@@ -19,16 +25,20 @@ import {
   getConfig,
   killPi,
   onPiEvent,
+  onSshPathBound,
   pixLog,
   onPiExit,
   onPiStderr,
   onReconnected,
+  onWorkspaceStateChanged,
   onSessionsChanged,
   saveConfig,
   sessionMtime,
   setTrayLabels,
   toggleDevtools,
   spawnPi,
+  sshTrustSave,
+  sshTrustStatus,
   trustSave,
   trustStatus,
 } from "@/api/piClient"
@@ -44,14 +54,7 @@ import {
   peekConversation,
   pruneDormantConversations,
 } from "@/stores/conversations"
-import {
-  splitView,
-  isMember,
-  leafByRuntime,
-  restoreIfMember,
-  suspend,
-  type PaneLeaf,
-} from "@/stores/splitView"
+import { splitView, isMember, leafByRuntime, restoreIfMember, suspend, type PaneLeaf } from "@/stores/splitView"
 import { createWorkspaceStartup } from "@/lib/workspaceStartup"
 import { createWorkspaceRuntime, type WorkspacePhase } from "@/lib/workspaceRuntime"
 import { createConversationLoader } from "@/lib/conversationLoader"
@@ -64,17 +67,26 @@ import CreateProjectDialog from "@/components/CreateProjectDialog.vue"
 import TrustDialog from "@/components/TrustDialog.vue"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import WorkspaceSidebar from "@/components/WorkspaceSidebar.vue"
+import type { SidebarSessionTarget } from "@/components/workspace/sidebar/useSidebarSessionReveal"
 import SettingsPage from "@/components/SettingsPage.vue"
 import ScheduledTasksPage from "@/components/ScheduledTasksPage.vue"
 import { Button } from "@/components/ui/button"
 import ChatView from "@/components/ChatView.vue"
 import SplitChatLayout from "@/components/SplitChatLayout.vue"
 import WindowTitleBar from "@/components/WindowTitleBar.vue"
+import KanbanBoard from "@/components/kanban/KanbanBoard.vue"
+import KanbanDetailsPanel from "@/components/kanban/KanbanDetailsPanel.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
-import { acknowledgeSessionRunStatus, sessionRunStatus } from "@/stores/sessionRunStatus"
+import { kanbanColumnOrderKey, kanbanStatusOrderKey, type KanbanCard } from "@/lib/kanban"
+import { loadTrustStatus } from "@/lib/sshTrust"
+import { isRemoteProject } from "@/lib/ssh"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
+import { ExternalLink, FolderPlus, Trash2, X } from "@lucide/vue"
 import { developerModeEnabled } from "@/lib/developerMode"
+import { initializeConfigPreferences } from "@/lib/configPreference"
 import { isDesktop } from "@/api/transport"
 import { tBackendError } from "@/i18n"
+import { saveTrustDecision } from "@/lib/sshTrust"
 import { dispatchShortcut, registerShortcutHandler } from "@/lib/shortcuts"
 
 const route = useRoute()
@@ -83,6 +95,8 @@ type Phase = WorkspacePhase
 
 const session = useSessionStore()
 const workspace = useWorkspaceStore()
+useSessionActivitySync(workspace)
+const { workspaceLayout } = useWorkspaceLayout()
 const navigating = ref(false)
 const pendingResume = ref<string | null>(null)
 const trustActivationBackup = ref<TrustActivationBackup | null>(null)
@@ -92,6 +106,7 @@ const { t } = useI18n()
 
 const rightSidebarOpen = ref(false)
 const sidebarOpen = ref(true)
+const sidebarRevealTarget = ref<SidebarSessionTarget | null>(null)
 const projectDialogOpen = ref(false)
 const editingProjectPath = ref<string | null>(null)
 
@@ -119,6 +134,29 @@ const config = ref<AppConfig>({})
 const project = ref("")
 const trustInfo = ref<TrustStatus | null>(null)
 const lastError = ref<string | null>(null)
+const kanban = useKanbanWorkspace(workspace, () => workspaceLayout.value === "board" && phase.value !== "detecting")
+const board = reactive(kanban)
+const boardVisited = ref(workspaceLayout.value === "board")
+const boardComponent = ref<InstanceType<typeof KanbanBoard> | null>(null)
+const boardChat = ref<InstanceType<typeof ChatView> | null>(null)
+const creatingBoardDraft = ref(false)
+const showKanban = computed(
+  () =>
+    workspaceLayout.value === "board" &&
+    phase.value !== "trust" &&
+    route.value.name !== "settings" &&
+    route.value.name !== "schedules",
+)
+const boardSelectionReady = computed(() => {
+  const card = board.selectedCard
+  if (!card) return !connecting.value && !navigating.value
+  return card.file
+    ? sameSessionIdentity(session.sessionFile, session.cwd, card.file, card.cwd || card.project)
+    : activeRuntimeId.value === (card.runtimeId || card.draftId)
+})
+watch(workspaceLayout, layout => {
+  if (layout === "board") boardVisited.value = true
+})
 
 const started = computed({
   get: () => session.started,
@@ -128,25 +166,20 @@ const started = computed({
 })
 const connecting = ref(false)
 const selectingProject = ref(false)
-// A terminal badge represents an unread result, not a permanent session state.
-watch(
-  () => {
-    if (
-      phase.value !== "chat" ||
-      (route.value.name !== "home" && route.value.name !== "session" && route.value.name !== "project") ||
-      connecting.value ||
-      navigating.value
-    )
-      return null
-    const file = session.sessionFile
-    const status = file ? sessionRunStatus(file) : undefined
-    return status === "completed" || status === "error" ? file : null
-  },
-  file => acknowledgeSessionRunStatus(file),
-  { immediate: true },
-)
+// Read receipts belong to visible ChatView instances, never the selected runtime alone.
 const startup = createWorkspaceStartup({
-  api: { prepareWorkspaceGit, workspaceGitInfo, killPi, spawnPi, trustStatus, trustSave, saveConfig, pixLog },
+  api: {
+    prepareWorkspaceGit,
+    workspaceGitInfo,
+    killPi,
+    spawnPi,
+    trustStatus,
+    trustSave,
+    sshTrustStatus,
+    sshTrustSave,
+    saveConfig,
+    pixLog,
+  },
   conversations: { sessionFor, uiFor, activeRuntimeId },
   workspace,
   phase,
@@ -181,7 +214,9 @@ const runtimeLifecycle = createWorkspaceRuntime({
     onPiEvent,
     onPiExit,
     onPiStderr,
+    onSshPathBound,
     onReconnected,
+    onWorkspaceStateChanged,
     onSessionsChanged,
     pixLog,
     sessionMtime,
@@ -260,7 +295,7 @@ const sessionOpening = useSessionOpening({
   ui,
   t,
   translateError: tBackendError,
-  api: { saveConfig, trustStatus, exportSessionFileHtml },
+  api: { saveConfig, trustStatus, sshTrustStatus, exportSessionFileHtml },
   conversations: { sessionFor, findConversation, activateSession, createConversation, pruneDormantConversations },
   session,
   conversationLoader,
@@ -288,12 +323,23 @@ const navigation = useAppNavigation({
   translateError: tBackendError,
   navigate,
   isDisposed: () => disposed,
-  peekConversation,
+  peekConversation: (id, path) => {
+    const draft = workspace.boardDrafts?.[id]
+    return draft && !draft.sessionFile ? board.draftConversation(draft) : peekConversation(id, path)
+  },
   resumeSession,
   selectQueuedConversation,
   newProjectSession,
 })
 const { requestNavigation, requestConversationNavigation } = navigation
+const openSessionNotification = useSessionNotificationNavigation({
+  workspaceLayout,
+  board,
+  workspace,
+  peekConversation,
+  navigation,
+})
+let unlistenNotifications: (() => void) | undefined
 
 // ---- 会话分屏：状态跟随激活会话，树在非成员会话展示期间挂起保留 ----
 const splitLeaf = computed<PaneLeaf | null>(() => leafByRuntime(activeRuntimeId.value))
@@ -316,10 +362,9 @@ const { onGlobalKeydown, disposeShortcuts } = useAppShortcuts({
   t,
   translateError: tBackendError,
   navigate,
-  projectRoute,
   sessionRoute,
   requestConversationNavigation,
-  newProjectSession,
+  newSessionFromChat,
   resumeSession,
   developerModeEnabled,
   isDesktop,
@@ -330,27 +375,207 @@ const { onGlobalKeydown, disposeShortcuts } = useAppShortcuts({
 
 // ---- template handlers for the conversation-navigation wrappers ----
 
+function changeWorkspaceLayout(layout: WorkspaceLayout) {
+  workspaceLayout.value = layout
+  if (layout === "board") board.detailsOpen = false
+}
+
+function selectBoardConversation(file: string, path: string) {
+  if (workspaceLayout.value !== "board") return
+  board.selection = board.cards.find(card => sameSessionIdentity(card.file, card.cwd, file, path)) ?? null
+  board.detailsOpen = true
+}
+
+function onBoardCardDeleted(card: KanbanCard) {
+  const selected = board.selection
+  const matches = selected?.id === card.id || (!!card.draftId && selected?.draftId === card.draftId)
+  if (!matches) return
+  board.selection = null
+  board.detailsOpen = false
+}
+
+function openBoardCard(card: KanbanCard) {
+  board.selection = card
+  board.detailsOpen = true
+  const draft = card.draftId ? workspace.boardDrafts[card.draftId] : null
+  if (draft && !draft.sessionFile) {
+    const owner = board.draftConversation(draft)
+    requestConversationNavigation(sessionRoute(owner.runtimeId, owner.cwd), () =>
+      selectQueuedConversation(owner.runtimeId),
+    )
+  } else if (card.file) {
+    resumeSessionFromRoute(card.file, card.cwd || card.project)
+  } else if (card.runtimeId) {
+    selectConversationFromSidebar(card.runtimeId)
+  }
+}
+
+let boardDraftStart = Promise.resolve()
+function dropBoardDraft(card: KanbanCard) {
+  if (navigating.value || phase.value === "trust") return
+  board.error = ""
+  void board
+    .startDraft(card, (draft, owner) => {
+      const pending = boardDraftStart.then(() =>
+        submitBoardDraft(draft, owner, {
+          knownSessions: () => Object.values(workspace.histories).flat(),
+          translate: t,
+          ensureStarted: async () => {
+            if (!owner.started) {
+              const status = await loadTrustStatus(owner.cwd, config.value.sshConnections ?? [], {
+                trustStatus,
+                sshTrustStatus,
+              })
+              if (
+                status.needsDecision &&
+                !(await requestWorkspaceTrust(status, isRemoteProject(owner.cwd) ? owner.cwd : null))
+              )
+                return false
+            }
+            return startSession(owner.runtimeId, draft.selection, true)
+          },
+        }),
+      )
+      boardDraftStart = pending.catch(() => {})
+      return pending
+    })
+    .catch(error => {
+      board.error = tBackendError(error)
+      ui.pushToast(tBackendError(error), "error")
+    })
+}
+
+function startBoardDraft(card: KanbanCard) {
+  if (card.status !== "todo" || !card.draftId || connecting.value || navigating.value) return
+  const draft = workspace.boardDrafts[card.draftId]
+  if (!draft || draft.sessionFile) return
+  board.selection = card
+  board.detailsOpen = true
+  const owner = board.draftConversation(draft)
+  requestConversationNavigation(sessionRoute(owner.runtimeId, owner.cwd), async () => {
+    await selectQueuedConversation(owner.runtimeId)
+    await nextTick()
+    if (activeRuntimeId.value === owner.runtimeId) await boardChat.value?.submitDraft()
+  })
+}
+
+async function createBoardDraft(input: import("@/lib/kanban").KanbanCreatePayload) {
+  if (creatingBoardDraft.value) return
+  creatingBoardDraft.value = true
+  board.error = ""
+  try {
+    const draft = await board.createDraft(input)
+    if (!draft || !input.startImmediately) return
+    const card = board.cards.find(card => card.draftId === draft.id)
+    if (card) startBoardDraft(card)
+  } catch (error) {
+    board.error = tBackendError(error)
+    ui.pushToast(tBackendError(error), "error")
+  } finally {
+    creatingBoardDraft.value = false
+  }
+}
+
+async function ensureBoardStarted(selection?: import("@/api/piClient").WorkspaceSelection | null) {
+  const owner = sessionFor(activeRuntimeId.value)
+  if (!owner.started) {
+    const status = await loadTrustStatus(owner.cwd || project.value, config.value.sshConnections ?? [], {
+      trustStatus,
+      sshTrustStatus,
+    })
+    if (status.needsDecision && !(await requestWorkspaceTrust(status, isRemoteProject(owner.cwd) ? owner.cwd : null)))
+      return false
+  }
+  return startSession(owner.runtimeId, selection)
+}
+
+async function openBoardConversationInChat() {
+  const card = board.selectedCard
+  const target: SidebarSessionTarget = {
+    cwd: card?.cwd || card?.project || session.cwd || project.value,
+    file: card ? card.file : session.sessionFile,
+    runtimeId: card?.runtimeId || card?.draftId || activeRuntimeId.value,
+  }
+  sidebarRevealTarget.value = null
+  workspaceLayout.value = "chat"
+  // Splitter panels register on mount; expand only after the sidebar is attached again.
+  await nextTick()
+  sidebarOpen.value = true
+  await nextTick()
+  sidebarRevealTarget.value = target
+  focusComposer()
+}
+
+function selectBoardDraftProject(path: string) {
+  const draft = board.selectedDraft
+  if (draft && !draft.sessionFile && !connecting.value) {
+    workspace.upsertBoardDraft({ ...draft, project: path, updatedAt: Date.now() })
+    const owner = board.draftConversation(workspace.boardDrafts[draft.id]!)
+    requestConversationNavigation(sessionRoute(owner.runtimeId, path), () => selectQueuedConversation(owner.runtimeId))
+    return
+  }
+  requestConversationNavigation(projectRoute(path), () => selectProject(path))
+}
+
+async function deleteBoardDraft() {
+  const draft = board.selectedDraft
+  if (!draft || draft.sessionFile || connecting.value) return
+  workspace.removeBoardDraft(draft.id)
+  board.detailsOpen = false
+  board.selection = null
+  await workspace.flushPersistence().catch(error => ui.pushToast(tBackendError(error), "error"))
+}
+
 function resumeSessionFromRoute(file: string, path: string) {
+  selectBoardConversation(file, path)
   requestConversationNavigation(sessionRoute(file, path), () => resumeSession(file, path))
 }
 
 function selectProjectFromRoute(path: string) {
+  if (workspaceLayout.value === "board") {
+    board.selectedProject = workspace.isProjectless(path) ? path : workspace.projectRoot(path)
+    board.detailsOpen = false
+    return
+  }
   requestConversationNavigation(projectRoute(path), () => selectProject(path))
 }
 
 function newSessionFromSidebar(path: string) {
+  if (workspaceLayout.value === "board") {
+    boardComponent.value?.openCreate(path)
+    return
+  }
   requestConversationNavigation(projectRoute(path), () => newProjectSession(path))
 }
 
 function newSessionFromChat() {
-  requestConversationNavigation(
-    projectRoute(workspace.projectRoot(project.value)),
-    () => newProjectSession(workspace.projectRoot(project.value)),
+  if (workspaceLayout.value === "board") {
+    boardComponent.value?.openCreate(workspace.projectRoot(project.value))
+    return
+  }
+  requestConversationNavigation(projectRoute(workspace.projectRoot(project.value)), () =>
+    newProjectSession(workspace.projectRoot(project.value)),
   )
 }
 
 async function onTrustDecision(trusted: boolean, trustParent: boolean) {
-  if (trustInfo.value) await trustSave(trustInfo.value!.projectPath, trusted, trustParent)
+  if (trustInfo.value) {
+    // 恢复会话的信任决策（契约 §4.3）：远程项目经 ssh_trust_save 落到远端；
+    // 恢复流程在暂停前已把 project 置为目标 URI。
+    try {
+      await saveTrustDecision(
+        project.value,
+        trustInfo.value.projectPath,
+        trusted,
+        trustParent,
+        config.value.sshConnections ?? [],
+        { trustSave, sshTrustSave },
+      )
+    } catch (e) {
+      ui.pushToast(tBackendError(e), "error")
+      return
+    }
+  }
   if (trusted) {
     phase.value = "chat"
     trustActivationBackup.value = null
@@ -376,15 +601,52 @@ async function onTrustDecision(trusted: boolean, trustParent: boolean) {
 
 function selectConversationFromSidebar(runtimeId: string) {
   const cwd = sessionFor(runtimeId).cwd || project.value
+  if (workspaceLayout.value === "board") {
+    board.selection = board.cards.find(card => card.runtimeId === runtimeId) ?? null
+    board.detailsOpen = true
+  }
   requestConversationNavigation(sessionRoute(runtimeId, cwd), () => selectQueuedConversation(runtimeId))
 }
 
+// Browser history must move the drawer selection together with its runtime.
+watch(route, next => {
+  if (workspaceLayout.value !== "board") return
+  if (next.name !== "session" || !next.params.conversation) {
+    if (next.name === "home") board.detailsOpen = false
+    return
+  }
+  const id = next.params.conversation
+  const path = next.params.project || project.value
+  board.selection =
+    board.cards.find(
+      card => card.draftId === id || card.runtimeId === id || sameSessionIdentity(card.file, card.cwd, id, path),
+    ) ?? null
+  board.detailsOpen = true
+})
+
+watch(
+  () => workspace.persistenceError,
+  error => {
+    if (error) ui.pushToast(tBackendError(error), "error")
+  },
+)
+
 onMounted(async () => {
   window.addEventListener("keydown", onGlobalKeydown)
+  void onSessionNotificationActivated(openSessionNotification)
+    .then(unlisten => {
+      if (disposed) unlisten()
+      else unlistenNotifications = unlisten
+    })
+    .catch(error => console.warn("[pi] failed to listen for notification activation:", error))
+  // 更新下载可能跨越页面切换，进度监听跟随应用生命周期。
+  void appUpdate.startProgressListener()
   // 启动后自动检查应用更新，发现新版本时标题栏会出现更新入口
   void appUpdate.autoCheck()
   try {
     config.value = await getConfig()
+    // Remote authentication may not have been available during main.ts startup.
+    await initializeConfigPreferences(config.value)
   } catch {
     config.value = {}
   }
@@ -394,6 +656,7 @@ onMounted(async () => {
 
   try {
     await runtimeLifecycle.listen()
+    await workspace.syncState()
 
     // Reattach after UI reload / remote connection without spawning duplicates.
     const restored = await reattachRunningSessions()
@@ -410,7 +673,18 @@ onMounted(async () => {
         project.value = target
         await workspace.rememberWorkspace(target)
       }
-      await resumeSession(initialRoute.params.conversation, target)
+      const draft = workspace.boardDrafts[initialRoute.params.conversation]
+      if (draft && !draft.sessionFile) {
+        const owner = board.draftConversation(draft)
+        await selectQueuedConversation(owner.runtimeId)
+      } else {
+        await resumeSession(draft?.sessionFile || initialRoute.params.conversation, target)
+      }
+      if (workspaceLayout.value === "board") {
+        board.detailsOpen = true
+        board.selection =
+          board.cards.find(card => card.file === session.sessionFile || card.draftId === draft?.id) ?? null
+      }
       return
     }
     if (initialRoute.name === "project" && initialRoute.params.project) {
@@ -436,6 +710,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onGlobalKeydown)
+  unlistenNotifications?.()
   disposeShortcuts()
   disposed = true
   finishWorkspaceTrust(false)
@@ -446,13 +721,21 @@ onUnmounted(() => {
 <template>
   <div class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground" style="padding-top: 2.25rem">
     <WindowTitleBar
+      :workspace-layout="workspaceLayout"
+      :show-sidebar="!showKanban"
       :sidebar-open="sidebarOpen"
       :right-sidebar-open="rightSidebarOpen"
-      :show-right-sidebar="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules'"
-      :show-open-in-editor="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules'"
+      :show-right-sidebar="phase === 'chat' && route.name !== 'settings' && route.name !== 'schedules' && !showKanban"
+      :show-open-in-editor="
+        phase === 'chat' &&
+        route.name !== 'settings' &&
+        route.name !== 'schedules' &&
+        (!showKanban || (board.detailsOpen && !!board.selectedCard && boardSelectionReady))
+      "
       :open-in-editor-project="session.cwd || project"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
       @toggle-right-sidebar="rightSidebarOpen = !rightSidebarOpen"
+      @change-layout="changeWorkspaceLayout"
     />
     <!-- Settings is a standalone full-page route: the whole panel group (sidebar included) is swapped out, so route changes never trigger the collapse animation. -->
     <SettingsPage v-if="route.name === 'settings'" :project="project" />
@@ -463,6 +746,7 @@ onUnmounted(() => {
       :class="{ 'sidebar-animating': sidebarAnimating }"
     >
       <ResizablePanel
+        v-if="!showKanban"
         :ref="panel => (sidebarPanel = panel as typeof sidebarPanel)"
         class="min-h-0"
         size-unit="px"
@@ -473,6 +757,7 @@ onUnmounted(() => {
         @resize="onSidebarResize"
       >
         <WorkspaceSidebar
+          :reveal-session="sidebarRevealTarget"
           :inert="!sidebarVisible"
           :class="sidebarVisible ? undefined : 'max-[640px]:-translate-x-full max-[640px]:invisible'"
           :project="project"
@@ -494,6 +779,7 @@ onUnmounted(() => {
         />
       </ResizablePanel>
       <ResizableHandle
+        v-if="!showKanban"
         v-show="sidebarVisible && !isNarrowViewport"
         class="sidebar-resize-handle bg-transparent"
         :aria-label="t('sidebar.resizeWidth')"
@@ -507,16 +793,118 @@ onUnmounted(() => {
         <main
           id="workspace-main"
           class="workspace-main h-full min-h-0 min-w-0 flex relative overflow-hidden"
-          :style="{ '--workspace-header-left': sidebarOpen ? undefined : '48px' }"
+          :style="{ '--workspace-header-left': showKanban || sidebarOpen ? undefined : '48px' }"
         >
           <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div v-if="boardVisited" v-show="showKanban" class="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              <KanbanBoard
+                ref="boardComponent"
+                class="flex-1"
+                v-model:selected-project="board.selectedProject"
+                :cards="board.cards"
+                :projects="board.projects"
+                :selected-id="board.detailsOpen ? board.selectedCard?.id : undefined"
+                :loading="board.loading"
+                :error="board.error ? tBackendError(board.error) : undefined"
+                :busy="creatingBoardDraft"
+                :navigation-busy="(workspace.gitBusy && !connecting) || phase === 'trust'"
+                :column-order="workspace.boardColumnOrder"
+                @reorder="
+                  (column, ids) =>
+                    workspace.reorderBoardColumn(kanbanColumnOrderKey(board.selectedProject, column), ids)
+                "
+                @reorder-columns="ids => workspace.reorderBoardColumn(kanbanStatusOrderKey, ids)"
+                @open="openBoardCard"
+                @start-draft="startBoardDraft"
+                @drop-draft="dropBoardDraft"
+                @card-deleted="onBoardCardDeleted"
+                @export="openSessionAction($event, 'export')"
+                @create="createBoardDraft"
+                @open-project="requestNavigation(switchProject)"
+                @retry="board.refresh"
+              >
+                <template #actions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="(workspace.gitBusy && !connecting) || phase === 'trust'"
+                    @click="requestNavigation(switchProject)"
+                  >
+                    <FolderPlus class="size-3.5" aria-hidden="true" />
+                    {{ t("kanban.createProject") }}
+                  </Button>
+                </template>
+              </KanbanBoard>
+              <Transition name="kanban-details">
+                <KanbanDetailsPanel v-if="showKanban && board.detailsOpen">
+                  <header class="flex h-12 shrink-0 items-center gap-1.5 border-b px-3">
+                    <span class="min-w-0 flex-1 truncate text-sm font-medium">{{
+                      board.selectedCard?.title || t("sidebar.untitled")
+                    }}</span>
+                    <Button
+                      v-if="board.selectedDraft && !board.selectedDraft.sessionFile"
+                      variant="ghost"
+                      size="icon-sm"
+                      :disabled="connecting || navigating"
+                      :title="t('kanban.deleteDraft')"
+                      :aria-label="t('kanban.deleteDraft')"
+                      @click="deleteBoardDraft"
+                      ><Trash2 class="size-4"
+                    /></Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      :title="t('kanban.openInChat')"
+                      :aria-label="t('kanban.openInChat')"
+                      @click="openBoardConversationInChat"
+                      ><ExternalLink class="size-4"
+                    /></Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      :title="t('kanban.closeDetails')"
+                      :aria-label="t('kanban.closeDetails')"
+                      @click="board.detailsOpen = false"
+                      ><X class="size-4"
+                    /></Button>
+                  </header>
+                  <ChatView
+                    v-if="phase === 'chat' && boardSelectionReady"
+                    ref="boardChat"
+                    hide-header
+                    defer-read-receipt
+                    :key="activeRuntimeId"
+                    :session-id="activeRuntimeId"
+                    :project="session.cwd || project"
+                    :ensure-started="ensureBoardStarted"
+                    :connecting="connecting"
+                    :selecting-project="selectingProject"
+                    :connected="started"
+                    sidebar-target="#workspace-main"
+                    v-model:right-sidebar-open="rightSidebarOpen"
+                    @select-project="selectBoardDraftProject"
+                    @open-project="requestNavigation(switchProject)"
+                    @new-session="newSessionFromChat"
+                    @resume-session="resumeSessionFromRoute"
+                    @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
+                  />
+                  <div
+                    v-else
+                    class="flex flex-1 items-center justify-center p-6 text-sm text-muted-foreground"
+                    role="status"
+                  >
+                    {{ phase === "down" ? lastError || t("app.exited") : t("chat.historyLoading") }}
+                  </div>
+                </KanbanDetailsPanel>
+              </Transition>
+            </div>
             <ScheduledTasksPage
               v-if="route.name === 'schedules'"
               :project="project"
               @resume-session="resumeSessionFromRoute"
             />
             <WelcomeView
-              v-else-if="phase === 'no-pi' || phase === 'pick' || phase === 'detecting'"
+              v-else-if="!showKanban && (phase === 'no-pi' || phase === 'pick' || phase === 'detecting')"
               :phase
               :config
               @configured="phase = 'pick'"
@@ -528,7 +916,7 @@ onUnmounted(() => {
               <TrustDialog :info="trustInfo" @done="onTrustDecision" />
             </div>
 
-            <template v-else-if="phase === 'chat'">
+            <template v-else-if="phase === 'chat' && !showKanban">
               <SplitChatLayout
                 v-if="splitView.tree && splitLeaf"
                 :key="splitView.tree.id"
@@ -552,6 +940,7 @@ onUnmounted(() => {
                     @select-project="selectProjectFromRoute"
                     @open-project="requestNavigation(switchProject)"
                     @new-session="newSessionFromChat"
+                    @resume-session="resumeSessionFromRoute"
                     @split-drop="(payload, zone) => handleSplitDrop(payload, zone, runtimeId)"
                   />
                 </template>
@@ -563,18 +952,22 @@ onUnmounted(() => {
                 :key="activeRuntimeId"
                 :session-id="activeRuntimeId"
                 :project="project"
-                :ensure-started="start"
+                :ensure-started="workspace.boardDrafts[activeRuntimeId] ? ensureBoardStarted : start"
                 :connecting="connecting"
                 :selecting-project="selectingProject"
                 :connected="started"
                 @select-project="selectProjectFromRoute"
                 @open-project="requestNavigation(switchProject)"
                 @new-session="newSessionFromChat"
+                @resume-session="resumeSessionFromRoute"
                 @split-drop="(payload, zone) => handleSplitDrop(payload, zone, activeRuntimeId)"
               />
             </template>
 
-            <div v-else-if="phase === 'down'" class="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+            <div
+              v-else-if="phase === 'down' && !showKanban"
+              class="flex flex-1 flex-col items-center justify-center gap-4 p-8"
+            >
               <p class="text-lg font-medium">{{ t("app.exited") }}</p>
               <p v-if="lastError" class="text-muted-foreground max-w-xl text-center font-mono text-xs">
                 {{ lastError }}
@@ -623,14 +1016,27 @@ onUnmounted(() => {
       <div
         v-for="t in ui.toasts"
         :key="t.id"
-        class="pointer-events-auto max-w-sm rounded-md border px-4 py-3 text-sm shadow-lg"
+        class="pointer-events-auto flex max-w-sm items-center gap-3 rounded-md border px-4 py-3 text-sm shadow-lg"
+        role="status"
         :class="{
           'bg-background text-foreground': t.kind === 'info',
           'border-amber-500/50 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100': t.kind === 'warning',
           'border-red-500/50 bg-red-50 text-red-900 dark:bg-red-950 dark:text-red-100': t.kind === 'error',
         }"
       >
-        {{ t.message }}
+        <span class="min-w-0 break-words">{{ t.message }}</span>
+        <Button
+          v-if="t.action"
+          type="button"
+          variant="outline"
+          size="sm"
+          class="shrink-0"
+          :disabled="t.pending"
+          :aria-busy="t.pending || undefined"
+          @click="ui.runToastAction(t.id)"
+        >
+          {{ t.action.label }}
+        </Button>
       </div>
     </div>
   </div>

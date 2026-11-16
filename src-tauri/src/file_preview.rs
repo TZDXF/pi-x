@@ -25,7 +25,7 @@ const IMAGE_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "jfif", "gif", "webp", "ico", "bmp", "avif",
 ];
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(serde::Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FilePreview {
     /// "text" | "image" | "binary"

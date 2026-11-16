@@ -1,9 +1,10 @@
 import { i18n, tBackendError } from "@/i18n"
 import { pixLog } from "@/api/piClient"
-import { contentText } from "@/lib/content"
+import { contentImages, contentText } from "@/lib/content"
 import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
-import { setSessionRunStatus } from "@/stores/sessionRunStatus"
+import { isAuxRuntimeId } from "@/lib/auxRuntime"
+import { setSessionRunStatus, type SessionRunStatus } from "@/stores/sessionRunStatus"
 import { useWorkspaceStore } from "@/stores/workspace"
 import type { Ref } from "vue"
 import type { AssistantMessageEvent, Usage } from "@/api/protocol"
@@ -179,6 +180,7 @@ export function uiEntryFromAppendedEntry(raw: any, id: number, timestamp: number
 /** Reactive state and store callbacks the event handler needs. */
 export interface EventContext {
   runtimeId: string
+  onUserMessage: (message: any) => void
   entries: Ref<Entry[]>
   runs: Ref<Record<string, ToolRun>>
   partialBlocks: Ref<Block[] | null>
@@ -206,6 +208,7 @@ export interface EventContext {
 export function createEventHandler(ctx: EventContext) {
   const {
     runtimeId,
+    onUserMessage,
     entries,
     runs,
     partialBlocks,
@@ -229,13 +232,24 @@ export function createEventHandler(ctx: EventContext) {
   } = ctx
 
   function handleEvent(ev: Record<string, any>) {
+    const runMetadata =
+      typeof ev.pixRunId === "string" &&
+      ev.pixRunId &&
+      typeof ev.pixRunUpdatedAt === "number" &&
+      Number.isFinite(ev.pixRunUpdatedAt)
+        ? { runId: ev.pixRunId, updatedAt: ev.pixRunUpdatedAt }
+        : undefined
+    const setRunStatus = (status: SessionRunStatus | null) => {
+      if (runMetadata) setSessionRunStatus(sessionFile.value, status, cwd.value, runMetadata)
+      else setSessionRunStatus(sessionFile.value, status, cwd.value)
+    }
     switch (ev.type) {
       case "scheduled_session_created":
         // This prompt is submitted by PiX's scheduler rather than the composer.
         entries.value.push({ kind: "user", id: nextId(), text: ev.prompt, timestamp: Date.now() })
         isStreaming.value = true
         flow.awaitingAgentStart = true
-        setSessionRunStatus(sessionFile.value, "running")
+        setRunStatus("running")
         break
 
       case "scheduled_session_failed":
@@ -244,7 +258,7 @@ export function createEventHandler(ctx: EventContext) {
           flow.awaitingAgentStart = false
           flow.turnFailed = true
           flow.lastErrorMessage = tBackendError(ev.error)
-          handleEvent({ type: "agent_settled" })
+          handleEvent({ ...ev, type: "agent_settled" })
         }
         break
 
@@ -257,7 +271,7 @@ export function createEventHandler(ctx: EventContext) {
         flow.turnFailed = false
         flow.turnAborted = false
         flow.lastErrorMessage = null
-        setSessionRunStatus(sessionFile.value, "running")
+        setRunStatus("running")
         break
 
       case "agent_end":
@@ -279,15 +293,22 @@ export function createEventHandler(ctx: EventContext) {
           pixLog("settled: ignored (not streaming)", runtimeId)
           break
         }
+        // The runtime can abort before producing an assistant message (e.g.
+        // from an extension), so its terminal flag is authoritative too.
+        flow.turnAborted ||= ev.aborted === true
         retryInfo.value = null
         flow.awaitingAgentStart = false
+        // Settled is the terminal boundary even if a message_end was missed.
+        // Never let its transient tools/thinking keep the completed turn live.
+        partialBlocks.value = null
+        streamingTurnId.value = null
         isStreaming.value = false
         const finalStatus = flow.turnAborted || flow.stopping ? null : flow.turnFailed ? "error" : "completed"
         pixLog(
           `settled: finalize status=${finalStatus ?? "none"} notify=${!flow.turnAborted && !flow.stopping} failed=${flow.turnFailed} aborted=${flow.turnAborted}`,
           runtimeId,
         )
-        setSessionRunStatus(sessionFile.value, finalStatus)
+        setRunStatus(finalStatus)
         // Error messages carry an empty content array, so a finally-failed run
         // would otherwise leave no trace in the conversation. Transient errors
         // that a retry recovered from never reach this point.
@@ -301,13 +322,18 @@ export function createEventHandler(ctx: EventContext) {
             live: true,
           })
         }
-        if (!flow.turnAborted && !flow.stopping) {
+        // aux 的完成通知一律静默（§5）：它是附属面板，不该弹系统通知或去改窗口标题。
+        if (!flow.turnAborted && !flow.stopping && !isAuxRuntimeId(runtimeId)) {
           const workspace = useWorkspaceStore()
           const file = sessionFile.value
           const row = file ? workspace.histories[cwd.value]?.find(s => s.file === file) : undefined
           const project = cwd.value ? workspace.projectName(cwd.value) : ""
           const name = row?.title || row?.preview || ""
-          notifyTurnComplete(name ? `${project} · ${name}` : project, flow.turnFailed)
+          notifyTurnComplete(name ? `${project} · ${name}` : project, flow.turnFailed, {
+            runtimeId,
+            sessionFile: file,
+            cwd: cwd.value,
+          })
         }
         void refreshStats()
         void refreshState()
@@ -320,6 +346,7 @@ export function createEventHandler(ctx: EventContext) {
 
       case "message_start": {
         const msg = ev.message
+        if (msg?.role === "user") onUserMessage(msg)
         if (msg?.role === "assistant") {
           streamingTurnId.value ??= nextId()
           partialBlocks.value = []
@@ -336,7 +363,30 @@ export function createEventHandler(ctx: EventContext) {
         // banner only while nothing is coming back (pi may not report
         // auto_retry_end until the first message ends, if at all).
         retryInfo.value = null
-        if (!partialBlocks.value) break
+        if (!partialBlocks.value) {
+          // A newly attached view can miss message_start. pi includes the
+          // complete current message with each update, so recover the prefix
+          // instead of dropping every later delta until message_end.
+          if (!isStreaming.value) break
+          streamingTurnId.value ??= nextId()
+          if (ev.message?.role === "assistant" && Array.isArray(ev.message.content)) {
+            // Keep content indexes, including empty blocks, aligned with deltas.
+            partialBlocks.value = ev.message.content.map((content: any, index: number) => {
+              if (content.type === "thinking")
+                return {
+                  type: "thinking",
+                  text: content.thinking ?? "",
+                  streaming:
+                    index === delta.contentIndex &&
+                    (delta.type === "thinking_start" || delta.type === "thinking_delta"),
+                }
+              return blocksFromMessage({ content: [content] })[0] ?? { type: "text", text: "" }
+            })
+            // The snapshot already includes this update; never append it twice.
+            break
+          }
+          partialBlocks.value = []
+        }
         applyDelta(partialBlocks.value, delta)
         break
       }
@@ -370,6 +420,9 @@ export function createEventHandler(ctx: EventContext) {
               live: true,
               startedAt: flow.agentStartedAt,
               completedAt: Date.now(),
+              model: msg.model,
+              responseModel: msg.responseModel,
+              usage: msg.usage,
             })
           if (msg.usage) lastUsage.value = msg.usage
         }
@@ -396,6 +449,7 @@ export function createEventHandler(ctx: EventContext) {
         if (run && ev.partialResult) {
           // partialResult is the accumulated output so far (per rpc.md)
           run.outputText = contentText(ev.partialResult.content)
+          run.outputImages = contentImages(ev.partialResult.content)
         }
         break
       }
@@ -404,8 +458,11 @@ export function createEventHandler(ctx: EventContext) {
         const run = runs.value[ev.toolCallId]
         if (run) {
           run.outputText = ev.result ? contentText(ev.result.content) : run.outputText
+          if (ev.result) run.outputImages = contentImages(ev.result.content)
           run.state = ev.isError ? "output-error" : "output-available"
           run.completedAt = Date.now()
+          if (typeof ev.durationMs === "number" && Number.isFinite(ev.durationMs) && ev.durationMs >= 0)
+            run.durationMs = ev.durationMs
         }
         break
       }
@@ -455,7 +512,7 @@ export function createEventHandler(ctx: EventContext) {
 
       case "auto_retry_start":
         isStreaming.value = true
-        setSessionRunStatus(sessionFile.value, "running")
+        setRunStatus("running")
         retryInfo.value = {
           attempt: Number(ev.attempt) || 1,
           maxAttempts: Number(ev.maxAttempts) || Number(ev.attempt) || 1,

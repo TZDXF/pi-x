@@ -114,6 +114,9 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "remote", labelKey: "settings.remotePort" },
   { tab: "remote", labelKey: "settings.remotePassword" },
   { tab: "remote", labelKey: "settings.remoteLinks" },
+  { tab: "ssh", labelKey: "ssh.nav" },
+  { tab: "ssh", labelKey: "ssh.addConnection" },
+  { tab: "ssh", labelKey: "ssh.testConnection" },
   { tab: "packages", labelKey: "packages.market" },
   { tab: "packages", labelKey: "packages.installed" },
   { tab: "packages", labelKey: "packages.customTitle" },
@@ -129,8 +132,11 @@ const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   { tab: "mcp", labelKey: "mcpConfig.refresh" },
   { tab: "mcp", labelKey: "mcpConfig.addServer" },
   { tab: "general", labelKey: "settings.language" },
+  { tab: "storage", labelKey: "storage.clean" },
+  { tab: "storage", labelKey: "storage.manageArchives" },
   { tab: "archives", labelKey: "sessionArchive.restore" },
   { tab: "archives", labelKey: "sessionArchive.delete" },
+  { tab: "usage", labelKey: "usage.totalTokens" },
   { tab: "about", labelKey: "appUpdate.title" },
   { tab: "about", labelKey: "piUpdate.title" },
   { tab: "about", labelKey: "settings.dataDirectory" },
@@ -152,6 +158,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.processDetail",
     "settings.processDetailDesc",
     "retrySettings",
+    "cacheWarming",
     "queueMode",
   ],
   shortcuts: [
@@ -179,6 +186,7 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "settings.remotePassword",
     "settings.remoteLinks",
   ],
+  ssh: ["ssh.desc", "ssh.connectionsHint", "ssh.addConnection", "ssh.testConnection", "ssh.host", "ssh.keyPath"],
   packages: ["packages"],
   "package-resources": ["packages"],
   models: [
@@ -198,7 +206,9 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
   "agent-config": ["agentConfig"],
   skills: ["skillsConfig"],
   mcp: ["mcpConfig"],
+  storage: ["storage"],
   archives: ["sessionArchive"],
+  usage: ["usage"],
   about: ["settings.aboutBody", "appUpdate", "piUpdate", "settings.dataDirectory"],
 }
 

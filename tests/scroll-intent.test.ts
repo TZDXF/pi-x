@@ -1,0 +1,93 @@
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
+import {
+  shouldReleaseBottomLock,
+  shouldReleaseBottomLockOnScroll,
+  shouldResumeBottomLock,
+} from "../src/lib/scrollIntent"
+
+function element(parentElement: Element | null = null, options = {}) {
+  return {
+    parentElement,
+    scrollTop: 0,
+    scrollHeight: 100,
+    clientHeight: 100,
+    style: { overflowY: "visible", overscrollBehaviorY: "auto" },
+    ...options,
+  } as unknown as HTMLElement
+}
+
+beforeEach(() => {
+  vi.stubGlobal("getComputedStyle", (element: HTMLElement) => element.style)
+})
+afterEach(() => vi.unstubAllGlobals())
+
+test("layout clamping and the library's one-pixel correction keep bottom following", () => {
+  expect(shouldReleaseBottomLockOnScroll(1000, 800, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(1000, 799, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 799, 800)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 0, 0)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 0, -100)).toBe(false)
+})
+
+test("upward scrolling away from the bottom releases following", () => {
+  expect(shouldReleaseBottomLockOnScroll(1000, 950, 1000)).toBe(true)
+  expect(shouldReleaseBottomLockOnScroll(800, 700, 1000)).toBe(true)
+  expect(shouldReleaseBottomLockOnScroll(800, 800, 1000)).toBe(false)
+  expect(shouldReleaseBottomLockOnScroll(800, 900, 1000)).toBe(false)
+})
+
+test("only a downward user scroll to the bottom resumes following", () => {
+  // Resizing can leave a reader at the bottom without downward movement;
+  // stationary and upward events must not resume following.
+  expect(shouldResumeBottomLock(900, 1000, 1000, false)).toBe(false)
+  expect(shouldResumeBottomLock(1000, 1000, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(1000, 900, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(900, 950, 1000, true)).toBe(false)
+  expect(shouldResumeBottomLock(900, 1000, 1000, true)).toBe(true)
+  expect(shouldResumeBottomLock(900, 999, 1000, true)).toBe(true)
+})
+
+test("upward wheels release a viewport with different overflow values on each axis", () => {
+  const viewport = element(null, {
+    scrollTop: 900,
+    scrollHeight: 1000,
+    style: { overflow: "hidden scroll", overflowY: "scroll" },
+  })
+  expect(shouldReleaseBottomLock(viewport, element(viewport), -10000)).toBe(true)
+  expect(shouldReleaseBottomLock(viewport, viewport, -100)).toBe(true)
+  expect(shouldReleaseBottomLock(viewport, viewport, 100)).toBe(false)
+  expect(shouldReleaseBottomLock(viewport, viewport, 0)).toBe(false)
+})
+
+test("nested vertical scrolling keeps the conversation pinned until its top is reached", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const nested = element(viewport, {
+    scrollTop: 50,
+    scrollHeight: 300,
+    style: { overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  const target = element(nested)
+  expect(shouldReleaseBottomLock(viewport, target, -100)).toBe(false)
+  nested.scrollTop = 0
+  expect(shouldReleaseBottomLock(viewport, target, -100)).toBe(true)
+  nested.style.overscrollBehaviorY = "contain"
+  expect(shouldReleaseBottomLock(viewport, target, -100)).toBe(false)
+  nested.style.overscrollBehaviorY = "none"
+  expect(shouldReleaseBottomLock(viewport, target, -100)).toBe(false)
+})
+
+test("horizontal and non-overflowing nested containers allow conversation scrolling", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const nested = element(viewport, {
+    style: { overflowX: "auto", overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  expect(shouldReleaseBottomLock(viewport, element(nested), -100)).toBe(true)
+})
+
+test("non-scrollable viewports and targets outside the conversation keep their lock", () => {
+  const viewport = element()
+  expect(shouldReleaseBottomLock(viewport, viewport, -100)).toBe(false)
+  viewport.scrollHeight = 1000
+  expect(shouldReleaseBottomLock(viewport, element(), -100)).toBe(false)
+  expect(shouldReleaseBottomLock(viewport, null, -100)).toBe(false)
+})

@@ -1,10 +1,12 @@
+import { isRemoteProject } from "@/lib/ssh"
 import { clampThinkingLevel } from "@/lib/thinkingLevels"
 import { defineStore } from "pinia"
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { i18n, tBackendError } from "@/i18n"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { setSessionRunStatus } from "@/stores/sessionRunStatus"
 import {
+  adoptSession,
   generateSessionTitle,
   getPiSettings,
   pixLog,
@@ -52,7 +54,8 @@ let entrySeq = 0
 const nextId = () => ++entrySeq
 
 /** 毫秒计时；部分测试 VM 环境没有 performance 全局。 */
-const nowMs = () => (typeof performance === "undefined" ? Date.now() : performance.now())
+import { nowMs } from "@/lib/timing"
+import { modelKey as formatModelKey, parseModelKey } from "@/lib/modelKey"
 
 export const createSessionStore = (runtimeId = "default") =>
   defineStore(`session:${runtimeId}`, () => {
@@ -97,6 +100,12 @@ export const createSessionStore = (runtimeId = "default") =>
     const followUpMode = ref<QueueDeliveryMode | null>(null)
     /** File path of the active pi session (null until persisted). */
     const sessionFile = ref<string | null>(null)
+    // 会话文件一旦确定（新会话首轮持久化、恢复既有会话）即纳入 PiX 管理：
+    // 项目会话列表只展示带 sidecar 的 PiX 会话。失败无碍，标题生成、归档等
+    // 后续操作也会补写 sidecar。
+    watch(sessionFile, file => {
+      if (file) void adoptSession(file).catch(() => {})
+    })
     /** Runtime auto-retry switch (set_auto_retry). pi reports no getter for it;
      *  the client tracks it, seeded from settings.json `retry.enabled` on init. */
     const autoRetry = ref<boolean | null>(null)
@@ -109,7 +118,7 @@ export const createSessionStore = (runtimeId = "default") =>
     async function syncSessionFile() {
       const seq = ++mtimeSyncSeq
       const file = sessionFile.value
-      if (!file) return
+      if (!file || isRemoteProject(cwd.value)) return
       try {
         const mtime = await sessionMtime(file)
         if (seq === mtimeSyncSeq && sessionFile.value === file) syncedSessionMtime.value = mtime
@@ -228,10 +237,29 @@ export const createSessionStore = (runtimeId = "default") =>
       clearQueueTimer,
     } = createPromptQueue({ promptQueue, isStreaming, isResending, isCompacting, flow, nextId, send })
 
+    const pendingSteering = new Map<
+      number,
+      { entry: UserEntry; promptText: string; images?: { data: string; mimeType: string }[] }
+    >()
     let userTurnCount = 0
 
     const handleEvent = createEventHandler({
       runtimeId,
+      onUserMessage: (message: any) => {
+        const text =
+          typeof message.content === "string"
+            ? message.content
+            : (message.content ?? [])
+                .filter((part: any) => part.type === "text")
+                .map((part: any) => part.text)
+                .join("\n")
+        const pendingItems = [...pendingSteering.entries()]
+        // Extensions can transform the message before the user event is emitted.
+        const pending = pendingItems.find(([, item]) => item.promptText === text) ?? pendingItems[0]
+        if (!pending) return
+        pendingSteering.delete(pending[0])
+        entries.value.push({ ...pending[1].entry, timestamp: message.timestamp ?? Date.now() })
+      },
       entries,
       runs,
       partialBlocks,
@@ -256,15 +284,14 @@ export const createSessionStore = (runtimeId = "default") =>
 
     // ---- actions ----
 
-    /** Surface a response `data.disposition` (rpc-commands.md) as a diagnostic
-     *  log plus a notice whenever the message did NOT simply start a run: an
-     *  extension consumed it ("handled") or pi queued it ("queued"). */
+    /** Log response dispositions and notify for extension handling or follow-up
+     *  queuing. Steering is normally queued, so it needs no notice. */
     function reportDisposition(command: string, data: unknown, queuedKey: string) {
       const disposition = (data as { disposition?: string } | undefined)?.disposition
       pixLog(`${command} disposition=${disposition ?? "unknown"}`, runtimeId)
       if (disposition === "handled")
         dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t("chat.dispositionHandled") }
-      else if (disposition === "queued")
+      else if (disposition === "queued" && queuedKey !== "chat.steerQueued")
         dispositionNotice.value = { seq: ++dispositionSeq, message: i18n.global.t(queuedKey) }
     }
 
@@ -331,7 +358,7 @@ export const createSessionStore = (runtimeId = "default") =>
         flow.turnFailed = false
         flow.turnAborted = false
       }
-      setSessionRunStatus(sessionFile.value, "running")
+      setSessionRunStatus(sessionFile.value, "running", cwd.value)
       const version = conversationVersion
       const firstMessage = !entries.value.some(entry => entry.kind === "user") && !state.value?.messageCount
       // Editing the first question replaces the session's identity: its title
@@ -347,30 +374,34 @@ export const createSessionStore = (runtimeId = "default") =>
       const modelChange = trimmed.startsWith("/") ? undefined : (pendingModelChange.value ?? undefined)
       if (modelChange) pendingModelChange.value = null
       ++userTurnCount
-      entries.value.push({
+      const userEntry: UserEntry = {
         kind: "user",
         id: replacement?.id ?? nextId(),
         timestamp: Date.now(),
         text: trimmed,
+        ...(expandedText ? { contextText: expandedText } : {}),
         modelChange: modelChange ?? replacement?.modelChange,
         images: images?.map(im => ({ url: `data:${im.mimeType};base64,${im.data}` })),
         live: true,
-      })
+      }
+      if (wasStreaming) pendingSteering.set(userEntry.id, { entry: userEntry, promptText, images })
+      else entries.value.push(userEntry)
       const command: Record<string, unknown> = { type: "prompt", message: promptText }
       if (images?.length) command.images = images.map(im => ({ type: "image", data: im.data, mimeType: im.mimeType }))
       if (wasStreaming) command.streamingBehavior = "steer"
       // resolves after the full run finishes; events drive the UI meanwhile
-      rpcRequest(command)
+      rpcRequest<{ disposition?: string }>(command)
         .then(async res => {
           if (!res.success) throw new Error(res.error ?? i18n.global.t("chat.promptRejected"))
-          // While steering, pi queues the message instead of starting a run;
-          // make that (and extension consumption) visible either way.
+          if (wasStreaming && res.data?.disposition === "handled") pendingSteering.delete(userEntry.id)
+          // Record queued steering silently; keep other disposition notices.
           reportDisposition("prompt", res.data, wasStreaming ? "chat.steerQueued" : "chat.followUpQueued")
         })
         .catch(e => {
           if (version !== conversationVersion) return
+          pendingSteering.delete(userEntry.id)
           flow.turnFailed = true
-          setSessionRunStatus(sessionFile.value, "error")
+          setSessionRunStatus(sessionFile.value, "error", cwd.value)
           if (!wasStreaming) {
             flow.awaitingAgentStart = false
             isStreaming.value = false
@@ -409,10 +440,10 @@ export const createSessionStore = (runtimeId = "default") =>
       })
       const titleStart = nowMs()
       void generateSessionTitle(titleFile, promptText, editingFirstQuestion)
-        .then(async title => {
-          if (title) {
-            if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, title)
-            else workspace.generatedTitle(titleFile, title)
+        .then(async generated => {
+          if (generated) {
+            if (editingFirstQuestion) workspace.regeneratedTitle(titleFile, generated.title, generated.description)
+            else workspace.generatedTitle(titleFile, generated.title, generated.description)
           }
           await workspace.refresh(titleProject)
         })
@@ -450,6 +481,7 @@ export const createSessionStore = (runtimeId = "default") =>
               text,
             })),
           )
+          pendingSteering.clear()
           steering.value = []
           followUp.value = []
           const aborted = await rpcRequest({ type: "abort" })
@@ -469,7 +501,16 @@ export const createSessionStore = (runtimeId = "default") =>
         if (!rewound.success) throw new Error(rewound.error ?? i18n.global.t("chat.editStopFailed"))
         const replaceIndex = entries.value.findIndex(entry => entry.id === original.id)
         if (replaceIndex < 0) throw new Error(i18n.global.t("chat.editSessionChanged"))
-        entries.value.splice(replaceIndex)
+        const removed = entries.value.splice(replaceIndex)
+        const removedCalls = new Set<string>()
+        for (const entry of removed) {
+          if (entry.kind !== "assistant") continue
+          for (const block of entry.blocks) if (block.type === "toolCall") removedCalls.add(block.callId)
+        }
+        for (const block of partialBlocks.value ?? []) if (block.type === "toolCall") removedCalls.add(block.callId)
+        for (const id of removedCalls) delete runs.value[id]
+        fileChangeArtifacts.value = fileChangeArtifacts.value.filter(artifact => !removedCalls.has(artifact.toolCallId))
+        revertedFileChangeCalls.value = new Set([...revertedFileChangeCalls.value].filter(id => !removedCalls.has(id)))
         // Cached history also feeds the file-change summary; omit the old turn.
         let historyEnd = historyMessages.value.length - 1
         while (historyEnd >= 0 && historyMessages.value[historyEnd]?.role !== "user") historyEnd--
@@ -499,6 +540,67 @@ export const createSessionStore = (runtimeId = "default") =>
       }
     }
 
+    /** Take the selected native steering message back before aborting; preserve the rest locally. */
+    async function sendSteeringNow(index: number) {
+      if (flow.stopping || isResending.value) return
+      const selectedText = steering.value[index]
+      if (selectedText === undefined) return
+      const version = conversationVersion
+      flow.stopping = true
+      flow.queuePaused = true
+      try {
+        const cleared = await rpcRequest<{ steering?: string[]; followUp?: string[] }>({ type: "clear_queue" })
+        if (version !== conversationVersion) return
+        if (!cleared.success) throw new Error(cleared.error ?? i18n.global.t("chat.editStopFailed"))
+        const all = [...(cleared.data?.steering ?? []), ...(cleared.data?.followUp ?? [])]
+        const selectedIndex = (cleared.data?.steering ?? [])[index] === selectedText ? index : -1
+        // It may have already been delivered while the click was in flight.
+        const local = [...pendingSteering.entries()]
+        const toQueue = all.map(text => {
+          const match = local.findIndex(([, item]) => item.promptText === text)
+          const found = match < 0 ? undefined : local.splice(match, 1)[0]
+          if (found) pendingSteering.delete(found[0])
+          const item = found?.[1]
+          return { id: nextId(), text: item?.entry.text ?? text, images: item?.images, expandedText: item?.promptText }
+        })
+        steering.value = []
+        followUp.value = []
+        if (selectedIndex < 0) {
+          promptQueue.value.unshift(...toQueue)
+          flow.queuePaused = false
+          return
+        }
+        const selected = toQueue.splice(selectedIndex, 1)[0]
+        promptQueue.value.unshift(...toQueue)
+        // Keep the selected prompt recoverable if abort or idle confirmation fails.
+        promptQueue.value.unshift(selected)
+        const aborted = await rpcRequest({ type: "abort" })
+        if (version !== conversationVersion) return
+        if (!aborted.success) throw new Error(aborted.error ?? i18n.global.t("chat.editStopFailed"))
+        const idle = await rpcRequest<SessionState>({ type: "get_state" })
+        if (version !== conversationVersion) return
+        if (
+          !idle.success ||
+          !idle.data ||
+          idle.data.isStreaming ||
+          idle.data.isCompacting ||
+          idle.data.pendingMessageCount > 0 ||
+          idle.data.sessionFile !== sessionFile.value
+        )
+          throw new Error(i18n.global.t("chat.editStopFailed"))
+        isStreaming.value = false
+        partialBlocks.value = null
+        streamingTurnId.value = null
+        flow.stopping = false
+        flow.queuePaused = false
+        dispatchQueuedPrompt()
+      } catch (error) {
+        if (version === conversationVersion) pushErrorEntry(error)
+      } finally {
+        if (version === conversationVersion) flow.stopping = false
+      }
+    }
+
     /** Esc: take back queued messages, then abort. Returns text to restore. */
     async function abortAndRestore(): Promise<string> {
       flow.stopping = true
@@ -507,6 +609,7 @@ export const createSessionStore = (runtimeId = "default") =>
       try {
         const res = await rpcRequest<{ steering?: string[]; followUp?: string[] }>({ type: "clear_queue" })
         restored.push(...(res.data?.steering ?? []), ...(res.data?.followUp ?? []))
+        pendingSteering.clear()
       } catch {
         // ignore
       }
@@ -520,7 +623,7 @@ export const createSessionStore = (runtimeId = "default") =>
       } finally {
         flow.turnAborted = true
         isStreaming.value = false
-        setSessionRunStatus(sessionFile.value, null)
+        setSessionRunStatus(sessionFile.value, null, cwd.value)
         flow.stopping = false
       }
       return restored.join("\n")
@@ -532,7 +635,7 @@ export const createSessionStore = (runtimeId = "default") =>
      *  rejected against a bumped conversationVersion). Shared by newSession()
      *  and clear(); teardown specific to dropping the conversation (session
      *  file, commands, offline models, auto-retry) stays with clear(). */
-    function resetRunFlow() {
+    function resetRunFlow(preserveHistory = false) {
       ++conversationVersion
       invalidateHistory()
       pendingModelChange.value = null
@@ -543,6 +646,7 @@ export const createSessionStore = (runtimeId = "default") =>
       flow.lastErrorMessage = null
       flow.awaitingAgentStart = false
       promptQueue.value = []
+      pendingSteering.clear()
       clearQueueTimer()
       flow.stopping = false
       ++resendVersion
@@ -555,10 +659,12 @@ export const createSessionStore = (runtimeId = "default") =>
       dispositionNotice.value = null
       steering.value = []
       followUp.value = []
-      entries.value = []
-      runs.value = {}
-      partialBlocks.value = null
-      streamingTurnId.value = null
+      if (!preserveHistory) {
+        entries.value = []
+        runs.value = {}
+        partialBlocks.value = null
+        streamingTurnId.value = null
+      }
       stats.value = null
       lastUsage.value = null
     }
@@ -624,8 +730,9 @@ export const createSessionStore = (runtimeId = "default") =>
     let stateRequestVersion = 0
     async function refreshState() {
       const version = ++stateRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<SessionState & { sessionFile?: string }>({ type: "get_state" })
-      if (version !== stateRequestVersion) return
+      if (version !== stateRequestVersion || conversation !== conversationVersion) return
       if (res.success && res.data) {
         state.value = res.data
         sessionFile.value = res.data.sessionFile ?? null
@@ -653,14 +760,19 @@ export const createSessionStore = (runtimeId = "default") =>
         .catch(e => console.warn("[pi] configured modes:", e))
     }
 
+    let statsRequestVersion = 0
     async function refreshStats() {
+      const version = ++statsRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<SessionStats>({ type: "get_session_stats" })
-      if (res.success && res.data) stats.value = res.data
+      if (version === statsRequestVersion && conversation === conversationVersion && res.success && res.data)
+        stats.value = res.data
     }
 
     let commandRequestVersion = 0
     async function refreshCommands() {
       const version = ++commandRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{
         commands: Array<
           CommandInfo & {
@@ -668,7 +780,7 @@ export const createSessionStore = (runtimeId = "default") =>
           }
         >
       }>({ type: "get_commands" })
-      if (version !== commandRequestVersion) return
+      if (version !== commandRequestVersion || conversation !== conversationVersion) return
       if (!res.success) throw new Error(res.error ?? "Failed to load commands")
       // Pi nests the resource file path in `sourceInfo` instead of a top-level
       // `path`; flatten it so the loaded-skills list and "import loaded" work.
@@ -688,29 +800,38 @@ export const createSessionStore = (runtimeId = "default") =>
       })
     }
 
+    let modelsRequestVersion = 0
     async function refreshModels() {
+      const version = ++modelsRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{ models: Model[] }>({ type: "get_available_models" })
-      if (res.success && res.data) models.value = res.data.models ?? []
+      if (version === modelsRequestVersion && conversation === conversationVersion && res.success && res.data)
+        models.value = res.data.models ?? []
     }
 
+    let thinkingRequestVersion = 0
     async function refreshThinkingLevels() {
+      const version = ++thinkingRequestVersion
+      const conversation = conversationVersion
       const res = await rpcRequest<{ levels: ThinkingLevel[] }>({ type: "get_available_thinking_levels" })
-      if (res.success && res.data) rpcThinkingLevels.value = res.data.levels ?? ["off"]
+      if (version === thinkingRequestVersion && conversation === conversationVersion && res.success && res.data)
+        rpcThinkingLevels.value = res.data.levels ?? ["off"]
     }
 
     async function applyRememberedSelection() {
       const start = nowMs()
       // Snapshot both choices: setModel may update Pi's effective thinking level.
       const savedModel = remembered.value.model
-      const modelKey = desiredModelKey.value ?? (savedModel ? `${savedModel.provider}/${savedModel.id}` : null)
+      const modelKey = desiredModelKey.value ?? (savedModel ? formatModelKey(savedModel) : null)
       const level = desiredThinkingLevel.value ?? remembered.value.thinking
       desiredModelKey.value = null
       desiredThinkingLevel.value = null
-      if (modelKey && `${state.value?.model?.provider}/${state.value?.model?.id}` !== modelKey) {
-        const [provider, ...rest] = modelKey.split("/")
-        await setModel(provider, rest.join("/"), false).catch(e =>
-          console.warn("[pi] remembered model unavailable:", e),
-        )
+      if (modelKey && (!state.value?.model || formatModelKey(state.value.model) !== modelKey)) {
+        const model = parseModelKey(modelKey)
+        if (model)
+          await setModel(model.provider, model.id, false).catch(e =>
+            console.warn("[pi] remembered model unavailable:", e),
+          )
       }
       await refreshThinkingLevels()
       if (level) {
@@ -738,11 +859,12 @@ export const createSessionStore = (runtimeId = "default") =>
       pixLog(`[perf] init end ${Math.round(nowMs() - start)}ms`, runtimeId)
     }
 
-    function clear() {
-      resetRunFlow()
+    function clear({ preserveHistory = false }: { preserveHistory?: boolean } = {}) {
+      resetRunFlow(preserveHistory)
       autoRetry.value = null
       followUpMode.value = null
-      sessionFile.value = null
+      // A same-session worker rebuild must not remount the keyed conversation.
+      if (!preserveHistory) sessionFile.value = null
       syncedSessionMtime.value = null
       ++mtimeSyncSeq
       invalidateOfflineModels()
@@ -774,7 +896,7 @@ export const createSessionStore = (runtimeId = "default") =>
       markInterrupted: () => {
         pixLog(`interrupted: streaming=${isStreaming.value}`, runtimeId)
         if (!isStreaming.value) return
-        setSessionRunStatus(sessionFile.value, "error")
+        setSessionRunStatus(sessionFile.value, "error", cwd.value)
         // The sidebar badge alone does not explain what happened; leave a
         // visible note in the conversation itself.
         entries.value.push({
@@ -785,7 +907,7 @@ export const createSessionStore = (runtimeId = "default") =>
           live: true,
         })
       },
-      markRunning: () => setSessionRunStatus(sessionFile.value, "running"),
+      markRunning: () => setSessionRunStatus(sessionFile.value, "running", cwd.value),
       isCompacting,
       compactionError,
       retryInfo,
@@ -820,6 +942,7 @@ export const createSessionStore = (runtimeId = "default") =>
       handleEvent,
       send,
       abortAndRestore,
+      sendSteeringNow,
       resendPrompt,
       isResending,
       newSession,
@@ -838,6 +961,10 @@ export const createSessionStore = (runtimeId = "default") =>
       refreshStats,
       refreshModels,
       refreshCommands,
+      // aux（TZD-101）自带初始化序列（`lib/auxSpawn.ts` 的 `initAuxSession`）：它在
+      // 每段之间检查"实例是否已关闭"，而公共 `init` 是原子的。这里只**加宽导出**，
+      // `init` 本身一行未改。
+      refreshThinkingLevels,
       loadOfflineModels,
       historyLoading,
       olderHistoryLoading,

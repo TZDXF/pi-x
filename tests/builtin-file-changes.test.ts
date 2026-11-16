@@ -107,3 +107,19 @@ test("independent plugin registrations cannot consume each other's pending tool 
   await first.handlers.get("tool_result")({ toolCallId: "shared", toolName: "write", isError: false }, { cwd: dir })
   expect(first.entries.length).toBe(1)
 })
+
+
+test("large files retain hashes without capturing their content", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "pix-file-change-"))
+  t.onTestFinished(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, "large.txt")
+  const data = Buffer.alloc(2 * 1024 * 1024 + 1, 65)
+  writeFileSync(file, data)
+  const { handlers, entries } = harness()
+  await handlers.get("tool_call")({ toolCallId: "large", toolName: "edit", input: { path: file } }, { cwd: dir })
+  await handlers.get("tool_result")({ toolCallId: "large", toolName: "edit", isError: false }, { cwd: dir })
+  const change = entries[0].data.files[0]
+  expect(change.unsupportedReason).toBe("file_too_large")
+  expect(change.beforeContent).toBeNull()
+  expect(change.beforeHash).toBe(createHash("sha256").update(data).digest("hex"))
+})

@@ -20,10 +20,9 @@ interface UseAppShortcutsContext {
   t(key: string): string
   translateError(error: unknown): string
   navigate(path: string, replace?: boolean): void
-  projectRoute(project: string): string
   sessionRoute(conversation: string, project?: string): string
   requestConversationNavigation(path: string, action: () => Promise<unknown>): void
-  newProjectSession(path: string): Promise<unknown>
+  newSessionFromChat(): void
   resumeSession(file: string, targetProject?: string): Promise<unknown>
   developerModeEnabled: Ref<boolean>
   isDesktop: boolean
@@ -47,10 +46,9 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
     t,
     translateError: tBackendError,
     navigate,
-    projectRoute,
     sessionRoute,
     requestConversationNavigation,
-    newProjectSession,
+    newSessionFromChat,
     resumeSession,
     developerModeEnabled,
     isDesktop,
@@ -67,7 +65,9 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
   }
 
   function onGlobalKeydown(event: KeyboardEvent) {
-    // devtools 快捷键不受会话阶段限制，打包版本在开发者模式下同样可用。
+    if (typeof event.key !== "string" || !event.key) return
+    // devtools 快捷键不受会话阶段限制；默认 release 产物不含 devtools，
+    // 打包版本需以 --features devtools 编译（见 developerMode.ts）。
     if (developerModeEnabled.value && isDevtoolsShortcut(event)) {
       event.preventDefault()
       void toggleDevtools()
@@ -110,15 +110,14 @@ export function useAppShortcuts(context: UseAppShortcutsContext) {
     if (rows.length < 2) return
     const index = rows.findIndex(row => row.file === session.sessionFile)
     // No saved session yet (pristine draft): next = newest, prev = oldest.
-    const target = index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
+    const target =
+      index < 0 ? rows[offset > 0 ? 0 : rows.length - 1] : rows[(index + offset + rows.length) % rows.length]
     if (target)
       requestConversationNavigation(sessionRoute(target.file, target.cwd), () => resumeSession(target.file, target.cwd))
   }
 
   const offShortcutHandlers = [
-    registerShortcutHandler("app.newSession", () =>
-      requestConversationNavigation(projectRoute(project.value), () => newProjectSession(project.value)),
-    ),
+    registerShortcutHandler("app.newSession", () => newSessionFromChat()),
     registerShortcutHandler("app.focusComposer", focusComposerFromShortcut),
     registerShortcutHandler("app.toggleSidebar", () => {
       if (route.value.name === "home") sidebarOpen.value = !sidebarOpen.value

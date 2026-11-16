@@ -243,7 +243,7 @@ const REQUEST_SKIP: [&str; 13] = [
     "accept-encoding",
     "content-length",
 ];
-const RESPONSE_SKIP: [&str; 14] = [
+const RESPONSE_SKIP: [&str; 15] = [
     "set-cookie",
     "connection",
     "keep-alive",
@@ -260,6 +260,7 @@ const RESPONSE_SKIP: [&str; 14] = [
     "cross-origin-resource-policy",
     "cross-origin-embedder-policy",
     "clear-site-data",
+    "location",
 ];
 
 fn headers_to_reqwest(map: &axum::http::HeaderMap) -> reqwest::header::HeaderMap {
@@ -322,14 +323,13 @@ fn rewrite_location(location: &str, target: &Target, query: Option<&str>) -> Opt
         Some(port) => format!("{}:{port}", next.host_str()?),
         None => next.host_str()?.to_string(),
     };
-    let root = target
-        .prefix
-        .rsplit_once('/')
-        .map(|(root, _)| root)
-        .unwrap_or_default();
-    let token = host_token(&proxy().secret, &host);
+    // Do not grant a new host capability to an untrusted redirect.
+    if host != target.host || !matches!(next.scheme(), "http" | "https") {
+        return None;
+    }
     Some(format!(
-        "{root}/{token}/{}/{}{}{}",
+        "{}/{}/{}{}{}",
+        target.prefix,
         next.scheme(),
         host,
         next.path(),
@@ -406,7 +406,11 @@ async fn forward_http(req: Request, target: &Target) -> Response {
             // scheme/host/path only, and keep it out of stdout.
             crate::logs::write(
                 "preview",
-                &format!("preview proxy: failed to reach {}: {}", target_url(target, None), e),
+                &format!(
+                    "preview proxy: failed to reach {}: {}",
+                    target_url(target, None),
+                    e
+                ),
             );
             return (
                 StatusCode::BAD_GATEWAY,
@@ -450,10 +454,7 @@ async fn forward_http(req: Request, target: &Target) -> Response {
             // Too large to rewrite: forward the buffered prefix followed by the
             // rest of the stream untouched instead of buffering it all.
             let passthrough = futures_util::stream::iter(
-                buffered
-                    .chunks
-                    .into_iter()
-                    .map(Ok::<_, reqwest::Error>),
+                buffered.chunks.into_iter().map(Ok::<_, reqwest::Error>),
             )
             .chain(stream);
             return builder
@@ -800,24 +801,13 @@ mod tests {
             format!("/p/{token}/http/localhost:3000/login?next=/app")
         );
         assert_eq!(
-            rewrite_location("https://other.example.org/a/b", &target, None).unwrap(),
-            format!(
-                "/p/{}/https/other.example.org/a/b",
-                host_token(&secret(), "other.example.org")
-            )
+            rewrite_location("https://other.example.org/a/b", &target, None),
+            None
         );
+        assert_eq!(rewrite_location("//127.0.0.1:22/", &target, None), None);
         assert_eq!(
             rewrite_location("section", &target, None).unwrap(),
             format!("/p/{token}/http/localhost:3000/section")
-        );
-        // Default ports are already omitted by the url crate, and redirects
-        // get a fresh token bound to the redirect target host.
-        assert_eq!(
-            rewrite_location("https://example.com/", &target, None).unwrap(),
-            format!(
-                "/p/{}/https/example.com/",
-                host_token(&secret(), "example.com")
-            )
         );
     }
 
@@ -829,12 +819,14 @@ mod tests {
             "content-security-policy",
             "default-src 'none'".parse().unwrap(),
         );
+        source.insert("location", "http://127.0.0.1:22/".parse().unwrap());
         source.insert("set-cookie", "sid=1".parse().unwrap());
         source.insert("content-type", "text/html".parse().unwrap());
         let out = headers_to_axum(&source);
         assert!(out.get("x-frame-options").is_none());
         assert!(out.get("content-security-policy").is_none());
         assert!(out.get("set-cookie").is_none());
+        assert!(out.get("location").is_none());
         assert_eq!(out.get("content-type").unwrap(), "text/html");
     }
 
@@ -976,15 +968,27 @@ mod tests {
         // Deterministic, 64 lowercase hex chars, and distinct per host.
         for host in ["localhost:5173", "127.0.0.1:5173", "example.com"] {
             let token = host_token(&secret(), host);
-            assert_eq!(token, host_token(&secret(), host), "deterministic for {host}");
+            assert_eq!(
+                token,
+                host_token(&secret(), host),
+                "deterministic for {host}"
+            );
             assert_eq!(token.len(), 64);
             assert!(
-                token.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                token
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
                 "lowercase hex: {token}"
             );
         }
-        assert_ne!(host_token(&secret(), "a.local"), host_token(&secret(), "b.local"));
-        assert_ne!(host_token("secret-a", "host"), host_token("secret-b", "host"));
+        assert_ne!(
+            host_token(&secret(), "a.local"),
+            host_token(&secret(), "b.local")
+        );
+        assert_ne!(
+            host_token("secret-a", "host"),
+            host_token("secret-b", "host")
+        );
     }
 
     #[tokio::test]
@@ -994,7 +998,10 @@ mod tests {
             (0..20).map(|_| Ok(chunk.clone())).collect();
         let stream = futures_util::stream::iter(chunks);
         let (mut rest, buffered) = read_limited(stream).await.unwrap();
-        assert!(buffered.oversized, "20MB body exceeds the 16MB rewrite limit");
+        assert!(
+            buffered.oversized,
+            "20MB body exceeds the 16MB rewrite limit"
+        );
         let buffered_bytes: u64 = buffered.chunks.iter().map(|c| c.len() as u64).sum();
         // Buffering stops right after the limit is crossed: at most one chunk past it.
         assert!(buffered_bytes <= REWRITE_MAX_BYTES + 1024 * 1024);
@@ -1145,7 +1152,9 @@ mod tests {
         assert!(body.starts_with(b"<html><body>"), "prefix preserved");
         assert!(body.ends_with(b"</body></html>"), "tail preserved");
         // Passed through unrewritten: no bridge injected, no URL prefixing.
-        assert!(!body.windows("__pix-preview-bridge".len()).any(|w| w == b"__pix-preview-bridge"));
+        assert!(!body
+            .windows("__pix-preview-bridge".len())
+            .any(|w| w == b"__pix-preview-bridge"));
         assert!(!body.windows("/p/".len()).any(|w| w == b"/p/"));
     }
 }

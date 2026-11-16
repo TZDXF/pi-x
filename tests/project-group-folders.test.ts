@@ -33,6 +33,7 @@ test("grouped sidebar state aggregates every folder before hiding the session li
     errors: Record<string, string>,
     loading: Record<string, boolean>,
     histories: Record<string, unknown[]>,
+    path = "C:/repo",
   ) => {
     const vmContext = runSlice(
       sidebar,
@@ -42,10 +43,13 @@ test("grouped sidebar state aggregates every folder before hiding the session li
         workspace: { projectFolders: () => folders, histories },
         errors: { value: errors },
         loading: { value: loading },
+        isSshProject: (value: string) => value.startsWith("ssh://"),
+        isRemoteProject: (value: string) =>
+          value.startsWith("ssh://") || value.startsWith("wsl://") || value.startsWith("docker://"),
       },
       "groupState",
     )
-    return (vmContext as { __out: (path: string) => Record<string, unknown> }).__out("C:/repo")
+    return (vmContext as { __out: (query: string) => Record<string, unknown> }).__out(path)
   }
   // 主目录缺失但组内其他目录健康：列表仍然显示，仅保留目录缺失警告。
   const partial = stateOf(["C:/repo", "C:/b"], { "C:/repo": "missing" }, {}, { "C:/b": [{}] })
@@ -53,6 +57,9 @@ test("grouped sidebar state aggregates every folder before hiding the session li
   // 所有目录都缺失时才隐藏整组列表。
   const allMissing = stateOf(["C:/repo", "C:/b"], { "C:/repo": "missing", "C:/b": "missing" }, {}, {})
   expect(allMissing).toMatchObject({ error: "missing", hidden: true, hasHistory: false })
+  // 远程项目标记 remote（P2 起会话历史经 ssh_sessions 可用，契约 §2.4）。
+  const remote = stateOf(["ssh://dev@host/proj"], {}, {}, {}, "ssh://dev@host/proj")
+  expect(remote).toMatchObject({ remote: true, hidden: false, hasHistory: false })
   // 全部目录加载失败才显示整组重试入口。
   const allFailed = stateOf(["C:/repo", "C:/b"], { "C:/repo": "failed", "C:/b": "failed" }, {}, { "C:/repo": [] })
   expect(allFailed).toMatchObject({ listError: "failed", hidden: false })
@@ -71,16 +78,38 @@ test("new sessions keep defaulting to the project primary directory", () => {
   // 共用同一个处理器，其内部仍然走项目主目录路由。
   const chatHandler = app.match(/function newSessionFromChat\(\)[\s\S]*?\n\}/)?.[0]
   expect(chatHandler).toBeTruthy()
-  expect(chatHandler).toMatch(/requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) => newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/)
+  expect(chatHandler).toMatch(
+    /requestConversationNavigation\(\s*projectRoute\(workspace\.projectRoot\(project\.value\)\),\s*\(\) =>\s*newProjectSession\(workspace\.projectRoot\(project\.value\)\),\s*\)/,
+  )
   expect(app.match(/@new-session="newSessionFromChat"/g)?.length).toBeGreaterThanOrEqual(2)
   // 顶栏项目下拉不列出组内目录。
   expect(context).not.toMatch(/groupFolders/)
 })
 
+test("board shortcuts use the layout-aware action and deletion clears only the selected card", () => {
+  expect(app).toMatch(/newSessionFromChat,\s*resumeSession,/)
+  expect(app).toMatch(/@card-deleted="onBoardCardDeleted"/)
+  const board = { selection: { id: "selected", draftId: "draft-1" }, detailsOpen: true }
+  const vmContext = runSlice(
+    app,
+    "function onBoardCardDeleted",
+    "function openBoardCard",
+    { board },
+    "onBoardCardDeleted",
+  )
+  const onDeleted = (vmContext as { __out: (card: Record<string, string>) => void }).__out
+  onDeleted({ id: "other" })
+  expect(board.selection).toEqual({ id: "selected", draftId: "draft-1" })
+  expect(board.detailsOpen).toBe(true)
+  onDeleted({ id: "other", draftId: "draft-1" })
+  expect(board.selection).toBeNull()
+  expect(board.detailsOpen).toBe(false)
+})
+
 test("the project file tree switches roots across the group folders", () => {
   expect(files).toMatch(/v-if="roots\.length > 1"/)
   expect(files).toMatch(/@select="activeRoot = root"/)
-  expect(files).toMatch(/invoke<Entry\[\]>\("list_project_directory", \{ project: activeRoot\.value, path \}\)/)
+  expect(files).toMatch(/invokeProjectFile<Entry\[\]>\("list_project_directory", activeRoot\.value, path\)/)
   // 切换目录后预览与批注归属跟随所选目录，批注 key 仍是会话目录。
   expect(files).toMatch(/:project="activeRoot"/)
   expect(files).toMatch(/:comment-project="props\.project"/)

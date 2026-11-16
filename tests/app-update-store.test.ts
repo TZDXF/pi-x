@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   desktop: true,
   getConfig: vi.fn(),
   checkAppUpdate: vi.fn(),
+  installAppUpdate: vi.fn(),
+  listen: vi.fn(),
 }))
 
 vi.mock("@/api/transport", () => ({
@@ -12,9 +14,14 @@ vi.mock("@/api/transport", () => ({
     return mocks.desktop
   },
   invoke: async () => null,
+  listen: mocks.listen,
 }))
 vi.mock("@/api/client/config", () => ({ getConfig: mocks.getConfig }))
-vi.mock("@/api/client/updates", () => ({ checkAppUpdate: mocks.checkAppUpdate }))
+vi.mock("@/api/client/updates", () => ({
+  APP_UPDATE_PROGRESS_EVENT: "pix://app-update",
+  checkAppUpdate: mocks.checkAppUpdate,
+  installAppUpdate: mocks.installAppUpdate,
+}))
 
 import { useAppUpdateStore } from "@/stores/appUpdate"
 
@@ -35,6 +42,9 @@ beforeEach(() => {
   vi.stubEnv("DEV", false)
   mocks.getConfig.mockReset()
   mocks.checkAppUpdate.mockReset()
+  mocks.installAppUpdate.mockReset()
+  mocks.listen.mockReset()
+  mocks.listen.mockResolvedValue(vi.fn())
 })
 
 afterEach(() => {
@@ -90,4 +100,50 @@ test("auto check failures stay silent and leave the state untouched", async () =
   await expect(store.autoCheck()).resolves.toBeUndefined()
   expect(store.status).toBeNull()
   expect(store.checked).toBe(false)
+})
+
+test("download progress remains available across page listeners and completes globally", async () => {
+  let progressHandler: (event: { payload: { stage: string; chunkLength?: number; contentLength?: number } }) => void
+  mocks.listen.mockImplementation(async (_event, handler) => {
+    progressHandler = handler
+    return vi.fn()
+  })
+  let finishInstall!: () => void
+  mocks.installAppUpdate.mockReturnValue(new Promise<void>(resolve => (finishInstall = resolve)))
+
+  const store = useAppUpdateStore()
+  const installing = store.install("stable")
+  await vi.waitFor(() => expect(mocks.installAppUpdate).toHaveBeenCalledWith("stable"))
+  await store.startProgressListener()
+
+  expect(mocks.listen).toHaveBeenCalledTimes(1)
+  expect(store.installing).toBe(true)
+  expect(store.progress).toBe(0)
+
+  progressHandler!({ payload: { stage: "download", chunkLength: 25, contentLength: 100 } })
+  expect(store.progress).toBe(25)
+  progressHandler!({ payload: { stage: "download", chunkLength: 25, contentLength: 100 } })
+  expect(store.progress).toBe(50)
+  progressHandler!({ payload: { stage: "install" } })
+  expect(store.progress).toBe(100)
+
+  finishInstall()
+  await installing
+  expect(store.installed).toBe(true)
+  expect(store.installing).toBe(false)
+  expect(store.progress).toBeNull()
+})
+
+test("a failed install clears progress and can be retried", async () => {
+  mocks.installAppUpdate.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(undefined)
+  const store = useAppUpdateStore()
+
+  await expect(store.install("stable")).rejects.toThrow("offline")
+  expect(store.installing).toBe(false)
+  expect(store.installed).toBe(false)
+  expect(store.progress).toBeNull()
+
+  await store.install("stable")
+  expect(mocks.installAppUpdate).toHaveBeenCalledTimes(2)
+  expect(store.installed).toBe(true)
 })

@@ -15,7 +15,7 @@ test("archived sessions live in a settings tab and the sidebar entry is gone", (
   expect(router).toMatch(/segments\[0\] === "archives"[\s\S]*?tab: "archives"/)
   expect(router).not.toMatch(/name: "archives"/)
   expect(tabs).toMatch(/id: "archives"[\s\S]*?import\("@\/components\/ArchivedSessionsPage\.vue"\)/)
-  expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "archives", "about"\]/)
+  expect(tabs).toMatch(/"other",[\s\S]*?tabIds: \["model-config", "storage", "archives", "usage", "about"\]/)
   expect(shortcuts).toMatch(/registerShortcutHandler\("app\.archives", \(\) => navigate\("\/settings\/archives"\)\)/)
   expect(sidebar).not.toMatch(/emit\('archives'\)/)
   expect(sidebar).not.toMatch(/archives: \[\]/)
@@ -79,6 +79,7 @@ test("bulk delete is exposed per project and for the whole page behind confirmat
 test("archived session list, restore and delete work through remote dispatch", () => {
   const remote = read("../src-tauri/src/remote/dispatch/session.rs")
 
+  expect(remote).toMatch(/"session_list_unarchived" =>/)
   expect(remote).toMatch(/"session_list_archived" =>/)
   expect(remote).toMatch(/"session_update" =>/)
   expect(remote).toMatch(/"session_delete" =>/)

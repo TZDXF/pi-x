@@ -69,7 +69,7 @@ const style = computed(() => {
         data-selection-draft
         :placeholder="t('chat.selectionCommentPlaceholder')"
         rows="1"
-        class="max-h-24 min-h-8 flex-1 resize-none text-xs"
+        class="selection-comment-scroll max-h-24 min-h-8 flex-1 resize-none text-xs"
         @keydown.esc.stop="onCancel"
         @keydown.ctrl.enter.prevent="save"
         @keydown.meta.enter.prevent="save"
@@ -100,3 +100,28 @@ const style = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 与会话中的其他原生滚动区域保持一致。 */
+.selection-comment-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.selection-comment-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.selection-comment-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.selection-comment-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+.selection-comment-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--input);
+  background-clip: content-box;
+}
+</style>

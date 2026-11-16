@@ -10,6 +10,27 @@ const tool = { type: "toolCall", callId: "tool-1", name: "bash", argsText: "{}" 
 const thinking = { type: "thinking", text: "reasoning", streaming: false }
 const plain = value => JSON.parse(JSON.stringify(value))
 
+test("response model and billed cost follow the final response without summing catalog components", () => {
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 0.2, totalFromProvider: true },
+  }
+  const result = responseTurns(
+    [
+      user(1),
+      { ...assistant(2, text("checking")), model: "auto", responseModel: "first" },
+      { ...assistant(3, text("done")), model: "auto", responseModel: "final", usage },
+    ],
+    false,
+  )
+  expect(result[1]).toMatchObject({ model: "auto", responseModel: "final", usage })
+  expect((result[1] as any).usage.cost.total).toBe(0.2)
+})
+
 test("completed turn folds earlier replies, reasoning and tools, retaining final summary", () => {
   const entries = [user(1), assistant(2, text("checking"), tool), assistant(3, thinking, text("done"), text("details"))]
   const original = JSON.stringify(entries)
@@ -53,8 +74,8 @@ test("empty history and pending questions are preserved", () => {
 test("chat uses an initially closed process disclosure and original index for branching", () => {
   const chat = turnSources()
   const blocks = readFileSync(new URL("../src/components/AssistantBlocks.vue", import.meta.url), "utf8")
-  expect(chat).toMatch(/v-if="hasFoldedProcess\(entry\)"/)
-  expect(chat).toMatch(/:blocks="hasFoldedProcess\(entry\) \? entry.summary : entry.blocks"/)
+  expect(chat).toMatch(/v-if="showProcess"/)
+  expect(chat).toMatch(/:blocks="showProcess \? entry.summary : entry.blocks"/)
   expect(chat).toMatch(/<details[\s\S]*?class="response-process(?:\s[^"]*)?"/)
   expect(chat).not.toMatch(/response-process[^>]*\bopen\b/)
   expect(chat).toMatch(/emit\('fork', entry.lastIndex\)/)
@@ -75,7 +96,7 @@ test("streaming and completed answers share one render path so markdown never re
   // The summary tail reuses the streaming block keys instead of remounting.
   expect(blocks).toMatch(/keyOffset\??: number/)
   expect(blocks).toMatch(/:key="props.keyOffset \+ i"/)
-  expect(chat).toMatch(/:key-offset="hasFoldedProcess\(entry\) \? entry.blocks.length - entry.summary.length : 0"/)
+  expect(chat).toMatch(/:key-offset="showProcess \? entry.blocks.length - entry.summary.length : 0"/)
   // The collapsed process renders lazily, not on completion.
   expect(chat).toMatch(/@toggle="onProcessToggle"/)
 })
@@ -205,7 +226,7 @@ test("a model-switch annotation does not duplicate the matching live divider", (
   expect(result[2]).toBe(marker)
 })
 
-test("initial and different recorded model dividers do not swallow a later live switch", () => {
+test("model dividers before the first question are hidden without swallowing later switches", () => {
   const entries = [
     { kind: "model_change", id: 1, provider: "old", modelId: "model-a" },
     user(2),
@@ -215,7 +236,6 @@ test("initial and different recorded model dividers do not swallow a later live 
     user(6),
   ]
   expect(responseTurns(entries, false).map(entry => entry.kind)).toEqual([
-    "model_change",
     "user",
     "assistant",
     "model_change",
@@ -223,10 +243,20 @@ test("initial and different recorded model dividers do not swallow a later live 
     "assistant",
     "user",
   ])
-  const consecutive = responseTurns([entries[0], entries[3]], false)
-  expect(consecutive.map(entry => entry.kind)).toEqual(["model_change", "model_change", "user"])
 })
 
+test("rapid model switches collapse to the latest model at the same turn boundary", () => {
+  const first = { kind: "model_change", id: 1, provider: "company", modelId: "glm-5.3-flash" } as const
+  const second = { kind: "model_change", id: 2, provider: "home", modelId: "k3" } as const
+  expect(responseTurns([first, second, user(3)], false)).toEqual([user(3)])
+
+  const turns = responseTurns([user(1), first, second, user(3)], false)
+  expect(turns.map(entry => entry.kind)).toEqual(["user", "model_change", "user"])
+  expect(turns[1]).toBe(second)
+
+  const firstQuestion = { ...user(4), modelChange: { from: "home/k3", to: "company/model-b" } }
+  expect(responseTurns([firstQuestion], false)).toEqual([firstQuestion])
+})
 test("completed replies without tool calls keep a thinking disclosure but show no elapsed-time label", () => {
   const turn = responseTurns(
     [
@@ -271,6 +301,14 @@ test.each([
   expect(hasFoldedProcess(live)).toBe(true)
 })
 
+test("concise mode hides reasoning-only process disclosures", () => {
+  const turn = responseTurns([assistant(1, thinking, text("answer"))], false)[0]
+  expect(hasFoldedProcess(turn)).toBe(true)
+  expect(hasFoldedProcess(turn, true)).toBe(false)
+
+  const withTools = responseTurns([assistant(1, thinking, tool, text("answer"))], false)[0]
+  expect(hasFoldedProcess(withTools, true)).toBe(true)
+})
 test("process disclosures keep trailing text visible and never wrap plain answers or empty turns", () => {
   const withAnswer = responseTurns([assistant(1, thinking, tool, text("answer"))], false)[0]
   expect(hasFoldedProcess(withAnswer)).toBe(true)

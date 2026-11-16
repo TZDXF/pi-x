@@ -3,25 +3,37 @@ import { computed, ref } from "vue"
 import { rpcNotify } from "@/api/piClient"
 import { tBackendError } from "@/i18n"
 import type { ExtensionUiRequest } from "@/api/protocol"
-import { notifyQuestion } from "@/lib/notifications"
+import { notifyQuestion, type SessionNotificationTarget } from "@/lib/notifications"
 
 export interface Toast {
   id: number
   message: string
   kind: "info" | "warning" | "error"
+  action?: { label: string; onClick: () => Promise<unknown> }
+  pending?: boolean
 }
 
 let toastSeq = 0
 
-export const createUiStore = (runtimeId = "default") =>
+export const createUiStore = (
+  runtimeId = "default",
+  notificationTarget: () => SessionNotificationTarget = () => ({ runtimeId }),
+  /**
+   * aux 的 ui store 传 `{ silent: true }`：`setTitle` 改的是**窗口**标题，一律不让
+   * 辅助对话覆盖主会话；`notifyQuestion` 也不弹系统通知（§5 要求三者对 aux 静默）。
+   */
+  options: { silent?: boolean } = {},
+) =>
   defineStore(`ui:${runtimeId}`, () => {
     /** Dialog requests (select/confirm/input/editor) awaiting user input. */
     const dialogs = ref<ExtensionUiRequest[]>([])
+    const responding = new Set<string>()
     /** Fire-and-forget widget lines displayed above the composer. */
     const widget = ref<{ key: string; lines: string[]; placement: string } | null>(null)
     /** Status bar entries keyed by extension-provided key. */
     const statusEntries = ref<Record<string, string>>({})
     const toasts = ref<Toast[]>([])
+    const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
     /** Text pushed into the composer by extensions (set_editor_text). */
     const pendingEditorText = ref<string | null>(null)
     /** 首条消息发送时 worker 尚未启动（冷启动需数秒）；先在对话区回显这条
@@ -42,8 +54,9 @@ export const createUiStore = (runtimeId = "default") =>
         case "confirm":
         case "input":
         case "editor":
+          if (dialogs.value.some(dialog => dialog.id === req.id)) break
           dialogs.value.push(req)
-          notifyQuestion(req.title || req.message || "")
+          if (!options.silent) notifyQuestion(req.title || req.message || "", notificationTarget())
           break
 
         case "notify":
@@ -72,25 +85,72 @@ export const createUiStore = (runtimeId = "default") =>
           break
 
         case "setTitle":
-          // window title; harmless in-app
-          document.title = req.text ?? document.title
+          // window title; harmless in-app — aux 静默（不抢主会话的窗口标题）。
+          if (!options.silent && typeof document !== "undefined") document.title = req.text ?? document.title
           break
       }
     }
 
-    function respond(req: ExtensionUiRequest, value: { value?: string; confirmed?: boolean; cancelled?: boolean }) {
-      const idx = dialogs.value.indexOf(req)
-      if (idx >= 0) dialogs.value.splice(idx, 1)
-      void rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
+    function resolveRequest(id: string) {
+      dialogs.value = dialogs.value.filter(dialog => dialog.id !== id)
     }
 
-    function pushToast(message: string, kind: Toast["kind"] = "info") {
+    function restoreRequests(requests: ExtensionUiRequest[]) {
+      const ids = new Set(requests.map(request => request.id))
+      dialogs.value = dialogs.value.filter(dialog => ids.has(dialog.id))
+      for (const request of requests) handleRequest(request)
+    }
+
+    async function respond(
+      req: ExtensionUiRequest,
+      value: { value?: string; confirmed?: boolean; cancelled?: boolean },
+    ) {
+      if (responding.has(req.id)) return
+      responding.add(req.id)
+      try {
+        await rpcNotify({ type: "extension_ui_response", id: req.id, ...value }, runtimeId)
+        resolveRequest(req.id)
+      } catch (error) {
+        pushToast(String(error), "error")
+      } finally {
+        responding.delete(req.id)
+      }
+    }
+
+    function dismissToast(id: number) {
+      clearTimeout(toastTimers.get(id))
+      toastTimers.delete(id)
+      toasts.value = toasts.value.filter(t => t.id !== id)
+    }
+
+    function expireToast(toast: Toast) {
+      toastTimers.set(
+        toast.id,
+        setTimeout(() => dismissToast(toast.id), toast.action ? 10000 : 5000),
+      )
+    }
+
+    function pushToast(message: string, kind: Toast["kind"] = "info", action?: Toast["action"]) {
       const id = ++toastSeq
       // 后端编码错误在此统一按当前语言翻译；普通文本原样透传。
-      toasts.value.push({ id, message: tBackendError(message), kind })
-      setTimeout(() => {
-        toasts.value = toasts.value.filter(t => t.id !== id)
-      }, 5000)
+      const toast = { id, message: tBackendError(message), kind, action }
+      toasts.value.push(toast)
+      expireToast(toast)
+    }
+
+    async function runToastAction(id: number) {
+      const toast = toasts.value.find(t => t.id === id)
+      if (!toast?.action || toast.pending) return
+      toast.pending = true
+      clearTimeout(toastTimers.get(id))
+      try {
+        await toast.action.onClick()
+        dismissToast(id)
+      } catch (error) {
+        pushToast(String(error), "error")
+        toast.pending = false
+        expireToast(toast)
+      }
     }
 
     function clear() {
@@ -99,6 +159,13 @@ export const createUiStore = (runtimeId = "default") =>
       statusEntries.value = {}
       stderrLines.value = []
       pendingUserMessage.value = null
+      // 关闭/销毁一个会话时这几样也必须清：toast 定时器不清就会在 store 销毁后
+      // 继续触发（写到已废弃的 ref），待插入文本与在途询问 id 会串到下一个会话。
+      for (const timer of toastTimers.values()) clearTimeout(timer)
+      toastTimers.clear()
+      toasts.value = []
+      pendingEditorText.value = null
+      responding.clear()
     }
 
     return {
@@ -112,8 +179,11 @@ export const createUiStore = (runtimeId = "default") =>
       pushStderr,
       activeDialog,
       handleRequest,
+      resolveRequest,
+      restoreRequests,
       respond,
       pushToast,
+      runToastAction,
       clear,
     }
   })

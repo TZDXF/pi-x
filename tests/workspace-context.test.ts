@@ -7,7 +7,9 @@ import ts from "typescript"
 const source = readFileSync(new URL("../src/components/WorkspaceContext.vue", import.meta.url), "utf8")
 
 test("environment and branch menus only record draft choices", () => {
-  const menu = source.split('<Popover v-if="!isProjectless" v-model:open="modeOpen"')[1].split("</Popover>")[0]
+  const menu = source
+    .split('<Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"')[1]
+    .split("</Popover>")[0]
   const content = menu.split("<PopoverContent")[1]
   expect((content.match(/<Button\b/g) || []).length).toBe(2)
   expect(content).toMatch(/@click="selectMode\(false\)"/)
@@ -46,12 +48,16 @@ test("projectless drafts show a default project and hide Git menus", () => {
   )
   expect(source).toMatch(/projectless\.name/)
   expect(source).toMatch(/if \(!props\.project\) return/)
-  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="modeOpen"/)
-  expect(source).toMatch(/<Popover v-if="!isProjectless" v-model:open="branchOpen"/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"/)
+  expect(source).toMatch(/<Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"/)
+  // 远程项目跳过本地 git 查询（契约 §5）。
+  expect(source).toMatch(/if \(isRemote\.value\)/)
 })
 
 test("branch menu offers create-and-checkout only in local mode", () => {
-  const menu = source.split('<Popover v-if="!isProjectless" v-model:open="branchOpen"')[1].split("</Popover>")[0]
+  const menu = source
+    .split('<Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"')[1]
+    .split("</Popover>")[0]
   expect(menu).toMatch(/<div v-if="!selection\?\.worktree"/)
   expect(menu).toMatch(/@click="openCreateDialog"/)
   expect(menu).toMatch(/workspace\.createBranch/)
@@ -85,6 +91,8 @@ function branchHarness(overrides = {}) {
     info: { value: null },
     selection: { value: { project: "C:/repo", worktree: false, branch: "main" } },
     gitError: { value: "" },
+    // isRemote 为 false 走本地 git 查询；远程分支的跳过行为单独覆盖。
+    isRemote: { value: false },
     blocked: { value: false },
     modeOpen: { value: false },
     projectOpen: { value: false },
@@ -107,10 +115,19 @@ function branchHarness(overrides = {}) {
   })
   const code =
     source.slice(source.indexOf("let request = 0"), source.indexOf("watch(() => props.project")) +
-    "\n__out = { newBranch, createError, creating, createBranch, createOpen, branchOpen, openCreateDialog }"
+    "\n__out = { newBranch, createError, creating, createBranch, createOpen, branchOpen, openCreateDialog, refresh }"
   vm.runInNewContext(ts.transpile(code), context)
   return { context: { ...context, ...context.__out }, calls }
 }
+
+test("initial worktree selection survives immediate submission during Git loading", async () => {
+  const initialSelection = { project: "C:/repo", worktree: true, branch: "feature/base" }
+  const { context } = branchHarness({ props: { project: "C:/repo", initialSelection } })
+  const pending = context.refresh()
+  expect(context.selection.value).toEqual(initialSelection)
+  await pending
+  expect(context.selection.value).toEqual(initialSelection)
+})
 
 test("creating a branch checks it out and refreshes the draft selection", async () => {
   const { context, calls } = branchHarness()
@@ -209,8 +226,23 @@ function harness(overrides = {}) {
     },
     normalizeProjectPath: value => value,
     samePath: (a, b) => a === b,
+    // 远程守卫（lib/ssh 导入在切片外）：本测试全部使用本地项目。
+    isSshProject: () => false,
+    isRemoteProject: () => false,
+    resolveSshConnectionId: () => null,
     trustStatus: async () => ({ needsDecision: false }),
     trustSave: async () => {},
+    // 信任分流（lib/sshTrust 导入在切片外）：镜像真实实现的本地分派；
+    // 远程分支行为由 tests/ssh-trust.test.ts 直接覆盖，本地用例不应触达。
+    sshTrustStatus: async () => {
+      throw new Error("local test must not call sshTrustStatus")
+    },
+    sshTrustSave: async () => {
+      throw new Error("local test must not call sshTrustSave")
+    },
+    loadTrustStatus: (project, _connections, api) => api.trustStatus(project),
+    saveTrustDecision: (_project, localProjectPath, trusted, trustParent, _connections, api) =>
+      api.trustSave(localProjectPath, trusted, trustParent),
     killPi: async () => events.push("kill"),
     saveConfig: async () => events.push("save"),
     startRuntime: async () => {
@@ -231,12 +263,24 @@ function harness(overrides = {}) {
     startup.indexOf("async function startRuntime(runtimeId"),
   )
   vm.runInContext(
-    ts.transpile(code) + "\nglobalThis.api = {start, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
+    ts.transpile(code) +
+      "\nglobalThis.api = {start, startSession, decideWorkspaceTrust, finishWorkspaceTrust, workspaceTrust}",
     context,
   )
   return { ...context.api, context, owner, events }
 }
 const selection = { project: "C:/repo", worktree: true, branch: "feature/base" }
+
+test("background checkout startup keeps the active project and does not block conversation navigation", async () => {
+  const h = harness({ phase: { value: "pick" } })
+  const pending = h.startSession("draft", selection, true)
+  expect(h.context.connecting.value).toBe(false)
+  expect(await pending).toBe(true)
+  expect(h.owner.cwd).toBe("C:/tree")
+  expect(h.context.project.value).toBe("C:/repo")
+  expect(h.context.phase.value).toBe("pick")
+  expect(h.events).toEqual(["create", "remember:C:/tree", "kill", "clear", "start:C:/tree"])
+})
 
 test("first send waits for checkout preparation before starting the same runtime", async () => {
   let resolve

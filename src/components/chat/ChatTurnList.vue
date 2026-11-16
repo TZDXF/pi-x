@@ -15,6 +15,9 @@ import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
+import CodeCommentPreview from "./CodeCommentPreview.vue"
+import type { ParsedCodeComment } from "@/lib/codeComments"
+import { useWorkspaceStore } from "@/stores/workspace"
 import ChatErrorRecord from "./ChatErrorRecord.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
 import ChatCompactionMarker from "./ChatCompactionMarker.vue"
@@ -26,9 +29,10 @@ import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
 import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import type { AuxAskPayload } from "@/lib/auxSelection"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
-import type { useChatTurnList } from "@/composables/useChatTurnList"
+import { isWaitingForReply, type useChatTurnList } from "@/composables/useChatTurnList"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import type { usePromptEdit, PromptEditTextarea } from "@/composables/usePromptEdit"
@@ -42,6 +46,11 @@ const props = defineProps<{
   selectingProject?: boolean
   renderedEntries: ReturnType<typeof useChatTurnList>["renderedEntries"]["value"]
   edit: UnwrapRef<ReturnType<typeof usePromptEdit>>
+  /**
+   * aux 面板传入自己的 runtimeId（TZD-103）：划词"引用到输入框"必须写进**本实例**
+   * 的引用桶，不能落到主会话的单例（同项目下两者 scope 相同，会真的串）。
+   */
+  auxRuntimeId?: string
 }>()
 const emit = defineEmits<{
   historyScroll: [event: Event]
@@ -51,9 +60,23 @@ const emit = defineEmits<{
   editTextarea: [textarea: PromptEditTextarea | null]
   openReview: [path: string]
   fork: [index: number]
+  /** 划词菜单的"在辅助对话中提问"（TZD-103）：由父层路由到 aux 注册表。 */
+  auxAsk: [payload: AuxAskPayload]
 }>()
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
+const workspace = useWorkspaceStore()
+const openedComment = ref<ParsedCodeComment | null>(null)
+const commentRoots = computed(() => [
+  props.project,
+  ...workspace.projectFolders(props.project).filter(root => root !== props.project),
+])
+watch(
+  () => [props.project, props.session.sessionFile],
+  () => {
+    openedComment.value = null
+  },
+)
 /** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
 async function stopRetry() {
   try {
@@ -86,6 +109,7 @@ const {
   project: () => props.project,
   renderedEntries: () => props.renderedEntries,
   conversation,
+  auxRuntimeId: props.auxRuntimeId,
 })
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
@@ -97,32 +121,29 @@ defineExpose({
 })
 // waiting-for-reply status: elapsed seconds tick while the reply has no content yet
 const waitingSeconds = ref(0)
+const waitingForReply = computed(() => isWaitingForReply(props.session))
 /** 会话是否已有用户消息：决定消息列的缩进布局（模板内联计算提为 computed）。 */
 const hasUserEntries = computed(() => props.session.entries.some(entry => entry.kind === "user"))
 let waitingClock: ReturnType<typeof setInterval> | undefined
-watch(
-  () => props.session.isStreaming && !props.session.partialBlocks,
-  waiting => {
-    if (waiting && waitingClock === undefined) {
-      waitingSeconds.value = 0
-      const since = Date.now()
-      waitingClock = setInterval(() => {
-        waitingSeconds.value = Math.floor((Date.now() - since) / 1000)
-      }, 1000)
-    } else if (!waiting && waitingClock !== undefined) {
-      clearInterval(waitingClock)
-      waitingClock = undefined
-    }
-  },
-)
+watch(waitingForReply, waiting => {
+  if (waiting && waitingClock === undefined) {
+    waitingSeconds.value = 0
+    const since = Date.now()
+    waitingClock = setInterval(() => {
+      waitingSeconds.value = Math.floor((Date.now() - since) / 1000)
+    }, 1000)
+  } else if (!waiting && waitingClock !== undefined) {
+    clearInterval(waitingClock)
+    waitingClock = undefined
+  }
+})
 onBeforeUnmount(() => {
   if (waitingClock !== undefined) clearInterval(waitingClock)
 })
 </script>
 
 <template>
-  <!-- conversation: loading (session start / history load) is kept silent;
-         the area renders immediately and history appears once ready -->
+  <!-- Keep the new conversation visible while its worker/history is loading. -->
   <Conversation
     ref="conversation"
     :key="session.sessionFile ?? project"
@@ -142,9 +163,16 @@ onBeforeUnmount(() => {
       >
         <template v-if="session.olderHistoryLoading"><Loader :size="16" /> {{ t("chat.historyLoading") }}</template>
       </div>
+      <div
+        v-if="session.sessionFile && session.entries.length === 0 && session.historyLoading"
+        class="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm"
+        role="status"
+      >
+        <Loader :size="16" /> {{ t("chat.historyLoading") }}
+      </div>
       <ConversationEmptyState
         class="chat-empty flex-1 min-h-60"
-        v-if="session.entries.length === 0 && !session.historyLoading && (!connecting || selectingProject)"
+        v-if="!session.sessionFile && session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"
         :title="t('workspace.emptyTitle', { project: projectName })"
       >
         <template #icon>
@@ -156,7 +184,7 @@ onBeforeUnmount(() => {
         v-for="(entry, entryIndex) in renderedEntries"
         :key="entry.id"
         :data-message-id="entry.id"
-        :enabled="renderedEntries.length > 40"
+        :enabled="true"
         :pinned="entryIndex >= renderedEntries.length - 4"
         :live="entry.kind === 'assistant' && !entry.complete"
         v-slot="{ animate }"
@@ -174,6 +202,7 @@ onBeforeUnmount(() => {
                 v-if="entry.kind === 'user'"
                 :entry="entry"
                 :edit="edit"
+                @open-code-comment="openedComment = $event"
                 @preview-image="emit('previewImage', $event)"
                 @copy-text="emit('copyText', $event)"
                 @edit-textarea="emit('editTextarea', $event)"
@@ -202,43 +231,31 @@ onBeforeUnmount(() => {
       <template v-if="ui.pendingUserMessage">
         <Message from="user">
           <div class="relative flex min-w-0 flex-col items-end">
+            <div v-if="ui.pendingUserMessage.images.length" class="mb-2 flex max-w-full flex-wrap justify-end gap-2">
+              <button
+                v-for="(im, i) in ui.pendingUserMessage.images"
+                :key="i"
+                type="button"
+                class="border-border bg-muted relative size-16 shrink-0 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
+                :title="t('chat.previewImage')"
+                :aria-label="t('chat.previewImage')"
+                @click="emit('previewImage', im.url)"
+              >
+                <img :src="im.url" class="size-full object-cover" alt="" />
+              </button>
+            </div>
             <MessageContent>
               <div class="text-sm">
                 <ComposerText :text="ui.pendingUserMessage.text" />
-                <div v-if="ui.pendingUserMessage.images.length" class="mt-1.5 flex flex-wrap gap-2">
-                  <button
-                    v-for="(im, i) in ui.pendingUserMessage.images"
-                    :key="i"
-                    type="button"
-                    class="border-border bg-muted relative size-16 cursor-zoom-in overflow-hidden rounded-md border transition-opacity hover:opacity-90"
-                    :title="t('chat.previewImage')"
-                    :aria-label="t('chat.previewImage')"
-                    @click="emit('previewImage', im.url)"
-                  >
-                    <img :src="im.url" class="size-full object-cover" alt="" />
-                  </button>
-                </div>
               </div>
             </MessageContent>
           </div>
         </Message>
-        <div
-          v-if="connecting && !selectingProject"
-          class="text-muted-foreground mt-2 flex items-center gap-2 text-sm"
-          role="status"
-        >
-          <Loader :size="14" />
-          <span>{{ t("chat.startingSession") }}</span>
-        </div>
       </template>
 
       <!-- waiting indicator before any content arrives: icon on the left,
                loading status (with elapsed seconds) on the right -->
-      <div
-        v-if="session.isStreaming && !session.partialBlocks"
-        class="text-muted-foreground flex items-center gap-2 text-sm"
-        role="status"
-      >
+      <div v-if="waitingForReply" class="text-muted-foreground flex items-center gap-2 text-sm" role="status">
         <Loader :size="14" />
         <span class="tabular-nums">{{
           waitingSeconds > 0 ? t("chat.thinkingSeconds", { seconds: waitingSeconds }) : t("chat.thinking")
@@ -251,7 +268,19 @@ onBeforeUnmount(() => {
       <QueueSection v-if="session.steering.length + session.followUp.length > 0" class="mt-2">
         <QueueList>
           <QueueItem v-for="(s, i) in session.steering" :key="`steer-${i}`">
-            <QueueItemContent>{{ t("chat.pendingSteering") }} · {{ s }}</QueueItemContent>
+            <div class="bg-muted/50 border-border flex w-full min-w-0 items-center gap-3 rounded-lg border px-3 py-2">
+              <div class="min-w-0 flex-1">
+                <div class="text-muted-foreground text-xs font-medium">{{ t("chat.pendingSteering") }}</div>
+                <div class="mt-1 break-words text-sm">{{ s }}</div>
+              </div>
+              <button
+                type="button"
+                class="border-border bg-background hover:bg-accent shrink-0 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors"
+                @click="session.sendSteeringNow(i)"
+              >
+                {{ t("chat.sendSteeringNow") }}
+              </button>
+            </div>
           </QueueItem>
           <QueueItem v-for="(s, i) in session.followUp" :key="`follow-up-${i}`">
             <QueueItemContent>{{ t("chat.pendingFollowUp") }} · {{ s }}</QueueItemContent>
@@ -290,6 +319,7 @@ onBeforeUnmount(() => {
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     @quote="onSelectionQuote"
+    @aux-ask="emit('auxAsk', $event)"
   />
   <ConversationSelectionPopup
     :state="selectionPopup"
@@ -297,4 +327,5 @@ onBeforeUnmount(() => {
     @remove="onSelectionRemove"
     @cancel="onSelectionCancel"
   />
+  <CodeCommentPreview :comment="openedComment" :roots="commentRoots" @close="openedComment = null" />
 </template>

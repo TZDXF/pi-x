@@ -28,9 +28,26 @@ pub fn pix_error_with(code: &str, fallback: impl Into<String>, params: Value) ->
     format!("{CODED_ERROR_PREFIX}{payload}")
 }
 
+/// 日志用的错误码：编码错误取 `code`，普通文本统一归为 `uncoded`。
+/// 诊断日志因此能定位失败类别而不写入原始错误文本（可能含路径或会话内容）。
+pub fn error_code(message: &str) -> String {
+    message
+        .strip_prefix(CODED_ERROR_PREFIX)
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+        .and_then(|value| value.get("code").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_else(|| "uncoded".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_code_extracts_codes_without_leaking_text() {
+        assert_eq!(error_code(&pix_error("sessionPathInvalid", "无效的会话路径")), "sessionPathInvalid");
+        assert_eq!(error_code("Pi SDK: boom /secret/path"), "uncoded");
+        assert_eq!(error_code(&format!("{CODED_ERROR_PREFIX}broken")), "uncoded");
+    }
 
     #[test]
     fn pix_error_encodes_code_and_fallback() {

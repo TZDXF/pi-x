@@ -21,11 +21,13 @@ import { createI18n } from 'vue-i18n'
 import messages from '/src/i18n/locales/en.ts'
 import ReviewPanel from '/src/components/ReviewPanel.vue'
 import OpenWithSettings from '/src/components/settings/OpenWithSettings.vue'
+import { initializeConfigPreferences } from '/src/lib/configPreference'
 import '/src/style.css'
 const lines = Array.from({length: 100}, (_, i) => [
   {kind:'remove', text:'old '+i+' '+ 'long '.repeat(60), oldLine:i+1},
   {kind:'add', text:'new '+i+' '+ 'long '.repeat(60), newLine:i+1},
 ]).flat()
+await initializeConfigPreferences()
 createApp({render:()=>h('div',{},[
   h('div',{style:'padding:24px'},[h(OpenWithSettings)]),
   h('div',{style:'display:flex;height:650px;width:1100px'},[h(ReviewPanel,{project:'C:/demo project',changes:[{id:'1',path:'src/demo & 中文.ts',tool:'edit',lines,added:100,removed:100,unknownBefore:false}]})])
@@ -50,9 +52,16 @@ test("review split scrolling and default file opening", async ({ page }) => {
     const scopedWindow = window as unknown as ReviewTestWindow
     scopedWindow.isTauri = true
     scopedWindow.calls = []
+    const preferences = JSON.parse(localStorage.getItem("pix.reviewTestPreferences") ?? "{}") as Record<string, string>
     scopedWindow.__TAURI_INTERNALS__ = {
       invoke: async (command, args) => {
         scopedWindow.calls.push({ command, args })
+        if (command === "app_config_get") return { preferences }
+        if (command === "app_preference_set") {
+          preferences[String(args.key)] = String(args.value)
+          localStorage.setItem("pix.reviewTestPreferences", JSON.stringify(preferences))
+          return
+        }
         if (command === "detect_editors") return { vscode: true, cursor: true }
         if (command === "editor_icons") return {}
         if (command === "open_in_editor" && scopedWindow.failOpen) throw new Error("File does not exist")

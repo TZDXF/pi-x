@@ -293,7 +293,14 @@ onMounted(load)
             {{ t(scope === "global" ? "mcpConfig.scope.global" : "mcpConfig.scope.project") }}
           </Button>
         </div>
-        <Button variant="outline" size="sm" :disabled="statusLoading" @click="refreshStatus">
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="statusLoading"
+          aria-live="polite"
+          aria-atomic="true"
+          @click="refreshStatus"
+        >
           <RefreshCw :size="14" class="mr-1" :class="{ 'animate-spin': statusLoading }" />
           {{ t(statusLoading ? "mcpConfig.refreshing" : "mcpConfig.refresh") }}
         </Button>
@@ -305,8 +312,8 @@ onMounted(load)
       <template v-if="active">
         <div class="flex flex-wrap items-center gap-2">
           <span class="break-all font-mono text-xs text-muted-foreground">{{ active.path }}</span>
-          <span class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-            {{ t(active.exists ? "mcpConfig.exists" : "mcpConfig.missing") }}
+          <span v-if="!active.exists" class="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+            {{ t("mcpConfig.missing") }}
           </span>
         </div>
 
@@ -327,9 +334,6 @@ onMounted(load)
               {{ t("mcpConfig.configError", { message }) }}
             </li>
           </ul>
-          <p v-if="statusLoading && !statusLoaded" role="status" class="text-xs text-muted-foreground">
-            {{ t("mcpConfig.refreshing") }}
-          </p>
           <div class="flex justify-end">
             <Button size="sm" class="gap-1" @click="openCreate">
               <Plus :size="14" />

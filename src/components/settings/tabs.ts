@@ -58,6 +58,14 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./RemoteSettings.vue")),
   },
   {
+    id: "ssh",
+    nav: "ssh.nav",
+    title: "ssh.title",
+    desc: "ssh.desc",
+    desktopOnly: true,
+    component: defineAsyncComponent(() => import("./SshSettings.vue")),
+  },
+  {
     id: "models",
     nav: "settings.providersModels",
     title: "settings.providersModelsTitle",
@@ -113,11 +121,25 @@ export const SETTINGS_TAB_DEFS: readonly SettingsTabDef[] = [
     component: defineAsyncComponent(() => import("./McpSettings.vue")),
   },
   {
+    id: "storage",
+    nav: "storage.nav",
+    title: "storage.title",
+    desc: "storage.description",
+    component: defineAsyncComponent(() => import("./StorageSettings.vue")),
+  },
+  {
     id: "archives",
     nav: "sessionArchive.nav",
     title: "sessionArchive.title",
     desc: "sessionArchive.description",
     component: defineAsyncComponent(() => import("@/components/ArchivedSessionsPage.vue")),
+  },
+  {
+    id: "usage",
+    nav: "usage.nav",
+    title: "usage.title",
+    desc: "usage.description",
+    component: defineAsyncComponent(() => import("@/components/UsageSummaryPage.vue")),
   },
   {
     id: "about",
@@ -142,7 +164,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "general",
     labelKey: "settings.groups.general",
-    tabIds: ["general", "appearance", "models", "shortcuts", "notifications", "remote"],
+    tabIds: ["general", "appearance", "models", "shortcuts", "notifications", "remote", "ssh"],
   },
   {
     id: "capabilities",
@@ -152,7 +174,7 @@ export const SETTINGS_GROUP_DEFS: readonly SettingsGroupDef[] = [
   {
     id: "other",
     labelKey: "settings.groups.other",
-    tabIds: ["model-config", "archives", "about"],
+    tabIds: ["model-config", "storage", "archives", "usage", "about"],
   },
 ]
 

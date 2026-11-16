@@ -21,7 +21,7 @@ test("built-in slash commands exclude export while keeping new and compact", () 
   const chat = composerSources()
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
   expect(submit).not.toMatch(/exportSessionHtml|type: ["']export_html["']|commandName === ["']export["']/)
-  expect(submit).toMatch(/completion\.unsupported/)
+  expect(submit).toMatch(/completion\.invalidArguments/)
 })
 
 test("slash completion is start-only and supports skill, unicode and hyphenated names", () => {

@@ -3,7 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{collections::BTreeMap, sync::Mutex};
 use tauri::AppHandle;
+
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 use crate::errors::{pix_error_detail, pix_error_with};
 
@@ -26,6 +29,10 @@ pub enum UpdateChannel {
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
+    /// Settings-page UI preferences. Values keep the legacy localPreference
+    /// serialization so existing validators and one-time migration stay small.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub preferences: BTreeMap<String, String>,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(
@@ -103,6 +110,15 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub workspace_groups: Option<bool>,
+    /// SSH 远程连接配置（契约 §2.1）。复用 `ssh::config::SshConnection`，
+    /// 与 `ssh_connection_save` 等 `ssh::config` 读写共用同一 schema：
+    /// `app_config_save` 全量重写 config.json 时不能抹掉该字段。
+    #[serde(
+        rename = "sshConnections",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ssh_connections: Option<Vec<crate::ssh::config::SshConnection>>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -139,9 +155,49 @@ pub fn app_config_get(app: AppHandle) -> Result<AppConfig, String> {
         .map_err(|e| pix_error_detail("configParseFailed", "配置文件解析失败: {detail}", e))
 }
 
+fn emit_config_changed(app: &AppHandle, config: &AppConfig) {
+    if let Ok(payload) = serde_json::to_value(config) {
+        crate::remote::emit(app, "pi://app-config-changed", payload);
+    }
+}
+
 #[tauri::command]
-pub fn app_config_save(app: AppHandle, config: AppConfig) -> Result<(), String> {
-    write_config(&config_path(&app)?, &config)
+pub fn app_config_save(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
+    let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
+    // Most callers save a snapshot captured earlier. Preferences have their own
+    // single-key command, so a stale snapshot must never erase newer UI choices.
+    config.preferences = app_config_get(app.clone())?.preferences;
+    write_config(&config_path(&app)?, &config)?;
+    emit_config_changed(&app, &config);
+    Ok(())
+}
+
+const PREFERENCE_KEYS: [&str; 11] = [
+    "locale",
+    "theme",
+    "terminalTheme",
+    "openWith",
+    "developerMode",
+    "shortcuts",
+    "notifyTurnComplete",
+    "notifyQuestion",
+    "notifySound",
+    "runningBehavior",
+    "processDetail",
+];
+
+/// Persist one settings-page preference without racing unrelated config fields.
+#[tauri::command]
+pub fn app_preference_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
+    if !PREFERENCE_KEYS.contains(&key.as_str()) {
+        return Err(format!("Unsupported app preference: {key}"));
+    }
+    let mut config = app_config_get(app.clone())?;
+    config.preferences.insert(key, value);
+    write_config(&config_path(&app)?, &config)?;
+    emit_config_changed(&app, &config);
+    Ok(())
 }
 
 /// 无项目会话的工作目录：`dir` 为实际使用路径，`default_dir` 用于设置页展示与「恢复默认」。
@@ -191,6 +247,90 @@ mod tests {
         assert_eq!(value["piPath"], "pi");
         assert!(value.get("managedSkills").is_none());
         assert!(value.get("defaultModel").is_none());
+    }
+
+    #[test]
+    fn app_config_round_trips_ssh_connections() {
+        use crate::ssh::config::{SshConnection, SshProbeInfo};
+
+        // 模拟 ssh_connection_save 写入 sshConnections 后，前端再次
+        // saveConfig 全量重写（useProjectActions / workspaceStartup）：
+        // 反序列化 → 序列化的 round trip 必须原样保留连接与缓存字段。
+        let raw = r#"{
+            "lastProject": "ssh://dev@host.example.com/home/dev/proj",
+            "sshConnections": [{
+                "id": "ssh-9f1c2a",
+                "name": "office server",
+                "host": "host.example.com",
+                "port": 2222,
+                "user": "dev",
+                "keyPath": "~/.ssh/id_ed25519",
+                "createdAt": "2026-10-05T08:00:00.000Z",
+                "lastUsedAt": "2026-10-05T09:00:00.000Z",
+                "lastProbe": {
+                    "probedAt": "2026-10-05T08:30:00.000Z",
+                    "ok": true,
+                    "uname": "Linux",
+                    "arch": "x86_64",
+                    "nodeVersion": "v22.10.0",
+                    "piVersion": "0.9.3"
+                }
+            }]
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(raw)
+            .map_err(|e| format!("含 sshConnections 的配置必须能被 AppConfig 解析: {e}"))
+            .unwrap();
+        let connections = parsed.ssh_connections.as_ref().unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].id, "ssh-9f1c2a");
+        assert_eq!(connections[0].host, "host.example.com");
+        assert_eq!(connections[0].port, 2222);
+        assert_eq!(
+            connections[0].last_used_at.as_deref(),
+            Some("2026-10-05T09:00:00.000Z")
+        );
+        let probe: &SshProbeInfo = connections[0].last_probe.as_ref().unwrap();
+        assert!(probe.ok);
+        assert_eq!(probe.pi_version.as_deref(), Some("0.9.3"));
+
+        let value = serde_json::to_value(&parsed).unwrap();
+        let round_tripped: Vec<SshConnection> =
+            serde_json::from_value(value["sshConnections"].clone()).unwrap();
+        assert_eq!(round_tripped, *connections);
+        // 旧配置缺 sshConnections 也应正常加载，且缺省时不写出该字段。
+        assert!(parsed
+            .last_project
+            .as_deref()
+            .is_some_and(|p| p.starts_with("ssh://")));
+        let legacy: AppConfig = serde_json::from_str(r#"{"lastProject":"C:/code"}"#).unwrap();
+        assert_eq!(legacy.ssh_connections, None);
+        assert!(serde_json::to_value(AppConfig::default())
+            .unwrap()
+            .get("sshConnections")
+            .is_none());
+    }
+
+    #[test]
+    fn app_config_round_trips_ui_preferences() {
+        let mut preferences = BTreeMap::new();
+        preferences.insert("theme".into(), "dark".into());
+        preferences.insert("processDetail".into(), "concise".into());
+        preferences.insert("terminalTheme".into(), r#"{"preset":"nord"}"#.into());
+        let config = AppConfig {
+            preferences,
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["preferences"]["theme"], "dark");
+        assert_eq!(value["preferences"]["processDetail"], "concise");
+        let parsed: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.preferences, config.preferences);
+        assert!(
+            serde_json::to_value(AppConfig::default())
+                .unwrap()
+                .get("preferences")
+                .is_none()
+        );
     }
 
     #[test]

@@ -536,6 +536,26 @@ pub async fn session_file_rewind_apply(
     artifacts: Vec<FileRewindArtifact>,
     file: Option<String>,
 ) -> Result<FileRewindApplyResult, String> {
+    let trust = crate::trust::status(&project).await?;
+    ensure_rewind_trusted(&trust)?;
+    apply_rewind(project, artifacts, file).await
+}
+
+fn ensure_rewind_trusted(trust: &serde_json::Value) -> Result<(), String> {
+    let approved = trust["decision"] == true
+        || (trust["decision"].is_null() && trust["policy"] == "always");
+    if approved {
+        Ok(())
+    } else {
+        Err(pix_error("rewindProjectUntrusted", "文件回退需要信任此项目"))
+    }
+}
+
+async fn apply_rewind(
+    project: String,
+    artifacts: Vec<FileRewindArtifact>,
+    file: Option<String>,
+) -> Result<FileRewindApplyResult, String> {
     spawn_blocking(move || {
         let root = dunce::canonicalize(&project)
             .map_err(|_| pix_error("projectDirMissing", "项目目录不存在"))?;
@@ -879,12 +899,27 @@ mod tests {
         assert_eq!(workspace.read("pulled.txt"), "remote change");
     }
 
+    #[test]
+    fn rewind_requires_an_explicit_or_global_trust_decision() {
+        use serde_json::json;
+        assert!(ensure_rewind_trusted(&json!({"decision": true, "policy": "ask"})).is_ok());
+        assert!(ensure_rewind_trusted(&json!({"decision": null, "policy": "always"})).is_ok());
+        for trust in [
+            json!({"decision": false, "policy": "always"}),
+            json!({"decision": null, "policy": "ask"}),
+            json!({"decision": null, "policy": "never"}),
+            json!({}),
+        ] {
+            assert!(ensure_rewind_trusted(&trust).is_err());
+        }
+    }
+
     #[tokio::test]
     async fn one_unsafe_file_blocks_the_whole_apply() {
         let workspace = Workspace::new();
         workspace.write("safe.txt", "after");
         workspace.write("unsafe.txt", "user edited");
-        let result = session_file_rewind_apply(
+        let result = apply_rewind(
             workspace.0.to_string_lossy().into_owned(),
             vec![
                 artifact("write", "safe.txt", Some("before"), Some("after")),

@@ -25,13 +25,16 @@ function decide(trusted: boolean, trustParent = false) {
       <h2 class="text-lg font-semibold">{{ t("trust.title") }}</h2>
       <p class="text-muted-foreground text-sm">
         <span class="text-foreground font-mono">{{ props.info.projectPath }}</span>
-        {{ t("trust.desc") }}
-        <span class="text-muted-foreground">{{ t("trust.descDetail") }}</span>
+        <template v-if="props.info.hasTrustRequiringResources">
+          {{ t("trust.desc") }}
+          <span class="text-muted-foreground">{{ t("trust.descDetail") }}</span>
+        </template>
+        <template v-else>{{ t("trust.descEmpty") }}</template>
       </p>
     </div>
 
     <div class="border-amber-500/40 bg-amber-50 dark:bg-amber-950/40 rounded-md border p-3 text-sm">
-      {{ t("trust.warning") }}
+      {{ props.info.hasTrustRequiringResources ? t("trust.warning") : t("trust.warningEmpty") }}
     </div>
 
     <div class="flex flex-col gap-2">

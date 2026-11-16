@@ -20,6 +20,7 @@ import {
 import { useUiStore } from "@/stores/conversations"
 import { useWorkspaceStore } from "@/stores/workspace"
 import { compactNumber, formatRelativeTime } from "@/lib/format"
+import { debounce } from "@/lib/timing"
 
 export function usePackages(project: () => string | undefined) {
   const ui = useUiStore()
@@ -33,7 +34,7 @@ export function usePackages(project: () => string | undefined) {
   const catalogHasMore = ref(false)
   let catalogPage = 0
   let catalogRequest = 0
-  let searchTimer: ReturnType<typeof setTimeout> | undefined
+  const searchCatalog = debounce(() => void loadCatalog(), 250)
 
   // ---- installed ----
   const installed = ref<InstalledPackage[]>([])
@@ -119,13 +120,8 @@ export function usePackages(project: () => string | undefined) {
     return setBuiltinPlugin("builtinDelayedSend", "packages.builtin.delayedSend.name", enabled)
   }
 
-  function clearSearchTimer() {
-    clearTimeout(searchTimer)
-    searchTimer = undefined
-  }
-
   async function fetchCatalog(append: boolean) {
-    clearSearchTimer()
+    searchCatalog.cancel()
     const request = ++catalogRequest
     const page = append ? catalogPage + 1 : 1
     catalogLoading.value = true
@@ -168,20 +164,18 @@ export function usePackages(project: () => string | undefined) {
     () => {
       // Invalidate immediately, including responses arriving during the debounce.
       ++catalogRequest
-      clearSearchTimer()
+      searchCatalog.cancel()
       catalog.value = []
       catalogHasMore.value = false
       catalogError.value = ""
       catalogLoading.value = true
-      searchTimer = setTimeout(() => {
-        void loadCatalog()
-      }, 250)
+      searchCatalog()
     },
     { flush: "sync" },
   )
 
   onScopeDispose(() => {
-    clearSearchTimer()
+    searchCatalog.cancel()
     ++catalogRequest
   })
 

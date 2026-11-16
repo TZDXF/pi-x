@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
+import { watch } from "vue"
 
 const controls = vi.hoisted(() => {
   const state = {}
   return {
     state,
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),
@@ -60,6 +62,39 @@ async function harness() {
   return { store: createSessionStore("default")(), requests }
 }
 const messages = count => Array.from({ length: count }, (_, i) => ({ role: "user", content: `message ${i}` }))
+
+test("restoring history retains response billing metadata and recorded tool duration", async () => {
+  const { store } = await harness()
+  const usage = {
+    input: 1,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 3,
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 0.2, totalFromProvider: true },
+  }
+  controls.state.sessionHistory = async () => [
+    { role: "user", content: "question", timestamp: 100 },
+    {
+      role: "assistant",
+      model: "auto",
+      responseModel: "actual",
+      usage,
+      stopReason: "stop",
+      content: [{ type: "text", text: "answer" }],
+      timestamp: 200,
+    },
+    { role: "toolResult", toolCallId: "recorded", durationMs: 1250, content: [{ type: "text", text: "output" }] },
+  ]
+  store.sessionFile = "history.jsonl"
+  await store.loadHistory()
+  expect(store.entries.find(entry => entry.kind === "assistant")).toMatchObject({
+    model: "auto",
+    responseModel: "actual",
+    usage,
+  })
+  expect(store.runs.recorded.durationMs).toBe(1250)
+})
 
 test("first page is asynchronous and limited to 30 entries; pages preserve ordering and ids", async () => {
   const { store } = await harness()
@@ -211,4 +246,215 @@ test("compaction summaries materialize as in-position markers", async () => {
   expect(marker.summary).toBe("collapsed history")
   expect(marker.tokensBefore).toBe(120000)
   expect(marker.timestamp).toBe(42)
+})
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+test("attaching history preserves live thinking, turn identity and running tools across later deltas", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const turnId = store.streamingTurnId
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "plan before switching" },
+  })
+  store.handleEvent({ type: "tool_execution_start", toolCallId: "active", toolName: "read", args: {} })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: " while loading" },
+  })
+  history.resolve([{ role: "user", content: "question" }])
+  await loading
+  expect(store.entries[0].text).toBe("question")
+  expect(store.streamingTurnId).toBe(turnId)
+  expect(store.runs.active.state).toBe("input-available")
+  expect(store.partialBlocks).toEqual([
+    { type: "thinking", text: "plan before switching while loading", streaming: true },
+  ])
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: " after switching" },
+  })
+  expect(store.partialBlocks[0].text).toBe("plan before switching while loading after switching")
+})
+
+test("thinking that starts during history materialization survives its publish", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  controls.state.sessionHistory = async () => [{ role: "user", content: "question" }]
+  const loading = store.loadHistory()
+  // Allow history fetch and error lookup to reach the asynchronous page yield.
+  await Promise.resolve()
+  await Promise.resolve()
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  store.handleEvent({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "new thinking" },
+  })
+  await loading
+  expect(store.partialBlocks[0].text).toBe("new thinking")
+  expect(store.streamingTurnId).not.toBeNull()
+})
+
+test.each([false, true])("history publish preserves an answer completed during loading (settled=%s)", async settled => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "live answer" }] },
+  })
+  if (settled) store.handleEvent({ type: "agent_settled" })
+  history.resolve([{ role: "user", content: "question" }])
+  await loading
+  expect(store.entries.map(entry => entry.kind)).toEqual(["user", "assistant"])
+  expect(store.entries[1]).toMatchObject({ blocks: [{ type: "text", text: "live answer" }] })
+})
+
+test("history publish deduplicates a live answer already present in the snapshot", async () => {
+  const { store } = await harness()
+  store.sessionFile = "running.jsonl"
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant" } })
+  const history = deferred()
+  controls.state.sessionHistory = () => history.promise
+  const loading = store.loadHistory()
+  store.handleEvent({ type: "tool_execution_start", toolCallId: "live-tool", toolName: "read", args: {} })
+  store.handleEvent({
+    type: "tool_execution_end",
+    toolCallId: "live-tool",
+    result: { content: [{ type: "text", text: "tool output" }] },
+    durationMs: 25,
+  })
+  store.handleEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "live answer" }] },
+  })
+  store.handleEvent({ type: "agent_settled" })
+  history.resolve([
+    { role: "user", content: "question", timestamp: 100 },
+    {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "live answer" }],
+      timestamp: 200,
+    },
+  ])
+  await loading
+  expect(store.entries).toHaveLength(2)
+  expect(store.entries.filter(entry => entry.kind === "assistant")).toHaveLength(1)
+  expect(store.runs["live-tool"]).toMatchObject({
+    state: "output-available",
+    outputText: "tool output",
+    durationMs: 25,
+  })
+})
+
+test("worker rebuild reset preserves the visible transcript and identity; normal clear still drops them", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  store.sessionFile = "saved.jsonl"
+  const entries = store.entries
+  const runs = store.runs
+  store.clear({ preserveHistory: true })
+  expect(store.entries).toBe(entries)
+  expect(store.runs).toBe(runs)
+  expect(store.sessionFile).toBe("saved.jsonl")
+  store.clear()
+  expect(store.entries).toEqual([])
+  expect(store.sessionFile).toBeNull()
+})
+
+test("refresh keeps the transcript through error lookup and paging yields, then replaces without a blank frame", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  store.sessionFile = "saved.jsonl"
+  const previous = store.entries
+  const error = deferred()
+  const requested = deferred()
+  controls.state.sessionHistory = async () => messages(75)
+  controls.state.sessionLastError = () => {
+    requested.resolve()
+    return error.promise
+  }
+  const sizes = []
+  const stop = watch(
+    () => store.entries.length,
+    size => sizes.push(size),
+    { flush: "sync" },
+  )
+  try {
+    const loading = store.loadHistory()
+    await requested.promise
+    expect(store.entries).toBe(previous)
+    await store.loadOlderHistory()
+    expect(store.entries).toBe(previous)
+    error.resolve(null)
+    await loading
+    expect(sizes).toEqual([30])
+    expect(store.entries[0].text).toBe("message 45")
+    expect(store.historyLoading).toBe(false)
+    await store.loadOlderHistory()
+    expect(store.entries).toHaveLength(60)
+  } finally {
+    stop()
+  }
+})
+
+test("failed refresh retains the visible transcript", async () => {
+  const { store, requests } = await harness()
+  await store.loadMessages(messages(2))
+  const previous = store.entries
+  const loading = store.loadHistory()
+  requests[0]({ success: false, error: "unavailable" })
+  await expect(loading).rejects.toThrow("unavailable")
+  expect(store.entries).toBe(previous)
+  expect(store.historyLoading).toBe(false)
+})
+
+test("a superseded error lookup cannot replace newer history or append its error", async () => {
+  const { store } = await harness()
+  store.sessionFile = "saved.jsonl"
+  const error = deferred()
+  const requested = deferred()
+  controls.state.sessionHistory = async () => messages(40)
+  controls.state.sessionLastError = () => {
+    requested.resolve()
+    return error.promise
+  }
+  const stale = store.loadHistory()
+  await requested.promise
+  await store.loadMessages([{ role: "user", content: "new snapshot" }])
+  error.resolve({ timestamp: 100, errorMessage: "stale error" })
+  await stale
+  expect(store.entries).toHaveLength(1)
+  expect(store.entries[0].text).toBe("new snapshot")
+})
+
+test("an empty replacement clears old content only when committed", async () => {
+  const { store } = await harness()
+  await store.loadMessages(messages(2))
+  const previous = store.entries
+  const loading = store.loadMessages([])
+  expect(store.entries).toBe(previous)
+  await loading
+  expect(store.entries).toEqual([])
+  expect(store.runs).toEqual({})
 })

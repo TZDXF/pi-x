@@ -1,4 +1,5 @@
-import { normalizeSlashes } from "@/lib/paths"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
+import { isRemoteProject } from "@/lib/ssh"
 
 /** Worker operations shared by regular navigation and split-pane loading. */
 export interface LoadableConversation {
@@ -33,7 +34,7 @@ export interface ConversationLoaderDependencies<T extends LoadableConversation> 
 /** Never activates a conversation; navigation and trust decisions belong to callers. */
 export function createConversationLoader<T extends LoadableConversation>(deps: ConversationLoaderDependencies<T>) {
   async function reconcile(owner: T) {
-    if (!owner.started || !owner.sessionFile || owner.isStreaming || owner.isResending) return
+    if (!owner.started || !owner.sessionFile || owner.isStreaming || owner.isResending || isRemoteProject(owner.cwd)) return
     const file = owner.sessionFile
     const disk = await deps.mtime(file).catch(() => null)
     // A turn may have started while the filesystem request was in flight.
@@ -55,7 +56,7 @@ export function createConversationLoader<T extends LoadableConversation>(deps: C
       if (!owner.started) {
         const running = await deps.listRunning()
         const runtime = running.find(
-          item => item.state.sessionFile && normalizeSlashes(item.state.sessionFile) === normalizeSlashes(file),
+          item => sameSessionIdentity(item.state.sessionFile, item.project, file, project),
         )
         if (runtime) {
           const placeholder = owner

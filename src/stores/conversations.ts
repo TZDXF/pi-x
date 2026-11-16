@@ -1,6 +1,6 @@
 import { reactive } from "vue"
 import { createUuid } from "../lib/uuid"
-import { normalizeSlashes } from "../lib/paths"
+import { sameSessionIdentity } from "@/lib/sessionIdentity"
 import { getActivePinia } from "pinia"
 import { createSessionStore } from "./session"
 import { isMember } from "./splitView"
@@ -27,10 +27,28 @@ export function sessionFor(id: string): Session {
 export function uiFor(id: string): Ui {
   let store = interfaces.get(id)
   if (!store) {
-    store = createUiStore(id)()
+    store = createUiStore(id, () => {
+      const owner = sessionFor(id)
+      return { runtimeId: id, sessionFile: owner.sessionFile, cwd: owner.cwd }
+    })()
     interfaces.set(id, store)
   }
   return store
+}
+
+/**
+ * aux（辅助对话）的 ui store 只登记进查找表，**不进** `sessions`。
+ *
+ * 这样 `ExtensionDialog` / `StatusBar` 凭 `:session-id="auxRuntimeId"` 能拿到 aux
+ * 自己的 ui（扩展询问不会落到主会话、回答不会发错进程），而 `allConversations()`
+ * 仍然看不见 aux（左侧会话列表、项目"运行中"、看板卡片都不受影响）。
+ */
+export function registerAuxUiStore(id: string, store: Ui) {
+  interfaces.set(id, store)
+}
+
+export function dropAuxUiStore(id: string) {
+  interfaces.delete(id)
 }
 export function activateSession(id: string) {
   sessionFor(id)
@@ -64,23 +82,24 @@ export function pruneDormantConversations() {
     pinia?._s?.delete(`ui:${id}`)
   }
 }
-const normalized = normalizeSlashes
-export function findConversation(file: string) {
-  return [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(file))
+export function findConversation(file: string, project?: string) {
+  return [...sessions.values()].find(store => sameSessionIdentity(store.sessionFile, store.cwd, file, project))
 }
 /** Resolve a history-route id (runtime id map key or session file) to an
  *  in-memory conversation without creating a store as a side effect. */
-export function peekConversation(id: string): Session | undefined {
-  return (
-    sessions.get(id) ??
-    [...sessions.values()].find(store => store.sessionFile && normalized(store.sessionFile) === normalized(id))
-  )
+export function peekConversation(id: string, project?: string): Session | undefined {
+  return sessions.get(id) ?? findConversation(id, project)
 }
-export function isSessionRunning(file: string) {
-  return !!findConversation(file)?.isStreaming
+export function isSessionRunning(file: string, project?: string) {
+  return !!findConversation(file, project)?.isStreaming
 }
 export function allConversations() {
   return [...sessions.values()]
+}
+
+/** aux 的 session store 不属于会话列表（见 `stores/auxChat.ts` 的 store 表）。 */
+export function hasConversation(id: string) {
+  return sessions.has(id)
 }
 
 // Reads follow the selected conversation, but actions are bound to the store

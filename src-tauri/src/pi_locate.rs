@@ -32,6 +32,34 @@ pub struct PiInfo {
     pub launcher: Option<Launcher>,
 }
 
+/// Build a tokio command from the resolved launcher. The fallback is shared by
+/// all callers so an unresolved launcher never silently changes spawn semantics.
+pub fn command_for(info: &PiInfo) -> Result<tokio::process::Command, String> {
+    let mut command = match &info.launcher {
+        Some(Launcher::Node { node, script }) => {
+            let mut command = tokio::process::Command::new(node);
+            command.arg(script);
+            command
+        }
+        Some(Launcher::Binary { path }) => tokio::process::Command::new(path),
+        None => {
+            let path = info.path.as_deref().filter(|path| !path.is_empty()).ok_or_else(|| {
+                pix_error("piLaunchUnknown", "无法确定 pi 启动方式")
+            })?;
+            if cfg!(windows) && is_windows_script(path) {
+                let mut command = tokio::process::Command::new("cmd");
+                command.arg("/C").arg(path);
+                command
+            } else {
+                tokio::process::Command::new(path)
+            }
+        }
+    };
+    #[cfg(windows)]
+    command.creation_flags(crate::process::CREATE_NO_WINDOW);
+    Ok(command)
+}
+
 fn candidate_names() -> &'static [&'static str] {
     if cfg!(windows) {
         &["pi.exe", "pi.cmd", "pi.bat", "pi"]
@@ -187,29 +215,14 @@ pub async fn detect(custom_path: Option<String>) -> PiInfo {
 /// Run `pi --version` to confirm the resolved launcher actually works.
 async fn probe_version(path: &str, launcher: Option<&Launcher>) -> Option<String> {
     use std::process::Stdio;
-    use tokio::process::Command;
 
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    let mut cmd = match launcher {
-        Some(Launcher::Node { node, script }) => {
-            let mut c = Command::new(node);
-            c.arg(script).arg("--version");
-            c
-        }
-        Some(Launcher::Binary { path }) => {
-            let mut c = Command::new(path);
-            c.arg("--version");
-            c
-        }
-        None => {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(path).arg("--version");
-            c
-        }
-    };
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut cmd = command_for(&PiInfo {
+        path: Some(path.to_string()),
+        launcher: launcher.cloned(),
+        ..PiInfo::default()
+    })
+    .ok()?;
+    cmd.arg("--version");
     cmd.stdin(Stdio::null());
     let output = cmd.output().await.ok()?;
 
@@ -224,6 +237,21 @@ async fn probe_version(path: &str, launcher: Option<&Launcher>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_for_uses_node_launcher_and_consistent_missing_path_error() {
+        let command = command_for(&PiInfo {
+            launcher: Some(Launcher::Node { node: "node".into(), script: "cli.js".into() }),
+            ..PiInfo::default()
+        })
+        .unwrap();
+        assert_eq!(command.as_std().get_program(), "node");
+        assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), ["cli.js"]);
+
+        let error = command_for(&PiInfo::default()).unwrap_err();
+        assert!(error.starts_with(crate::errors::CODED_ERROR_PREFIX));
+        assert!(error.contains("piLaunchUnknown"));
+    }
 
     // Parses an npm `.cmd` shim with Windows separators; unreachable on other
     // platforms (build_launcher only resolves shims under cfg(windows)).

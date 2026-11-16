@@ -1,6 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { ref } from "vue"
+import { rememberSshProjectConnection, resolveSshConnectionId } from "@/lib/ssh"
 import { createWorkspaceRuntime } from "@/lib/workspaceRuntime"
+import { sessionActivitySnapshot, sessionRunStatus } from "@/stores/sessionRunStatus"
 
 function harness() {
   const callbacks = {}
@@ -37,7 +39,9 @@ function harness() {
     onPiEvent: subscribe("event"),
     onPiExit: subscribe("exit"),
     onPiStderr: subscribe("stderr"),
+    onSshPathBound: subscribe("sshPathBound"),
     onReconnected: subscribe("reconnected"),
+    onWorkspaceStateChanged: subscribe("workspace"),
     onSessionsChanged: subscribe("changed"),
     listRunningSessions: vi.fn(async () => []),
     killPi: vi.fn(async () => {}),
@@ -45,6 +49,8 @@ function harness() {
     sessionMtime: vi.fn(async () => 1),
   }
   const toast = vi.fn()
+  const resolveRequest = vi.fn()
+  const restoreRequests = vi.fn()
   const context = {
     api,
     conversations: {
@@ -52,9 +58,16 @@ function harness() {
       findConversation: () => sessionFor("active"),
       activateSession: vi.fn(),
       activeRuntimeId: ref("active"),
-      uiFor: () => ({ pushToast: toast, pushStderr: vi.fn(), handleRequest: vi.fn() }),
+      uiFor: () => ({ pushToast: toast, pushStderr: vi.fn(), handleRequest: vi.fn(), resolveRequest, restoreRequests }),
     },
-    workspace: { histories: {}, refresh: vi.fn(async () => {}), isRemovedProject: path => path === "/removed" },
+    workspace: {
+      histories: {},
+      refresh: vi.fn(async () => {}),
+      isRemovedProject: path => path === "/removed",
+      remember: vi.fn(),
+      applyState: vi.fn(),
+      syncState: vi.fn(async () => {}),
+    },
     phase: ref("chat"),
     config: ref({ lastProject: "/project" }),
     project: ref("/project"),
@@ -66,17 +79,92 @@ function harness() {
     translateError: value => value,
     registerSessionMtimeSync: vi.fn(),
   }
-  return { context, callbacks, owners, off, toast, runtime: createWorkspaceRuntime(context) }
+  return {
+    context,
+    callbacks,
+    owners,
+    off,
+    toast,
+    resolveRequest,
+    restoreRequests,
+    runtime: createWorkspaceRuntime(context),
+  }
 }
+
+test("runtime snapshots restore the precise unread run and pending UI without changing selection", async () => {
+  const { context, runtime, restoreRequests } = harness()
+  const activity = { status: "completed", runId: "backend-restored-run", updatedAt: Date.now() }
+  const request = { id: "request-1", type: "extension_ui_request", method: "confirm" }
+  context.api.listRunningSessions.mockResolvedValue([
+    {
+      runtimeId: "background",
+      project: "/project",
+      state: { sessionFile: "s.jsonl", isStreaming: false },
+      activity,
+      pendingUiRequests: [request],
+    },
+  ])
+  await runtime.reattachRunningSessions(false)
+  expect(sessionActivitySnapshot("s.jsonl", "/project")).toMatchObject(activity)
+  expect(sessionRunStatus("s.jsonl", "/project")).toBe("completed")
+  expect(restoreRequests).toHaveBeenCalledWith([request])
+  expect(context.conversations.activateSession).not.toHaveBeenCalled()
+})
+
+test("UI resolutions from another client remove the same pending request", async () => {
+  const { runtime, callbacks, resolveRequest, restoreRequests } = harness()
+  await runtime.listen()
+  callbacks.event({ type: "extension_ui_resolved", runtimeId: "background", id: "confirm-1" })
+  expect(resolveRequest).toHaveBeenCalledWith("confirm-1")
+  callbacks.event({ type: "agent_settled", runtimeId: "background" })
+  expect(restoreRequests).toHaveBeenCalledWith([])
+  runtime.dispose()
+})
+
+test("persisted running sessions whose workers disappeared are marked as interrupted", async () => {
+  const { context, runtime } = harness()
+  const activity = {
+    file: "lost-worker.jsonl",
+    project: "/project",
+    status: "running",
+    runId: "lost-worker",
+    updatedAt: 1,
+  }
+  context.workspace.sessionActivities = { "lost-worker.jsonl": activity }
+  await runtime.reattachRunningSessions()
+  expect(sessionRunStatus(activity.file, activity.project)).toBe("error")
+  expect(sessionActivitySnapshot(activity.file, activity.project)?.runId).toBe("lost-worker")
+})
+
+test("an intentional worker exit preserves its authoritative idle result", async () => {
+  const { context, runtime, callbacks } = harness()
+  await runtime.listen()
+  const owner = context.conversations.sessionFor("intentional-exit")
+  owner.isStreaming = true
+  const activity = {
+    file: "intentional-exit.jsonl",
+    project: "/project",
+    status: "idle",
+    runId: "stopped-run",
+    updatedAt: Date.now(),
+  }
+  callbacks.exit(owner.runtimeId, activity)
+  expect(owner.markInterrupted).not.toHaveBeenCalled()
+  expect(owner.isStreaming).toBe(false)
+  expect(sessionRunStatus(activity.file, activity.project)).toBeUndefined()
+  expect(sessionActivitySnapshot(activity.file, activity.project)).toMatchObject(activity)
+  runtime.dispose()
+})
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 test("subscriptions are disposed exactly once and metadata synchronization is registered", async () => {
   const { runtime, context, off } = harness()
   await runtime.listen()
-  expect(off).toHaveLength(5)
+  expect(off).toHaveLength(7)
   expect(context.registerSessionMtimeSync).toHaveBeenCalledOnce()
   runtime.dispose()
   runtime.dispose()
@@ -141,6 +229,7 @@ test("rebuild keeps an existing navigation lock and restores the session identit
   expect(context.connecting.value).toBe(true)
   expect(owner.sessionFile).toBe("s.jsonl")
   expect(owner.started).toBe(true)
+  expect(owner.clear).toHaveBeenCalledWith({ preserveHistory: true })
   expect(context.api.killPi).toHaveBeenCalledWith("active")
   expect(context.spawnWorkspacePi).toHaveBeenCalledWith("/project", "s.jsonl", "active")
 })
@@ -169,4 +258,89 @@ test("reattachment restores streaming before loading history and does not activa
   expect(restored.runtimeId).toBe("restored")
   expect(context.conversations.activateSession).toHaveBeenCalledWith("restored")
   expect(owner.markRunning).toHaveBeenCalledOnce()
+})
+
+test("ssh path rebinding updates the owner, project list and current display (contract §3.8)", async () => {
+  const { runtime, context, callbacks, owners } = harness()
+  await runtime.listen()
+  const rebound = { runtimeId: "active", project: "ssh://host/resolved", path: "/resolved" }
+  await callbacks.sshPathBound(rebound)
+  const owner = owners.get("active")
+  expect(owner.cwd).toBe("ssh://host/resolved")
+  expect(context.workspace.remember).toHaveBeenCalledWith("ssh://host/resolved")
+  // 当前展示与最近项目跟随回绑（原 path 与回绑前一致时）。
+  expect(context.project.value).toBe("ssh://host/resolved")
+  expect(context.config.value.lastProject).toBe("ssh://host/resolved")
+
+  // 原路径不同的其它 runtime 只回绑自身，不影响当前展示。
+  context.workspace.remember.mockClear()
+  await callbacks.sshPathBound({ runtimeId: "other", project: "ssh://host/other", path: "/other" })
+  expect(owners.get("other").cwd).toBe("ssh://host/other")
+  expect(context.workspace.remember).toHaveBeenCalledWith("ssh://host/other")
+  expect(context.project.value).toBe("ssh://host/resolved")
+
+  // 相同路径（含空 cwd）不发事件语义：直接忽略。
+  context.workspace.remember.mockClear()
+  await callbacks.sshPathBound({ runtimeId: "active", project: "ssh://host/resolved", path: "/resolved" })
+  expect(context.workspace.remember).not.toHaveBeenCalled()
+})
+
+test("ssh 回绑使用事件所属 runtime 的连接选择，保留旧 URI 绑定", async () => {
+  const values = new Map()
+  vi.stubGlobal("localStorage", {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  })
+  const { runtime, context, callbacks } = harness()
+  const connections = [
+    { id: "first", host: "host", keyPath: "/keys/first" },
+    { id: "selected", host: "host", keyPath: "/keys/selected" },
+  ]
+  context.config.value.sshConnections = connections
+  const previous = "ssh://host/alias"
+  const rebound = "ssh://host/real"
+  const active = "ssh://host/active"
+  context.project.value = active
+  context.config.value.lastProject = active
+  context.conversations.sessionFor("active").cwd = active
+  context.conversations.sessionFor("background").cwd = previous
+  rememberSshProjectConnection(active, "first")
+  rememberSshProjectConnection(rebound, "first")
+  rememberSshProjectConnection(previous, "selected")
+  await runtime.listen()
+  await callbacks.sshPathBound({ runtimeId: "background", project: rebound, path: "/real" })
+  expect(context.conversations.sessionFor("background").cwd).toBe(rebound)
+  expect(resolveSshConnectionId(rebound, connections)).toBe("selected")
+  expect(resolveSshConnectionId(previous, connections)).toBe("selected")
+  expect(resolveSshConnectionId(active, connections)).toBe("first")
+  expect(context.project.value).toBe(active)
+  expect(context.config.value.lastProject).toBe(active)
+  runtime.dispose()
+})
+
+test("workspace change events apply shared metadata without saving it again", async () => {
+  const { runtime, context, callbacks } = harness()
+  await runtime.listen()
+  const state = { revision: 3, projects: ["shared"] }
+  callbacks.workspace(state)
+  expect(context.workspace.applyState).toHaveBeenCalledWith(state)
+})
+
+test("reconnect synchronizes project metadata before reattaching running sessions", async () => {
+  const { runtime, context, callbacks } = harness()
+  await runtime.listen()
+  context.phase.value = "down"
+  let resolve
+  context.workspace.syncState.mockImplementation(
+    () =>
+      new Promise(done => {
+        resolve = done
+      }),
+  )
+  callbacks.reconnected()
+  expect(context.api.listRunningSessions).not.toHaveBeenCalled()
+  resolve()
+  await vi.waitFor(() => expect(context.api.listRunningSessions).toHaveBeenCalledOnce())
+  expect(context.phase.value).toBe("pick")
+  runtime.dispose()
 })

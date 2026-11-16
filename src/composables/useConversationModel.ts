@@ -2,6 +2,7 @@ import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import type { ThinkingLevel } from "@/api/protocol"
 import type { SessionStore } from "@/stores/session"
+import { modelKey as formatModelKey, parseModelKey } from "@/lib/modelKey"
 
 /** Conversation model and thinking-level selection; deferred while pi starts lazily. */
 export function useConversationModel(
@@ -15,15 +16,16 @@ export function useConversationModel(
       if (session.desiredModelKey) return session.desiredModelKey
       if (!options.connected() && session.offlineDefaultModelKey) return session.offlineDefaultModelKey
       const m = session.currentModel
-      return m ? `${m.provider}/${m.id}` : ""
+      return m ? formatModelKey(m) : ""
     },
     set: (key: string) => {
-      const [provider, ...rest] = key.split("/")
+      const model = parseModelKey(key)
+      if (!model) return
       if (!options.connected()) {
         session.setDesiredModel(key)
         return
       }
-      session.setModel(provider, rest.join("/")).catch(e => options.onError(e))
+      session.setModel(model.provider, model.id).catch(e => options.onError(e))
     },
   })
 

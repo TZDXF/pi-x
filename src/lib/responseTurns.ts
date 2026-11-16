@@ -1,3 +1,5 @@
+import { modelKey } from "@/lib/modelKey"
+import type { Usage } from "@/api/protocol"
 import type {
   ErrorBlock,
   Block,
@@ -21,6 +23,9 @@ export interface AssistantTurn {
   durationMs: number | null
   toolCallCount: number
   timestamp?: number
+  model?: string
+  responseModel?: string
+  usage?: Usage
 }
 
 /** Group a turn without changing store entries or indices used for branching. */
@@ -30,6 +35,7 @@ export function responseTurns(
 ): (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] {
   const result: (UserEntry | AssistantTurn | CompactionEntry | ContextEditEntry | ModelChangeEntry)[] = []
   let questionTime: number | undefined
+  let hasUser = false
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!
     if (entry.kind === "user") {
@@ -38,7 +44,14 @@ export function responseTurns(
       // set_model / cycle_model annotate the next question even when pi
       // emits no entry_appended event. Reuse the history divider rendering,
       // but do not duplicate a matching divider already delivered live.
-      if (target && !(previous?.kind === "model_change" && `${previous.provider}/${previous.modelId}` === target)) {
+      if (
+        hasUser &&
+        target &&
+        !(
+          previous?.kind === "model_change" &&
+          modelKey({ provider: previous.provider, id: previous.modelId }) === target
+        )
+      ) {
         const separator = target.indexOf("/")
         result.push({
           kind: "model_change",
@@ -51,6 +64,7 @@ export function responseTurns(
         })
       }
       result.push(entry)
+      hasUser = true
       questionTime = entry.timestamp
       continue
     }
@@ -72,9 +86,12 @@ export function responseTurns(
     // instead of splitting the answer around an invisible marker.
     if ((entry as { kind?: string }).kind === "custom") continue
     if (entry.kind === "model_change") {
-      // Model switches are rendered as dividers and break turn grouping;
-      // no duration flows across them.
-      result.push(entry)
+      // A divider belongs between turns, not before the first question. Rapid
+      // switches at the same boundary collapse to the model actually used.
+      if (!hasUser) continue
+      const previous = result[result.length - 1]
+      if (previous?.kind === "model_change") result[result.length - 1] = entry
+      else result.push(entry)
       questionTime = undefined
       continue
     }
@@ -97,6 +114,10 @@ export function responseTurns(
           }
     if (turn !== previous) result.push(turn)
     turn.lastIndex = index
+    if (entry.model) turn.model = entry.model
+    // These describe the last response, not another message earlier in the turn.
+    turn.responseModel = entry.responseModel
+    turn.usage = entry.usage
     turn.failed = entry.failed === true || entry.blocks.some(block => block.type === "error")
     const blocks = entry.blocks.filter(block => block.type !== "error")
     turn.errors.push(...entry.blocks.filter((block): block is ErrorBlock => block.type === "error"))

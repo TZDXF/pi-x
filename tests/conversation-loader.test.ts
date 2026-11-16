@@ -139,3 +139,44 @@ test("a session identity changing during metadata lookup invalidates the reconci
   await loader.reconcile(owner)
   expect(deps.rebuild).not.toHaveBeenCalled()
 })
+
+test.each([
+  ["ssh://dev@host-a:22/project", "ssh://dev@host-b:22/project"],
+  ["wsl://Ubuntu/project", "wsl://Debian/project"],
+  ["docker://first/project", "docker://second/project"],
+  ["/project", "ssh://dev@host-a:22/project"],
+  ["ssh://dev@host-a:22/project", "/project"],
+])("does not attach a same-path worker from %s when opening %s", async (existingProject, targetProject) => {
+  const { owner, deps, loader } = harness()
+  owner.cwd = targetProject
+  deps.listRunning.mockResolvedValue([
+    { runtimeId: "existing", project: existingProject, state: { sessionFile: "session.jsonl", isStreaming: true } },
+  ])
+  expect(await loader.load(owner, "session.jsonl", targetProject)).toBe(owner)
+  expect(deps.sessionFor).not.toHaveBeenCalled()
+  expect(deps.spawn).toHaveBeenCalledWith(targetProject, "session.jsonl", owner.runtimeId)
+})
+
+test("attaches the matching remote worker even when another endpoint has the same file", async () => {
+  const { owner, runtime, deps, loader } = harness()
+  const project = "ssh://dev@host-b:22/project"
+  owner.cwd = project
+  deps.listRunning.mockResolvedValue([
+    { runtimeId: "wrong", project: "ssh://dev@host-a:22/project", state: { sessionFile: "session.jsonl", isStreaming: true } },
+    { runtimeId: "existing", project, state: { sessionFile: "session.jsonl", isStreaming: false } },
+  ])
+  expect(await loader.load(owner, "session.jsonl", project)).toBe(runtime)
+  expect(deps.sessionFor).toHaveBeenCalledWith("existing")
+  expect(runtime.init).toHaveBeenCalledWith(project)
+  expect(deps.spawn).not.toHaveBeenCalled()
+})
+
+test("remote reconciliation never reads a same-path local file or rebuilds from its metadata", async () => {
+  const { owner, deps, loader } = harness()
+  owner.cwd = "docker://container/project"
+  owner.started = true
+  deps.mtime.mockResolvedValue(999)
+  await loader.reconcile(owner)
+  expect(deps.mtime).not.toHaveBeenCalled()
+  expect(deps.rebuild).not.toHaveBeenCalled()
+})

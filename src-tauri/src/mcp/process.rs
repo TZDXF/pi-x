@@ -1,11 +1,10 @@
 //! Command construction, Windows shim handling, stderr draining and child cleanup.
 use super::config::{def_str, def_string_record};
 use crate::errors::pix_error;
-use crate::pi_locate::{is_windows_script, Launcher};
+use crate::process::CREATE_NO_WINDOW;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::process::{Child, Command};
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Stderr tail kept for stdio failure reports.
 const STDERR_TAIL: usize = 2000;
 
@@ -13,35 +12,11 @@ pub(super) fn build_list_command(
     info: &crate::pi_locate::PiInfo,
     args: &[&str],
 ) -> Result<Command, String> {
-    let mut cmd = match &info.launcher {
-        Some(Launcher::Node { node, script }) => {
-            let mut c = Command::new(node);
-            c.arg(script).args(args);
-            c
-        }
-        Some(Launcher::Binary { path }) => {
-            let mut c = Command::new(path);
-            c.args(args);
-            c
-        }
-        None => {
-            let path = info.path.clone().ok_or("pi path not resolved")?;
-            if cfg!(windows) && is_windows_script(&path) {
-                let mut c = Command::new("cmd");
-                c.arg("/C").arg(&path).args(args);
-                c
-            } else {
-                let mut c = Command::new(&path);
-                c.args(args);
-                c
-            }
-        }
-    };
+    let mut cmd = crate::pi_locate::command_for(info)?;
+    cmd.args(args);
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
     Ok(cmd)
 }
 

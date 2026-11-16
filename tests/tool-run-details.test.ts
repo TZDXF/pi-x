@@ -58,7 +58,8 @@ test("tool formatting preserves general-tool hour display and subagent cumulativ
   expect(blocks).toMatch(/ms == null \|\| ms < 1_000/)
   expect(blocks).toMatch(/ms > 120_000/)
   expect(blocks).toMatch(/ms > 30_000/)
-  expect(subagents).toMatch(/formatToolElapsed\(now.value - startedAt, false\)/)
+  expect(subagents).toContain("toolDuration(runFor(block), now.value)")
+  expect(subagents).toContain("formatToolElapsed(duration, false)")
   expect(subagents).not.toMatch(/ms < 1_000|120_000|30_000/)
 })
 

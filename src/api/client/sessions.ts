@@ -10,14 +10,30 @@ export interface SessionMeta {
   file: string
   id: string
   cwd: string
+  /** Creation time from the session header, independent of later file writes. */
   timestamp?: string
   mtimeMs: number
   title?: string | null
   archived?: boolean
   preview?: string | null
+  /** Latest user prompt in the current branch, used by board cards. */
+  lastUserMessage?: string | null
+}
+
+export interface SessionSearchHit {
+  session: SessionMeta
+  role?: "user" | "assistant" | null
+  snippet?: string | null
+  matchCount: number
 }
 
 export const listSessions = (project: string) => invoke<SessionMeta[]>("session_list", { project })
+
+/** Search titles, ids and user/assistant text across every local session file. */
+export const searchSessions = (query: string) => invoke<SessionSearchHit[]>("session_search", { query })
+
+/** Every persisted, unarchived local session, without project registration or recent-row limits. */
+export const listUnarchivedSessions = () => invoke<SessionMeta[]>("session_list_unarchived")
 
 /** On-disk mtime of a session file, used to detect external edits. */
 export const sessionMtime = (file: string) => invoke<number>("session_mtime", { file })
@@ -40,8 +56,9 @@ export interface SessionLastError {
  */
 export const sessionLastError = (file: string) => invoke<SessionLastError | null>("session_last_error", { file })
 
-/** Duplicate a saved session file with a fresh id; returns the new file path. */
-export const duplicateSessionFile = (file: string) => invoke<string>("session_duplicate", { file })
+/** Duplicate a saved session, optionally keeping only the branch before a user entry. */
+export const duplicateSessionFile = (file: string, beforeEntryId?: string, runtimeId?: string) =>
+  invoke<string>("session_duplicate", { file, beforeEntryId, runtimeId })
 
 /** Session files under ~/.pi/agent/sessions changed on disk (possibly externally). */
 export function onSessionsChanged(handler: (files: string[]) => void): Promise<() => void> {
@@ -116,7 +133,16 @@ export const listArchivedSessions = () => invoke<SessionMeta[]>("session_list_ar
 /** Permanently delete a session file (and its PiX metadata sidecar). */
 export const deleteSession = (file: string) => invoke<void>("session_delete", { file })
 
-/** Independent, tool-free title generation; never changes the active RPC model.
+/** Mark a session as PiX-managed so it appears in the PiX-only session
+ *  listing; idempotent and cheap (no-op once the sidecar exists). */
+export const adoptSession = (file: string) => invoke<void>("session_adopt", { file })
+
+export interface GeneratedSessionTitle {
+  title: string
+  description: string
+}
+
+/** Independent, tool-free title and description generation; never changes the active RPC model.
  *  `overwrite` replaces an existing session name (first-question edits). */
 export const generateSessionTitle = (file: string, message: string, overwrite = false) =>
-  invoke<string | null>("session_generate_title", { file, message, overwrite })
+  invoke<GeneratedSessionTitle | null>("session_generate_title", { file, message, overwrite })

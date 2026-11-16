@@ -1,5 +1,7 @@
 /** Client-side routing for globally broadcast PTY output. Owner tokens identify
  *  a creation request before its terminal id returns; they are not authorization. */
+import { createId } from "@/lib/uuid"
+
 export interface TerminalOutput {
   id: number
   owner?: string | null
@@ -10,10 +12,7 @@ export function createTerminalOutputRouter(write: (id: number, data: string) => 
   const requests = new Map<string, { id: number | null; chunks: string[] }>()
 
   function begin() {
-    const owner =
-      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `terminal-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const owner = createId("terminal-")
     requests.set(owner, { id: null, chunks: [] })
     return owner
   }

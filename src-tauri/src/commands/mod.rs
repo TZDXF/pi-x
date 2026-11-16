@@ -5,6 +5,7 @@
 //! - [`models`]: pi `models.json` management and the provider `/models` fetcher.
 //! - [`workspace`]: workspace-group manifest handed to the pix-workspace
 //!   extension.
+//! - [`workspace_state`]: shared, persistent sidebar projects and ordering metadata.
 //! - [`pi`]: pi detection and trust, RPC spawn/passthrough, pi settings and
 //!   diagnostics logging.
 //! - [`files`]: project file browsing/preview, stored-session listing/export
@@ -13,24 +14,28 @@
 //! 命令实现位于子模块，lib.rs 的 generate_handler 以 `commands::<域>::<cmd>`
 //! 路径解析命令名与其包装宏；命令名字符串保持与拆分前完全一致。
 
+pub(crate) mod aux_leases;
 pub(crate) mod config;
 pub(crate) mod files;
 pub(crate) mod models;
 pub(crate) mod pi;
+pub(crate) mod pi_aux;
 pub(crate) mod prompts;
+pub(crate) mod ssh;
 pub(crate) mod workspace;
+pub(crate) mod workspace_state;
 
 // 再导出保持拆分前 `crate::commands::*` 的对外路径；部分调用方位于
 // remote-access feature 之后，默认构建下这些再导出会显示为未使用。
 #[allow(unused_imports)]
 pub use config::{
-    app_config_get, app_config_save, projectless_dir_resolve, AppConfig, ModelRef,
-    ProjectlessDirInfo, UpdateChannel,
+    app_config_get, app_config_save, app_preference_set, projectless_dir_resolve, AppConfig,
+    ModelRef, ProjectlessDirInfo, UpdateChannel,
 };
 #[allow(unused_imports)]
 pub use files::{
     list_project_directory, open_path, read_file_preview, search_files, session_export_file,
-    session_list,
+    session_list, session_list_unarchived,
 };
 #[allow(unused_imports)]
 pub use models::{models_config_get, models_config_save, models_fetch, FetchedModel};
@@ -40,7 +45,14 @@ pub use pi::{
     rpc_request, rpc_running, rpc_sessions, rpc_spawn, trust_save, trust_status,
 };
 #[allow(unused_imports)]
+pub use aux_leases::{aux_claim, aux_list, aux_release};
+#[allow(unused_imports)]
 pub use prompts::{global_prompt_list, global_prompt_save, GlobalPromptFile};
+#[allow(unused_imports)]
+pub use ssh::{
+    docker_container_list, ssh_connection_delete, ssh_connection_list, ssh_connection_probe,
+    ssh_connection_save, ssh_probe_target, ssh_trust_save, ssh_trust_status, wsl_distro_list,
+};
 #[allow(unused_imports)]
 pub use workspace::WorkspaceContext;
 

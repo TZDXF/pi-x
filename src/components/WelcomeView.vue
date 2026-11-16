@@ -42,10 +42,6 @@ async function saveAndDetect() {
         <h1 class="flex justify-center"><PiXLogo style="width: 120px; height: 56px" /></h1>
       </div>
 
-      <p v-if="phase === 'detecting'" class="text-center text-sm text-muted-foreground animate-pulse">
-        {{ t("welcome.connecting") }}
-      </p>
-
       <!-- pi not found -->
       <div v-if="phase === 'no-pi'" class="space-y-4">
         <h2 class="text-center font-medium">{{ t("welcome.noPiTitle") }}</h2>

@@ -7,6 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
+import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
 interface Props {
@@ -22,13 +23,13 @@ interface Props {
 
 const emit = defineEmits<{ scroll: [event: Event] }>()
 defineExpose({
-  stopScroll: () => context.stopScroll(),
-  scrollToBottom: () => context.scrollToBottom(),
+  stopScroll: releaseBottomLock,
+  scrollToBottom,
   scrollToMessage: async (id: number) => {
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
     if (!viewport || !message) return
-    context.stopScroll()
+    releaseBottomLock()
     message.dispatchEvent(new Event('virtual-reveal'))
     await nextTick()
     if (!message.isConnected) return
@@ -51,8 +52,50 @@ const delegatedProps = reactiveOmit(props, 'class', 'ariaLabel', 'anchor')
 const context = useStickToBottom(delegatedProps)
 const { scrollRef, contentRef } = context
 const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
+let readingHistory = props.initial === false
+let lastScrollTop: number | undefined
+function releaseBottomLock() {
+  readingHistory = true
+  context.stopScroll()
+}
+function scrollToBottom(options?: Parameters<typeof context.scrollToBottom>[0]) {
+  readingHistory = false
+  return context.scrollToBottom(options)
+}
 watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
+// The library clears escapedFromLock when shrinking near the bottom. Keep the
+// user's reading intent authoritative so our instant resize pin cannot re-lock.
+// Run after its whole resize callback: isAtBottom also includes "near bottom",
+// so a synchronous watcher cannot observe the internal at-bottom change.
+watch(() => context.escapedFromLock.value, escaped => {
+  if (readingHistory && !escaped) context.stopScroll()
+})
+function handleWheel(event: WheelEvent) {
+  const scroll = scrollRef.value
+  if (!scroll || event.ctrlKey || event.defaultPrevented || !(event.target instanceof Element)) return
+  // Reka uses overflow: hidden scroll, which the library's shorthand overflow
+  // check misses. Release before virtual row resizing can pin us back down.
+  if (shouldReleaseBottomLock(scroll, event.target, event.deltaY)) releaseBottomLock()
+}
+function handleScroll(event: Event) {
+  const scroll = scrollRef.value
+  if (scroll) {
+    const previous = lastScrollTop ?? scroll.scrollTop
+    lastScrollTop = scroll.scrollTop
+    // Scroll events also cover scrollbar dragging and keyboard navigation, but
+    // layout shrinkage clamps scrollTop to the new bottom without user intent.
+    if (shouldReleaseBottomLockOnScroll(previous, scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight))
+      releaseBottomLock()
+    else if (shouldResumeBottomLock(
+      previous,
+      scroll.scrollTop,
+      scroll.scrollHeight - scroll.clientHeight,
+      readingHistory,
+    )) readingHistory = false
+  }
+  emit('scroll', event)
+}
 // With resize="instant", pin scrollTop synchronously in the ResizeObserver
 // callback (after layout, before paint). The library defers its correction to
 // the next animation frame, which paints one frame per streaming chunk with a
@@ -61,22 +104,26 @@ watchEffect((onCleanup) => {
   const scroll = scrollRef.value
   const content = contentRef.value
   if (!scroll || !content || props.resize !== 'instant') return
-  const pin = () => pinToBottom(scroll, context.isAtBottom.value, context.escapedFromLock.value)
+  // A viewport resize can make the library escape after a layout clamp as well.
+  // Follow our reading intent, rather than that incidental library state.
+  const pin = () => pinToBottom(scroll, !readingHistory, false)
   const observer = new ResizeObserver(pin)
   observer.observe(content)
+  observer.observe(scroll)
   onCleanup(() => observer.disconnect())
 })
-provide(conversationKey, context)
+provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock })
 onMounted(() => {
   if (props.initial === 'instant' && scrollRef.value)
     scrollRef.value.scrollTop = scrollRef.value.scrollHeight
+  lastScrollTop = scrollRef.value?.scrollTop
 })
 </script>
 
 <template>
   <ScrollAreaRoot :class="cn('relative min-h-0 min-w-0 flex-1 overflow-hidden', props.class)">
     <ScrollAreaViewport ref="viewport" class="size-full [&>div]:!block [&>div]:min-h-full [&>div]:min-w-0"
-      :style="{ overflowAnchor: props.anchor }" @scroll="emit('scroll', $event)" role="log" :aria-label="props.ariaLabel" tabindex="0">
+      :style="{ overflowAnchor: props.anchor }" @scroll="handleScroll" @wheel.passive="handleWheel" role="log" :aria-label="props.ariaLabel" tabindex="0">
       <div :ref="el => { contentRef = el as HTMLElement | null }"><slot /></div>
     </ScrollAreaViewport>
     <ScrollBar />

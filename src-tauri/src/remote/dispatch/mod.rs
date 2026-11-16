@@ -12,6 +12,7 @@ mod session;
 mod skills;
 mod terminal;
 mod update;
+mod usage;
 mod workspace;
 
 use crate::errors::pix_error;
@@ -47,6 +48,9 @@ pub(super) async fn dispatch(app: &AppHandle, cmd: &str, a: Value) -> Result<Val
         return result;
     }
     if let Some(result) = skills::handle(cmd, &a).await {
+        return result;
+    }
+    if let Some(result) = usage::handle(cmd, &a).await {
         return result;
     }
     if let Some(result) = schedule::handle(app, cmd, &a).await {

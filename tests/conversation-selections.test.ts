@@ -157,5 +157,7 @@ test("parseComposerPromptContexts returns original content without any block", (
     visibleContent: "普通消息",
     comments: [],
     selections: [],
+    parentContext: null,
+    parentContextBlock: null,
   })
 })

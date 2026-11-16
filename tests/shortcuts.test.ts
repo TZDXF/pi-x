@@ -7,6 +7,15 @@ const source = readFileSync(new URL("../src/lib/shortcuts.ts", import.meta.url),
   .replace(/^import .*$/gm, "")
   .replace(/export /g, "")
 
+// Synchronous adapter double for shortcut behavior; config.json persistence is
+// tested independently in config-preferences.test.ts.
+const preferenceSource = readFileSync(new URL("../src/lib/localPreference.ts", import.meta.url), "utf8")
+  .replace("createLocalPreference", "createConfigPreference")
+  .replaceAll("options.key", "options.legacyKey")
+  .replace(/^import .*$/gm, "")
+  .replace(/if \(import\.meta\.hot\).*$/gm, "")
+  .replace(/export /g, "")
+
 const expose = `
 globalThis.api = {
   SHORTCUT_ACTION_DEFS, SHORTCUT_ACTION_IDS, LOCKED_SHORTCUTS,
@@ -36,7 +45,7 @@ function harness(stored) {
     },
   })
   vm.runInContext(
-    ts.transpile(source + expose, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }),
+    ts.transpile(preferenceSource + source + expose, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }),
     context,
   )
   return { api: context.api, storage: () => value }
@@ -59,7 +68,7 @@ function keyEvent(key, mods = {}, target = null) {
 const editable = { closest: () => ({}) }
 const plain = { closest: () => null }
 
-test("defaults resolve and overrides persist to storage", () => {
+test("defaults resolve and overrides persist through the preference adapter", () => {
   const { api, storage } = harness(null)
   expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
   expect(api.isShortcutModified("app.newSession")).toBe(false)
@@ -76,12 +85,12 @@ test("defaults resolve and overrides persist to storage", () => {
   // resetting to the default removes the stored override
   api.setShortcutOverride("app.newSession", "ctrl+n")
   expect(api.isShortcutModified("app.newSession")).toBe(false)
-  expect(storage()).toBe(null)
+  expect(storage()).toBe("{}")
 
   api.setShortcutOverride("app.newSession", "ctrl+alt+n")
   api.resetAllShortcuts()
   expect(api.shortcutCombo("app.newSession")).toBe("ctrl+n")
-  expect(storage()).toBe(null)
+  expect(storage()).toBe("{}")
 })
 
 test("comboFromEvent normalizes modifiers, keys, IME and modifiers-only presses", () => {
@@ -91,8 +100,28 @@ test("comboFromEvent normalizes modifiers, keys, IME and modifiers-only presses"
   expect(api.comboFromEvent(keyEvent(" "))).toBe("space")
   expect(api.comboFromEvent(keyEvent("Escape"))).toBe("escape")
   expect(api.comboFromEvent(keyEvent("`", { ctrl: true }))).toBe("ctrl+`")
+  expect(api.comboFromEvent(keyEvent("toString"))).toBe("tostring")
+  expect(api.comboFromEvent(keyEvent("constructor"))).toBe("constructor")
   expect(api.comboFromEvent(keyEvent("Shift"))).toBe(null)
   expect(api.comboFromEvent(keyEvent("e", { ctrl: true, composing: true }))).toBe(null)
+})
+
+test("invalid keyboard keys do not form or dispatch shortcuts", () => {
+  const { api } = harness(null)
+  let hits = 0
+  api.registerShortcutHandler("app.searchTasks", () => hits++)
+
+  for (const key of [undefined, null, "", 42, {}]) {
+    const event = keyEvent(key, { ctrl: true })
+    event.preventDefault = () => {
+      throw new Error("Unmatched keyboard events must not be consumed")
+    }
+    expect(api.comboFromEvent(event)).toBe(null)
+    expect(api.dispatchShortcut(event)).toBe(false)
+  }
+  expect(hits).toBe(0)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(true)
+  expect(hits).toBe(1)
 })
 
 test("dispatchShortcut resolves handlers and respects scope and suppression", () => {
@@ -161,4 +190,22 @@ test("formatComboParts renders human-readable key segments", () => {
   expect([...api.formatComboParts("alt+arrowup")]).toEqual(["Alt", "↑"])
   expect([...api.formatComboParts("escape")]).toEqual(["Esc"])
   expect([...api.formatComboParts("ctrl+,")]).toEqual(["Ctrl", ","])
+})
+
+test("task search supports Ctrl+K, rebinding, modal suppression and cleanup", () => {
+  const { api } = harness(null)
+  let calls = 0
+  const off = api.registerShortcutHandler("app.searchTasks", () => calls++)
+  expect(api.shortcutCombo("app.searchTasks")).toBe("ctrl+k")
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }, editable))).toBe(true)
+  expect(calls).toBe(1)
+  api.setShortcutsSuppressed("task-search", true)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(false)
+  api.setShortcutsSuppressed("task-search", false)
+  api.setShortcutOverride("app.searchTasks", "ctrl+shift+k")
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true }))).toBe(false)
+  expect(api.dispatchShortcut(keyEvent("K", { ctrl: true, shift: true }))).toBe(true)
+  expect(calls).toBe(2)
+  off()
+  expect(api.dispatchShortcut(keyEvent("K", { ctrl: true, shift: true }))).toBe(false)
 })

@@ -1,7 +1,24 @@
 import { expect, test, vi } from "vitest"
 import { reactive, ref } from "vue"
-import { useChatTurnList, blocksText, hasSummary } from "@/composables/useChatTurnList"
+import { useChatTurnList, blocksText, hasSummary, isWaitingForReply } from "@/composables/useChatTurnList"
 import { chatSource } from "./fixtures/chatSources"
+
+test("waiting status hides during tool calls and returns after all tools settle", () => {
+  const session = reactive({ isStreaming: true, partialBlocks: null, runs: {} })
+  expect(isWaitingForReply(session)).toBe(true)
+  session.runs.first = { state: "input-available" }
+  session.runs.second = { state: "input-streaming" }
+  expect(isWaitingForReply(session)).toBe(false)
+  session.runs.first.state = "output-available"
+  expect(isWaitingForReply(session)).toBe(false)
+  session.runs.second.state = "output-error"
+  expect(isWaitingForReply(session)).toBe(true)
+  session.partialBlocks = [{ type: "text", text: "reply" }]
+  expect(isWaitingForReply(session)).toBe(false)
+  session.partialBlocks = null
+  session.isStreaming = false
+  expect(isWaitingForReply(session)).toBe(false)
+})
 
 function harness() {
   const session = reactive({
@@ -50,10 +67,53 @@ test("partial deltas append without mutating committed blocks and context edits 
     { kind: "context_edit", id: 3 },
     { kind: "assistant", id: 2, blocks: [{ type: "text", text: "committed" }] },
   )
+  h.session.isStreaming = true
   h.session.partialBlocks = [{ type: "text", text: "delta" }]
   expect(h.controls.renderedEntries.value.map(e => e.kind)).toEqual(["user", "assistant"])
   expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe("committed\n\ndelta")
   expect(h.session.entries[2].blocks).toHaveLength(1)
+})
+
+test("streaming chunks reuse historical turns and do not accumulate in the cached tail", () => {
+  const h = harness()
+  h.session.entries.push(
+    { kind: "user", id: 1, text: "old question" },
+    { kind: "assistant", id: 2, blocks: [{ type: "text", text: "old answer" }] },
+    { kind: "user", id: 3, text: "new question" },
+    { kind: "assistant", id: 4, blocks: [{ type: "text", text: "committed" }] },
+  )
+  h.session.isStreaming = true
+  const original = h.controls.renderedEntries.value
+  for (const text of ["one", "one two", "one two three"]) {
+    h.session.partialBlocks = [{ type: "text", text }]
+    const next = h.controls.renderedEntries.value
+    expect(next[1]).toBe(original[1])
+    expect(next[3]).not.toBe(original[3])
+    expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe(`committed\n\n${text}`)
+  }
+  h.session.partialBlocks = null
+  expect(h.controls.renderedEntries.value).toBe(original)
+  h.session.entries[3].blocks.push({ type: "text", text: "saved" })
+  expect(blocksText(h.controls.lastAssistantTurn().blocks)).toBe("committed\n\nsaved")
+  h.session.isStreaming = false
+  expect(h.controls.lastAssistantTurn().complete).toBe(true)
+})
+
+test("idle turns ignore stale tool and thinking deltas after the final answer", () => {
+  const h = harness()
+  h.session.entries.push(
+    { kind: "user", id: 1, text: "q" },
+    { kind: "assistant", id: 2, blocks: [{ type: "text", text: "final answer" }] },
+  )
+  h.session.partialBlocks = [
+    { type: "toolCall", callId: "old-tool", name: "bash", argsText: "{}" },
+    { type: "thinking", text: "", streaming: true },
+  ]
+  const turn = h.controls.lastAssistantTurn()
+  expect(turn.complete).toBe(true)
+  expect(turn.blocks).toEqual([{ type: "text", text: "final answer" }])
+  expect(hasSummary(turn)).toBe(true)
+  expect(turn.toolCallCount).toBe(0)
 })
 
 test("history paging ignores duplicate events and restores only the still-current connected viewport", async () => {
@@ -133,6 +193,9 @@ test("process materialization survives virtual row unmounting and content/action
   expect(root).toMatch(/<Teleport :to="sidebarTarget \|\| 'body'" :disabled="!sidebarTarget" defer>/)
   expect(root).toMatch(/v-model:bridge="bridge"/)
   expect(root).toMatch(/setShortcutsSuppressed\("chat-dialogs", active\)/)
+  // ChatView 的规模护栏（防止把业务逻辑继续塞进这个视图）。TZD-101 的侧栏接线
+  // （槽位 + aux 实例）整体搬进 `useChatViewSidebar`，视图只留装配与取返回值，
+  // 因此恢复 500 上限，不放宽。
   expect(root.split("\n").length).toBeLessThan(500)
 })
 
@@ -142,4 +205,27 @@ test("error records stay outside answer/process rendering and failed turns have 
   expect(assistant).toMatch(/v-for="\(error, index\) in entry.errors"/)
   expect(assistant).toMatch(/<MessageActions\s+v-if="entry.complete && !entry.failed"/)
   expect(list).toMatch(/v-if="session.compactionError"/)
+})
+
+test.each([
+  ["sent prompts", "components/chat/ChatUserPrompt.vue", "<template>", "entry.images"],
+  [
+    "pending prompts",
+    "components/chat/ChatTurnList.vue",
+    '<template v-if="ui.pendingUserMessage">',
+    "ui.pendingUserMessage.images",
+  ],
+])("%s show a wrapping image row above and outside the text bubble", (_name, file, marker, images) => {
+  const template = chatSource(file).split(marker)[1]!
+  const aboveBubble = template.split("<MessageContent>")[0]!
+  const bubble = template.match(/<MessageContent>([\s\S]*?)<\/MessageContent>/)![1]!
+  expect(aboveBubble).toContain(`v-if="${images}${images === "entry.images" ? "?." : "."}length"`)
+  expect(aboveBubble).toContain('class="mb-2 flex max-w-full flex-wrap justify-end gap-2"')
+  expect(aboveBubble).toContain(`v-for="(im, i) in ${images}"`)
+  expect(aboveBubble).toContain("size-16 shrink-0")
+  expect(aboveBubble).toContain(`:aria-label="t('chat.previewImage')"`)
+  expect(aboveBubble).toContain(`@click="emit('previewImage', im.url)"`)
+  expect(aboveBubble).toMatch(/<img :src="im.url"/)
+  expect(bubble).not.toContain("<img")
+  expect(bubble).toContain("<ComposerText")
 })

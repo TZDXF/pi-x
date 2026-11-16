@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import { computed, effectScope, onScopeDispose, ref, watch } from "vue"
+import { debounce } from "@/lib/timing"
 
 function harness(t, options = {}) {
   const source = readFileSync(new URL("../src/components/settings/packages/usePackages.ts", import.meta.url), "utf8")
@@ -17,6 +18,7 @@ function harness(t, options = {}) {
     onScopeDispose,
     ref,
     watch,
+    debounce,
     setTimeout,
     clearTimeout,
     useI18n: () => ({ t: key => key }),

@@ -1,4 +1,5 @@
 import { computed, readonly, ref } from "vue"
+import { createConfigPreference } from "@/lib/configPreference"
 
 /**
  * Central keyboard-shortcut registry.
@@ -7,7 +8,7 @@ import { computed, readonly, ref } from "vue"
  * Modifier order is fixed (ctrl, alt, shift, meta) and the key part is the
  * lowercased `KeyboardEvent.key`, so recorded combos match subsequent events
  * on the same keyboard layout. Users may rebind any configurable action;
- * overrides persist in localStorage under STORAGE_KEY.
+ * overrides persist under `preferences.shortcuts` in ~/.pix/config.json.
  */
 
 export type ShortcutScope = "global" | "chat" | "editor" | "sidebar"
@@ -20,6 +21,7 @@ export interface ShortcutActionDef {
 }
 
 export const SHORTCUT_ACTION_DEFS = {
+  "app.searchTasks": { scope: "global", labelKey: "shortcuts.actions.searchTasks", default: "ctrl+k" },
   "app.newSession": { scope: "global", labelKey: "shortcuts.actions.newSession", default: "ctrl+n" },
   "app.focusComposer": { scope: "global", labelKey: "shortcuts.actions.focusComposer", default: "ctrl+i" },
   "app.toggleSidebar": { scope: "global", labelKey: "shortcuts.actions.toggleSidebar", default: "ctrl+b" },
@@ -69,15 +71,12 @@ export type LockedShortcutId = (typeof LOCKED_SHORTCUTS)[number]["id"]
 const MODIFIER_ORDER = ["ctrl", "alt", "shift", "meta"] as const
 const MODIFIER_KEYS = new Set<string>(MODIFIER_ORDER)
 
-const STORAGE_KEY = "pix.shortcuts"
-
 function isShortcutActionId(value: string): value is ShortcutActionId {
   return Object.prototype.hasOwnProperty.call(SHORTCUT_ACTION_DEFS, value)
 }
 
-function loadOverrides(): Partial<Record<ShortcutActionId, string>> {
+function loadOverrides(raw: string | null): Partial<Record<ShortcutActionId, string>> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return {}
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== "object" || parsed === null) return {}
@@ -92,17 +91,17 @@ function loadOverrides(): Partial<Record<ShortcutActionId, string>> {
   }
 }
 
-function saveOverrides(overrides: Partial<Record<ShortcutActionId, string>>) {
-  try {
+const preference = createConfigPreference<Partial<Record<ShortcutActionId, string>>>({
+  key: "shortcuts",
+  legacyKey: "pix.shortcuts",
+  defaultValue: {},
+  read: loadOverrides,
+  serialize: overrides => {
     const entries = Object.entries(overrides).filter(([, combo]) => !!combo)
-    if (entries.length) localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)))
-    else localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    /* Storage is optional. */
-  }
-}
-
-const overrides = ref<Partial<Record<ShortcutActionId, string>>>(loadOverrides())
+    return JSON.stringify(Object.fromEntries(entries))
+  },
+})
+const overrides = preference.value
 
 /** The combo currently bound to an action (override or default). */
 export function shortcutCombo(id: ShortcutActionId): string {
@@ -119,13 +118,11 @@ export function setShortcutOverride(id: ShortcutActionId, combo: string | null) 
   const next = { ...overrides.value }
   if (!combo || combo === SHORTCUT_ACTION_DEFS[id].default) delete next[id]
   else next[id] = combo
-  overrides.value = next
-  saveOverrides(next)
+  return preference.set(next)
 }
 
 export function resetAllShortcuts() {
-  overrides.value = {}
-  saveOverrides({})
+  return preference.set({})
 }
 
 /** The action currently bound to a combo, ignoring `excludeId`. */
@@ -175,11 +172,9 @@ export function formatComboParts(combo: string): string[] {
   })
 }
 
-const SPECIAL_KEYS: Record<string, string> = { " ": "space" }
-
 function normalizeEventKey(key: string): string {
-  const mapped = SPECIAL_KEYS[key] ?? key
-  return mapped.toLowerCase()
+  if (typeof key !== "string") return ""
+  return key === " " ? "space" : key.toLowerCase()
 }
 
 /** Canonical combo for a keyboard event, or null for pure modifiers / IME. */

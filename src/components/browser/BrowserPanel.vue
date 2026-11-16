@@ -30,6 +30,8 @@ import {
   X,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
+import { Textarea } from "@/components/ui/textarea"
 import { bridgeInspect } from "@/lib/previewBridge"
 import type { Point } from "@/lib/canvasAnnotations"
 import { useBrowserNavigation } from "@/composables/browser/useBrowserNavigation"
@@ -49,7 +51,7 @@ const { t } = useI18n()
 const mode = ref<Mode>("none")
 const pendingTextPoint = ref<Point | null>(null)
 const commentDraft = ref("")
-const commentInput = ref<HTMLTextAreaElement | null>(null)
+const commentInput = ref<InstanceType<typeof Textarea> | null>(null)
 // Template refs remain owned by the host; controllers only use the supplied nodes.
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const stageRef = ref<HTMLElement | null>(null)
@@ -80,7 +82,7 @@ const {
   onTextRequested: point => {
     pendingTextPoint.value = point
     commentDraft.value = ""
-    nextTick(() => commentInput.value?.focus())
+    nextTick(() => commentInput.value?.$el.focus())
   },
 })
 const {
@@ -220,16 +222,18 @@ function saveComment() {
       <Button variant="ghost" size="icon-xs" :title="t('browser.reload')" :disabled="!currentUrl" @click="reload">
         <RefreshCw class="size-4" />
       </Button>
-      <div class="flex min-w-0 flex-1 items-center gap-1 rounded-md border bg-background px-2 py-1">
-        <Globe class="size-3.5 shrink-0 text-muted-foreground" />
-        <input
+      <InputGroup class="h-auto min-w-0 flex-1 gap-1 rounded-md bg-background px-2 py-1">
+        <InputGroupAddon class="p-0 [&>svg]:size-3.5">
+          <Globe class="size-3.5 shrink-0 text-muted-foreground" />
+        </InputGroupAddon>
+        <InputGroupInput
           v-model="inputUrl"
           type="text"
-          class="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+          class="h-auto min-w-0 flex-1 bg-transparent p-0 text-xs md:text-xs outline-none placeholder:text-muted-foreground"
           :placeholder="t('browser.urlPlaceholder')"
           @keydown.enter="navigate"
         />
-      </div>
+      </InputGroup>
       <!-- Access mode toggle: proxy by default, direct as the manual fallback. -->
       <button
         type="button"
@@ -436,11 +440,11 @@ function saveComment() {
             <X class="size-3.5" />
           </Button>
         </div>
-        <textarea
+        <Textarea
           ref="commentInput"
           v-model="commentDraft"
           rows="2"
-          class="w-full resize-none rounded-md border bg-transparent p-2 text-xs outline-none placeholder:text-muted-foreground"
+          class="min-h-0 w-full resize-none rounded-md border bg-transparent p-2 text-xs md:text-xs outline-none placeholder:text-muted-foreground [field-sizing:fixed]"
           :placeholder="t('browser.commentPlaceholder')"
           @keydown.enter.exact.prevent="saveComment"
           @keydown.esc.prevent="cancelPending"

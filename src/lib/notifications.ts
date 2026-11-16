@@ -4,99 +4,82 @@
  * questions awaiting input, and an optional sound.
  *
  * Desktop uses tauri-plugin-notification; the web build falls back to the
- * browser Notification API. Preferences persist to localStorage and sync
- * across windows via the storage event.
+ * browser Notification API. Preferences persist to ~/.pix/config.json and
+ * synchronize between desktop and remote web clients.
  */
-import { readonly, ref } from "vue"
 import { i18n } from "@/i18n"
-import { invoke, isDesktop } from "@/api/transport"
+import { invoke, isDesktop, listen } from "@/api/transport"
 import { pixLog } from "@/api/piClient"
+import { createConfigPreference } from "@/lib/configPreference"
 
 export type TurnCompleteNotification = "never" | "unfocused" | "always"
 export type NotificationSound = "default" | "none"
 
-const TURN_KEY = "pix.notify.turnComplete"
-const QUESTION_KEY = "pix.notify.question"
-const SOUND_KEY = "pix.notify.sound"
+export interface SessionNotificationTarget {
+  runtimeId: string
+  sessionFile?: string | null
+  cwd?: string
+}
+
+const activationHandlers = new Set<(target: SessionNotificationTarget) => void>()
+
+/** Desktop events stay local to this webview; web notifications use their own click handler. */
+export async function onSessionNotificationActivated(handler: (target: SessionNotificationTarget) => void) {
+  if (isDesktop) return listen<SessionNotificationTarget>("notification-activated", event => handler(event.payload))
+  activationHandlers.add(handler)
+  return () => {
+    activationHandlers.delete(handler)
+  }
+}
+
+const TURN_LEGACY_KEY = "pix.notify.turnComplete"
+const QUESTION_LEGACY_KEY = "pix.notify.question"
+const SOUND_LEGACY_KEY = "pix.notify.sound"
 
 const isTurnMode = (value: unknown): value is TurnCompleteNotification =>
   value === "never" || value === "unfocused" || value === "always"
 const isSound = (value: unknown): value is NotificationSound => value === "default" || value === "none"
 
-function readTurnMode(): TurnCompleteNotification {
-  try {
-    const value = localStorage.getItem(TURN_KEY)
-    if (isTurnMode(value)) return value
-  } catch {
-    /* Storage is optional. */
-  }
-  return "unfocused"
-}
-function readBool(key: string, fallback: boolean): boolean {
-  try {
-    const value = localStorage.getItem(key)
-    if (value === "1") return true
-    if (value === "0") return false
-  } catch {
-    /* Storage is optional. */
-  }
-  return fallback
-}
-function readSound(): NotificationSound {
-  try {
-    const value = localStorage.getItem(SOUND_KEY)
-    if (isSound(value)) return value
-  } catch {
-    /* Storage is optional. */
-  }
-  return "default"
-}
+const turnPreference = createConfigPreference<TurnCompleteNotification>({
+  key: "notifyTurnComplete",
+  legacyKey: TURN_LEGACY_KEY,
+  defaultValue: "unfocused",
+  validate: isTurnMode,
+})
+const questionPreference = createConfigPreference<boolean>({
+  key: "notifyQuestion",
+  legacyKey: QUESTION_LEGACY_KEY,
+  defaultValue: true,
+  read: raw => raw !== "0",
+  serialize: value => (value ? "1" : "0"),
+})
+const soundPreference = createConfigPreference<NotificationSound>({
+  key: "notifySound",
+  legacyKey: SOUND_LEGACY_KEY,
+  defaultValue: "default",
+  validate: isSound,
+})
 
-const turnMode = ref<TurnCompleteNotification>(readTurnMode())
-const questionEnabled = ref(readBool(QUESTION_KEY, true))
-const soundSetting = ref<NotificationSound>(readSound())
-
-export const turnCompleteNotification = readonly(turnMode)
-export const questionNotification = readonly(questionEnabled)
-export const notificationSound = readonly(soundSetting)
-
-function write(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    /* Storage is optional. */
-  }
-}
+export const turnCompleteNotification = turnPreference.value
+export const questionNotification = questionPreference.value
+export const notificationSound = soundPreference.value
 
 export function setTurnCompleteNotification(value: TurnCompleteNotification) {
   if (!isTurnMode(value)) return
-  turnMode.value = value
-  write(TURN_KEY, value)
+  const saving = turnPreference.set(value)
   if (value !== "never") void ensurePermission()
+  return saving
 }
 export function setQuestionNotification(value: boolean) {
-  questionEnabled.value = value
-  write(QUESTION_KEY, value ? "1" : "0")
+  const saving = questionPreference.set(value)
   if (value) void ensurePermission()
+  return saving
 }
 export function setNotificationSound(value: NotificationSound) {
   if (!isSound(value)) return
-  soundSetting.value = value
-  write(SOUND_KEY, value)
+  const saving = soundPreference.set(value)
   if (value === "default") playNotificationSound()
-}
-
-function syncPrefs(event: StorageEvent) {
-  if (event.key === null || event.key === TURN_KEY) turnMode.value = readTurnMode()
-  if (event.key === null || event.key === QUESTION_KEY) questionEnabled.value = readBool(QUESTION_KEY, true)
-  if (event.key === null || event.key === SOUND_KEY) soundSetting.value = readSound()
-}
-window.addEventListener("storage", syncPrefs)
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    window.removeEventListener("storage", syncPrefs)
-  })
+  return saving
 }
 
 /** True when the window is hidden or unfocused, so "unfocused" mode fires. */
@@ -147,9 +130,9 @@ export function playNotificationSound() {
   }
 }
 
-async function deliver(title: string, body: string) {
+async function deliver(title: string, body: string, target: SessionNotificationTarget) {
   if (!(await ensurePermission())) return
-  if (soundSetting.value === "default") playNotificationSound()
+  if (notificationSound.value === "default") playNotificationSound()
   try {
     if (isDesktop) {
       // Desktop delivery goes through the backend command: the notification
@@ -157,9 +140,14 @@ async function deliver(title: string, body: string) {
       // activation, so the toast showed as PowerShell and clicking it did
       // nothing. The command registers the app identity and focuses the main
       // window on click.
-      await invoke("send_notification", { title, body })
+      await invoke("send_notification", { title, body, target })
     } else {
-      new Notification(title, { body })
+      const notification = new Notification(title, { body })
+      notification.onclick = () => {
+        window.focus()
+        notification.close()
+        activationHandlers.forEach(handler => handler(target))
+      }
     }
   } catch {
     /* Notification delivery is best-effort. */
@@ -169,17 +157,17 @@ async function deliver(title: string, body: string) {
 const t = (key: string) => i18n.global.t(key)
 
 /** Pi finished a turn (or failed); `detail` is "project · session title". */
-export function notifyTurnComplete(detail: string, failed = false) {
-  const mode = turnMode.value
+export function notifyTurnComplete(detail: string, failed: boolean, target: SessionNotificationTarget) {
+  const mode = turnCompleteNotification.value
   pixLog(`notify turnComplete failed=${failed} mode=${mode} detail=${detail}`)
   if (mode === "never") return
   if (mode === "unfocused" && !windowUnfocused()) return
-  void deliver(t(failed ? "notify.turnFailedTitle" : "notify.turnCompleteTitle"), detail)
+  void deliver(t(failed ? "notify.turnFailedTitle" : "notify.turnCompleteTitle"), detail, { ...target })
 }
 
 /** An extension dialog (select/confirm/input/editor) awaits user input. */
-export function notifyQuestion(detail: string) {
-  if (!questionEnabled.value) return
+export function notifyQuestion(detail: string, target: SessionNotificationTarget) {
+  if (!questionNotification.value) return
   if (!windowUnfocused()) return
-  void deliver(t("notify.questionTitle"), detail)
+  void deliver(t("notify.questionTitle"), detail, { ...target })
 }

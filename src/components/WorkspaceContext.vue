@@ -9,8 +9,18 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { workspaceGitInfo, createWorkspaceGit, type WorkspaceGitInfo, type WorkspaceSelection } from "@/api/piClient"
 import { tBackendError } from "@/i18n"
+import { isRemoteProject } from "@/lib/ssh"
 import { useWorkspaceStore } from "@/stores/workspace"
-const props = defineProps<{ project: string; disabled?: boolean }>()
+const props = withDefaults(
+  defineProps<{
+    project: string
+    disabled?: boolean
+    projectPicker?: boolean
+    projectPlaceholder?: string
+    initialSelection?: WorkspaceSelection | null
+  }>(),
+  { projectPicker: true, initialSelection: null },
+)
 const emit = defineEmits<{ selectProject: [path: string]; openProject: [] }>()
 const selection = defineModel<WorkspaceSelection | null>({ default: null })
 const workspace = useWorkspaceStore()
@@ -31,8 +41,12 @@ const blocked = computed(() => props.disabled || workspace.gitBusy)
 const name = (path: string) => workspace.projectName(path)
 // 空项目仅作为无项目会话的初始展示；真正切换仍由父组件完成。
 const isProjectless = computed(() => !props.project || workspace.isProjectless(props.project))
-const projectTitle = computed(() => props.project || workspace.projectless)
-const projectLabel = computed(() => (props.project ? name(props.project) : t("projectless.name")))
+// 远程项目 P1 不查询本地 git，也不提供分支/工作树选择（契约 §5）。
+const isRemote = computed(() => isRemoteProject(props.project))
+const projectTitle = computed(() => props.project || (props.projectPlaceholder ? "" : workspace.projectless))
+const projectLabel = computed(() =>
+  props.project ? name(props.project) : props.projectPlaceholder || t("projectless.name"),
+)
 // An unborn HEAD is the current branch, but it has no commit to use as a base.
 const branchOptions = computed(() => {
   const result = info.value
@@ -54,22 +68,34 @@ const filteredProjects = computed(() => {
   return paths.filter(p => name(p).toLowerCase().includes(query) || p.toLowerCase().includes(query))
 })
 let request = 0
+let initialSelection = props.initialSelection
 async function refresh() {
   if (!props.project) return
   const id = ++request
+  const preferred = initialSelection
+  initialSelection = null
   loading.value = true
   info.value = null
-  selection.value = null
+  // Immediate draft submission may happen before Git metadata returns.
+  selection.value = preferred?.project === props.project ? { ...preferred } : null
   gitError.value = ""
+  // 远程项目不做本地 git 查询，工作区选择保持为空。
+  if (isRemote.value) {
+    loading.value = false
+    return
+  }
   try {
     const result = await workspaceGitInfo(props.project)
     if (id === request) {
       info.value = result
-      selection.value = {
-        project: props.project,
-        worktree: false,
-        branch: result.branch,
-      }
+      selection.value =
+        preferred?.project === props.project
+          ? { ...preferred }
+          : {
+              project: props.project,
+              worktree: false,
+              branch: result.branch,
+            }
       workspace.registerWorktrees(result)
     }
   } catch (e) {
@@ -140,9 +166,10 @@ watch(() => props.project, refresh, { immediate: true })
 
 <template>
   <div
+    v-if="projectPicker || (!isProjectless && !isRemote)"
     class="workspace-context flex gap-[5px] items-center mt-0 mr-3.5 mb-[-10px] ml-3.5 pt-[5px] pr-2 pb-[15px] pl-2 bg-muted rounded-[16px_16px_0_0] max-[700px]:[margin-inline:2px] max-[700px]:gap-0"
   >
-    <Popover v-model:open="projectOpen"
+    <Popover v-if="projectPicker" v-model:open="projectOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"
@@ -192,7 +219,7 @@ watch(() => props.project, refresh, { immediate: true })
         </div>
       </PopoverContent>
     </Popover>
-    <Popover v-if="!isProjectless" v-model:open="modeOpen"
+    <Popover v-if="!isProjectless && !isRemote" v-model:open="modeOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"
@@ -228,7 +255,7 @@ watch(() => props.project, refresh, { immediate: true })
         ></PopoverContent
       >
     </Popover>
-    <Popover v-if="!isProjectless" v-model:open="branchOpen"
+    <Popover v-if="!isProjectless && !isRemote" v-model:open="branchOpen"
       ><PopoverTrigger as-child
         ><Button
           variant="context-chip"
@@ -283,7 +310,9 @@ watch(() => props.project, refresh, { immediate: true })
     </Popover>
     <Dialog v-model:open="createOpen">
       <DialogContent class="sm:max-w-sm">
-        <DialogHeader><DialogTitle>{{ t("workspace.createBranch") }}</DialogTitle></DialogHeader>
+        <DialogHeader
+          ><DialogTitle>{{ t("workspace.createBranch") }}</DialogTitle></DialogHeader
+        >
         <form class="space-y-4" @submit.prevent="createBranch">
           <p class="text-sm text-muted-foreground">{{ t("workspace.branchHint") }}</p>
           <Input

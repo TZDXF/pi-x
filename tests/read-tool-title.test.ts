@@ -42,9 +42,9 @@ test("missing paths and invalid argument objects fall back to the tool name", ()
   }
 })
 
-test("read headers use the preview with persisted run arguments as a fallback", () => {
+test("read headers use the execution snapshot with streamed arguments as a fallback", () => {
   const blocks = readFileSync(new URL("../src/components/AssistantBlocks.vue", import.meta.url), "utf8")
-  expect(blocks).toMatch(/readToolTitle\(block\.argsText \|\| runFor\(block\)\?\.argsText \|\| ""\)/)
+  expect(blocks).toContain("readToolTitle(toolInput(block, runFor(block)))")
   expect(blocks).toMatch(/:title="isRead\(block\) \? readTitle\(block\) \|\| undefined : undefined"/)
 })
 

@@ -3,6 +3,7 @@ import { computed } from "vue"
 import { useI18n } from "vue-i18n"
 import { groupModelsByProvider } from "@/lib/modelSelection"
 import ModelSelectOptions from "@/components/ModelSelectOptions.vue"
+import { modelKey } from "@/lib/modelKey"
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 const props = withDefaults(
@@ -19,7 +20,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ "update:modelValue": [value: string] }>()
 const { t } = useI18n()
-const selectedModel = computed(() => props.models.find(model => `${model.provider}/${model.id}` === props.modelValue))
+const selectedModel = computed(() => props.models.find(model => modelKey(model) === props.modelValue))
 const groups = computed(() => groupModelsByProvider(props.models))
 </script>
 

@@ -3,6 +3,8 @@ import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
 
 type InvokeArgs = {
   query?: string
+  key?: string
+  value?: string
   command?: {
     type?: string
     message?: string
@@ -67,13 +69,15 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   page.on("pageerror", error => errors.push(error.message))
 
   const calls: InvokeCall[] = []
+  const preferences: Record<string, string> = {}
   let failedSearch = false
   await page.routeWebSocket("**/api/events*", () => {})
   await page.route("**/api/invoke", async route => {
     const { command, args } = route.request().postDataJSON() as { command: string; args: InvokeArgs }
     calls.push({ command, args })
     let data: unknown = {}
-    if (command === "app_config_get") data = { lastProject: "C:/test-project" }
+    if (command === "app_config_get") data = { lastProject: "C:/test-project", preferences }
+    else if (command === "app_preference_set") preferences[String(args.key)] = String(args.value)
     else if (command === "rpc_running") data = false
     else if (command === "trust_status") data = { needsDecision: false }
     else if (/sessions|projects/.test(command)) data = []
@@ -227,9 +231,10 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await editor.fill("/unsupported")
   await editor.press("Escape")
   await editor.press("Enter")
-  await page.waitForTimeout(100)
-  await expectEditorText(editor, "/unsupported")
-  expect(calls.filter(call => call.args.command?.type === "prompt")).toHaveLength(1)
+  await expectEditorText(editor, "")
+  await expect
+    .poll(() => calls.filter(call => call.args.command?.type === "prompt").map(call => call.args.command?.message))
+    .toEqual(['检查 @"src/中文 file.ts"', "/unsupported"])
 
   await editor.fill("/review explain")
   await editor.press("Enter")
@@ -250,6 +255,28 @@ test("composer completion, IME, RPC context, retry, and command dispatch", async
   await expect(page.getByRole("status").filter({ hasText: /没有匹配|无匹配|No matching/ })).toBeVisible()
   await editor.press("Shift+Enter")
   await expectEditorText(editor, "@none\n\n")
+
+  // Native multiline insertion can create DIVs that the composer serializes without line breaks.
+  const pasted = 'location /example/ {\n    value "<tag>&";\n\n}\n'
+  await editor.fill("")
+  await editor.focus()
+  await editor.evaluate((element, text) => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData("text/plain", text.replace(/\n/g, "\r\n"))
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }))
+  }, pasted)
+  await expectEditorText(editor, pasted)
+  await editor.press("Control+z")
+  await expectEditorText(editor, "")
+  await editor.press("Control+Shift+z")
+  await expectEditorText(editor, pasted)
+  await editor.press("Enter")
+  await expect
+    .poll(() => {
+      const prompts = calls.filter(call => call.args.command?.type === "prompt")
+      return prompts[prompts.length - 1]?.args.command?.message
+    })
+    .toBe(pasted.trim())
 
   await editor.fill("/new ")
   await editor.press("Escape")

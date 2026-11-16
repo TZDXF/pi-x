@@ -1,4 +1,5 @@
 /** Display helpers for filesystem paths shown in the UI. */
+import { buildRemoteUri, isRemoteUri, parseRemoteUri } from "@/lib/ssh"
 
 /** True when `path` looks like a Windows path (drive letter, UNC, or backslashes). */
 export function isWindowsPath(path: string): boolean {
@@ -30,6 +31,12 @@ export function normalizeSlashes(path: string): string {
 
 /** Stable project key across folder pickers, config and stored session cwd values. */
 export function normalizeProjectPath(path: string): string {
+  // 远程项目（ssh/wsl/docker）按 POSIX 语义归一化（ssh host 小写、路径折叠等），
+  // 再经各后端构造函数重建展示 URI（多后端契约 §2.2）；解析失败保持原串。
+  if (isRemoteUri(path)) {
+    const remote = parseRemoteUri(path)
+    return remote ? buildRemoteUri(remote) : path
+  }
   const normalized = normalizeSlashes(path)
   if (/^[a-zA-Z]:\/+$/.test(normalized)) return `${normalized[0]}:/`
   if (/^\/+$/.test(normalized)) return normalized.startsWith("//") ? "//" : "/"

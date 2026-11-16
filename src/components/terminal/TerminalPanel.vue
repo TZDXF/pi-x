@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { invoke, listen } from "@/api/transport"
 import { createTerminalOutputRouter, type TerminalOutput } from "@/lib/terminalOutput"
+import { usePointerDrag } from "@/composables/usePointerDrag"
+import { terminalConnectionId } from "@/lib/sshTrust"
+import { sshConnectionList } from "@/api/piClient"
 import { nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { terminalTheme } from "@/lib/terminalTheme"
 import { useI18n } from "vue-i18n"
+import { tBackendError } from "@/i18n"
+import { useUiStore } from "@/stores/conversations"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Plus, SquareTerminal, X } from "@lucide/vue"
 import { VueDraggable } from "vue-draggable-plus"
 
@@ -23,6 +29,7 @@ interface TermTab {
 const props = defineProps<{ project: string; visible: boolean; embedded?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
+const ui = useUiStore()
 
 const tabs = ref<TermTab[]>([])
 const activeId = ref<number | null>(null)
@@ -57,7 +64,7 @@ function cancelRename() {
 }
 
 function setRenameInput(el: unknown) {
-  renameInput = (el as HTMLInputElement) ?? null
+  renameInput = (el as InstanceType<typeof Input> | null)?.$el ?? null
 }
 
 const tabEls = new Map<number, HTMLElement>()
@@ -166,11 +173,14 @@ async function openTerminal() {
       outputRouter.cancel(owner)
       return
     }
+    // 远程项目传连接 id 走 ssh -tt 分支；本地项目恒为 undefined（契约 §3.4）。
+    const sshConnectionId = await terminalConnectionId(props.project, sshConnectionList)
     const id = await invoke<number>("term_create", {
       cwd: props.project,
       cols: 80,
       rows: 24,
       owner,
+      sshConnectionId,
     })
     // The panel may have unmounted or switched projects while creation was pending.
     if (!outputRouter.bind(owner, id)) {
@@ -187,7 +197,8 @@ async function openTerminal() {
       if (tabs.value.some(tab => tab.id === id)) await closeTab(id)
       else void invoke("term_kill", { id }).catch(() => {})
     }
-    console.error("term_create failed", e)
+    // 创建失败（含 coded error）toast 展示，不再只进 console（契约 §3.4）。
+    ui.pushToast(tBackendError(e), "error")
   }
 }
 
@@ -239,22 +250,17 @@ watch(terminalTheme, t => {
 })
 
 // ---- divider drag resize ----
-let dragStart: { y: number; height: number } | null = null
-function onDividerDown(e: MouseEvent) {
-  dragStart = { y: e.clientY, height: panelHeight.value }
-  window.addEventListener("mousemove", onDividerMove)
-  window.addEventListener("mouseup", onDividerUp)
-}
-function onDividerMove(e: MouseEvent) {
-  if (!dragStart) return
-  const max = Math.round(window.innerHeight * 0.7)
-  panelHeight.value = Math.min(max, Math.max(150, dragStart.height - (e.clientY - dragStart.y)))
-}
-function onDividerUp() {
-  dragStart = null
-  window.removeEventListener("mousemove", onDividerMove)
-  window.removeEventListener("mouseup", onDividerUp)
-  fitActive()
+const dividerDrag = usePointerDrag<{ y: number; height: number }>({
+  cursor: "row-resize",
+  windowListeners: true,
+  onMove: (start, event) => {
+    const max = Math.round(window.innerHeight * 0.7)
+    panelHeight.value = Math.min(max, Math.max(150, start.height - (event.clientY - start.y)))
+  },
+  onEnd: fitActive,
+})
+function onDividerDown(event: PointerEvent) {
+  dividerDrag.start(event, { y: event.clientY, height: panelHeight.value })
 }
 
 watch(
@@ -309,8 +315,7 @@ onBeforeUnmount(() => {
   for (const id of ids) void invoke("term_kill", { id }).catch(() => {})
   unlistenExit?.()
   unlistenOutput?.()
-  window.removeEventListener("mousemove", onDividerMove)
-  window.removeEventListener("mouseup", onDividerUp)
+  dividerDrag.cancel()
 })
 
 defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
@@ -326,7 +331,7 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
     <div
       v-if="!embedded"
       class="border-border hover:bg-primary/10 relative -mt-1 h-2 shrink-0 cursor-row-resize border-t border-transparent"
-      @mousedown="onDividerDown"
+      @pointerdown="onDividerDown"
       @dblclick="onPanelDblClick"
     />
 
@@ -366,11 +371,11 @@ defineExpose({ openTerminal, hasTerminals: () => tabs.value.length > 0 })
             @dblclick="startRename(tab)"
           >
             <SquareTerminal class="size-3.5" :class="tab.exited ? 'text-muted-foreground/50' : ''" />
-            <input
+            <Input
               v-if="renamingId === tab.id"
               :ref="setRenameInput"
               v-model="renameDraft"
-              class="border-border bg-background text-foreground h-4 w-20 rounded-sm border px-1 text-xs outline-none"
+              class="border-border bg-background text-foreground h-4 w-20 rounded-sm border px-1 py-0 text-xs md:text-xs outline-none"
               :aria-label="t('terminal.rename')"
               @click.stop
               @blur="commitRename"

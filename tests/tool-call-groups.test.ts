@@ -21,7 +21,7 @@ test("all tool types, including file changes and subagents, share one concise gr
   expect([...toolCallGroups(blocks)]).toEqual([[0, blocks]])
 })
 
-test("text and streaming thinking stay in place and split tool groups", () => {
+test("text splits tool groups while streaming thinking preserves the group", () => {
   const first = tool("1")
   const second = tool("2")
   const third = tool("3")
@@ -36,8 +36,7 @@ test("text and streaming thinking stay in place and split tool groups", () => {
   ]
   expect([...toolCallGroups(blocks)]).toEqual([
     [1, [first]],
-    [3, [second]],
-    [5, [third]],
+    [3, [second, third]],
   ])
 })
 
@@ -63,6 +62,41 @@ test("streaming tool arrivals keep the group anchor and update its count", () =>
   expect(toolCallGroups(blocks).get(0)).toEqual([blocks[0]])
   blocks.push(tool("2", "read"))
   expect([...toolCallGroups(blocks)]).toEqual([[0, blocks]])
+})
+
+test("a new tool joins the existing group before the intervening thinking completes", () => {
+  const first = tool("1")
+  const second = tool("2", "read")
+  const thinking: Block = { type: "thinking", text: "Planning", streaming: true }
+  const blocks: Block[] = [first, thinking]
+  expect([...toolCallGroups(blocks)]).toEqual([[0, [first]]])
+
+  blocks.push(second)
+  expect([...toolCallGroups(blocks)]).toEqual([[0, [first, second]]])
+
+  thinking.streaming = false
+  expect([...toolCallGroups(blocks)]).toEqual([[0, [first, second]]])
+})
+
+test("standalone image tools and errors still split groups across thinking blocks", () => {
+  const first = tool("1")
+  const image = tool("image", "read")
+  const second = tool("2")
+  const third = tool("3")
+  const blocks: Block[] = [
+    first,
+    { type: "thinking", text: "Planning", streaming: true },
+    image,
+    { type: "thinking", text: "Continuing", streaming: false },
+    second,
+    { type: "error", text: "Failed" },
+    third,
+  ]
+  expect([...toolCallGroups(blocks, block => block.callId === "image")]).toEqual([
+    [0, [first]],
+    [4, [second]],
+    [6, [third]],
+  ])
 })
 
 test("pending and executing tools keep the collapsed summary active", () => {

@@ -1,4 +1,5 @@
 import { ref, type Ref } from "vue"
+import { usePointerDrag } from "@/composables/usePointerDrag"
 
 /** Bottom drawers share the stage's height budget and are mutually exclusive when toggled. */
 export function useBrowserDrawers(stageRef: Ref<HTMLElement | null>) {
@@ -20,34 +21,24 @@ export function useBrowserDrawers(stageRef: Ref<HTMLElement | null>) {
   const DRAWER_PAGE_RESERVE = 96
 
   const drawerHeights = ref<Record<DrawerName, number>>({ annotations: 192, console: 160 })
-  let resizingDrawer: DrawerName | null = null
-  let resizeStartY = 0
-  let resizeStartHeight = 0
-
   function clampDrawerHeight(height: number) {
     const stageHeight = stageRef.value?.clientHeight ?? Number.POSITIVE_INFINITY
     const max = Math.max(DRAWER_MIN_HEIGHT, stageHeight - DRAWER_PAGE_RESERVE)
     return Math.min(Math.max(height, DRAWER_MIN_HEIGHT), max)
   }
 
-  function onDrawerResizeStart(drawer: DrawerName, event: PointerEvent) {
-    event.preventDefault()
-    resizingDrawer = drawer
-    resizeStartY = event.clientY
-    resizeStartHeight = drawerHeights.value[drawer]
-    const handle = event.currentTarget as HTMLElement
-    handle.setPointerCapture(event.pointerId)
-  }
+  const resizeDrag = usePointerDrag<{ drawer: DrawerName; startY: number; startHeight: number }>({
+    cursor: "row-resize",
+    onMove: (start, event) => {
+      const height = start.startHeight + (start.startY - event.clientY)
+      drawerHeights.value[start.drawer] = clampDrawerHeight(height)
+    },
+  })
 
-  function onDrawerResizeMove(event: PointerEvent) {
-    if (!resizingDrawer) return
-    const height = resizeStartHeight + (resizeStartY - event.clientY)
-    drawerHeights.value[resizingDrawer] = clampDrawerHeight(height)
-  }
-
-  function onDrawerResizeEnd() {
-    resizingDrawer = null
-  }
+  const onDrawerResizeStart = (drawer: DrawerName, event: PointerEvent) =>
+    resizeDrag.start(event, { drawer, startY: event.clientY, startHeight: drawerHeights.value[drawer] })
+  const onDrawerResizeMove = resizeDrag.move
+  const onDrawerResizeEnd = resizeDrag.stop
 
   return {
     showAnnotations,

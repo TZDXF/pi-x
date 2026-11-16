@@ -1,3 +1,5 @@
+import type { Usage } from "@/api/protocol"
+
 // ---- render model ----
 
 export interface ToolRun {
@@ -5,10 +7,13 @@ export interface ToolRun {
   name: string
   argsText: string
   outputText: string
+  outputImages?: string[]
   state: "input-streaming" | "input-available" | "output-available" | "output-error"
   /** Execution start (tool_execution_start); drives the elapsed-time display. */
   startedAt?: number
   completedAt?: number
+  /** Monotonic execution duration reported by pi; also available in history. */
+  durationMs?: number
 }
 
 export interface TextBlock {
@@ -45,6 +50,18 @@ export interface UserEntry {
   kind: "user"
   id: number
   text: string
+  /** Expanded prompt retains attachments for live bubbles; text stays editable user input. */
+  contextText?: string
+  /**
+   * aux 父上下文折叠块的**内文**（不含 `<aux_parent_context>` 标签）。历史重建时
+   * 从落盘的完整 prompt 里拆出来，气泡默认收起显示；`null`/缺失表示没有该块。
+   */
+  parentContext?: string | null
+  /**
+   * aux 父上下文折叠块的**原文**（含 `<aux_parent_context>` 标签、不含分隔空行）。
+   * 编辑重发时原样拼回去（字节不变），气泡折叠展示用 `parentContext`。
+   */
+  parentContextBlock?: string | null
   modelChange?: { from: string; to: string }
   images?: { url: string }[]
   live?: true
@@ -59,6 +76,9 @@ export interface AssistantEntry {
   startedAt?: number
   completedAt?: number
   timestamp?: number
+  model?: string
+  responseModel?: string
+  usage?: Usage
 }
 /** Marks where a compaction collapsed earlier history; summary stays expandable. */
 export interface CompactionEntry {

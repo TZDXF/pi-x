@@ -5,6 +5,8 @@ export interface ComposerDraft {
   project: string
   file: string | null
   text: string
+  /** Original files survive composer remounts; preview URLs belong to the view. */
+  files: File[]
 }
 
 const STORAGE_KEY = "pix.composerDrafts"
@@ -25,7 +27,7 @@ try {
         !text
       )
         continue
-      drafts.set(file ? fileKey(file) : projectKey(project), { project, file, text })
+      drafts.set(file ? fileKey(file) : projectKey(project), { project, file, text, files: [] })
     }
   }
 } catch {
@@ -34,7 +36,12 @@ try {
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...drafts.values()]))
+    // Files stay in memory: serializing them would lose their bytes and storing
+    // base64 images here would quickly exhaust the text draft storage quota.
+    const saved = [...drafts.values()]
+      .filter(draft => draft.text)
+      .map(({ project, file, text }) => ({ project, file, text }))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved))
   } catch {
     /* Keep the in-memory draft if storage is unavailable or full. */
   }
@@ -44,11 +51,15 @@ export function composerDraftText(project: string, file: string | null): string 
   return (file ? drafts.get(fileKey(file)) : drafts.get(projectKey(project)))?.text ?? ""
 }
 
-export function recordComposerDraft(project: string, file: string | null, text: string) {
+export function composerDraftFiles(project: string, file: string | null): File[] {
+  return [...((file ? drafts.get(fileKey(file)) : drafts.get(projectKey(project)))?.files ?? [])]
+}
+
+export function recordComposerDraft(project: string, file: string | null, text: string, files: readonly File[] = []) {
   // Project and saved-session buffers are independent; submitting clears the
   // project buffer through the empty text update before pi creates its file.
   const key = file ? fileKey(file) : projectKey(project)
-  if (text) drafts.set(key, { project, file, text })
+  if (text || files.length) drafts.set(key, { project, file, text, files: [...files] })
   else drafts.delete(key)
   persist()
 }

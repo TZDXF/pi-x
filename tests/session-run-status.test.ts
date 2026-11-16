@@ -8,7 +8,9 @@ const controls = vi.hoisted(() => {
     state,
     statuses: new Map(),
     notifications: [],
+    runMetadata: [],
     piClient: {
+      adoptSession: async () => {},
       sessionHistory: (...args) => state.sessionHistory(...args),
       pixLog: (...args) => state.pixLog(...args),
       sessionLastError: (...args) => state.sessionLastError(...args),
@@ -32,7 +34,8 @@ vi.mock("@/lib/notifications", () => ({
   notifyTurnComplete: (...args) => controls.notifications.push(args),
 }))
 vi.mock("@/stores/sessionRunStatus", () => ({
-  setSessionRunStatus: (file, status) => {
+  setSessionRunStatus: (file, status, project, metadata) => {
+    controls.runMetadata.push({ file, status, project, metadata })
     if (status) controls.statuses.set(file, status)
     else controls.statuses.delete(file)
   },
@@ -57,6 +60,7 @@ async function harness() {
   })
   controls.statuses.clear()
   controls.notifications.length = 0
+  controls.runMetadata.length = 0
   controls.workspace = { histories: {}, projectName: () => "project" }
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
   setActivePinia(createPinia())
@@ -83,6 +87,7 @@ test("concurrent sessions show independent running, completed and error statuses
   expect(statuses.get("first.jsonl")).toBe("running")
   first.handleEvent({ type: "agent_settled" })
   expect(statuses.get("first.jsonl")).toBe("completed")
+  expect(controls.notifications[0][2]).toEqual({ runtimeId: "first", sessionFile: "first.jsonl", cwd: "" })
   expect(statuses.get("second.jsonl")).toBe("running")
   second.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
   second.handleEvent({ type: "agent_end" })
@@ -101,6 +106,32 @@ test("concurrent sessions show independent running, completed and error statuses
   expect(statuses.get("second.jsonl")).toBe("running")
   second.handleEvent({ type: "agent_settled" })
   expect(statuses.get("second.jsonl")).toBe("completed")
+})
+
+test("events forward stable backend run identity and time through start, retry and settlement", async () => {
+  const { session } = await harness()
+  const store = session("metadata", "metadata.jsonl")
+  const metadata = { pixRunId: "backend-turn", pixRunUpdatedAt: 100 }
+  store.handleEvent({ type: "agent_start", ...metadata })
+  store.handleEvent({ type: "auto_retry_start", ...metadata, pixRunUpdatedAt: 110 })
+  store.handleEvent({ type: "agent_settled", ...metadata, pixRunUpdatedAt: 120 })
+  expect(controls.runMetadata.map(({ status, metadata }) => ({ status, metadata }))).toEqual([
+    { status: "running", metadata: { runId: "backend-turn", updatedAt: 100 } },
+    { status: "running", metadata: { runId: "backend-turn", updatedAt: 110 } },
+    { status: "completed", metadata: { runId: "backend-turn", updatedAt: 120 } },
+  ])
+  store.handleEvent({ type: "agent_start", ...metadata, pixRunId: "backend-stop", pixRunUpdatedAt: 130 })
+  store.handleEvent({
+    type: "agent_settled",
+    ...metadata,
+    pixRunId: "backend-stop",
+    pixRunUpdatedAt: 140,
+    aborted: true,
+  })
+  expect(controls.runMetadata.at(-1)).toMatchObject({
+    status: null,
+    metadata: { runId: "backend-stop", updatedAt: 140 },
+  })
 })
 
 test("aborted turns clear status; unexpected process exit marks running turn as error", async () => {
@@ -355,15 +386,20 @@ test("session rows expose their actions through a right-click context menu", () 
   const list = readSidebarPart("SidebarSessionList.vue")
   const row = readSidebarPart("SidebarSavedSessionRow.vue")
   expect(sidebar.match(/<SidebarSessionList/g)).toHaveLength(2)
-  expect(list).toMatch(/<SidebarSavedSessionRow\s+v-for="row in rows"/)
+  expect(list).toMatch(/<SidebarSavedSessionRow\s+v-for="row in visibleRows"/)
   expect(row).not.toMatch(/class="session-actions/)
   expect(row).toMatch(/<ContextMenuTrigger as-child :disabled="disabled">/)
   for (const action of ["emit('rename', s)", "emit('duplicate', s)", "emit('copyLink', s)", "emit('export', s.file)"])
     expect(row.includes(action), `menu keeps ${action}`).toBeTruthy()
-  // 归档是行内快捷按钮，hover 时显示，不进右键菜单。
+  // 归档同时保留行内快捷按钮和共享右键菜单入口。
   expect(row).toMatch(/class="session-archive hover-action /)
   expect(row.includes("@click=\"emit('archive', s)\""), "row keeps the hover archive button").toBeTruthy()
-  expect(row).not.toMatch(/<ContextMenuItem @select="emit\('archive'/)
+  expect(row).toContain("@archive=\"emit('archive', s)\"")
+  const menu = readFileSync(
+    new URL("../src/components/workspace/SessionContextMenuContent.vue", import.meta.url),
+    "utf8",
+  )
+  expect(menu).toContain("@select=\"emit('archive')\"")
 })
 
 test("project heading exposes its actions through a right-click context menu", () => {

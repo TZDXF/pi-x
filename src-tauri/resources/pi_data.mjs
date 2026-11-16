@@ -34,14 +34,27 @@ if (op.startsWith("trust_")) {
   // Only global preferences; do not load or overwrite project settings here.
   const settings = SettingsManager.create(getAgentDir(), getAgentDir());
   checkErrors(settings);
+  const { SettingsSchema } = await load("core/settings-schema.js").catch(() => ({}));
+  const selfUpdateCommandSupported = !!SettingsSchema?.properties?.selfUpdateCommand;
+  const cacheWarmingSupported = typeof settings.getCacheWarmingMode === "function" &&
+    typeof settings.setCacheWarmingMode === "function";
+  const schemaCacheWarmingModes = SettingsSchema?.properties?.cacheWarming?.anyOf
+    ?.map(option => option?.const)
+    .filter(mode => ["off", "streaming", "idle"].includes(mode)) ?? [];
+  // Pi 0.99 has cache warming but predates the published settings schema and the idle mode.
+  const cacheWarmingModes = cacheWarmingSupported
+    ? schemaCacheWarmingModes.length ? schemaCacheWarmingModes : ["off", "streaming"]
+    : [];
   if (op === "settings_save") {
     const patch = request.settings;
     if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Invalid settings");
     for (const key of Object.keys(patch)) {
-      if (!["defaultProvider", "defaultModel", "skills", "retry", "compaction", "followUpMode"].includes(key))
+      if (!["defaultProvider", "defaultModel", "skills", "retry", "compaction", "followUpMode",
+        "cacheWarming", "selfUpdateCommand", "collapseChangelog", "sessionShareDestination"].includes(key))
         throw new Error(`Unsupported setting: ${key}`);
     }
     if ("skills" in patch && (!Array.isArray(patch.skills) || !patch.skills.every(p => typeof p === "string"))) throw new Error("Invalid skill paths");
+    validatePreferences(settings, patch, selfUpdateCommandSupported, cacheWarmingModes);
     if ("followUpMode" in patch) {
       if (!["one-at-a-time", "all"].includes(patch.followUpMode)) throw new Error("Invalid followUpMode");
       settings.setFollowUpMode(patch.followUpMode);
@@ -55,6 +68,15 @@ if (op.startsWith("trust_")) {
     }
     if ("retry" in patch) applyRetrySettings(settings, patch.retry);
     if ("compaction" in patch) applyCompactionSettings(settings, patch.compaction);
+    if ("cacheWarming" in patch) settings.setCacheWarmingMode(patch.cacheWarming);
+    if ("collapseChangelog" in patch) settings.setCollapseChangelog(patch.collapseChangelog);
+    if ("sessionShareDestination" in patch) settings.setSessionShareDestination(patch.sessionShareDestination);
+    if ("selfUpdateCommand" in patch) {
+      if (patch.selfUpdateCommand === null) delete settings.globalSettings.selfUpdateCommand;
+      else settings.globalSettings.selfUpdateCommand = patch.selfUpdateCommand;
+      settings.markModified("selfUpdateCommand");
+      settings.save();
+    }
     await settings.flush();
     checkErrors(settings);
   }
@@ -62,7 +84,12 @@ if (op.startsWith("trust_")) {
   result = { defaultProvider: global.defaultProvider, defaultModel: global.defaultModel,
     defaultThinkingLevel: global.defaultThinkingLevel, modelThinkingLevels: global.modelThinkingLevels,
     skills: global.skills ?? [], retry: readRetrySettings(settings),
-    compaction: readCompactionSettings(settings), followUpMode: settings.getFollowUpMode() };
+    compaction: readCompactionSettings(settings), followUpMode: settings.getFollowUpMode(),
+    cacheWarming: cacheWarmingSupported ? settings.getCacheWarmingMode() : null, cacheWarmingModes,
+    selfUpdateCommand: global.selfUpdateCommand ?? null, selfUpdateCommandSupported,
+    selfUpdateCommandOverridden: !!process.env.PI_SELF_UPDATE_COMMAND?.trim(),
+    collapseChangelog: settings.getCollapseChangelog(),
+    sessionShareDestination: settings.getSessionShareDestination?.() ?? null };
 } else if (op === "session_export_html") {
   const { exportFromFile } = await load("core/export-html/index.js");
   result = await exportFromFile(request.file, { outputPath: request.outputPath });
@@ -81,6 +108,28 @@ process.stdout.write(JSON.stringify(result));
 function checkErrors(settings) {
   const errors = settings.drainErrors();
   if (errors.length) throw new Error(errors.map(e => e.error?.message ?? String(e)).join("; "));
+}
+
+function validatePreferences(settings, patch, supportsCustomUpdate, cacheWarmingModes) {
+  if ("cacheWarming" in patch && !cacheWarmingModes.includes(patch.cacheWarming))
+    throw new Error("Invalid or unsupported cacheWarming");
+  if ("collapseChangelog" in patch && typeof patch.collapseChangelog !== "boolean")
+    throw new Error("Invalid collapseChangelog");
+  if ("sessionShareDestination" in patch) {
+    if (!["auto", "gist", "radius"].includes(patch.sessionShareDestination))
+      throw new Error("Invalid sessionShareDestination");
+    if (typeof settings.setSessionShareDestination !== "function")
+      throw new Error("Installed Pi does not support sessionShareDestination");
+  }
+  if ("selfUpdateCommand" in patch) {
+    const argv = patch.selfUpdateCommand;
+    if (argv !== null && (!Array.isArray(argv) || !argv.length ||
+      !argv.every(arg => typeof arg === "string" && !arg.includes("\0")) || !argv[0].trim()))
+      throw new Error("Invalid selfUpdateCommand: expected a non-empty argv array or null");
+    if (!supportsCustomUpdate || !settings.globalSettings ||
+      typeof settings.markModified !== "function" || typeof settings.save !== "function")
+      throw new Error("Installed Pi does not support selfUpdateCommand");
+  }
 }
 
 function readRetrySettings(settings) {

@@ -1,12 +1,15 @@
 import { open as chooseDirectory } from "@tauri-apps/plugin-dialog"
-import { invoke, isDesktop } from "../transport"
+import { invoke, isDesktop, listen } from "../transport"
 import type { UpdateChannel } from "./updates"
+import type { SshConnection } from "./ssh"
 
 export interface TrustStatus {
   projectPath: string
   parentPath: string | null
   hasTrustRequiringResources: boolean
   decision: boolean | null
+  /** pi 的 defaultProjectTrust 策略；旧后端不返回时按 "ask" 处理。 */
+  policy?: string
   needsDecision: boolean
 }
 
@@ -16,6 +19,8 @@ export interface ModelRef {
 }
 
 export interface AppConfig {
+  /** Settings-page preferences, serialized by configPreference.ts. */
+  preferences?: Record<string, string>
   piPath?: string
   lastProject?: string
   /** 应用自身更新通道（app_update.rs），缺省为 stable */
@@ -38,7 +43,11 @@ export interface AppConfig {
   builtinDelayedSend?: boolean
   /** 多目录项目组；缺省为启用，关闭后「添加项目」直接选择单目录且会话不注入工作区清单。 */
   workspaceGroups?: boolean
+  /** SSH 远程连接配置（契约 §2.1）；凭据不落盘。 */
+  sshConnections?: SshConnection[]
 }
+
+export type CacheWarmingMode = "off" | "streaming" | "idle"
 
 export interface PiSettings {
   defaultProvider?: string | null
@@ -52,10 +61,30 @@ export interface PiSettings {
   compaction?: { enabled: boolean }
   /** pi 全局 settings.json 的 `followUpMode`：排队跟进消息的投递节奏。 */
   followUpMode?: import("../protocol").QueueDeliveryMode
+  /** 提示缓存预热；null 表示当前 Pi 不支持。modes 列出该版本接受的取值。 */
+  cacheWarming?: CacheWarmingMode | null
+  cacheWarmingModes?: CacheWarmingMode[]
+  selfUpdateCommand?: string[] | null
+  selfUpdateCommandSupported?: boolean
+  selfUpdateCommandOverridden?: boolean
+  collapseChangelog?: boolean
+  sessionShareDestination?: "auto" | "gist" | "radius" | null
 }
 export const getPiSettings = () => invoke<PiSettings>("pi_settings_get")
 export const savePiSettings = (
-  settings: Partial<Pick<PiSettings, "defaultProvider" | "defaultModel" | "skills" | "followUpMode">> & {
+  settings: Partial<
+    Pick<
+      PiSettings,
+      | "defaultProvider"
+      | "defaultModel"
+      | "skills"
+      | "followUpMode"
+      | "cacheWarming"
+      | "selfUpdateCommand"
+      | "collapseChangelog"
+      | "sessionShareDestination"
+    >
+  > & {
     retry?: { maxRetries?: number; enabled?: boolean }
     compaction?: { enabled: boolean }
   },
@@ -67,15 +96,19 @@ export function setTrayLabels(show: string, quit: string): Promise<void> {
   return invoke<void>("set_tray_labels", { showLabel: show, quitLabel: quit })
 }
 
-/** 切换主窗口 devtools；仅桌面端可用，返回切换后的打开状态。 */
+/** 切换主窗口 devtools；仅桌面端可用，返回切换后的打开状态。
+ *  默认 release 产物不含 devtools，后端报错时按未打开处理。 */
 export function toggleDevtools(): Promise<boolean> {
   if (!isDesktop) return Promise.resolve(false)
-  return invoke<boolean>("devtools_toggle")
+  return invoke<boolean>("devtools_toggle").catch(() => false)
 }
 
 export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
+export const saveConfigPreference = (key: string, value: string) => invoke<void>("app_preference_set", { key, value })
+export const onAppConfigChanged = (handler: (config: AppConfig) => void) =>
+  listen<AppConfig>("pi://app-config-changed", event => handler(event.payload))
 
 export interface ProjectlessDirInfo {
   /** 实际使用的工作目录（已规范化）。 */
@@ -111,3 +144,11 @@ export const trustStatus = (project: string) => invoke<TrustStatus>("trust_statu
 
 export const trustSave = (project: string, trusted: boolean, trustParent: boolean) =>
   invoke<unknown>("trust_save", { project, trusted, trustParent })
+
+/** 远程信任状态（契约 §4.2）；返回形状与本地 trust_status 一致。放在 config 以避免 ssh↔config 依赖环。 */
+export const sshTrustStatus = (project: string, sshConnectionId: string) =>
+  invoke<TrustStatus>("ssh_trust_status", { project, sshConnectionId })
+
+/** 保存远程信任决策；返回决策后的状态。 */
+export const sshTrustSave = (project: string, sshConnectionId: string, trusted: boolean, trustParent: boolean) =>
+  invoke<TrustStatus>("ssh_trust_save", { project, sshConnectionId, trusted, trustParent })

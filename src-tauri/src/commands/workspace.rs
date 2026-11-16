@@ -18,12 +18,7 @@ pub struct WorkspaceContext {
 
 /// Render the selected roots as metadata; no file contents are loaded here.
 fn same_directory(left: &Path, right: &Path) -> bool {
-    if cfg!(windows) {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
-    } else {
-        left == right
-    }
+    crate::paths::eq_norm_path(left, right)
 }
 
 fn workspace_manifest(project: &str, workspace: &WorkspaceContext) -> Result<String, String> {

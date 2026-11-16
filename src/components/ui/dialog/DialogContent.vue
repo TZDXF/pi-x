@@ -2,17 +2,18 @@
 import type { DialogContentEmits, DialogContentProps } from 'reka-ui'
 
 import type { HTMLAttributes } from 'vue'
+import { computed } from 'vue'
 import { XIcon } from '@lucide/vue'
 import { reactiveOmit } from '@vueuse/core'
 import {
   DialogClose,
   DialogContent,
-  DialogPortal,
   useForwardPropsEmits,
 } from 'reka-ui'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import DialogOverlay from './DialogOverlay.vue'
+import DialogPortal from './DialogPortal.vue'
 
 defineOptions({
   inheritAttrs: false,
@@ -34,18 +35,19 @@ function preventPointerDownOutside(event: PointerDownOutsideEvent) {
   emits('pointerDownOutside', event)
 }
 
-const guardedForwarded = {
-  ...forwarded,
+const guardedForwarded = computed(() => ({
+  ...forwarded.value,
   onPointerDownOutside: preventPointerDownOutside,
-}
+}))
 </script>
 
 <template>
-  <DialogPortal>
+  <DialogPortal v-slot="{ onAfterLeave }" :force-mount="props.forceMount">
     <DialogOverlay />
     <DialogContent
       data-slot="dialog-content"
       v-bind="{ ...$attrs, ...guardedForwarded }"
+      @after-leave="onAfterLeave"
       :class="cn('bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 ring-foreground/10 grid max-w-[calc(100%-2rem)] gap-4 rounded-xl p-4 text-sm ring-1 duration-100 sm:max-w-sm fixed top-1/2 left-1/2 z-50 w-full -translate-x-1/2 -translate-y-1/2 outline-none', props.class)"
     >
       <slot />

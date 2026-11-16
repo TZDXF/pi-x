@@ -54,36 +54,33 @@ function mountActions(overrides: Partial<Parameters<typeof useSidebarSessionActi
   return { actions, options, app }
 }
 
-test("one shared timer opens only the last clicked session, and double click renames without opening", () => {
+test("single clicks open immediately without waiting for a double-click timer", () => {
   vi.useFakeTimers()
   const { actions, options } = mountActions()
   actions.openSession(saved("project"))
+  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved("project"))
   actions.openSession(saved("projectless"))
-  vi.advanceTimersByTime(249)
-  expect(options.resume).not.toHaveBeenCalled()
-  vi.advanceTimersByTime(1)
-  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved("projectless"))
-  actions.openSession(saved())
+  expect(options.resume).toHaveBeenLastCalledWith(saved("projectless"))
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+test("double click renames the opened session without scheduling another open", () => {
+  vi.useFakeTimers()
+  const { actions, options } = mountActions()
   actions.openSession(saved())
   actions.renameOnDoubleClick(saved())
-  vi.advanceTimersByTime(300)
-  expect(options.resume).toHaveBeenCalledTimes(1)
+  vi.runAllTimers()
+  expect(options.resume).toHaveBeenCalledExactlyOnceWith(saved())
   expect(actions.renaming.value).toEqual(saved())
   expect(actions.title.value).toBe("one")
 })
 
-test("double click cancels opening when navigation is busy; unmount clears a pending click", () => {
-  vi.useFakeTimers()
-  const { actions, options, app } = mountActions({ navigationDisabled: () => true })
+test("navigation protection blocks both opening and double-click renaming", () => {
+  const { actions, options } = mountActions({ navigationDisabled: () => true })
   actions.openSession(saved())
   actions.renameOnDoubleClick(saved())
-  vi.advanceTimersByTime(300)
   expect(options.resume).not.toHaveBeenCalled()
   expect(actions.renaming.value).toBeNull()
-  actions.openSession(saved())
-  app.unmount()
-  vi.advanceTimersByTime(300)
-  expect(options.resume).not.toHaveBeenCalled()
 })
 
 test("optimistic archive hides immediately, blocks duplicate requests and rolls back on failure", async () => {
@@ -119,6 +116,33 @@ test("busy archive does nothing; successful archive/restore preserves the existi
   await actions.archive(saved("old", { archived: true }))
   expect(options.update).toHaveBeenLastCalledWith(saved("old", { archived: true }), "old", false)
   expect(actions.archiving.value).toEqual({})
+})
+
+test("successful archive offers undo even when update mutates the row; undo preserves the latest title", async () => {
+  const onArchived = vi.fn()
+  const update = vi.fn(async (row: SessionMeta, title: string | null, archived: boolean) => {
+    Object.assign(row, { title, archived })
+  })
+  const { actions } = mountActions({ update, onArchived })
+  const row = saved()
+  await actions.archive(row)
+  expect(row.archived).toBe(true)
+  expect(onArchived).toHaveBeenCalledOnce()
+  row.title = "Updated title"
+  await onArchived.mock.calls[0]![0]()
+  expect(update).toHaveBeenLastCalledWith(row, "Updated title", false)
+  expect(row.archived).toBe(false)
+  expect(actions.archiving.value).toEqual({})
+})
+
+test("failed archives and restoring archived sessions do not offer archive undo", async () => {
+  const onArchived = vi.fn()
+  const failed = mountActions({ update: vi.fn().mockRejectedValue(new Error("archive failed")), onArchived })
+  await failed.actions.archive(saved())
+  expect(onArchived).not.toHaveBeenCalled()
+  const restored = mountActions({ onArchived })
+  await restored.actions.archive(saved("old", { archived: true }))
+  expect(onArchived).not.toHaveBeenCalled()
 })
 
 test("rename trims the title, preserves archive state, blocks concurrent saves and stays open after failure", async () => {
@@ -173,7 +197,9 @@ test("native drag writes both PiX payloads and plain text, including runtime ide
   const setData = vi.fn()
   const transfer = { setData, effectAllowed: "none" } as unknown as DataTransfer
   const item = { dataset: { file: "session.jsonl", path: "project-root" } } as unknown as HTMLElement
-  setSidebarSessionDragData(transfer, item, () => "runtime-1")
+  const resolveRuntime = vi.fn(() => "runtime-1")
+  setSidebarSessionDragData(transfer, item, resolveRuntime)
+  expect(resolveRuntime).toHaveBeenCalledWith("session.jsonl", "project-root")
   expect(transfer.effectAllowed).toBe("copyMove")
   expect(setData.mock.calls).toEqual([
     ["application/x-pix-session", "session.jsonl"],

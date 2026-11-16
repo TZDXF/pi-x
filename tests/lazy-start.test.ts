@@ -17,10 +17,13 @@ import { useAppNavigation } from "@/composables/useAppNavigation"
 import { useProjectActions } from "@/composables/useProjectActions"
 import { useSessionOpening } from "@/composables/useSessionOpening"
 import { useAppShortcuts } from "@/composables/useAppShortcuts"
+import { useWorkspaceLayout } from "@/composables/useWorkspaceLayout"
+import * as sessionIdentity from "@/lib/sessionIdentity"
+import * as sshTrust from "@/lib/sshTrust"
 
-async function loadVueSetup(source, require) {
+async function loadVueSetup(source, require, props = {}, inlineTemplate = false) {
   const { descriptor } = parse(source, { filename: "App.vue" })
-  const compiled = compileScript(descriptor, { id: "app-test" }).content
+  const compiled = compileScript(descriptor, { id: "app-test", inlineTemplate }).content
   const output = transpileModule(compiled, {
     compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
   }).outputText
@@ -33,7 +36,7 @@ async function loadVueSetup(source, require) {
     "App.vue",
     import.meta.dirname,
   )
-  return module.exports.default.setup({}, { expose: () => {}, emit: () => {} })
+  return module.exports.default.setup(props, { expose: () => {}, emit: () => {} })
 }
 
 afterEach(() => {
@@ -48,9 +51,12 @@ async function harness(group = null) {
     projectRoot: path => path,
     projectName: path => path,
     projectGroups: group ? { project: group } : {},
+    boardDrafts: {},
     // App 挂载即解析无项目会话目录（不阻塞启动），桩掉即可。
     ensureProjectless: async () => "",
     projectlessDefault: "",
+    syncState: async () => {},
+    applyState: () => {},
     isProjectless: () => false,
     // 移除项目标记：默认没有任何已移除项目。
     isRemovedProject: () => false,
@@ -76,6 +82,7 @@ async function harness(group = null) {
   }
   const context = {
     mount: undefined,
+    getConfig: async () => ({ lastProject: "project" }),
     findConversation: () => undefined,
     trustStatus: async () => ({ needsDecision: false }),
     spawnPi: async (...args) => {
@@ -104,6 +111,20 @@ async function harness(group = null) {
       useWindowSize: () => ({ width: ref(1200), height: ref(800) }),
     },
     "@/composables/useWorkspaceSidebarLayout": { useWorkspaceSidebarLayout },
+    "@/composables/useWorkspaceLayout": { useWorkspaceLayout },
+    "@/composables/useKanbanWorkspace": {
+      useKanbanWorkspace: () => ({
+        cards: ref([]),
+        projects: ref([]),
+        selectedDraft: ref(null),
+        selectedCard: ref(null),
+        detailsOpen: ref(false),
+        selectedProject: ref(""),
+      }),
+    },
+    "@/composables/useSessionActivitySync": { useSessionActivitySync: () => {} },
+    "@/lib/sessionIdentity": sessionIdentity,
+    "@/lib/sshTrust": sshTrust,
     "@/api/transport": { isDesktop: false },
     "@/api/piClient": {
       detectPi: async () => ({ found: true }),
@@ -111,13 +132,15 @@ async function harness(group = null) {
       workspaceGitInfo: async () => ({}),
       exportSessionFileHtml: async () => true,
       listRunningSessions: (...args) => context.listRunningSessions(...args),
-      getConfig: async () => ({ lastProject: "project" }),
+      getConfig: () => context.getConfig(),
       killPi: (...args) => context.killPi(...args),
       onPiEvent: async () => () => {},
       pixLog: () => {},
       onPiExit: async () => () => {},
       onPiStderr: async () => () => {},
+      onSshPathBound: async () => () => {},
       onReconnected: async () => () => {},
+      onWorkspaceStateChanged: async () => () => {},
       onSessionsChanged: async () => () => {},
       saveConfig: async () => {},
       sessionMtime: async () => 0,
@@ -146,7 +169,9 @@ async function harness(group = null) {
       useUiStore: () => ({ clear() {}, pushToast() {} }),
     },
     "@/stores/workspace": { useWorkspaceStore: () => workspace, registerSessionMtimeSync: () => {} },
-    "@/stores/appUpdate": { useAppUpdateStore: () => ({ autoCheck: async () => {} }) },
+    "@/stores/appUpdate": {
+      useAppUpdateStore: () => ({ autoCheck: async () => {}, startProgressListener: async () => {} }),
+    },
     "@/lib/router": {
       useRoute: () => ref({ name: "home", params: {} }),
       navigate: () => {},
@@ -159,6 +184,8 @@ async function harness(group = null) {
     "@/lib/workspaceRuntime": { createWorkspaceRuntime },
     "@/lib/workspaceStartup": { createWorkspaceStartup },
     "@/composables/useAppNavigation": { useAppNavigation },
+    "@/composables/useSessionNotificationNavigation": { useSessionNotificationNavigation: () => () => {} },
+    "@/lib/notifications": { onSessionNotificationActivated: async () => () => {} },
     "@/composables/useProjectActions": { useProjectActions },
     "@/composables/useSessionOpening": { useSessionOpening },
     "@/composables/useAppShortcuts": { useAppShortcuts },
@@ -166,6 +193,7 @@ async function harness(group = null) {
     "@/lib/backendError": backendError,
     "@/i18n": { tBackendError: value => value },
     "@/lib/shortcuts": { dispatchShortcut: () => false, registerShortcutHandler: () => () => {} },
+    "@/lib/configPreference": { initializeConfigPreferences: async () => true },
   }
   const bindings = await loadVueSetup(appSource, dependencies)
   context.actions = {
@@ -178,11 +206,61 @@ async function harness(group = null) {
     connecting: bindings.connecting,
     selectingProject: bindings.selectingProject,
     phase: bindings.phase,
+    showKanban: bindings.showKanban,
+    boardVisited: bindings.boardVisited,
+    route: bindings.route,
   }
   context.activeRuntimeId = bindings.activeRuntimeId ?? activeRuntimeId
   context.sessionFor = bindings.sessionFor ?? sessionFor
   return { context, calls, spawnArgs, workspace }
 }
+
+test("the saved board layout is visible before and during runtime initialization", async () => {
+  vi.stubGlobal("localStorage", { getItem: () => "board" })
+  const { context, calls } = await harness()
+  expect(context.actions.phase.value).toBe("detecting")
+  expect(context.actions.boardVisited.value).toBe(true)
+  expect(context.actions.showKanban.value).toBe(true)
+
+  let resolveConfig
+  context.getConfig = () => new Promise(resolve => (resolveConfig = resolve))
+  const mounting = context.mount()
+  expect(context.actions.showKanban.value).toBe(true)
+  resolveConfig({ lastProject: "project" })
+  await mounting
+  expect(context.actions.phase.value).toBe("chat")
+  expect(context.actions.showKanban.value).toBe(true)
+  expect(calls).toEqual([])
+
+  context.actions.phase.value = "trust"
+  expect(context.actions.showKanban.value).toBe(false)
+  context.actions.phase.value = "chat"
+  for (const name of ["settings", "schedules"]) {
+    context.actions.route.value = { name, params: {} }
+    expect(context.actions.showKanban.value).toBe(false)
+  }
+})
+
+test("the ordinary layout remains the default during startup", async () => {
+  const { context } = await harness()
+  expect(context.actions.phase.value).toBe("detecting")
+  expect(context.actions.boardVisited.value).toBe(false)
+  expect(context.actions.showKanban.value).toBe(false)
+})
+
+test("the welcome page renders startup without a runtime connection notice", async () => {
+  const source = readFileSync(new URL("../src/components/WelcomeView.vue", import.meta.url), "utf8")
+  const t = vi.fn(key => key)
+  const render = await loadVueSetup(
+    source,
+    { vue: vueRuntime, "vue-i18n": { useI18n: () => ({ t }) } },
+    { phase: "detecting", config: {} },
+    true,
+  )
+  const view = render({}, [])
+  expect(view.type).toBe("div")
+  expect(t).not.toHaveBeenCalledWith("welcome.connecting")
+})
 
 test("opening the app, selecting projects and drafting a new chat do not start pi", async () => {
   const { context, calls } = await harness()
@@ -242,7 +320,7 @@ test("a grouped project passes every root to Pi and refreshes context on the nex
   expect(calls).toEqual(["spawn", "init", "spawn", "init"])
 })
 
-test("cross-project drafts stay visible during checks while sending remains blocked", async () => {
+test("cross-project drafts stay visible and the send button stays enabled during checks", async () => {
   const { context, calls } = await harness()
   await context.mount()
   let resolveTrust
@@ -266,14 +344,56 @@ test("cross-project drafts stay visible during checks while sending remains bloc
   expect(context.actions.connecting.value).toBe(false)
   expect(calls).toEqual([])
   const view = composerSources() + turnSources()
-  expect(view.split("(!connecting || selectingProject)").length - 1).toBe(1)
+  expect(view).toContain('v-if="!session.sessionFile && session.entries.length === 0 && !session.historyLoading && !ui.pendingUserMessage"')
   expect(view).toMatch(/\(!connecting \|\| selectingProject \|\| gitBusy\)/)
-  expect(view).toMatch(/:disabled="editBusy \|\| gitBusy \|\| connecting"/)
+  expect(view).toMatch(/:disabled="editBusy \|\| gitBusy"/)
 })
 
+test("selecting a project without a saved trust decision asks even before .pi resources exist", async () => {
+  const { context } = await harness()
+  await context.mount()
+  context.trustStatus = async () => ({
+    needsDecision: false,
+    decision: null,
+    policy: "ask",
+    hasTrustRequiringResources: false,
+  })
+  await context.actions.selectProject("fresh")
+  expect(context.actions.phase.value).toBe("trust")
+})
+
+test("a saved trust decision or a non-ask policy skips the upfront prompt", async () => {
+  for (const status of [
+    { needsDecision: false, decision: true, policy: "ask", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: false, policy: "ask", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: null, policy: "always", hasTrustRequiringResources: false },
+    { needsDecision: false, decision: null, policy: "never", hasTrustRequiringResources: false },
+  ]) {
+    const { context } = await harness()
+    await context.mount()
+    context.trustStatus = async () => status
+    await context.actions.selectProject("settled")
+    expect(context.actions.phase.value, JSON.stringify(status)).toBe("chat")
+  }
+})
+
+test("the projectless workspace never prompts for trust", async () => {
+  const { context, workspace } = await harness()
+  await context.mount()
+  workspace.isProjectless = () => true
+  context.trustStatus = async () => ({
+    needsDecision: false,
+    decision: null,
+    policy: "ask",
+    hasTrustRequiringResources: false,
+  })
+  await context.actions.selectProject("projectless-dir")
+  expect(context.actions.phase.value).toBe("chat")
+})
 test("project selection keeps the editor enabled without bypassing other edit guards", () => {
   const view = composerSources() + turnSources()
-  const editor = view.split("<ComposerRichEditor")[1].split("/>")[0]
+  // 编辑器禁用条件由 ChatComposer 传给 ChatPromptInput，再传给 ComposerRichEditor。
+  const editor = view.split("<ChatPromptInput")[1].split("/>")[0]
   const expression = editor.match(/:disabled="([^"]+)"/)[1]
   const state = {
     editBusy: false,
@@ -284,7 +404,7 @@ test("project selection keeps the editor enabled without bypassing other edit gu
   }
   const disabled = values => new Function(...Object.keys(values), `return (${expression})`)(...Object.values(values))
   expect(disabled(state)).toBe(false)
-  expect(disabled({ ...state, selectingProject: false })).toBe(true)
+  expect(disabled({ ...state, selectingProject: false })).toBe(false)
   expect(disabled({ ...state, editBusy: true })).toBe(true)
   expect(disabled({ ...state, gitBusy: true })).toBe(true)
 })
