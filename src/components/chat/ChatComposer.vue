@@ -110,18 +110,26 @@ const { codeComments, selections, onSendDelayWheel, onSubmit, abort } = props.co
         </PromptInputHeader>
         <PromptInputHeader v-if="pendingComments.length">
           <!-- 待发送的代码批注，随下一条消息一并发给 agent -->
-          <div class="flex flex-wrap gap-1.5 px-1">
+          <div class="flex min-w-0 flex-wrap gap-1.5 px-1">
             <div
               v-for="c in pendingComments"
               :key="c.id"
               class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-1 pl-2 text-xs"
             >
               <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
-              <span class="shrink-0 font-mono"
+              <!-- 路径与批注都**可收缩**：`shrink-0` 的长路径曾把 chip 顶出 composer
+                   容器（宽度算成 max-content，然后被父级 overflow-hidden 裁切）。
+                   两段从 0 起按比例增长（`basis-0` + `grow`）；路径单行截断（行号要可读），
+                   批注换行到两行后截断，全文由 `title` 给出。 -->
+              <span class="min-w-0 basis-0 grow-[3] truncate font-mono" :title="c.path"
                 >{{ commentFile(c.path) }}:{{ c.startLine
                 }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span
               >
-              <span class="min-w-0 truncate text-muted-foreground" :title="c.comment">{{ c.comment }}</span>
+              <span
+                class="line-clamp-2 min-w-0 basis-0 grow-[2] break-words whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+                :title="c.comment"
+                >{{ c.comment }}</span
+              >
               <Button
                 type="button"
                 variant="ghost"

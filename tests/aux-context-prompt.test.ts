@@ -127,10 +127,10 @@ test("copy uses only the visible question (no `<aux_parent_context>`)", () => {
     /const visibleText = computed\(\(\) => parseComposerPromptContexts\(props\.entry\.text\)\.visibleContent\)/,
   )
   expect(chat).toMatch(/@click="emit\('copyText', visibleText\)"/)
-  // 折叠块默认收起：展开态是本地 ref，初值 false。
-  expect(chat).toMatch(/const parentContextOpen = ref\(false\)/)
-  expect(chat).toMatch(/data-aux-parent-context-toggle/)
-  expect(chat).toMatch(/v-if="parentContextOpen"/)
+  // 气泡**不再展示**父上下文块（也不再有折叠块/展开态）：块只存在于 prompt 数据里。
+  expect(chat).not.toMatch(/data-aux-parent-context/)
+  expect(chat).not.toMatch(/parentContextOpen/)
+  expect(chat).not.toMatch(/chat\.parentContext/)
   // 展示正文也来自解析器（与读回同源）。
   expect(chat).toMatch(/parseComposerPromptContexts\(props\.entry\.contextText \?\? props\.entry\.text\)/)
 })
