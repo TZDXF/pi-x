@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { expect, test, vi } from "vitest"
 import { checkCommand, runChecks } from "../scripts/check.mjs"
 
@@ -17,9 +18,28 @@ test("package manager paths with spaces work for JS and native distributions", (
   for (const native of ["C:/Program Files/pnpm/pnpm.exe", "/opt/pnpm/pnpm"]) {
     expect(checkCommand("lint", native)).toEqual({ command: native, args: ["run", "lint"] })
   }
+  // Rust 检查一律经 UTF-8 包装器启动（scripts/run-with-utf8.mjs），而不是直接 spawn cargo。
+  expect(checkCommand("rust")).toEqual({
+    command: process.execPath,
+    args: [
+      fileURLToPath(new URL("../scripts/run-with-utf8.mjs", import.meta.url)),
+      "cargo",
+      "check",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+    ],
+  })
   expect(checkCommand("rust:remote")).toEqual({
-    command: "cargo",
-    args: ["check", "--manifest-path", "src-tauri/Cargo.toml", "--features", "remote-access"],
+    command: process.execPath,
+    args: [
+      fileURLToPath(new URL("../scripts/run-with-utf8.mjs", import.meta.url)),
+      "cargo",
+      "check",
+      "--manifest-path",
+      "src-tauri/Cargo.toml",
+      "--features",
+      "remote-access",
+    ],
   })
 })
 
