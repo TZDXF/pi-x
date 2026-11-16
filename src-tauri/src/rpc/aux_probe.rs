@@ -206,6 +206,7 @@ pub(crate) fn clear_kill_failures() {
     child::SKIP_OS_KILL.store(false, std::sync::atomic::Ordering::Relaxed);
     child::KILL_BUDGET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
     child::OS_KILL_DELAY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    child::NONE_BRANCH_WINDOW_MS.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 测试用：模拟"OS 终止调用返回成功、但进程其实没被终止"（复审第四轮 P1-2 的 seam）。
@@ -223,6 +224,12 @@ pub(crate) fn simulate_unconfirmed_kill(budget_ms: u64) {
 #[cfg(test)]
 pub(crate) fn set_kill_budget_ms(ms: u64) {
     child::KILL_BUDGET_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 测试用：`inner == None` 分支入口的确定窗口（让竞争者先排队拿 activity）。
+#[cfg(test)]
+pub(crate) fn set_none_branch_window_ms(ms: u64) {
+    child::NONE_BRANCH_WINDOW_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// 测试用：把 OS 终止命令换成"延迟 `delay_ms` 后返回非零"（覆盖 taskkill 卡住的场景）。

@@ -445,11 +445,20 @@ UUID、永不复用），因此"刚判定为空、kill 前又被领走"不可能
 **真实可达**（worker 可能在 OS kill 尚未执行时自行退出），但无害：进程确实已退出、
 `pi://exit` 只发一次，不会把活进程判死。
 
-**退出路径的取锁也受同一总 deadline 约束**：`process_kill_confirming` 先取 `activity`
-锁、再取 `inner` 锁，**两把锁都用 `timeout(剩余 budget, lock())`**。否则另一条默认 kill
-在跑 OS 命令期间持有 `inner`（最长 5s）时，退出路径会白等满 5s（复审第六轮实测 N=1
-4946ms）。抢不到锁即按"未确认终止"失败：**不 take** `inner`、撤销 `expected_stop`、不
-`commit_exit`，由 `kill_all` 记日志后继续下一个实例。
+**退出路径的取锁也受同一总 deadline 约束**：`process_kill_confirming` **先取 `inner`
+锁、再取 `activity` 锁**（锁序与 `process_spawn_impl` 一致），**两把锁都用
+`timeout(剩余 budget, lock())`**。否则另一条默认 kill 在跑 OS 命令期间持有 `inner`
+（最长 5s）时，退出路径会白等满 5s（复审第六轮实测 N=1 4946ms）。抢不到锁即按"未确认
+终止"失败：**一行共享状态都不动**（`inner` 不 take、意图位不置）、不 `commit_exit`，
+由 `kill_all` 记日志后继续下一个实例。
+
+> **早期版本的 `activity` → `inner` 顺序已废弃**（复审第七轮）：那个顺序要求"先置意图位
+> 再取 `inner`"，`inner` 抢不到就必须回头无 budget 地重取 `activity` 去撤销，500ms 预算
+> 被打到 2083ms。现在的顺序是"**先取锁、再改共享状态**"。
+
+**`inner == None` 的幂等分支**：此时 `inner` 守卫与 `activity` 守卫**都仍在手上**，
+撤销意图位与提交 `pi://exit` 直接使用这把 activity 守卫完成 —— **不再回头取锁**
+（复审第八轮：旧版在这里调 `has_spawned_once()` 裸取 activity，实测 2001ms）。
 
 **退出路径不做后台重试**：`kill_all` 会 `take` 整个进程池并 `clear_pending_kills()`，
 所以退出时的终止失败**只记日志、不再重试**（也不跨启动恢复）—— 这些 Child 由**本次**

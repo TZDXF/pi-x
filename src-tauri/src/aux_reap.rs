@@ -661,6 +661,12 @@ mod tests {
 
     #[tokio::test]
     async fn in_flight_requests_also_block_reclaiming() {
+        // `reap_once` 会用注入的"未来时刻"调 `holder_count(_, now)` → `expire_at`，
+        // 把**全局租约表**里别人刚领的条目整条过期掉。不持锁的用例在 CI 并行时会
+        // 让别的用例的 token 断言随机失败（复审第八轮 CI 红）。凡调用
+        // `reap_once`/`claim_at`/`holder_count`/`release_at` 的用例都必须串行。
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:inflight", RuntimePolicy::Aux).await;
         test_harness::add_in_flight_request(&state, "aux:inflight").await;
@@ -672,6 +678,12 @@ mod tests {
 
     #[tokio::test]
     async fn busy_or_pending_instances_are_never_reaped() {
+        // `reap_once` 会用注入的"未来时刻"调 `holder_count(_, now)` → `expire_at`，
+        // 把**全局租约表**里别人刚领的条目整条过期掉。不持锁的用例在 CI 并行时会
+        // 让别的用例的 token 断言随机失败（复审第八轮 CI 红）。凡调用
+        // `reap_once`/`claim_at`/`holder_count`/`release_at` 的用例都必须串行。
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "aux:busy", RuntimePolicy::Aux).await;
         test_harness::install(&state, "aux:ask", RuntimePolicy::Aux).await;
@@ -685,6 +697,12 @@ mod tests {
 
     #[tokio::test]
     async fn main_runtimes_are_never_scanned() {
+        // `reap_once` 会用注入的"未来时刻"调 `holder_count(_, now)` → `expire_at`，
+        // 把**全局租约表**里别人刚领的条目整条过期掉。不持锁的用例在 CI 并行时会
+        // 让别的用例的 token 断言随机失败（复审第八轮 CI 红）。凡调用
+        // `reap_once`/`claim_at`/`holder_count`/`release_at` 的用例都必须串行。
+        let _guard = crate::aux_leases::test_lock();
+        crate::aux_leases::reset_for_test();
         let state = Arc::new(RpcState::default());
         test_harness::install(&state, "main", RuntimePolicy::Main).await;
         let now = Instant::now() + Duration::from_secs(31 * 60);

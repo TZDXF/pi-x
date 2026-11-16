@@ -126,8 +126,12 @@ impl ProcessState {
             .map(SessionTransport::snapshot)
     }
 
-    /// 该对象是否**真的启动过**进程：`process_kill` 的 `inner == None` 早退分支据此
-    /// 决定是否发一条 `pi://exit`（从未启动的对象没有可报告的终止）。
+    /// 该对象是否**真的启动过**进程（**只读、仅测试使用**）。
+    ///
+    /// 生产路径**不**用它：`process_kill` 的 `inner == None` 早退分支直接从**已持有**
+    /// 的 `activity` 守卫里读 `has_spawned()` —— 放锁后再取一次是裸等待，会把总预算
+    /// 打穿（复审第八轮 P1）。
+    #[cfg(test)]
     pub(crate) async fn has_spawned_once(&self) -> bool {
         self.activity.lock().await.has_spawned()
     }

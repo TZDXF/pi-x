@@ -858,6 +858,14 @@ pub(super) static KILL_BUDGET_MS: AtomicU64 = AtomicU64::new(0);
 pub(super) static SKIP_OS_KILL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// 测试用：在 `inner == None` 分支**放锁之后、若还要回头取锁之前**插入一个确定窗口。
+///
+/// 为什么需要它：那处缺陷只在"本任务放锁之后、竞争者立刻抢到 activity"时才显形，
+/// 纯靠调度抖动写的用例会 false negative。窗口让竞争者有一个确定的机会拿锁，
+/// 于是"回头裸取"的回归必然被检出；**只影响测试**，生产路径该窗口为 0。
+#[cfg(test)]
+pub(super) static NONE_BRANCH_WINDOW_MS: AtomicU64 = AtomicU64::new(0);
+
 /// 测试用：把 OS 终止命令换成"先睡 D 毫秒、再返回非零"的等价物。
 ///
 /// 这是复审第五轮要求的可重跑注入：不需要造真实 OS 权限拒绝，就能证明总 deadline
@@ -1234,26 +1242,36 @@ async fn process_kill_confirming(
     // ② 再取 activity。抢不到：inner 原样归还（没 take）、什么都不改。
     let mut activity = lock_activity_within(state, deadline, "acquire").await?;
 
-    // ③ **两把锁都持有**之后才改共享状态：置意图位 → take inner → 立刻放掉 activity
-    //    （它是 reader/事件出口热用的锁，不能跨慢操作持有）。
+    // ③ **两把锁都持有**之后才改共享状态：置意图位 → take inner。
     activity.mark_expected_stop();
     let taken = inner_guard.take();
-    drop(activity);
 
     let Some(mut inner) = taken else {
+        // 测试窗口（生产恒为 0）：此刻我们**仍持有** activity 守卫，让竞争者先排队，
+        // 于是"放锁后再裸取 activity"的回归会被确定地检出（不依赖调度抖动）。
+        #[cfg(test)]
+        if NONE_BRANCH_WINDOW_MS.load(Ordering::Relaxed) > 0 {
+            tokio::time::sleep(Duration::from_millis(
+                NONE_BRANCH_WINDOW_MS.load(Ordering::Relaxed),
+            ))
+            .await;
+        }
         // 没有内层会话：要么已确认退出过（reader 收了尾 / 更早的一次成功 kill），
         // 要么**从未 spawn**（spawn 失败不会入池，公共路径不可达）。
-        // 此时仍持有 inner 守卫，别人拿不到 inner，因此这个判断没有竞态。
-        drop(inner_guard);
-        // 撤销刚置上的意图位（budget 内；超时就保留并记日志，见 §11）。
-        clear_expected_stop(state, deadline).await;
-        if state.has_spawned_once().await {
-            commit_exit(state, false, Some(deadline)).await;
+        // 此时 inner 守卫仍在我们手上（别人拿不到 inner，判断无竞态），**activity 守卫
+        // 也仍在手上** —— 所以撤销意图位与提交终止状态都直接用这把守卫完成，
+        // **不再回头取一次 activity 锁**（上一版正是在这里裸取，把 500ms 预算打到 2001ms）。
+        activity.clear_expected_stop();
+        if activity.has_spawned() {
+            commit_exit_locked(state, &mut activity, false);
         }
+        drop(activity);
+        drop(inner_guard);
         return Ok(());
     };
     // 慢操作（远端 exec / OS 终止 / 等退出）期间**不持有 activity**（只持 inner 守卫）：
     // activity 是所有 reader/事件出口热用的锁，不能在这里长期占住。
+    drop(activity);
     match kill_inner(&state.runtime_id, &mut inner, reason, Some(deadline)).await {
         Ok(()) => {
             drop(inner);
@@ -1519,6 +1537,101 @@ mod kill_confirmation_tests {
         assert_eq!(sink.exits().len(), 0, "失败时不得发 exit");
         activity_holder.await.expect("activity holder");
         let _ = inner_holder.await;
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第八轮 P1 的回归（`inner == None` 分支 + activity 被抢）**。
+    ///
+    /// 复现质量的时序：先让一次成功 kill 把 `inner` 摘成 `None`；kill 的第 ② 步拿到
+    /// activity、放掉之后由**抢占者**立刻接手并持有 2000ms。旧版在 None 分支会"回头
+    /// 裸取 activity"，于是 500ms 预算被打到 2001ms（质量实测）；现在它直接用仍持有的
+    /// 守卫，立刻返回。
+    ///
+    /// "放锁 → 被抢"这个窗口用测试专用 `set_none_branch_window_ms`（分支入口处的确定
+    /// 延迟，生产恒为 0）来钉住 —— 否则纯靠调度抖动，回归可能漏检（false negative）。
+    #[tokio::test]
+    async fn the_idempotent_none_branch_also_stays_within_budget() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:none", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:none").await;
+
+        // 先确认退出：inner → None，活动表已发过一次 exit。
+        process_kill(&process, "first").await.expect("首次 kill 成功");
+        assert!(process.inner.lock().await.is_none(), "inner 必须已是 None");
+        assert_eq!(sink.exits().len(), 1, "首次 kill 已发 exit");
+
+        // 抢占者：分支入口窗口一打开就抢 activity，并持有 2000ms。
+        let grabber = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                loop {
+                    if process.activity.try_lock().is_err() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                let _held = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+
+        // 窗口 50ms ≪ 断言上界 1000ms。
+        crate::rpc::aux_probe::set_none_branch_window_ms(50);
+        let started = std::time::Instant::now();
+        let _ = process_kill_fast(&process, "second").await;
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "inner==None 分支也不得无界等 activity（质量实测 2001ms），实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 1, "幂等分支不得重复发 exit");
+        grabber.await.expect("grabber");
+        crate::rpc::aux_probe::clear_kill_failures();
+    }
+
+    /// **复审第八轮 P1 的回归（`inner == None` + 两把锁的形态）**：生产 `kill_all` 在
+    /// 幂等分支上遇到被占的 activity，N=1 也必须 **< 1000ms**。
+    #[tokio::test]
+    async fn kill_all_on_an_already_exited_instance_stays_within_budget() {
+        let _guard = lock();
+        crate::rpc::aux_probe::clear_kill_failures();
+        let state = RpcState::default();
+        let (process, sink) =
+            test_harness::install_recording(&state, "aux:none2", RuntimePolicy::Aux).await;
+        test_harness::start_agent_run(&state, "aux:none2").await;
+        process_kill(&process, "first").await.expect("首次 kill");
+        assert!(process.inner.lock().await.is_none());
+
+        let holder = {
+            let process = process.clone();
+            tokio::spawn(async move {
+                let _guard = process.activity.lock().await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
+            })
+        };
+        let held = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if process.activity.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(held.is_ok(), "activity 必须真的被占住");
+
+        let started = std::time::Instant::now();
+        crate::rpc::kill_all(&state).await.expect("kill_all Ok");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1000),
+            "kill_all 在幂等分支上也不得无界等 activity，实测 {elapsed:?}"
+        );
+        assert_eq!(sink.exits().len(), 1, "不得重复发 exit");
+        holder.await.expect("activity holder");
         crate::rpc::aux_probe::clear_kill_failures();
     }
 
