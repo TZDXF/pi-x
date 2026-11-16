@@ -79,6 +79,7 @@ import KanbanBoard from "@/components/kanban/KanbanBoard.vue"
 import KanbanDetailsPanel from "@/components/kanban/KanbanDetailsPanel.vue"
 import { useRoute, navigate, goHome, projectRoute, sessionRoute } from "@/lib/router"
 import { kanbanColumnOrderKey, kanbanStatusOrderKey, type KanbanCard } from "@/lib/kanban"
+import { boardPanelSessions } from "@/lib/boardPanelSessions"
 import { loadTrustStatus } from "@/lib/sshTrust"
 import { isRemoteProject } from "@/lib/ssh"
 import { sameSessionIdentity } from "@/lib/sessionIdentity"
@@ -342,10 +343,27 @@ const openSessionNotification = useSessionNotificationNavigation({
 })
 let unlistenNotifications: (() => void) | undefined
 
-// 归档成功后收敛正在显示该会话的面板（TZD-121）：清掉看板右侧会话面板的选中
-// 卡片并关闭面板，同时收起右侧面板；未归档会话的切换不受影响。
+// 归档成功后收敛正在显示该会话的面板（TZD-121）：清掉看板详情面板的选中卡片并
+// 关闭面板，同时收起右侧面板；未归档会话的切换不受影响。
+//
+// `boardSessions` 由 `lib/boardPanelSessions.ts` 汇总真实身份：草稿首次落盘后
+// `selection` 仍是旧快照，命中要跟 `selectedCard`/草稿索引/活运行时一起判断。
 useArchivedSessionPanel({
-  board,
+  // 只有布局真的是看板、详情真的展开时，看板选择才算"用户正在看的面板"。
+  boardVisible: () => showKanban.value && board.detailsOpen,
+  boardSessions: () =>
+    boardPanelSessions({
+      selectedCard: board.selectedCard,
+      selection: board.selection,
+      draft: id => {
+        const draft = workspace.boardDrafts[id]
+        return { file: draft?.sessionFile, cwd: draft?.project }
+      },
+      runtime: id => {
+        const owner = peekConversation(id)
+        return { file: owner?.sessionFile, cwd: owner?.cwd }
+      },
+    }),
   activeSession: () => ({ file: session.sessionFile, cwd: session.cwd }),
   closeBoardPanel: () => {
     board.selection = null
