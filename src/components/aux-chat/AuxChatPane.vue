@@ -108,7 +108,7 @@ const sendControl = useChatSendControl({
   // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，
   // 发送成功后只清本桶，主会话的批注/引用互不影响。
   contexts: "aux",
-  // 首轮带父会话已提交分支（`<aux_parent_context>` 折叠块，默认收起，TZD-102）。
+  // 首轮带父会话已提交分支（`<aux_parent_context>` 块，气泡不展示，TZD-102/TZD-119）。
   parentContext,
 })
 const controls = reactive(sendControl)

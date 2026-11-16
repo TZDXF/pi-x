@@ -21,14 +21,18 @@ test("code comment chips never size to their content", () => {
     [view, "ChatUserPrompt"],
     [composer, "ChatComposer"],
   ] as const) {
-    // 反向护栏：路径段曾写作 `shrink-0 font-mono`，长路径会顶破卡片。
-    expect(file, name).not.toMatch(/shrink-0 font-mono/)
-    // 路径与批注两段都必须可收缩，并各自截断。两段共用 `basis-0 + grow`：
-    // 只给一段 `flex-1`、另一段 `basis-auto` 时，后者会按 max-content 吃满宽度。
+    // 路径段不再 `shrink-0`（长路径会顶破卡片），而是可收缩 + 截断。
+    expect(file, name).not.toMatch(/min-w-0 basis-0 grow-\[3\] truncate font-mono shrink-0/)
     expect(file, name).toMatch(/min-w-0 basis-0 grow-\[3\] truncate font-mono/)
     expect(file, name).toMatch(/line-clamp-2 min-w-0 basis-0 grow-\[2\]/)
-    // 截断必须可回溯：路径段的 title 给出完整路径（批注段原本就有 title）。
-    expect(file, name).toMatch(/:title="c\.path"/)
+    // 行号是**独立后缀段**：`shrink-0` 且不参与路径的 truncate（否则窄面板下行号被省略）。
+    expect(file, name).toMatch(/shrink-0 font-mono" data-code-comment-lines/)
+    // 行号不再拼进路径的截断 span 里（旧写法 `{{ c.path }}:{{ c.startLine }}`）。
+    expect(file, name).not.toMatch(/c\.path }}:{{ c\.startLine/)
+    // 截断必须可回溯：路径段 title 给完整 `path:行号`（气泡与 composer 都用 commentPathLabel），
+    // 行号独立可读，批注段有 title。
+    expect(file, name).toMatch(/:title="commentPathLabel\(c\)"/)
+    expect(file, name).toMatch(/:title="c\.comment"/)
   }
 })
 
@@ -49,6 +53,17 @@ test("bubble blocks never size themselves from the viewport", () => {
   expect(view).not.toMatch(/75vw/)
   // 编辑框宽度跟气泡走，旧宽度被 max-w 封顶。
   expect(view).toMatch(/class="w-full max-w-\[36rem\] min-w-0 space-y-2"/)
+})
+
+test("line labels share one format with the prompt block", async () => {
+  // chip 的行号段与 prompt 里的 `Lines:` 必须同源，避免两处格式漂移（`10` vs `10-10`）。
+  const { commentLineLabel, commentPathLabel, formatCodeComment } = await import("@/lib/codeComments")
+  expect(commentLineLabel(10, 10)).toBe("10")
+  expect(commentLineLabel(2, 5)).toBe("2-5")
+  expect(commentPathLabel({ path: "src/a.ts", startLine: 2, endLine: 5 })).toBe("src/a.ts:2-5")
+  expect(
+    formatCodeComment({ path: "src/a.ts", startLine: 2, endLine: 5, selectedText: "", comment: "x" }, 0),
+  ).toContain("Lines: 2-5")
 })
 
 test("the aux parent-context block is kept in data only (no bubble UI)", () => {

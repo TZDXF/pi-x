@@ -48,8 +48,17 @@ function fenceFor(text: string) {
   return fence
 }
 
-function lineLabel(start: number, end: number) {
+/**
+ * 行号区间标签（`10` / `2-5`）。prompt 的 `Lines:` 与气泡 chip 共用同一份格式：
+ * chip 里行号是**独立的后缀段**，不参与路径的截断（`ChatUserPrompt` / `ChatComposer`）。
+ */
+export function commentLineLabel(start: number, end: number) {
   return start === end ? String(start) : `${start}-${end}`
+}
+
+/** prompt/UI 共用的 `path:lines` 标签（气泡 chip 与 title 用它）。 */
+export function commentPathLabel(comment: { path: string; startLine: number; endLine: number }) {
+  return `${comment.path}:${commentLineLabel(comment.startLine, comment.endLine)}`
 }
 
 /**
@@ -81,7 +90,7 @@ export function formatCodeComment(draft: CodeCommentDraft, index: number): strin
     `## Comment ${index + 1}`,
     `File: ${draft.path}`,
     "Side: R",
-    `Lines: ${lineLabel(draft.startLine, draft.endLine)}`,
+    `Lines: ${commentLineLabel(draft.startLine, draft.endLine)}`,
     "Selected text:",
     fence,
     selected,

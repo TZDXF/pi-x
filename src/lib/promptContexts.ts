@@ -22,7 +22,7 @@ import { buildAuxParentContextBlock, stripAuxParentContextBlock, withAuxParentCo
  * 序列化：先拼 userselect 块再在外层追加 Code comments 块，
  * 最终 prompt 为「正文 + userselect + Code comments」。
  *
- * 给了父上下文时把折叠块置于**最前**（`<aux_parent_context>…</aux_parent_context>` +
+ * 给了父上下文时把该块置于**最前**（`<aux_parent_context>…</aux_parent_context>` +
  * 空行 + 正文），与解析顺序严格相反 —— 序列化与解析必须互逆，否则历史读回与首发
  * 会看到不同的提示词。
  */
@@ -47,9 +47,9 @@ export function parseComposerPromptContexts(content: string): {
   visibleContent: string
   comments: ParsedCodeComment[]
   selections: ParsedConversationSelection[]
-  /** 折叠块**内文**（不含标签）；没有该块时为 `null`。 */
+  /** 块**内文**（不含标签）；没有该块时为 `null`。 */
   parentContext: string | null
-  /** 折叠块原文（含标签，不含分隔空行）；气泡折叠展示与"块字节不变"判据用它。 */
+  /** 块原文（含标签，不含分隔空行）；"编辑重发块字节不变"判据用它（气泡不展示该块）。 */
   parentContextBlock: string | null
 } {
   const leading = stripAuxParentContextBlock(content)

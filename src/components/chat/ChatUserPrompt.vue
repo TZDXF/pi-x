@@ -6,7 +6,7 @@ import { MessageContent, MessageActions, MessageAction } from "@/components/ai-e
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { parseComposerPromptContexts } from "@/lib/promptContexts"
-import type { ParsedCodeComment } from "@/lib/codeComments"
+import { commentLineLabel, commentPathLabel, type ParsedCodeComment } from "@/lib/codeComments"
 import ComposerText from "@/components/ComposerText.vue"
 import { formatMessageTime } from "@/lib/format"
 import type { UserEntry } from "@/stores/session"
@@ -117,16 +117,17 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
           type="button"
           data-code-comment-tag
           class="flex max-w-full min-w-0 items-start gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-ring"
-          :title="[c.path, c.selectedText, c.comment].filter(Boolean).join('\n')"
+          :title="[commentPathLabel(c), c.selectedText, c.comment].filter(Boolean).join('\n')"
           @click="emit('openCodeComment', c)"
         >
           <MessageSquareQuote class="size-3.5 shrink-0 text-muted-foreground" />
           <!-- 路径不再 `shrink-0`：超长路径曾把 chip 顶出气泡，横向溢出后被裁切。
-               路径与批注都从 0 起按比例增长（`basis-0` + `grow`），路径单行截断（行号要留在
-               末尾可读），批注换行到两行后截断；完整值由 `title` 与点击后的批注弹窗给出。 -->
-          <span class="min-w-0 basis-0 grow-[3] truncate font-mono" :title="c.path"
-            >{{ c.path }}:{{ c.startLine }}<template v-if="c.endLine !== c.startLine">-{{ c.endLine }}</template></span
-          >
+               行号**独立成后缀段**（`shrink-0`）：与路径共用一个 truncate span 时，长路径会把
+               行号一起省略（380px 面板实测），而"这条批注在文件的哪几行"是必须可读的信息。
+               路径按 `basis-0 + grow` 分到剩余宽度并在 chip 内截断；`title` 给完整 `path:行号`
+               （chip 与路径段都用它），点击后的批注弹窗给出更完整的上下文。 -->
+          <span class="min-w-0 basis-0 grow-[3] truncate font-mono" :title="commentPathLabel(c)">{{ c.path }}</span>
+          <span class="shrink-0 font-mono" data-code-comment-lines>{{ commentLineLabel(c.startLine, c.endLine) }}</span>
           <span
             class="line-clamp-2 min-w-0 basis-0 grow-[2] break-words whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
             :title="c.comment"

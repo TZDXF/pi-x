@@ -39,7 +39,7 @@ export function useChatSendControl(deps: {
    */
   contexts?: "shared" | "aux" | "none"
   /**
-   * aux 的**父上下文**折叠块内文（`docs/aux-chat-spec.md` §3/§4，TZD-102）。
+   * aux 的**父上下文**块内文（`docs/aux-chat-spec.md` §3/§4，TZD-102；气泡不展示该块）。
    *
    * 只在**首轮**返回值：调用方（`AuxChatPane`）按 aux `runtimeId` 记账，第 2/3 轮返回
    * `null`，于是块不会被重复拼上（单测钉住"连续三轮仅首轮注入"）。主会话不传。
