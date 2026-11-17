@@ -14,6 +14,7 @@ const imports = {
   vue,
   "@/lib/utils": { cn: () => "" },
   "@/lib/linkOptions": { markdownLinkOptions: {} },
+  "@/lib/markdownAutoLink": { markdownParserOptions: { plugins: [] } },
   "vue-stream-markdown/index.css": {},
   "vue-stream-markdown": {
     Markdown: vue.defineComponent({
@@ -39,6 +40,12 @@ test("completed and historical markdown is static regardless of animation", asyn
       expect(html).toContain("localhost")
     }
   }
+})
+
+test("assistant markdown receives the shared parser options", () => {
+  expect(chatSource("components/ai-elements/message/MessageResponse.vue")).toContain(
+    ':parser-options="markdownParserOptions"',
+  )
 })
 
 test("assistant turns forward completion independently of animation", () => {
