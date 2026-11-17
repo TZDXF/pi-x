@@ -7,6 +7,7 @@ import { packageTranslate } from "@/api/piClient"
 import { useUiStore } from "@/stores/conversations"
 import { useContentTranslation } from "@/composables/useContentTranslation"
 import { markdownLinkOptions } from "@/lib/linkOptions"
+import { markdownParserOptions } from "@/lib/markdownAutoLink"
 import type { FilePreview } from "@/lib/projectFiles"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -66,6 +67,7 @@ const readResourceFile = computed(() => {
           mode="static"
           :enable-animate="false"
           :link-options="markdownLinkOptions"
+          :parser-options="markdownParserOptions"
           class="text-sm"
         />
       </template>

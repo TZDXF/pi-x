@@ -8,6 +8,7 @@ import { storeToRefs } from "pinia"
 import { useI18n } from "vue-i18n"
 import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
+import { markdownParserOptions } from "@/lib/markdownAutoLink"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { GithubIcon } from "@/components/ai-elements/open-in-chat/providers/icons"
@@ -304,7 +305,12 @@ onMounted(() => {
         :aria-label="t('appUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown mode="static" :link-options="markdownLinkOptions" :content="appStatus.releaseNotes" />
+        <Markdown
+          mode="static"
+          :link-options="markdownLinkOptions"
+          :parser-options="markdownParserOptions"
+          :content="appStatus.releaseNotes"
+        />
       </div>
       <button
         v-if="appStatus.releaseUrl"
@@ -370,7 +376,12 @@ onMounted(() => {
         :aria-label="t('piUpdate.releaseNotes')"
         @click="onNotesClick"
       >
-        <Markdown mode="static" :link-options="markdownLinkOptions" :content="status.releaseNotes" />
+        <Markdown
+          mode="static"
+          :link-options="markdownLinkOptions"
+          :parser-options="markdownParserOptions"
+          :content="status.releaseNotes"
+        />
       </div>
       <button
         v-if="status.releaseUrl"

@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { computed, useSlots } from 'vue'
 import { Markdown } from 'vue-stream-markdown'
 import { markdownLinkOptions } from '@/lib/linkOptions'
+import { markdownParserOptions } from '@/lib/markdownAutoLink'
 import 'vue-stream-markdown/index.css'
 
 interface Props {
@@ -38,6 +39,7 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
     :content="md"
     :mode="props.streaming ? 'streaming' : 'static'"
     :link-options="markdownLinkOptions"
+    :parser-options="markdownParserOptions"
     :class="
       cn(
         'size-full [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!',

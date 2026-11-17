@@ -25,6 +25,7 @@ import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
+import { markdownParserOptions } from "@/lib/markdownAutoLink"
 import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
 import "vue-stream-markdown/index.css"
@@ -412,6 +413,7 @@ onBeforeUnmount(() => {
             mode="static"
             :enable-animate="false"
             :link-options="markdownLinkOptions"
+            :parser-options="markdownParserOptions"
             class="text-sm"
           />
           <slot name="after-content" />
