@@ -79,6 +79,11 @@ test("the aux pane send control reads its own bucket instead of full isolation",
   expect(control).toContain("if (auxScoped) clearAuxSelectionBucket(session.runtimeId)")
 })
 
+test("the reopened file preview keeps the session root for subsequent selections", () => {
+  const preview = read("components/chat/CodeCommentPreview.vue")
+  expect(preview).toContain(':comment-project="roots[0]"')
+})
+
 test("the preview keeps caller attrs on its single visible root (fragment regression)", () => {
   // 回归（TZD-103 阻塞项）：模板有两个根（section + 覆盖层浮层）时，Vue 3 不再自动继承
   // attrs —— `data-package-resource-preview`（E2E 定位）与 `class` 会静默丢失。

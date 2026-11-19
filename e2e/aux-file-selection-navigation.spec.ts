@@ -10,6 +10,7 @@ import messages from '/src/i18n/locales/en.ts'
 import ProjectFiles from '/src/components/ProjectFiles.vue'
 import ChatTurnList from '/src/components/chat/ChatTurnList.vue'
 import { useWorkspaceStore } from '/src/stores/workspace.ts'
+import { activeRuntimeId } from '/src/stores/runtime.ts'
 import { auxSessionFor, auxUiFor, registerAuxAskRouter } from '/src/stores/auxChat.ts'
 import { auxSelectionItems } from '/src/stores/auxSelections.ts'
 import { serializeComposerPromptContexts } from '/src/lib/promptContexts.ts'
@@ -20,6 +21,7 @@ const pinia = createPinia()
 createApp({ setup() {
   const workspace = useWorkspaceStore()
   workspace.projectGroups = { [primary]: { name: 'QA', folders: [primary, extra], primary } }
+  activeRuntimeId.value = parentRuntimeId
   const session = auxSessionFor(runtimeId), ui = auxUiFor(runtimeId)
   const entries = ref([])
   const edit = reactive({ editedPrompt: null, editedText: '', editBusy: false, editBlocked: true, lastUserPromptId: null })
@@ -73,7 +75,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 for (const history of [false, true]) {
-  test(`${history ? "history" : "live"}: a secondary-root file selection reopens the same-named source file`, async ({
+  test(`${history ? "history" : "live"}: selecting again from a reopened secondary-root file preserves its source`, async ({
     page,
   }) => {
     const errors: string[] = []
@@ -101,6 +103,31 @@ for (const history of [false, true]) {
     await page.locator("[data-file-selection-tag]").click()
     const dialog = page.getByRole("dialog")
     await expect(dialog.getByRole("heading", { level: 2 })).toHaveText("C:/qa-extra/same.ts")
+    await expect(
+      dialog.getByRole("region", { name: "File preview" }).getByText("EXTRA_SOURCE_1", { exact: true }),
+    ).toBeVisible()
+    expect(await page.evaluate(() => Reflect.get(window, "__fileReads").at(-1))).toMatchObject({
+      project: "C:/qa-extra",
+      path: "same.ts",
+    })
+
+    // 从回跳弹窗内层预览再次划词，仍需保留「会话根 ≠ 文件根」的来源关系。
+    const reopened = dialog.getByRole("region", { name: "File preview" }).getByText("EXTRA_SOURCE_1", { exact: true })
+    await reopened.evaluate(element => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const selection = window.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }))
+    })
+    await dialog.getByRole("button", { name: "Ask in auxiliary chat" }).click()
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(window, "__auxItems")?.map((item: { path: string }) => item.path)))
+      .toEqual(["C:/qa-extra/same.ts"])
+    await page.keyboard.press("Escape")
+    await page.getByRole("button", { name: "Fixture send" }).click()
+    await page.locator("[data-file-selection-tag]").click()
     await expect(
       dialog.getByRole("region", { name: "File preview" }).getByText("EXTRA_SOURCE_1", { exact: true }),
     ).toBeVisible()

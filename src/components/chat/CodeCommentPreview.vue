@@ -64,6 +64,7 @@ const readFile = computed(() => {
         :key="comment.id + comment.path"
         :project="target.project"
         :path="target.path"
+        :comment-project="roots[0]"
         :read-file="readFile"
         :line-range="lineRange ?? undefined"
         :closable="false"
