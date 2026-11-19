@@ -9,9 +9,16 @@ import { resolveCodeCommentFile } from "@/lib/codeCommentNavigation"
 import type { ParsedCodeComment } from "@/lib/codeComments"
 import type { ParsedConversationSelection } from "@/lib/conversationSelections"
 import type { FilePreview } from "@/lib/projectFiles"
+import type { PendingCodeComment } from "@/stores/codeComments"
 
-const props = defineProps<{ comment: ParsedCodeComment | ParsedConversationSelection | null; roots: string[] }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{
+  /** 代码行批注（带行号）与文件划词引用（无行号）共用这一预览入口。 */
+  comment: ParsedCodeComment | ParsedConversationSelection | null
+  roots: string[]
+  /** 主会话目录；缺省表示无 composer 接收方（aux），不展示主会话待发送 chip。 */
+  commentProject?: string
+}>()
+const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 const target = computed(() => {
   const path = props.comment?.path
@@ -28,15 +35,18 @@ const selectedText = computed(() => {
 const readFile = computed(() => {
   const file = target.value
   const path = props.comment?.path ?? ""
-  return async (): Promise<FilePreview> => {
+  // 预览传进来的永远是项目相对路径：Markdown 正文是批注目标文件本身，图片则是
+  // 按正文所在目录解构出来的同一项目内路径（TZD-132）。项目根始终用批注目标解析出的那个。
+  return async (requested?: string): Promise<FilePreview> => {
+    const relative = requested || file?.path || ""
     if (!file) throw new Error(t("projectFiles.commentFileUnavailable", { path }))
     try {
-      return await invokeProjectFile<FilePreview>("read_file_preview", file.project, file.path)
+      return await invokeProjectFile<FilePreview>("read_file_preview", file.project, relative)
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : String(cause)
       const code = parseCodedError(raw)?.code
       if (code === "previewPathInvalid" || code === "projectDirMissing") {
-        throw new Error(t("projectFiles.commentFileUnavailable", { path }))
+        throw new Error(t("projectFiles.commentFileUnavailable", { path: relative === file.path ? path : relative }))
       }
       throw cause
     }
@@ -64,10 +74,12 @@ const readFile = computed(() => {
         :key="comment.id + comment.path"
         :project="target.project"
         :path="target.path"
-        :comment-project="roots[0]"
+        :comment-project="commentProject"
+        :selection-project="roots[0]"
         :read-file="readFile"
         :line-range="lineRange ?? undefined"
         :closable="false"
+        @insert-code-comment="emit('insert-code-comment', $event)"
       />
       <p v-else role="alert" class="text-sm text-destructive">
         {{ t("projectFiles.commentFileUnavailable", { path: comment.path }) }}

@@ -9,6 +9,8 @@ import messages from '/src/i18n/locales/en.ts'
 import ChatUserPrompt from '/src/components/chat/ChatUserPrompt.vue'
 import CodeCommentPreview from '/src/components/chat/CodeCommentPreview.vue'
 import { serializeComposerPromptContexts } from '/src/lib/promptContexts.ts'
+import { useCodeCommentsStore } from '/src/stores/codeComments.ts'
+import { useCodeCommentInsertion } from '/src/composables/useCodeCommentInsertion.ts'
 import '/src/style.css'
 const comments = [
   { path: 'src/main.ts', startLine: 80, endLine: 82, selectedText: 'const value = 80', comment: 'Check this range' },
@@ -21,10 +23,16 @@ const prompt = serializeComposerPromptContexts('Please review', {
   selections: [{ path: 'src/selection.ts', text: 'Selected paragraph', comment: 'Explain this selection' }],
 })
 const history = location.search.includes('history')
+const isolated = location.search.includes('isolated')
 const entry = history ? { kind: 'user', id: 1, text: prompt } : { kind: 'user', id: 1, text: 'Please review', contextText: prompt }
 const edit = reactive({ editedPrompt: null, editedText: '', editBusy: false, editBlocked: false, lastUserPromptId: null })
 createApp({ setup() {
   const selected = ref(null)
+  const composer = ref({ textInput: 'Existing draft', setTextInput(text) { composer.value.textInput = text } })
+  const { insertCodeComment } = useCodeCommentInsertion(composer)
+  const codeComments = useCodeCommentsStore()
+  codeComments.add('C:/demo', { path: 'src/main.ts', startLine: 80, endLine: 82, selectedText: 'const value = 80', comment: 'Pending comment' })
+  codeComments.add('C:/demo', { path: 'src/file.ts', root: 'C:/other', startLine: 5, endLine: 5, selectedText: 'code', comment: 'Cross-root comment' })
   return () => h('main', { style: 'padding:24px;max-width:800px' }, [
     h(ChatUserPrompt, {
       entry,
@@ -32,7 +40,14 @@ createApp({ setup() {
       onOpenCodeComment: c => selected.value = c,
       onOpenSelection: s => selected.value = s,
     }),
-    h(CodeCommentPreview, { comment: selected.value, roots: ['C:/demo', 'C:/other'], onClose: () => selected.value = null }),
+    h(CodeCommentPreview, {
+      comment: selected.value,
+      roots: ['C:/demo', 'C:/other'],
+      commentProject: isolated ? undefined : 'C:/demo',
+      onClose: () => selected.value = null,
+      onInsertCodeComment: insertCodeComment,
+    }),
+    h('output', { 'data-inserted-composer': '' }, composer.value.textInput),
   ])
 }}).use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).use(createPinia()).mount('#app')
 </script></body></html>`
@@ -117,3 +132,33 @@ for (const history of [false, true]) {
     expect(errors).toEqual([])
   })
 }
+
+test("history preview inserts a pending annotation into the existing composer draft", async ({ page }) => {
+  await page.goto(harness.url + "?history")
+  await page.locator("[data-code-comment-tag]").first().click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "Insert into composer", exact: true }).click()
+  const inserted = page.locator("[data-inserted-composer]")
+  await expect(inserted).toContainText("Existing draft")
+  await expect(inserted).toContainText("## Comment 1")
+  await expect(inserted).toContainText("Pending comment")
+  await expect(inserted).not.toContainText("# Code comments:")
+  await expect(dialog.locator("[data-code-comment-id]")).toHaveCount(0)
+  await expect(dialog.getByRole("button", { name: "Insert into composer", exact: true })).toHaveCount(0)
+
+  await page.keyboard.press("Escape")
+  await page.locator("[data-code-comment-tag]").nth(3).click()
+  await dialog.getByRole("button", { name: "Insert into composer", exact: true }).click()
+  await expect(inserted).toContainText("File: C:/other/src/file.ts")
+  await expect(inserted).toContainText("Cross-root comment")
+  await expect(dialog.locator("[data-code-comment-id]")).toHaveCount(0)
+})
+
+test("history preview without a session receiver hides pending chips and insertion", async ({ page }) => {
+  await page.goto(harness.url + "?history&isolated")
+  await page.locator("[data-code-comment-tag]").first().click()
+  const dialog = page.getByRole("dialog")
+  await expect(dialog.locator('[data-line="80"]')).toBeVisible()
+  await expect(dialog.locator("[data-code-comment-id]")).toHaveCount(0)
+  await expect(dialog.getByRole("button", { name: "Insert into composer", exact: true })).toHaveCount(0)
+})

@@ -18,7 +18,10 @@ test("the file preview mounts the same floating menu in code mode with path and 
   expect(preview).toContain("<ConversationSelectionMenu")
   expect(preview).toContain('mode="code"')
   expect(preview).toContain(':path="path"')
-  expect(preview).toContain(':source-root="commentRoot"')
+  expect(preview).toContain(':source-root="selectionRoot"')
+  // 来源根优先取批注归属算出的跨目录根，回跳预览则回落到会话根（`selectionProject`）。
+  expect(preview).toContain("const selectionRoot = computed(() => {")
+  expect(preview).toContain("const session = props.selectionProject")
   expect(preview).toContain('@aux-ask="onAuxAsk"')
   // 代码视图与渲染态 Markdown 都要能被同一浮层检测到（渲染态没有 [data-line]，只带 path）。
   expect(preview).toContain("const menuRoot = computed<HTMLElement | null>(() => (showCode.value")
@@ -81,7 +84,10 @@ test("the aux pane send control reads its own bucket instead of full isolation",
 
 test("the reopened file preview keeps the session root for subsequent selections", () => {
   const preview = read("components/chat/CodeCommentPreview.vue")
-  expect(preview).toContain(':comment-project="roots[0]"')
+  expect(preview).toContain(':selection-project="roots[0]"')
+  // #31 的 composer 归属入参原样保留（主会话待发送 chip 与引入按钮）。
+  expect(preview).toContain(':comment-project="commentProject"')
+  expect(preview).toContain("@insert-code-comment=\"emit('insert-code-comment', $event)\"")
 })
 
 test("the preview keeps caller attrs on its single visible root (fragment regression)", () => {

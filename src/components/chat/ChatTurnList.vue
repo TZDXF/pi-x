@@ -17,6 +17,7 @@ import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
 import CodeCommentPreview from "./CodeCommentPreview.vue"
 import type { ParsedCodeComment } from "@/lib/codeComments"
+import type { PendingCodeComment } from "@/stores/codeComments"
 import { useWorkspaceStore } from "@/stores/workspace"
 import ChatErrorRecord from "./ChatErrorRecord.vue"
 import ChatAssistantTurn from "./ChatAssistantTurn.vue"
@@ -62,6 +63,7 @@ const emit = defineEmits<{
   fork: [index: number]
   /** 划词菜单的"在辅助对话中提问"（TZD-103）：由父层路由到 aux 注册表。 */
   auxAsk: [payload: AuxAskPayload]
+  "insert-code-comment": [comment: PendingCodeComment]
 }>()
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
@@ -328,5 +330,11 @@ onBeforeUnmount(() => {
     @remove="onSelectionRemove"
     @cancel="onSelectionCancel"
   />
-  <CodeCommentPreview :comment="openedFileReference" :roots="commentRoots" @close="openedFileReference = null" />
+  <CodeCommentPreview
+    :comment="openedFileReference"
+    :roots="commentRoots"
+    :comment-project="auxRuntimeId ? undefined : session.cwd || project"
+    @close="openedFileReference = null"
+    @insert-code-comment="emit('insert-code-comment', $event)"
+  />
 </template>
