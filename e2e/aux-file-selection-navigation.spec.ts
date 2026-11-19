@@ -30,6 +30,8 @@ createApp({ setup() {
     active: () => tab,
     open: async () => null,
     reveal() { window.__auxItems = auxSelectionItems(runtimeId) },
+    // 入口判据（TZD-131）：本夹具没有真实侧栏，直接声明该实例有入口。
+    entry: () => true,
   })
   function showPrompt() {
     const text = 'QA prompt'

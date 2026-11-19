@@ -61,35 +61,71 @@ vi.mock("@/lib/auxSpawn", () => ({
   spawnAuxRuntime: (parent: unknown, tab: unknown) => controls.spawn(parent, tab),
 }))
 
-import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
-import { auxSelectionItems } from "@/stores/auxSelections"
-import {
-  auxDeliverableFor,
-  auxInstancesFor,
-  auxTabBySidebarId,
-  registerAuxRuntimeBridge,
-  resetAuxChatForTest,
-  setAuxTabId,
-} from "@/stores/auxChat"
-import {
-  groupKeyFor,
-  hasGroup,
-  releaseGroup,
-  retainGroup,
-  resetQueuesForTest,
-  resetRegistryForTest,
-  retainedGroupCount,
-  tabsFor,
-} from "@/stores/sidebarTabs"
+/**
+ * 模块**动态**获取：`vitest.config.ts` 是 `isolate: false`，模块缓存与 `vi.mock` 注册表
+ * 跨测试文件共享。若静态 import，本文件会拿到**别的文件**先缓存下来的 `@/stores/workspace`
+ * 替身（例如 `sidebar-tab-registry.test.ts` 的 `persistSidebarTabs(){}` 空实现），于是
+ * `controls.persisted` 里永远没有落盘载荷、容量计数也被别人的组污染 —— 本地按字母序跑
+ * 全绿、CI 上文件顺序不同就 8 条红（TZD-131 CI 失败的真实原因）。
+ * 因此每个用例前 `vi.resetModules()` 后重新 import，既让本文件的 `vi.mock` 生效，
+ * 也拿到干净的模块级注册表。
+ */
+type AuxChatModule = typeof import("@/stores/auxChat")
+type SidebarTabsModule = typeof import("@/stores/sidebarTabs")
+type AuxSelectionsModule = typeof import("@/stores/auxSelections")
+type ChatViewSidebarModule = typeof import("@/composables/useChatViewSidebar")
+
+let useChatViewSidebar: ChatViewSidebarModule["useChatViewSidebar"]
+let auxSelectionItems: AuxSelectionsModule["auxSelectionItems"]
+let auxDeliverableFor: AuxChatModule["auxDeliverableFor"]
+let auxInstancesFor: AuxChatModule["auxInstancesFor"]
+let auxTabBySidebarId: AuxChatModule["auxTabBySidebarId"]
+let registerAuxRuntimeBridge: AuxChatModule["registerAuxRuntimeBridge"]
+let resetAuxChatForTest: AuxChatModule["resetAuxChatForTest"]
+let setAuxTabId: AuxChatModule["setAuxTabId"]
+let groupKeyFor: SidebarTabsModule["groupKeyFor"]
+let hasGroup: SidebarTabsModule["hasGroup"]
+let releaseGroup: SidebarTabsModule["releaseGroup"]
+let retainGroup: SidebarTabsModule["retainGroup"]
+let resetQueuesForTest: SidebarTabsModule["resetQueuesForTest"]
+let resetRegistryForTest: SidebarTabsModule["resetRegistryForTest"]
+let retainedGroupCount: SidebarTabsModule["retainedGroupCount"]
+let tabsFor: SidebarTabsModule["tabsFor"]
 
 let scopes: EffectScope[] = []
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia())
+  vi.resetModules()
+  const aux = await import("@/stores/auxChat")
+  auxDeliverableFor = aux.auxDeliverableFor
+  auxInstancesFor = aux.auxInstancesFor
+  auxTabBySidebarId = aux.auxTabBySidebarId
+  registerAuxRuntimeBridge = aux.registerAuxRuntimeBridge
+  resetAuxChatForTest = aux.resetAuxChatForTest
+  setAuxTabId = aux.setAuxTabId
+  const sidebar = await import("@/stores/sidebarTabs")
+  groupKeyFor = sidebar.groupKeyFor
+  hasGroup = sidebar.hasGroup
+  releaseGroup = sidebar.releaseGroup
+  retainGroup = sidebar.retainGroup
+  resetQueuesForTest = sidebar.resetQueuesForTest
+  resetRegistryForTest = sidebar.resetRegistryForTest
+  retainedGroupCount = sidebar.retainedGroupCount
+  tabsFor = sidebar.tabsFor
+  const selections = await import("@/stores/auxSelections")
+  auxSelectionItems = selections.auxSelectionItems
+  const chatSidebar = await import("@/composables/useChatViewSidebar")
+  useChatViewSidebar = chatSidebar.useChatViewSidebar
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
   controls.spawn.mockReset().mockImplementation(async () => {})
   controls.kill.mockReset().mockImplementation(async () => {})
   for (const key in controls.persisted) delete controls.persisted[key]
+  // 侧栏组注册表与回收队列是模块级状态：`isolate: false` 下同一进程里可能残留别的
+  // 用例建过的组（CI 上文件顺序与本地不同，靠 `afterEach` 兜底不够）。先清干净，
+  // 否则「24 组容量」「20 格上限」这些计数型断言会随执行顺序时好时坏（TZD-131 CI 红）。
+  resetRegistryForTest()
+  resetQueuesForTest()
   resetAuxChatForTest()
   registerAuxRuntimeBridge({ kill: controls.kill })
 })
