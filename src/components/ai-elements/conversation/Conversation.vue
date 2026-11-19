@@ -7,6 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
+import { nextFrame, revealElement } from '@/lib/revealScroll'
 import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
@@ -22,21 +23,54 @@ interface Props {
 }
 
 const emit = defineEmits<{ scroll: [event: Event] }>()
+/**
+ * 定位过程中的抑制计数（TZD-138 P2）：`VirtualMessage` 的行高补偿会直接写 `scrollTop`，
+ * 一次写入就会打断平滑滚动。定位期间把计数抬起来，让行高照常量、不写滚动位置；
+ * 定位流程自己按最新布局反复校正，直到目标真的进入视口。
+ */
+const revealLock = ref(0)
+/**
+ * 把一个元素滚进视口并验证结果（返回是否到位）：先把目标虚拟行重挂出来，再进入
+ * “滚 → 等停 → 复核 → 修正”循环。这期间禁止行高补偿写 `scrollTop`。
+ */
+async function revealInViewport(target: Element | null | undefined, options: { animated?: boolean } = {}) {
+  const viewport = scrollRef.value
+  if (!viewport || !target || !(target instanceof HTMLElement)) return false
+  // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
+  releaseBottomLock()
+  revealLock.value++
+  try {
+    return await revealElement(viewport, target, { animated: options.animated })
+  } finally {
+    revealLock.value--
+  }
+}
 defineExpose({
   stopScroll: releaseBottomLock,
   scrollToBottom,
+  /** 通用入口：把任意视口内元素滚到视口里（划词引用徽标就用它）。 */
+  revealInViewport,
   scrollToMessage: async (id: number) => {
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
-    if (!viewport || !message) return
+    if (!viewport || !message) return false
     releaseBottomLock()
-    message.dispatchEvent(new Event('virtual-reveal'))
-    await nextTick()
-    if (!message.isConnected) return
-    viewport.scrollTo({
-      top: viewport.scrollTop + message.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 24,
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
-    })
+    revealLock.value++
+    try {
+      // 虚拟行可能整行卸载，`virtual-reveal` 让它重挂；等一帧布局稳定再量位置。
+      message.dispatchEvent(new Event('virtual-reveal'))
+      await nextTick()
+      await nextFrame()
+      if (!message.isConnected) return false
+      // 与原有行为一致：目标顶端贴视口顶端（留 24px），长消息也能从开头读起。
+      return await revealElement(viewport, message, {
+        animated: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+        align: 'start',
+        margin: 24,
+      })
+    } finally {
+      revealLock.value--
+    }
   },
 })
 
@@ -112,7 +146,7 @@ watchEffect((onCleanup) => {
   observer.observe(scroll)
   onCleanup(() => observer.disconnect())
 })
-provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock })
+provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock, revealLock })
 onMounted(() => {
   if (props.initial === 'instant' && scrollRef.value)
     scrollRef.value.scrollTop = scrollRef.value.scrollHeight

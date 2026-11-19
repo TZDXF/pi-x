@@ -150,6 +150,8 @@ defineExpose({
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToBottom: () => conversation.value?.scrollToBottom(),
   scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
+  revealInViewport: async (target: Element, options?: { animated?: boolean }) =>
+    (await conversation.value?.revealInViewport?.(target, options)) ?? false,
   locateSelection,
   editSelection,
 })

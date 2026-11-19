@@ -80,6 +80,17 @@ const toggle = '[data-message-id="1"] [data-prompt-toggle]'
 const badge = '[data-message-id="1"] [data-selection-anchor]'
 const shell = '[data-message-id="1"][data-virtual-mounted]'
 
+/**
+ * 把目标行**确定性地**挂载出来：派发 `virtual-reveal`（产品自己的入口），
+ * 不依赖 `IntersectionObserver` 的时序（在慢/并行环境里回调可能迟迟不来）。
+ */
+async function mountTarget(page: import("@playwright/test").Page) {
+  await page.evaluate(() => {
+    document.querySelector('[data-message-id="1"]')?.dispatchEvent(new Event("virtual-reveal"))
+  })
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+}
+
 /** 划选第 11 行 → 引用到输入框 → 保存 → 收起提问。 */
 async function quoteLineEleven(page: import("@playwright/test").Page) {
   await page.locator(toggle).click()
@@ -158,6 +169,9 @@ test("first click locates a clipped reference while the target row is still moun
   await page.goto(`${harness!.url}?mode=single`)
   await quoteLineEleven(page)
   await locateFromSummary(page)
+  // 一次点击后徽标必须**真的进入视口**（不只是完成展开）：`toBeInViewport` 是 QA 最小脚本
+  // 给的断言，针对"最终滚动被 VirtualMessage 的行高补偿打断"这一缺陷形态。
+  await expect(page.locator(badge)).toBeInViewport({ ratio: 0.75, timeout: 3000 })
   const geo = await geometry(page)
   expect(geo.expanded, "one click expands the prompt").toBe("false")
   expect(geo.ariaExpanded).toBe("true")
@@ -170,10 +184,7 @@ test("first click locates a clipped reference after the row was virtually unmoun
   const viewport = page.getByRole("log")
   // 目标行先在底部不可见 → 被 VirtualMessage 卸载（正文元素消失）。
   await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
-  await viewport.evaluate(el => {
-    el.scrollTop = 0
-  })
-  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await mountTarget(page)
   await quoteLineEleven(page)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await viewport.evaluate(el => {
@@ -187,10 +198,14 @@ test("first click locates a clipped reference after the row was virtually unmoun
   await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
   await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "true")
   await expect(page.locator(badge)).toHaveCount(1)
+  // 关键回归：目标行是靠"重挂 + 展开 + 重新校正滚动"一次进视口的，不能停在展开。
+  await expect(page.locator(badge)).toBeInViewport({ ratio: 0.75, timeout: 3000 })
   const geo = await geometry(page)
   expect(geo.expanded).toBe("false")
   expect(geo.badgeTop).toBeGreaterThan(100)
   expect(geo.badgeBottom).toBeLessThanOrEqual(geo.bodyHeight)
+  // 引用原文本身（第 11 行）也要在视口内，而不只是徽标。
+  await expect(page.locator(body)).toBeInViewport({ ratio: 0.25 })
 })
 
 test("a second click on an already-revealed reference does not expand or scroll again", async ({ page }) => {
@@ -198,10 +213,7 @@ test("a second click on an already-revealed reference does not expand or scroll 
   await page.goto(`${harness!.url}?mode=virtual`)
   const viewport = page.getByRole("log")
   await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
-  await viewport.evaluate(el => {
-    el.scrollTop = 0
-  })
-  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await mountTarget(page)
   await quoteLineEleven(page)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await viewport.evaluate(el => {

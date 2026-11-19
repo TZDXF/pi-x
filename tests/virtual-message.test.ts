@@ -9,7 +9,7 @@ const script = source
   .split('<script setup lang="ts">')[1]
   .split("</script>")[0]
   .replace(/^import .*$/gm, "")
-function harness(initial = {}) {
+function harness(initial = {}, extraContext = {}) {
   const scope = effectScope()
   const props = reactive({ enabled: true, pinned: false, live: false, ...initial })
   const mounted = [],
@@ -24,7 +24,7 @@ function harness(initial = {}) {
     conversationKey: {},
     defineProps: () => props,
     withDefaults: p => p,
-    inject: () => ({ scrollRef: ref(viewport) }),
+    inject: () => ({ scrollRef: ref(viewport), ...extraContext }),
     onMounted: f => mounted.push(f),
     onBeforeUnmount: f => cleanup.push(f),
     ResizeObserver: class {
@@ -124,6 +124,26 @@ test("measured height is retained and changes above viewport preserve reading po
     h.close()
   }
 })
+test("an in-flight locate suppresses the height compensation write", () => {
+  // TZD-138 P2：定位进行中时行高照常量，但**不能**写 scrollTop —— 一次补偿写入就会
+  // 打断平滑滚动，把目标留在视口外。计数归零后恢复补偿。
+  const revealLock = ref(1)
+  const h = harness({}, { revealLock })
+  try {
+    h.body.value = { getBoundingClientRect: () => ({ height: 240 }) }
+    h.measure()
+    expect(h.height.value).toBe(240)
+    expect(h.viewport.scrollTop, "no scroll correction while locating").toBe(1000)
+    revealLock.value = 0
+    h.body.value = { getBoundingClientRect: () => ({ height: 400 }) }
+    h.measure()
+    expect(h.height.value).toBe(400)
+    expect(h.viewport.scrollTop, "correction resumes after locating").toBe(1160)
+  } finally {
+    h.close()
+  }
+})
+
 test("explicitly disabled virtualization renders immediately", () => {
   const h = harness({ enabled: false })
   try {

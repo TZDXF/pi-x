@@ -6,7 +6,10 @@ import type { UiStore } from "@/stores/ui"
 
 export interface ChatHistoryHandle {
   stopScroll: () => void
-  scrollToMessage: (id: number) => void
+  /** 把消息滚进视口并验证结果（返回是否到位，TZD-138 P2）。 */
+  scrollToMessage: (id: number) => Promise<boolean> | void
+  /** 把视口内任意元素（例如划词引用徽标）滚进视口并验证结果。 */
+  revealInViewport?: (target: Element, options?: { animated?: boolean }) => Promise<boolean>
   historyViewport: () => HTMLElement | null
 }
 

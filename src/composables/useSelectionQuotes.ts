@@ -317,18 +317,30 @@ export function useSelectionQuotes(deps: {
       const wrapper = root?.querySelector(`[data-message-id="${targetMessageId}"] [data-selection-source]`)
       return revealClippedSelection(wrapper, targetEndOffset, targetMessageId)
     }
+    /**
+     * 把徽标滚进视口并**验证**结果（TZD-138 P2）：`scrollIntoView({behavior:"smooth"})` 的动画
+     * 会被 `VirtualMessage` 的行高补偿写入 `scrollTop` 打断，停在半路，徽标仍在视口外。
+     * `Conversation.revealInViewport` 在定位期间抑制行高补偿，并反复校正到目标真的可见。
+     */
+    async function revealBadge() {
+      const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
+      if (!badge) return false
+      const handle = conversation.value
+      if (handle?.revealInViewport) await handle.revealInViewport(badge, { animated: true })
+      // 没有会话定位句柄（测试替身或非会话宿主）时退回浏览器原生滚动，行为不变。
+      else badge.scrollIntoView({ block: "center", behavior: "smooth" })
+      flashLocatedSelection(item!)
+      return true
+    }
     // 引用落在折叠裁剪区（目标行还挂载着）：先展开正文，后面才有可定位的徽标与高亮。
     if (await revealTargetIfClipped()) {
       if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
       if (!pendingSelections.value.some(entry => entry.id === id)) return
       await recomputeAnchors()
     }
-    const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
-    if (badge) {
-      badge.scrollIntoView({ block: "center", behavior: "smooth" })
-      flashLocatedSelection(item)
-      return
-    }
+    if (await revealBadge()) return
+    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
+    if (!pendingSelections.value.some(entry => entry.id === id)) return
     // 没有徽标：目标行可能根本被虚拟化卸载了，先把它滚（重挂）出来。
     await conversation.value?.scrollToMessage(target.messageId)
     await nextTick()
@@ -343,8 +355,7 @@ export function useSelectionQuotes(deps: {
     await recomputeAnchors()
     await nextTick()
     if (request !== locateRequest) return
-    root?.querySelector(`[data-selection-anchor="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })
-    flashLocatedSelection(item)
+    await revealBadge()
   }
   async function editSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)

@@ -35,6 +35,9 @@ function measure() {
   height.value = next
   const viewport = context?.scrollRef.value
   if (!viewport || !shell.value) return
+  // 定位（`Conversation.revealInViewport`）进行中：高度照常量，但**不要写滚动位置**。
+  // 这里的一次补偿写入就能打断平滑滚动，把目标留在视口外（TZD-138 P2，三内核实测）。
+  if ((context?.revealLock?.value ?? 0) > 0) return
   // Correct estimates above the reading position; leave bottom-follow to Conversation.
   const above = shell.value.getBoundingClientRect().top + previous <= viewport.getBoundingClientRect().top
   const atBottom = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 32
