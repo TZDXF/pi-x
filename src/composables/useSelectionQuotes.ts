@@ -33,6 +33,11 @@ export function useSelectionQuotes(deps: {
    * 写进主会话的桶（同项目下两者 scope 相同，会真的串）。
    */
   auxRuntimeId?: string
+  /**
+   * 展开被折叠裁剪的提问（TZD-138）：定位/编辑一个落在裁剪区外的引用前，先让对应消息
+   * 展开正文并返回 `true`（没展开返回 `false`）。不传时退化为"裁剪区不显示徽标"。
+   */
+  revealClippedPrompt?: (messageId: number) => boolean
 }) {
   const { session, ui, conversation } = deps
   const { t } = useI18n()
@@ -149,6 +154,38 @@ export function useSelectionQuotes(deps: {
   }
   // ---- 索引标记覆盖层：按引用在列表中的序号渲染到划词结束处（布局变化时重算） ----
   const anchorOverlays = ref<Map<number, { id: string; index: number; left: number; top: number }[]>>(new Map())
+  /** 折叠态正文容器（`CollapsiblePromptText`）：只有它带这个标记。 */
+  const CLIPPED_PROMPT = '[data-prompt-text][data-prompt-collapsed="true"]'
+  /**
+   * 该矩形是否落在折叠裁剪区。折叠只裁高度（`overflow: hidden`），所以只看竖直方向：
+   * 矩形整体在可见下边界以下即"看不见"。矩形与包装元素都可能是测试替身，取不到几何
+   * 时一律当作"没被裁"（宁可不收起，也不要错误地藏徽标）。
+   */
+  function isClippedOut(wrapper: Element | null | undefined, rect: DOMRect | null | undefined): boolean {
+    if (!wrapper || !rect || typeof wrapper.querySelector !== "function") return false
+    const body = wrapper.querySelector(CLIPPED_PROMPT)
+    if (!body || typeof body.getBoundingClientRect !== "function") return false
+    const bodyRect = body.getBoundingClientRect()
+    if (!bodyRect || !bodyRect.height) return false
+    return rect.top >= bodyRect.bottom - 0.5
+  }
+  /**
+   * 定位前把被裁剪的正文展开（TZD-138 P2）：收起状态下引用位于裁剪区，徽标只能画到气泡
+   * 下方空白处，滚动与闪亮也都指向看不见的行。先展开、再等一帧让布局稳定，调用方随后重算
+   * 锚点。返回是否真的展开了。
+   */
+  async function revealClippedSelection(
+    wrapper: Element | null | undefined,
+    offset: number,
+    messageId: number,
+  ): Promise<boolean> {
+    const reveal = deps.revealClippedPrompt
+    if (!reveal || !wrapper || !isClippedOut(wrapper, boundaryRect(wrapper, offset))) return false
+    if (!reveal(messageId)) return false
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    return true
+  }
   async function recomputeAnchors() {
     const root = selectionRoot.value
     const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
@@ -161,6 +198,9 @@ export function useSelectionQuotes(deps: {
         const rect = boundaryRect(wrapper, target.endOffset)
         const wrapperRect = wrapper.getBoundingClientRect()
         if (!rect) return
+        // 裁剪区里的引用在折叠态没有可见锚点：不画徽标。否则徽标落在气泡下方空白处，
+        // 看起来指向一个不存在的位。定位/编辑时先展开正文再重算（locateSelection）。
+        if (isClippedOut(wrapper, rect)) return
         const list = map.get(target.messageId) ?? []
         list.push({
           id: item.id,
@@ -261,14 +301,21 @@ export function useSelectionQuotes(deps: {
     // 文件来源/跨 runtime 的引用没有本面板可定位的正文：不滚动、不闪亮（摘要仍可用）。
     if (!target) return
     const request = locateRequest
+    const scope = selectionScope.value
+    const root = selectionRoot.value
+    // 引用落在折叠裁剪区：先展开正文（TZD-138 P2），后面才有可定位的徽标与高亮。
+    const targetWrapper = root?.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
+    if (await revealClippedSelection(targetWrapper, target.endOffset, target.messageId)) {
+      if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
+      if (!pendingSelections.value.some(entry => entry.id === id)) return
+      await recomputeAnchors()
+    }
     const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
     if (badge) {
       badge.scrollIntoView({ block: "center", behavior: "smooth" })
       flashLocatedSelection(item)
       return
     }
-    const scope = selectionScope.value
-    const root = selectionRoot.value
     await conversation.value?.scrollToMessage(target.messageId)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))

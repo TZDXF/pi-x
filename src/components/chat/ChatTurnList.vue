@@ -115,6 +115,16 @@ function togglePrompt(entryId: number) {
   if (expandedPrompts.has(entryId)) expandedPrompts.delete(entryId)
   else expandedPrompts.add(entryId)
 }
+/**
+ * 定位裁剪区里的引用的前置动作（TZD-138 P2）：展开正文并让锚点重算。
+ * 入口只处理“确实被裁着”的情况（判定在 `useSelectionQuotes` 里用 DOM 几何做），
+ * 已展开就返回 `false`，避免无意义的重复渲染。
+ */
+function revealClippedPrompt(entryId: number) {
+  if (expandedPrompts.has(entryId)) return false
+  expandedPrompts.add(entryId)
+  return true
+}
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
 const {
   selectionRoot,
@@ -133,6 +143,7 @@ const {
   renderedEntries: () => props.renderedEntries,
   conversation,
   auxRuntimeId: props.auxRuntimeId,
+  revealClippedPrompt,
 })
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
