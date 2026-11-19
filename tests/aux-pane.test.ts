@@ -64,17 +64,17 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   expect(chat).toMatch(/@add-tab="addTab"/)
   // 快捷键关 Tab 也走同一入口（不能只撤槽位留下孤儿进程）。
   expect(chat).toMatch(/void closeTab\(activeTabId\.value\)/)
-  // 添加：先开进程（openAux 同步入表再 await spawn），没有名额就撤销槽位并提示。
+  // 添加：先开进程（openAux 同步入表再 await spawn），实例数量不设专属上限。
   expect(auxTabs).toMatch(/const tab = await openAux\(deps\.runtimeId, \{/)
-  expect(auxTabs).toMatch(/deps\.ui\.pushToast\(t\("auxChat\.limitReached"/)
+  expect(auxTabs).not.toMatch(/auxChat\.limitReached|auxCanOpen|AUX_MAX_TABS/)
   // 关闭：实例先销毁（墓碑 + rpc_kill + store 拆除），再撤槽位。
   expect(auxTabs).toMatch(/await closeAux\(aux\.runtimeId\)/)
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
-  // 侧栏入口：Popover 与空态宫格各一处，名额满时禁用并说明原因。
-  expect(sidebar).toMatch(/addAux\(\)/)
-  expect(sidebar).toMatch(/:disabled="!canAddAux\(\)"/)
-  expect(sidebar).toMatch(/auxChat\.limitReached/)
+  // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。
+  expect(sidebar.match(/:disabled="!auxParent"/g)).toHaveLength(2)
+  expect(sidebar.match(/@click="addTab\('aux'\)"/g)).toHaveLength(2)
+  expect(sidebar).not.toMatch(/auxChat\.limitReached|AUX_MAX_TABS|aux-limit|canAddAux/)
   // Tab 隐藏不卸载（force-mount + v-show），关闭才卸载。
   expect(sidebar).toMatch(/force-mount/)
   expect(sidebar).toMatch(/v-show="tab\.id === activeId"/)
@@ -124,7 +124,7 @@ test("side bar persistence drops aux on both read and write", () => {
   expect(lib).toMatch(/export const SIDEBAR_TAB_KINDS = \["review", "files", "terminal", "browser"\]/)
   // 写盘：aux 在本地就丢掉，不把脏数据交给后端兜底。
   expect(lib).toMatch(/const allowed = tabs\.filter\(tab => isPersistedSidebarTabKind\(tab\.type\)\)/)
-  // 上限语义没有因此扩大（侧栏 20 条与 aux 的 5 无关）。
+  // 移除 aux 专属上限不改变通用侧栏的 20 条容量规则。
   expect(lib).toMatch(/export const MAX_SIDEBAR_TABS = 20/)
 })
 

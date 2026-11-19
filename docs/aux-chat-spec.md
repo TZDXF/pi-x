@@ -78,9 +78,9 @@
 - 草稿仅内存 `src/stores/auxDrafts.ts`（不写 localStorage、不改 `composerDrafts`）；附件保留原始 `File`，blob URL 由 `PromptInput.onBeforeUnmount` revoke。
 - 引用按 runtime 分桶 `src/stores/auxSelections.ts`，捕获/展示/发送/清理同源；主会话 `useChatSendControl` 的 clear 时机不变。
 - 回收（TZD-104 落地位置见 §11）：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s，**租约 TTL 90s**：停心跳的条目在 claim/list/reap 任一入口惰性过期，过期只让 `claims` 归零、仍由 30 分钟空闲门槛兜底）+ 三条件（非流式非待答无在途 ∧ 无未过期租约 ∧ 空闲 >30 分钟）。判定与 kill 在租约表同一把锁内仲裁（`begin_reap` 置 `reaping` 墓碑，`claim` 见墓碑即 `auxLeaseReaping`）；`aux_release` **只认 lease token**，clientId 只是标识不是凭证。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
-- 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例计入上限（5），关闭置 `cancelRequested`。
+- 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例同步入表，关闭置 `cancelRequested`。
 - 对话框：`ExtensionDialog` 传 aux `session-id`；`StatusBar` 只展示；隐藏 Tab 不渲染弹框并出未答标记；有 timeout 由 `activity.rs` 过期，无 timeout 关闭时先发 `cancelled`；aux 的 `notifyQuestion`/`notifyTurnComplete`/`setTitle` 静默。
-- 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；上限 5 → 约 0.75GB 空闲基线。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
+- 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；实例数量不设辅助对话专属上限，通用侧栏容量与 30 分钟空闲回收规则不变。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
 
 ## 6. 验收矩阵
 
@@ -112,8 +112,8 @@
 
 | 职责                                                                | 文件                                                                      |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 实例注册表（Tab/序号/上限 5/关闭销毁、clientId）                    | `src/stores/auxChat.ts`                                                   |
-| 纯逻辑（前缀、上限、序号分配）                                      | `src/lib/auxRuntime.ts`                                                   |
+| 实例注册表（Tab/序号/关闭销毁、clientId）                           | `src/stores/auxChat.ts`                                                   |
+| 纯逻辑（前缀、序号分配）                                            | `src/lib/auxRuntime.ts`                                                   |
 | 草稿（仅内存）                                                      | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts`              |
 | `aux_spawn` 前端调用（独立字段，无拼接）                            | `src/api/client/process.ts` 的 `spawnAuxPi`                               |
 | 启动上下文（继承模型/工作区/SSH 连接）+ 逐段判活的 `initAuxSession` | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用）           |
@@ -133,8 +133,6 @@
   记名）与重连恢复（只恢复本机 clientId 条目，见 §11）。**不另生成第二份标识**。
 - `activeAuxFor` / `closeAllFor`：划词复用与"父会话关闭即销毁"（§5/§10 已在用）。
 - `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受。
-- `RightSidebar` 的 `aux-limit` 事件：名额已满时入口本就禁用，该事件是"用户仍点到
-  禁用态"的可执行提示兜底，实际几乎不可达但保留。
 
 与规格正文的**两处写法差异**（**非等价**：§5 的 `cancelRequested` 语义由下面的机制实现）：
 
@@ -170,7 +168,7 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    **对公共 `stores/session.ts` 的唯一改动是加宽导出**：`refreshThinkingLevels` 原本
    只在 store 内部用，`initAuxSession` 需要逐段调用它，因此进了 store 的返回值；
    `init()` 本身一行未改（主会话行为不变）。
-   `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。
+   `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser）。辅助对话不设专属实例上限，通用侧栏 20 条 / 24 组规则不变。
 
 ## 9. 上下文取材与折叠块（TZD-102 落地）
 
@@ -238,9 +236,9 @@ null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态�
 **路由**（`stores/auxChat.ts` 的 `askInAux`）：**入口优先** —— 先确认该父会话的
 router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸载）返回 `unavailable`
 且**不写任何桶**。入口可用时：有激活的 aux Tab → 追加到它的桶并把槽位切成激活；
-没有激活但有存活实例 → 复用最近一个（不新开，避免撞 5 个上限与面板碎片化）；
+没有激活但有存活实例 → 复用最近一个（不新开，避免面板碎片化）；
 一个都没有 → 新建后投递。连点同一手势只建一个实例（`pendingCreations` 复用 +
-`appendConversationSelection` 判重）。入口缺失/名额满/引用超限各有一次用户可见提示
+`appendConversationSelection` 判重）。入口缺失/新建未完成/引用超限各有一次用户可见提示
 （`lib/auxAsk.ts`）。
 
 **来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。

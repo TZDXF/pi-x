@@ -174,7 +174,6 @@ export default {
     creating: "正在启动辅助对话…",
     spawnFailedUnknown: "辅助对话启动失败",
     retry: "重试",
-    limitReached: "辅助对话最多同时开启 {count} 个实例，请先关闭一个再添加。",
     askFailed: "无法在辅助对话中提问：当前会话没有可用的辅助对话入口。",
   },
   split: {

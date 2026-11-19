@@ -482,7 +482,6 @@ onBeforeUnmount(() => {
         @close-tab="closeTab"
         @reorder-tabs="sidebar.reorder"
         @restart-terminal="sidebar.restartTerminal"
-        @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
       />

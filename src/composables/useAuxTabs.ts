@@ -1,13 +1,10 @@
 import { computed, onScopeDispose, type ComputedRef } from "vue"
 import { useI18n } from "vue-i18n"
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import { auxParentContext, spawnAuxRuntime, type AuxParentContext } from "@/lib/auxSpawn"
 import type { SidebarTabItem, SidebarTabKind } from "@/lib/sidebarTabs"
 import type { SessionStore } from "@/stores/session"
-import type { UiStore } from "@/stores/ui"
 import type { useWorkspaceStore } from "@/stores/workspace"
 import {
-  auxCanOpen,
   auxCreationPending,
   auxInstancesFor,
   auxPendingCreation,
@@ -28,7 +25,6 @@ import {
 export function useAuxTabs(deps: {
   runtimeId: string
   session: SessionStore
-  ui: UiStore
   workspace: ReturnType<typeof useWorkspaceStore>
   project: () => string
   /** 侧栏注册表的新增/关闭（`useSidebarTabs` 的 `add`/`close`）。 */
@@ -48,23 +44,15 @@ export function useAuxTabs(deps: {
     auxParentContext(deps.runtimeId, deps.session.cwd || deps.project(), deps.session, deps.workspace),
   )
 
-  function notifyLimit() {
-    deps.ui.pushToast(t("auxChat.limitReached", { count: AUX_MAX_TABS }), "warning")
-  }
-
   /**
    * 添加一个 aux 槽位并启动它的进程。
    *
    * 顺序：先加侧栏槽位（拿到 `tabId`），再 `openAux` —— 后者**同步**入表再 `await`
-   * spawn，创建中的实例计入上限 5。同一父会话已有在途创建时不叠加槽位（`openAux`
-   * 会复用那次创建，先加槽位只会留下查不到实例的空壳）。
+   * spawn。同一父会话已有在途创建时不叠加槽位（`openAux` 会复用那次创建，先加槽位
+   * 只会留下查不到实例的空壳）。实例数量不设辅助对话专属上限。
    */
   async function addAux() {
     if (auxCreationPending(deps.runtimeId)) return
-    if (!auxCanOpen()) {
-      notifyLimit()
-      return
-    }
     const tabId = deps.addSidebarTab("aux")
     if (tabId === null) return
     const tab = await openAux(deps.runtimeId, {
@@ -75,9 +63,8 @@ export function useAuxTabs(deps: {
       },
     })
     if (!tab) {
-      // 注册表拒绝（名额刚被别的会话占满）：撤销刚加的槽位，不留永远创建不出来的 Tab。
+      // 创建期间实例已被关闭：撤销刚加的槽位，不留查不到实例的空壳 Tab。
       deps.closeSidebarTab(tabId)
-      notifyLimit()
       return
     }
     if (tab.status === "ready") deps.activate(tabId)
@@ -150,7 +137,6 @@ export function useAuxTabs(deps: {
   async function openForAsk() {
     const pending = auxPendingCreation(deps.runtimeId)
     if (pending) return (await pending) ?? null
-    if (!auxCanOpen()) return null
     const tabId = deps.addSidebarTab("aux")
     if (tabId === null) return null
     const tab = await openAux(deps.runtimeId, {
@@ -171,5 +157,5 @@ export function useAuxTabs(deps: {
   registerAuxAskRouter(deps.runtimeId, { active: activeAuxTab, open: openForAsk, reveal })
   onScopeDispose(() => registerAuxAskRouter(deps.runtimeId, null))
 
-  return { parent: parent as ComputedRef<AuxParentContext>, addTab, closeTab, addAux, notifyLimit }
+  return { parent: parent as ComputedRef<AuxParentContext>, addTab, closeTab, addAux }
 }

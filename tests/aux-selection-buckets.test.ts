@@ -170,7 +170,6 @@ test("every rejection maps to one user-visible toast and successes stay silent",
   const t = (key: string, params?: Record<string, unknown>) => `${key}:${JSON.stringify(params ?? {})}`
   expect(describeAuxAskResult(t, { ok: true, duplicate: false })).toBeNull()
   expect(describeAuxAskResult(t, { ok: true, duplicate: true })).toMatchObject({ kind: "info" })
-  expect(describeAuxAskResult(t, { ok: false, reason: "limit" })).toMatchObject({ kind: "warning" })
   expect(describeAuxAskResult(t, { ok: false, reason: "append", appendReason: "single" })).toMatchObject({
     kind: "error",
   })

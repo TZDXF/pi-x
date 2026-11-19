@@ -13,8 +13,7 @@ import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import AuxChatPane from "@/components/aux-chat/AuxChatPane.vue"
-import { auxCanOpen, auxHasPendingQuestion, auxTabBySidebarId, auxTitleForSidebarId } from "@/stores/auxChat"
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
+import { auxHasPendingQuestion, auxTabBySidebarId, auxTitleForSidebarId } from "@/stores/auxChat"
 import type { FileChange } from "@/lib/sessionChanges"
 import { usePointerDrag } from "@/composables/usePointerDrag"
 import type { AuxParentContext } from "@/lib/auxSpawn"
@@ -41,8 +40,6 @@ const emit = defineEmits<{
   close: []
   "update:activeId": [id: number | null]
   "add-tab": [type: SidebarTabType]
-  /** aux 名额已满（用户在禁用入口上仍点到了），由父层给可执行提示。 */
-  "aux-limit": []
   "close-tab": [id: number]
   "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
@@ -71,24 +68,9 @@ function titleFor(tab: SidebarTabItem): string {
 function pendingQuestion(tab: SidebarTabItem) {
   return tab.type === "aux" && auxHasPendingQuestion(tab.id)
 }
-/** aux 槽位对应的实例；缺失（上限被拒/已关闭）时整格不渲染面板。 */
+/** aux 槽位对应的实例；缺失（已关闭或创建期间被回滚）时整格不渲染面板。 */
 function auxInstance(tabId: number) {
   return auxTabBySidebarId(tabId)
-}
-/**
- * 添加"辅助对话"入口的可用性：上限 5 由 aux 注册表自己计数（**创建中的实例计入**），
- * 与侧栏的 20 条/24 组无关。名额满时禁用入口并给出原因，而不是点了没反应。
- */
-function canAddAux() {
-  return auxCanOpen() && !!props.auxParent
-}
-function addAux() {
-  // 名额检查在注册表 `openAux` 里仍会再做一次（这是 UI 侧的提前提示）。
-  if (!canAddAux()) {
-    emit("aux-limit")
-    return
-  }
-  addTab("aux")
 }
 function addTab(type: SidebarTabType) {
   addOpen.value = false
@@ -361,15 +343,14 @@ onBeforeUnmount(() => {
               >
                 <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
               </Button>
-              <!-- 辅助对话：上限 5 由 aux 注册表自己计数（与侧栏 20 条无关） -->
+              <!-- 辅助对话数量不设专属上限；父上下文未就绪时暂不可启动。 -->
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 class="w-full justify-start gap-2"
-                :disabled="!canAddAux()"
-                :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
-                @click="addAux()"
+                :disabled="!auxParent"
+                @click="addTab('aux')"
               >
                 <MessageSquarePlus class="size-4 shrink-0" />{{ t("sidebarTabs.newAux") }}
               </Button>
@@ -467,9 +448,8 @@ onBeforeUnmount(() => {
             variant="outline"
             size="lg"
             class="h-auto flex-col gap-2 py-4"
-            :disabled="!canAddAux()"
-            :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
-            @click="addAux()"
+            :disabled="!auxParent"
+            @click="addTab('aux')"
           >
             <MessageSquarePlus class="size-6 shrink-0" />{{ t("sidebarTabs.newAux") }}
           </Button>

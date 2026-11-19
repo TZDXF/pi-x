@@ -1,4 +1,3 @@
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import { CONVERSATION_SELECTION_MAX_COUNT } from "@/lib/conversationSelections"
 import { askInAux, type AuxAskOutcome } from "@/stores/auxChat"
@@ -21,15 +20,13 @@ export function describeAuxAskResult(
   outcome: AuxAskOutcome | { ok: true; duplicate: boolean },
 ): AuxAskToast | null {
   if (outcome.ok) return outcome.duplicate ? { message: t("chat.selectionDuplicate"), kind: "info" } : null
-  if (outcome.reason === "limit")
-    return { message: t("auxChat.limitReached", { count: AUX_MAX_TABS }), kind: "warning" }
   if (outcome.reason === "append") {
     if (outcome.appendReason === "count")
       return { message: t("chat.selectionLimitCount", { count: CONVERSATION_SELECTION_MAX_COUNT }), kind: "error" }
     if (outcome.appendReason === "total") return { message: t("chat.selectionLimitTotal"), kind: "error" }
     return { message: t("chat.selectionLimitSingle"), kind: "error" }
   }
-  // `noParent` / `unavailable`：没有可投递的 aux（父会话不存在或入口未接线）。
+  // `noParent` / `unavailable`：父会话不存在、入口未接线或新建未完成。
   return { message: t("auxChat.askFailed"), kind: "warning" }
 }
 

@@ -46,7 +46,6 @@ export function useChatViewSidebar(deps: {
   const aux = useAuxTabs({
     runtimeId: deps.runtimeId,
     session: deps.session,
-    ui: deps.ui,
     workspace,
     project: deps.project,
     addSidebarTab: sidebar.add,
@@ -89,7 +88,5 @@ export function useChatViewSidebar(deps: {
     reorder: sidebar.reorder,
     restartTerminal: sidebar.restartTerminal,
     parent: aux.parent as ComputedRef<AuxParentContext>,
-    /** 名额满时的可执行提示（侧栏禁用态被点到、注册表拒绝时共用）。 */
-    notifyLimit: aux.notifyLimit,
   }
 }
