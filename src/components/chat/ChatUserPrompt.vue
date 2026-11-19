@@ -6,6 +6,7 @@ import { MessageContent, MessageActions, MessageAction } from "@/components/ai-e
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { parseComposerPromptContexts } from "@/lib/promptContexts"
+import type { ParsedConversationSelection } from "@/lib/conversationSelections"
 import { commentLineLabel, commentPathLabel, type ParsedCodeComment } from "@/lib/codeComments"
 import ComposerText from "@/components/ComposerText.vue"
 import { formatMessageTime } from "@/lib/format"
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   copyText: [text: string]
   editTextarea: [textarea: PromptEditTextarea | null]
   openCodeComment: [comment: ParsedCodeComment]
+  openSelection: [selection: ParsedConversationSelection]
 }>()
 const { t } = useI18n()
 const { editedPrompt, editedText, editBusy, editBlocked, lastUserPromptId } = toRefs(props.edit)
@@ -85,12 +87,18 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
         </div>
       </div>
       <ComposerText v-else :text="parsedPrompt.visibleContent" />
-      <!-- 历史消息里解析回的划词引用：只读展示，样式对齐 composer 的待发送 chips -->
+      <!-- 划词引用样式对齐 composer；带文件路径的引用可打开对应文件，其余保持只读。 -->
       <div v-if="parsedPrompt.selections.length" class="mt-1.5 flex min-w-0 flex-wrap gap-1.5">
-        <div
+        <component
+          :is="s.path ? 'button' : 'div'"
           v-for="s in parsedPrompt.selections"
           :key="s.id"
-          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-xs"
+          :type="s.path ? 'button' : undefined"
+          :data-file-selection-tag="s.path ? '' : undefined"
+          class="flex max-w-full min-w-0 items-center gap-1.5 rounded-md border bg-muted/50 py-1 pr-2 pl-2 text-left text-xs"
+          :class="s.path ? 'cursor-pointer hover:bg-accent focus-visible:outline-ring' : undefined"
+          :title="s.path"
+          @click="s.path && emit('openSelection', s)"
         >
           <TextQuote class="size-3.5 shrink-0 text-muted-foreground" />
           <!-- 两段都从 0 起按比例增长（`basis-0` + `grow`）：`flex-1`（basis 0）与
@@ -104,7 +112,7 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
             :title="s.comment"
             >{{ s.comment }}</span
           >
-        </div>
+        </component>
       </div>
       <!-- 即时消息与历史消息使用同一批注标签；原生按钮支持键盘打开文件。 -->
       <div v-if="parsedPrompt.comments.length" class="mt-1.5 flex min-w-0 flex-wrap gap-1.5">

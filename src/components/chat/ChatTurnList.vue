@@ -28,7 +28,7 @@ import ConversationSelectionMenu from "./ConversationSelectionMenu.vue"
 import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
 import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
-import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH, type ParsedConversationSelection } from "@/lib/conversationSelections"
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
@@ -66,7 +66,7 @@ const emit = defineEmits<{
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
-const openedComment = ref<ParsedCodeComment | null>(null)
+const openedFileReference = ref<ParsedCodeComment | ParsedConversationSelection | null>(null)
 const commentRoots = computed(() => [
   props.project,
   ...workspace.projectFolders(props.project).filter(root => root !== props.project),
@@ -74,7 +74,7 @@ const commentRoots = computed(() => [
 watch(
   () => [props.project, props.session.sessionFile],
   () => {
-    openedComment.value = null
+    openedFileReference.value = null
   },
 )
 /** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
@@ -202,7 +202,8 @@ onBeforeUnmount(() => {
                 v-if="entry.kind === 'user'"
                 :entry="entry"
                 :edit="edit"
-                @open-code-comment="openedComment = $event"
+                @open-code-comment="openedFileReference = $event"
+                @open-selection="openedFileReference = $event"
                 @preview-image="emit('previewImage', $event)"
                 @copy-text="emit('copyText', $event)"
                 @edit-textarea="emit('editTextarea', $event)"
@@ -327,5 +328,5 @@ onBeforeUnmount(() => {
     @remove="onSelectionRemove"
     @cancel="onSelectionCancel"
   />
-  <CodeCommentPreview :comment="openedComment" :roots="commentRoots" @close="openedComment = null" />
+  <CodeCommentPreview :comment="openedFileReference" :roots="commentRoots" @close="openedFileReference = null" />
 </template>
