@@ -3,17 +3,27 @@ import {
   shouldReleaseBottomLock,
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
+  targetsConversationViewport,
 } from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
-  return {
+  const node = {
     parentElement,
     scrollTop: 0,
     scrollHeight: 100,
     clientHeight: 100,
     style: { overflowY: "visible", overscrollBehaviorY: "auto" },
+    contains: (candidate: unknown) => {
+      let current = candidate as { parentElement?: Element | null } | null
+      while (current) {
+        if (current === (node as unknown)) return true
+        current = current.parentElement ?? null
+      }
+      return false
+    },
     ...options,
-  } as unknown as HTMLElement
+  }
+  return node as unknown as HTMLElement
 }
 
 beforeEach(() => {
@@ -90,4 +100,28 @@ test("non-scrollable viewports and targets outside the conversation keep their l
   viewport.scrollHeight = 1000
   expect(shouldReleaseBottomLock(viewport, element(), -100)).toBe(false)
   expect(shouldReleaseBottomLock(viewport, null, -100)).toBe(false)
+})
+
+test("a wheel over the conversation's own scrollbar targets the viewport", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const root = element(null, {})
+  ;(viewport as unknown as { parentElement: Element | null }).parentElement = root
+  const scrollbar = element(root, {})
+  scrollbar.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (scrollbar as unknown as Element) : null
+  const thumb = element(scrollbar, {})
+  thumb.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (scrollbar as unknown as Element) : null
+  // Reka's scrollbar is the viewport's sibling, not a descendant: its wheel must
+  // still count, while a scrollbar belonging to another ScrollArea must not.
+  expect(targetsConversationViewport(viewport, thumb)).toBe(true)
+  const otherRoot = element(null, {})
+  const otherScrollbar = element(otherRoot, {})
+  const otherThumb = element(otherScrollbar, {})
+  otherThumb.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (otherScrollbar as unknown as Element) : null
+  expect(targetsConversationViewport(viewport, otherThumb)).toBe(false)
+  // Nested scrollbars inside the viewport are not the conversation's own rail.
+  const nestedBar = element(viewport, {})
+  expect(shouldReleaseBottomLock(viewport, element(nestedBar), -100)).toBe(true)
 })

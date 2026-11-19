@@ -7,8 +7,8 @@ import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect 
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
-import { beginScrollDrag, clearScrollWrites, consumeScrollWrite, endScrollDrag, observeScrollWrites } from '@/lib/scrollWrites'
+import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock, targetsConversationViewport } from '@/lib/scrollIntent'
+import { beginAppScroll, beginUserInput, consumeScrollWrite, endUserInput, isAppScrolling, observeScrollWrites } from '@/lib/scrollWrites'
 import { conversationKey } from './context'
 
 interface Props {
@@ -34,6 +34,10 @@ defineExpose({
     message.dispatchEvent(new Event('virtual-reveal'))
     await nextTick()
     if (!message.isConnected) return
+    // Navigation is the app's movement, not the reader's: mark the viewport so
+    // the settling events (including one clamped onto the bottom) cannot re-arm
+    // following (TZD-135).
+    beginAppScroll(viewport)
     viewport.scrollTo({
       top: viewport.scrollTop + message.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 24,
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
@@ -79,7 +83,7 @@ function handleWheel(event: WheelEvent) {
   if (!scroll || event.ctrlKey || event.defaultPrevented || !(event.target instanceof Element)) return
   // The reader's own gesture outranks any recorded write, so the movement it
   // produces can never be mistaken for one the app made.
-  clearScrollWrites(scroll)
+  beginUserInput(scroll)
   // Reka uses overflow: hidden scroll, which the library's shorthand overflow
   // check misses. Release before virtual row resizing can pin us back down.
   if (shouldReleaseBottomLock(scroll, event.target, event.deltaY)) releaseBottomLock()
@@ -87,7 +91,7 @@ function handleWheel(event: WheelEvent) {
 function handleKeyDown(event: KeyboardEvent) {
   const scroll = scrollRef.value
   if (!scroll || event.defaultPrevented) return
-  if (CONVERSATION_SCROLL_KEYS.has(event.key)) clearScrollWrites(scroll)
+  if (CONVERSATION_SCROLL_KEYS.has(event.key)) beginUserInput(scroll)
 }
 function handleScroll(event: Event) {
   const scroll = scrollRef.value
@@ -95,16 +99,15 @@ function handleScroll(event: Event) {
     const previous = lastScrollTop ?? scroll.scrollTop
     lastScrollTop = scroll.scrollTop
     // Code moves this viewport too: bottom pinning, virtual-row height
-    // compensation and the storage library's clamps. Those writes are recorded
-    // when they happen, so a downward one can no longer pass for a downward
-    // reading gesture - that re-armed following while the reader was scrolling
-    // up and pinned every later chunk to the bottom (TZD-135).
-    const programmatic = consumeScrollWrite(scroll, scroll.scrollTop)
+    // compensation, navigation and the storage library's clamps. A recorded write
+    // or an app-initiated scroll means the reader did not move it, so the
+    // downward check below must not re-arm following on that account (TZD-135).
+    const userOwned = !consumeScrollWrite(scroll, scroll.scrollTop) && !isAppScrolling(scroll)
     // Scroll events also cover scrollbar dragging and keyboard navigation, but
     // layout shrinkage clamps scrollTop to the new bottom without user intent.
     if (shouldReleaseBottomLockOnScroll(previous, scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight))
       releaseBottomLock()
-    else if (!programmatic && shouldResumeBottomLock(
+    else if (userOwned && shouldResumeBottomLock(
       previous,
       scroll.scrollTop,
       scroll.scrollHeight - scroll.clientHeight,
@@ -113,23 +116,47 @@ function handleScroll(event: Event) {
   }
   emit('scroll', event)
 }
-// A scrollbar drag is the reader, not the app: the thumb writes scrollTop while
-// it follows the pointer, and that movement must keep re-arming following.
-// Only this conversation's own scrollbar counts - nested and unrelated ones do
-// not make the app's writes here the reader's.
+// Scrollbar interaction is the reader, not the app: Reka positions the thumb by
+// assigning scrollTop on every pointer move. Only the conversation's own
+// scrollbar counts — a nested or unrelated one does not make this viewport's
+// writes the reader's.
+let draggingScrollbar = false
+function ownScrollbar(target: Element): Element | null {
+  const scroll = scrollRef.value
+  if (!scroll) return null
+  const scrollbar = target.closest('[data-slot="scroll-area-scrollbar"]')
+  // Only this conversation's scrollbar: its parent is the same ScrollAreaRoot.
+  return scrollbar && scrollbar.parentElement === scroll.parentElement ? scrollbar : null
+}
 function handlePointerDown(event: PointerEvent) {
   const scroll = scrollRef.value
   if (!scroll || !(event.target instanceof Element)) return
-  const scrollbar = event.target.closest('[data-slot="scroll-area-scrollbar"]')
-  // Only this conversation's own scrollbar: dragging a nested or unrelated one
-  // does not make writes to this viewport the reader's.
-  const own = scroll.parentElement?.querySelector('[data-slot="scroll-area-scrollbar"]')
-  if (!scrollbar || !own || !scrollbar.isSameNode(own)) return
-  beginScrollDrag(scroll)
+  const scrollbar = ownScrollbar(event.target)
+  if (!scrollbar) return
+  draggingScrollbar = true
+  beginUserInput(scroll)
+}
+function handlePointerMove() {
+  const scroll = scrollRef.value
+  // Each move is its own dispatch: refresh the reader's window so the thumb's
+  // scrollTop writes stay the reader's. Merely holding the thumb still opens
+  // none, which is what keeps later compensation writes app-owned.
+  if (draggingScrollbar && scroll) beginUserInput(scroll)
 }
 function handlePointerUp() {
   const scroll = scrollRef.value
-  if (scroll) endScrollDrag(scroll)
+  draggingScrollbar = false
+  if (scroll) endUserInput(scroll)
+}
+function handleCanvasWheel(event: WheelEvent) {
+  const scroll = scrollRef.value
+  if (!scroll || event.ctrlKey || event.defaultPrevented || !(event.target instanceof Element)) return
+  // Reka handles a wheel over the scrollbar track with a document-level listener
+  // (it writes viewport.scrollTop), so the viewport's own handler never runs. A
+  // wheel over the conversation's scrollbar is still the reader's gesture.
+  if (!targetsConversationViewport(scroll, event.target) || scroll.contains(event.target)) return
+  beginUserInput(scroll)
+  if (event.deltaY < 0 && scroll.scrollHeight > scroll.clientHeight) releaseBottomLock()
 }
 // With resize="instant", pin scrollTop synchronously in the ResizeObserver
 // callback (after layout, before paint). The library defers its correction to
@@ -160,16 +187,22 @@ watchEffect((onCleanup) => {
 })
 onMounted(() => {
   window.addEventListener('pointerdown', handlePointerDown, true)
+  window.addEventListener('pointermove', handlePointerMove, true)
   window.addEventListener('pointerup', handlePointerUp, true)
   window.addEventListener('pointercancel', handlePointerUp, true)
+  // Capture on the document so a wheel over the conversation's own scrollbar
+  // (a sibling of the viewport) is attributed to the reader as well.
+  window.addEventListener('wheel', handleCanvasWheel, { capture: true, passive: true })
   if (props.initial === 'instant' && scrollRef.value)
     scrollRef.value.scrollTop = scrollRef.value.scrollHeight
   lastScrollTop = scrollRef.value?.scrollTop
 })
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', handlePointerDown, true)
+  window.removeEventListener('pointermove', handlePointerMove, true)
   window.removeEventListener('pointerup', handlePointerUp, true)
   window.removeEventListener('pointercancel', handlePointerUp, true)
+  window.removeEventListener('wheel', handleCanvasWheel, { capture: true })
 })
 </script>
 

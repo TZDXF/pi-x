@@ -1,24 +1,38 @@
 /**
- * Tell an app-driven scroll write apart from a reading gesture (TZD-135).
+ * Attribute scroll events to whoever really moved the viewport (TZD-135).
  *
  * The conversation viewport is moved by code that is not the reader: bottom
  * pinning while a reply streams, virtual-row height compensation
- * (`VirtualMessage.measure`), history page anchoring, the storage library's own
- * shrink clamp and its correction when growing content arrives. Every one of
- * them surfaces as an ordinary scroll event, so the scroll handler cannot tell
- * whether the position changed because someone scrolled.
+ * (`VirtualMessage.measure`), history page anchoring, message navigation, and
+ * the storage library's own clamps. Every one of them surfaces as an ordinary
+ * scroll event, so the scroll handler cannot tell whether the position changed
+ * because someone scrolled.
  *
- * Reading a downward write as a downward gesture is what made the panel jump to
- * the bottom while the user was scrolling up: one of those writes lands on the
- * bottom, bottom following is re-armed, and from then on every streaming chunk
- * pins the viewport there, so the reader can never stay scrolled up.
+ * Reading an app write as a downward gesture is what made the panel jump to the
+ * bottom while the user was scrolling up: one such write lands on the bottom,
+ * bottom following is re-armed, and from then on every streaming chunk pins the
+ * viewport there, so the reader can never stay scrolled up.
  *
- * The viewport's `scrollTop` is therefore observed: each assignment made by code
- * records the position the browser settled on, and the scroll event it causes
- * consumes that record. A real gesture clears the records first, so the reader
- * always wins — including a scrollbar drag, whose thumb is also positioned by
- * code.
+ * Three inputs decide the attribution, and the reader always wins:
+ *
+ * 1. **Observed writes.** The viewport's `scrollTop` is observed: an assignment
+ *    made outside user input records the position the browser settled on, and
+ *    the scroll event it causes consumes that record.
+ * 2. **User input dispatches.** A wheel, a key or a scrollbar pointer interaction
+ *    opens a short window (`beginUserInput`); writes inside it are the reader's
+ *    and are not recorded. This is what keeps Reka honest — its scrollbar listens
+ *    for `wheel` on the document and positions the thumb by assigning
+ *    `scrollTop`, so neither reaches the viewport's own handlers. A thumb merely
+ *    held still opens no window, so later compensation writes stay app writes.
+ * 3. **App-initiated scrolling.** `scrollTo()`/`scrollBy()` and
+ *    `scrollIntoView()` never touch the accessor, so `beginAppScroll` marks the
+ *    viewport: its scroll events stay app-owned until the movement settles.
  */
+
+interface AppScroll {
+  startedAt: number
+  lastEventAt: number
+}
 
 interface ScrollWrite {
   scrollTop: number
@@ -26,23 +40,60 @@ interface ScrollWrite {
 }
 
 /** How long a recorded write may take to surface as a scroll event. */
-const SCROLL_WRITE_TTL_MS = 400
+const WRITE_TTL_MS = 400
+/** How long user input keeps owning the writes it dispatches. */
+const INPUT_WINDOW_MS = 48
+/** Quiet period after which an app-initiated scroll counts as settled. */
+const APP_SCROLL_SETTLE_MS = 160
+/** Hard cap, so a stalled smooth scroll cannot own the viewport forever. */
+const APP_SCROLL_MAX_MS = 1600
 /** Sub-pixel layout rounding must not unmatch a recorded write. */
-const SCROLL_WRITE_TOLERANCE_PX = 1
+const TOLERANCE_PX = 1
 
 const writes = new WeakMap<object, ScrollWrite[]>()
-const dragging = new WeakSet<object>()
+const inputUntil = new WeakMap<object, number>()
+const appScrolls = new WeakMap<object, AppScroll>()
+
+/** Whether the reader's own input currently owns this viewport's writes. */
+export function isUserInputActive(target: object, now = Date.now()): boolean {
+  const until = inputUntil.get(target)
+  if (until === undefined) return false
+  if (until > now) return true
+  inputUntil.delete(target)
+  return false
+}
+
+/**
+ * Open a short window owned by the reader.
+ *
+ * Call it from the input dispatch itself. The window covers the rest of that
+ * dispatch plus the scroll event it produces, so a later compensation write
+ * while the reader only holds the thumb still is attributed to the app.
+ * Pending app records and an app-initiated scroll are dropped — the reader wins.
+ */
+export function beginUserInput(target: object, now = Date.now()): void {
+  inputUntil.set(target, now + INPUT_WINDOW_MS)
+  writes.delete(target)
+  appScrolls.delete(target)
+}
+
+/** Close the window early, once the input has been fully handled. */
+export function endUserInput(target: object): void {
+  inputUntil.delete(target)
+}
 
 /** Record that a scroll event at `scrollTop` was produced by code. */
 export function recordScrollWrite(target: object, scrollTop: number, now = Date.now()): void {
-  if (dragging.has(target)) return
+  // Inside user input the movement is the reader's: leaving it unrecorded is
+  // exactly what makes the resulting scroll event count as a gesture.
+  if (isUserInputActive(target, now)) return
   const list = writes.get(target)
   if (!list) {
     writes.set(target, [{ scrollTop, at: now }])
     return
   }
   for (let index = list.length - 1; index >= 0; index--) {
-    if (now - list[index]!.at > SCROLL_WRITE_TTL_MS) list.splice(index, 1)
+    if (now - list[index]!.at > WRITE_TTL_MS) list.splice(index, 1)
   }
   list.push({ scrollTop, at: now })
 }
@@ -57,33 +108,52 @@ export function consumeScrollWrite(target: object, scrollTop: number, now = Date
   const list = writes.get(target)
   if (!list) return false
   for (let index = list.length - 1; index >= 0; index--) {
-    if (now - list[index]!.at > SCROLL_WRITE_TTL_MS) list.splice(index, 1)
+    if (now - list[index]!.at > WRITE_TTL_MS) list.splice(index, 1)
   }
-  const index = list.findIndex(write => Math.abs(write.scrollTop - scrollTop) <= SCROLL_WRITE_TOLERANCE_PX)
+  const index = list.findIndex(write => Math.abs(write.scrollTop - scrollTop) <= TOLERANCE_PX)
   if (index < 0) return false
   list.splice(index, 1)
   return true
 }
 
-/** A real gesture wins over stale records: nothing pending belongs to it. */
+/** Forget records: a real gesture outranks anything still pending. */
 export function clearScrollWrites(target: object): void {
   writes.delete(target)
 }
 
 /**
- * Stop recording writes while a scrollbar drag is in progress.
+ * Declare that this viewport scrolls because the app asked it to.
  *
- * The custom scrollbar's thumb follows the pointer by assigning `scrollTop`, so
- * that movement is the reader's, not the app's.
+ * `scrollTo()`, `scrollBy()` and `scrollIntoView()` (smooth or not) never touch
+ * the `scrollTop` accessor, so their events cannot be matched to a record.
+ * Marking the viewport keeps them — including the final one clamped onto the
+ * bottom — out of the reading-intent decision until the movement settles.
  */
-export function beginScrollDrag(target: object): void {
-  dragging.add(target)
-  writes.delete(target)
+export function beginAppScroll(target: object, now = Date.now()): void {
+  appScrolls.set(target, { startedAt: now, lastEventAt: now })
 }
 
-/** Resume recording once the drag ends. */
-export function endScrollDrag(target: object): void {
-  dragging.delete(target)
+/** End an app-initiated scroll early (e.g. the reader took over). */
+export function endAppScroll(target: object): void {
+  appScrolls.delete(target)
+}
+
+/**
+ * Whether the viewport is still inside an app-initiated scroll.
+ *
+ * Every scroll event refreshes the quiet period; once the movement stops for
+ * `APP_SCROLL_SETTLE_MS` (or the `APP_SCROLL_MAX_MS` cap is hit) the viewport is
+ * the reader's again.
+ */
+export function isAppScrolling(target: object, now = Date.now()): boolean {
+  const state = appScrolls.get(target)
+  if (!state) return false
+  if (now - state.lastEventAt > APP_SCROLL_SETTLE_MS || now - state.startedAt > APP_SCROLL_MAX_MS) {
+    appScrolls.delete(target)
+    return false
+  }
+  state.lastEventAt = now
+  return true
 }
 
 /**
@@ -93,7 +163,8 @@ export function endScrollDrag(target: object): void {
  * compensation, history anchoring and the storage library's internal writes are
  * all covered without each writer declaring itself.
  *
- * Returns a disposer restoring the previous property descriptor.
+ * Returns a disposer restoring the previous property descriptor and dropping all
+ * attribution state for that viewport.
  */
 export function observeScrollWrites(target: HTMLElement): () => void {
   const own = Object.getOwnPropertyDescriptor(target, "scrollTop")
@@ -127,7 +198,8 @@ export function observeScrollWrites(target: HTMLElement): () => void {
     if (own) Object.defineProperty(target, "scrollTop", own)
     else Reflect.deleteProperty(target, "scrollTop")
     writes.delete(target)
-    dragging.delete(target)
+    inputUntil.delete(target)
+    appScrolls.delete(target)
   }
 }
 
