@@ -3,35 +3,47 @@
  *
  * The conversation viewport is moved by code that is not the reader: bottom
  * pinning while a reply streams, virtual-row height compensation
- * (`VirtualMessage.measure`), history page anchoring, message navigation, and
- * the storage library's own clamps. Every one of them surfaces as an ordinary
- * scroll event, so the scroll handler cannot tell whether the position changed
- * because someone scrolled.
+ * (`VirtualMessage.measure`), history page anchoring, message navigation, and the
+ * storage library's own clamps. Every one of them surfaces as an ordinary scroll
+ * event, so the scroll handler cannot tell whether the position changed because
+ * someone scrolled.
  *
  * Reading an app write as a downward gesture is what made the panel jump to the
  * bottom while the user was scrolling up: one such write lands on the bottom,
  * bottom following is re-armed, and from then on every streaming chunk pins the
  * viewport there, so the reader can never stay scrolled up.
  *
- * Three inputs decide the attribution, and the reader always wins:
+ * Attribution has two inputs:
  *
- * 1. **Observed writes.** The viewport's `scrollTop` is observed: an assignment
- *    made outside user input records the position the browser settled on, and
- *    the scroll event it causes consumes that record.
- * 2. **User input dispatches.** A wheel, a key or a scrollbar pointer interaction
- *    opens a short window (`beginUserInput`); writes inside it are the reader's
- *    and are not recorded. This is what keeps Reka honest — its scrollbar listens
- *    for `wheel` on the document and positions the thumb by assigning
- *    `scrollTop`, so neither reaches the viewport's own handlers. A thumb merely
- *    held still opens no window, so later compensation writes stay app writes.
- * 3. **App-initiated scrolling.** `scrollTo()`/`scrollBy()` and
- *    `scrollIntoView()` never touch the accessor, so `beginAppScroll` marks the
- *    viewport: its scroll events stay app-owned until the movement settles.
+ * 1. **Observed writes.** The viewport's `scrollTop` is observed. An assignment
+ *    made outside an input dispatch records the position the browser settled on,
+ *    and the scroll event it causes consumes that record.
+ * 2. **Input dispatches.** An input that moves the viewport *itself* (a wheel, a
+ *    scrolling key, a scrollbar pointer interaction) opens an exemption that
+ *    covers exactly that input's dispatch — the whole task the browser dispatches
+ *    the event in, including the library listeners that run after ours. Only
+ *    writes performed within that task are the reader's; a layout write that
+ *    merely *follows* the input in a later task stays the app's.
+ *
+ *    This is what keeps Reka honest — its scrollbar listens for `wheel` on the
+ *    document and positions the thumb by assigning `scrollTop`, so neither
+ *    reaches the viewport's own handlers — while a same-frame compensation
+ *    triggered by the same keystroke is no longer swallowed.
+ *
+ * App-initiated scrolling (`scrollTo`, `scrollBy`, `scrollIntoView`) never touches
+ * the accessor, so its events cannot be matched to a record. `beginAppScroll`
+ * marks the viewport with the position the app asked for, and the mark stays
+ * until the movement is **confirmed** finished: the arrival event at that
+ * position, the browser's `scrollend`, a replacement request, or the reader
+ * actually taking the viewport over. A timeout never stands in for that
+ * confirmation — a busy frame can delay the first frame of an animation by
+ * hundreds of milliseconds, and the arrival would then be attributed to the
+ * reader.
  */
 
 interface AppScroll {
-  startedAt: number
-  lastEventAt: number
+  /** Position the app asked for, clamped to the scrollable range; null if unknown. */
+  targetTop: number | null
 }
 
 interface ScrollWrite {
@@ -41,52 +53,49 @@ interface ScrollWrite {
 
 /** How long a recorded write may take to surface as a scroll event. */
 const WRITE_TTL_MS = 400
-/** How long user input keeps owning the writes it dispatches. */
-const INPUT_WINDOW_MS = 48
-/** Quiet period after which an app-initiated scroll counts as settled. */
-const APP_SCROLL_SETTLE_MS = 160
-/** Hard cap, so a stalled smooth scroll cannot own the viewport forever. */
-const APP_SCROLL_MAX_MS = 1600
-/** Sub-pixel layout rounding must not unmatch a recorded write. */
+/** Sub-pixel layout rounding must not unmatch a recorded write or a target. */
 const TOLERANCE_PX = 1
 
 const writes = new WeakMap<object, ScrollWrite[]>()
-const inputUntil = new WeakMap<object, number>()
+/** Input dispatches currently executing for this viewport (nested ones count). */
+const dispatches = new WeakMap<object, number>()
 const appScrolls = new WeakMap<object, AppScroll>()
 
-/** Whether the reader's own input currently owns this viewport's writes. */
-export function isUserInputActive(target: object, now = Date.now()): boolean {
-  const until = inputUntil.get(target)
-  if (until === undefined) return false
-  if (until > now) return true
-  inputUntil.delete(target)
-  return false
+/** Whether an input dispatch for this viewport is running right now. */
+export function isInputDispatch(target: object): boolean {
+  return (dispatches.get(target) ?? 0) > 0
 }
 
 /**
- * Open a short window owned by the reader.
+ * Open an exemption for the input dispatch that is running now.
  *
- * Call it from the input dispatch itself. The window covers the rest of that
- * dispatch plus the scroll event it produces, so a later compensation write
- * while the reader only holds the thumb still is attributed to the app.
- * Pending app records and an app-initiated scroll are dropped — the reader wins.
+ * The exemption ends when the browser finishes dispatching this event — i.e. at
+ * the end of the current task, after every listener of the same event ran. A
+ * write the dispatch itself performs (Reka's thumb write for a wheel over the
+ * track or a pointer drag) is the reader's; a layout write in a later task
+ * belongs to the app.
  */
-export function beginUserInput(target: object, now = Date.now()): void {
-  inputUntil.set(target, now + INPUT_WINDOW_MS)
+export function beginUserInput(target: object): void {
+  dispatches.set(target, (dispatches.get(target) ?? 0) + 1)
+  // The reader outranks anything the app still has pending for this viewport.
   writes.delete(target)
-  appScrolls.delete(target)
+  setTimeout(() => {
+    const remaining = (dispatches.get(target) ?? 1) - 1
+    if (remaining > 0) dispatches.set(target, remaining)
+    else dispatches.delete(target)
+  }, 0)
 }
 
-/** Close the window early, once the input has been fully handled. */
+/** Close the exemption early, once the dispatch is known to be finished. */
 export function endUserInput(target: object): void {
-  inputUntil.delete(target)
+  dispatches.delete(target)
 }
 
 /** Record that a scroll event at `scrollTop` was produced by code. */
 export function recordScrollWrite(target: object, scrollTop: number, now = Date.now()): void {
-  // Inside user input the movement is the reader's: leaving it unrecorded is
-  // exactly what makes the resulting scroll event count as a gesture.
-  if (isUserInputActive(target, now)) return
+  // A write the input dispatch performs itself is the reader's: leaving it
+  // unrecorded is what makes the resulting scroll event count as a gesture.
+  if (isInputDispatch(target)) return
   const list = writes.get(target)
   if (!list) {
     writes.set(target, [{ scrollTop, at: now }])
@@ -116,7 +125,7 @@ export function consumeScrollWrite(target: object, scrollTop: number, now = Date
   return true
 }
 
-/** Forget records: a real gesture outranks anything still pending. */
+/** Forget records: a fresh start (new input, new navigation) outranks them. */
 export function clearScrollWrites(target: object): void {
   writes.delete(target)
 }
@@ -124,35 +133,38 @@ export function clearScrollWrites(target: object): void {
 /**
  * Declare that this viewport scrolls because the app asked it to.
  *
- * `scrollTo()`, `scrollBy()` and `scrollIntoView()` (smooth or not) never touch
- * the `scrollTop` accessor, so their events cannot be matched to a record.
- * Marking the viewport keeps them — including the final one clamped onto the
- * bottom — out of the reading-intent decision until the movement settles.
+ * `targetTop` is the position the app requested, clamped by the caller; reaching
+ * it is the app's own confirmation that the movement finished. Pass `null` when
+ * the movement has no known endpoint (`scrollIntoView`) and let `scrollend`, a
+ * replacement request or a reader takeover finish it.
  */
-export function beginAppScroll(target: object, now = Date.now()): void {
-  appScrolls.set(target, { startedAt: now, lastEventAt: now })
-}
-
-/** End an app-initiated scroll early (e.g. the reader took over). */
-export function endAppScroll(target: object): void {
-  appScrolls.delete(target)
+export function beginAppScroll(target: object, targetTop: number | null): void {
+  appScrolls.set(target, { targetTop })
 }
 
 /**
- * Whether the viewport is still inside an app-initiated scroll.
- *
- * Every scroll event refreshes the quiet period; once the movement stops for
- * `APP_SCROLL_SETTLE_MS` (or the `APP_SCROLL_MAX_MS` cap is hit) the viewport is
- * the reader's again.
+ * End an app-initiated scroll: the browser reported `scrollend`, the request was
+ * cancelled or replaced, or the reader took the viewport over.
  */
-export function isAppScrolling(target: object, now = Date.now()): boolean {
+export function finishAppScroll(target: object): void {
+  appScrolls.delete(target)
+}
+
+/** Whether the app is still waiting for the movement it asked for. */
+export function hasAppScroll(target: object): boolean {
+  return appScrolls.has(target)
+}
+
+/**
+ * Whether the viewport still owes the app the movement it asked for.
+ *
+ * The event that lands on the requested position is the app's own arrival: it is
+ * attributed to the app and then the viewport is handed back to the reader.
+ */
+export function isAppScrolling(target: object, scrollTop: number): boolean {
   const state = appScrolls.get(target)
   if (!state) return false
-  if (now - state.lastEventAt > APP_SCROLL_SETTLE_MS || now - state.startedAt > APP_SCROLL_MAX_MS) {
-    appScrolls.delete(target)
-    return false
-  }
-  state.lastEventAt = now
+  if (state.targetTop !== null && Math.abs(state.targetTop - scrollTop) <= TOLERANCE_PX) appScrolls.delete(target)
   return true
 }
 
@@ -198,7 +210,7 @@ export function observeScrollWrites(target: HTMLElement): () => void {
     if (own) Object.defineProperty(target, "scrollTop", own)
     else Reflect.deleteProperty(target, "scrollTop")
     writes.delete(target)
-    inputUntil.delete(target)
+    dispatches.delete(target)
     appScrolls.delete(target)
   }
 }

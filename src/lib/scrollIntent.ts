@@ -42,6 +42,24 @@ export function targetsConversationViewport(viewport: HTMLElement, target: Eleme
   return !!scrollbar && scrollbar.parentElement === viewport.parentElement
 }
 
+/** Keys whose default action scrolls the conversation. */
+const KEY_SCROLL_KEYS = new Set(["End", "Home", "PageDown", "PageUp", "ArrowDown", "ArrowUp", " "])
+
+/**
+ * Whether this key press scrolls the conversation viewport.
+ *
+ * Keys scroll the nearest scrollable ancestor of the focused element, so focus
+ * has to be inside the conversation. Space is the exception: it activates the
+ * focused control (a button, a summary, a checkbox) instead of scrolling, so it
+ * only scrolls when the viewport itself holds focus.
+ */
+export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return false
+  if (!(event.target instanceof Element) || !targetsConversationViewport(viewport, event.target)) return false
+  if (!KEY_SCROLL_KEYS.has(event.key)) return false
+  return event.key !== " " || event.target === viewport
+}
+
 /**
  * Whether a gesture in `deltaY`'s direction moves the conversation viewport,
  * rather than being consumed by a nested scroller.

@@ -10,9 +10,10 @@ import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
  * re-armed following, so every later streaming chunk pinned the panel to the
  * bottom and the reader could never stay scrolled up.
  *
- * The scenarios cover both directions: app movement must never re-arm, and the
- * reader's own wheel/drag — including a wheel over the scrollbar track and a
- * drag while a nested scrollbar is mounted — must still re-arm.
+ * Each scenario is checked in both directions: app movement must never re-arm,
+ * and the reader's own wheel/drag/key — including a wheel over the scrollbar
+ * track, a drag with a nested scrollbar mounted, and a keystroke that does not
+ * scroll the viewport — must keep the attribution honest.
  */
 const html = `<!doctype html><html><body><div id="app"></div><script type="module">
 import { createApp, h, ref, nextTick } from 'vue'
@@ -22,8 +23,8 @@ import { ScrollArea } from '/src/components/ui/scroll-area'
 import { pinToBottom } from '/src/lib/bottomPin'
 import '/src/style.css'
 const query = location.search
-// The compensation scenario stages a >viewport-height row above the reader and
-// a tail that shrinks in the same update, so the reader stays above the old bottom.
+// The compensation scenario stages a row above the reader (600px, its old end
+// above the viewport top) and a tail that can shrink in the same Vue update.
 const compensation = query.includes('compensation')
 const above = ref(compensation ? 600 : 1200)
 const tail = ref(compensation ? 650 : 300)
@@ -46,21 +47,34 @@ createApp({
       overlay: () => h(ConversationScrollButton),
     }))
 }).mount('#app')
+const viewport = /** @type {HTMLElement} */ (document.querySelector('[role=log]'))
+// Every scroll event the viewport dispatches, so a test can wait for the one a
+// programmatic write causes instead of guessing with a timeout.
+window.__scrollTicks = 0
+viewport.addEventListener('scroll', () => { window.__scrollTicks += 1 })
 window.__growTail = by => { tail.value += by }
 // A streamed chunk that grows the row above the reader and shrinks the tail in
-// one Vue update: the compensation write is clamped onto the bottom.
+// one Vue update, so the compensation write is clamped onto the bottom.
 window.__compensate = async () => {
   above.value += 260
   tail.value -= 220
   await nextTick()
-  const viewport = document.querySelector('[role=log]')
   return { top: viewport.scrollTop, gap: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop }
 }
 // The production pin, called the way the streaming path calls it.
-window.__pinToBottom = () => {
-  const viewport = document.querySelector('[role=log]')
-  pinToBottom(viewport, true, false)
+window.__pinToBottom = () => pinToBottom(viewport, true, false)
+/** Append an inline control inside the panel for keystroke scenarios. */
+window.__mountInlineButton = onActivate => {
+  const button = document.createElement('button')
+  button.textContent = 'Inline action'
+  button.style.cssText = 'position:fixed;left:10px;top:10px;'
+  button.onclick = onActivate
+  viewport.append(button)
+  button.focus({ preventScroll: true })
+  return button
 }
+/** Run a synchronous busy loop to delay the next frame. */
+window.__busy = ms => { const until = performance.now() + ms; while (performance.now() < until) { /* block */ } }
 </script></body></html>`
 
 let harness: VueHarness | null = null
@@ -91,11 +105,21 @@ async function readUp(page: Page, scenario = "") {
   await expect.poll(() => gapOf(page)).toBe(200)
 }
 /**
- * Stream one more chunk and report the gap afterwards. `gapOf` right after the
- * chunk tells whether following is still on: 0 means the panel glued itself to
- * the bottom again.
+ * Wait until the viewport has dispatched another scroll event. A virtual-row
+ * compensation landing on the bottom only stops mattering once its own scroll
+ * event has been handled — pushing the next chunk before that would test a state
+ * the browser has not reached yet.
+ */
+async function settleScroll(page: Page) {
+  const ticks = await page.evaluate(() => (window as any).__scrollTicks)
+  await page.waitForFunction(before => (window as any).__scrollTicks > before, ticks, { timeout: 2000 })
+}
+/**
+ * Stream one more chunk and report the gap afterwards. A gap of 0 means the panel
+ * glued itself to the bottom again; anything growing means following stayed off.
  */
 async function streamChunk(page: Page, by = 40) {
+  await settleScroll(page).catch(() => {})
   await page.evaluate(size => (window as any).__growTail(size), by)
   await page.waitForTimeout(220)
   return gapOf(page)
@@ -104,50 +128,43 @@ async function streamChunk(page: Page, by = 40) {
 test("virtual-row compensation really lands on the bottom, then must not re-arm following", async ({ page }) => {
   await readUp(page, "?compensation")
   const before = await page.evaluate(() => (window as any).__compensate())
-  // The reverse assertion: the reader's remaining distance (240px) is smaller
-  // than the row growth (260px), so the compensation write must be clamped onto
-  // the bottom. Without this the scenario would prove nothing.
+  // Reverse assertion: the remaining distance (240px) is smaller than the row
+  // growth (260px), so the compensation write must be clamped onto the bottom.
   expect(before.gap).toBeGreaterThan(200)
-  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
-  const arrival = await page.evaluate(() => {
-    const element = document.querySelector<HTMLElement>("[role=log]")!
-    return element.scrollHeight - element.clientHeight - element.scrollTop
-  })
-  expect(arrival).toBeLessThanOrEqual(1)
+  await settleScroll(page)
+  expect(await gapOf(page)).toBeLessThanOrEqual(1)
   // Everything below the reader streams on; none of it may pull the reader down.
-  for (let chunk = 0; chunk < 4; chunk++) {
-    const after = await streamChunk(page)
-    expect(after).toBeGreaterThanOrEqual(40 * (chunk + 1))
+  for (let chunk = 1; chunk <= 4; chunk++) {
+    expect(await streamChunk(page)).toBeGreaterThanOrEqual(40 * chunk)
   }
 })
 
-test("a virtual-row compensation landing on the bottom does not re-arm following", async ({ page }) => {
-  await page.goto(harness!.url + "?compensation")
-  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
-  await viewportOf(page).hover()
-  await page.mouse.wheel(0, -200)
-  await page.waitForTimeout(200)
-  const reading = await viewportOf(page).evaluate(element => Math.round(element.scrollTop))
-  // A mounted row above the reader grows past the remaining distance, so the
-  // compensation write is clamped onto the bottom.
+test("virtual-row compensation landing on the bottom does not re-arm following", async ({ page }) => {
+  await readUp(page, "?compensation")
+  const readingTop = await viewportOf(page).evaluate(element => Math.round(element.scrollTop))
   await page.evaluate(() => (window as any).__compensate())
-  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  await settleScroll(page)
+  expect(await gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
-  expect(await viewportOf(page).evaluate(element => Math.round(element.scrollTop))).toBeGreaterThanOrEqual(reading - 1)
+  expect(await viewportOf(page).evaluate(element => Math.round(element.scrollTop))).toBeGreaterThanOrEqual(
+    readingTop - 1,
+  )
 })
 
 test("an app-side pin to the bottom does not re-arm following", async ({ page }) => {
-  await readUp(page, "")
+  await readUp(page)
   await page.evaluate(() => (window as any).__pinToBottom())
+  await settleScroll(page).catch(() => {})
   expect(await gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
 })
 
 test("scrollToMessage clamped onto the bottom does not re-arm following", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await readUp(page, "")
+  await readUp(page)
   await page.evaluate(() => (window as any).__conversation.scrollToMessage(1))
-  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  await settleScroll(page).catch(() => {})
+  expect(await gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
 })
 
@@ -159,15 +176,33 @@ test("compensation while the reader holds the thumb still does not re-arm follow
   await page.waitForTimeout(100)
   expect(await gapOf(page)).toBeGreaterThan(100)
   await page.evaluate(() => (window as any).__compensate())
-  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  await settleScroll(page)
+  expect(await gapOf(page)).toBeLessThanOrEqual(1)
   await page.waitForTimeout(120)
   await page.mouse.up()
   // The thumb never moved, so the compensation was still the app's movement.
   expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
 })
 
+test("a non-scrolling Space keystroke does not launder same-frame compensation", async ({ page }) => {
+  await readUp(page, "?compensation")
+  // Space activates the focused control instead of scrolling the viewport; it
+  // must not open a reader exemption for the layout write that follows.
+  await viewportOf(page).evaluate(() => {
+    const button = (window as any).__mountInlineButton(() => {
+      ;(window as any).__inlineActivated = true
+    })
+    button.addEventListener("keydown", () => void (window as any).__compensate(), { once: true })
+  })
+  await page.keyboard.press("Space")
+  expect(await page.evaluate(() => (window as any).__inlineActivated)).toBe(true)
+  await settleScroll(page)
+  expect(await gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
+})
+
 test("a reader's own wheel back to the bottom still re-arms following", async ({ page }) => {
-  await readUp(page, "")
+  await readUp(page)
   await viewportOf(page).hover()
   await page.mouse.wheel(0, 400)
   await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
@@ -175,7 +210,7 @@ test("a reader's own wheel back to the bottom still re-arms following", async ({
 })
 
 test("a wheel over the scrollbar track still re-arms following", async ({ page }) => {
-  await readUp(page, "")
+  await readUp(page)
   // Reka handles a wheel over the track with a document-level listener that
   // writes viewport.scrollTop; the viewport's own handler never sees it.
   const point = await thumbCentre(page)
@@ -192,7 +227,7 @@ test("a wheel over the scrollbar track still re-arms following", async ({ page }
 })
 
 test("a scrollbar drag back to the bottom still re-arms following", async ({ page }) => {
-  await readUp(page, "")
+  await readUp(page)
   const point = await thumbCentre(page)
   await page.mouse.move(point.x, point.y)
   await page.mouse.down()
@@ -212,4 +247,53 @@ test("an outer scrollbar drag still re-arms following with a nested scrollbar mo
   await page.mouse.up()
   await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBeLessThanOrEqual(1)
+})
+
+test("a smooth scrollToMessage does not re-arm following", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await page.evaluate(() => (window as any).__conversation.scrollToMessage(1))
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a smooth scrollToMessage survives a non-scrolling Space keystroke", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    ;(window as any).__mountInlineButton(() => {
+      ;(window as any).__inlineActivated = true
+    })
+    // Trigger the keystroke from the animation's first intermediate frame, so the
+    // interaction really overlaps the app's movement.
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  await page.keyboard.press("Space")
+  expect(await page.evaluate(() => (window as any).__inlineActivated)).toBe(true)
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a smooth scrollToMessage under one busy frame does not re-arm following", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  // A frame delayed by hundreds of milliseconds must not end the app
+  // attribution: there is no timeout-based release any more.
+  await viewportOf(page).evaluate(async () => {
+    const started = performance.now()
+    void (window as any).__conversation.scrollToMessage(1)
+    ;(window as any).__busy(330)
+    ;(window as any).__firstFrameDelay = Math.round(performance.now() - started)
+  })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
 })
