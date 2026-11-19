@@ -83,11 +83,11 @@ export function useAuxTabs(deps: {
     if (tab.status === "ready") deps.activate(tabId)
   }
 
-  /** 关闭槽位：先销毁实例（墓碑 + rpc_kill + store 拆除），再撤槽位。 */
+  /** 关闭槽位：先同步撤槽位，再销毁实例；页面清理与 rpc_kill 不应拖住 Tab 关闭。 */
   async function closeAuxBySidebarId(tabId: number) {
     const aux = auxTabBySidebarId(tabId)
-    if (aux) await closeAux(aux.runtimeId)
     deps.closeSidebarTab(tabId)
+    if (aux) await closeAux(aux.runtimeId)
   }
 
   /**

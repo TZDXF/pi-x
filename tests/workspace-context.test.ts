@@ -358,6 +358,7 @@ test("chat awaits preparation and throws on failure so input and attachments are
   const submit = chat.slice(chat.indexOf("async function onSubmit("), chat.indexOf("function thinkingLabel"))
   expect(submit).toMatch(/await deps\.ensureStarted\(session\.entries\.length \? null : deps\.workspaceSelection\(\)\)/)
   expect(submit.indexOf("await deps.ensureStarted") < submit.indexOf("await session.send")).toBeTruthy()
-  expect(submit).toMatch(/bridge\.value\?\.setTextInput\(text\)\s*throw new Error/)
+  expect(submit).toContain("appendComposerText(text, currentText)")
+  expect(submit).toMatch(/bridge\.value\?\.setTextInput\([\s\S]*?\)\s*throw new Error/)
   expect(chat).toMatch(/v-model="workspaceSelection"/)
 })
