@@ -1418,6 +1418,8 @@ export default {
     thinkingSeconds: "Thinking · {seconds}s",
     thoughtFew: "Thought for a few seconds",
     thoughtSeconds: "Thought for {seconds}s",
+    wrapCodeOn: "Turn off code block wrapping (applies to all code blocks)",
+    wrapCodeOff: "Turn on code block wrapping (applies to all code blocks)",
   },
 
   /** Copy for the npm:pi-subagents extension adaptation. */

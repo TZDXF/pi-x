@@ -172,7 +172,7 @@ pub fn app_config_save(app: AppHandle, mut config: AppConfig) -> Result<(), Stri
     Ok(())
 }
 
-const PREFERENCE_KEYS: [&str; 11] = [
+const PREFERENCE_KEYS: [&str; 12] = [
     "locale",
     "theme",
     "terminalTheme",
@@ -184,6 +184,8 @@ const PREFERENCE_KEYS: [&str; 11] = [
     "notifySound",
     "runningBehavior",
     "processDetail",
+    // Markdown 代码块的全局自动换行（TZD-133），值域 "1"/"0"。
+    "markdownCodeWrap",
 ];
 
 /// Persist one settings-page preference without racing unrelated config fields.
@@ -331,6 +333,28 @@ mod tests {
                 .get("preferences")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn preference_whitelist_covers_frontend_settings() {
+        // 前端 `createConfigPreference` 的 key 必须出现在白名单里，否则
+        // `app_preference_set` 会直接拒绝保存，重启后无从恢复（TZD-133）。
+        for key in [
+            "locale",
+            "theme",
+            "terminalTheme",
+            "openWith",
+            "developerMode",
+            "shortcuts",
+            "notifyTurnComplete",
+            "notifyQuestion",
+            "notifySound",
+            "runningBehavior",
+            "processDetail",
+            "markdownCodeWrap",
+        ] {
+            assert!(PREFERENCE_KEYS.contains(&key), "missing preference key: {key}");
+        }
     }
 
     #[test]

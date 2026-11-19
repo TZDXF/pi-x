@@ -8,6 +8,7 @@ import { useUiStore } from "@/stores/conversations"
 import { useContentTranslation } from "@/composables/useContentTranslation"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import { markdownParserOptions } from "@/lib/markdownAutoLink"
+import { markdownCodeWrapClass, markdownCodeWrapControls } from "@/lib/markdownCodeWrap"
 import type { FilePreview } from "@/lib/projectFiles"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -68,7 +69,9 @@ const readResourceFile = computed(() => {
           :enable-animate="false"
           :link-options="markdownLinkOptions"
           :parser-options="markdownParserOptions"
+          :controls="markdownCodeWrapControls"
           class="text-sm"
+          :class="markdownCodeWrapClass"
         />
       </template>
     </template>

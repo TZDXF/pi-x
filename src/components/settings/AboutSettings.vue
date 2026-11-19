@@ -9,6 +9,7 @@ import { useI18n } from "vue-i18n"
 import { Markdown } from "vue-stream-markdown"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import { markdownParserOptions } from "@/lib/markdownAutoLink"
+import { markdownCodeWrapClass, markdownCodeWrapControls } from "@/lib/markdownCodeWrap"
 import "vue-stream-markdown/index.css"
 import PiXLogo from "@/components/PiXLogo.vue"
 import { GithubIcon } from "@/components/ai-elements/open-in-chat/providers/icons"
@@ -309,6 +310,8 @@ onMounted(() => {
           mode="static"
           :link-options="markdownLinkOptions"
           :parser-options="markdownParserOptions"
+          :controls="markdownCodeWrapControls"
+          :class="markdownCodeWrapClass"
           :content="appStatus.releaseNotes"
         />
       </div>
@@ -380,6 +383,8 @@ onMounted(() => {
           mode="static"
           :link-options="markdownLinkOptions"
           :parser-options="markdownParserOptions"
+          :controls="markdownCodeWrapControls"
+          :class="markdownCodeWrapClass"
           :content="status.releaseNotes"
         />
       </div>

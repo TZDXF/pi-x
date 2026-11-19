@@ -5,17 +5,16 @@ import { computed, useSlots } from 'vue'
 import { Markdown } from 'vue-stream-markdown'
 import { markdownLinkOptions } from '@/lib/linkOptions'
 import { markdownParserOptions } from '@/lib/markdownAutoLink'
+import { markdownCodeWrapClass, markdownCodeWrapControls } from '@/lib/markdownCodeWrap'
 import 'vue-stream-markdown/index.css'
 
 interface Props {
   content?: string
   streaming?: boolean
   class?: HTMLAttributes['class']
-  /** 代码块是否默认自动换行（vue-stream-markdown 无内置配置，通过样式实现） */
-  wrapCode?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { wrapCode: true, streaming: false })
+const props = withDefaults(defineProps<Props>(), { streaming: false })
 
 const slots = useSlots()
 const slotContent = computed<string | undefined>(() => {
@@ -40,10 +39,11 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
     :mode="props.streaming ? 'streaming' : 'static'"
     :link-options="markdownLinkOptions"
     :parser-options="markdownParserOptions"
+    :controls="markdownCodeWrapControls"
     :class="
       cn(
         'size-full [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!',
-        props.wrapCode && '[&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere]',
+        markdownCodeWrapClass,
         props.class,
       )
     "
