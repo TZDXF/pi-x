@@ -33,6 +33,14 @@ export function useChatViewSidebar(deps: {
 }) {
   const { t } = useI18n()
   const workspace = useWorkspaceStore()
+  /**
+   * 组"获准且完成载入"后补存活 aux 槽位的回调。
+   *
+   * 晚绑定：`useSidebarTabs` 构造期就可能直接准入（那时 `aux` 还没建，且它自己的
+   * 构造函数会先补一次），但**延迟准入**（组满排队 → 名额空出）发生在挂载之后，
+   * 必须回到 `aux` 那里幂等补一次，否则存活实例没有入口也关不掉（TZD-131）。
+   */
+  let onGroupAdopted: () => void = () => {}
   const sidebar = useSidebarTabs({
     runtimeId: deps.runtimeId,
     sessionFile: computed(() => deps.session.sessionFile),
@@ -43,6 +51,7 @@ export function useChatViewSidebar(deps: {
     onTabLimitReached: () => deps.ui.pushToast(t("sidebarTabs.limitReached", { count: MAX_SIDEBAR_TABS }), "warning"),
     // 组数准入排队时必须告知（会自愈，不静默）。
     onGroupLimitReached: () => deps.ui.pushToast(t("sidebarTabs.groupLimitReached"), "warning"),
+    onGroupAdopted: () => onGroupAdopted(),
   })
   const aux = useAuxTabs({
     runtimeId: deps.runtimeId,
@@ -56,6 +65,9 @@ export function useChatViewSidebar(deps: {
     // 划词入口的路由判据："有激活的 aux Tab"就是侧栏当前激活槽位。
     activeTabId: () => sidebar.activeId.value,
   })
+  // 组晚到的准入（组满排队 → 名额空出）：普通 Tab 由 `useSidebarTabs` 补，存活 aux
+  // 槽位由这里幂等补回；缺槽不撤实例（下次挂载还会再补），也不按裸 id 关闭。
+  onGroupAdopted = aux.restoreSlotsNow
 
   /**
    * 会话正文划词的"在辅助对话中提问"（TZD-103）。

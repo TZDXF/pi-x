@@ -21,7 +21,8 @@ vi.mock("@/lib/auxSpawn", () => ({
 }))
 vi.mock("@/stores/auxChat", () => ({
   auxCreationPending: () => false,
-  auxInstancesFor: () => [],
+  // 本组 7 号 `aux` 槽对应的实例（关闭入口按「本父会话 + 槽位」解析它）。
+  auxInstancesFor: () => [{ tabId: 7, runtimeId: "aux:test", parentRuntimeId: "runtime:parent" }],
   auxPendingCreation: () => undefined,
   // 槽位按父会话 + id 联合定位（TZD-127）：只命中本父会话的 id=7。
   auxTabBySidebarId: (parentRuntimeId: string, tabId: number) =>
@@ -69,7 +70,9 @@ function harness() {
       addSidebarTab: () => 7,
       closeSidebarTab: controls.closeSidebarTab,
       activate: () => {},
-      tabs: () => [],
+      // 关闭 aux 的前提是本组**真有**一个 `aux` 槽位（TZD-131：没槽位的 id 只撤槽位、
+      // 不按数字去全局表里找实例，否则会误关另一个父会话的同号 aux）。
+      tabs: () => [{ id: 7, type: "aux" }],
       activeTabId: () => 7,
     }),
   )!
