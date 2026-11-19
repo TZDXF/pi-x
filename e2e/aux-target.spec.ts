@@ -25,7 +25,7 @@ let id = 0
 const open = () => openAux(parent, { tabId: ++id, titlePrefix: 'QA Aux', spawn: async () => {} })
 for (let i = 0; i < count; i++) await open()
 let active = auxInstancesFor(parent)[0]
-registerAuxAskRouter(parent, {active: () => active, open, reveal: tab => { active = tab }})
+registerAuxAskRouter(parent, {active: () => active, open, reveal: tab => { active = tab }, entry: () => true})
 window.qa = () => ({ count: auxInstancesFor(parent).length, active: active?.title, buckets: auxInstancesFor(parent).map(tab => auxSelectionItems(tab.runtimeId)) })
 createApp({setup() {
   const root = ref(null)

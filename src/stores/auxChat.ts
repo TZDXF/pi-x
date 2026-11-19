@@ -41,8 +41,14 @@ import { createUiStore, type UiStore } from "@/stores/ui"
 export type AuxTabStatus = "creating" | "ready" | "error"
 
 export interface AuxTab {
-  /** 侧栏 Tab 槽位 id（`stores/sidebarTabs.ts` 的 `SidebarTabItem.id`）。 */
-  tabId: number
+  /**
+   * 侧栏 Tab 槽位 id（`stores/sidebarTabs.ts` 的 `SidebarTabItem.id`）。
+   *
+   * `null` = **本组没有入口**：槽位随 LRU 淘汰消失、或补槽位时本组已满 20 格（TZD-131）。
+   * 这种实例仍活着（进程与 store 都在，缺槽不 kill），但不参与按槽位的显示/关闭查找 ——
+   * 否则它会用旧号继续被命中，与后来分到同一个号的实例撞在一起。
+   */
+  tabId: number | null
   /** aux 运行时 id，`aux:` 前缀；同时是 session/ui store 的键。 */
   runtimeId: string
   /** 父（主）会话 runtimeId。 */
@@ -259,6 +265,14 @@ export async function reconcileAuxLeases(): Promise<string[]> {
 export interface AuxAskRouter {
   /** 该父会话当前**激活**的 aux（侧栏 active 槽位指向它）；没有则 `null`。 */
   active: (parentRuntimeId: string) => AuxTab | null
+  /**
+   * 该实例此刻**在本组侧栏里有没有入口**（槽位存在、类型为 `aux`、且由它占据）。**必填**。
+   *
+   * 只有接线层（`useAuxTabs`）能回答这个问题：实例表里的 `tabId` 是"上一次分配到的号"，
+   * 组被淘汰/排队/换键后可能与当前组完全脱节（TZD-131）。所有"能不能投递"的判据都走它，
+   * 且**不设实例表兜底** —— 父视图卸载后 router 注销，此时恰好正是"不能投递"的状态。
+   */
+  entry: (tab: AuxTab) => boolean
   /** 新建一个 aux（加槽位 + spawn）；槽位不可用或创建期间关闭时返回 `null`。 */
   open: (parentRuntimeId: string) => Promise<AuxTab | null>
   /** 把该实例的槽位切成激活并展开侧栏（复用与新建后都要做）。 */
@@ -354,8 +368,10 @@ export function auxTabByRuntime(runtimeId: string): AuxTab | undefined {
 /**
  * 按父会话 + 侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。
  * 槽位 id 由各父会话的侧栏组分别从 1 分配，裸 id 不是全局键。
+ * 没有槽位的实例（`tabId === null`）不参与匹配：它们不该再被任何格命中（TZD-131）。
  */
 export function auxTabBySidebarId(parentRuntimeId: string, tabId: number): AuxTab | undefined {
+  if (tabId === null) return undefined
   return tabs.find(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === tabId)
 }
 
@@ -374,10 +390,39 @@ export function auxInstancesFor(parentRuntimeId: string): AuxTab[] {
   return tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId)
 }
 
-/** 把实例的槽位 id 改成新的（侧栏组被淘汰后补槽位时用）。 */
-export function setAuxTabId(runtimeId: string, tabId: number) {
+/**
+ * 把实例的槽位 id 改成新的（侧栏组被淘汰后补槽位时用）。
+ *
+ * `null` 表示**收回**槽位：本组已满/补不上时不能用旧号继续参与查找（TZD-131）。
+ */
+export function setAuxTabId(runtimeId: string, tabId: number | null) {
   const tab = auxTabByRuntime(runtimeId)
   if (tab) tab.tabId = tabId
+}
+
+/** 本会话里**没有槽位**的实例（名额空出后优先给它们补槽，见 `restoreSlots`）。 */
+export function auxSlotlessFor(parentRuntimeId: string): AuxTab[] {
+  return tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === null)
+}
+
+/**
+ * 该实例此刻有没有**当前组**的入口。
+ *
+ * 只认接线层（`router.entry`）的回答：它读的是**当前侧栏组**的真实槽位。没有当前 router
+ * （父 `ChatView` 已卸载/尚未挂载）或未注入 `entry` 时一律视为**无入口** ——
+ * 实例表自查只说明"上一次分配到的号还在自己名下"，组被淘汰/排队/换键后并不成立，
+ * 也与"父视图卸载后不投递"的既有契约冲突（TZD-131）。
+ */
+function hasLiveEntry(parentRuntimeId: string, tab: AuxTab): boolean {
+  const router = askRouters.get(parentRuntimeId)
+  return router?.entry ? router.entry(tab) : false
+}
+
+/** 该父会话里**可以当作划词目标**的实例（当前组有入口、且未关闭）。 */
+export function auxDeliverableFor(parentRuntimeId: string): AuxTab[] {
+  return auxInstancesFor(parentRuntimeId).filter(
+    tab => !isClosedAux(tab.runtimeId) && hasLiveEntry(parentRuntimeId, tab),
+  )
 }
 
 /** 某个父会话最后一个实例（切回父会话时恢复它的面板）。 */
@@ -684,17 +729,28 @@ export async function askInAux(
     // 多实例选择器给出的目标必须仍属于这个父会话；关闭/切换后的旧选项不得落到别的实例。
     const selected = auxTabByRuntime(target)
     if (!selected || selected.parentRuntimeId !== parentRuntimeId) return { ok: false, reason: "unavailable" }
+    // 目标还必须**真的有入口**：等槽位（`tabId === null`）的实例打不开面板，收下引用
+    // 只会落进一个看不见的待发送桶（TZD-131）。此时沿用"没有可用入口"的失败文案。
+    if (!hasLiveEntry(parentRuntimeId, selected)) return { ok: false, reason: "unavailable" }
     return deliverToAux(selected, payload)
   }
   if (target !== null) {
     // 未显式选择时保留原有自动路由；多实例浮层会传入已有 id 或 null（新建）。
-    const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
-    if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
+    // 自动路由只挑**可打开**的实例：激活的排在前面，其次该父会话最近的可用实例。
+    const active = router.active(parentRuntimeId)
+    if (active && hasLiveEntry(parentRuntimeId, active)) return deliverToAux(active, payload)
+    const deliverable = auxDeliverableFor(parentRuntimeId)
+    const recent = deliverable[deliverable.length - 1]
+    // 没有可打开的实例时落到下面的"新建"分支（新建能拿到槽位才可投递）。
+    if (recent) return deliverToAux(recent, payload)
   }
   const created = await router.open(parentRuntimeId)
   if (!created) return { ok: false, reason: "unavailable" }
   // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。
   if (isClosedAux(created.runtimeId)) return { ok: false, reason: "unavailable" }
+  // 也必须**在写桶之前重新确认当前组入口**：等待期间可能换键/被淘汰/组满，实例变成
+  // 没有槽位（`tabId === null`）的状态；此时收下引用只会落进一个打不开的桶（TZD-131）。
+  if (!hasLiveEntry(parentRuntimeId, created)) return { ok: false, reason: "unavailable" }
   return deliverToAux(created, payload)
 }
 

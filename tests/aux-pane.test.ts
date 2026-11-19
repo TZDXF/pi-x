@@ -67,10 +67,10 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   // 添加：先开进程（openAux 同步入表再 await spawn），实例数量不设专属上限。
   expect(auxTabs).toMatch(/const tab = await openAux\(deps\.runtimeId, \{/)
   expect(auxTabs).not.toMatch(/auxChat\.limitReached|auxCanOpen|AUX_MAX_TABS/)
-  // 关闭：先同步撤槽位（TZD-130），再按父会话 + 槽位查到的实例销毁（TZD-127）。
-  expect(auxTabs).toMatch(
-    /const aux = auxTabBySidebarId\(deps\.runtimeId, tabId\)\s*deps\.closeSidebarTab\(tabId\)\s*if \(aux\) await closeAux\(aux\.runtimeId\)/,
-  )
+  // 关闭：先同步撤槽位（TZD-130），再销毁**已解析**的实例（本父会话 + 本组槽位，TZD-131）；
+  // `closeAux` 仍要在第一个 await 之前起，让等槽位的实例立刻能补格。
+  expect(auxTabs).toMatch(/async function closeAuxBySidebarId\(tabId: number, aux: AuxTab \| undefined\) \{/)
+  expect(auxTabs).toMatch(/const closing = aux \? closeAux\(aux\.runtimeId\)/)
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
   // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。
@@ -91,6 +91,42 @@ test("a mount restores the aux slot when the sidebar group was evicted", () => {
   expect(auxTabs).toMatch(/setAuxTabId\(instance\.runtimeId, slot\)/)
   // 构造即补齐（接线方不需要额外调一行，ChatView 因此少 3 行）。
   expect(auxTabs).toMatch(/restoreSlots\(deps\.tabs\(\)\)/)
+  // 判据是"该 id 上确实是一个 aux 槽位"，不是"这个数字出现过"：aux 永不落盘，
+  // 重挂载后落盘的普通 Tab 会重新拿到 1..n 的 id（TZD-131）。
+  expect(auxTabs).toMatch(/tabs\.filter\(tab => tab\.type === "aux"\)/)
+  // 关闭入口：本组槽位不是 `aux` → 只撤槽位；是 `aux` → 先撤槽位再关**已解析**实例。
+  // 不得再按裸 id 查全局表（A 无槽位时 `closeTab(1)` 会落到 B 的同号实例上）。
+  expect(auxTabs).toMatch(/if \(slot\?\.type !== "aux"\) \{\s*deps\.closeSidebarTab\(id\)/)
+  expect(auxTabs).toMatch(/await closeAuxBySidebarId\(id, auxInstanceAtSlot\(id\)\)/)
+  expect(auxTabs).toMatch(
+    /function auxInstanceAtSlot\(id: number\): AuxTab \| undefined \{\s*return auxInstancesFor\(deps\.runtimeId\)\.find/,
+  )
+  expect(auxTabs).not.toMatch(/auxTabBySidebarId\(/)
+  // 划词路由只认属于本组、类型为 aux 的现存槽位。
+  expect(auxTabs).toMatch(/if \(slotAt\(deps\.tabs\(\), id\)\?\.type !== "aux"\) return null/)
+  // 异步收尾不得再用创建时捕获的旧槽位 id：成功按实例**当前** tabId 验证归属后激活，
+  // 失败/关闭只撤仍为 aux 且无实例认领的格（TZD-131）。
+  expect(auxTabs).toMatch(/function revealReady\(tab: AuxTab\) \{/)
+  expect(auxTabs).toMatch(/if \(!ownsSlot\(tab\.tabId, tab\.runtimeId\)\) return/)
+  // 补槽失败（组满 20 条）必须**收回**槽位号：否则旧号会与后来分到同一个号的实例撞一格。
+  expect(auxTabs).toMatch(/setAuxTabId\(instance\.runtimeId, null\)/)
+  expect(auxTabs).toMatch(/function fillWaitingAuxSlots\(\): AuxTab\[\] \{/)
+  expect(auxTabs).toMatch(/function dropUnclaimedAuxSlot\(tabId: number\) \{/)
+  expect(auxTabs).not.toMatch(/deps\.activate\(tabId\)/)
+})
+
+test("a deferred group admission retries the aux slot restore", () => {
+  const auxTabs = read("composables/useAuxTabs.ts")
+  const sidebarTabs = read("composables/useSidebarTabs.ts")
+  const chatSidebar = read("composables/useChatViewSidebar.ts")
+  // 组满时构造期补不上不是终态：`useSidebarTabs` 在**组获准且载入后**回调订阅方。
+  expect(sidebarTabs).toMatch(/onGroupAdopted\?: \(\) => void/)
+  expect(sidebarTabs).toMatch(/options\.onGroupAdopted\?\.\(\)/)
+  // 回调必须晚于 hydrate（否则刚补的 aux 槽位会被 `hydrateGroup` 的整表重建覆盖）。
+  expect(sidebarTabs).toMatch(/hydrateFromPersisted\(key\)[\s\S]{0,400}options\.onGroupAdopted\?\.\(\)/)
+  // 接线把回调指向幂等补齐；`ChatView` 不需要额外调一行。
+  expect(chatSidebar).toMatch(/onGroupAdopted = aux\.restoreSlotsNow/)
+  expect(auxTabs).toMatch(/function restoreSlotsNow\(\) \{\s*restoreSlots\(deps\.tabs\(\)\)/)
 })
 
 test("the aux composer hides the workspace/project picker it cannot use", () => {

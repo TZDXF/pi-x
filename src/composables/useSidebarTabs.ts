@@ -47,6 +47,15 @@ export function useSidebarTabs(options: {
    */
   onGroupLimitReached?: () => void
   /**
+   * 本实例刚获得侧栏组时回调（挂载即准入，或名额空出后的延迟准入）。
+   *
+   * 在**落盘载荷补 hydrate 之后**调用 —— 订阅方要补的是"不落盘但存活的槽位"（`aux`），
+   * 必须在组已建好、普通 Tab 已恢复之后再补，否则会被 `hydrateGroup` 的整表重建覆盖。
+   * 组满时 `addTab` 返回 `null`，构造期补不上；延迟准入必须靠这个回调再试一次，
+   * 否则存活实例会没有入口（TZD-131）。
+   */
+  onGroupAdopted?: () => void
+  /**
    * 存储替身：E2E 夹具里没有 Tauri transport，无法构造真实 workspace store。
    * 生产调用点不传，走 `useWorkspaceStore()`。
    */
@@ -137,6 +146,9 @@ export function useSidebarTabs(options: {
     hydrateFromPersisted(key)
     // 组刚建出来时可能还没被读取过：读一次让响应式 `tabs` 立刻有内容。
     if (!tabsFor(key).length) tabsFor(key)
+    // 组已建好、普通 Tab 已载入：通知订阅方补"不落盘但存活的槽位"（aux）。
+    // 构造期那次对该键无效（组满时 `addTab` 返回 `null`），延迟准入后必须再补一次。
+    options.onGroupAdopted?.()
   }
 
   /**
@@ -208,6 +220,10 @@ export function useSidebarTabs(options: {
     if (previousHold && previousHold !== next) releaseOwnerKey(owner, previousHold)
     if (moved) persist(next)
     pruneForCurrentGroup()
+    // 立即准入分支也要通知与 `adoptKey` 相同的订阅方：换键回滚（文件键 → 临时运行时键 →
+    // 同一文件键）走的是这条路径，`aux` 实例的槽位 id 可能在临时键上被改过，回到文件键后
+    // 必须在**当前组的槽位**上重新对准，否则面板解析不到实例（TZD-131）。
+    options.onGroupAdopted?.()
   })
   onScopeDispose(stopKeyWatch)
 
