@@ -26,7 +26,7 @@ import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import { markdownParserOptions } from "@/lib/markdownAutoLink"
-import { markdownCodeWrapClass, markdownCodeWrapControls } from "@/lib/markdownCodeWrap"
+import { markdownCodeWrapControls } from "@/lib/markdownCodeWrap"
 import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
 import { markdownImageContextKey, previewImageUrl } from "@/lib/markdownImages"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
@@ -455,7 +455,6 @@ onBeforeUnmount(() => {
             :parser-options="markdownParserOptions"
             :controls="markdownCodeWrapControls"
             class="text-sm"
-            :class="markdownCodeWrapClass"
           />
           <slot name="after-content" />
         </div>

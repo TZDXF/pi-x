@@ -6,7 +6,7 @@ import { computed, useSlots } from 'vue'
 import { Markdown } from 'vue-stream-markdown'
 import { markdownLinkOptions } from '@/lib/linkOptions'
 import { markdownParserOptions } from '@/lib/markdownAutoLink'
-import { markdownCodeWrapClass, markdownCodeWrapControls } from '@/lib/markdownCodeWrap'
+import { markdownCodeWrapControls } from '@/lib/markdownCodeWrap'
 import 'vue-stream-markdown/index.css'
 
 interface Props {
@@ -50,7 +50,6 @@ const md = computed(() => (slotContent.value ?? props.content ?? '') as string)
       :parser-options="markdownParserOptions"
       :controls="markdownCodeWrapControls"
       :enable-animate="props.animate"
-      :class="markdownCodeWrapClass"
     />
   </CollapsibleContent>
 </template>

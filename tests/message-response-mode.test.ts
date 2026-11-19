@@ -15,10 +15,7 @@ const imports = {
   "@/lib/utils": { cn: () => "" },
   "@/lib/linkOptions": { markdownLinkOptions: {} },
   "@/lib/markdownAutoLink": { markdownParserOptions: { plugins: [] } },
-  "@/lib/markdownCodeWrap": {
-    markdownCodeWrapClass: "",
-    markdownCodeWrapControls: { value: {} },
-  },
+  "@/lib/markdownCodeWrap": { markdownCodeWrapControls: { value: {} } },
   "vue-stream-markdown/index.css": {},
   "vue-stream-markdown": {
     Markdown: vue.defineComponent({
