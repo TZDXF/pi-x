@@ -18,7 +18,10 @@ const comments = [
   { path: 'missing.ts', startLine: 3, endLine: 4, selectedText: 'removed', comment: 'Deleted file' },
   { path: 'C:/other/src/file.ts', startLine: 5, endLine: 5, selectedText: 'code', comment: 'Other folder' },
 ]
-const prompt = serializeComposerPromptContexts('Please review', { comments, selections: [] })
+const prompt = serializeComposerPromptContexts('Please review', {
+  comments,
+  selections: [{ path: 'src/selection.ts', text: 'Selected paragraph', comment: 'Explain this selection' }],
+})
 const history = location.search.includes('history')
 const isolated = location.search.includes('isolated')
 const entry = history ? { kind: 'user', id: 1, text: prompt } : { kind: 'user', id: 1, text: 'Please review', contextText: prompt }
@@ -31,7 +34,12 @@ createApp({ setup() {
   codeComments.add('C:/demo', { path: 'src/main.ts', startLine: 80, endLine: 82, selectedText: 'const value = 80', comment: 'Pending comment' })
   codeComments.add('C:/demo', { path: 'src/file.ts', root: 'C:/other', startLine: 5, endLine: 5, selectedText: 'code', comment: 'Cross-root comment' })
   return () => h('main', { style: 'padding:24px;max-width:800px' }, [
-    h(ChatUserPrompt, { entry, edit, onOpenCodeComment: c => selected.value = c }),
+    h(ChatUserPrompt, {
+      entry,
+      edit,
+      onOpenCodeComment: c => selected.value = c,
+      onOpenSelection: s => selected.value = s,
+    }),
     h(CodeCommentPreview, {
       comment: selected.value,
       roots: ['C:/demo', 'C:/other'],
@@ -79,6 +87,8 @@ for (const history of [false, true]) {
     await page.goto(harness.url + (history ? "?history" : ""))
     const tags = page.locator("[data-code-comment-tag]")
     await expect(tags).toHaveCount(4)
+    const fileSelection = page.locator("[data-file-selection-tag]")
+    await expect(fileSelection).toHaveCount(1)
     await expect(page.getByText("Please review", { exact: true })).toBeVisible()
     await expect(page.getByText("# Code comments:", { exact: false })).toHaveCount(0)
     await tags.first().click()
@@ -105,6 +115,18 @@ for (const history of [false, true]) {
     await tags.nth(2).click()
     await expect(dialog.getByRole("alert")).toContainText("File does not exist or is unavailable")
     if (history) await page.screenshot({ path: "temp/code-comment-missing.png" })
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    // 项目文件划词进辅助对话后，带 path 的批注也应能打开同一文件预览。
+    await fileSelection.click()
+    await expect(dialog.getByRole("heading", { level: 2 })).toHaveText("src/selection.ts")
+    await expect(dialog.getByText("Explain this selection", { exact: true })).toBeVisible()
+    await expect(dialog.locator('[data-line="1"]')).toBeVisible()
+    expect(await page.evaluate(() => Reflect.get(window, "__fileReads").at(-1))).toMatchObject({
+      project: "C:/demo",
+      path: "src/selection.ts",
+    })
+    if (!history) await page.screenshot({ path: "temp/code-comment-selection.png" })
     await page.keyboard.press("Escape")
     await expect(page.getByRole("dialog")).toHaveCount(0)
     expect(errors).toEqual([])
