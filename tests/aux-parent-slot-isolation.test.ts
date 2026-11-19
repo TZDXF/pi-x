@@ -75,6 +75,10 @@ afterEach(() => {
   scopes.length = 0
   auxChat.resetAuxChatForTest()
   vi.unstubAllGlobals()
+  // 用完即清缓存：本文件把 `@/stores/workspace` 换成了最小替身，若这份替身随模块缓存
+  // 被后续文件（如 `sidebar-tab-registry.test.ts`）复用，对方的 `vi.mock` 就不再生效
+  // （`isolate: false` 下 vitest 的模块缓存跨文件共享）。
+  vi.resetModules()
 })
 
 function sidebar(runtimeId: string) {

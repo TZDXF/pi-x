@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import * as vue from "vue"
-import { menuPlacement } from "@/lib/selectionMenuPlacement"
+import { MENU_FLIP_THRESHOLD, menuPlacement } from "@/lib/selectionMenuPlacement"
 
 /**
  * 划词浮层的两个挂载点（TZD-103）：
@@ -68,6 +68,7 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
     captureOffsets: () => ({ start: 3, end: 12 }),
     // 纯函数按真实实现注入（像素级断言在 `aux-selection-placement.test.ts`）。
     menuPlacement,
+    MENU_FLIP_THRESHOLD,
     MenuPlacement: undefined,
     selectionEndRect: () => selection.anchor ?? { right: 120, top: 40, bottom: 60 },
     selectionLineRange: () => (selection.lineRange ? { ...selection.lineRange } : null),
@@ -93,7 +94,7 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
     vm.runInContext(
       ts.transpile(
         script +
-          `\nglobalThis.api = { state, placement, tooLong, menuBox, measuredWidth, onMouseUp, askInAux, quoteSelection };`,
+          `\nglobalThis.api = { state, placement, tooLong, menuBox, measuredWidth, choosingAux, onMouseUp, askInAux, chooseAuxTarget, quoteSelection };`,
         { target: ts.ScriptTarget.ES2022 },
       ),
       context,
@@ -138,6 +139,48 @@ test("chat mode keeps both actions and emits the same payload for quote and auxA
     expect(h.api.state.value).toBeNull()
     h.api.askInAux()
     expect(h.emits).toHaveBeenCalledTimes(2)
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("multiple aux targets require an explicit existing conversation or new-chat choice", () => {
+  const props: Record<string, unknown> = {
+    maxTextLength: 8000,
+    mode: "chat",
+    root: null,
+    auxTargets: [
+      { runtimeId: "aux:a", title: "辅助对话 1" },
+      { runtimeId: "aux:b", title: "辅助对话 2" },
+    ],
+  }
+  const h = setup(props, { text: "选中的正文", inRoot: true, source: "assistant" })
+  props.root = h.root
+  try {
+    h.api.onMouseUp()
+    h.api.askInAux()
+    // 多实例时不能沿用“激活优先/最近一个”的隐式投递。
+    expect(h.api.choosingAux.value).toBe(true)
+    expect(h.api.state.value).not.toBeNull()
+    expect(h.emits).not.toHaveBeenCalled()
+    h.api.chooseAuxTarget("aux:b")
+    expect(h.emits).toHaveBeenCalledWith(
+      "auxAsk",
+      { text: "选中的正文", source: "assistant", messageId: 7, startOffset: 3, endOffset: 12 },
+      "aux:b",
+    )
+    expect(h.api.choosingAux.value).toBe(false)
+    expect(h.api.state.value).toBeNull()
+
+    // 同一路径也能明确新建；null 与“未传 target”的自动路由区分开。
+    h.api.onMouseUp()
+    h.api.askInAux()
+    h.api.chooseAuxTarget(null)
+    expect(h.emits).toHaveBeenLastCalledWith(
+      "auxAsk",
+      { text: "选中的正文", source: "assistant", messageId: 7, startOffset: 3, endOffset: 12 },
+      null,
+    )
   } finally {
     h.scope.stop()
   }
@@ -240,12 +283,18 @@ test("code mode renders only the aux action and chat mode renders both", () => {
   const chatButtons = template.split("selectionAdd").length - 1
   expect(chatButtons).toBe(1)
   expect(template.split("selectionAskAux").length - 1).toBe(2)
+  // 多实例选择态列出全部已有实例，并提供独立的新建入口。
+  expect(template).toContain('v-for="target in auxTargets"')
+  expect(template).toContain('@click="chooseAuxTarget(target.runtimeId)"')
+  expect(template).toContain('@click="chooseAuxTarget(null)"')
 })
 
-test("the anchor / flip / clamp rules are unchanged and only the width source moved", () => {
+test("the anchor stays fixed while clamp and flip use the measured menu size", () => {
   // 定位规则委派给纯函数（像素级用例见 `aux-selection-placement.test.ts`）：
   // 锚点仍是 selectionEndRect（多行取最后一行），翻转阈值 48、间距 4、左边距 8 全部保留。
-  expect(source).toContain('import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"')
+  expect(source).toContain(
+    'import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"',
+  )
   expect(source).toContain("return menuPlacement(")
   expect(source).toContain("state.value.anchor")
   expect(source).toContain("{ width: window.innerWidth, height: window.innerHeight }")
@@ -253,6 +302,9 @@ test("the anchor / flip / clamp rules are unchanged and only the width source mo
   expect(source).not.toContain("window.innerWidth - 168")
   expect(source).toContain("measuredWidth.value || estimatedWidth.value")
   expect(source).toContain("menuBox.value?.offsetWidth")
+  expect(source).toContain("measuredHeight.value || estimatedHeight.value")
+  expect(source).toContain("menuBox.value?.offsetHeight")
+  expect(source).toContain("max-h-[calc(100vh-16px)]")
   // 锚点来源仍是 selectionEndRect（不自造矩形）。
   expect(source).toContain("const endRect = selectionEndRect(range)")
   // 四个 document 级监听（含捕获阶段的 scroll）与卸载清理。

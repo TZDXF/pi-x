@@ -102,6 +102,42 @@ test("without an activated tab a live instance is reused instead of opening anot
   expect(opened).toBe(0)
 })
 
+test("multiple live instances honor the selected target or an explicit new-chat choice", async () => {
+  const parent = "runtime:parent"
+  const first = await liveTab(parent, 13)
+  const second = await liveTab(parent, 14)
+  let opened = 0
+  let created: Awaited<ReturnType<typeof liveTab>> | null = null
+  aux.registerAuxAskRouter(parent, {
+    // 即使有激活项，显式选择也不能被它覆盖。
+    active: () => first,
+    open: async () => {
+      opened += 1
+      created = await liveTab(parent, 15)
+      return created
+    },
+    reveal: () => {},
+  })
+
+  const selected = await aux.askInAux(parent, { text: "给第二个" }, second.runtimeId)
+  expect(selected.ok && selected.tab.runtimeId).toBe(second.runtimeId)
+  expect(buckets.auxSelectionItems(first.runtimeId)).toHaveLength(0)
+  expect(buckets.auxSelectionItems(second.runtimeId).map(item => item.text)).toEqual(["给第二个"])
+  expect(opened).toBe(0)
+
+  const fresh = await aux.askInAux(parent, { text: "给新对话" }, null)
+  expect(fresh.ok && fresh.tab.runtimeId).toBe(created!.runtimeId)
+  expect(opened).toBe(1)
+  expect(buckets.auxSelectionItems(created!.runtimeId).map(item => item.text)).toEqual(["给新对话"])
+
+  // 选择态打开后实例可能已关闭，或父会话已切换；不得悄悄改投激活/最近实例。
+  const stale = await aux.askInAux(parent, { text: "旧选项" }, "aux:missing")
+  expect(stale).toEqual({ ok: false, reason: "unavailable" })
+  aux.registerAuxAskRouter("runtime:other", { active: () => null, open: async () => null, reveal: () => {} })
+  const wrongParent = await aux.askInAux("runtime:other", { text: "跨会话" }, second.runtimeId)
+  expect(wrongParent).toEqual({ ok: false, reason: "unavailable" })
+})
+
 test("with no live instance the router opens one and the reference lands in its bucket", async () => {
   const parent = "runtime:parent"
   let revealCount = 0

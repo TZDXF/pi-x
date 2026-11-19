@@ -175,6 +175,9 @@ export default {
     spawnFailedUnknown: "辅助对话启动失败",
     retry: "重试",
     askFailed: "无法在辅助对话中提问：当前会话没有可用的辅助对话入口。",
+    chooseTarget: "选择辅助对话",
+    newChat: "新建辅助对话",
+    cancelSelection: "取消选择",
   },
   split: {
     closePane: "关闭此窗格",

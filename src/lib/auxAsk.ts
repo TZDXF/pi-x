@@ -1,4 +1,4 @@
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { CONVERSATION_SELECTION_MAX_COUNT } from "@/lib/conversationSelections"
 import { askInAux, type AuxAskOutcome } from "@/stores/auxChat"
 
@@ -33,16 +33,18 @@ export function describeAuxAskResult(
 /**
  * 把一次划词手势投给该父会话的 aux，并把失败原因翻译成提示。
  *
- * 路由规则在 `stores/auxChat.ts` 的 `askInAux` 里（激活优先 → 复用存活实例 → 新建），
+ * 路由在 `stores/auxChat.ts`：显式 target 精确投递/新建；缺省 target 保留单实例自动路由。
  * 这里只负责"用户看到了什么"。
  */
 export async function askAuxSelection(options: {
   parentRuntimeId: string
   payload: AuxAskPayload
+  /** 多实例时由用户明确选择：已有 runtimeId，或 `null` 表示新建。 */
+  target?: AuxAskTarget
   t: (key: string, params?: Record<string, unknown>) => string
   toast: (message: string, kind: AuxAskToast["kind"]) => void
 }): Promise<AuxAskOutcome> {
-  const outcome = await askInAux(options.parentRuntimeId, options.payload)
+  const outcome = await askInAux(options.parentRuntimeId, options.payload, options.target)
   const notice = describeAuxAskResult(options.t, outcome)
   if (notice) options.toast(notice.message, notice.kind)
   return outcome

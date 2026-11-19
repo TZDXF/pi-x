@@ -3,7 +3,7 @@ import { reactive } from "vue"
 import { createAuxRuntimeId, nextAuxOrdinal } from "@/lib/auxRuntime"
 import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import type { ConversationSelectionLimitReason } from "@/lib/conversationSelections"
 import {
   AUX_LEASE_HEARTBEAT_MS,
@@ -656,10 +656,13 @@ export type AuxAskOutcome =
 /**
  * **划词入口的统一投递**（TZD-103）：会话正文与代码预览两个入口都走这里。
  *
- * 路由规则（`docs/aux-chat-spec.md` §5）：
- * 1. 该父会话有**激活**的 aux → 追加到它的引用桶并切回那个 Tab（复用，不新开）；
- * 2. 没有激活但有存活实例 → 复用最近一个（同样切过去），避免每划一次词就多开一个进程；
- * 3. 一个都没有 → 新建 aux 再投递（新建未完成则返回 `unavailable`，引用不入任何桶）。
+ * 路由规则（`docs/aux-chat-spec.md` §10）：
+ * 1. 显式 target 为已有 runtimeId → 只投该实例；失效或其他父会话的 id 返回 unavailable；
+ * 2. 显式 target 为 null → 新建 aux 再投递（多实例选择器的"新建"入口）；
+ * 3. 未传 target → 保留兼容路径：激活实例 → 最近实例 → 新建。共用浮层在多个实例时
+ *    一定会先让用户选择，因此不会把多实例手势交给这条隐式路由。
+ * 辅助对话没有专属实例上限，新建失败（例如通用侧栏容量不足或创建期间被关闭）返回
+ * `unavailable`。
  *
  * 同一手势去重：连点时第一次就把实例同步登记进表（`openAux` 先入表再 `await` spawn），
  * 第二次直接命中"存活实例"分支；同一段文字再进桶时 `appendConversationSelection`
@@ -669,13 +672,25 @@ export type AuxAskOutcome =
  * 新建。父 `ChatView` 卸载后 router 注销、`reveal` 也无人接，此时即便实例还活着也
  * 返回 `unavailable` 并且**不写任何桶** —— 否则会留下一条投不进也看不到的引用。
  */
-export async function askInAux(parentRuntimeId: string, payload: AuxAskPayload): Promise<AuxAskOutcome> {
+export async function askInAux(
+  parentRuntimeId: string,
+  payload: AuxAskPayload,
+  target: AuxAskTarget | undefined = undefined,
+): Promise<AuxAskOutcome> {
   if (!parentRuntimeId) return { ok: false, reason: "noParent" }
   const router = auxAskRouter(parentRuntimeId)
   if (!router) return { ok: false, reason: "unavailable" }
-  // 复用（激活优先，其次该父会话最近一个）：两者都是"已有实例"，不新开进程。
-  const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
-  if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
+  if (typeof target === "string") {
+    // 多实例选择器给出的目标必须仍属于这个父会话；关闭/切换后的旧选项不得落到别的实例。
+    const selected = auxTabByRuntime(target)
+    if (!selected || selected.parentRuntimeId !== parentRuntimeId) return { ok: false, reason: "unavailable" }
+    return deliverToAux(selected, payload)
+  }
+  if (target !== null) {
+    // 未显式选择时保留原有自动路由；多实例浮层会传入已有 id 或 null（新建）。
+    const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
+    if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
+  }
   const created = await router.open(parentRuntimeId)
   if (!created) return { ok: false, reason: "unavailable" }
   // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。

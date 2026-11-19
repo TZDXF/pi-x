@@ -235,11 +235,13 @@ null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态�
 
 **路由**（`stores/auxChat.ts` 的 `askInAux`）：**入口优先** —— 先确认该父会话的
 router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸载）返回 `unavailable`
-且**不写任何桶**。入口可用时：有激活的 aux Tab → 追加到它的桶并把槽位切成激活；
-没有激活但有存活实例 → 复用最近一个（不新开，避免面板碎片化）；
-一个都没有 → 新建后投递。连点同一手势只建一个实例（`pendingCreations` 复用 +
-`appendConversationSelection` 判重）。入口缺失/新建未完成/引用超限各有一次用户可见提示
-（`lib/auxAsk.ts`）。
+且**不写任何桶**。入口可用时：没有 aux → 新建后投递；只有一个 aux → 直接复用；
+**有多个 aux → 浮层先展开目标选择，列出全部已有对话与"新建辅助对话"，用户选择后才
+投递**。已有目标按 runtimeId 精确匹配且必须属于当前父会话，失效选项不落到其他实例；
+辅助对话不设专属实例上限，"新建辅助对话"始终可点。选择已有或新建成功后都激活对应槽位。
+连点同一手势只建一个实例（`pendingCreations` 复用 + `appendConversationSelection` 判重）。
+入口缺失/新建未完成/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。aux 面板内的划词仍
+直接进本实例，不弹目标选择。
 
 **来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。
 消息 `messageId`/字符区间只在该 runtime 里有意义，因此 aux 正文的选区恢复与索引徽标
@@ -250,10 +252,13 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 `ChatTurnList` 已 expose 的 `locateSelection` / `editSelection`，否则动作在子组件 emit
 处中断。
 
-**浮层定位**（P2-1）：锚点仍是 `selectionEndRect`（多行取最后一行），翻转阈值 48px、
-间距 4px、左边距 8px、四个 document 级监听与控件内选区排除**全部不变**；**只有横向
-钳制**从写死的 168px 换成浮层**实测宽度**（`lib/selectionMenuPlacement.ts` 纯函数：
-左缘不早于 8px、右缘不超出视口）。1280px 视口右缘划词时双按钮整体在视口内。
+**浮层定位**（P2-1；TZD-129 复审补充实测高度）：锚点仍是 `selectionEndRect`
+（多行取最后一行），间距 4px、左边距 8px、四个 document 级监听与控件内选区排除不变；
+横向钳制使用浮层**实测宽度**（左缘不早于 8px、右缘不超出视口），纵向翻转使用
+**实测高度**。下侧空间不足且上侧可容纳时翻转；两侧都不足时钳制在视口内，目标选择
+列表另设 `100vh - 16px` 最大高度与纵向滚动，保证上下边缘处已有目标和新建均可操作；
+菜单内部滚动保持当前选择，外部内容滚动仍关闭菜单。1280px 视口右缘划词时双按钮整体在
+视口内；1000×600 视口底部三目标、1000×180 矮视口两处入口的真实滚轮均有浏览器回归。
 
 **`ProjectFilePreview` 的两个根**：模板是 `<section>` + 覆盖层浮层（fragment 下 Vue 3
 **不再自动继承 attrs**），因此显式 `defineOptions({ inheritAttrs: false })` 并把
@@ -268,8 +273,8 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 
 验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、
 `tests/aux-send-control.test.ts`（prompt 组装含 `# userselect:`、只清本桶、批注不消费、
-abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活优先 / 复用 / 新建 /
-去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
+abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 单实例复用 / 多实例精确选择 / 新建 /
+失效目标 / 去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式、多实例选择与既有算法不变）、
 `tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
 `tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
 `tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。

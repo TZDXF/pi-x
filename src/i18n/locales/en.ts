@@ -177,6 +177,9 @@ export default {
     spawnFailedUnknown: "Auxiliary chat failed to start",
     retry: "Retry",
     askFailed: "Cannot ask in auxiliary chat: no auxiliary chat entry is available for this session.",
+    chooseTarget: "Choose auxiliary chat",
+    newChat: "New auxiliary chat",
+    cancelSelection: "Cancel selection",
   },
   split: {
     closePane: "Close pane",

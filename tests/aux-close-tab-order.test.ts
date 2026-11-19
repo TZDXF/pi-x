@@ -1,5 +1,5 @@
 import { effectScope } from "vue"
-import { beforeEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 /**
  * 关闭 aux 槽位的顺序（TZD-130）：先同步撤槽位，再销毁实例。
@@ -33,6 +33,11 @@ vi.mock("@/stores/auxChat", () => ({
   registerAuxAskRouter: () => {},
   setAuxTabId: () => {},
 }))
+
+afterEach(() => {
+  // 与接线用例同理：本文件的 `vi.mock` 替身不得随模块缓存漏给后续测试文件。
+  vi.resetModules()
+})
 
 function pending() {
   let resolve!: () => void

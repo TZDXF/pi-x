@@ -30,7 +30,7 @@ import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
 import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import { isWaitingForReply, type useChatTurnList } from "@/composables/useChatTurnList"
@@ -52,6 +52,8 @@ const props = defineProps<{
    * 的引用桶，不能落到主会话的单例（同项目下两者 scope 相同，会真的串）。
    */
   auxRuntimeId?: string
+  /** 主会话多 aux 时的选择项；aux 面板内不传，仍直接投递到本实例。 */
+  auxTargets?: AuxTargetOption[]
 }>()
 const emit = defineEmits<{
   historyScroll: [event: Event]
@@ -62,7 +64,7 @@ const emit = defineEmits<{
   openReview: [path: string]
   fork: [index: number]
   /** 划词菜单的"在辅助对话中提问"（TZD-103）：由父层路由到 aux 注册表。 */
-  auxAsk: [payload: AuxAskPayload]
+  auxAsk: [payload: AuxAskPayload, target?: AuxAskTarget]
   "insert-code-comment": [comment: PendingCodeComment]
 }>()
 const changes = useTurnChanges(props.session, props.ui)
@@ -320,8 +322,9 @@ onBeforeUnmount(() => {
   <ConversationSelectionMenu
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
+    :aux-targets="auxTargets"
     @quote="onSelectionQuote"
-    @aux-ask="emit('auxAsk', $event)"
+    @aux-ask="(payload, target) => emit('auxAsk', payload, target)"
   />
   <ConversationSelectionPopup
     :state="selectionPopup"

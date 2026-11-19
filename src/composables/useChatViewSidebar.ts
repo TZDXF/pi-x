@@ -1,6 +1,6 @@
 import { computed, type ComputedRef } from "vue"
 import { useI18n } from "vue-i18n"
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { MAX_SIDEBAR_TABS, type SidebarTabItem, type SidebarTabKind } from "@/lib/sidebarTabs"
 import type { AuxParentContext } from "@/lib/auxSpawn"
@@ -9,6 +9,7 @@ import { useSidebarTabs } from "@/composables/useSidebarTabs"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import { useWorkspaceStore } from "@/stores/workspace"
+import { auxInstancesFor } from "@/stores/auxChat"
 
 /**
  * `ChatView` 的右侧侧栏接线：一次装配两套注册表。
@@ -59,12 +60,13 @@ export function useChatViewSidebar(deps: {
   /**
    * 会话正文划词的"在辅助对话中提问"（TZD-103）。
    *
-   * 视图只把事件转过来：路由（复用激活实例 → 复用存活实例 → 新建）在注册表里，
-   * 结果文案在 `lib/auxAsk.ts`，展开侧栏在这一层（视图不新增业务分支）。
+   * 视图只把事件转过来：多实例时携带用户选择的目标，路由与失败文案分别在注册表、
+   * `lib/auxAsk.ts`；展开侧栏在这一层（视图不新增业务分支）。
    */
-  async function askAux(payload: AuxAskPayload) {
+  async function askAux(payload: AuxAskPayload, target?: AuxAskTarget) {
     const outcome = await askAuxSelection({
       parentRuntimeId: deps.runtimeId,
+      target,
       // 消息 id 属于发起手势的这个会话：aux 面板据此判断"能不能在本面板就近定位"。
       payload: { ...payload, sourceRuntimeId: deps.runtimeId },
       t,
@@ -75,8 +77,11 @@ export function useChatViewSidebar(deps: {
     return outcome
   }
 
+  const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))
+
   return {
     askAux,
+    auxTargets,
     /** 槽位列表（含 `aux`；`aux` 永不落盘）。 */
     tabs: sidebar.tabs as ComputedRef<SidebarTabItem[]>,
     activeId: sidebar.activeId,
