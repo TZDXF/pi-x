@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { MessageSquarePlus, TextQuote } from "@lucide/vue"
+import { MessageSquare, MessageSquarePlus, Plus, TextQuote, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { captureOffsets, selectionEndRect } from "@/lib/selectionAnchors"
-import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
+import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
 import { selectionLineRange } from "@/lib/codeComments"
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
+import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { ConversationSelectionSource } from "@/lib/conversationSelections"
 
 /**
@@ -36,8 +37,12 @@ const props = withDefaults(
     path?: string
     /** 文件实际所属根；跨目录预览必须保留，避免历史消息回跳到会话根同名文件。 */
     sourceRoot?: string
+    /** 当前父会话的存活 aux；多于一个时先让用户选择投递目标。 */
+    auxTargets?: AuxTargetOption[]
+    /** 是否还能新建 aux；达到全局上限时保留新建项但置灰并说明原因。 */
+    auxCanCreate?: boolean
   }>(),
-  { mode: "chat" },
+  { mode: "chat", auxTargets: () => [], auxCanCreate: true },
 )
 const emit = defineEmits<{
   quote: [
@@ -49,8 +54,8 @@ const emit = defineEmits<{
       endOffset: number
     },
   ]
-  /** 在辅助对话中提问（TZD-103）：两种模式共用同一个 payload 形状。 */
-  auxAsk: [payload: AuxAskPayload]
+  /** 多实例时第二参数是用户选中的已有 runtimeId 或 null（新建）；单实例保持原行为。 */
+  auxAsk: [payload: AuxAskPayload, target?: AuxAskTarget]
 }>()
 const { t } = useI18n()
 
@@ -60,6 +65,7 @@ const state = ref<{
   payload: AuxAskPayload
 } | null>(null)
 const tooLong = computed(() => (state.value?.text.length ?? 0) > props.maxTextLength)
+const choosingAux = ref(false)
 
 // 选区锚点所在元素节点；用 nodeType 判断而非 instanceof，便于测试环境桩对象。
 function anchorElement(node: Node | null) {
@@ -125,6 +131,7 @@ function inspectSelection() {
 
 function clearState() {
   state.value = null
+  choosingAux.value = false
 }
 function showSelection() {
   const inspected = inspectSelection()
@@ -144,8 +151,10 @@ function onKeyUp(event: KeyboardEvent) {
   if (!event.shiftKey && event.key !== "Shift") return
   showSelection()
 }
-function onScroll() {
-  // 滚动后选区矩形已失准，直接收起。
+function onScroll(event: Event) {
+  // 多目标选择器自身在矮视口内可滚动；内部滚动不改变外部选区矩形，不能收起菜单。
+  if (menuBox.value?.contains(event.target as Node)) return
+  // 外部内容滚动后选区矩形已失准，直接收起。
   clearState()
 }
 // mousedown.prevent 防止点击菜单时选区被清掉导致菜单先消失。
@@ -165,8 +174,21 @@ function quoteSelection() {
   emit("quote", { text, source, messageId, startOffset, endOffset })
 }
 function askInAux() {
+  // 只有一个或没有 aux 时沿用自动路由；多个 aux 时同一份选区进入目标选择态。
+  if ((props.auxTargets?.length ?? 0) > 1) {
+    const inspected = inspectSelection()
+    if (!inspected || tooLong.value) return
+    state.value = { text: inspected.payload.text, anchor: inspected.anchor, payload: inspected.payload }
+    choosingAux.value = true
+    return
+  }
   const payload = takePayload()
   if (payload) emit("auxAsk", payload)
+}
+function chooseAuxTarget(target: AuxAskTarget) {
+  // 选择期间流式更新可能改写 DOM；真正投递前与单实例路径一样复核选区。
+  const payload = takePayload()
+  if (payload) emit("auxAsk", payload, target)
 }
 
 document.addEventListener("selectionchange", onSelectionChange)
@@ -189,20 +211,32 @@ onBeforeUnmount(() => {
  *
  * 为什么不再写死 168：chat 模式有两个横排按钮（"引用到输入框" + "在辅助对话中提问"），
  * 真实宽度远超 168，1280px 视口右缘划词会把按钮推出视口（TZD-103 P2-1）。这里先给
- * 一个保守估计值，`nextTick` 后按 `offsetWidth` 实测覆盖；钳制/翻转规则本身没变
- * （见 `lib/selectionMenuPlacement.ts`）。
+ * 一个保守估计值，`nextTick` 后按实际尺寸覆盖。目标选择是多行菜单，纵向定位也必须
+ * 使用实测高度，否则底部划词会把后面的目标与新建按钮放到视口外。
  */
 const menuBox = ref<HTMLElement | null>(null)
 const measuredWidth = ref(0)
+const measuredHeight = ref(0)
 const estimatedWidth = computed(() => (props.mode === "code" ? 148 : 262))
-async function measureWidth() {
+const estimatedHeight = computed(() =>
+  choosingAux.value ? 56 + ((props.auxTargets?.length ?? 0) + 1) * 32 : MENU_FLIP_THRESHOLD - 12,
+)
+async function measureMenu() {
   await nextTick()
   const width = menuBox.value?.offsetWidth ?? 0
+  const height = menuBox.value?.offsetHeight ?? 0
   if (width > 0 && width !== measuredWidth.value) measuredWidth.value = width
+  if (height > 0 && height !== measuredHeight.value) measuredHeight.value = height
 }
 watch(
-  () => state.value,
-  shown => (shown ? void measureWidth() : (measuredWidth.value = 0)),
+  () => [state.value, choosingAux.value, props.auxTargets?.length ?? 0] as const,
+  ([shown]) => {
+    if (shown) void measureMenu()
+    else {
+      measuredWidth.value = 0
+      measuredHeight.value = 0
+    }
+  },
   { immediate: true },
 )
 
@@ -213,13 +247,65 @@ const placement = computed<MenuPlacement | null>(() => {
     state.value.anchor,
     { width: window.innerWidth, height: window.innerHeight },
     measuredWidth.value || estimatedWidth.value,
+    measuredHeight.value || estimatedHeight.value,
   )
 })
 </script>
 
 <template>
   <div ref="menuBox" v-if="state && placement" class="fixed z-50 max-w-[calc(100vw-16px)]" :style="placement">
-    <div class="flex items-center gap-1">
+    <div
+      v-if="choosingAux"
+      class="max-h-[calc(100vh-16px)] w-56 overflow-y-auto rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md"
+      role="menu"
+      :aria-label="t('auxChat.chooseTarget')"
+      @keydown.esc.stop="clearState"
+    >
+      <div class="flex items-center justify-between gap-2 px-1.5 py-1">
+        <span class="text-xs font-medium">{{ t("auxChat.chooseTarget") }}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          class="size-5"
+          :title="t('auxChat.cancelSelection')"
+          :aria-label="t('auxChat.cancelSelection')"
+          @mousedown.prevent
+          @click="clearState"
+        >
+          <X class="size-3.5" />
+        </Button>
+      </div>
+      <Button
+        v-for="target in auxTargets"
+        :key="target.runtimeId"
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="h-8 w-full justify-start gap-2 px-2 text-xs font-normal"
+        role="menuitem"
+        @mousedown.prevent
+        @click="chooseAuxTarget(target.runtimeId)"
+      >
+        <MessageSquare class="size-3.5 shrink-0" />
+        <span class="truncate">{{ target.title }}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        class="h-8 w-full justify-start gap-2 border-t px-2 text-xs font-normal"
+        role="menuitem"
+        :disabled="!auxCanCreate"
+        :title="!auxCanCreate ? t('auxChat.limitReached', { count: AUX_MAX_TABS }) : undefined"
+        @mousedown.prevent
+        @click="chooseAuxTarget(null)"
+      >
+        <Plus class="size-3.5 shrink-0" />
+        {{ t("auxChat.newChat") }}
+      </Button>
+    </div>
+    <div v-else class="flex items-center gap-1">
       <!-- 会话正文模式保留原动作；代码模式下"引用到输入框"仍是行号栏批注，不在这里重复。 -->
       <Button
         v-if="mode === 'chat'"

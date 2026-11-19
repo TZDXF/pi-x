@@ -51,7 +51,9 @@ test("the files panel and sidebar pass the owning session runtime down", () => {
 test("the chat list forwards auxAsk and routes quotes into the aux pane's own bucket", () => {
   const list = read("components/chat/ChatTurnList.vue")
   expect(list).toContain("auxRuntimeId?: string")
-  expect(list).toContain("@aux-ask=\"emit('auxAsk', $event)\"")
+  expect(list).toContain("@aux-ask=\"(payload, target) => emit('auxAsk', payload, target)\"")
+  expect(list).toContain(':aux-targets="auxTargets"')
+  expect(list).toContain(':aux-can-create="auxCanCreate"')
   expect(list).toContain("auxRuntimeId: props.auxRuntimeId")
   const pane = read("components/aux-chat/AuxChatPane.vue")
   expect(pane).toContain(':aux-runtime-id="runtimeId"')
@@ -66,7 +68,8 @@ test("ChatView routes the chat selection gesture without growing the view", () =
   // 规模护栏不变（逻辑仍全在 composable 里）。
   expect(chat.split("\n").length).toBeLessThan(500)
   const sidebar = read("composables/useChatViewSidebar.ts")
-  expect(sidebar).toContain("async function askAux(payload: AuxAskPayload)")
+  expect(sidebar).toContain("async function askAux(payload: AuxAskPayload, target?: AuxAskTarget)")
+  expect(sidebar).toContain("const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))")
   expect(sidebar).toContain("parentRuntimeId: deps.runtimeId")
   // 复用与新建都要让面板可见。
   expect(sidebar).toContain("if (outcome.ok) deps.onFirstTabAdded()")
@@ -131,5 +134,7 @@ test("i18n carries the two new keys in both locales", () => {
     const messages = read(`i18n/locales/${locale}.ts`)
     expect(messages).toContain("selectionAskAux: ")
     expect(messages).toContain("askFailed: ")
+    expect(messages).toContain("chooseTarget: ")
+    expect(messages).toContain("newChat: ")
   }
 })
