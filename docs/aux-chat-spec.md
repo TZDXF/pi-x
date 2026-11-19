@@ -237,11 +237,13 @@ null / 抛错 / 被身份过滤空之后**再取一次** `get_entries`（竞态�
 
 **路由**（`stores/auxChat.ts` 的 `askInAux`）：**入口优先** —— 先确认该父会话的
 router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸载）返回 `unavailable`
-且**不写任何桶**。入口可用时：有激活的 aux Tab → 追加到它的桶并把槽位切成激活；
-没有激活但有存活实例 → 复用最近一个（不新开，避免撞 5 个上限与面板碎片化）；
-一个都没有 → 新建后投递。连点同一手势只建一个实例（`pendingCreations` 复用 +
-`appendConversationSelection` 判重）。入口缺失/名额满/引用超限各有一次用户可见提示
-（`lib/auxAsk.ts`）。
+且**不写任何桶**。入口可用时：没有 aux → 新建后投递；只有一个 aux → 直接复用；
+**有多个 aux → 浮层先展开目标选择，列出全部已有对话与"新建辅助对话"，用户选择后才
+投递**。已有目标按 runtimeId 精确匹配且必须属于当前父会话，失效选项不落到其他实例；
+新建受全局 5 实例上限约束，达到上限时选择项置灰。选择已有或新建成功后都激活对应槽位。
+连点同一手势只建一个实例（`pendingCreations` 复用 + `appendConversationSelection` 判重）。
+入口缺失/名额满/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。aux 面板内的划词仍
+直接进本实例，不弹目标选择。
 
 **来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。
 消息 `messageId`/字符区间只在该 runtime 里有意义，因此 aux 正文的选区恢复与索引徽标
@@ -270,8 +272,8 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 
 验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、
 `tests/aux-send-control.test.ts`（prompt 组装含 `# userselect:`、只清本桶、批注不消费、
-abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 激活优先 / 复用 / 新建 /
-去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式与既有算法不变）、
+abort 不清）、`tests/aux-selection-routing.test.ts`（入口优先 / 单实例复用 / 多实例精确选择 / 新建 /
+失效目标 / 去重 / 清桶时机）、`tests/aux-selection-menu.test.ts`（浮层两模式、多实例选择与既有算法不变）、
 `tests/aux-selection-placement.test.ts`（实测宽度钳制 + 右缘 ≤ 视口 + 翻转阈值）、
 `tests/aux-selection-local.test.ts`（跨 runtime 不定位 / 同 runtime 可定位 / 文件来源可编辑）、
 `tests/aux-selection-entries.test.ts`（两处入口接线、`$attrs` 单根回归、摘要定位/编辑接线）。

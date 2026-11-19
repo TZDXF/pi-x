@@ -176,6 +176,9 @@ export default {
     retry: "重试",
     limitReached: "辅助对话最多同时开启 {count} 个实例，请先关闭一个再添加。",
     askFailed: "无法在辅助对话中提问：当前会话没有可用的辅助对话入口。",
+    chooseTarget: "选择辅助对话",
+    newChat: "新建辅助对话",
+    cancelSelection: "取消选择",
   },
   split: {
     closePane: "关闭此窗格",

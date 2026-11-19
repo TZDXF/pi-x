@@ -93,7 +93,7 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
     vm.runInContext(
       ts.transpile(
         script +
-          `\nglobalThis.api = { state, placement, tooLong, menuBox, measuredWidth, onMouseUp, askInAux, quoteSelection };`,
+          `\nglobalThis.api = { state, placement, tooLong, menuBox, measuredWidth, choosingAux, onMouseUp, askInAux, chooseAuxTarget, quoteSelection };`,
         { target: ts.ScriptTarget.ES2022 },
       ),
       context,
@@ -138,6 +138,49 @@ test("chat mode keeps both actions and emits the same payload for quote and auxA
     expect(h.api.state.value).toBeNull()
     h.api.askInAux()
     expect(h.emits).toHaveBeenCalledTimes(2)
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("multiple aux targets require an explicit existing conversation or new-chat choice", () => {
+  const props: Record<string, unknown> = {
+    maxTextLength: 8000,
+    mode: "chat",
+    root: null,
+    auxCanCreate: true,
+    auxTargets: [
+      { runtimeId: "aux:a", title: "辅助对话 1" },
+      { runtimeId: "aux:b", title: "辅助对话 2" },
+    ],
+  }
+  const h = setup(props, { text: "选中的正文", inRoot: true, source: "assistant" })
+  props.root = h.root
+  try {
+    h.api.onMouseUp()
+    h.api.askInAux()
+    // 多实例时不能沿用“激活优先/最近一个”的隐式投递。
+    expect(h.api.choosingAux.value).toBe(true)
+    expect(h.api.state.value).not.toBeNull()
+    expect(h.emits).not.toHaveBeenCalled()
+    h.api.chooseAuxTarget("aux:b")
+    expect(h.emits).toHaveBeenCalledWith(
+      "auxAsk",
+      { text: "选中的正文", source: "assistant", messageId: 7, startOffset: 3, endOffset: 12 },
+      "aux:b",
+    )
+    expect(h.api.choosingAux.value).toBe(false)
+    expect(h.api.state.value).toBeNull()
+
+    // 同一路径也能明确新建；null 与“未传 target”的自动路由区分开。
+    h.api.onMouseUp()
+    h.api.askInAux()
+    h.api.chooseAuxTarget(null)
+    expect(h.emits).toHaveBeenLastCalledWith(
+      "auxAsk",
+      { text: "选中的正文", source: "assistant", messageId: 7, startOffset: 3, endOffset: 12 },
+      null,
+    )
   } finally {
     h.scope.stop()
   }
@@ -240,6 +283,10 @@ test("code mode renders only the aux action and chat mode renders both", () => {
   const chatButtons = template.split("selectionAdd").length - 1
   expect(chatButtons).toBe(1)
   expect(template.split("selectionAskAux").length - 1).toBe(2)
+  // 多实例选择态列出全部已有实例，并提供独立的新建入口。
+  expect(template).toContain('v-for="target in auxTargets"')
+  expect(template).toContain('@click="chooseAuxTarget(target.runtimeId)"')
+  expect(template).toContain('@click="chooseAuxTarget(null)"')
 })
 
 test("the anchor / flip / clamp rules are unchanged and only the width source moved", () => {
