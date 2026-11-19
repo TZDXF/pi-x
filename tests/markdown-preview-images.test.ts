@@ -83,25 +83,38 @@ test("relative image paths resolve against the Markdown file's own directory", (
   })
 })
 
-test("external links pass through and anything unreadable is blocked", () => {
+test("external links pass through untouched and anything unreadable is blocked", () => {
   expect(resolveMarkdownImageSource("https://example.com/a.png", "a.md")).toEqual({
     kind: "external",
     url: "https://example.com/a.png",
+  })
+  // 回归（TZD-132 P2）：外链里的百分号编码是远端资源名的一部分，解码会改写请求地址。
+  expect(resolveMarkdownImageSource("https://images.example.test/encoded%2Fobject.png", "a.md")).toEqual({
+    kind: "external",
+    url: "https://images.example.test/encoded%2Fobject.png",
+  })
+  expect(resolveMarkdownImageSource("https://example.com/a%20b.png?v=%2F#x", "a.md")).toEqual({
+    kind: "external",
+    url: "https://example.com/a%20b.png?v=%2F#x",
   })
   expect(resolveMarkdownImageSource("data:image/png;base64,AAA", "a.md")).toEqual({
     kind: "external",
     url: "data:image/png;base64,AAA",
   })
-  expect(resolveMarkdownImageSource("//cdn.example.com/a.png", "a.md")).toEqual({
+  expect(resolveMarkdownImageSource("//cdn.example.com/a%2Fb.png", "a.md")).toEqual({
     kind: "external",
-    url: "https://cdn.example.com/a.png",
+    url: "https://cdn.example.com/a%2Fb.png",
   })
-  // 越出项目根、绝对文件系统路径、非图片协议、空地址都不可渲染。
+  // 越出项目根、绝对文件系统路径、非图片协议、空地址都不可渲染；
+  // 解码后才露出协议或绝对路径的同样拦住。
   for (const src of [
     "../../etc/a.png",
     "C:/Users/a.png",
     "C:\\Users\\a.png",
     "javascript:alert(1)",
+    "javascript%3Aalert(1)",
+    "%2F%2Fevil.example.com/a.png",
+    "%43%3A/Users/a.png",
     "file:///a.png",
     "",
   ])

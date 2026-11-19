@@ -16,15 +16,18 @@ const target = computed(() => props.comment && resolveCodeCommentFile(props.comm
 const readFile = computed(() => {
   const file = target.value
   const path = props.comment?.path ?? ""
-  return async (): Promise<FilePreview> => {
+  // 预览传进来的永远是项目相对路径：Markdown 正文是批注目标文件本身，图片则是
+  // 按正文所在目录解构出来的同一项目内路径（TZD-132）。项目根始终用批注目标解析出的那个。
+  return async (requested?: string): Promise<FilePreview> => {
+    const relative = requested || file?.path || ""
     if (!file) throw new Error(t("projectFiles.commentFileUnavailable", { path }))
     try {
-      return await invokeProjectFile<FilePreview>("read_file_preview", file.project, file.path)
+      return await invokeProjectFile<FilePreview>("read_file_preview", file.project, relative)
     } catch (cause) {
       const raw = cause instanceof Error ? cause.message : String(cause)
       const code = parseCodedError(raw)?.code
       if (code === "previewPathInvalid" || code === "projectDirMissing") {
-        throw new Error(t("projectFiles.commentFileUnavailable", { path }))
+        throw new Error(t("projectFiles.commentFileUnavailable", { path: relative === file.path ? path : relative }))
       }
       throw cause
     }

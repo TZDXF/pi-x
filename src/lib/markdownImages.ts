@@ -51,22 +51,32 @@ function decodePath(src: string): string {
   }
 }
 
+/** 带协议的地址（`https:`、`javascript:`、`C:` 不算）；`//` 协议相对也算外部。 */
+function hasProtocol(src: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")
+}
+
 /**
  * 解析 Markdown 图片地址。
  *
- * - 带协议/协议相对/data URL → 外部直链（仅 http/https/blob/data:image）。
- * - 其他相对或根相对地址 → 项目内路径：按 `docPath` 的目录解析 `./`、`../`，
- *   以 `/` 开头则相对项目根；去掉 `?query`、`#anchor`，统一为正斜杠。
+ * - 带协议/协议相对/data URL → 外部直链（仅 http/https/blob/data:image），**原样保留**：
+ *   外链里的 `%2F`、`%20` 属于远端资源名，解码会改变请求地址。
+ * - 其他相对或根相对地址 → 项目内路径：先解码（解析层会把中文编码），再按 `docPath`
+ *   的目录解析 `./`、`../`，以 `/` 开头则相对项目根；去掉 `?query`、`#anchor`，统一为正斜杠。
  * - 解析后越出项目根、指向绝对文件系统路径、带其他协议 → `blocked`。
  */
 export function resolveMarkdownImageSource(src: string, docPath: string): MarkdownImageSource {
-  const raw = decodePath((src ?? "").trim())
+  const raw = (src ?? "").trim()
   if (!raw) return { kind: "blocked" }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) {
+  // 先按未解码的原串判定外链，避免 `%2F` 被解码成路径分隔符。
+  if (hasProtocol(raw)) {
     return isAllowedExternal(raw) ? { kind: "external", url: externalUrl(raw) } : { kind: "blocked" }
   }
+  const decoded = decodePath(raw)
+  // 解码后才出现协议（如 `javascript%3A...`）或绝对路径的，同样不放行。
+  if (hasProtocol(decoded) || /^[a-z]:[\\/]/i.test(decoded)) return { kind: "blocked" }
   // 去掉查询串与锚点后再按路径解析（`a.png?x=1`、`a.png#top` 都指向同一张图）。
-  const pathOnly = raw.split(/[?#]/)[0]
+  const pathOnly = decoded.split(/[?#]/)[0]
   if (!pathOnly) return { kind: "blocked" }
   const segments = pathOnly.startsWith("/") ? [] : normalizeSlashes(docPath).split("/").slice(0, -1)
   for (const part of normalizeSlashes(pathOnly).split("/")) {
