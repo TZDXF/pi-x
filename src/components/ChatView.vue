@@ -34,6 +34,7 @@ import type { SplitDropZone } from "@/lib/splitDropZone"
 import { computeBottomNotch } from "@/lib/splitDropZone"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
 import { appendComposerText } from "@/lib/composer"
+import { useCodeCommentInsertion } from "@/composables/useCodeCommentInsertion"
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -64,7 +65,6 @@ function insertIntoComposer(text: string) {
   if (!bridge.value) return
   bridge.value.setTextInput(appendComposerText(bridge.value.textInput || "", text))
 }
-
 const { t } = useI18n()
 
 const props = defineProps<{
@@ -123,6 +123,7 @@ const currentTitle = computed(
 )
 
 const bridge = ref<InstanceType<typeof PromptInputBridge> | null>(null)
+const { insertCodeComment: insertCodeCommentIntoComposer } = useCodeCommentInsertion(bridge)
 const draftOptions = useBoardComposerDraft(session, workspace, bridge, workspaceSelection)
 const { initialDraft } = useComposerDraftSync(session, () => props.project, bridge, draftOptions)
 defineExpose({ submitDraft: () => bridge.value?.submitForm() })
@@ -396,6 +397,7 @@ onBeforeUnmount(() => {
         @open-review="openReviewAt"
         @fork="forkFromAnswer"
         @aux-ask="sidebar.askAux"
+        @insert-code-comment="insertCodeCommentIntoComposer"
       />
 
       <!-- extension widget -->
@@ -484,6 +486,7 @@ onBeforeUnmount(() => {
         @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
+        @insert-code-comment="insertCodeCommentIntoComposer"
       />
     </Teleport>
   </div>

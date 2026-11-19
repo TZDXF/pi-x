@@ -18,6 +18,7 @@ import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { FileChange } from "@/lib/sessionChanges"
 import { usePointerDrag } from "@/composables/usePointerDrag"
 import type { AuxParentContext } from "@/lib/auxSpawn"
+import type { PendingCodeComment } from "@/stores/codeComments"
 // 类型定义移到 `lib/sidebarTabs.ts`（TZD-95 需要落盘/恢复它们），这里只做再导出。
 import type { SidebarTabItem, SidebarTabKind } from "@/lib/sidebarTabs"
 export type SidebarTabType = SidebarTabKind
@@ -46,6 +47,7 @@ const emit = defineEmits<{
   "close-tab": [id: number]
   "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
+  "insert-code-comment": [comment: PendingCodeComment]
   "restart-terminal": [id: number]
 }>()
 
@@ -395,7 +397,7 @@ onBeforeUnmount(() => {
             v-else-if="tab.type === 'files'"
             :project="project"
             :aux-parent-runtime-id="auxParent?.runtimeId"
-            @send-to-chat="$emit('send-to-chat', $event)"
+            @insert-code-comment="$emit('insert-code-comment', $event)"
           />
           <!-- 恢复出来的 terminal Tab 只渲染占位：进程已随旧实例退出，
                挂 TerminalPanel 会在首次可见时自动新开 shell（见 00:58 实测）。 -->

@@ -9,6 +9,9 @@ import messages from '/src/i18n/locales/en.ts'
 import ChatUserPrompt from '/src/components/chat/ChatUserPrompt.vue'
 import CodeCommentPreview from '/src/components/chat/CodeCommentPreview.vue'
 import { serializeComposerPromptContexts } from '/src/lib/promptContexts.ts'
+import { formatCodeCommentForComposer } from '/src/lib/codeComments.ts'
+import { appendComposerText } from '/src/lib/composer.ts'
+import { useCodeCommentsStore } from '/src/stores/codeComments.ts'
 import '/src/style.css'
 const comments = [
   { path: 'src/main.ts', startLine: 80, endLine: 82, selectedText: 'const value = 80', comment: 'Check this range' },
@@ -22,9 +25,21 @@ const entry = history ? { kind: 'user', id: 1, text: prompt } : { kind: 'user', 
 const edit = reactive({ editedPrompt: null, editedText: '', editBusy: false, editBlocked: false, lastUserPromptId: null })
 createApp({ setup() {
   const selected = ref(null)
+  const inserted = ref('Existing draft')
+  const codeComments = useCodeCommentsStore()
+  codeComments.add('C:/demo', { path: 'src/main.ts', startLine: 80, endLine: 82, selectedText: 'const value = 80', comment: 'Pending comment' })
   return () => h('main', { style: 'padding:24px;max-width:800px' }, [
     h(ChatUserPrompt, { entry, edit, onOpenCodeComment: c => selected.value = c }),
-    h(CodeCommentPreview, { comment: selected.value, roots: ['C:/demo', 'C:/other'], onClose: () => selected.value = null }),
+    h(CodeCommentPreview, {
+      comment: selected.value,
+      roots: ['C:/demo', 'C:/other'],
+      onClose: () => selected.value = null,
+      onInsertCodeComment: comment => {
+        inserted.value = appendComposerText(inserted.value, formatCodeCommentForComposer(comment))
+        codeComments.remove(comment.id)
+      },
+    }),
+    h('output', { 'data-inserted-composer': '' }, inserted.value),
   ])
 }}).use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).use(createPinia()).mount('#app')
 </script></body></html>`
@@ -95,3 +110,17 @@ for (const history of [false, true]) {
     expect(errors).toEqual([])
   })
 }
+
+test("history preview inserts a pending annotation into the existing composer draft", async ({ page }) => {
+  await page.goto(harness.url + "?history")
+  await page.locator("[data-code-comment-tag]").first().click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "Insert into composer", exact: true }).click()
+  const inserted = page.locator("[data-inserted-composer]")
+  await expect(inserted).toContainText("Existing draft")
+  await expect(inserted).toContainText("## Comment 1")
+  await expect(inserted).toContainText("Pending comment")
+  await expect(inserted).not.toContainText("# Code comments:")
+  await expect(dialog.locator("[data-code-comment-id]")).toHaveCount(0)
+  await expect(dialog.getByRole("button", { name: "Insert into composer", exact: true })).toHaveCount(0)
+})

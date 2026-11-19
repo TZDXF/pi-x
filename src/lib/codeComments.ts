@@ -105,6 +105,14 @@ export function buildCodeCommentsBlock(drafts: readonly CodeCommentDraft[]): str
   return `# Code comments:\n\n${drafts.map((draft, index) => formatCodeComment(draft, index)).join("\n\n")}`
 }
 
+/**
+ * 引入 composer 的是可编辑正文，不是机器解析的上下文尾块：刻意不带
+ * `# Code comments:` 标题，后续正文及另行附上的 chip 不会被误并入此批注。
+ */
+export function formatCodeCommentForComposer(draft: CodeCommentDraft): string {
+  return formatCodeComment(draft, 0)
+}
+
 /** 把批注块追加到消息末尾；没有批注时只做 trim，不改变原文。 */
 export function buildPromptWithCodeComments(text: string, drafts: readonly CodeCommentDraft[]): string {
   const content = text.trimEnd()

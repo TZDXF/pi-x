@@ -3,6 +3,7 @@ import { parseComposerPromptContexts, serializeComposerPromptContexts } from "@/
 import {
   selectionLineRange,
   formatCodeComment,
+  formatCodeCommentForComposer,
   buildCodeCommentsBlock,
   buildPromptWithCodeComments,
   parsePromptCodeComments,
@@ -159,6 +160,28 @@ test("buildPromptWithCodeComments appends the block or trims plain text", () => 
   expect(buildPromptWithCodeComments("帮我看看", drafts)).toBe("帮我看看\n\n" + buildCodeCommentsBlock(drafts))
   // 空消息只发批注块本身。
   expect(buildPromptWithCodeComments("  ", drafts)).toBe(buildCodeCommentsBlock(drafts))
+})
+
+test("editable inserted comments preserve following prose and coexist with multiple chips", () => {
+  const inserted = formatCodeCommentForComposer({
+    path: "src/editable.ts",
+    startLine: 4,
+    endLine: 5,
+    selectedText: "editable",
+    comment: "inserted comment",
+  })
+  expect(inserted).not.toContain("# Code comments:")
+  const visible = `${inserted}\n\n后续正文仍属于用户指令`
+  expect(parsePromptCodeComments(visible)).toEqual({ visibleContent: visible, comments: [] })
+
+  const chips = [
+    { path: "src/a.ts", startLine: 1, endLine: 1, selectedText: "a", comment: "chip one" },
+    { path: "src/b.ts", startLine: 2, endLine: 3, selectedText: "b", comment: "chip two" },
+  ]
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments(visible, chips))
+  expect(parsed.visibleContent).toBe(visible)
+  expect(parsed.comments.map(comment => comment.comment)).toEqual(["chip one", "chip two"])
+  expect(parsed.comments.some(comment => comment.comment.includes("# Code comments:"))).toBe(false)
 })
 
 // ---- 持久化消息解析回附件（对齐 ZCode 的 parsePromptCodeComments） ----

@@ -16,6 +16,7 @@ import { usePointerDrag } from "@/composables/usePointerDrag"
 import { useWorkspaceStore } from "@/stores/workspace"
 import ProjectFilePreview from "@/components/ProjectFilePreview.vue"
 import FileTypeIcon from "@/components/FileTypeIcon.vue"
+import type { PendingCodeComment } from "@/stores/codeComments"
 
 const props = withDefaults(
   defineProps<{
@@ -32,7 +33,7 @@ const props = withDefaults(
   }>(),
   { filter: "", preview: true, showHeader: true },
 )
-const emit = defineEmits<{ "send-to-chat": [text: string] }>()
+const emit = defineEmits<{ "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
 // 多目录项目：树根默认跟随会话目录，可在组内目录（含 worktree）之间切换。
@@ -261,7 +262,7 @@ onBeforeUnmount(() => {
         :revision="previewRevision"
         class="min-w-0 flex-1"
         @close="selected = null"
-        @send-to-chat="emit('send-to-chat', $event)"
+        @insert-code-comment="emit('insert-code-comment', $event)"
       />
       <section
         v-else-if="preview"

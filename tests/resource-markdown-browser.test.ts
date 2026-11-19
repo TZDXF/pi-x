@@ -7,7 +7,6 @@ import { isMarkdownExt } from "@/lib/fileKind"
 import { normalizeSlashes } from "@/lib/paths"
 import { useContentTranslation } from "@/composables/useContentTranslation"
 import { usePointerDrag } from "@/composables/usePointerDrag"
-import { buildCodeCommentsBlock, commentFilePath } from "@/lib/codeComments"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -327,7 +326,7 @@ test("full code comment warning uses a localized toast and preserves the draft",
   expect(h.api.commentRange.value).toEqual({ start: 1, end: 1 })
 })
 
-test("inserting a code comment emits editable text and consumes its pending chip", () => {
+test("requesting code comment insertion keeps the chip until a composer accepts it", () => {
   const emit = vi.fn()
   const remove = vi.fn()
   const props = vue.reactive({
@@ -338,8 +337,6 @@ test("inserting a code comment emits editable text and consumes its pending chip
   const h = setup("ProjectFilePreview", props, "insertCommentIntoComposer", {
     defineEmits: () => emit,
     useCodeCommentsStore: () => ({ remove }),
-    buildCodeCommentsBlock,
-    commentFilePath,
     onBeforeUnmount: callback => vue.onScopeDispose(callback),
     document: { removeEventListener() {} },
     highlightFileLines: async () => [],
@@ -354,11 +351,8 @@ test("inserting a code comment emits editable text and consumes its pending chip
     comment: "explain this",
   }
   h.api.insertCommentIntoComposer(comment)
-  expect(emit).toHaveBeenCalledExactlyOnceWith(
-    "send-to-chat",
-    buildCodeCommentsBlock([{ ...comment, path: "C:/shared/src/a.ts" }]),
-  )
-  expect(remove).toHaveBeenCalledExactlyOnceWith("comment-1")
+  expect(emit).toHaveBeenCalledExactlyOnceWith("insert-code-comment", comment)
+  expect(remove).not.toHaveBeenCalled()
 })
 
 test("successfully adding a code comment closes the draft without a toast", () => {

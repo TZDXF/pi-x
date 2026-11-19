@@ -14,13 +14,7 @@ import { isMarkdownExt } from "@/lib/fileKind"
 import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
-import {
-  buildCodeCommentsBlock,
-  commentFilePath,
-  MAX_SELECTED_TEXT_LENGTH,
-  selectionLineRange,
-  type CodeCommentRange,
-} from "@/lib/codeComments"
+import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import ConversationSelectionMenu from "@/components/chat/ConversationSelectionMenu.vue"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
 import type { AuxAskPayload } from "@/lib/auxSelection"
@@ -65,7 +59,7 @@ const props = withDefaults(
   }>(),
   { closable: true, revision: 0 },
 )
-const emit = defineEmits<{ close: []; "send-to-chat": [text: string] }>()
+const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 
 const preview = ref<FilePreview | null>(null)
@@ -306,9 +300,8 @@ function confirmComment() {
   closeComment()
 }
 function insertCommentIntoComposer(comment: PendingCodeComment) {
-  // 转为可编辑文本后移除原上下文 chip，避免发送时重复携带同一条批注。
-  emit("send-to-chat", buildCodeCommentsBlock([{ ...comment, path: commentFilePath(comment) }]))
-  codeComments.remove(comment.id)
+  // 由实际持有 composer 的 ChatView 写入并消费 chip；无接收方时保留批注。
+  emit("insert-code-comment", comment)
 }
 function removeComment(id: string) {
   codeComments.remove(id)
