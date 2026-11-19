@@ -155,6 +155,10 @@ test("update edits only its own entry and remove keeps the rest of the bucket", 
 
 test("wire payload keeps only path/text so the userselect contract is unchanged", () => {
   expect(auxSelectionWire({ text: "正文", path: " src/a.ts " })).toEqual({ path: " src/a.ts ", text: "正文" })
+  expect(auxSelectionWire({ text: "副目录", path: "same.ts", root: "C:/qa-extra/" })).toEqual({
+    path: "C:/qa-extra/same.ts",
+    text: "副目录",
+  })
   expect(auxSelectionWire({ text: "正文", path: "   " })).toEqual({ text: "正文" })
   expect(auxSelectionWire({ text: "正文", messageId: 4, startOffset: 2, endOffset: 9 })).toEqual({ text: "正文" })
 })

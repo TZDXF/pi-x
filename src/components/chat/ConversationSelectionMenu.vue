@@ -32,8 +32,10 @@ const props = withDefaults(
     maxTextLength: number
     /** `chat` 在会话正文上；`code` 在文件预览（代码 / Markdown）上。 */
     mode?: "chat" | "code"
-    /** `code` 模式下引用的文件路径（相对会话目录），随引用发给 agent。 */
+    /** `code` 模式下引用的文件路径（相对来源根），随引用发给 agent。 */
     path?: string
+    /** 文件实际所属根；跨目录预览必须保留，避免历史消息回跳到会话根同名文件。 */
+    sourceRoot?: string
   }>(),
   { mode: "chat" },
 )
@@ -100,7 +102,8 @@ function inspectCodeSelection(root: HTMLElement, text: string): AuxAskPayload | 
   if (!path) return null
   // 行区间靠 `selectionLineRange`（与代码批注同源）：两端都得落在本容器内的 [data-line]。
   const lineRange = selectionLineRange(root, window.getSelection())
-  return { text, path, ...(lineRange ? { lineRange } : {}) }
+  const sourceRoot = props.sourceRoot?.trim()
+  return { text, path, ...(sourceRoot ? { root: sourceRoot } : {}), ...(lineRange ? { lineRange } : {}) }
 }
 
 function inspectSelection() {

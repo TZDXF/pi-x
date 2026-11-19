@@ -144,7 +144,13 @@ test("chat mode keeps both actions and emits the same payload for quote and auxA
 })
 
 test("code mode carries path and line range and never emits a prompt quote", () => {
-  const props: Record<string, unknown> = { maxTextLength: 8000, mode: "code", path: "src/a.ts", root: null }
+  const props: Record<string, unknown> = {
+    maxTextLength: 8000,
+    mode: "code",
+    path: "src/a.ts",
+    sourceRoot: "C:/qa-extra",
+    root: null,
+  }
   const h = setup(props, { text: "选中的代码", inRoot: true, lineRange: { start: 4, end: 6 } })
   props.root = h.root
   try {
@@ -154,6 +160,7 @@ test("code mode carries path and line range and never emits a prompt quote", () 
     expect(h.emits).toHaveBeenCalledWith("auxAsk", {
       text: "选中的代码",
       path: "src/a.ts",
+      root: "C:/qa-extra",
       lineRange: { start: 4, end: 6 },
     })
     expect(h.emits.mock.calls[0]![0]).toBe("auxAsk")

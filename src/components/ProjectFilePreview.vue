@@ -528,6 +528,7 @@ onBeforeUnmount(() => {
     mode="code"
     :root="menuRoot"
     :path="path"
+    :source-root="commentRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     @aux-ask="onAuxAsk"
   />

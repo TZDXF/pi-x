@@ -18,6 +18,7 @@ test("the file preview mounts the same floating menu in code mode with path and 
   expect(preview).toContain("<ConversationSelectionMenu")
   expect(preview).toContain('mode="code"')
   expect(preview).toContain(':path="path"')
+  expect(preview).toContain(':source-root="commentRoot"')
   expect(preview).toContain('@aux-ask="onAuxAsk"')
   // 代码视图与渲染态 Markdown 都要能被同一浮层检测到（渲染态没有 [data-line]，只带 path）。
   expect(preview).toContain("const menuRoot = computed<HTMLElement | null>(() => (showCode.value")
