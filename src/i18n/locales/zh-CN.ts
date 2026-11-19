@@ -1363,6 +1363,7 @@ export default {
     reset: "重置",
     resetAll: "全部恢复默认",
     locked: "固定",
+    unbound: "未绑定",
   },
 
   blocks: {

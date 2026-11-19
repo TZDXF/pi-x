@@ -257,7 +257,7 @@ export function useChatSendControl(deps: {
    * 清掉本次已发出的引用：**只清自己那桶**。
    *
    * aux 清 `session.runtimeId` 的桶，主会话清 `conversationSelections` 单例；
-   * 两者互不影响是 TZD-103 的硬约束（abort 时都不清，文本可被 Esc 恢复）。
+   * 两者互不影响是 TZD-103 的硬约束（abort 时都不清，文本可由停止按钮恢复）。
    */
   function consumeSelections() {
     if (!pendingSelections.value.length) return

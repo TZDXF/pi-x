@@ -248,6 +248,8 @@ function cycleSidebarTab(offset: number) {
 }
 
 const offShortcutHandlers = [
+  // Registered even though the default binding is empty: a user-recorded
+  // stop key must keep working (TZD-134 only removed the default Esc).
   registerShortcutHandler("chat.stop", () => {
     if (session.isStreaming) void abort()
   }),

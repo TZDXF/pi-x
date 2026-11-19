@@ -1406,6 +1406,7 @@ export default {
     reset: "Reset",
     resetAll: "Reset all",
     locked: "Locked",
+    unbound: "Not bound",
   },
 
   blocks: {
