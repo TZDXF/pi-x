@@ -67,9 +67,10 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   // 添加：先开进程（openAux 同步入表再 await spawn），实例数量不设专属上限。
   expect(auxTabs).toMatch(/const tab = await openAux\(deps\.runtimeId, \{/)
   expect(auxTabs).not.toMatch(/auxChat\.limitReached|auxCanOpen|AUX_MAX_TABS/)
-  // 关闭：实例先销毁（墓碑 + rpc_kill + store 拆除），再撤槽位。
-  expect(auxTabs).toMatch(/await closeAux\(aux\.runtimeId\)/)
-  expect(auxTabs).toMatch(/auxTabBySidebarId\(deps\.runtimeId, tabId\)/)
+  // 关闭：先同步撤槽位（TZD-130），再按父会话 + 槽位查到的实例销毁（TZD-127）。
+  expect(auxTabs).toMatch(
+    /const aux = auxTabBySidebarId\(deps\.runtimeId, tabId\)\s*deps\.closeSidebarTab\(tabId\)\s*if \(aux\) await closeAux\(aux\.runtimeId\)/,
+  )
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
   // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。

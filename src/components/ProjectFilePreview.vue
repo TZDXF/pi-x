@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, provide, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
+import { ArrowLeft, Code, ExternalLink, Eye, FileX, MessageSquareQuote, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { invokeProjectFile } from "@/api/client/projectFiles"
@@ -20,14 +20,16 @@ import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelect
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
-import { useCodeCommentsStore } from "@/stores/codeComments"
+import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import { markdownParserOptions } from "@/lib/markdownAutoLink"
 import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
+import { markdownImageContextKey, previewImageUrl } from "@/lib/markdownImages"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
+import MarkdownImage from "@/components/MarkdownImage.vue"
 import "vue-stream-markdown/index.css"
 
 /**
@@ -59,7 +61,7 @@ const props = withDefaults(
   }>(),
   { closable: true, revision: 0 },
 )
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 
 const preview = ref<FilePreview | null>(null)
@@ -95,8 +97,39 @@ const imageSrc = computed(() => {
 const showRenderedMarkdown = computed(() => preview.value?.kind === "text" && isMarkdown.value && mdRendered.value)
 const showCode = computed(() => preview.value?.kind === "text" && !showRenderedMarkdown.value && !imageSrc.value)
 
+// ---- Markdown 图片（TZD-132）----
+// 渲染器默认的 URL 硬校验会拦掉 `assets/a.png` 这类相对地址，webview 也读不到
+// 项目目录里的文件；因此接管 `img`：相对地址按本文件目录解析成项目内路径，
+// 再走 `read_file_preview` 读成 data URL（远端 SSH 项目同样适用）。
+const markdownComponents = { img: MarkdownImage }
+/** 同一张图在一次预览会话内只读一次；文件或路径切换时整表作废。 */
+const markdownImageCache = new Map<string, Promise<string | null>>()
+function loadMarkdownImage(path: string): Promise<string | null> {
+  const cached = markdownImageCache.get(path)
+  if (cached) return cached
+  const pending = (async () => {
+    try {
+      const result = props.readFile
+        ? await props.readFile(path)
+        : await invokeProjectFile<FilePreview>("read_file_preview", props.project, path)
+      return previewImageUrl(result, path)
+    } catch {
+      return null
+    }
+  })()
+  markdownImageCache.set(path, pending)
+  return pending
+}
+provide(markdownImageContextKey, {
+  get docPath() {
+    return props.path
+  },
+  load: loadMarkdownImage,
+})
+
 async function load(resetView = true) {
   const current = ++seq
+  markdownImageCache.clear()
   loading.value = true
   errorCause.value = null
   openError.value = null
@@ -192,7 +225,7 @@ const commentRoot = computed(() =>
 )
 /** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
 const pendingComments = computed(() =>
-  codeComments.project === commentProject.value
+  props.commentProject !== undefined && codeComments.project === commentProject.value
     ? codeComments.comments.filter(c => c.path === props.path && (c.root ?? props.project) === props.project)
     : [],
 )
@@ -298,6 +331,10 @@ function confirmComment() {
     return
   }
   closeComment()
+}
+function insertCommentIntoComposer(comment: PendingCodeComment) {
+  // 由实际持有 composer 的 ChatView 写入并消费 chip；无接收方时保留批注。
+  emit("insert-code-comment", comment)
 }
 function removeComment(id: string) {
   codeComments.remove(id)
@@ -412,6 +449,7 @@ onBeforeUnmount(() => {
             :content="markdownContent.body"
             mode="static"
             :enable-animate="false"
+            :components="markdownComponents"
             :link-options="markdownLinkOptions"
             :parser-options="markdownParserOptions"
             class="text-sm"
@@ -478,7 +516,16 @@ onBeforeUnmount(() => {
                   {{ commentRangeLabel(comment.startLine, comment.endLine) }}
                 </p>
                 <p class="text-xs leading-relaxed break-words whitespace-pre-wrap">{{ comment.comment }}</p>
-                <div class="mt-1.5 flex justify-end">
+                <div class="mt-1.5 flex justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5 text-xs text-muted-foreground"
+                    :title="t('projectFiles.annotateInsert')"
+                    :aria-label="t('projectFiles.annotateInsert')"
+                    @click="insertCommentIntoComposer(comment)"
+                    ><MessageSquareQuote class="size-3.5" />{{ t("projectFiles.annotateInsert") }}</Button
+                  >
                   <Button
                     variant="ghost"
                     size="sm"

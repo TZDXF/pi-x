@@ -2,7 +2,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, setActivePinia } from "pinia"
 import { effectScope, type EffectScope } from "vue"
 
-/** 真实侧栏接线 + aux 注册表；仅替换进程、RPC 与持久化，不访问真实模型。 */
+/**
+ * 跨父会话的同号槽位隔离（TZD-127）：真实侧栏接线 + 真实 aux 注册表，
+ * 仅替换进程、RPC 与持久化，不访问真实模型。
+ *
+ * `isolate: false`：模块缓存跨测试文件共享。每个用例前 `vi.resetModules()` 再动态
+ * import，既让本文件的 `vi.mock` 生效，也避免拿到别的文件缓存过的注册表实例
+ * （否则结果随执行顺序时好时坏）。
+ */
 const controls = vi.hoisted(() => ({
   spawn: vi.fn(async (_parent: unknown, _tab: unknown) => {}),
   kill: vi.fn(async (_id: string) => {}),
@@ -44,23 +51,29 @@ vi.mock("@/lib/auxSpawn", () => ({
   spawnAuxRuntime: (parent: unknown, tab: unknown) => controls.spawn(parent, tab),
 }))
 
-import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
-import { auxInstancesFor, auxTabBySidebarId, registerAuxRuntimeBridge, resetAuxChatForTest } from "@/stores/auxChat"
+type AuxChat = typeof import("@/stores/auxChat")
+type Sidebar = typeof import("@/composables/useChatViewSidebar")
+
+let auxChat: AuxChat
+let useChatViewSidebar: Sidebar["useChatViewSidebar"]
 
 const scopes: EffectScope[] = []
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia())
   vi.stubGlobal("localStorage", { getItem: () => null, setItem() {} })
   controls.spawn.mockReset().mockImplementation(async () => {})
   controls.kill.mockClear()
-  registerAuxRuntimeBridge({ kill: controls.kill })
+  vi.resetModules()
+  auxChat = await import("@/stores/auxChat")
+  ;({ useChatViewSidebar } = await import("@/composables/useChatViewSidebar"))
+  auxChat.registerAuxRuntimeBridge({ kill: controls.kill })
 })
 
 afterEach(() => {
   scopes.forEach(scope => scope.stop())
   scopes.length = 0
-  resetAuxChatForTest()
+  auxChat.resetAuxChatForTest()
   vi.unstubAllGlobals()
 })
 
@@ -85,19 +98,19 @@ test("same slot id in parents A/B renders and closes only the instance owned by 
   const b = sidebar("runtime:b")
   await a.addTab("aux")
   await b.addTab("aux")
-  const left = auxInstancesFor("runtime:a")[0]!
-  const right = auxInstancesFor("runtime:b")[0]!
+  const left = auxChat.auxInstancesFor("runtime:a")[0]!
+  const right = auxChat.auxInstancesFor("runtime:b")[0]!
   expect(left.tabId).toBe(1)
   expect(right.tabId).toBe(1)
 
   // 与 RightSidebar 相同的显示查找：B 的 id=1 不能解析到先登记的 A。
-  const renderedFrom = auxTabBySidebarId("runtime:b", b.tabs.value[0]!.id)?.parentRuntimeId
+  const renderedFrom = auxChat.auxTabBySidebarId("runtime:b", b.tabs.value[0]!.id)?.parentRuntimeId
   await b.closeTab(right.tabId)
 
   expect({
     renderedFrom,
     killed: controls.kill.mock.calls[0]?.[0],
-    leftLive: auxInstancesFor("runtime:a").length,
-    rightLive: auxInstancesFor("runtime:b").length,
+    leftLive: auxChat.auxInstancesFor("runtime:a").length,
+    rightLive: auxChat.auxInstancesFor("runtime:b").length,
   }).toEqual({ renderedFrom: "runtime:b", killed: right.runtimeId, leftLive: 1, rightLive: 0 })
 })

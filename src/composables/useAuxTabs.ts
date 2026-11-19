@@ -70,11 +70,11 @@ export function useAuxTabs(deps: {
     if (tab.status === "ready") deps.activate(tabId)
   }
 
-  /** 关闭槽位：先销毁实例（墓碑 + rpc_kill + store 拆除），再撤槽位。 */
+  /** 关闭槽位：先同步撤槽位，再销毁实例；页面清理与 rpc_kill 不应拖住 Tab 关闭。 */
   async function closeAuxBySidebarId(tabId: number) {
     const aux = auxTabBySidebarId(deps.runtimeId, tabId)
-    if (aux) await closeAux(aux.runtimeId)
     deps.closeSidebarTab(tabId)
+    if (aux) await closeAux(aux.runtimeId)
   }
 
   /**
@@ -100,7 +100,7 @@ export function useAuxTabs(deps: {
     else deps.addSidebarTab(type)
   }
 
-  /** 侧栏"关闭 Tab"的统一入口：`aux` 必须先销毁进程，不能只撤槽位。 */
+  /** 侧栏"关闭 Tab"的统一入口：`aux` 也要销毁进程（先撤槽位，再销毁），不能只撤槽位。 */
   async function closeTab(id: number) {
     if (auxTabBySidebarId(deps.runtimeId, id)) {
       await closeAuxBySidebarId(id)
