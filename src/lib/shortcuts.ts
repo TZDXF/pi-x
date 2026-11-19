@@ -30,7 +30,6 @@ export const SHORTCUT_ACTION_DEFS = {
   "app.archives": { scope: "global", labelKey: "shortcuts.actions.archives", default: "ctrl+shift+h" },
   "app.prevSession": { scope: "global", labelKey: "shortcuts.actions.prevSession", default: "alt+arrowup" },
   "app.nextSession": { scope: "global", labelKey: "shortcuts.actions.nextSession", default: "alt+arrowdown" },
-  "chat.stop": { scope: "chat", labelKey: "shortcuts.actions.stop", default: "escape" },
   "chat.forkLast": { scope: "chat", labelKey: "shortcuts.actions.forkLast", default: "ctrl+shift+f" },
   "chat.copyLastAnswer": { scope: "chat", labelKey: "shortcuts.actions.copyLastAnswer", default: "ctrl+shift+c" },
   "chat.scrollTop": { scope: "chat", labelKey: "shortcuts.actions.scrollTop", default: "ctrl+home" },
@@ -248,9 +247,10 @@ export function dispatchShortcut(event: KeyboardEvent): boolean {
   if (!id) return false
   const editable = isEditableTarget(event.target)
   // Editor-scope actions only fire while typing; bare keys never hijack text
-  // input (Escape stays available so generation can always be stopped).
+  // input, and no binding stops a run from the keyboard (the composer's stop
+  // button and the RPC/cancel entry points are the only ways to abort).
   if (SHORTCUT_ACTION_DEFS[id].scope === "editor" && !editable) return false
-  if (editable && !comboHasModifier(combo) && combo !== "escape") return false
+  if (editable && !comboHasModifier(combo)) return false
   const handler = handlers.get(id)
   if (!handler) return false
   event.preventDefault()

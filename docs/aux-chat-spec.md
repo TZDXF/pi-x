@@ -270,7 +270,7 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 **发送与清理同源**（`composables/useChatSendControl.ts`）：`contexts` 从
 `"shared" | "none"` 扩为 `"shared" | "aux" | "none"`；`"aux"` 读本桶、序列化仍走
 `serializeComposerPromptContexts`（`# userselect:` 契约不变），发送成功后**只清本桶**
-（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可被 Esc 恢复）。关闭
+（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可由停止按钮恢复）。关闭
 实例（`closeAux`）与迟到收尾（`settleLateAux`）都清本桶。
 
 验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、

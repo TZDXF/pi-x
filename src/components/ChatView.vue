@@ -236,7 +236,7 @@ const sendControl = useChatSendControl({
   onSent: jumpToConversationBottom,
 })
 const controls = reactive(sendControl)
-const { delayedSend, delayedSendEnabled, abort } = sendControl
+const { delayedSend, delayedSendEnabled } = sendControl
 
 // ---- keyboard shortcuts: executors for lib/shortcuts.ts actions ----
 
@@ -248,9 +248,6 @@ function cycleSidebarTab(offset: number) {
 }
 
 const offShortcutHandlers = [
-  registerShortcutHandler("chat.stop", () => {
-    if (session.isStreaming) void abort()
-  }),
   registerShortcutHandler("chat.forkLast", () => {
     const entry = lastAssistantTurn()
     if (entry?.complete && !entry.failed) void forkFromAnswer(entry.lastIndex)

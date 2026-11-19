@@ -165,7 +165,6 @@ const SETTINGS_SEARCH_DETAIL_KEYS: Record<SettingsTab, readonly string[]> = {
     "shortcuts.actions.newSession",
     "shortcuts.actions.focusComposer",
     "shortcuts.actions.toggleSidebar",
-    "shortcuts.actions.stop",
     "shortcuts.actions.forkLast",
     "shortcuts.actions.attachFile",
     "shortcuts.actions.terminal",

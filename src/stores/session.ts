@@ -601,7 +601,7 @@ export const createSessionStore = (runtimeId = "default") =>
       }
     }
 
-    /** Esc: take back queued messages, then abort. Returns text to restore. */
+    /** Stop button: take back queued messages, then abort. Returns text to restore. */
     async function abortAndRestore(): Promise<string> {
       flow.stopping = true
       flow.queuePaused = true

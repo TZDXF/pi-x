@@ -69,9 +69,8 @@ function applyLocale(v: Locale) {
       <SettingHeading>{{ t("settings.shortcutsTitle") }}</SettingHeading>
       <SettingDescription>
         {{ t("settings.shortcutSend") }} <KeyHint>Enter</KeyHint> · {{ t("settings.shortcutNewline") }}
-        <KeyHint>Shift + Enter</KeyHint><br />{{ t("settings.shortcutStop") }} <KeyHint>Esc</KeyHint> ·
-        {{ t("settings.shortcutFileRef") }} <KeyHint>@</KeyHint> · {{ t("settings.shortcutCommands") }}
-        <KeyHint>/</KeyHint>
+        <KeyHint>Shift + Enter</KeyHint><br />{{ t("settings.shortcutFileRef") }} <KeyHint>@</KeyHint> ·
+        {{ t("settings.shortcutCommands") }} <KeyHint>/</KeyHint>
       </SettingDescription>
     </div>
     <Button variant="outline" size="sm" @click="navigate('/settings/shortcuts')">

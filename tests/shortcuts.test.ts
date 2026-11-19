@@ -128,7 +128,7 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
   const { api } = harness(null)
   let sidebarHits = 0
   let editorHits = 0
-  let stopHits = 0
+  let chatHits = 0
   const offs = [
     api.registerShortcutHandler("sidebar.files", () => {
       sidebarHits++
@@ -136,8 +136,8 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
     api.registerShortcutHandler("editor.attachFile", () => {
       editorHits++
     }),
-    api.registerShortcutHandler("chat.stop", () => {
-      stopHits++
+    api.registerShortcutHandler("chat.forkLast", () => {
+      chatHits++
     }),
   ]
 
@@ -151,10 +151,12 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
   expect(api.dispatchShortcut(keyEvent("A", { ctrl: true, shift: true }, editable))).toBe(true)
   expect(editorHits).toBe(1)
 
-  // bare keys never hijack typing, but Escape stays available
+  // bare keys never hijack typing, and Escape no longer stops a run
   expect(api.dispatchShortcut(keyEvent("a", {}, editable))).toBe(false)
-  expect(api.dispatchShortcut(keyEvent("Escape", {}, editable))).toBe(true)
-  expect(stopHits).toBe(1)
+  expect(api.dispatchShortcut(keyEvent("Escape", {}, editable))).toBe(false)
+  expect(api.dispatchShortcut(keyEvent("Escape", {}, plain))).toBe(false)
+  expect(api.resolveShortcut("escape")).toBe(null)
+  expect(chatHits).toBe(0)
 
   // unbound combos do nothing
   expect(api.dispatchShortcut(keyEvent("k", { ctrl: true, alt: true }, plain))).toBe(false)
@@ -169,6 +171,23 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
 
   offs.forEach(off => off())
   expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(false)
+})
+
+test("Escape is not a bound action and no chat handler stops the run", () => {
+  const { api } = harness(null)
+  // 回归：Esc 不再作为「停止生成」快捷键注册，注册表里也没有 stop 动作。
+  expect(api.SHORTCUT_ACTION_IDS).not.toContain("chat.stop")
+  expect(Object.keys(api.SHORTCUT_ACTION_DEFS).filter(id => api.SHORTCUT_ACTION_DEFS[id].default === "escape")).toEqual(
+    [],
+  )
+  expect(api.resolveShortcut("escape")).toBe(null)
+
+  // 停止入口只剩停止按钮与 RPC/cancel：聊天快捷键表里不再注册 chat.stop。
+  const chatView = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
+  expect(chatView).not.toMatch(/registerShortcutHandler\("chat\.stop"/)
+  expect(chatView).not.toMatch(/\.isStreaming\) void abort\(\)/)
+  const composer = readFileSync(new URL("../src/components/chat/ChatComposer.vue", import.meta.url), "utf8")
+  expect(composer).toMatch(/@click="showStopButton && abort\(\)"/)
 })
 
 test("resolve and conflict detection cover custom bindings and locked keys", () => {

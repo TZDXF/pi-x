@@ -4,7 +4,7 @@
  *
  * The PromptInput context (textInput / setTextInput / submitForm) can only be
  * injected by descendant components, but ChatView needs programmatic access
- * (extensions pushing editor text, Esc-restore, status computation).
+ * (extensions pushing editor text, stop-button restore, status computation).
  * This bridge exposes the context to the parent via a template ref.
  *
  * Do NOT bind :value/@input on <PromptInputTextarea> — the context is the
