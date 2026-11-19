@@ -17,52 +17,45 @@ interface ConfigPreferenceOptions<T> {
 }
 
 /**
- * 一笔本地写入。
- * `revision` 是主机回执里的修订号：命令返回前为 null（在途），旧后端始终为 null。
+ * 共享偏好同步（`~/.pix/config.json` 的 preferences）。
+ *
+ * 主机每写一次偏好就把 `preferencesRevision` 加一，并把这个修订号随
+ * `app_preference_set` 的返回值、`pi://app-config-changed` 推送与 `app_config_get`
+ * 一起下发（新后端始终输出该字段，包括真实的 `0`）。
+ *
+ * 关键点是**按 key 记录「在哪一修订上得知这个值」**，而不是用一个全局修订号判断整表新旧：
+ * - 单键写入成功的回执只证明**这一个 key** 在 rN 上已是我们的值，不能把「完整快照」的
+ *   水位推到 rN —— 否则仍包含其它 key 新信息的 r(N-1) 全量事件会被整份丢弃；
+ * - 全量快照按 key 合并：某个 key 我们已知的修订更新就跳过它，其余照常采用；
+ * - 命令还没返回的写入（在途）拥有该 key 的显示权，任何快照都不覆盖；
+ * - 旧后端（不支持修订号）保留按 key 的 FIFO 降级：推送按序确认最老一笔写入，
+ *   主动读取则以整表为准（一次读取就能纠正丢失的回执）。
  */
-interface PendingWrite {
+interface KnownValue {
   raw: string
+  /** 得知这个值的修订号；null 表示来自「不带修订号」的旧后端快照。 */
   revision: number | null
 }
 
-/**
- * 主机视图：我们已知的主机 preferences，对应修订号 `hostRevision`。**不是**显示值。
- *
- * 主机侧每写一次偏好就把 `preferencesRevision` 加一并返回；推送事件与 `app_config_get`
- * 都携带该修订号（包括真实 `0` —— 新后端始终输出该字段，只有不认识它的旧后端才缺省）。
- */
-let preferences: Record<string, string> = {}
-/** 已应用过的最新主机修订号；-1 表示还没收到过带修订号的快照（旧后端 / 尚未初始化）。 */
-let hostRevision = -1
+/** 我们已知的主机 preferences（按 key 带上得知时的修订号）。**不是**显示值。 */
+const known = new Map<string, KnownValue>()
+/** 命令尚未返回的本地写入（key → raw，按时间排列）：显示权归它们。 */
+const inflight = new Map<string, string[]>()
+/** 旧后端专用：命令已成功、但回执事件还没到的写入（key → raw，按时间排列）。 */
+const unseen = new Map<string, string[]>()
+/** 宽松写入失败后仍保留在界面上的本地选择；任何被采纳的主机快照都会清掉它。 */
+const failedOverrides = new Map<string, string>()
+
+/** 见过的最大修订号；-1 表示还没见过任何修订号（旧后端或尚未初始化）。 */
+let seenRevision = -1
 let initialized = false
 let listening = false
 let reconnectListening = false
-
-/**
- * 尚未被主机确认的写入（key → 按时间排列）。
- *
- * 写入身份不靠「值相同」判定 —— 用户可能连续选回同一个值（0→1→0 时首笔 `0` 与末值同值），
- * 值匹配无法区分「自己那笔的回执」和「之后又切了一次」：
- * - 回执修订号 >= 该笔的修订号 → 这笔已被主机采纳，删记录；
- * - 修订号更旧的事件 / 更旧的读取 → 整份丢弃（已知状态更新，绝不能被它覆盖）；
- * - 仍有未被覆盖的写入 → 显示值用本地值（主机视图照常更新，外部改动不会被藏）。
- */
-const pendingWrites = new Map<string, PendingWrite[]>()
-/**
- * 宽松写入失败后仍保留在界面上的本地选择（key → raw）。
- * 主机明确说「没写成」时不该闪回默认值，但它不是可屏蔽权威状态的记录：
- * 任何一次被采纳的主机快照都会清空它。
- */
-const failedOverrides = new Map<string, string>()
 
 const listeners = new Set<() => void>()
 const migrationCallbacks = new Set<() => void>()
 const migrations = new Set<string>()
 let writeQueue: Promise<void> = Promise.resolve()
-
-function hasConfigValue(key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(preferences, key)
-}
 
 function legacyValue(key?: string): string | null {
   if (!key) return null
@@ -86,119 +79,112 @@ function notify() {
   for (const listener of listeners) listener()
 }
 
-function newestPending(key: string): PendingWrite | undefined {
-  const list = pendingWrites.get(key)
+/**
+ * 快照的有效修订号：
+ * - 带数字 → 就是它；
+ * - 不带，但本端已经见过修订号 → 这是旧格式快照（新后端始终输出该字段），按 R0 处理，
+ *   于是它不会覆盖我们已知的更新状态；
+ * - 不带且从未见过修订号 → 旧后端，走 FIFO 降级。
+ */
+function effectiveRevision(revision: number | undefined): number | null {
+  if (typeof revision === "number") return revision
+  return seenRevision >= 0 ? 0 : null
+}
+
+function lastOf(map: Map<string, string[]>, key: string): string | undefined {
+  const list = map.get(key)
   return list?.[list.length - 1]
 }
 
-function addPending(key: string, entry: PendingWrite) {
-  pendingWrites.set(key, [...(pendingWrites.get(key) ?? []), entry])
-}
-
-/** 只删这一笔（按对象身份），同键的其它写入不受影响 —— 写失败不牵连后续写入。 */
-function removePending(key: string, entry: PendingWrite) {
-  const list = pendingWrites.get(key)
-  if (!list) return
-  const remaining = list.filter(candidate => candidate !== entry)
-  if (remaining.length) pendingWrites.set(key, remaining)
-  else pendingWrites.delete(key)
-}
-
-/** 删掉所有已被 `revision` 覆盖（含回执）的记录；修订号未知的在途写入保留。 */
-function clearPendingCovered(revision: number) {
-  for (const [key, list] of [...pendingWrites]) {
-    const remaining = list.filter(entry => entry.revision === null || entry.revision > revision)
-    if (remaining.length) pendingWrites.set(key, remaining)
-    else pendingWrites.delete(key)
-  }
-}
-
-/** 显示用的 raw：未被覆盖的本地写入优先，其次写失败保留的本地选择，最后主机视图。 */
+/** 显示用的 raw：在途写入 > 旧后端待回执写入 > 写失败保留值 > 主机视图。 */
 function effectiveRaw(key: string): string | undefined {
-  const pending = newestPending(key)
-  if (pending) return pending.raw
+  const pending = lastOf(inflight, key)
+  if (pending !== undefined) return pending
+  const unseenRaw = lastOf(unseen, key)
+  if (unseenRaw !== undefined) return unseenRaw
   const failed = failedOverrides.get(key)
   if (failed !== undefined) return failed
-  return hasConfigValue(key) ? preferences[key] : undefined
+  return known.get(key)?.raw
+}
+
+/** 采用快照里的一个 key：只有比我们已知的更新（或同级）才写。 */
+function adopt(key: string, raw: string, revision: number) {
+  const current = known.get(key)
+  if (current?.revision != null && current.revision > revision) return
+  known.set(key, { raw, revision })
+}
+
+function forget(key: string, revision: number) {
+  const current = known.get(key)
+  if (!current) return
+  // 我们的信息比这份快照新时保留（快照里没有这个 key 只说明旧时刻的状态）。
+  if (current.revision !== null && current.revision > revision) return
+  known.delete(key)
+}
+
+function clearFailedOverrides() {
+  for (const key of [...failedOverrides.keys()]) if (!inflight.has(key)) failedOverrides.delete(key)
 }
 
 /**
- * 一份快照的有效修订号。
+ * 应用一份主机快照（推送事件或主动读取）。
  *
- * 新后端在线上快照里始终带 `preferencesRevision`（真实 `0` 也算），旧后端完全不认识该字段。
- * 因此：一旦本端见过修订号，后续「没有修订号」的快照只能来自旧格式，按等效 `0` 处理 ——
- * 这样它就不会被当成新事件覆盖已知道更高修订的状态（旧配置升级后的迟到全量保存事件）。
- */
-function snapshotRevision(revision: number | undefined): number | undefined {
-  if (typeof revision === "number") return revision
-  return hostRevision >= 0 ? 0 : undefined
-}
-
-/**
- * 应用一份主机快照。
- *
- * - `authoritative`（主动读取：启动 / 重连 / 显式刷新）能纠正丢失的事件，但**不得**
- *   覆盖已知更高修订的状态（读取抓取时刻早于已应用的推送时整份丢弃），也不得吞掉
- *   这份读取还没覆盖到的本地写入（在途写入、或修订号高于该读取的写入）。
- * - 推送事件按修订号单调过滤；更旧的整份丢弃。
- * - 旧后端（从未见过修订号）退化为有界 FIFO 降级。
+ * 数字修订：按 key 合并 —— 单键回执只推进该 key，不会让其它 key 的新信息被丢弃。
+ * 无修订号（旧后端）：`authoritative`（主动读取）以整表为准；否则按 key FIFO 确认。
  */
 function replacePreferences(
   next: Record<string, string> | undefined,
   snapshot: { revision?: number; authoritative?: boolean } = {},
 ) {
   const incoming = next ?? {}
-  const revision = snapshotRevision(snapshot.revision)
+  const revision = effectiveRevision(snapshot.revision)
+  const keys = Object.keys(incoming)
 
-  if (snapshot.authoritative && typeof revision === "number") {
-    // 抓取时刻早于已知状态：这份读取是过时的，什么都不改（否则会把 UI 扳回旧值）。
-    if (revision < hostRevision) return
-    hostRevision = revision
-    clearPendingCovered(revision)
-    failedOverrides.clear()
-    preferences = { ...incoming }
-    initialized = true
-    notify()
-    for (const migrate of migrationCallbacks) migrate()
-    return
-  }
-
-  if (snapshot.authoritative) {
-    // 旧后端（或首次加载时还没有修订号）：整表采用；出现在快照里的键按 FIFO 确认一笔，
-    // 快照里没有的键仍保留在途写入（不能让一次读取吞掉尚未发布的新写入）。
-    confirmLegacyPending(incoming)
-    failedOverrides.clear()
-    preferences = { ...incoming }
-    initialized = true
-    notify()
-    for (const migrate of migrationCallbacks) migrate()
-    return
-  }
-
-  if (typeof revision === "number") {
-    if (revision < hostRevision) return
-    hostRevision = revision
-    clearPendingCovered(revision)
+  if (revision !== null) {
+    if (revision > seenRevision) seenRevision = revision
+    for (const key of keys) {
+      // 在途写入还没被主机接受，快照（可能产生于它之前）不能决定它的显示。
+      if (inflight.has(key)) continue
+      adopt(key, incoming[key]!, revision)
+      // 数字快照已覆盖这笔写入的更早阶段，之后不再需要 FIFO 确认。
+      unseen.delete(key)
+    }
+    for (const key of [...known.keys()]) {
+      if (Object.prototype.hasOwnProperty.call(incoming, key)) continue
+      if (inflight.has(key)) continue
+      forget(key, revision)
+    }
+  } else if (snapshot.authoritative) {
+    // 旧后端主动读取：整表即主机真值。命令已返回的旧写入不再逐笔确认 —— 否则要读多次，
+    // 且键被外部删掉时也永远不会回落到默认值。
+    for (const key of [...unseen.keys()]) if (!inflight.has(key)) unseen.delete(key)
+    for (const key of keys) {
+      if (inflight.has(key)) continue
+      adopt(key, incoming[key]!, -1)
+    }
+    for (const key of [...known.keys()]) {
+      if (Object.prototype.hasOwnProperty.call(incoming, key)) continue
+      if (inflight.has(key)) continue
+      known.delete(key)
+    }
   } else {
-    // 旧后端没有修订号：快照里出现的键，其最老一笔本地写入按 FIFO 视为已确认。
-    // 快照里没出现的键（只改了别的 key 的旧事件）不能吞掉本地记录，否则会闪回默认值。
-    confirmLegacyPending(incoming)
+    // 旧后端推送：快照里出现的键按 FIFO 确认最老一笔写入；还有未确认的写入时保留本地值。
+    for (const key of keys) {
+      if (inflight.has(key)) continue
+      const pending = unseen.get(key)
+      if (pending?.length) {
+        if (pending.length > 1) unseen.set(key, pending.slice(1))
+        else unseen.delete(key)
+        if (unseen.has(key)) continue
+      }
+      adopt(key, incoming[key]!, -1)
+    }
   }
 
-  failedOverrides.clear()
-  preferences = { ...incoming }
+  clearFailedOverrides()
   initialized = true
   notify()
   for (const migrate of migrationCallbacks) migrate()
-}
-
-/** 旧后端（无修订号）路径：快照里出现的键各按 FIFO 确认一笔写入。 */
-function confirmLegacyPending(incoming: Record<string, string>) {
-  for (const [key, list] of [...pendingWrites]) {
-    if (!Object.prototype.hasOwnProperty.call(incoming, key)) continue
-    if (list.length > 1) pendingWrites.set(key, list.slice(1))
-    else pendingWrites.delete(key)
-  }
 }
 
 /** Serialize writes within this client; the backend merges each key into the latest config. */
@@ -218,58 +204,49 @@ function persistRawValue(key: string, raw: string, legacyKey?: string): Promise<
   return write
 }
 
-/**
- * 主机已接受了这笔写入（命令成功返回）：把它并入主机视图，并清掉已被它覆盖的记录。
- *
- * 只有当我们这笔就是已知最新修订时才能改写主机视图 —— 否则更新的状态（别的客户端的
- * 后续写入 / 更晚的推送）优先，不能倒回去。
- */
+/** 主机接受了这笔写入：只更新**这一个 key** 的已知修订（绝不动完整快照的水位）。 */
 function acceptWrite(key: string, raw: string, revision: number | undefined) {
   if (revision === undefined) {
-    // 旧后端不返回修订号：命令成功即主机已接受，直接并入主机视图。
-    preferences = { ...preferences, [key]: raw }
+    // 旧后端不返回修订号：先记入「待回执」，由推送 / 主动读取来确认。
+    unseen.set(key, [...(unseen.get(key) ?? []), raw])
     notify()
     return
   }
-  if (revision >= hostRevision) {
-    hostRevision = revision
-    preferences = { ...preferences, [key]: raw }
-    clearPendingCovered(revision)
-  }
+  if (revision > seenRevision) seenRevision = revision
+  adopt(key, raw, revision)
   notify()
 }
 
 /**
  * 写入一笔偏好。
  *
- * - 宽松模式（默认）：先乐观显示（登记待确认），失败后按既有语义保留显示；
+ * - 宽松模式（默认）：先乐观显示（登记在途），失败后保留显示（`failedOverrides`）；
  * - 严格模式（`throwOnWriteError`）：**提交成功之前不改生效值** —— 打开文件、设置页等
  *   直接读该偏好的路径不会看到还没被主机接受的值。
  */
 async function commit(key: string, raw: string, legacyKey: string | undefined, mode: { optimistic: boolean }) {
   // 新写入接管这个 key：之前写失败保留的旧选择不再显示。
   failedOverrides.delete(key)
-  const entry: PendingWrite | null = mode.optimistic ? { raw, revision: null } : null
-  if (entry) {
-    addPending(key, entry)
+  if (mode.optimistic) {
+    inflight.set(key, [...(inflight.get(key) ?? []), raw])
     notify()
+  }
+  const removeInflight = (value: string) => {
+    const list = inflight.get(key)
+    if (!list) return
+    const remaining = list.filter(candidate => candidate !== value)
+    if (remaining.length) inflight.set(key, remaining)
+    else inflight.delete(key)
   }
   try {
     const revision = await persistRawValue(key, raw, legacyKey)
-    if (entry) {
-      entry.revision = revision ?? null
-      // 主机有时先广播事件、后返回命令结果：回执已经途经本端时不能再留下幽灵记录，
-      // 否则之后的权威读取会被它挡住（严格写入路径曾出现这个回归）。
-      if (revision !== undefined && revision <= hostRevision) removePending(key, entry)
-    }
+    if (mode.optimistic) removeInflight(raw)
     acceptWrite(key, raw, revision)
   } catch (error) {
-    // 只清理这一笔：同键其它仍在途 / 后续写入的记录不受影响。
-    if (entry) {
-      removePending(key, entry)
-      // 只有这笔是该键最新的本地意图时才保留显示：更老的失败不能盖住之后的选择
-      //（连点时代码排队执行，旧写入较晚才失败）。
-      if (mode.optimistic && !newestPending(key)) failedOverrides.set(key, raw)
+    if (mode.optimistic) {
+      removeInflight(raw)
+      // 只有这笔仍是该 key 最新的本地意图时才保留显示：更老的失败不能盖住之后的选择。
+      if (!lastOf(inflight, key)) failedOverrides.set(key, raw)
     }
     throw error
   } finally {
@@ -279,7 +256,7 @@ async function commit(key: string, raw: string, legacyKey: string | undefined, m
 
 function migrateLegacyValue(options: ConfigPreferenceOptions<unknown>) {
   if (!initialized || !options.legacyKey || migrations.has(options.key)) return
-  if (hasConfigValue(options.key)) {
+  if (known.has(options.key)) {
     removeLegacyValue(options.legacyKey)
     return
   }
@@ -305,8 +282,8 @@ function startConfigListener() {
 }
 
 /**
- * 远程传输断开期间事件会丢（见 `api/transport.ts` 的 RECONNECTED_EVENT 契约）。
- * 重连后主动读一次主机配置以纠正丢失的事件；这份读取仍受修订号约束（见 replacePreferences）。
+ * 远程传输断开期间事件会丢（见 `api/transport.ts` 的 RECONNECTED_EVENT 契约），
+ * 重连后主动读一次以纠正丢失的事件。仍有修订号约束：更旧的读取不会覆盖已知的更新状态。
  */
 function startReconnectListener() {
   if (reconnectListening) return

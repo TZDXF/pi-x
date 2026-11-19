@@ -337,6 +337,104 @@ test("a strict write never exposes the value before the host accepts it", async 
   expect(editor.openWithPreference.value.kind).toBe("cursor")
 })
 
+test("a single-key write result never discards a older full event for another key", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const wrap = module.createConfigPreference({
+    key: "markdownCodeWrap",
+    defaultValue: "1",
+    read: raw => raw !== "0",
+    serialize: value => (value ? "1" : "0"),
+  })
+
+  // 另一端在 r6 把主题改成 dark，其全量事件还没到；本端随后写了换行键，命令返回 r7。
+  host.preferences = { theme: "dark", markdownCodeWrap: "1" }
+  host.revision = 6
+  await wrap.set(false)
+  host.preferences = { theme: "dark", markdownCodeWrap: "0" }
+  host.revision = 7
+  expect(wrap.value.value).toBe(false)
+
+  // r6 的全量事件迟到：单键回执只推进了换行键，不能让它整份失效。
+  broadcast(6, { theme: "dark", markdownCodeWrap: "1" })
+  expect(theme.value.value).toBe("dark")
+  // 该键自己仍保留本地更新值（r6 里换行还是旧的 1）。
+  expect(wrap.value.value).toBe(false)
+
+  // r7 的完整快照到齐后两边一致。
+  broadcast(7, { theme: "dark", markdownCodeWrap: "0" })
+  expect(theme.value.value).toBe("dark")
+  expect(wrap.value.value).toBe(false)
+})
+
+test("a reconnect GET still recovers other keys after a higher single-key write result", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const wrap = module.createConfigPreference({
+    key: "markdownCodeWrap",
+    defaultValue: "1",
+    read: raw => raw !== "0",
+    serialize: value => (value ? "1" : "0"),
+  })
+
+  // 断线期间另一端在 r6 改了主题；重连读取发出但响应未回，本端写入换行键拿到 r7。
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  host.preferences = { theme: "dark", markdownCodeWrap: "1" }
+  host.revision = 6
+  await wrap.set(false)
+  host.preferences = { theme: "dark", markdownCodeWrap: "0" }
+  host.revision = 7
+
+  network.resolve({ preferencesRevision: 6, preferences: { theme: "dark", markdownCodeWrap: "1" } })
+  expect(await refreshing).toBe(true)
+  // 读取里我们还没见过的主题（r6）必须被采用；换行键保留本地更新值。
+  expect(theme.value.value).toBe("dark")
+  expect(wrap.value.value).toBe(false)
+})
+
+test("a full snapshot older than one key still merges the keys we have not seen newer", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const wrap = module.createConfigPreference({
+    key: "markdownCodeWrap",
+    defaultValue: "1",
+    read: raw => raw !== "0",
+    serialize: value => (value ? "1" : "0"),
+  })
+
+  // 本端先应用 r7 的换行改动，再收到一份 r6 的全量快照（主题已变）。
+  host.preferences = { theme: "dark", markdownCodeWrap: "1" }
+  host.revision = 6
+  await wrap.set(false)
+  host.revision = 7
+  broadcast(6, { theme: "dark", markdownCodeWrap: "1" })
+  expect(theme.value.value).toBe("dark")
+  expect(wrap.value.value).toBe(false)
+
+  // 同一份 r6 里没有我们更了解的值时才保留本地（更旧快照不覆盖逐键更新）。
+  broadcast(6, { theme: "light", markdownCodeWrap: "0" })
+  expect(theme.value.value).toBe("light")
+  expect(wrap.value.value).toBe(false)
+})
+
+test("a legacy host read supersedes all successful writes in a single pass", async () => {
+  // 旧后端：写入不返回修订号，回执事件全丢；一次主动读取即以整表为准。
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  await theme.set("dark")
+  await theme.set("system")
+  await theme.set("light")
+  // 主机端已被另一端改成 dark，而本端三笔回执都没到。
+  host.preferences = { theme: "dark" }
+  await module.refreshFromHost()
+  expect(theme.value.value).toBe("dark")
+  await module.refreshFromHost()
+  expect(theme.value.value).toBe("dark")
+})
+
 test("a legacy host without revisions degrades to bounded FIFO", async () => {
   // 旧后端：写入不返回修订号、事件也不携带 —— 从初始化起就是这种形态。
   const module = await harness({ theme: "system" }, 0, { legacyHost: true })
