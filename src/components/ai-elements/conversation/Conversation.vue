@@ -3,11 +3,12 @@ import type { HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 import { reactiveOmit } from '@vueuse/core'
 import { useStickToBottom } from 'vue-stick-to-bottom'
-import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
 import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
+import { beginScrollDrag, clearScrollWrites, consumeScrollWrite, endScrollDrag, observeScrollWrites } from '@/lib/scrollWrites'
 import { conversationKey } from './context'
 
 interface Props {
@@ -54,6 +55,8 @@ const { scrollRef, contentRef } = context
 const viewport = ref<InstanceType<typeof ScrollAreaViewport>>()
 let readingHistory = props.initial === false
 let lastScrollTop: number | undefined
+/** Keys that scroll the conversation; their movement is the reader's. */
+const CONVERSATION_SCROLL_KEYS = new Set(['End', 'Home', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' '])
 function releaseBottomLock() {
   readingHistory = true
   context.stopScroll()
@@ -74,20 +77,34 @@ watch(() => context.escapedFromLock.value, escaped => {
 function handleWheel(event: WheelEvent) {
   const scroll = scrollRef.value
   if (!scroll || event.ctrlKey || event.defaultPrevented || !(event.target instanceof Element)) return
+  // The reader's own gesture outranks any recorded write, so the movement it
+  // produces can never be mistaken for one the app made.
+  clearScrollWrites(scroll)
   // Reka uses overflow: hidden scroll, which the library's shorthand overflow
   // check misses. Release before virtual row resizing can pin us back down.
   if (shouldReleaseBottomLock(scroll, event.target, event.deltaY)) releaseBottomLock()
+}
+function handleKeyDown(event: KeyboardEvent) {
+  const scroll = scrollRef.value
+  if (!scroll || event.defaultPrevented) return
+  if (CONVERSATION_SCROLL_KEYS.has(event.key)) clearScrollWrites(scroll)
 }
 function handleScroll(event: Event) {
   const scroll = scrollRef.value
   if (scroll) {
     const previous = lastScrollTop ?? scroll.scrollTop
     lastScrollTop = scroll.scrollTop
+    // Code moves this viewport too: bottom pinning, virtual-row height
+    // compensation and the storage library's clamps. Those writes are recorded
+    // when they happen, so a downward one can no longer pass for a downward
+    // reading gesture - that re-armed following while the reader was scrolling
+    // up and pinned every later chunk to the bottom (TZD-135).
+    const programmatic = consumeScrollWrite(scroll, scroll.scrollTop)
     // Scroll events also cover scrollbar dragging and keyboard navigation, but
     // layout shrinkage clamps scrollTop to the new bottom without user intent.
     if (shouldReleaseBottomLockOnScroll(previous, scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight))
       releaseBottomLock()
-    else if (shouldResumeBottomLock(
+    else if (!programmatic && shouldResumeBottomLock(
       previous,
       scroll.scrollTop,
       scroll.scrollHeight - scroll.clientHeight,
@@ -95,6 +112,24 @@ function handleScroll(event: Event) {
     )) readingHistory = false
   }
   emit('scroll', event)
+}
+// A scrollbar drag is the reader, not the app: the thumb writes scrollTop while
+// it follows the pointer, and that movement must keep re-arming following.
+// Only this conversation's own scrollbar counts - nested and unrelated ones do
+// not make the app's writes here the reader's.
+function handlePointerDown(event: PointerEvent) {
+  const scroll = scrollRef.value
+  if (!scroll || !(event.target instanceof Element)) return
+  const scrollbar = event.target.closest('[data-slot="scroll-area-scrollbar"]')
+  // Only this conversation's own scrollbar: dragging a nested or unrelated one
+  // does not make writes to this viewport the reader's.
+  const own = scroll.parentElement?.querySelector('[data-slot="scroll-area-scrollbar"]')
+  if (!scrollbar || !own || !scrollbar.isSameNode(own)) return
+  beginScrollDrag(scroll)
+}
+function handlePointerUp() {
+  const scroll = scrollRef.value
+  if (scroll) endScrollDrag(scroll)
 }
 // With resize="instant", pin scrollTop synchronously in the ResizeObserver
 // callback (after layout, before paint). The library defers its correction to
@@ -113,17 +148,35 @@ watchEffect((onCleanup) => {
   onCleanup(() => observer.disconnect())
 })
 provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock })
+let stopObservingWrites: (() => void) | undefined
+watchEffect((onCleanup) => {
+  const scroll = scrollRef.value
+  if (!scroll) return
+  stopObservingWrites = observeScrollWrites(scroll)
+  onCleanup(() => {
+    stopObservingWrites?.()
+    stopObservingWrites = undefined
+  })
+})
 onMounted(() => {
+  window.addEventListener('pointerdown', handlePointerDown, true)
+  window.addEventListener('pointerup', handlePointerUp, true)
+  window.addEventListener('pointercancel', handlePointerUp, true)
   if (props.initial === 'instant' && scrollRef.value)
     scrollRef.value.scrollTop = scrollRef.value.scrollHeight
   lastScrollTop = scrollRef.value?.scrollTop
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', handlePointerDown, true)
+  window.removeEventListener('pointerup', handlePointerUp, true)
+  window.removeEventListener('pointercancel', handlePointerUp, true)
 })
 </script>
 
 <template>
   <ScrollAreaRoot :class="cn('relative min-h-0 min-w-0 flex-1 overflow-hidden', props.class)">
     <ScrollAreaViewport ref="viewport" class="size-full [&>div]:!block [&>div]:min-h-full [&>div]:min-w-0"
-      :style="{ overflowAnchor: props.anchor }" @scroll="handleScroll" @wheel.passive="handleWheel" role="log" :aria-label="props.ariaLabel" tabindex="0">
+      :style="{ overflowAnchor: props.anchor }" @scroll="handleScroll" @wheel.passive="handleWheel" @keydown="handleKeyDown" role="log" :aria-label="props.ariaLabel" tabindex="0">
       <div :ref="el => { contentRef = el as HTMLElement | null }"><slot /></div>
     </ScrollAreaViewport>
     <ScrollBar />
