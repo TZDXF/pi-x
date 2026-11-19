@@ -72,7 +72,7 @@ export function useAuxTabs(deps: {
 
   /** 关闭槽位：先销毁实例（墓碑 + rpc_kill + store 拆除），再撤槽位。 */
   async function closeAuxBySidebarId(tabId: number) {
-    const aux = auxTabBySidebarId(tabId)
+    const aux = auxTabBySidebarId(deps.runtimeId, tabId)
     if (aux) await closeAux(aux.runtimeId)
     deps.closeSidebarTab(tabId)
   }
@@ -102,7 +102,7 @@ export function useAuxTabs(deps: {
 
   /** 侧栏"关闭 Tab"的统一入口：`aux` 必须先销毁进程，不能只撤槽位。 */
   async function closeTab(id: number) {
-    if (auxTabBySidebarId(id)) {
+    if (auxTabBySidebarId(deps.runtimeId, id)) {
       await closeAuxBySidebarId(id)
       return
     }
@@ -121,8 +121,7 @@ export function useAuxTabs(deps: {
   function activeAuxTab() {
     const id = deps.activeTabId()
     if (id === null) return null
-    const aux = auxTabBySidebarId(id)
-    return aux && aux.parentRuntimeId === deps.runtimeId ? aux : null
+    return auxTabBySidebarId(deps.runtimeId, id) ?? null
   }
 
   /** 复用/新建之后把该实例的槽位切成激活（`reveal` 只做激活，不新开）。 */

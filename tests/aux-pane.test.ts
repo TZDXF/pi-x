@@ -69,6 +69,7 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   expect(auxTabs).not.toMatch(/auxChat\.limitReached|auxCanOpen|AUX_MAX_TABS/)
   // 关闭：实例先销毁（墓碑 + rpc_kill + store 拆除），再撤槽位。
   expect(auxTabs).toMatch(/await closeAux\(aux\.runtimeId\)/)
+  expect(auxTabs).toMatch(/auxTabBySidebarId\(deps\.runtimeId, tabId\)/)
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
   // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。
@@ -102,8 +103,9 @@ test("the aux composer hides the workspace/project picker it cannot use", () => 
 
 test("aux tray title comes from the registry and marks unanswered questions", () => {
   const sidebar = read("components/RightSidebar.vue")
-  expect(sidebar).toMatch(/if \(tab\.type === "aux"\) return auxTitleForSidebarId\(tab\.id\)/)
-  expect(sidebar).toMatch(/auxHasPendingQuestion\(tab\.id\)/)
+  expect(sidebar).toMatch(/auxTitleForSidebarId\(props\.auxParent\.runtimeId, tab\.id\)/)
+  expect(sidebar).toMatch(/auxHasPendingQuestion\(props\.auxParent\.runtimeId, tab\.id\)/)
+  expect(sidebar).toMatch(/auxTabBySidebarId\(props\.auxParent\.runtimeId, tabId\)/)
   // 未答询问只在标题出标记，不在隐藏的 Tab 里弹框。
   expect(sidebar).toMatch(/data-aux-pending/)
 })

@@ -58,7 +58,10 @@ function iconFor(type: SidebarTabType) {
 function titleFor(tab: SidebarTabItem): string {
   // aux 的标题由注册表给出（"辅助对话 2"），不按同类 Tab 序号推算：关闭后重开
   // 会复用序号，与同类型 Tab 的"第几个"不是一回事。
-  if (tab.type === "aux") return auxTitleForSidebarId(tab.id) ?? t("sidebarTabs.aux")
+  if (tab.type === "aux") {
+    if (!props.auxParent) return t("sidebarTabs.aux")
+    return auxTitleForSidebarId(props.auxParent.runtimeId, tab.id) ?? t("sidebarTabs.aux")
+  }
   const base = t(`sidebarTabs.${tab.type}`)
   const sameType = props.tabs.filter(item => item.type === tab.type)
   if (sameType.length > 1) return `${base} ${sameType.findIndex(item => item.id === tab.id) + 1}`
@@ -66,11 +69,11 @@ function titleFor(tab: SidebarTabItem): string {
 }
 /** 未答扩展询问的标记：只在标题上出圆点，不弹窗（隐藏 Tab 不抢焦点）。 */
 function pendingQuestion(tab: SidebarTabItem) {
-  return tab.type === "aux" && auxHasPendingQuestion(tab.id)
+  return tab.type === "aux" && !!props.auxParent && auxHasPendingQuestion(props.auxParent.runtimeId, tab.id)
 }
-/** aux 槽位对应的实例；缺失（已关闭或创建期间被回滚）时整格不渲染面板。 */
+/** 当前父会话的 aux 槽位；不同父会话的相同槽位 id 不得串线。 */
 function auxInstance(tabId: number) {
-  return auxTabBySidebarId(tabId)
+  return props.auxParent ? auxTabBySidebarId(props.auxParent.runtimeId, tabId) : undefined
 }
 function addTab(type: SidebarTabType) {
   addOpen.value = false

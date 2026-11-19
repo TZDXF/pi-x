@@ -74,7 +74,7 @@
 
 ## 5. 生命周期
 
-- Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。
+- Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。槽位 id 由各父会话分别从 1 分配，显示、标题、未答标记与关闭必须按 `parentRuntimeId + tabId` 联合查找，不能用裸 tabId 全局匹配。
 - 草稿仅内存 `src/stores/auxDrafts.ts`（不写 localStorage、不改 `composerDrafts`）；附件保留原始 `File`，blob URL 由 `PromptInput.onBeforeUnmount` revoke。
 - 引用按 runtime 分桶 `src/stores/auxSelections.ts`，捕获/展示/发送/清理同源；主会话 `useChatSendControl` 的 clear 时机不变。
 - 回收（TZD-104 落地位置见 §11）：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s，**租约 TTL 90s**：停心跳的条目在 claim/list/reap 任一入口惰性过期，过期只让 `claims` 归零、仍由 30 分钟空闲门槛兜底）+ 三条件（非流式非待答无在途 ∧ 无未过期租约 ∧ 空闲 >30 分钟）。判定与 kill 在租约表同一把锁内仲裁（`begin_reap` 置 `reaping` 墓碑，`claim` 见墓碑即 `auxLeaseReaping`）；`aux_release` **只认 lease token**，clientId 只是标识不是凭证。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。

@@ -122,7 +122,7 @@ test("each aux instance gets a distinct aux: runtime id, ordinal and title", asy
   expect(second?.title).toBe("aux 2")
   expect(first?.runtimeId.startsWith("aux:")).toBe(true)
   expect(first?.runtimeId).not.toBe(second?.runtimeId)
-  expect(auxTabBySidebarId(10)?.runtimeId).toBe(first?.runtimeId)
+  expect(auxTabBySidebarId("runtime:parent", 10)?.runtimeId).toBe(first?.runtimeId)
 })
 
 test("every instance carries a stable local clientId for later lease/reconnect filtering", async () => {
@@ -177,7 +177,7 @@ test("the same parent gesture is deduplicated into one creation", async () => {
   expect(await second).toBe(await first)
   expect(auxCreationPending("runtime:parent")).toBe(false)
   // 整个手势只建了一个实例，槽位 2 从未对应任何实例。
-  expect(auxTabBySidebarId(2)).toBeUndefined()
+  expect(auxTabBySidebarId("runtime:parent", 2)).toBeUndefined()
 })
 
 test("a spawn failure keeps the instance with its coded error and does not kill it", async () => {
@@ -276,7 +276,7 @@ test("closeAux is idempotent and kills exactly once", async () => {
 test("closing while the creation is still in flight kills the late process instead of reviving it", async () => {
   const gate = pending<void>()
   const opening = openAux("runtime:parent", { tabId: 5, titlePrefix: "aux", spawn: () => gate.promise })
-  const tab = auxTabBySidebarId(5)!
+  const tab = auxTabBySidebarId("runtime:parent", 5)!
   await closeAux(tab.runtimeId)
   gate.resolve()
   expect(await opening).toBeNull()
@@ -336,10 +336,10 @@ test("aux ui store keeps an unanswered question visible for the sidebar badge", 
   const tab = await openAux("runtime:parent", { tabId: 13, titlePrefix: "aux", spawn: async () => {} })
   auxUiFor(tab!.runtimeId).handleRequest({ type: "extension_ui_request", id: "q", method: "confirm" } as never)
   const { auxHasPendingQuestion, auxTitleForSidebarId } = await import("@/stores/auxChat")
-  expect(auxHasPendingQuestion(13)).toBe(true)
-  expect(auxTitleForSidebarId(13)).toBe("aux 1")
+  expect(auxHasPendingQuestion("runtime:parent", 13)).toBe(true)
+  expect(auxTitleForSidebarId("runtime:parent", 13)).toBe("aux 1")
   auxUiFor(tab!.runtimeId).resolveRequest("q")
-  expect(auxHasPendingQuestion(13)).toBe(false)
+  expect(auxHasPendingQuestion("runtime:parent", 13)).toBe(false)
 })
 
 test("drafts are memory-only and cleared per runtime on close", async () => {

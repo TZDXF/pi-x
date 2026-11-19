@@ -162,7 +162,7 @@ test("① init 已进入后关闭：尾部思考等级/统计类 RPC 零续发�
       await spawnMod.spawnAuxRuntime(parent(), tab)
     },
   })
-  const tab = store.auxTabBySidebarId(1)!
+  const tab = store.auxTabBySidebarId("main", 1)!
   // 等首批四段全部发出（get_state / get_commands / get_available_models / get_session_stats）。
   await vi.waitFor(() => expect(rpcLog.length).toBeGreaterThanOrEqual(4))
   expect(proc.alive).toBe(true)
@@ -199,7 +199,7 @@ test("①c init 抛错且实例已被关闭：catch 分支同样走收尾（kill
       await spawnMod.spawnAuxRuntime(parent(), tab)
     },
   })
-  const tab = store.auxTabBySidebarId(2)!
+  const tab = store.auxTabBySidebarId("main", 2)!
   await vi.waitFor(() => expect(rpcLog.length).toBeGreaterThanOrEqual(4))
   await store.closeAux(tab.runtimeId)
   const afterClose = rpcLog.length
@@ -258,7 +258,7 @@ test("⑥ kill 不幂等：收尾之后迟到 spawn 真正落地，必须再被�
       await spawnMod.spawnAuxRuntime(parent(), tab)
     },
   })
-  const tab = store.auxTabBySidebarId(7)!
+  const tab = store.auxTabBySidebarId("main", 7)!
   await store.closeAux(tab.runtimeId)
   // 旧引用再走一次入口守卫 ⇒ 第二次收尾（旧实现此时耗尽幂等额度）。
   await spawnMod.retryAuxSpawn(parent(), tab)
@@ -300,7 +300,7 @@ test("② 关闭后迟到返回的 spawnAuxPi：不重建 store、kill 被调用
       await spawnMod.spawnAuxRuntime(parent(), tab)
     },
   })
-  const tab = store.auxTabBySidebarId(4)!
+  const tab = store.auxTabBySidebarId("main", 4)!
   await store.closeAux(tab.runtimeId)
   // 关闭之后进程才真正起来（迟到的 spawnAuxPi 返回）。
   gate.resolve()

@@ -351,9 +351,12 @@ export function auxTabByRuntime(runtimeId: string): AuxTab | undefined {
   return tabs.find(tab => tab.runtimeId === runtimeId)
 }
 
-/** 按侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。 */
-export function auxTabBySidebarId(tabId: number): AuxTab | undefined {
-  return tabs.find(tab => tab.tabId === tabId)
+/**
+ * 按父会话 + 侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。
+ * 槽位 id 由各父会话的侧栏组分别从 1 分配，裸 id 不是全局键。
+ */
+export function auxTabBySidebarId(parentRuntimeId: string, tabId: number): AuxTab | undefined {
+  return tabs.find(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === tabId)
 }
 
 /** 墓碑是否命中（迟到 `pi://exit` / 事件的丢弃判据）。 */
@@ -420,13 +423,13 @@ export function auxUiFor(runtimeId: string): UiStore {
 }
 
 /** 侧栏 Tab 标题：实例标题（`RightSidebar.titleFor` 使用）。 */
-export function auxTitleForSidebarId(tabId: number): string | null {
-  return auxTabBySidebarId(tabId)?.title ?? null
+export function auxTitleForSidebarId(parentRuntimeId: string, tabId: number): string | null {
+  return auxTabBySidebarId(parentRuntimeId, tabId)?.title ?? null
 }
 
-/** 该 aux 槽位是否有未答的扩展询问（Tab 标题出标记用）。 */
-export function auxHasPendingQuestion(tabId: number): boolean {
-  const tab = auxTabBySidebarId(tabId)
+/** 该父会话的 aux 槽位是否有未答的扩展询问（Tab 标题出标记用）。 */
+export function auxHasPendingQuestion(parentRuntimeId: string, tabId: number): boolean {
+  const tab = auxTabBySidebarId(parentRuntimeId, tabId)
   if (!tab) return false
   return (auxUis.get(tab.runtimeId)?.dialogs.length ?? 0) > 0
 }
