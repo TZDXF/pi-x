@@ -37,7 +37,12 @@ pub struct AppConfig {
     ///
     /// 前端用它区分「自己那笔写入的回执」与「后续/外部的真实变更」：值相同无法判定
     /// 身份（用户可能连点回同一个值），修订号可以，且重启后仍然单调。
-    #[serde(rename = "preferencesRevision", default, skip_serializing_if = "is_zero")]
+    ///
+    /// **线上快照必须始终输出该字段，即使是真实的 `0`**（因此不加
+    /// `skip_serializing_if`）：前端要靠「有没有这个字段」区分「新后端 r0」与「完全不
+    /// 支持修订号的旧后端」，否则旧配置升级后的迟到全量保存事件会被当成新事件。
+    /// 磁盘上也写出了它，让旧文件的 `0` 与「从未写过」在语义上一致（都是 r0）。
+    #[serde(rename = "preferencesRevision", default)]
     pub preferences_revision: u64,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
@@ -129,10 +134,6 @@ pub struct AppConfig {
 
 fn is_false(v: &bool) -> bool {
     !*v
-}
-
-fn is_zero(v: &u64) -> bool {
-    *v == 0
 }
 
 fn config_path(_app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -368,13 +369,14 @@ mod tests {
         assert_eq!(parsed.preferences_revision, 7);
         assert_eq!(parsed.preferences["theme"], "dark");
 
-        // 默认（从没写过）不输出该字段，旧配置也不受影响。
-        assert!(serde_json::to_value(AppConfig::default())
-            .unwrap()
-            .get("preferencesRevision")
-            .is_none());
-        let legacy: AppConfig = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap_or_default();
+        // 线上快照必须**显式**输出 r0：前端要能区分「新后端 r0」和「旧后端没有该字段」。
+        let fresh = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(fresh["preferencesRevision"], 0);
+        // 旧配置（没有该字段）读成 r0，再写出时就带上显式 0。
+        let legacy: AppConfig = serde_json::from_str(r#"{"preferences":{"theme":"dark"}}"#).unwrap();
         assert_eq!(legacy.preferences_revision, 0);
+        let rewritten = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(rewritten["preferencesRevision"], 0);
     }
 
     #[test]

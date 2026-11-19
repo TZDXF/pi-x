@@ -22,6 +22,10 @@ const host = vi.hoisted(() => ({
   legacyHost: false,
   /** 让某一笔写入在主机侧失败（按 value 触发，便于只挂最老一笔）。 */
   failValue: null as string | null,
+  /** 覆盖 `app_config_get`（模拟「重连读取的响应还在路上」）。 */
+  getOverride: null as null | (() => Promise<{ preferences: Record<string, string>; preferencesRevision?: number }>),
+  /** 让 `app_preference_set` 的完成受测试控制（模拟在途写入）。 */
+  writeGate: null as null | (() => Promise<number>),
   writes: [] as { key: string; value: string }[],
 }))
 
@@ -30,6 +34,7 @@ vi.mock("@/api/transport", () => ({
   RECONNECTED_EVENT: "pi://reconnected",
   invoke: async (command: string, args: { key: string; value: string }) => {
     if (command === "app_config_get") {
+      if (host.getOverride) return host.getOverride()
       return host.legacyHost
         ? { preferences: { ...host.preferences } }
         : { preferences: { ...host.preferences }, preferencesRevision: host.revision }
@@ -44,6 +49,7 @@ vi.mock("@/api/transport", () => ({
         host.writes.pop()
         throw new Error("mock transient write error")
       }
+      if (host.writeGate) return host.writeGate()
       host.preferences[args.key] = args.value
       if (!host.legacyHost) {
         host.revision += 1
@@ -72,15 +78,29 @@ function broadcast(revision = host.revision, preferences: Record<string, string>
   })
 }
 
-async function harness(preferences: Record<string, string> = {}, revision = 0) {
+type Snapshot = { preferences: Record<string, string>; preferencesRevision?: number }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+async function harness(preferences: Record<string, string> = {}, revision = 0, options: { legacyHost?: boolean } = {}) {
   vi.resetModules()
   host.preferences = { ...preferences }
   host.revision = revision
   host.changed = undefined
   host.failWrite = false
   host.echoBeforeReturn = false
-  host.legacyHost = false
+  host.legacyHost = options.legacyHost ?? false
   host.failValue = null
+  host.getOverride = null
+  host.writeGate = null
   host.writes = []
   vi.stubGlobal("localStorage", { getItem: () => null, removeItem() {} })
   // 预加载客户端配置模块：监听器用动态 import，isolate:false 下每轮 resetModules 后
@@ -221,10 +241,105 @@ test("a strict write confirmed before the command returns leaves no phantom reco
   expect(editor.value.value).toBe("vscode")
 })
 
+test("a delayed reconnect GET never replaces an already applied higher revision", async () => {
+  const module = await harness({ theme: "system" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 重连读取在主机侧取到 r6/dark，但响应还在路上；期间一条独立的 r7/light 推送先到。
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  // 响应还在路上时，一条独立的 r7/light 推送先到并被应用。
+  broadcast(7, { theme: "light" })
+  expect(theme.value.value).toBe("light")
+
+  network.resolve({ preferencesRevision: 6, preferences: { theme: "dark" } })
+  expect(await refreshing).toBe(true)
+  // 抓取时刻更早的读取整份丢弃，不能把 UI 扳回 dark。
+  expect(theme.value.value).toBe("light")
+
+  // 更新修订的读取才允许纠正丢事件：r8 覆盖后变为 dark。
+  host.getOverride = null
+  host.preferences = { theme: "dark" }
+  host.revision = 8
+  await module.refreshFromHost()
+  expect(theme.value.value).toBe("dark")
+})
+
+test("a reconnect GET does not delete a newer in-flight local write", async () => {
+  const module = await harness({ markdownCodeWrap: "1" }, 5)
+  const wrap = module.createConfigPreference({
+    key: "markdownCodeWrap",
+    defaultValue: "1",
+    read: raw => raw !== "0",
+    serialize: value => (value ? "1" : "0"),
+  })
+
+  // 重连读取先发出（主机侧取到 r5/开启），响应还没回来；用户此时点了关闭，写入也还在路上。
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  // 用户在读取响应回来之前点了关闭；这笔写入也还停在主机侧。
+  const write = deferred<number>()
+  host.writeGate = () => write.promise
+  const pending = wrap.set(false)
+  expect(wrap.value.value).toBe(false)
+
+  network.resolve({ preferencesRevision: 5, preferences: { markdownCodeWrap: "1" } })
+  expect(await refreshing).toBe(true)
+  // 读取没有覆盖这笔在途写入。
+  expect(wrap.value.value).toBe(false)
+
+  // 主机最终接受了这笔写入（r6/关闭）：保持关闭，并把主机视图并入。
+  host.preferences = { markdownCodeWrap: "0" }
+  write.resolve(6)
+  await pending
+  expect(wrap.value.value).toBe(false)
+})
+
+test("a delayed r0 full-save echo cannot override an applied r1 state", async () => {
+  const module = await harness({ theme: "system", preferencesRevision: 1 }, 1)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  host.preferences = { theme: "dark" }
+  host.revision = 2
+  await module.refreshFromHost()
+  expect(theme.value.value).toBe("dark")
+
+  // 旧配置升级后的全量保存（r0）迟到：新后端在线上快照里**显式**带 0，客户端必须认出
+  // 它是更旧的修订并丢弃，不能退回 system。（旧后端「没有该字段」则由 snapshotRevision 兜底）
+  broadcast(0, { theme: "system" })
+  expect(theme.value.value).toBe("dark")
+  // 完全没有修订号的快照（旧格式）在本端已见过修订号后同样按 r0 处理。
+  host.changed?.({ payload: { preferences: { theme: "system" } } })
+  expect(theme.value.value).toBe("dark")
+})
+
+test("a strict write never exposes the value before the host accepts it", async () => {
+  const module = await harness({ openWith: JSON.stringify({ kind: "vscode", executable: "" }) }, 5)
+  const editor = await import("@/lib/openWith")
+
+  const write = deferred<number>()
+  host.writeGate = () => write.promise
+  const saving = editor.setOpenWith("cursor")!
+  // 主机还没确认：生效值（也就是「用哪个 IDE 打开文件」读到的值）仍是 vscode。
+  expect(editor.openWithPreference.value.kind).toBe("vscode")
+
+  write.reject(new Error("mock disk denied"))
+  await expect(saving).rejects.toThrow("mock disk denied")
+  expect(editor.openWithPreference.value.kind).toBe("vscode")
+  expect(module.createConfigPreference({ key: "openWith", defaultValue: "vscode" }).value.value).toBe(
+    JSON.stringify({ kind: "vscode", executable: "" }),
+  )
+
+  // 成功时才切换：主机接受后立刻生效（且不依赖回执事件是否送达）。
+  host.writeGate = null
+  await editor.setOpenWith("cursor")
+  expect(editor.openWithPreference.value.kind).toBe("cursor")
+})
+
 test("a legacy host without revisions degrades to bounded FIFO", async () => {
-  const module = await harness({ theme: "system" })
-  // harness 会重置宿主模型；这里切换到「旧后端」形态（不返回修订号、事件也不带）。
-  host.legacyHost = true
+  // 旧后端：写入不返回修订号、事件也不携带 —— 从初始化起就是这种形态。
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
   const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
 
   await theme.set("dark")
