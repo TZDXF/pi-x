@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
+import { ArrowLeft, Code, ExternalLink, Eye, FileX, MessageSquareQuote, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { invokeProjectFile } from "@/api/client/projectFiles"
@@ -20,7 +20,7 @@ import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelect
 import type { AuxAskPayload } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
-import { useCodeCommentsStore } from "@/stores/codeComments"
+import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
 import ImageViewer from "@/components/ImageViewer.vue"
@@ -59,7 +59,7 @@ const props = withDefaults(
   }>(),
   { closable: true, revision: 0 },
 )
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 
 const preview = ref<FilePreview | null>(null)
@@ -192,7 +192,7 @@ const commentRoot = computed(() =>
 )
 /** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
 const pendingComments = computed(() =>
-  codeComments.project === commentProject.value
+  props.commentProject !== undefined && codeComments.project === commentProject.value
     ? codeComments.comments.filter(c => c.path === props.path && (c.root ?? props.project) === props.project)
     : [],
 )
@@ -298,6 +298,10 @@ function confirmComment() {
     return
   }
   closeComment()
+}
+function insertCommentIntoComposer(comment: PendingCodeComment) {
+  // 由实际持有 composer 的 ChatView 写入并消费 chip；无接收方时保留批注。
+  emit("insert-code-comment", comment)
 }
 function removeComment(id: string) {
   codeComments.remove(id)
@@ -478,7 +482,16 @@ onBeforeUnmount(() => {
                   {{ commentRangeLabel(comment.startLine, comment.endLine) }}
                 </p>
                 <p class="text-xs leading-relaxed break-words whitespace-pre-wrap">{{ comment.comment }}</p>
-                <div class="mt-1.5 flex justify-end">
+                <div class="mt-1.5 flex justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-1.5 text-xs text-muted-foreground"
+                    :title="t('projectFiles.annotateInsert')"
+                    :aria-label="t('projectFiles.annotateInsert')"
+                    @click="insertCommentIntoComposer(comment)"
+                    ><MessageSquareQuote class="size-3.5" />{{ t("projectFiles.annotateInsert") }}</Button
+                  >
                   <Button
                     variant="ghost"
                     size="sm"

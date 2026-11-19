@@ -5,6 +5,7 @@ import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib/completion"
 import { commentFilePath } from "@/lib/codeComments"
+import { appendComposerText } from "@/lib/composer"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 import { runningBehavior } from "@/lib/runningBehavior"
 import { auxSelectionItems, clearAuxSelectionBucket, removeAuxSelection } from "@/stores/auxSelections"
@@ -181,7 +182,9 @@ export function useChatSendControl(deps: {
       }
     try {
       if (!(await deps.ensureStarted(session.entries.length ? null : deps.workspaceSelection()))) {
-        bridge.value?.setTextInput(text)
+        const currentText = bridge.value?.textInput ?? ""
+        // 启动等待期间可能又引入了批注或编辑了草稿；恢复原提交时保留这些新内容。
+        bridge.value?.setTextInput(currentText && currentText !== text ? appendComposerText(text, currentText) : text)
         throw new Error(t("completion.startFailed"))
       }
       if (commandName) {

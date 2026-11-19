@@ -7,6 +7,7 @@ import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
 import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { buildPromptWithCodeComments, commentFilePath } from "@/lib/codeComments"
+import { appendComposerText } from "@/lib/composer"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
 import { claimAuxParentContext, resetAuxParentContextForTest } from "@/stores/auxContext"
 
@@ -25,6 +26,7 @@ function harness(config = Promise.resolve({}), extra = {}) {
     "@/lib/attachments": { dataUrlToImage, isImageAttachment, isImageUrl },
     "@/lib/completion": { withSessionReferences, desktopCommands },
     "@/lib/codeComments": { commentFilePath },
+    "@/lib/composer": { appendComposerText },
     "@/lib/promptContexts": { serializeComposerPromptContexts },
     "@/lib/runningBehavior": { runningBehavior: behavior },
     "@/stores/codeComments": { useCodeCommentsStore: () => comments },
@@ -523,6 +525,23 @@ test("startup failure removes the echo and restores the composer text", async ()
     await expect(h.controls.onSubmit({ text: "draft" })).rejects.toThrow("completion.startFailed")
     expect(h.ui.pendingUserMessage).toBeNull()
     expect(h.bridge.value.setTextInput).toHaveBeenCalledWith("draft")
+    expect(h.session.send).not.toHaveBeenCalled()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("startup failure restores the submitted draft before text inserted while waiting", async () => {
+  const h = harness()
+  const inserted = "## Comment 1\nFile: src/a.ts\nComment: keep this"
+  h.ensureStarted.mockImplementation(async () => {
+    // 模拟等待启动时从文件预览引入批注：输入框已有新内容，不能再被旧草稿覆盖。
+    h.bridge.value.textInput = inserted
+    return false
+  })
+  try {
+    await expect(h.controls.onSubmit({ text: "original draft" })).rejects.toThrow("completion.startFailed")
+    expect(h.bridge.value.setTextInput).toHaveBeenCalledExactlyOnceWith(`original draft\n\n${inserted}`)
     expect(h.session.send).not.toHaveBeenCalled()
   } finally {
     h.scope.stop()
