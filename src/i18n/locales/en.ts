@@ -1225,6 +1225,7 @@ export default {
     shortcutsOpen: "Customize shortcuts",
     shortcutSend: "Send",
     shortcutNewline: "newline",
+    shortcutStop: "Stop",
     shortcutFileRef: "file reference",
     shortcutCommands: "commands",
     aboutTitle: "About PiX",
@@ -1379,6 +1380,7 @@ export default {
       archives: "Open archives",
       prevSession: "Previous session",
       nextSession: "Next session",
+      stop: "Stop generating",
       forkLast: "Fork latest answer",
       copyLastAnswer: "Copy latest answer",
       cycleModel: "Cycle to next model",
@@ -1404,6 +1406,7 @@ export default {
     reset: "Reset",
     resetAll: "Reset all",
     locked: "Locked",
+    unbound: "Not bound",
   },
 
   blocks: {

@@ -30,6 +30,10 @@ export const SHORTCUT_ACTION_DEFS = {
   "app.archives": { scope: "global", labelKey: "shortcuts.actions.archives", default: "ctrl+shift+h" },
   "app.prevSession": { scope: "global", labelKey: "shortcuts.actions.prevSession", default: "alt+arrowup" },
   "app.nextSession": { scope: "global", labelKey: "shortcuts.actions.nextSession", default: "alt+arrowdown" },
+  // Intentionally unbound by default: Esc must never stop a run (TZD-134). Calling
+  // <StopButton> and the RPC entries stay the primary ways out; a user who wants a
+  // key records one in settings, and that saved binding keeps working.
+  "chat.stop": { scope: "chat", labelKey: "shortcuts.actions.stop", default: "" },
   "chat.forkLast": { scope: "chat", labelKey: "shortcuts.actions.forkLast", default: "ctrl+shift+f" },
   "chat.copyLastAnswer": { scope: "chat", labelKey: "shortcuts.actions.copyLastAnswer", default: "ctrl+shift+c" },
   "chat.scrollTop": { scope: "chat", labelKey: "shortcuts.actions.scrollTop", default: "ctrl+home" },
@@ -81,7 +85,9 @@ function loadOverrides(raw: string | null): Partial<Record<ShortcutActionId, str
     if (typeof parsed !== "object" || parsed === null) return {}
     const overrides: Partial<Record<ShortcutActionId, string>> = {}
     for (const [id, combo] of Object.entries(parsed as Record<string, unknown>)) {
-      if (isShortcutActionId(id) && typeof combo === "string" && combo) overrides[id] = combo
+      if (!isShortcutActionId(id) || typeof combo !== "string" || !combo) continue
+      if (isBlockedStopBinding(id, combo)) continue
+      overrides[id] = combo
     }
     return overrides
   } catch {
@@ -102,9 +108,15 @@ const preference = createConfigPreference<Partial<Record<ShortcutActionId, strin
 })
 const overrides = preference.value
 
-/** The combo currently bound to an action (override or default). */
+/** The combo currently bound to an action (override or default); "" means unbound. */
 export function shortcutCombo(id: ShortcutActionId): string {
-  return overrides.value[id] ?? SHORTCUT_ACTION_DEFS[id].default
+  const combo = overrides.value[id] ?? SHORTCUT_ACTION_DEFS[id].default
+  return isBlockedStopBinding(id, combo) ? "" : combo
+}
+
+/** Esc must never stop a run, even through a hand-edited or legacy stored binding. */
+function isBlockedStopBinding(id: ShortcutActionId, combo: string): boolean {
+  return id === "chat.stop" && combo === "escape"
 }
 
 export function isShortcutModified(id: ShortcutActionId): boolean {
@@ -115,7 +127,7 @@ export function isShortcutModified(id: ShortcutActionId): boolean {
 /** Bind a new combo, or pass null to fall back to the default. */
 export function setShortcutOverride(id: ShortcutActionId, combo: string | null) {
   const next = { ...overrides.value }
-  if (!combo || combo === SHORTCUT_ACTION_DEFS[id].default) delete next[id]
+  if (!combo || isBlockedStopBinding(id, combo) || combo === SHORTCUT_ACTION_DEFS[id].default) delete next[id]
   else next[id] = combo
   return preference.set(next)
 }
@@ -126,8 +138,10 @@ export function resetAllShortcuts() {
 
 /** The action currently bound to a combo, ignoring `excludeId`. */
 export function resolveShortcut(combo: string, excludeId?: ShortcutActionId): ShortcutActionId | null {
+  if (!combo) return null
   for (const id of SHORTCUT_ACTION_IDS) {
     if (id === excludeId) continue
+    // Unbound actions (e.g. the default `chat.stop`) match nothing.
     if (shortcutCombo(id) === combo) return id
   }
   return null
@@ -247,8 +261,8 @@ export function dispatchShortcut(event: KeyboardEvent): boolean {
   if (!id) return false
   const editable = isEditableTarget(event.target)
   // Editor-scope actions only fire while typing; bare keys never hijack text
-  // input, and no binding stops a run from the keyboard (the composer's stop
-  // button and the RPC/cancel entry points are the only ways to abort).
+  // input, so a user-recorded stop key only fires outside the composer (Esc
+  // has no default binding at all: TZD-134).
   if (SHORTCUT_ACTION_DEFS[id].scope === "editor" && !editable) return false
   if (editable && !comboHasModifier(combo)) return false
   const handler = handlers.get(id)

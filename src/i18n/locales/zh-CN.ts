@@ -1191,6 +1191,7 @@ export default {
     shortcutsOpen: "自定义快捷键",
     shortcutSend: "发送消息",
     shortcutNewline: "换行",
+    shortcutStop: "停止生成",
     shortcutFileRef: "文件引用",
     shortcutCommands: "命令",
     aboutTitle: "关于 PiX",
@@ -1336,6 +1337,7 @@ export default {
       archives: "打开归档",
       prevSession: "上一个会话",
       nextSession: "下一个会话",
+      stop: "停止生成",
       forkLast: "分支最新回答",
       copyLastAnswer: "复制最新回答",
       cycleModel: "切换到下一个模型",
@@ -1361,6 +1363,7 @@ export default {
     reset: "重置",
     resetAll: "全部恢复默认",
     locked: "固定",
+    unbound: "未绑定",
   },
 
   blocks: {

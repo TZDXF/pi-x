@@ -141,8 +141,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onRecordKeydown, tru
             <template v-if="recording === id">
               <span class="text-muted-foreground animate-pulse text-xs">{{ t("shortcuts.recording") }}</span>
             </template>
-            <template v-else>
+            <template v-else-if="shortcutCombo(id)">
               <KeyHint v-for="part in formatComboParts(shortcutCombo(id))" :key="part">{{ part }}</KeyHint>
+            </template>
+            <template v-else>
+              <span class="text-muted-foreground text-xs">{{ t("shortcuts.unbound") }}</span>
             </template>
           </button>
         </div>

@@ -173,21 +173,61 @@ test("dispatchShortcut resolves handlers and respects scope and suppression", ()
   expect(api.dispatchShortcut(keyEvent("E", { ctrl: true, shift: true }, plain))).toBe(false)
 })
 
-test("Escape is not a bound action and no chat handler stops the run", () => {
+test("the stop action exists but Esc is not bound to it", () => {
   const { api } = harness(null)
-  // 回归：Esc 不再作为「停止生成」快捷键注册，注册表里也没有 stop 动作。
-  expect(api.SHORTCUT_ACTION_IDS).not.toContain("chat.stop")
+  // 回归（TZD-134）：动作与执行器保留，只是默认不再绑定 Esc。
+  expect(api.SHORTCUT_ACTION_IDS).toContain("chat.stop")
+  expect(api.shortcutCombo("chat.stop")).toBe("")
+  expect(api.resolveShortcut("escape")).toBe(null)
+  expect(api.resolveShortcut("")).toBe(null)
   expect(Object.keys(api.SHORTCUT_ACTION_DEFS).filter(id => api.SHORTCUT_ACTION_DEFS[id].default === "escape")).toEqual(
     [],
   )
-  expect(api.resolveShortcut("escape")).toBe(null)
 
-  // 停止入口只剩停止按钮与 RPC/cancel：聊天快捷键表里不再注册 chat.stop。
+  // 派发层：默认状态按 Esc 不消费、不触发任何处理器。
+  let stopHits = 0
+  api.registerShortcutHandler("chat.stop", () => {
+    stopHits++
+  })
+  expect(api.dispatchShortcut(keyEvent("Escape", {}, editable))).toBe(false)
+  expect(api.dispatchShortcut(keyEvent("Escape", {}, plain))).toBe(false)
+  expect(stopHits).toBe(0)
+
+  // 执行器仍在：聊天视图注册了 chat.stop，停止按钮也仍调用 abort()。
   const chatView = readFileSync(new URL("../src/components/ChatView.vue", import.meta.url), "utf8")
-  expect(chatView).not.toMatch(/registerShortcutHandler\("chat\.stop"/)
-  expect(chatView).not.toMatch(/\.isStreaming\) void abort\(\)/)
+  expect(chatView).toMatch(/registerShortcutHandler\("chat\.stop"/)
   const composer = readFileSync(new URL("../src/components/chat/ChatComposer.vue", import.meta.url), "utf8")
   expect(composer).toMatch(/@click="showStopButton && abort\(\)"/)
+})
+
+test("a saved non-Esc stop binding keeps working and Esc can never be bound", () => {
+  // 旧版本保存的偏好（Esc 从未被保存过，但一旦被手改/历史遗留要拦住）。
+  const { api, storage } = harness(JSON.stringify({ "chat.stop": "ctrl+alt+k", "sidebar.files": "ctrl+shift+x" }))
+  expect(api.shortcutCombo("chat.stop")).toBe("ctrl+alt+k")
+  expect(api.isShortcutModified("chat.stop")).toBe(true)
+  expect(api.resolveShortcut("ctrl+alt+k")).toBe("chat.stop")
+
+  let stopHits = 0
+  api.registerShortcutHandler("chat.stop", () => {
+    stopHits++
+  })
+  // 会话流式中焦点常在输入框：录制出来的带修饰键组合仍要生效。
+  expect(api.dispatchShortcut(keyEvent("K", { ctrl: true, alt: true }, editable))).toBe(true)
+  expect(api.dispatchShortcut(keyEvent("k", { ctrl: true, alt: true }, plain))).toBe(true)
+  expect(stopHits).toBe(2)
+
+  // 存储里的 escape 变体不会生效，也不会被回写成绑定。
+  const escapeStored = harness(JSON.stringify({ "chat.stop": "escape" }))
+  expect(escapeStored.api.shortcutCombo("chat.stop")).toBe("")
+  expect(escapeStored.api.resolveShortcut("escape")).toBe(null)
+  expect(escapeStored.storage()).toBe(JSON.stringify({ "chat.stop": "escape" }))
+  expect(escapeStored.api.dispatchShortcut(keyEvent("Escape", {}, editable))).toBe(false)
+
+  // 界面录制 Esc 无法写入绑定：回到未绑定，而不是回到 Esc。
+  api.setShortcutOverride("chat.stop", "escape")
+  expect(api.shortcutCombo("chat.stop")).toBe("")
+  expect(JSON.parse(storage())).toEqual({ "sidebar.files": "ctrl+shift+x" })
+  expect(JSON.parse(storage())).not.toHaveProperty("chat.stop")
 })
 
 test("resolve and conflict detection cover custom bindings and locked keys", () => {

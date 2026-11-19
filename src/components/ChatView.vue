@@ -236,7 +236,7 @@ const sendControl = useChatSendControl({
   onSent: jumpToConversationBottom,
 })
 const controls = reactive(sendControl)
-const { delayedSend, delayedSendEnabled } = sendControl
+const { delayedSend, delayedSendEnabled, abort } = sendControl
 
 // ---- keyboard shortcuts: executors for lib/shortcuts.ts actions ----
 
@@ -248,6 +248,11 @@ function cycleSidebarTab(offset: number) {
 }
 
 const offShortcutHandlers = [
+  // Registered even though the default binding is empty: a user-recorded
+  // stop key must keep working (TZD-134 only removed the default Esc).
+  registerShortcutHandler("chat.stop", () => {
+    if (session.isStreaming) void abort()
+  }),
   registerShortcutHandler("chat.forkLast", () => {
     const entry = lastAssistantTurn()
     if (entry?.complete && !entry.failed) void forkFromAnswer(entry.lastIndex)
