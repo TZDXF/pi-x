@@ -227,9 +227,9 @@ onMounted(() => {
 })
 /**
  * `scrollend` is the browser's own confirmation that an app-initiated scroll
- * finished. It fires on the scrolling element, so it is attached to the viewport;
- * while an app navigation is pending, its arrival must not be mistaken for the
- * reader, so `scrollend` also clears any record left at that position.
+ * finished. It fires on the scrolling element, so it is attached to the viewport
+ * and ends the attribution even when the requested position was never reached
+ * (e.g. a `scrollIntoView` without a known target, or an interrupted animation).
  */
 watchEffect((onCleanup) => {
   const scroll = scrollRef.value
