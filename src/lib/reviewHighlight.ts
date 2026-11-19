@@ -1,11 +1,11 @@
 // Adapted from RepoMeow src/lib/diff-highlight.ts; isolated for lazy loading.
-import { codeToTokens, type BundledLanguage } from "shiki"
 import type { DiffLine } from "@/lib/reviewDiff"
 import { baseName } from "./paths"
+import { tokenizeLines } from "./codeHighlight"
 
 /**
  * diff 代码着色:把 diff 行按「旧版本 = ctx+del / 新版本 = ctx+add」重组为两段完整源码,
- * 经 shiki codeToTokens 双主题(github-light / github-dark)分词后,
+ * 经共享着色器(lib/codeHighlight,纯 JS 正则引擎)双主题(github-light / github-dark)分词后,
  * 再按行序一一映射回 DiffLine。重组与展示用的是同一批行,映射不依赖绝对行号,
  * 工具仅提供局部片段时仍然逐行对齐,但缺失外层语法上下文可能影响着色。
  */
@@ -78,16 +78,80 @@ const EXT_TO_LANG: Record<string, string> = {
   prisma: "prisma",
   diff: "diff",
   mk: "makefile",
+  // TZD-136：补齐常见但在初版里缺失的扩展名（键是无点的扩展名，别名由 shiki 解析）
+  asm: "asm",
+  s: "asm",
+  nix: "nix",
+  cmake: "cmake",
+  zig: "zig",
+  nim: "nim",
+  astro: "astro",
+  sol: "solidity",
+  tex: "tex",
+  vim: "vim",
+  ex: "elixir",
+  exs: "elixir",
+  erl: "erlang",
+  hs: "haskell",
+  ml: "ocaml",
+  clj: "clojure",
+  cljs: "clojure",
+  jl: "julia",
+  tf: "terraform",
+  tfvars: "terraform",
+  hcl: "hcl",
+  proto: "proto",
+  jsonnet: "jsonnet",
+  hjson: "hjson",
+  ngl: "nginx",
+  csv: "csv",
+  tsv: "tsv",
+  mmd: "mermaid",
+  env: "dotenv",
+  vhdl: "vhdl",
+  verilog: "verilog",
+  sv: "system-verilog",
+  svh: "system-verilog",
+  f: "fortran-free-form",
+  f90: "fortran-free-form",
+  f95: "fortran-free-form",
+  fs: "fsharp",
+  fsx: "fsharp",
+  hx: "haxe",
+  qml: "qml",
+  gd: "gdscript",
+  cr: "crystal",
+  pas: "pascal",
+  d: "d",
+  raku: "raku",
+  p6: "raku",
+  scm: "scheme",
+  rkt: "racket",
+  lisp: "lisp",
+  el: "lisp",
+  sc: "scala",
+  st: "smalltalk",
+  tcl: "tcl",
+  wgsl: "wgsl",
+  glsl: "glsl",
+  hlsl: "hlsl",
+  ll: "llvm",
+  http: "http",
 }
 
-/** 由文件路径推断 shiki 语言;无扩展名的 Dockerfile / Makefile 按文件名识别 */
+/** 由文件路径推断 shiki 语言;无扩展名的 Dockerfile / Makefile 等按文件名识别 */
 export function diffLangOf(filePath: string): string {
   const name = baseName(filePath)
   const lower = name.toLowerCase()
   if (lower === "dockerfile" || lower.startsWith("dockerfile.")) return "dockerfile"
   if (lower === "makefile") return "makefile"
+  if (lower === "cmakelists.txt") return "cmake"
+  if (lower === "jenkinsfile") return "groovy"
+  if (lower === "vagrantfile") return "ruby"
+  if (lower === "gemfile" || lower === "rakefile") return "ruby"
   const dot = name.lastIndexOf(".")
-  if (dot <= 0) return "text"
+  if (dot < 0) return "text"
+  // 点文件（.env / .gitignore）取点后整段作为扩展名；未收录的就落 text。
   return EXT_TO_LANG[name.slice(dot + 1).toLowerCase()] ?? "text"
 }
 
@@ -166,8 +230,6 @@ export function wordClsOf(line: DiffLine): string {
   return line.kind === "del" ? "diff-word-del" : "diff-word-add"
 }
 
-const THEMES = { light: "github-light", dark: "github-dark" } as const
-
 /**
  * 逐行着色整份 diff:返回 DiffLine → 行内 HTML(不含行首 +/-/空格 标记)。
  * emphasis 为行内差异区间(见 diff.ts 的 intralineRanges),命中的行在着色结果上叠加差异底色。
@@ -199,30 +261,21 @@ export async function highlightDiffLines(
   }
   if ((!newRefs.length && !oldRefs.length) || lines.length > 5000 || total > MAX_CHARS) return null
 
-  const lang = diffLangOf(filePath) as BundledLanguage
+  const lang = diffLangOf(filePath)
   const out = new Map<DiffLine, string>()
   const htmlOf = (ref: DiffLine, tokens: LineToken[] | undefined) =>
     tokensToLineHtml(tokens, emphasis?.get(ref), wordClsOf(ref))
-  try {
-    // 先旧后新:ctx 行两侧文本相同,新侧结果覆盖旧侧,视觉效果一致
-    if (oldRefs.length) {
-      const { tokens } = await codeToTokens(oldSrc.join("\n"), {
-        lang,
-        themes: THEMES,
-        defaultColor: false,
-      })
-      oldRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
-    }
-    if (newRefs.length) {
-      const { tokens } = await codeToTokens(newSrc.join("\n"), {
-        lang,
-        themes: THEMES,
-        defaultColor: false,
-      })
-      newRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
-    }
-  } catch {
-    return null
+  // 先旧后新:ctx 行两侧文本相同,新侧结果覆盖旧侧,视觉效果一致;
+  // 分词器与文件预览共用(纯 JS 引擎,桌面端 CSP 下同样可用)
+  if (oldRefs.length) {
+    const tokens = await tokenizeLines(oldSrc.join("\n"), lang)
+    if (!tokens) return null
+    oldRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
+  }
+  if (newRefs.length) {
+    const tokens = await tokenizeLines(newSrc.join("\n"), lang)
+    if (!tokens) return null
+    newRefs.forEach((ref, i) => out.set(ref, htmlOf(ref, tokens[i])))
   }
   return out
 }
