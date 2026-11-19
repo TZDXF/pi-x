@@ -17,9 +17,10 @@ import { highlightFileLines } from "@/lib/filePreviewCode"
 import { MAX_SELECTED_TEXT_LENGTH, selectionLineRange, type CodeCommentRange } from "@/lib/codeComments"
 import ConversationSelectionMenu from "@/components/chat/ConversationSelectionMenu.vue"
 import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
-import type { AuxAskPayload } from "@/lib/auxSelection"
+import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
+import { auxCanOpen, auxInstancesFor } from "@/stores/auxChat"
 import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
@@ -201,13 +202,19 @@ watch(
 // payload 带 path + 行区间；渲染态 Markdown 没有 [data-line]，只带 path（不猜行号）。
 const markdownRoot = ref<HTMLElement | null>(null)
 const menuRoot = computed<HTMLElement | null>(() => (showCode.value ? codeRoot.value : markdownRoot.value))
-async function onAuxAsk(payload: AuxAskPayload) {
+const auxTargets = computed(() => {
+  const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
+  return parentRuntimeId ? auxInstancesFor(parentRuntimeId) : []
+})
+const auxCanCreate = computed(() => auxCanOpen())
+async function onAuxAsk(payload: AuxAskPayload, target?: AuxAskTarget) {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
   if (!parentRuntimeId) return
   // 投递路由（复用激活实例 / 新建）与失败文案都在 `lib/auxAsk.ts`：这里只转事件。
   await askAuxSelection({
     parentRuntimeId,
     payload,
+    target,
     t,
     toast: (message, kind) => ui.pushToast(message, kind),
   })
@@ -576,6 +583,8 @@ onBeforeUnmount(() => {
     :root="menuRoot"
     :path="path"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
+    :aux-targets="auxTargets"
+    :aux-can-create="auxCanCreate"
     @aux-ask="onAuxAsk"
   />
 </template>

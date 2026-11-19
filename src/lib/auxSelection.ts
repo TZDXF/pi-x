@@ -19,6 +19,15 @@ export interface CodeSelectionRange {
   end: number
 }
 
+/** 划词投递目标：已有 aux 的 runtimeId；`null` 表示明确新建。缺省参数仍走自动路由。 */
+export type AuxAskTarget = string | null
+
+/** 多 aux 时浮层里的可选项（只暴露展示与路由所需字段）。 */
+export interface AuxTargetOption {
+  runtimeId: string
+  title: string
+}
+
 /**
  * 一次"在辅助对话中提问"的手势产物。
  *
