@@ -5,6 +5,7 @@ import {
   CSV_MAX_VIRTUAL_ROWS,
   CSV_OVERSCAN,
   CSV_PAGE_CACHE_LIMIT,
+  CSV_PAGE_CACHE_ROWS,
   CSV_PAGE_ROWS,
   CSV_ROW_HEIGHT,
   csvBodyHeight,
@@ -216,4 +217,37 @@ test("the client page mirrors the backend's byte-budget flag", () => {
   // 本地解析持有整份有界文本，不存在按字节裁剪的页。
   expect(page.budgetTruncated).toBe(false)
   expect(page.totalRows).toBe(1)
+})
+
+// ---- 第三轮复验（TZD-137）新增回归：每条都对应一个「旧实现会失败」的复现 ----
+
+// 复验 P2：表头是逗号、数据行里有很多分号时，不能被整段计数误判成
+// 分号分隔（旧实现计整段 8 KB，这里必须只看首行）。
+test("a semicolon-heavy data row never outvotes a comma header", () => {
+  expect(sniffDelimiter("id,note", "data.csv")).toBe(",")
+  const parsed = parseCsvRows("id,note\n1,a;b;c;d\n", "data.csv")
+  expect(parsed.delimiter).toBe(",")
+  expect(parsed.rows).toEqual([["1", "a;b;c;d"]])
+  expect(parsed.columnCount).toBe(2)
+  // 反向同理：制表符表头不会被数据行里的逗号挤掉（分隔符显示为 \t 转义）。
+  expect(parseCsvRows("a	b\n1,x,y,z\n", "data.tsv").delimiter).toEqual("\\t")
+})
+
+// 复验 P1：最后一条记录以引号结束、文件没有末尾换行时，仍要交付该行。
+test("a file without a trailing newline still yields its last record", () => {
+  const parsed = parseCsvRows('id,note\n1,one\n2,"two"', "data.csv")
+  expect(parsed.header).toEqual(["id", "note"])
+  expect(parsed.rows).toEqual([
+    ["1", "one"],
+    ["2", "two"],
+  ])
+  // 普通（无引号）的末行同样不能丢。
+  expect(parseCsvRows("id\n1\n2", "data.csv").rows).toEqual([["1"], ["2"]])
+})
+
+// 复验 P2：缓存上限必须按**行数**而不是段数来约束（相邻段不再无限合并）。
+test("the row cache is bounded by rows, not by chunk count", () => {
+  expect(CSV_PAGE_CACHE_ROWS).toBe(CSV_PAGE_CACHE_LIMIT * CSV_PAGE_ROWS)
+  // 九屏 500 行远超上限：这正是旧实现「相邻段合并后无人裁剪」的场景。
+  expect(CSV_PAGE_CACHE_ROWS).toBeLessThan(9 * CSV_PAGE_ROWS)
 })

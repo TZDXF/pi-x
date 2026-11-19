@@ -188,3 +188,60 @@ test("a wide row beyond the first slice is still reported on the first page", ()
   expect(page.columnCount).toBe(129)
   expect(page.truncatedColumns).toBe(true)
 })
+
+// 复验 P1：文件末尾没有换行时，最后一条记录也必须交付（旧实现直接丢掉）。
+test("remote csv keeps the last record when the file has no trailing newline", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  writeFileSync(join(project, "no-newline.csv"), ["id,note", "1,one", '2,"two"'].join(lf))
+  const first = call("no-newline.csv", "csv", { offset: 0, limit: 1 }).data
+  expect(first.totalRows).toBe(2)
+  expect(first.more).toBe(true)
+  const second = call("no-newline.csv", "csv", { offset: 1, limit: 1 }).data
+  expect(second.rows).toEqual([["2", "two"]])
+})
+
+// 复验 P2：数据行里的大量分号不能把逗号表头挤掉（只嗅探首行）。
+test("remote csv never lets a data row outvote the header", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  writeFileSync(join(project, "semicolons.csv"), ["id,note", "1,a;b;c;d", ""].join(lf))
+  const page = call("semicolons.csv", "csv").data
+  expect(page.delimiter).toBe(",")
+  expect(page.columnCount).toBe(2)
+  expect(page.rows[0]).toEqual(["1", "a;b;c;d"])
+})
+
+// 复验 P1：128 列 × 4096 个汉字（单行 ~1.5 MB）也必须落在 1 MB 预算内。
+test("remote csv wide CJK slices stay inside the byte budget", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const columns = 128
+  const cell = "界".repeat(4096)
+  const header = Array.from({ length: columns }, (_, index) => `c${index}`).join(",")
+  const cells = Array.from({ length: columns - 1 }, () => cell).join(",")
+  const lines = [header]
+  for (let row = 0; row < 40; row++) lines.push(`${row},${cells}`)
+  writeFileSync(join(project, "wide-cjk.csv"), lines.join(lf) + lf)
+
+  const first = call("wide-cjk.csv", "csv", { offset: 0, limit: 500 }).data
+  const size = Buffer.byteLength(JSON.stringify(first))
+  expect(size).toBeLessThanOrEqual(1024 * 1024)
+  expect(first.budgetTruncated).toBe(true)
+  expect(first.rows).toHaveLength(1)
+  // 单行也超预算时裁掉尾部单元格，且下一段不跳行。
+  expect(first.rows[0].length).toBeLessThan(columns)
+  const next = call("wide-cjk.csv", "csv", { offset: 1, limit: 500 }).data
+  expect(next.rows[0][0]).toBe("1")
+})
+
+// 复验 P2：表头也计入页字节预算（旧实现只算数据行）。
+test("remote csv charges the header to the page budget", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const header = Array.from({ length: 128 }, (_, index) => `c${index}` + "界".repeat(4096)).join(",")
+  writeFileSync(join(project, "wide-header.csv"), `${header}${lf}1,2${lf}`)
+  const page = call("wide-header.csv", "csv").data
+  expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024)
+  expect(page.rows).toHaveLength(1)
+})

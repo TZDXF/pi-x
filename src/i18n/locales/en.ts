@@ -287,6 +287,7 @@ export default {
     csvScrollHint: "Pages load as you scroll; the file is never read whole",
     csvPage: "Screen {page}",
     csvPageTrimmed: "This screen was trimmed to the transfer budget; scroll to continue",
+    csvRetry: "Retry",
     csvPrevPage: "Previous",
     csvNextPage: "Next",
   },

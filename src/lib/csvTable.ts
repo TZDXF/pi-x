@@ -58,6 +58,12 @@ export const CSV_OVERSCAN = 8
 /** Pages kept in memory, so scrolling never leaves the working set unbounded. */
 export const CSV_PAGE_CACHE_LIMIT = 6
 /**
+ * Rows kept in memory, independent of how the chunks happen to merge. Chunk
+ * *count* alone was not a bound: adjacent slices merge into one ever growing
+ * chunk, so nine 500-row screens could sit in memory with no eviction.
+ */
+export const CSV_PAGE_CACHE_ROWS = CSV_PAGE_CACHE_LIMIT * CSV_PAGE_ROWS
+/**
  * Highest row count that keeps a single absolutely-positioned scroll surface
  * below the browser's element-height ceiling (Chromium ~33.5M px; at
  * [`CSV_ROW_HEIGHT`] that is ~1.28M rows, so 1M leaves headroom). Above it the
@@ -150,11 +156,15 @@ export const csvDelimiterLabel = (delimiter: string) => (delimiter === "\t" ? "\
  * the extension decides.
  */
 export function sniffDelimiter(firstLine: string, path: string): string {
-  const counts = [",", "\t", ";"]
-    .map(candidate => ({ candidate, count: countOutsideQuotes(firstLine, candidate) }))
-    .sort((a, b) => b.count - a.count)
-  const best = counts[0]
-  return best && best.count > 0 ? best.candidate : extOf(path) === "tsv" ? "\t" : ","
+  // 只看首行：把数据行也算进去会让「逗号表头 + 数据行里全是分号」被误判。
+  // 平票保持先出现的候选（逗号 → 制表符 → 分号），与 Rust/Node 同序。
+  const head = firstLine.slice(0, 8192)
+  let best: { candidate: string; count: number } | null = null
+  for (const candidate of [",", "\t", ";"]) {
+    const count = countOutsideQuotes(head, candidate)
+    if (count > 0 && (!best || count > best.count)) best = { candidate, count }
+  }
+  return best?.candidate ?? (extOf(path) === "tsv" ? "\t" : ",")
 }
 
 function countOutsideQuotes(line: string, candidate: string): number {
@@ -268,6 +278,7 @@ export function parseCsvRows(
     field += char
     started = true
   }
+  // 没有末尾换行时，循环末尾的 commitRow() 仍会提交最后一条完整记录。
   commitRow()
   return finalize(rows, widths, delimiter, body.length, maxColumns, truncatedCells)
 }

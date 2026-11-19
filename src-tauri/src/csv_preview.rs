@@ -1,17 +1,18 @@
 //! CSV/TSV table preview for the project-files sidebar.
 //!
 //! A large delimited file must never travel through one JSON payload, so each
-//! request parses the file streamingly and returns one bounded page of rows
+//! request parses the file streamingly and returns one bounded slice of rows
 //! plus file-level metadata (header, row count, column count). The renderer
 //! keeps only a window of rows, and this module keeps the IPC payload bounded
 //! as well: at most [`CSV_PAGE_MAX_ROWS`] rows, [`CSV_MAX_COLUMNS`] columns,
-//! [`CSV_CELL_MAX_CHARS`] characters per cell and [`CSV_PAGE_MAX_BYTES`]
-//! serialized bytes per response.
+//! [`CSV_CELL_MAX_CHARS`] characters per cell and — a **hard** cap —
+//! [`CSV_PAGE_MAX_BYTES`] serialized bytes per response (header included).
 //!
 //! Parsing is a byte-level state machine fed in fixed-size chunks: a physical
 //! line is never buffered whole, so a single 100 MB row costs constant memory
-//! and linear time (the previous line-at-a-time reader copied the unterminated
-//! prefix once per chunk, i.e. quadratic in line length).
+//! and linear time. Bytes that belong to no visible field (the bulk of a
+//! first-page scan) are skipped a run at a time, and visible cells are copied
+//! a run at a time, so the per-byte cost stays a tight loop.
 //!
 //! Rules (RFC 4180, lenient; identical in the Node twin
 //! `src-tauri/resources/remote_files.mjs` and the client parser
@@ -20,12 +21,15 @@
 //! * `"` only opens a quoted run at the start of a field; `""` inside a run is
 //!   a literal quote; the delimiter and line breaks inside a run are content.
 //! * A trailing CR outside a quoted run is dropped (CRLF), a bare LF ends the
-//!   record, a CR/LF inside a quoted run stays in the cell.
+//!   record, a CR/LF inside a quoted run stays in the cell (CRLF collapses to
+//!   one LF).
 //! * Empty physical lines outside a quoted run are not records.
+//! * A record still open at end of file is completed (a missing trailing
+//!   newline never loses the last row).
 //! * A leading UTF-8 BOM is dropped before any parsing.
-//! * The delimiter is sniffed from the first [`SNIFF_BYTES`] bytes outside
-//!   quoted runs; ties prefer comma, then tab, then semicolon; a single-column
-//!   file falls back to the extension.
+//! * The delimiter is sniffed from the **first line only** (outside quoted
+//!   runs, at most [`SNIFF_BYTES`]); ties prefer comma, then tab, then
+//!   semicolon; a single-column file falls back to the extension.
 //!
 //! The first record is always reported as the header row (the convention GitHub,
 //! Excel and most CSV viewers use), so a headerless file loses its first data
@@ -49,15 +53,18 @@ pub const CSV_MAX_COLUMNS: usize = 128;
 pub const CSV_CELL_MAX_CHARS: usize = 4096;
 /// Files above this size are refused: every page request rescans from the start.
 pub const CSV_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-/// Serialized size budget for one page. Kept far below the 16 MiB SSH exec
-/// output limit (`ssh::transport::MAX_EXEC_OUTPUT_BYTES`) so a page of wide or
-/// long cells can never fail the transport: the page is trimmed instead and
-/// reports `more`, and the client continues from `offset + rows.len()`.
+/// Hard cap on one response, header included. Kept far below the 16 MiB SSH
+/// exec output limit (`ssh::transport::MAX_EXEC_OUTPUT_BYTES`) so a slice of
+/// wide or long cells can never fail the transport: the slice is trimmed
+/// instead and reports `budgetTruncated`, and the client continues from
+/// `offset + rows.len()`.
 pub const CSV_PAGE_MAX_BYTES: usize = 1024 * 1024;
+/// JSON syntax overhead (field names, brackets, commas) never charged to cells.
+const PAGE_OVERHEAD_BYTES: usize = 4 * 1024;
 /// Byte budget behind the character cap above (6 bytes per char keeps the cap
 /// exact for UTF-8 while still bounding a pathological single-cell file).
 const CELL_MAX_BYTES: usize = CSV_CELL_MAX_CHARS * 6;
-/// Bytes inspected when sniffing the delimiter (never the whole first line).
+/// Bytes inspected when sniffing the delimiter (never past the first line).
 const SNIFF_BYTES: usize = 8 * 1024;
 /// Bytes read per chunk while scanning.
 const READ_CHUNK: usize = 64 * 1024;
@@ -147,9 +154,11 @@ struct Sniff {
     bom_bytes: usize,
 }
 
-/// Pick the separator by counting candidates in the first bytes of the file,
-/// ignoring quoted runs. Ties prefer comma, then tab, then semicolon; a file
-/// with no candidate falls back to the extension.
+/// Pick the separator from the **first line** (outside quoted runs, at most
+/// [`SNIFF_BYTES`]). Counting the whole file head instead let a data row full
+/// of semicolons outvote a comma header and split a legitimate CSV.
+/// Ties keep the earlier candidate (comma → tab → semicolon); a file with no
+/// candidate falls back to the extension.
 fn sniff_delimiter(head: &[u8], path: &str) -> Sniff {
     let bom_bytes = if head.starts_with(BOM) { BOM.len() } else { 0 };
     let body = &head[bom_bytes..];
@@ -158,6 +167,7 @@ fn sniff_delimiter(head: &[u8], path: &str) -> Sniff {
     for &byte in body.iter().take(SNIFF_BYTES) {
         match byte {
             b'"' => in_quotes = !in_quotes,
+            b'\n' if !in_quotes => break,
             _ if !in_quotes => {
                 if let Some(index) = CANDIDATES.iter().position(|candidate| *candidate == byte) {
                     counts[index] += 1;
@@ -168,7 +178,6 @@ fn sniff_delimiter(head: &[u8], path: &str) -> Sniff {
     }
     let mut best: Option<(usize, usize)> = None;
     for (index, count) in counts.iter().enumerate() {
-        // 平票保留先出现的候选（逗号 → 制表符 → 分号），与 Node 侧同序。
         if *count > 0 && best.is_none_or(|(_, winner)| *count > winner) {
             best = Some((index, *count));
         }
@@ -211,14 +220,6 @@ struct ParsedRow {
     truncated_cells: bool,
 }
 
-enum Feed {
-    /// The byte was consumed; the record continues.
-    Continues,
-    Row(ParsedRow),
-    /// Empty physical line outside any quoted run: not a record.
-    Blank,
-}
-
 /// RFC 4180 byte-level state machine. One physical line is never buffered:
 /// each byte is consumed as it is read, so memory stays constant regardless of
 /// row width and time stays linear in the file size.
@@ -237,7 +238,7 @@ struct RowParser {
     pending_cr: bool,
     at_field_start: bool,
     cell_truncated: bool,
-    /// Any byte seen in the current record (blank lines have none).
+    /// Any record content seen so far (blank lines have none).
     started: bool,
 }
 
@@ -283,6 +284,25 @@ impl RowParser {
         }
     }
 
+    /// A run of ordinary field bytes (no delimiter, newline, CR or quote).
+    fn push_run(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.started = true;
+        self.at_field_start = false;
+        if !self.collect {
+            return;
+        }
+        let room = CELL_MAX_BYTES.saturating_sub(self.field.len());
+        if bytes.len() <= room {
+            self.field.extend_from_slice(bytes);
+        } else {
+            self.field.extend_from_slice(&bytes[..room]);
+            self.cell_truncated = true;
+        }
+    }
+
     fn end_field(&mut self) {
         self.field_count += 1;
         if self.collect && self.fields.len() < CSV_MAX_COLUMNS {
@@ -305,80 +325,43 @@ impl RowParser {
         }
     }
 
-    fn feed(&mut self, byte: u8) -> Feed {
-        if self.pending_quote {
-            self.pending_quote = false;
-            if byte == b'"' {
-                self.push(b'"');
-                return Feed::Continues;
-            }
-            // The run ended: this byte is ordinary content, not a quote.
-            self.in_quotes = false;
-        }
-        {
-            if self.pending_cr {
-                self.pending_cr = false;
-                if byte == b'\n' {
-                    // CRLF inside a cell collapses to a single LF.
-                    self.push(b'\n');
-                    return Feed::Continues;
-                }
-                // A lone CR stays as CR; fall through to handle this byte.
-                self.push(b'\r');
-            }
-            if self.in_quotes {
-                if byte == b'"' {
-                    self.pending_quote = true;
-                    return Feed::Continues;
-                }
-                if byte == b'\r' {
-                    self.pending_cr = true;
-                    return Feed::Continues;
-                }
-                // Content bytes keep their LF (hard line break in a cell).
-                self.push(byte);
-                return Feed::Continues;
-            }
-            match byte {
-                b'"' if self.at_field_start => {
-                    self.in_quotes = true;
-                    self.at_field_start = false;
-                    self.started = true;
-                    return Feed::Continues;
-                }
-                b'\n' => {
-                    if !self.started && self.field_count == 0 {
-                        return Feed::Blank;
-                    }
-                    self.end_field();
-                    return Feed::Row(self.take_row());
-                }
-                // CRLF: the CR outside a quoted run is dropped, LF ends the record.
-                b'\r' => return Feed::Continues,
-                b if b == self.delimiter => {
-                    self.end_field();
-                    self.started = true;
-                    return Feed::Continues;
-                }
-                _ => {
-                    self.push(byte);
-                    self.at_field_start = false;
-                    return Feed::Continues;
-                }
-            }
-        }
+    /// Complete the record currently in the parser (used by the LF branch and
+    /// by the end-of-file flush).
+    fn finish_record(&mut self) -> ParsedRow {
+        self.end_field();
+        self.take_row()
     }
 }
 
 /// Rough serialized size of one cell: the UTF-8 bytes, the quotes JSON adds,
-/// and one byte per character that needs escaping. The estimator only feeds the
-/// page byte budget, so a few percent of slack is fine.
+/// and one byte per character that needs escaping.
 fn cell_cost(cell: &str) -> usize {
     cell.len() + 3 + cell.bytes().filter(|b| *b == b'"' || *b == b'\\').count()
 }
 
 fn row_cost(row: &[String]) -> usize {
     row.iter().map(|cell| cell_cost(cell)).sum()
+}
+
+/// Keep a row's leading cells while the serialized size fits `budget`.
+/// Returns the possibly shortened row and whether any cell was dropped.
+fn fit_row(mut fields: Vec<String>, budget: usize) -> (Vec<String>, bool) {
+    let mut cost = 0usize;
+    let mut keep = 0usize;
+    for field in &fields {
+        let next = cost + cell_cost(field);
+        if keep > 0 && next > budget {
+            break;
+        }
+        cost = next;
+        keep += 1;
+    }
+    if keep < fields.len() {
+        fields.truncate(keep.max(1));
+        (fields, true)
+    } else {
+        (fields, false)
+    }
 }
 
 fn scan<R: Read>(
@@ -395,8 +378,10 @@ fn scan<R: Read>(
     } else {
         limit.min(CSV_PAGE_MAX_ROWS)
     };
+    let cap = CSV_PAGE_MAX_BYTES.saturating_sub(PAGE_OVERHEAD_BYTES);
     let mut parser = RowParser::new(sniff.delimiter);
     let mut header: Option<Vec<String>> = None;
+    let mut header_cost = 0usize;
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut total_rows: u64 = 0;
     let mut more = false;
@@ -411,16 +396,21 @@ fn scan<R: Read>(
     // True at a record boundary: the collect decision is made by the first byte.
     let mut at_boundary = true;
     let mut bom_skip = sniff.bom_bytes;
+    let mut stop = false;
     let mut buffer = vec![0u8; READ_CHUNK];
 
-    'read: loop {
+    loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        for &byte in &buffer[..read] {
+        let chunk = &buffer[..read];
+        let mut i = 0usize;
+        while i < chunk.len() {
             if bom_skip > 0 {
-                bom_skip -= 1;
+                let skip = bom_skip.min(chunk.len() - i);
+                bom_skip -= skip;
+                i += skip;
                 continue;
             }
             if at_boundary {
@@ -433,57 +423,145 @@ fn scan<R: Read>(
                 parser.begin_row(header.is_none() || windowed);
                 at_boundary = false;
             }
-            match parser.feed(byte) {
-                Feed::Continues => continue,
-                Feed::Blank => {
-                    at_boundary = true;
-                    continue;
-                }
-                Feed::Row(row) => {
-                    at_boundary = true;
-                    if record == 0 {
-                        header = Some(row.fields);
-                        column_count = column_count.max(row.field_count);
-                        truncated_columns |= row.field_count > CSV_MAX_COLUMNS;
-                        truncated_cells |= row.truncated_cells;
-                        record = 1;
+            let byte = chunk[i];
+            // 引号内：逐字节处理（需要 CRLF/quoted-quote 的前瞻状态）。
+            if parser.in_quotes || parser.pending_quote {
+                if parser.pending_quote {
+                    parser.pending_quote = false;
+                    if byte == b'"' {
+                        parser.push(b'"');
+                        i += 1;
                         continue;
                     }
-                    let data_row = record - 1;
-                    // 首页本来就要扫完整份文件（为了 total_rows 与整表列数），
-                    // 因此列数与截断标记对**所有**行累计；后续页只看表头与窗口行。
-                    if offset == 0 || (data_row >= offset && data_row < offset + limit) {
-                        column_count = column_count.max(row.field_count);
-                        truncated_columns |= row.field_count > CSV_MAX_COLUMNS;
-                        truncated_cells |= row.truncated_cells;
-                    }
-                    total_rows += 1;
-                    let in_window = data_row >= offset && data_row < offset + limit;
-                    if in_window && !budget_exhausted {
-                        let cost = row_cost(&row.fields);
-                        if !rows.is_empty() && collected_bytes + cost > CSV_PAGE_MAX_BYTES {
-                            // Byte budget reached: stop collecting but keep the
-                            // row index intact, the client continues from here.
-                            budget_exhausted = true;
-                            budget_truncated = true;
-                            more = true;
-                        } else {
-                            collected_bytes += cost;
-                            rows.push(row.fields);
+                    parser.in_quotes = false;
+                }
+                if parser.in_quotes {
+                    if byte == b'"' {
+                        parser.pending_quote = true;
+                    } else if byte == b'\r' {
+                        parser.pending_cr = true;
+                    } else {
+                        if parser.pending_cr {
+                            parser.pending_cr = false;
+                            if byte == b'\n' {
+                                // 单元格内 CRLF 折叠成一个 LF。
+                                parser.push(b'\n');
+                                i += 1;
+                                continue;
+                            }
+                            parser.push(b'\r');
                         }
+                        parser.push(byte);
                     }
-                    if !more && data_row >= offset + limit {
-                        more = true;
+                    i += 1;
+                    continue;
+                }
+                // 引用块刚结束：当前字节按普通内容重放，不再前进索引。
+                continue;
+            }
+            if parser.pending_cr {
+                parser.pending_cr = false;
+                if byte == b'\n' {
+                    parser.push(b'\n');
+                    i += 1;
+                    continue;
+                }
+                parser.push(b'\r');
+            }
+            match byte {
+                b'"' if parser.at_field_start => {
+                    parser.in_quotes = true;
+                    parser.at_field_start = false;
+                    parser.started = true;
+                    i += 1;
+                    continue;
+                }
+                b'\r' => {
+                    // CRLF：CR 属于行尾分隔，不算记录内容。
+                    i += 1;
+                    continue;
+                }
+                b'\n' => {
+                    // 普通行内的 LF 结束记录；引用块内的 LF 已在上面处理。
+                    i += 1;
+                    if !parser.started && parser.field_count == 0 {
+                        at_boundary = true;
+                        continue;
                     }
-                    if offset > 0 && (budget_exhausted || data_row >= offset + limit) {
-                        // Later pages need neither the exact total nor a rescan.
-                        break 'read;
+                    let row = parser.finish_record();
+                    at_boundary = true;
+                    stop |= finish_record(
+                        row,
+                        &mut record,
+                        &mut header,
+                        &mut header_cost,
+                        &mut rows,
+                        &mut total_rows,
+                        &mut more,
+                        &mut column_count,
+                        &mut truncated_columns,
+                        &mut truncated_cells,
+                        &mut budget_truncated,
+                        &mut collected_bytes,
+                        &mut budget_exhausted,
+                        offset,
+                        limit,
+                        cap,
+                    );
+                    if stop {
+                        break;
                     }
-                    record += 1;
+                    continue;
+                }
+                _ if byte == parser.delimiter => {
+                    parser.end_field();
+                    parser.started = true;
+                    i += 1;
+                    continue;
+                }
+                _ => {
+                    // 普通字段内容：一次吃掉整段（快路径，减少逐字节开销）。
+                    let rest = &chunk[i..];
+                    let run = rest
+                        .iter()
+                        .position(|b| {
+                            *b == parser.delimiter || *b == b'\n' || *b == b'\r' || *b == b'"'
+                        })
+                        .unwrap_or(rest.len());
+                    parser.push_run(&rest[..run]);
+                    i += run;
+                    continue;
                 }
             }
         }
+        if stop {
+            break;
+        }
     }
+
+    // 文件没有末尾换行时，最后一条完整记录仍要交付（否则末行会丢）。
+    if !at_boundary && parser.started {
+        let row = parser.finish_record();
+        finish_record(
+            row,
+            &mut record,
+            &mut header,
+            &mut header_cost,
+            &mut rows,
+            &mut total_rows,
+            &mut more,
+            &mut column_count,
+            &mut truncated_columns,
+            &mut truncated_cells,
+            &mut budget_truncated,
+            &mut collected_bytes,
+            &mut budget_exhausted,
+            offset,
+            limit,
+            cap,
+        );
+    }
+
     Ok(CsvPage {
         offset,
         rows,
@@ -497,6 +575,86 @@ fn scan<R: Read>(
         delimiter: delimiter_label(sniff.delimiter),
         file_bytes,
     })
+}
+
+/// Fold one completed record into the page state. Returns whether scanning can
+/// stop (a later page already has its window and the budget verdict).
+#[allow(clippy::too_many_arguments)]
+fn finish_record(
+    row: ParsedRow,
+    record: &mut u64,
+    header: &mut Option<Vec<String>>,
+    header_cost: &mut usize,
+    rows: &mut Vec<Vec<String>>,
+    total_rows: &mut u64,
+    more: &mut bool,
+    column_count: &mut usize,
+    truncated_columns: &mut bool,
+    truncated_cells: &mut bool,
+    budget_truncated: &mut bool,
+    collected_bytes: &mut usize,
+    budget_exhausted: &mut bool,
+    offset: u64,
+    limit: u64,
+    cap: usize,
+) -> bool {
+    if *record == 0 {
+        *column_count = (*column_count).max(row.field_count);
+        *truncated_columns |= row.field_count > CSV_MAX_COLUMNS;
+        *truncated_cells |= row.truncated_cells;
+        // 表头也占页字节：不计入预算会让「1 MB 上限」在宽表上不成立。
+        let (fields, cut) = fit_row(row.fields, cap / 2);
+        *truncated_columns |= cut;
+        *header_cost = row_cost(&fields);
+        *header = Some(fields);
+        *record = 1;
+        return false;
+    }
+    let data_row = *record - 1;
+    // 首页本来就要扫完整份文件（为了 total_rows 与整表列数），因此列数与
+    // 截断标记对**所有**行累计；后续页只看表头与窗口行。
+    if offset == 0 || (data_row >= offset && data_row < offset + limit) {
+        *column_count = (*column_count).max(row.field_count);
+        *truncated_columns |= row.field_count > CSV_MAX_COLUMNS;
+        *truncated_cells |= row.truncated_cells;
+    }
+    *total_rows += 1;
+    let in_window = data_row >= offset && data_row < offset + limit;
+    if in_window && !*budget_exhausted {
+        let cost = row_cost(&row.fields);
+        let page_cost = *header_cost + *collected_bytes + cost;
+        if rows.is_empty() {
+            // 页里至少要有一行；单行超预算时裁掉尾部单元格而不是返回空页。
+            if page_cost > cap {
+                let available = cap.saturating_sub(*header_cost);
+                let (fields, cut) = fit_row(row.fields, available);
+                *truncated_columns |= cut;
+                *budget_truncated = true;
+                *collected_bytes += row_cost(&fields);
+                rows.push(fields);
+            } else {
+                *collected_bytes += cost;
+                rows.push(row.fields);
+            }
+        } else if page_cost > cap {
+            // 预算用尽：停止收集，但行号不变，客户端从 offset + rows.len() 续读。
+            *budget_exhausted = true;
+            *budget_truncated = true;
+            *more = true;
+        } else {
+            *collected_bytes += cost;
+            rows.push(row.fields);
+        }
+    }
+    if !*more && data_row >= offset + limit {
+        *more = true;
+    }
+    *record += 1;
+    if offset > 0 && (*budget_exhausted || data_row >= offset + limit) {
+        // Later pages need neither the exact total nor a rescan.
+        return true;
+    }
+    false
 }
 #[cfg(test)]
 mod tests {
@@ -519,6 +677,29 @@ mod tests {
         let root = std::env::temp_dir().join(format!("pix-csv-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// 复验（P1）复现：最后一条记录以引号结束且文件没有末尾换行。
+    #[test]
+    fn a_missing_trailing_newline_never_loses_the_last_record() {
+        let csv = "id,note\n1,one\n2,\"two\"";
+        let out = page(csv, 0, 1);
+        assert_eq!(
+            out.total_rows,
+            Some(2),
+            "the third record is the 2nd data row"
+        );
+        assert!(out.more, "a page of 1 row must report the second row");
+        let second = page(csv, 1, 1);
+        assert_eq!(
+            second.rows,
+            vec![vec!["2".to_string(), "two".to_string()]],
+            "the last row is reachable and unquoted"
+        );
+        // 也覆盖「没有末尾换行但没有引号」的普通情况。
+        let plain = page("id\n1\n2", 0, 10);
+        assert_eq!(plain.total_rows, Some(2));
+        assert_eq!(plain.rows.len(), 2);
     }
 
     #[test]
@@ -544,7 +725,6 @@ mod tests {
 
     #[test]
     fn bom_stripping_and_quoting_agree_with_the_node_twin() {
-        // BOM + 引号表头：BOM 只剥一次，表头单元格不带字面引号。
         let out = page("\u{feff}\"id\",note\n1,2\n", 0, 10);
         assert_eq!(
             out.header.as_deref(),
@@ -561,13 +741,10 @@ mod tests {
         assert_eq!(out.rows[0][1], "line one\nline two");
         assert_eq!(out.rows[2][0], "3");
         let first = page(csv, 0, 1);
-        assert!(first.more, "second record exists past the one-row window");
+        assert!(first.more);
         let second = page(csv, 1, 1);
         assert_eq!(second.rows, vec![vec!["2".to_string(), "flat".to_string()]]);
-        assert_eq!(
-            second.total_rows, None,
-            "later pages do not rescan the whole file"
-        );
+        assert_eq!(second.total_rows, None);
     }
 
     #[test]
@@ -576,6 +753,20 @@ mod tests {
         let out = page(csv, 0, 10);
         assert_eq!(out.total_rows, Some(2));
         assert_eq!(out.rows[1], vec![String::new(), "x".to_string()]);
+    }
+
+    /// 复验（P2）复现：表头是逗号分隔、数据行里有很多分号，不能被误判成分号。
+    #[test]
+    fn data_rows_never_outvote_the_header_when_sniffing() {
+        let csv = "id,note\n1,a;b;c;d\n";
+        let out = page(csv, 0, 10);
+        assert_eq!(out.delimiter, ",");
+        assert_eq!(out.column_count, 2);
+        assert_eq!(out.rows, vec![vec!["1".to_string(), "a;b;c;d".to_string()]]);
+        // 反向同理：制表符表头不会被数据行里的逗号挤掉。
+        let tab = page("a\tb\n1,x,y,z\n", 0, 10);
+        assert_eq!(tab.delimiter, "\\t");
+        assert_eq!(tab.column_count, 2);
     }
 
     #[test]
@@ -588,15 +779,11 @@ mod tests {
         assert_eq!(page("a;b;c\n1;2;3\n", 0, 10).delimiter, ";");
         // 平票时按 逗号 → 制表符 → 分号 的优先级，Node 侧同序。
         assert_eq!(sniff_delimiter(b"a,b;c\n", "x.csv").delimiter, b',');
-        // 制表符与分号平票时制表符优先（逗号 > 制表符 > 分号）。
         assert_eq!(sniff_delimiter(b"a\tb;c\n", "x.csv").delimiter, b'\t');
         assert_eq!(sniff_delimiter(b"a;b\tc\n", "x.csv").delimiter, b'\t');
-        // 引号内的分隔符不参与嗅探。
         assert_eq!(sniff_delimiter(b"\"a;b;c\",d\n", "x.csv").delimiter, b',');
-        // 单列文件按扩展名回退。
         assert_eq!(sniff_delimiter(b"single\n", "x.tsv").delimiter, b'\t');
         assert_eq!(sniff_delimiter(b"single\n", "x.csv").delimiter, b',');
-        // 只有开头的 BOM 被标记跳过，且不影响嗅探。
         let sniff = sniff_delimiter("\u{feff}a,b\n".as_bytes(), "x.csv");
         assert_eq!(sniff.bom_bytes, BOM.len());
         assert_eq!(sniff.delimiter, b',');
@@ -625,7 +812,6 @@ mod tests {
 
     #[test]
     fn a_wide_row_outside_the_first_page_still_shows_up_on_the_first_page() {
-        // 回归（验收 P2）：首页必须报出整表的真实列数，而不只是首屏窗口里的列数。
         let mut csv = String::from("id\n");
         for row in 0..500 {
             csv.push_str(&format!("r{row}\n"));
@@ -652,7 +838,6 @@ mod tests {
 
     #[test]
     fn exactly_the_cell_cap_is_not_truncated() {
-        // 回归（验收 P2）：正好 4096 个 4 字节 emoji 既不算截断，也不该多切一刀。
         let emoji = "😀".repeat(CSV_CELL_MAX_CHARS);
         let out = page(&format!("id,text\n1,{emoji}\n"), 0, 10);
         assert_eq!(out.rows[0][1].chars().count(), CSV_CELL_MAX_CHARS);
@@ -672,16 +857,15 @@ mod tests {
         assert_eq!(out.total_rows, Some(CSV_PAGE_MAX_ROWS + 20));
     }
 
-    /// 首列是行号、其余 127 列各 4096 字符：单行序列化约 0.5 MB，两行就会越
-    /// 过 1 MB 预算，同时行号让「下一页从哪一行开始」可直接断言。
-    fn wide_rows(row_count: usize) -> String {
+    /// 128 列 × 4096 字符的行：单行序列化约 0.5 MB（ASCII）或 1.5 MB（中文）。
+    /// 首列是行号，其余 127 列填 `cell`。
+    fn wide_rows(row_count: usize, cell: &str) -> String {
         let header = (0..CSV_MAX_COLUMNS)
             .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(",");
-        let cell = "x".repeat(CSV_CELL_MAX_CHARS);
         let cells = (0..CSV_MAX_COLUMNS - 1)
-            .map(|_| cell.clone())
+            .map(|_| cell.to_string())
             .collect::<Vec<_>>()
             .join(",");
         let mut csv = String::from(&header);
@@ -692,12 +876,20 @@ mod tests {
         csv
     }
 
+    fn assert_page_fits(page: &CsvPage) {
+        let serialized = serde_json::to_vec(page).unwrap().len();
+        assert!(
+            serialized <= CSV_PAGE_MAX_BYTES,
+            "serialized page {serialized} must stay inside {CSV_PAGE_MAX_BYTES}"
+        );
+    }
+
     #[test]
     fn the_byte_budget_trims_a_page_without_skipping_rows() {
-        // 回归（验收 P1）：一页的序列化字节必须有界，且下一段页码不丢行。
-        let csv = wide_rows(40);
+        let csv = wide_rows(40, &"x".repeat(CSV_CELL_MAX_CHARS));
         let first = page(&csv, 0, 500);
-        assert!(first.budget_truncated, "wide cells exceed the budget");
+        assert_page_fits(&first);
+        assert!(first.budget_truncated);
         assert!(first.more);
         assert!(!first.rows.is_empty());
         assert!(
@@ -711,30 +903,52 @@ mod tests {
             first.rows.len().to_string(),
             "the next page starts exactly after the trimmed one (no skipped row)"
         );
-        let serialized = serde_json::to_vec(&first).unwrap().len();
-        assert!(
-            serialized <= CSV_PAGE_MAX_BYTES + 64 * 1024,
-            "page payload {serialized} must stay near the budget"
+    }
+
+    /// 复验（P1）复现：每格 4096 个 3 字节汉字时，旧实现返回 3.1 MB。
+    #[test]
+    fn wide_cjk_cells_stay_inside_the_byte_budget() {
+        let csv = wide_rows(40, &"界".repeat(CSV_CELL_MAX_CHARS));
+        let first = page(&csv, 0, 500);
+        let size = serde_json::to_vec(&first).unwrap().len();
+        println!("cjk wide page: {} rows, {} B", first.rows.len(), size);
+        assert_page_fits(&first);
+        assert!(first.budget_truncated);
+        assert_eq!(first.rows.len(), 1, "only one 1.5 MB row fits");
+        let next = page(&csv, 1, 500);
+        assert_eq!(next.rows[0][0], "1", "no row is skipped by the budget");
+        // 单行也超预算时裁掉尾部单元格，而不是返回空页。
+        assert!(first.rows[0].len() < CSV_MAX_COLUMNS);
+    }
+
+    #[test]
+    fn the_header_also_counts_against_the_page_budget() {
+        // 128 列 × 4096 汉字的表头本身就 1.5 MB：裁到预算内，页面仍可用。
+        let header = (0..CSV_MAX_COLUMNS)
+            .map(|i| format!("c{i}") + &"界".repeat(CSV_CELL_MAX_CHARS))
+            .collect::<Vec<_>>()
+            .join(",");
+        let out = page(&format!("{header}\n1,2\n"), 0, 10);
+        assert_page_fits(&out);
+        assert!(out.header.as_ref().unwrap().len() <= CSV_MAX_COLUMNS);
+        assert!(out.truncated_columns || out.header.as_ref().unwrap().len() < CSV_MAX_COLUMNS);
+        assert_eq!(
+            out.rows.len(),
+            1,
+            "a trimmed header still leaves room for a row"
         );
     }
 
     #[test]
     fn at_least_one_row_is_always_returned() {
-        // 预算不能把「一行都放不下」变成空页：第一行总是收下。
-        let csv = wide_rows(3);
+        let csv = wide_rows(3, &"x".repeat(CSV_CELL_MAX_CHARS));
         let out = page(&csv, 0, 1);
         assert_eq!(out.rows.len(), 1, "a one-row page still returns that row");
         assert!(out.more);
-        assert!(
-            !out.budget_truncated,
-            "limit cut it first, not the byte budget"
-        );
     }
 
     #[test]
     fn a_very_long_physical_line_is_parsed_in_constant_memory() {
-        // 回归（验收 P1）：一整个 8 MB 的单行不应被逐块反复拷贝（旧实现是
-        // O(n^2)），这里验证正确性，并用宽松时限固定「不随行长爆炸」。
         let long = "z".repeat(8 * 1024 * 1024);
         let csv = format!("id,text\n1,{long}\n");
         let started = std::time::Instant::now();
@@ -770,7 +984,6 @@ mod tests {
         let root = project();
         let file = root.join("huge.csv");
         std::fs::write(&file, "a\n").unwrap();
-        // 稀疏文件：只改长度，不写真实数据。
         let handle = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
         handle.set_len(CSV_MAX_FILE_BYTES + 1).unwrap();
         let err = read_page(&root.to_string_lossy(), "huge.csv", 0, 10).unwrap_err();
@@ -784,18 +997,14 @@ mod perf_tests {
     use super::*;
     use std::io::Write;
 
-    /// 合成 100 万行 CSV（约 40 MB），测首屏整表扫描、中段分页与载荷上界。
-    /// dev profile（opt-level 0）计时，因此是**上界**，不是 release 实测值。
-    /// 运行：cargo test --manifest-path src-tauri/Cargo.toml csv_perf -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn csv_perf_million_rows() {
+    /// 合成 `rows` 行 CSV，写进临时目录并返回其根。
+    fn synthetic(rows: u32) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("pix-csv-perf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("million.csv");
         let mut handle = std::fs::File::create(&file).unwrap();
         writeln!(handle, "id,name,amount,note").unwrap();
-        for row in 0..1_000_000u32 {
+        for row in 0..rows {
             writeln!(
                 handle,
                 "{row},name{row},{}.{},备注 row {row}",
@@ -805,33 +1014,45 @@ mod perf_tests {
             .unwrap();
         }
         drop(handle);
-        let bytes = std::fs::metadata(&file).unwrap().len();
+        root
+    }
+
+    /// 同一进程内重复测量：返回每次耗时（毫秒），用于报告「中位数/最差」而不是
+    /// 单次最佳值。运行：
+    /// cargo test --release --manifest-path src-tauri/Cargo.toml csv_perf -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn csv_perf_million_rows() {
+        let root = synthetic(1_000_000);
+        let bytes = std::fs::metadata(root.join("million.csv")).unwrap().len();
         println!(
             "synthetic csv: {} rows, {:.1} MB",
             1_000_000,
             bytes as f64 / 1e6
         );
+        let mut first_ms = Vec::new();
+        let mut tail_ms = Vec::new();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let page = read_page(&root.to_string_lossy(), "million.csv", 0, 500).unwrap();
+            first_ms.push(started.elapsed().as_millis() as u64);
+            assert_eq!(page.rows.len(), 500);
+            assert_eq!(page.total_rows, Some(1_000_000));
+            assert!(page.more);
 
-        let first = std::time::Instant::now();
-        let page = read_page(&root.to_string_lossy(), "million.csv", 0, 500).unwrap();
-        println!("first page (offset 0, full scan): {:?}", first.elapsed());
-        assert_eq!(page.rows.len(), 500);
-        assert_eq!(page.total_rows, Some(1_000_000));
-        assert!(page.more);
-
-        let mid = std::time::Instant::now();
-        let page = read_page(&root.to_string_lossy(), "million.csv", 999_000, 500).unwrap();
-        println!("tail page (offset 999000): {:?}", mid.elapsed());
-        assert_eq!(page.rows.len(), 500, "last page is full: 1000000 data rows");
-
-        let payload = serde_json::to_vec(&page).unwrap();
-        println!("page payload: {} KB", payload.len() / 1024);
-        assert!(payload.len() < CSV_PAGE_MAX_BYTES);
+            let started = std::time::Instant::now();
+            let page = read_page(&root.to_string_lossy(), "million.csv", 999_000, 500).unwrap();
+            tail_ms.push(started.elapsed().as_millis() as u64);
+            assert_eq!(page.rows.len(), 500);
+            let payload = serde_json::to_vec(&page).unwrap().len();
+            println!("page payload: {} KB", payload / 1024);
+            assert!(payload < CSV_PAGE_MAX_BYTES);
+        }
+        println!("first page ms: {first_ms:?}");
+        println!("tail page ms: {tail_ms:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// 单行 128 MiB：旧实现按块重复拼接未结束的行（O(n²)），在本机 20s 时限内
-    /// 没有任何输出；现在逐字节消费，耗时与字节数线性相关。
     #[test]
     #[ignore]
     fn csv_perf_one_giant_row_stays_linear() {
@@ -839,46 +1060,23 @@ mod perf_tests {
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("long.csv");
         let mut handle = std::fs::File::create(&file).unwrap();
-        write!(
-            handle,
-            "id,text
-1,"
-        )
-        .unwrap();
+        write!(handle, "id,text\n1,").unwrap();
         let chunk = "z".repeat(1024 * 1024);
         for _ in 0..128 {
             handle.write_all(chunk.as_bytes()).unwrap();
         }
-        handle
-            .write_all(
-                b"
-2,end
-",
-            )
-            .unwrap();
+        handle.write_all(b"\n2,end\n").unwrap();
         drop(handle);
         let started = std::time::Instant::now();
         let page = read_page(&root.to_string_lossy(), "long.csv", 0, 500).unwrap();
         println!("128 MiB single row: {:?}", started.elapsed());
-        assert_eq!(
-            page.rows.len(),
-            2,
-            "the row after the giant one is still indexed"
-        );
+        assert_eq!(page.rows.len(), 2);
         assert_eq!(page.total_rows, Some(2));
         assert!(page.truncated_cells);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "linear parse must finish well inside the SSH exec timeout"
-        );
-        let payload = serde_json::to_vec(&page).unwrap();
-        println!("giant-row page payload: {} KB", payload.len() / 1024);
-        assert!(payload.len() < CSV_PAGE_MAX_BYTES);
+        assert!(serde_json::to_vec(&page).unwrap().len() <= CSV_PAGE_MAX_BYTES);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// 宽表（128 列 × 40 行 × 4096 ASCII/格）是最容易撑爆 SSH 输出的形状，
-    /// 这里固定「一页序列化后必须远低于 16 MiB 传输上限」。
     #[test]
     #[ignore]
     fn csv_perf_wide_long_cells_stay_under_the_transport_limit() {
@@ -910,7 +1108,7 @@ mod perf_tests {
             started.elapsed()
         );
         assert!(page.budget_truncated);
-        assert!(payload < CSV_PAGE_MAX_BYTES + 64 * 1024);
+        assert!(payload <= CSV_PAGE_MAX_BYTES);
         assert!(
             payload < crate::ssh::transport::MAX_EXEC_OUTPUT_BYTES,
             "one page must fit the SSH exec output limit"

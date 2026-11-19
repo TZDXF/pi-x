@@ -1,10 +1,13 @@
+/**
+ * 远端 CSV/TSV 表格预览（`op: "csv"`）。本文件的实现必须与
+ * `src-tauri/src/csv_preview.rs` 逐项一致：分页、列/字符/字节上限、分隔符嗅探
+ * （只看首行、平票顺序）、BOM、`limit = 0` 的默认值、以及「无末尾换行也要交付
+ * 最后一条记录」。`tests/remote-files.test.ts` 会直接比对两边的常量与行为。
+ */
 import fs from "node:fs"
-import path from "node:path"
 
 const TEXT_MAX = 512 * 1024
 const IMAGE_MAX = 8 * 1024 * 1024
-// CSV 表格预览的契约必须与 src-tauri/src/csv_preview.rs 逐项一致：分页、
-// 截断、分隔符嗅探（平票顺序）、BOM、`limit = 0` 的默认值、以及单页字节预算。
 const CSV_PAGE_MAX_ROWS = 1000
 const CSV_PAGE_DEFAULT_ROWS = 200
 const CSV_MAX_COLUMNS = 128
@@ -12,6 +15,7 @@ const CSV_CELL_MAX_CHARS = 4096
 const CSV_CELL_MAX_CHARS_BYTES = CSV_CELL_MAX_CHARS * 6
 const CSV_MAX_FILE_BYTES = 256 * 1024 * 1024
 const CSV_PAGE_MAX_BYTES = 1024 * 1024
+const CSV_BYTE_OVERHEAD = 4 * 1024
 const SNIFF_BYTES = 8 * 1024
 const READ_CHUNK = 64 * 1024
 const BOM = [0xef, 0xbb, 0xbf]
@@ -23,7 +27,11 @@ const mimes = {
 const fail = (code, fallback, params = {}) => {
   throw { code, fallback, params }
 }
-const extOf = relative => path.extname(relative).slice(1).toLowerCase()
+const extOf = relative => {
+  const name = relative.split(/[\\/]/).pop() || ""
+  const dot = name.lastIndexOf(".")
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ""
+}
 
 function read({ project, path: relative, op, offset = 0, limit = CSV_PAGE_DEFAULT_ROWS }) {
   const root = fs.realpathSync(project)
@@ -48,7 +56,7 @@ function read({ project, path: relative, op, offset = 0, limit = CSV_PAGE_DEFAUL
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile()) fail("previewPathInvalid", "无效的文件路径: {detail}", { detail: relative })
-    const mime = mimes[path.extname(relative).slice(1).toLowerCase()]
+    const mime = mimes[extOf(relative)]
     if (mime && stat.size > IMAGE_MAX) fail("previewImageTooLarge", "图片过大，无法预览（上限 {limit} MB）", { limit: 8 })
     const buffer = Buffer.alloc(Math.min(stat.size, mime ? IMAGE_MAX + 1 : TEXT_MAX + 1))
     let length = 0
@@ -69,8 +77,9 @@ function read({ project, path: relative, op, offset = 0, limit = CSV_PAGE_DEFAUL
 }
 
 /**
- * 只在文件开头 8 KB 内统计候选分隔符（不要求读到首个换行），引号内不计。
- * 平票按 逗号 → 制表符 → 分号 的优先级（与 Rust 侧同序）；无候选时按扩展名回退。
+ * 只统计**首行**（引号外、最多 8 KB）的候选分隔符。把整段文件开头都算进去，
+ * 会让「表头是逗号、数据行里全是分号」的合法 CSV 被误判（复验 P2）。
+ * 平票按 逗号 → 制表符 → 分号 的优先级（与 Rust 同序）；无候选时按扩展名回退。
  */
 function sniffDelimiter(head, relative) {
   const bomBytes = head.subarray(0, 3).equals(Buffer.from(BOM)) ? 3 : 0
@@ -78,6 +87,7 @@ function sniffDelimiter(head, relative) {
   let inQuotes = false
   for (const byte of head.subarray(bomBytes, bomBytes + SNIFF_BYTES)) {
     if (byte === 34) { inQuotes = !inQuotes; continue }
+    if (byte === 10 && !inQuotes) break
     if (inQuotes) continue
     const index = CANDIDATES.indexOf(byte)
     if (index >= 0) counts[index] += 1
@@ -92,19 +102,33 @@ function sniffDelimiter(head, relative) {
   }
 }
 
-/** 单元格成本：UTF-8 字节 + JSON 引号，另加需要转义的字符。与 Rust 侧同一估算。 */
+/** 单元格成本：UTF-8 字节（不是 UTF-16 长度）+ JSON 引号 + 需转义的字符。 */
 function cellCost(cell) {
+  const bytes = Buffer.byteLength(cell, "utf8")
   let escapes = 0
   for (const char of cell) if (char === '"' || char === "\\") escapes += 1
-  return cell.length + 3 + escapes
+  return bytes + 3 + escapes
 }
 const rowCost = row => row.reduce((total, cell) => total + cellCost(cell), 0)
 
+/** 保留前若干单元格，使序列化后不超过 `budget`（至少保留一个）。 */
+function fitRow(fields, budget) {
+  let cost = 0
+  let keep = 0
+  for (const field of fields) {
+    const next = cost + cellCost(field)
+    if (keep > 0 && next > budget) break
+    cost = next
+    keep += 1
+  }
+  if (keep < fields.length) return { fields: fields.slice(0, Math.max(1, keep)), cut: true }
+  return { fields, cut: false }
+}
+
 /**
  * 逐字节流式解析（与 Rust `RowParser` 同一状态机）：整行从不缓冲，因此一个
- * 128 MiB 的物理行也只占常数内存、耗时随字节数线性增长（旧实现按块重复拼接
- * 未结束的行，是 O(n²)）。RFC 4180 宽松口径：引号只在字段起始处开启引用块，
- * 块内 `""` 是字面引号，块内分隔符与换行是字面量。
+ * 128 MiB 的物理行也只占常数内存、耗时随字节数线性增长。RFC 4180 宽松口径：
+ * 引号只在字段起始处开启引用块，块内 `""` 是字面引号，块内分隔符与换行是字面量。
  */
 class RowParser {
   constructor(delimiter) {
@@ -114,7 +138,7 @@ class RowParser {
   beginRow(collect) {
     this.collect = collect
     // 按字节累积，字段结束时才解码：逐字节 String.fromCharCode 会把多字节
-    // UTF-8（含 emoji 等代理对）拆成乱码（验收 P2 的 emoji 用例）。
+    // UTF-8（含 emoji 等代理对）拆成乱码。
     this.bytes = []
     this.field = ""
     this.fieldBytes = 0
@@ -135,13 +159,28 @@ class RowParser {
       this.fieldBytes += 1
     } else this.cellTruncated = true
   }
+  /** 一段普通字段字节（不含分隔符/换行/CR/引号）。 */
+  pushRun(bytes) {
+    if (!bytes.length) return
+    this.started = true
+    this.atFieldStart = false
+    if (!this.collect) return
+    const room = Math.max(0, CSV_CELL_MAX_CHARS_BYTES - this.fieldBytes)
+    if (bytes.length <= room) {
+      for (let index = 0; index < bytes.length; index++) this.bytes.push(bytes[index])
+      this.fieldBytes += bytes.length
+    } else {
+      for (let index = 0; index < room; index++) this.bytes.push(bytes[index])
+      this.fieldBytes += room
+      this.cellTruncated = true
+    }
+  }
   endField() {
     this.fieldCount += 1
     this.field = this.bytes.length ? Buffer.from(this.bytes).toString("utf8") : ""
     this.bytes = []
     if (this.collect && this.fields.length < CSV_MAX_COLUMNS) {
-      // 与 Rust 同口径：按**码位**截断，正好等于上限不算截断。UTF-16 length
-      // 只是快速下界（它永远 ≥ 码位数），超过后再按码位精确判断。
+      // 与 Rust 同口径：按**码位**截断，正好等于上限不算截断。
       if (this.field.length > CSV_CELL_MAX_CHARS) {
         const chars = Array.from(this.field)
         if (chars.length > CSV_CELL_MAX_CHARS) {
@@ -155,52 +194,11 @@ class RowParser {
     this.fieldBytes = 0
     this.atFieldStart = true
   }
-  takeRow() {
+  finishRecord() {
+    this.endField()
     const row = { fields: this.fields, fieldCount: this.fieldCount, truncatedCells: this.cellTruncated }
     this.fields = []
     return row
-  }
-  /** "continue" / "blank" / 完成的行。 */
-  feed(byte) {
-    let current = byte
-    while (true) {
-      if (this.pendingQuote) {
-        this.pendingQuote = false
-        if (current === 34) { this.push(34); return "continue" }
-        this.inQuotes = false
-      }
-      if (this.pendingCr) {
-        this.pendingCr = false
-        if (current === 10) { this.push(10); return "continue" }
-        this.push(13)
-      }
-      if (this.inQuotes) {
-        if (current === 34) { this.pendingQuote = true; return "continue" }
-        if (current === 13) { this.pendingCr = true; return "continue" }
-        this.push(current)
-        return "continue"
-      }
-      if (current === 34 && this.atFieldStart) {
-        this.inQuotes = true
-        this.atFieldStart = false
-        this.started = true
-        return "continue"
-      }
-      if (current === 10) {
-        if (!this.started && this.fieldCount === 0) return "blank"
-        this.endField()
-        return this.takeRow()
-      }
-      if (current === 13) return "continue"
-      if (current === this.delimiter) {
-        this.endField()
-        this.started = true
-        return "continue"
-      }
-      this.push(current)
-      this.atFieldStart = false
-      return "continue"
-    }
   }
 }
 
@@ -215,6 +213,7 @@ function readCsv({ file, relative, offset, limit }) {
     ? Math.min(Math.floor(requested), CSV_PAGE_MAX_ROWS)
     : CSV_PAGE_DEFAULT_ROWS
   const start = Number.isFinite(Number(offset)) ? Math.max(0, Math.floor(Number(offset))) : 0
+  const cap = CSV_PAGE_MAX_BYTES - CSV_BYTE_OVERHEAD
 
   const sniffFd = fs.openSync(file, "r")
   let head
@@ -227,90 +226,180 @@ function readCsv({ file, relative, offset, limit }) {
   }
   const sniff = sniffDelimiter(head, relative)
 
+  const state = {
+    header: null,
+    headerCost: 0,
+    rows: [],
+    totalRows: 0,
+    more: false,
+    columnCount: 0,
+    truncatedColumns: false,
+    truncatedCells: false,
+    budgetTruncated: false,
+    collectedBytes: 0,
+    budgetExhausted: false,
+    record: 0,
+  }
+
   const fd = fs.openSync(file, "r")
   try {
     const parser = new RowParser(sniff.delimiter)
-    let header = null
-    const rows = []
-    let totalRows = 0
-    let more = false
-    let columnCount = 0
-    let truncatedColumns = false
-    let truncatedCells = false
-    let budgetTruncated = false
-    let collectedBytes = 0
-    let budgetExhausted = false
-    let record = 0
     let atBoundary = true
     let bomSkip = sniff.bomBytes
+    let stop = false
     const buffer = Buffer.alloc(READ_CHUNK)
 
-    scan: while (true) {
+    scan: while (!stop) {
       const read = fs.readSync(fd, buffer, 0, READ_CHUNK, null)
       if (!read) break
-      for (let index = 0; index < read; index++) {
-        const byte = buffer[index]
-        if (bomSkip > 0) { bomSkip -= 1; continue }
-        if (atBoundary) {
-          const dataRow = Math.max(0, record - 1)
-          const windowed = header !== null && !budgetExhausted && dataRow >= start && dataRow < start + clamped
-          parser.beginRow(header === null || windowed)
-          atBoundary = false
-        }
-        const feed = parser.feed(byte)
-        if (feed === "continue") continue
-        if (feed === "blank") { atBoundary = true; continue }
-        atBoundary = true
-        const row = feed
-        if (record === 0) {
-          header = row.fields
-          columnCount = Math.max(columnCount, row.fieldCount)
-          truncatedColumns = truncatedColumns || row.fieldCount > CSV_MAX_COLUMNS
-          truncatedCells = truncatedCells || row.truncatedCells
-          record = 1
+      let index = 0
+      while (index < read) {
+        if (bomSkip > 0) {
+          const skip = Math.min(bomSkip, read - index)
+          bomSkip -= skip
+          index += skip
           continue
         }
-        const dataRow = record - 1
-        // 首页本来就要扫完整份文件，因此列数与截断标记对**所有**行累计。
-        if (start === 0 || (dataRow >= start && dataRow < start + clamped)) {
-          columnCount = Math.max(columnCount, row.fieldCount)
-          truncatedColumns = truncatedColumns || row.fieldCount > CSV_MAX_COLUMNS
-          truncatedCells = truncatedCells || row.truncatedCells
+        if (atBoundary) {
+          const dataRow = Math.max(0, state.record - 1)
+          const windowed = state.header !== null && !state.budgetExhausted &&
+            dataRow >= start && dataRow < start + clamped
+          parser.beginRow(state.header === null || windowed)
+          atBoundary = false
         }
-        totalRows += 1
-        const inWindow = dataRow >= start && dataRow < start + clamped
-        if (inWindow && !budgetExhausted) {
-          const cost = rowCost(row.fields)
-          if (rows.length > 0 && collectedBytes + cost > CSV_PAGE_MAX_BYTES) {
-            budgetExhausted = true
-            budgetTruncated = true
-            more = true
-          } else {
-            collectedBytes += cost
-            rows.push(row.fields)
+        const byte = buffer[index]
+        if (byte === 34 && parser.atFieldStart) {
+          parser.inQuotes = true
+          parser.atFieldStart = false
+          parser.started = true
+          index += 1
+          continue
+        }
+        if (parser.inQuotes || parser.pendingQuote) {
+          if (parser.pendingQuote) {
+            parser.pendingQuote = false
+            if (byte === 34) { parser.push(34); index += 1; continue }
+            parser.inQuotes = false
           }
+          if (parser.inQuotes) {
+            if (byte === 34) parser.pendingQuote = true
+            else if (byte === 13) parser.pendingCr = true
+            else {
+              if (parser.pendingCr) {
+                parser.pendingCr = false
+                if (byte === 10) { parser.push(10); index += 1; continue }
+                parser.push(13)
+              }
+              parser.push(byte)
+            }
+            index += 1
+            continue
+          }
+          continue
         }
-        if (!more && dataRow >= start + clamped) more = true
-        if (start > 0 && (budgetExhausted || dataRow >= start + clamped)) break scan
-        record += 1
+        if (parser.pendingCr) {
+          parser.pendingCr = false
+          if (byte === 10) { parser.push(10); index += 1; continue }
+          parser.push(13)
+        }
+        if (byte === 13) { index += 1; continue }
+        if (byte === 10) {
+          index += 1
+          if (!parser.started && parser.fieldCount === 0) { atBoundary = true; continue }
+          const row = parser.finishRecord()
+          atBoundary = true
+          stop = finishRecord(state, row, start, clamped, cap)
+          if (stop) break scan
+          continue
+        }
+        if (byte === parser.delimiter) {
+          parser.endField()
+          parser.started = true
+          index += 1
+          continue
+        }
+        // 普通字段内容：一次吃掉整段（快路径）。
+        let run = index
+        while (run < read) {
+          const b = buffer[run]
+          if (b === parser.delimiter || b === 10 || b === 13 || b === 34) break
+          run += 1
+        }
+        parser.pushRun(buffer.subarray(index, run))
+        index = run
       }
+    }
+
+    // 文件没有末尾换行时，最后一条完整记录仍要交付（否则末行会丢，复验 P1）。
+    if (!atBoundary && parser.started) {
+      finishRecord(state, parser.finishRecord(), start, clamped, cap)
     }
     return {
       offset: start,
-      rows,
-      header,
-      more,
-      totalRows: start === 0 ? totalRows : null,
-      columnCount,
-      truncatedColumns,
-      truncatedCells,
-      budgetTruncated,
+      rows: state.rows,
+      header: state.header,
+      more: state.more,
+      totalRows: start === 0 ? state.totalRows : null,
+      columnCount: state.columnCount,
+      truncatedColumns: state.truncatedColumns,
+      truncatedCells: state.truncatedCells,
+      budgetTruncated: state.budgetTruncated,
       delimiter: sniff.delimiter === 9 ? "\\t" : sniff.delimiter === 59 ? ";" : ",",
       fileBytes,
     }
   } finally {
     fs.closeSync(fd)
   }
+}
+
+/** 把一条完成的记录并入页状态；返回是否可以停止扫描。与 Rust `finish_record` 同序。 */
+function finishRecord(state, row, start, limit, cap) {
+  if (state.record === 0) {
+    state.columnCount = Math.max(state.columnCount, row.fieldCount)
+    state.truncatedColumns = state.truncatedColumns || row.fieldCount > CSV_MAX_COLUMNS
+    state.truncatedCells = state.truncatedCells || row.truncatedCells
+    // 表头也占页字节：不计入预算，1 MB 上限在宽表上就不成立。
+    const fitted = fitRow(row.fields, Math.floor(cap / 2))
+    state.truncatedColumns = state.truncatedColumns || fitted.cut
+    state.headerCost = rowCost(fitted.fields)
+    state.header = fitted.fields
+    state.record = 1
+    return false
+  }
+  const dataRow = state.record - 1
+  if (start === 0 || (dataRow >= start && dataRow < start + limit)) {
+    state.columnCount = Math.max(state.columnCount, row.fieldCount)
+    state.truncatedColumns = state.truncatedColumns || row.fieldCount > CSV_MAX_COLUMNS
+    state.truncatedCells = state.truncatedCells || row.truncatedCells
+  }
+  state.totalRows += 1
+  const inWindow = dataRow >= start && dataRow < start + limit
+  if (inWindow && !state.budgetExhausted) {
+    const cost = rowCost(row.fields)
+    const pageCost = state.headerCost + state.collectedBytes + cost
+    if (state.rows.length === 0) {
+      if (pageCost > cap) {
+        const fitted = fitRow(row.fields, Math.max(0, cap - state.headerCost))
+        state.truncatedColumns = state.truncatedColumns || fitted.cut
+        state.budgetTruncated = true
+        state.collectedBytes += rowCost(fitted.fields)
+        state.rows.push(fitted.fields)
+      } else {
+        state.collectedBytes += cost
+        state.rows.push(row.fields)
+      }
+    } else if (pageCost > cap) {
+      state.budgetExhausted = true
+      state.budgetTruncated = true
+      state.more = true
+    } else {
+      state.collectedBytes += cost
+      state.rows.push(row.fields)
+    }
+  }
+  if (!state.more && dataRow >= start + limit) state.more = true
+  state.record += 1
+  return start > 0 && (state.budgetExhausted || dataRow >= start + limit)
 }
 
 try {

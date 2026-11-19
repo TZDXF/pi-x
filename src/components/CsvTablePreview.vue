@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { AlertCircle } from "@lucide/vue"
+import { AlertCircle, RefreshCw } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { formatCodedError } from "@/lib/backendError"
 import { readCsvPage } from "@/api/client/projectFiles"
@@ -9,7 +9,7 @@ import {
   CSV_MAX_CELL_CHARS,
   CSV_MAX_COLUMNS,
   CSV_OVERSCAN,
-  CSV_PAGE_CACHE_LIMIT,
+  CSV_PAGE_CACHE_ROWS,
   CSV_PAGE_ROWS,
   CSV_ROW_HEIGHT,
   csvBodyHeight,
@@ -29,17 +29,18 @@ import {
  *
  * 大文件性能的四条约束：
  * 1. 传输有界：后端 `read_csv_page` 流式解析、每次只回一段（≤500 行，且序列化
- *    字节有预算），前端永不持有整份文件；
+ *    字节有硬上限），前端永不持有整份文件；
  * 2. 渲染有界：固定行高 + 绝对定位的虚拟窗口，DOM 里只有视口内的行；可见列数
  *    被 [CSV_MAX_COLUMNS] 截断（后端报的 `columnCount` 可能更大，只用于提示）；
- * 3. 在途有界：**同时最多 2 个**分页请求，窗口移动时丢弃尚未发出的排队请求，
- *    因此快速跳过多个区段也不会堆起 N 个并发；
- * 4. 回滚有界：chunk 缓存有上限（[CSV_PAGE_CACHE_LIMIT]），往回滚动不会让内存
- *    随浏览过的区域线性增长。
+ * 3. 在途有界：**同时最多 2 个**请求。计数只随请求真正结束而减少，刷新不会把它
+ *    清零，因此「旧请求还在跑 + 刷新又发两个」不会变成 3；已发出的 offset 也不会
+ *    被重复请求；
+ * 4. 回滚有界：段缓存按**行数**限制（[CSV_PAGE_CACHE_ROWS]），不把相邻段缝成
+ *    一个不断变大的段——那样「段数」上限根本拦不住内存，翻屏步长也会算错。
  *
  * 行数超过 [`CSV_MAX_VIRTUAL_ROWS`] 时单一滚动面的高度会越过浏览器元素上限
- * （Chromium 约 33.5M px），虚拟滚动已无法到达尾部，因此自动改为「一段一屏 +
- * 上一段/下一段」：渲染规模与请求规模同样与总行数无关。
+ * （Chromium 约 33.5M px），虚拟滚动已无法到达尾部，因此自动改为「一屏 +
+ * 上一屏/下一屏」，步长按**实际取回的行数**计算（被字节预算裁短也正确）。
  */
 const props = withDefaults(
   defineProps<{
@@ -47,14 +48,14 @@ const props = withDefaults(
     path: string
     /** Bounded text blob; when set, no backend page requests are made. */
     text?: string | null
-    /** Bumped when the file changed on disk; reloads the visible rows in place. */
+    /** Bumped when the file changed on disk; reloads in place. */
     revision?: number
   }>(),
   { text: undefined, revision: 0 },
 )
 const { t } = useI18n()
 
-/** Open pages allowed at the same time (IPC + parse round trips). */
+/** Requests allowed at the same time (IPC + parse round trips). */
 const MAX_INFLIGHT_PAGES = 2
 
 interface Chunk {
@@ -76,14 +77,12 @@ const loading = ref(false)
 const errorCause = ref<unknown>(null)
 const error = computed(() => (errorCause.value == null ? "" : formatCodedError(t, errorCause.value)))
 
-/** Loaded row ranges, ordered by offset (never adjacent-duplicated). */
+/** Loaded row ranges, ordered by offset; one entry per request, never merged. */
 const chunks = ref<Chunk[]>([])
 /** Client mode: the whole bounded blob, already parsed. */
 const clientRows = ref<string[][] | null>(null)
 /** Bumped whenever rows arrive so computed windows re-render. */
 const tick = ref(0)
-
-/** Rows rendered per paged-mode screen and per backend request. */
 const rowsPerChunk = CSV_PAGE_ROWS
 
 const rowCount = computed(() => {
@@ -92,73 +91,85 @@ const rowCount = computed(() => {
   return chunks.value.reduce((end, chunk) => Math.max(end, chunk.offset + chunk.rows.length), 0)
 })
 
+function chunkAt(offset: number): Chunk | undefined {
+  return chunks.value.find(chunk => chunk.offset === offset)
+}
+
 function rowAt(index: number): string[] | undefined {
   if (clientRows.value) return clientRows.value[index]
-  // Chunks are few (bounded by the cache limit), so a linear scan is cheaper
-  // than maintaining an index map that must be rebuilt on every prune.
   for (const chunk of chunks.value) {
     if (index >= chunk.offset && index < chunk.offset + chunk.rows.length) return chunk.rows[index - chunk.offset]
   }
   return undefined
 }
 
+function resetMetadata() {
+  header.value = null
+  columnCount.value = 0
+  totalRows.value = null
+  exhausted.value = false
+  truncatedColumns.value = false
+  truncatedCells.value = false
+  budgetTruncated.value = false
+}
+
 function applyChunk(page: CsvPage) {
   if (page.header) header.value = page.header
   columnCount.value = Math.max(columnCount.value, page.columnCount, page.header?.length ?? 0)
-  if (page.offset === 0) totalRows.value = page.totalRows
-  if (page.offset === 0) delimiter.value = page.delimiter
-  fileBytes.value = Math.max(fileBytes.value, page.fileBytes)
+  if (page.offset === 0) {
+    // 首页是元数据的唯一来源：总行数可能因为文件被改小而变小，必须覆盖而不是取大。
+    totalRows.value = page.totalRows
+    delimiter.value = page.delimiter
+  }
+  fileBytes.value = page.fileBytes
   truncatedColumns.value ||= page.truncatedColumns
   truncatedCells.value ||= page.truncatedCells
   budgetTruncated.value ||= page.budgetTruncated
   if (!page.rows.length) {
-    // 越过分页边界：后端没有更多数据。
+    // 空段：该 offset 之后没有数据了。
     exhausted.value = true
-    if (totalRows.value == null) totalRows.value = page.offset
+    if (page.offset === 0 && totalRows.value == null) totalRows.value = 0
+    clampPage()
+    tick.value += 1
     return
   }
   chunks.value = [
     ...chunks.value.filter(chunk => chunk.offset !== page.offset),
     { offset: page.offset, rows: page.rows },
   ].sort((a, b) => a.offset - b.offset)
-  chunks.value = mergeChunks(chunks.value)
-  trimChunks(page.offset, page.rows.length)
+  trimChunks()
+  clampPage()
   tick.value += 1
 }
 
-/** Merge chunks that became adjacent (a byte-trimmed page is shorter than 500). */
-function mergeChunks(list: Chunk[]): Chunk[] {
-  const merged: Chunk[] = []
-  for (const chunk of list) {
-    const last = merged[merged.length - 1]
-    if (last && last.offset + last.rows.length === chunk.offset) {
-      merged[merged.length - 1] = { offset: last.offset, rows: [...last.rows, ...chunk.rows] }
-    } else merged.push(chunk)
-  }
-  return merged
-}
-
 /**
- * Keep the chunk just loaded plus everything inside the desired window, then
- * drop the oldest others. Dropping a chunk the viewport is showing would leave
- * a hole until the next scroll, so the visible window is always protected.
+ * Keep the chunks the viewport needs, then drop the farthest others until the
+ * cached **row count** is back under [`CSV_PAGE_CACHE_ROWS`]. Counting chunks
+ * alone was not a bound: adjacent 500-row slices used to be merged into one
+ * ever growing chunk, so nine screens stayed resident with no eviction.
  */
-function trimChunks(keepOffset: number, keepRows: number) {
-  const desired = { start: desiredWindow.value.start, end: desiredWindow.value.end }
-  const protectedChunks = chunks.value.filter(
-    chunk => chunk.offset === keepOffset || (chunk.offset < desired.end && chunk.offset + keepRows > desired.start),
-  )
-  if (chunks.value.length <= CSV_PAGE_CACHE_LIMIT) return
-  const protectedSet = new Set(protectedChunks)
-  const result: Chunk[] = []
-  for (const chunk of chunks.value) {
-    if (result.length < CSV_PAGE_CACHE_LIMIT || protectedSet.has(chunk)) result.push(chunk)
+function trimChunks() {
+  const total = chunks.value.reduce((rows, chunk) => rows + chunk.rows.length, 0)
+  if (total <= CSV_PAGE_CACHE_ROWS) return
+  const desired = desiredWindow.value
+  const isVisible = (chunk: Chunk) => chunk.offset < desired.end && chunk.offset + chunk.rows.length > desired.start
+  // 可视段优先且**永远保留**（删掉正在显示的行会立刻出现空洞）；其余按距窗口
+  // 远近填充剩余额度。旧实现先按距离排序再按额度裁剪，结果把可视段自己也裁掉了。
+  const visible = chunks.value.filter(isVisible)
+  let kept = visible.reduce((rows, chunk) => rows + chunk.rows.length, 0)
+  const result = [...visible]
+  const others = chunks.value
+    .filter(chunk => !isVisible(chunk))
+    .sort((a, b) => Math.abs(a.offset - desired.start) - Math.abs(b.offset - desired.start))
+  for (const chunk of others) {
+    if (kept + chunk.rows.length > CSV_PAGE_CACHE_ROWS) break
+    kept += chunk.rows.length
+    result.push(chunk)
   }
-  chunks.value = result
+  chunks.value = result.sort((a, b) => a.offset - b.offset)
 }
 
 // ---- 虚拟窗口：渲染行数只由视口高度决定 ----
-
 const scroller = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
 const viewportHeight = ref(0)
@@ -170,7 +181,6 @@ watch(
     if (!element) return
     viewportHeight.value = element.clientHeight
     observer = new ResizeObserver(() => {
-      // 宽度变化（例如侧栏被拖拽）只影响列裁切，不需要重新取数。
       viewportHeight.value = element.clientHeight
     })
     observer.observe(element)
@@ -191,7 +201,6 @@ const bodyHeight = computed(() => csvBodyHeight(visibleRowCount.value))
 const rowWindow = computed(() => {
   void tick.value
   if (virtual.value) return csvRowWindow(scrollTop.value, viewportHeight.value, rowCount.value)
-  // 分页模式仍按视口渲染：滚动面只覆盖当前段，DOM 规模与总行数无关。
   const local = csvRowWindow(scrollTop.value, viewportHeight.value, visibleRowCount.value)
   return { start: baseRow.value + local.start, end: baseRow.value + local.end }
 })
@@ -221,31 +230,45 @@ const visibleRows = computed(() => {
   return rendered
 })
 
-// ---- 请求调度：最多 MAX_INFLIGHT_PAGES 个在途请求，窗口移动即重排队 ----
-let generation = 0
-/** In-flight requests by offset; the range they will cover once they land. */
-const inflight = new Map<number, number>()
+/** 文件变小/刷新后把页码与滚动位置钳回有效范围（否则旧页空白、摘要仍是旧值）。 */
+function clampPage() {
+  const rows = rowCount.value
+  if (!virtual.value && pageStart.value > 0 && pageStart.value >= rows) {
+    pageStart.value = Math.max(0, Math.min(rows - 1, Math.floor((rows - 1) / rowsPerChunk) * rowsPerChunk))
+    scrollTop.value = 0
+    if (scroller.value) scroller.value.scrollTop = 0
+  }
+  if (virtual.value) {
+    const maxScroll = Math.max(0, csvBodyHeight(rows) - viewportHeight.value)
+    if (scrollTop.value > maxScroll) {
+      scrollTop.value = maxScroll
+      if (scroller.value) scroller.value.scrollTop = maxScroll
+    }
+  } else if (scroller.value) {
+    const maxScroll = Math.max(0, csvBodyHeight(visibleRowCount.value) - viewportHeight.value)
+    if (scrollTop.value > maxScroll) {
+      scrollTop.value = maxScroll
+      scroller.value.scrollTop = maxScroll
+    }
+  }
+}
 
-/** Whether an in-flight request will eventually fill `row`. */
+// ---- 请求调度：最多 MAX_INFLIGHT_PAGES 个在途请求，失败后不自动重试 ----
+/**
+ * Requests actually in flight, keyed by the offset they cover. This map is
+ * **not** cleared on refresh: those requests are still running and still count
+ * against the cap (clearing it let a refresh push the peak to 3).
+ */
+const pending = new Map<number, number>()
+/** Explicit offsets to fetch next (refresh metadata/current screen, paging). */
+const queue: number[] = []
+let generation = 0
+
 function pendingAt(row: number): boolean {
-  for (const [offset, limit] of inflight) {
+  for (const [offset, limit] of pending) {
     if (row >= offset && row < offset + limit) return true
   }
   return false
-}
-
-/**
- * Dispatch the first gap the viewport needs that is not already on the way.
- * A gap covered by an in-flight request is not a gap: asking again would just
- * duplicate the same slice (the request already being parsed covers it).
- */
-function pump() {
-  if (props.text !== undefined || exhausted.value) return
-  while (inflight.size < MAX_INFLIGHT_PAGES) {
-    const gap = firstPendingGap(desiredWindow.value.start, desiredWindow.value.end)
-    if (gap == null) return
-    void requestChunk(gap)
-  }
 }
 
 function firstPendingGap(start: number, end: number): number | null {
@@ -256,9 +279,33 @@ function firstPendingGap(start: number, end: number): number | null {
   return null
 }
 
+function pump() {
+  if (props.text !== undefined) return
+  // 失败的请求不再自动重试：否则「永久错误」（例如超 256 MB）会无限循环。
+  if (errorCause.value != null) return
+  while (pending.size < MAX_INFLIGHT_PAGES) {
+    let next: number | null = null
+    while (queue.length) {
+      const candidate = queue.shift() as number
+      if (!pending.has(candidate) && rowAt(candidate) === undefined && !exhaustedAt(candidate)) {
+        next = candidate
+        break
+      }
+    }
+    if (next == null) next = firstPendingGap(desiredWindow.value.start, desiredWindow.value.end)
+    if (next == null || pending.has(next)) return
+    void requestChunk(next)
+  }
+}
+
+/** 已知末页之后不再请求（省一次空页往返）。 */
+function exhaustedAt(offset: number): boolean {
+  return totalRows.value != null && offset >= totalRows.value
+}
+
 async function requestChunk(offset: number) {
   const startedIn = generation
-  inflight.set(offset, rowsPerChunk)
+  pending.set(offset, rowsPerChunk)
   loading.value = true
   try {
     const page = await readCsvPage(props.project, props.path, offset, rowsPerChunk)
@@ -269,59 +316,57 @@ async function requestChunk(offset: number) {
     if (startedIn !== generation) return
     errorCause.value = cause
   } finally {
-    if (startedIn === generation) {
-      inflight.delete(offset)
-      loading.value = inflight.size > 0
-      pump()
-    }
+    // 计数只随请求结束而释放，跨代也一样：刷新时旧请求仍在占用名额。
+    pending.delete(offset)
+    loading.value = pending.size > 0
+    if (startedIn === generation) pump()
   }
 }
 
-// ---- 加载：文件切换重建；磁盘刷新保留当前页/滚动位置 ----
-function resetState() {
-  generation += 1
-  inflight.clear()
-  chunks.value = []
-  clientRows.value = null
-  header.value = null
-  columnCount.value = 0
-  totalRows.value = null
-  exhausted.value = false
-  truncatedColumns.value = false
-  truncatedCells.value = false
-  budgetTruncated.value = false
+function retry() {
   errorCause.value = null
-  loading.value = false
+  queue.push(0)
+  if (!virtual.value && pageStart.value > 0) queue.push(pageStart.value)
+  pump()
 }
 
-async function load(preservePosition: boolean) {
-  // 磁盘刷新必须保留页码/滚动位置**和**元数据：`totalRows` 只在 offset 0 的
-  // 那一页返回，刷新若丢掉它，虚拟滚动会退化成只有已加载的几行。
-  const previous = {
+// ---- 加载：文件切换重建；磁盘刷新保留位置并重新取元数据 ----
+function resetState() {
+  generation += 1
+  queue.length = 0
+  chunks.value = []
+  clientRows.value = null
+  resetMetadata()
+  errorCause.value = null
+}
+
+function keepMetadata() {
+  return {
     header: header.value,
     columnCount: columnCount.value,
-    totalRows: totalRows.value,
     delimiter: delimiter.value,
     fileBytes: fileBytes.value,
-    truncatedColumns: truncatedColumns.value,
-    truncatedCells: truncatedCells.value,
     pageStart: pageStart.value,
     scrollTop: scrollTop.value,
   }
+}
+
+async function load(preservePosition: boolean) {
+  const previous = keepMetadata()
   resetState()
+  chunks.value = []
   if (preservePosition) {
     header.value = previous.header
     columnCount.value = previous.columnCount
-    totalRows.value = previous.totalRows
     delimiter.value = previous.delimiter
     fileBytes.value = previous.fileBytes
-    truncatedColumns.value = previous.truncatedColumns
-    truncatedCells.value = previous.truncatedCells
     pageStart.value = previous.pageStart
     scrollTop.value = previous.scrollTop
   } else {
     pageStart.value = 0
     scrollTop.value = 0
+    delimiter.value = ","
+    fileBytes.value = 0
   }
   if (scroller.value) scroller.value.scrollTop = scrollTop.value
   if (props.text !== undefined) {
@@ -335,12 +380,14 @@ async function load(preservePosition: boolean) {
     truncatedCells.value = parsed.truncatedCells
     delimiter.value = parsed.delimiter
     fileBytes.value = parsed.fileBytes
+    clampPage()
     tick.value += 1
     return
   }
-  // 刷新时先取回当前页（页码/滚动位置不变），而不是回到第 1 页。
-  const start = preservePosition ? desiredWindow.value.start : 0
-  await requestChunk(start >= 0 ? start : 0)
+  // 刷新时先要回**首页元数据**（总行数/表头可能变，文件也可能被改小），
+  // 再要回当前这一屏；两者都不改变页码本身。
+  queue.push(0)
+  if (preservePosition && desiredWindow.value.start > 0) queue.push(desiredWindow.value.start)
   pump()
 }
 
@@ -358,29 +405,37 @@ function onScroll() {
   const element = scroller.value
   if (!element) return
   scrollTop.value = element.scrollTop
-  // 窗口移动只改变「下一个缺口在哪」，在途请求仍算数。
   pump()
 }
 
-// 系统滚动/ResizeObserver 变化后也要补一次，避免空窗口。
 watch(desiredWindow, () => pump())
 
-function goToChunkOffset(offset: number) {
-  pageStart.value = Math.max(0, offset)
+function goToScreen(offset: number) {
+  pageStart.value = Math.max(0, Math.min(offset, Math.max(0, rowCount.value - 1)))
   scrollTop.value = 0
   if (scroller.value) scroller.value.scrollTop = 0
   if (props.text !== undefined) {
     tick.value += 1
     return
   }
+  queue.push(pageStart.value)
+  tick.value += 1
   pump()
 }
 
-/** Rows in the current paged-mode screen (a byte-trimmed page may be shorter). */
-const currentScreenRows = computed(() => {
-  const first = chunks.value.find(chunk => chunk.offset === baseRow.value)
-  return first ? first.rows.length : rowsPerChunk
-})
+/** Rows in the current screen (a byte-trimmed page can be shorter than 500). */
+const currentChunk = computed(() => chunkAt(baseRow.value))
+const currentScreenRows = computed(() => currentChunk.value?.rows.length ?? rowsPerChunk)
+
+/** Row index of the screen before `baseRow`; uses real chunk lengths, not 500. */
+function previousScreenOffset(): number {
+  const ending = chunks.value
+    .filter(chunk => chunk.offset + chunk.rows.length <= baseRow.value)
+    .sort((a, b) => b.offset - a.offset)
+  const previous = ending[0]
+  if (previous && previous.offset + previous.rows.length === baseRow.value) return previous.offset
+  return Math.max(0, baseRow.value - rowsPerChunk)
+}
 
 const canPageBack = computed(() => baseRow.value > 0)
 const canPageForward = computed(() => baseRow.value + currentScreenRows.value < rowCount.value)
@@ -411,7 +466,6 @@ function formatBytes(bytes: number) {
   return `${exponent === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[exponent]}`
 }
 const delimiterText = computed(() => (delimiter.value === "\\t" ? "TAB" : delimiter.value))
-/** Table intrinsic width: rendered columns × cell width + the row-number gutter. */
 const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedColumns.value) + 56)
 </script>
 
@@ -424,11 +478,15 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
     >
       <AlertCircle class="mt-px size-3.5 shrink-0" aria-hidden="true" />
       <span class="break-words">{{ error }}</span>
+      <!-- 失败后不再自动重试：只给一次显式重试入口。 -->
+      <Button variant="ghost" size="sm" class="h-5 shrink-0 px-1.5 text-[11px]" data-csv-retry @click="retry">
+        <RefreshCw class="size-3" />{{ t("projectFiles.csvRetry") }}
+      </Button>
     </p>
     <!--
       滚动容器必须保持父容器宽度（min-w-0 + overflow-auto），横滚由**内容**的
       固有宽度撑出来。把 minWidth 加在容器上会让它比 420px 的侧栏还宽，父级再
-      用 overflow-hidden 裁掉，横滚条就永远停在 scrollLeft = 0（验收 P1）。
+      用 overflow-hidden 裁掉，横滚条就永远停在 scrollLeft = 0。
     -->
     <div
       ref="scroller"
@@ -437,7 +495,6 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
       @scroll="onScroll"
     >
       <div class="min-w-full font-mono text-xs" :style="{ width: `${tableWidth}px` }">
-        <!-- 表头独立于虚拟滚动内容：始终吸顶，不随行数增长进入 DOM -->
         <div class="sticky top-0 z-20 flex border-b bg-muted/60">
           <div
             class="sticky left-0 z-30 w-14 shrink-0 border-r bg-muted/60 px-2 py-1 text-right text-muted-foreground select-none"
@@ -492,8 +549,6 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
       <span v-if="budgetTruncated">{{ t("projectFiles.csvPageTrimmed") }}</span>
       <span>{{ t("projectFiles.csvDelimiter", { delimiter: delimiterText }) }}</span>
       <span>{{ fileSize }}</span>
-      <!-- 超过虚拟滚动上限（浏览器元素高度 ~33.5M px）后改为翻页：渲染与请求规模
-           都与行数无关，只是把「滚动到底」换成「翻到下一屏」。 -->
       <span v-if="!virtual" class="ml-auto flex items-center gap-2" data-csv-pager>
         <Button
           variant="ghost"
@@ -501,7 +556,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           class="h-6 px-1.5 text-[11px]"
           :disabled="!canPageBack || loading"
           data-csv-page-prev
-          @click="goToChunkOffset(Math.max(0, baseRow - rowsPerChunk))"
+          @click="goToScreen(previousScreenOffset())"
           >{{ t("projectFiles.csvPrevPage") }}</Button
         >
         <span data-csv-page-label>{{
@@ -513,7 +568,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           class="h-6 px-1.5 text-[11px]"
           :disabled="!canPageForward || loading"
           data-csv-page-next
-          @click="goToChunkOffset(baseRow + currentScreenRows)"
+          @click="goToScreen(baseRow + currentScreenRows)"
           >{{ t("projectFiles.csvNextPage") }}</Button
         >
       </span>

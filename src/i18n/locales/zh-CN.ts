@@ -283,6 +283,7 @@ export default {
     csvScrollHint: "滚动时按页加载，表格不整份载入内存",
     csvPage: "第 {page} 屏",
     csvPageTrimmed: "本屏按传输字节上限裁剪，滚动即可继续加载",
+    csvRetry: "重试",
     csvPrevPage: "上一页",
     csvNextPage: "下一页",
   },
