@@ -51,7 +51,7 @@ const pendingWrites = new Map<string, PendingWrite[]>()
  * 任何一次主机快照（推送或主动读取）都会清空它。
  */
 const failedOverrides = new Map<string, string>()
-/** 已应用过的最新主机修订号；-1 表示主机没有提供修订号。 */
+/** 已应用过的最新主机修订号；-1 表示还没收到过带修订号的快照。 */
 let hostRevision = -1
 
 const listeners = new Set<() => void>()
