@@ -32,6 +32,7 @@ const props = withDefaults(
   }>(),
   { filter: "", preview: true, showHeader: true },
 )
+const emit = defineEmits<{ "send-to-chat": [text: string] }>()
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
 // 多目录项目：树根默认跟随会话目录，可在组内目录（含 worktree）之间切换。
@@ -260,6 +261,7 @@ onBeforeUnmount(() => {
         :revision="previewRevision"
         class="min-w-0 flex-1"
         @close="selected = null"
+        @send-to-chat="emit('send-to-chat', $event)"
       />
       <section
         v-else-if="preview"

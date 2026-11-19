@@ -265,6 +265,7 @@ export default {
     annotateConfirm: "添加批注",
     annotateCancel: "取消",
     annotateFull: "代码批注已达上限（20 条），请先移除部分批注。",
+    annotateInsert: "引入到输入框",
     annotateRemove: "移除批注",
     selectFile: "从右侧文件树中选择要查看的文件",
     resizeTree: "拖拽调整文件树宽度（也可使用左右方向键）",

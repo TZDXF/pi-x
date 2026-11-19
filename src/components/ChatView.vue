@@ -33,6 +33,7 @@ import { useSessionDrop, type SessionDragPayload } from "@/composables/useSessio
 import type { SplitDropZone } from "@/lib/splitDropZone"
 import { computeBottomNotch } from "@/lib/splitDropZone"
 import { registerShortcutHandler, setShortcutsSuppressed } from "@/lib/shortcuts"
+import { appendComposerText } from "@/lib/composer"
 import { copyWithToast } from "@/lib/clipboard"
 import PromptInputBridge from "@/components/PromptInputBridge.vue"
 import { useWorkspaceStore } from "@/stores/workspace"
@@ -58,12 +59,10 @@ function openReviewAt(path: string) {
   if (existing) activeTabId.value = existing.id
   else addSidebarTab("review")
 }
-// Browser panel annotations are appended to the composer as a structured block.
+// Sidebar annotations are appended to the composer as structured, editable blocks.
 function insertIntoComposer(text: string) {
   if (!bridge.value) return
-  const existing = bridge.value.textInput || ""
-  const separator = existing ? (existing.endsWith("\n") ? "\n" : "\n\n") : ""
-  bridge.value.setTextInput(existing + separator + text)
+  bridge.value.setTextInput(appendComposerText(bridge.value.textInput || "", text))
 }
 
 const { t } = useI18n()

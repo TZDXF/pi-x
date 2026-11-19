@@ -395,6 +395,7 @@ onBeforeUnmount(() => {
             v-else-if="tab.type === 'files'"
             :project="project"
             :aux-parent-runtime-id="auxParent?.runtimeId"
+            @send-to-chat="$emit('send-to-chat', $event)"
           />
           <!-- 恢复出来的 terminal Tab 只渲染占位：进程已随旧实例退出，
                挂 TerminalPanel 会在首次可见时自动新开 shell（见 00:58 实测）。 -->

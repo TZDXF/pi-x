@@ -269,6 +269,7 @@ export default {
     annotateConfirm: "Add comment",
     annotateCancel: "Cancel",
     annotateFull: "Code comments are full (max 20). Remove some comments before adding new ones.",
+    annotateInsert: "Insert into composer",
     annotateRemove: "Remove comment",
     selectFile: "Select a file from the tree on the right",
     resizeTree: "Drag to resize the file tree (arrow keys also work)",

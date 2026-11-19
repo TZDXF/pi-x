@@ -7,6 +7,7 @@ import { isMarkdownExt } from "@/lib/fileKind"
 import { normalizeSlashes } from "@/lib/paths"
 import { useContentTranslation } from "@/composables/useContentTranslation"
 import { usePointerDrag } from "@/composables/usePointerDrag"
+import { buildCodeCommentsBlock, commentFilePath } from "@/lib/codeComments"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -275,10 +276,15 @@ for (const outcome of ["success", "failure"]) {
   })
 }
 
-
 test("file preview error text reacts to locale changes", async () => {
   const locale = vue.ref("en")
-  const props = vue.reactive({ path: "a", project: "", readFile: async () => { throw "coded" } })
+  const props = vue.reactive({
+    path: "a",
+    project: "",
+    readFile: async () => {
+      throw "coded"
+    },
+  })
   const h = setup("ProjectFilePreview", props, "error", {
     useI18n: () => ({ t: key => `${locale.value}:${key}` }),
     useCodeCommentsStore: () => ({}),
@@ -291,7 +297,6 @@ test("file preview error text reacts to locale changes", async () => {
   locale.value = "zh-CN"
   expect(h.api.error.value).toBe("zh-CN:backendErrors.example")
 })
-
 
 test("file preview imports its toast store from the conversations module", () => {
   const source = readFileSync(new URL("../src/components/ProjectFilePreview.vue", import.meta.url), "utf8")
@@ -314,11 +319,47 @@ test("full code comment warning uses a localized toast and preserves the draft",
   h.api.confirmComment()
   locale.value = "zh-CN"
   h.api.confirmComment()
-  expect(h.errors.mock.calls).toEqual([["en:projectFiles.annotateFull", "warning"], ["zh-CN:projectFiles.annotateFull", "warning"]])
+  expect(h.errors.mock.calls).toEqual([
+    ["en:projectFiles.annotateFull", "warning"],
+    ["zh-CN:projectFiles.annotateFull", "warning"],
+  ])
   expect(h.api.commentText.value).toBe("comment")
   expect(h.api.commentRange.value).toEqual({ start: 1, end: 1 })
 })
 
+test("inserting a code comment emits editable text and consumes its pending chip", () => {
+  const emit = vi.fn()
+  const remove = vi.fn()
+  const props = vue.reactive({
+    path: "src/a.ts",
+    project: "C:/shared",
+    readFile: async () => ({ kind: "text", text: "a" }),
+  })
+  const h = setup("ProjectFilePreview", props, "insertCommentIntoComposer", {
+    defineEmits: () => emit,
+    useCodeCommentsStore: () => ({ remove }),
+    buildCodeCommentsBlock,
+    commentFilePath,
+    onBeforeUnmount: callback => vue.onScopeDispose(callback),
+    document: { removeEventListener() {} },
+    highlightFileLines: async () => [],
+  })
+  const comment = {
+    id: "comment-1",
+    path: "src/a.ts",
+    root: "C:/shared",
+    startLine: 2,
+    endLine: 3,
+    selectedText: "const a = 1\nreturn a",
+    comment: "explain this",
+  }
+  h.api.insertCommentIntoComposer(comment)
+  expect(emit).toHaveBeenCalledExactlyOnceWith(
+    "send-to-chat",
+    buildCodeCommentsBlock([{ ...comment, path: "C:/shared/src/a.ts" }]),
+  )
+  expect(remove).toHaveBeenCalledExactlyOnceWith("comment-1")
+})
 
 test("successfully adding a code comment closes the draft without a toast", () => {
   const props = vue.reactive({ path: "a", project: "p", readFile: async () => ({ kind: "text", text: "a" }) })
