@@ -149,7 +149,6 @@ test("multiple aux targets require an explicit existing conversation or new-chat
     maxTextLength: 8000,
     mode: "chat",
     root: null,
-    auxCanCreate: true,
     auxTargets: [
       { runtimeId: "aux:a", title: "辅助对话 1" },
       { runtimeId: "aux:b", title: "辅助对话 2" },

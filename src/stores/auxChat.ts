@@ -1,6 +1,6 @@
 import { getActivePinia } from "pinia"
 import { reactive } from "vue"
-import { AUX_MAX_TABS, createAuxRuntimeId, nextAuxOrdinal } from "@/lib/auxRuntime"
+import { createAuxRuntimeId, nextAuxOrdinal } from "@/lib/auxRuntime"
 import type { AuxEventSink } from "@/lib/auxEventSink"
 import { registerAuxEventSink } from "@/lib/auxEventSink"
 import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
@@ -259,7 +259,7 @@ export async function reconcileAuxLeases(): Promise<string[]> {
 export interface AuxAskRouter {
   /** 该父会话当前**激活**的 aux（侧栏 active 槽位指向它）；没有则 `null`。 */
   active: (parentRuntimeId: string) => AuxTab | null
-  /** 新建一个 aux（加槽位 + spawn）；无名额/失败返回 `null`。 */
+  /** 新建一个 aux（加槽位 + spawn）；槽位不可用或创建期间关闭时返回 `null`。 */
   open: (parentRuntimeId: string) => Promise<AuxTab | null>
   /** 把该实例的槽位切成激活并展开侧栏（复用与新建后都要做）。 */
   reveal: (tab: AuxTab) => void
@@ -351,9 +351,12 @@ export function auxTabByRuntime(runtimeId: string): AuxTab | undefined {
   return tabs.find(tab => tab.runtimeId === runtimeId)
 }
 
-/** 按侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。 */
-export function auxTabBySidebarId(tabId: number): AuxTab | undefined {
-  return tabs.find(tab => tab.tabId === tabId)
+/**
+ * 按父会话 + 侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。
+ * 槽位 id 由各父会话的侧栏组分别从 1 分配，裸 id 不是全局键。
+ */
+export function auxTabBySidebarId(parentRuntimeId: string, tabId: number): AuxTab | undefined {
+  return tabs.find(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === tabId)
 }
 
 /** 墓碑是否命中（迟到 `pi://exit` / 事件的丢弃判据）。 */
@@ -364,11 +367,6 @@ export function isClosedAux(runtimeId: string): boolean {
 /** 存活中的实例数（**创建中的实例同样计入**，所以直接用数组长度）。 */
 export function auxLiveCount() {
   return tabs.length
-}
-
-/** 是否还有名额（上限 5；与侧栏 20/24 无关）。 */
-export function auxCanOpen() {
-  return tabs.length < AUX_MAX_TABS
 }
 
 /** 某个父会话的全部实例（挂载时补槽位、④ 的回收都用它）。 */
@@ -425,13 +423,13 @@ export function auxUiFor(runtimeId: string): UiStore {
 }
 
 /** 侧栏 Tab 标题：实例标题（`RightSidebar.titleFor` 使用）。 */
-export function auxTitleForSidebarId(tabId: number): string | null {
-  return auxTabBySidebarId(tabId)?.title ?? null
+export function auxTitleForSidebarId(parentRuntimeId: string, tabId: number): string | null {
+  return auxTabBySidebarId(parentRuntimeId, tabId)?.title ?? null
 }
 
-/** 该 aux 槽位是否有未答的扩展询问（Tab 标题出标记用）。 */
-export function auxHasPendingQuestion(tabId: number): boolean {
-  const tab = auxTabBySidebarId(tabId)
+/** 该父会话的 aux 槽位是否有未答的扩展询问（Tab 标题出标记用）。 */
+export function auxHasPendingQuestion(parentRuntimeId: string, tabId: number): boolean {
+  const tab = auxTabBySidebarId(parentRuntimeId, tabId)
   if (!tab) return false
   return (auxUis.get(tab.runtimeId)?.dialogs.length ?? 0) > 0
 }
@@ -439,11 +437,11 @@ export function auxHasPendingQuestion(tabId: number): boolean {
 /**
  * 打开一个 aux 实例。
  *
- * 顺序固定：**同步**入表（`status: "creating"`）再 `await` spawn —— 创建中的实例
- * 计入上限，否则连点几次就能开出超过 5 个进程。同一父会话的并发手势复用同一次
- * 创建结果。
+ * 顺序固定：**同步**入表（`status: "creating"`）再 `await` spawn，让事件分发与
+ * 并发手势立刻看到创建中的实例。实例数量不设辅助对话专属上限；同一父会话的并发
+ * 手势复用同一次创建结果。
  *
- * 返回 `null` 表示没有名额（调用方应提示并回滚刚加的侧栏槽位）。
+ * 返回 `null` 表示实例在创建期间已关闭（调用方应回滚刚加的侧栏槽位）。
  */
 export async function openAux(
   parentRuntimeId: string,
@@ -451,7 +449,6 @@ export async function openAux(
 ): Promise<AuxTab | null> {
   const pending = pendingCreations.get(parentRuntimeId)
   if (pending) return pending
-  if (!auxCanOpen()) return null
 
   const runtimeId = createAuxRuntimeId()
   const ordinal = nextAuxOrdinal(tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId).map(tab => tab.ordinal))
@@ -464,7 +461,7 @@ export async function openAux(
     ordinal,
     status: "creating",
   }
-  // 先入表：上限计数与事件分发都要立刻看到它（事件可能在 spawn 握手期间到达）。
+  // 先入表：实例查询与事件分发都要立刻看到它（事件可能在 spawn 握手期间到达）。
   tabs.push(tab)
   // 先建 store：spawn 期间的 `pi://event` / `extension_ui_request` 要有落点。
   auxSessionFor(runtimeId)
@@ -642,18 +639,17 @@ async function cancelPendingDialogs(ui: UiStore) {
 }
 
 /**
- * 划词入口的路由结果。`ok: false` 的三种原因对应三种用户可见反馈：
+ * 划词入口的路由结果。`ok: false` 的两类原因对应三种用户可见反馈：
  *
- * - `noParent` / `unavailable`：没有可投递的 aux（父会话不可用、或入口未接线），
- *   调用方给一句通用失败提示；
- * - `limit`：名额已满（5 个实例全占用），提示先关一个；
+ * - `noParent` / `unavailable`：没有可投递的 aux（父会话不可用、入口未接线或新建
+ *   未完成），调用方给一句通用失败提示；
  * - `append`：引用本身被上限/总长拒绝（`appendReason` 复用主会话的三种文案）。
  */
 export type AuxAskOutcome =
   | { ok: true; tab: AuxTab; duplicate: boolean }
   | {
       ok: false
-      reason: "noParent" | "unavailable" | "limit" | "append"
+      reason: "noParent" | "unavailable" | "append"
       appendReason?: ConversationSelectionLimitReason
     }
 
@@ -665,6 +661,8 @@ export type AuxAskOutcome =
  * 2. 显式 target 为 null → 新建 aux 再投递（多实例选择器的"新建"入口）；
  * 3. 未传 target → 保留兼容路径：激活实例 → 最近实例 → 新建。共用浮层在多个实例时
  *    一定会先让用户选择，因此不会把多实例手势交给这条隐式路由。
+ * 辅助对话没有专属实例上限，新建失败（例如通用侧栏容量不足或创建期间被关闭）返回
+ * `unavailable`。
  *
  * 同一手势去重：连点时第一次就把实例同步登记进表（`openAux` 先入表再 `await` spawn），
  * 第二次直接命中"存活实例"分支；同一段文字再进桶时 `appendConversationSelection`
@@ -694,7 +692,7 @@ export async function askInAux(
     if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
   }
   const created = await router.open(parentRuntimeId)
-  if (!created) return { ok: false, reason: "limit" }
+  if (!created) return { ok: false, reason: "unavailable" }
   // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。
   if (isClosedAux(created.runtimeId)) return { ok: false, reason: "unavailable" }
   return deliverToAux(created, payload)

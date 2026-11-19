@@ -7,7 +7,6 @@ import { captureOffsets, selectionEndRect } from "@/lib/selectionAnchors"
 import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
 import { selectionLineRange } from "@/lib/codeComments"
 import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { ConversationSelectionSource } from "@/lib/conversationSelections"
 
 /**
@@ -37,10 +36,8 @@ const props = withDefaults(
     path?: string
     /** 当前父会话的存活 aux；多于一个时先让用户选择投递目标。 */
     auxTargets?: AuxTargetOption[]
-    /** 是否还能新建 aux；达到全局上限时保留新建项但置灰并说明原因。 */
-    auxCanCreate?: boolean
   }>(),
-  { mode: "chat", auxTargets: () => [], auxCanCreate: true },
+  { mode: "chat", auxTargets: () => [] },
 )
 const emit = defineEmits<{
   quote: [
@@ -293,8 +290,6 @@ const placement = computed<MenuPlacement | null>(() => {
         size="sm"
         class="h-8 w-full justify-start gap-2 border-t px-2 text-xs font-normal"
         role="menuitem"
-        :disabled="!auxCanCreate"
-        :title="!auxCanCreate ? t('auxChat.limitReached', { count: AUX_MAX_TABS }) : undefined"
         @mousedown.prevent
         @click="chooseAuxTarget(null)"
       >

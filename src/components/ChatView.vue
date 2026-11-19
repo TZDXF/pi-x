@@ -114,7 +114,7 @@ const sidebar = useChatViewSidebar({
   onLastTabClosed: () => (sidebarOpen.value = false),
 })
 const { tabs: sidebarTabs, activeId: activeTabId, parent: auxParent, addTab, closeTab, addSidebarTab } = sidebar
-const { auxTargets, auxCanCreate } = sidebar
+const { auxTargets } = sidebar
 const reviewFocus = ref<string | null>(null)
 
 const boardDraft = Object.values(workspace.boardDrafts ?? {}).find(draft => (draft.runtimeId || draft.id) === runtimeId)
@@ -393,7 +393,6 @@ onBeforeUnmount(() => {
         :rendered-entries="renderedEntries"
         :edit="edit"
         :aux-targets="auxTargets"
-        :aux-can-create="auxCanCreate"
         @history-scroll="onHistoryScroll"
         @navigate="navigateToQuestion"
         @preview-image="previewImage = $event"
@@ -488,7 +487,6 @@ onBeforeUnmount(() => {
         @close-tab="closeTab"
         @reorder-tabs="sidebar.reorder"
         @restart-terminal="sidebar.restartTerminal"
-        @aux-limit="sidebar.notifyLimit"
         @close="sidebarOpen = false"
         @send-to-chat="insertIntoComposer"
         @insert-code-comment="insertCodeCommentIntoComposer"

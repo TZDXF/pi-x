@@ -9,7 +9,7 @@ import { useSidebarTabs } from "@/composables/useSidebarTabs"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { auxCanOpen, auxInstancesFor } from "@/stores/auxChat"
+import { auxInstancesFor } from "@/stores/auxChat"
 
 /**
  * `ChatView` 的右侧侧栏接线：一次装配两套注册表。
@@ -47,7 +47,6 @@ export function useChatViewSidebar(deps: {
   const aux = useAuxTabs({
     runtimeId: deps.runtimeId,
     session: deps.session,
-    ui: deps.ui,
     workspace,
     project: deps.project,
     addSidebarTab: sidebar.add,
@@ -79,12 +78,10 @@ export function useChatViewSidebar(deps: {
   }
 
   const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))
-  const auxCanCreate = computed(() => auxCanOpen())
 
   return {
     askAux,
     auxTargets,
-    auxCanCreate,
     /** 槽位列表（含 `aux`；`aux` 永不落盘）。 */
     tabs: sidebar.tabs as ComputedRef<SidebarTabItem[]>,
     activeId: sidebar.activeId,
@@ -96,7 +93,5 @@ export function useChatViewSidebar(deps: {
     reorder: sidebar.reorder,
     restartTerminal: sidebar.restartTerminal,
     parent: aux.parent as ComputedRef<AuxParentContext>,
-    /** 名额满时的可执行提示（侧栏禁用态被点到、注册表拒绝时共用）。 */
-    notifyLimit: aux.notifyLimit,
   }
 }

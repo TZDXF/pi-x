@@ -8,7 +8,7 @@ import { createPinia, setActivePinia } from "pinia"
  * 1. 有**激活**的 aux → 引用进它的桶，且不新建进程（只 reveal 一次）；
  * 2. 没有激活但有存活实例 → 复用最近一个（不新建）；
  * 3. 一个都没有 → 新建并把引用投进新实例的桶；
- * 4. 连点同一手势 → 只建一个实例、引用不重复；名额满/入口缺失 → 不写任何桶。
+ * 4. 连点同一手势 → 只建一个实例、引用不重复；新建未完成/入口缺失 → 不写任何桶。
  *
  * `@/api/piClient` 全部替身：不触碰真实模型/进程。
  */
@@ -184,7 +184,7 @@ test("repeated gestures in the same turn create one instance and one reference",
   expect(opens).toBeLessThanOrEqual(2)
 })
 
-test("no router or no capacity writes into no bucket at all", async () => {
+test("no router or an unfinished creation writes into no bucket at all", async () => {
   const parent = "runtime:parent"
   // 入口未接线（没有 ChatView 挂载该父会话）：不写桶，返回 unavailable。
   const missing = await aux.askInAux(parent, { text: "正文" })
@@ -204,11 +204,10 @@ test("no router or no capacity writes into no bucket at all", async () => {
   expect(reused.ok && reused.tab.runtimeId).toBe(orphan.runtimeId)
   expect(buckets.auxSelectionCount(orphan.runtimeId)).toBe(1)
 
-  // 名额已满且**该父会话没有实例**：`open` 返回 null（由 useAuxTabs 的 openForAsk 判定），
-  // 引用不入任何桶。
+  // 新建未完成（例如通用侧栏容量不足或创建期间被关闭）：返回 unavailable，引用不入任何桶。
   aux.registerAuxAskRouter("runtime:empty", { active: () => null, open: async () => null, reveal: () => {} })
-  const full = await aux.askInAux("runtime:empty", { text: "正文" })
-  expect(full).toEqual({ ok: false, reason: "limit" })
+  const unfinished = await aux.askInAux("runtime:empty", { text: "正文" })
+  expect(unfinished).toEqual({ ok: false, reason: "unavailable" })
 })
 
 test("the append limits are reported back instead of silently dropping the reference", async () => {

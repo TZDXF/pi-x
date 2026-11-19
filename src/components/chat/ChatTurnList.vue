@@ -54,7 +54,6 @@ const props = defineProps<{
   auxRuntimeId?: string
   /** 主会话多 aux 时的选择项；aux 面板内不传，仍直接投递到本实例。 */
   auxTargets?: AuxTargetOption[]
-  auxCanCreate?: boolean
 }>()
 const emit = defineEmits<{
   historyScroll: [event: Event]
@@ -324,7 +323,6 @@ onBeforeUnmount(() => {
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     :aux-targets="auxTargets"
-    :aux-can-create="auxCanCreate"
     @quote="onSelectionQuote"
     @aux-ask="(payload, target) => emit('auxAsk', payload, target)"
   />

@@ -20,7 +20,7 @@ import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelect
 import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
-import { auxCanOpen, auxInstancesFor } from "@/stores/auxChat"
+import { auxInstancesFor } from "@/stores/auxChat"
 import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
@@ -206,7 +206,6 @@ const auxTargets = computed(() => {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
   return parentRuntimeId ? auxInstancesFor(parentRuntimeId) : []
 })
-const auxCanCreate = computed(() => auxCanOpen())
 async function onAuxAsk(payload: AuxAskPayload, target?: AuxAskTarget) {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
   if (!parentRuntimeId) return
@@ -584,7 +583,6 @@ onBeforeUnmount(() => {
     :path="path"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     :aux-targets="auxTargets"
-    :aux-can-create="auxCanCreate"
     @aux-ask="onAuxAsk"
   />
 </template>

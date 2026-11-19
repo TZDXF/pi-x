@@ -49,7 +49,6 @@ test("the chat list forwards auxAsk and routes quotes into the aux pane's own bu
   expect(list).toContain("auxRuntimeId?: string")
   expect(list).toContain("@aux-ask=\"(payload, target) => emit('auxAsk', payload, target)\"")
   expect(list).toContain(':aux-targets="auxTargets"')
-  expect(list).toContain(':aux-can-create="auxCanCreate"')
   expect(list).toContain("auxRuntimeId: props.auxRuntimeId")
   const pane = read("components/aux-chat/AuxChatPane.vue")
   expect(pane).toContain(':aux-runtime-id="runtimeId"')
