@@ -235,3 +235,78 @@ test("without a reveal hook a clipped reference is simply not badged", async () 
     unmount()
   }
 })
+
+test("a virtualized (unmounted) target is revealed on the first click, after remount (TZD-138 P2)", async () => {
+  // 虚拟化会把滚出视口的行**整行卸载**：第一次点击时 `[data-selection-source]` 根本不存在，
+  // 旧的定位链路只在滚动前查一次正文、判断裁剪，卸载时查不到；`scrollToMessage` 重挂后
+  // 又只重算锚点没再查一次，于是第一次点击只把正文重挂出来（仍是收起态、无徽标），
+  // 要再点一次才生效。这里钉住"重挂后重新查询 + 判断裁剪 + 展开 + 重算锚点"。
+  setActivePinia(createPinia())
+  vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 0))
+  vi.stubGlobal("cancelAnimationFrame", clearTimeout)
+  vi.stubGlobal(
+    "MutationObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
+  vi.mocked(boundaryRect).mockReturnValue({ right: 120, top: 260 } as DOMRect)
+  const store = useConversationSelectionsStore()
+  store.add("session", { text: "quote", source: "user", messageId: 1, startOffset: 0, endOffset: 5 })
+  const item = store.items[0]!
+  let mounted = false
+  let expanded = false
+  const badge = { scrollIntoView: vi.fn() }
+  // 收起态正文只露出 6 行：引用在第 11 行（rect.top 260）—— 落在裁剪区外。
+  const clippedBody = {
+    getBoundingClientRect: () => ({ top: 20, bottom: expanded ? 700 : 140, height: expanded ? 680 : 120 }),
+  }
+  const wrapper = {
+    getBoundingClientRect: () => ({ left: 10, top: 20 }),
+    querySelector: (selector: string) => (selector.includes("data-prompt-collapsed") ? clippedBody : null),
+  }
+  const root = {
+    querySelector: (selector: string) => {
+      if (selector.includes("data-selection-anchor")) return expanded ? badge : null
+      return mounted ? wrapper : null
+    },
+  }
+  const scrollToMessage = vi.fn(async () => {
+    mounted = true
+  })
+  const conversation = ref({ $el: root, scrollToMessage })
+  const revealClippedPrompt = vi.fn((messageId: number) => {
+    if (messageId !== 1 || expanded) return false
+    expanded = true
+    return true
+  })
+  const { result, unmount } = mountBrowserComposable(() =>
+    useSelectionQuotes({
+      session: { sessionFile: "session" } as SessionStore,
+      ui: {} as UiStore,
+      project: () => "project",
+      renderedEntries: () => [],
+      conversation: conversation as unknown as Parameters<typeof useSelectionQuotes>[0]["conversation"],
+      revealClippedPrompt,
+    }),
+  )
+  try {
+    await result.recomputeAnchors()
+    expect(result.anchorOverlays.value.size, "unmounted row contributes no badge").toBe(0)
+    // 首次点击：一次调用就要完成"重挂 → 判断裁剪 → 展开 → 重算 → 滚到徽标"。
+    await result.locateSelection(item.id)
+    expect(scrollToMessage).toHaveBeenCalledWith(1)
+    expect(revealClippedPrompt, "revealed exactly once, after the remount").toHaveBeenCalledTimes(1)
+    expect(expanded).toBe(true)
+    expect(result.anchorOverlays.value.get(1), "badge recomputed for the remounted row").toHaveLength(1)
+    expect(badge.scrollIntoView).toHaveBeenCalledTimes(1)
+    // 再点一次：已展开且徽标在，直接定位，不重复展开、不重复滚动。
+    await result.locateSelection(item.id)
+    expect(revealClippedPrompt).toHaveBeenCalledTimes(1)
+    expect(scrollToMessage).toHaveBeenCalledTimes(1)
+  } finally {
+    unmount()
+  }
+})

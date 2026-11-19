@@ -1,0 +1,236 @@
+import { test, expect } from "@playwright/test"
+import { startVueHarness, type VueHarness } from "./helpers/vue-harness"
+
+/**
+ * TZD-138 P2（第三轮）：虚拟行卸载后的**首次点击**必须就能定位。
+ *
+ * 复现自 QA 的 `qa-fixed-recheck.spec.ts`：真实 `ChatTurnList` + `VirtualMessage` 长会话，
+ * 引用第 11 行并收起，滚到足够远让目标行整行卸载（`data-virtual-mounted="false"`，
+ * 正文元素消失），再点引用摘要。旧实现在没有徽标时 `scrollToMessage` 重挂后只重算锚点，
+ * 没有"重查正文 → 判断裁剪 → 展开"，于是第一次点击只把正文重挂出来、仍是收起态、无徽标，
+ * 要再点一次才生效。
+ *
+ * 断言只用**单次** `evaluate` 取几何（正文与徽标同一时刻、同一坐标系）：QA 脚本里分两次
+ * `boundingBox()` 取值，平滑滚动动画（WebKit 更慢）在两次调用之间还在推进，会把两次测量
+ * 混到不同滚动位置，产生与产品行为无关的偶发失败。这里先等滚动停稳，再原子测量。
+ */
+const html = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0"><div id="app"></div><script type="module">
+import { createApp, h, reactive, ref } from 'vue'
+import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
+import zh from '/src/i18n/locales/zh-CN.ts'
+import ChatTurnList from '/src/components/chat/ChatTurnList.vue'
+import Summary from '/src/components/chat/ConversationSelectionSummary.vue'
+import { usePromptEdit } from '/src/composables/usePromptEdit.ts'
+import { useWorkspaceStore } from '/src/stores/workspace.ts'
+import { useConversationSelectionsStore } from '/src/stores/conversationSelections.ts'
+import '/src/style.css'
+const mode = new URLSearchParams(location.search).get('mode')
+const lines = Array.from({ length: 12 }, (_, i) => 'Line-' + String(i + 1).padStart(2, '0') + ' readable words')
+const visible = lines.join('\\n')
+const parent = '<aux_parent_context>\\nImmutable context.\\n</aux_parent_context>\\n\\n'
+const target = { kind: 'user', id: 1, text: visible, contextText: parent + visible }
+// virtual：目标行后面塞 55 条，滚动后目标行会被 VirtualMessage 整行卸载。
+const entries = mode === 'virtual'
+  ? [target, ...Array.from({ length: 55 }, (_, i) => ({ kind: 'user', id: i + 2, text: 'Later entry ' + i }))]
+  : [target]
+const copies = [], resends = []
+const session = reactive({
+  entries, sessionFile: 'qa-a.jsonl', steering: [], followUp: [], timelineTurns: [],
+  isStreaming: false, partialBlocks: null,
+  resendPrompt: (...args) => { resends.push(args) },
+})
+const ui = reactive({ pendingUserMessage: null, pushToast: () => {} })
+const list = ref(null)
+window.qa = { session, ui, list, visible, parent, copies, resends }
+createApp({ setup() {
+  const editTextarea = ref(null)
+  const edit = reactive(usePromptEdit({
+    session, ui, workspace: useWorkspaceStore(), editTextarea,
+    project: () => '/qa', connecting: () => false, connected: () => true, knownSessions: () => [],
+  }))
+  const selections = useConversationSelectionsStore()
+  window.qa.selections = selections
+  return () => h('div', { style: 'width:700px;height:550px;display:flex;flex-direction:column' }, [
+    h(ChatTurnList, {
+      ref: list, session, ui, project: '/qa', projectName: 'QA', connecting: false,
+      renderedEntries: session.entries, edit,
+      onCopyText: t => copies.push(t),
+      onEditTextarea: t => { editTextarea.value = t },
+    }),
+    selections.items.length ? h(Summary, {
+      items: selections.items,
+      onLocate: id => list.value?.locateSelection(id),
+      onEdit: id => list.value?.editSelection(id),
+    }) : null,
+  ])
+}}).use(createPinia()).use(createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zh } })).mount('#app')
+</script></body></html>`
+
+let harness: VueHarness | null = null
+test.beforeAll(async () => {
+  harness = await startVueHarness({ name: "prompt-collapse-locate", port: 1523, html })
+})
+test.afterAll(async () => {
+  await harness?.close()
+})
+
+const body = '[data-message-id="1"] [data-prompt-text]'
+const toggle = '[data-message-id="1"] [data-prompt-toggle]'
+const badge = '[data-message-id="1"] [data-selection-anchor]'
+const shell = '[data-message-id="1"][data-virtual-mounted]'
+
+/** 划选第 11 行 → 引用到输入框 → 保存 → 收起提问。 */
+async function quoteLineEleven(page: import("@playwright/test").Page) {
+  await page.locator(toggle).click()
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "true")
+  const points = await page.locator(body).evaluate(root => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let node = walker.nextNode()
+    while (node && !node.textContent?.includes("Line-11")) node = walker.nextNode()
+    if (!node) throw new Error("Line-11 missing")
+    const start = node.textContent!.indexOf("Line-11")
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + 7)
+    const rect = range.getBoundingClientRect()
+    return { left: rect.left + 0.5, right: rect.right - 0.5, y: (rect.top + rect.bottom) / 2 }
+  })
+  await page.mouse.move(points.left, points.y)
+  await page.mouse.down()
+  await page.mouse.move(points.right, points.y, { steps: 8 })
+  await page.mouse.up()
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("Line-11")
+  await page.getByRole("button", { name: "引用到输入框" }).click()
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await expect(page.locator(badge)).toHaveCount(1)
+  await page.locator(toggle).click()
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "false")
+  // 收起态：裁剪区里的引用没有可见锚点，徽标必须消失（而不是落在气泡下方空白处）。
+  await expect(page.locator(badge)).toHaveCount(0)
+}
+
+/** 从摘要列表点该引用（一次点击）。 */
+async function locateFromSummary(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: /1 条注释/ }).hover()
+  await page.locator("button[title=Line-11]").click()
+}
+
+/** 等平滑滚动停稳：连续 3 次采样 `scrollTop` 不变（最多等约 2.4s）。 */
+async function settleScroll(page: import("@playwright/test").Page) {
+  await page.evaluate(async () => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+    let last = log.scrollTop
+    let stable = 0
+    for (let i = 0; i < 40 && stable < 3; i++) {
+      await sleep(60)
+      const now = log.scrollTop
+      stable = now === last ? stable + 1 : 0
+      last = now
+    }
+  })
+}
+
+/**
+ * 原子测量（单次 `evaluate`，同一坐标系）：徽标必须落在可见正文里、位于第 11 行附近。
+ */
+async function geometry(page: import("@playwright/test").Page) {
+  await settleScroll(page)
+  return page.evaluate(() => {
+    const bodyEl = document.querySelector('[data-message-id="1"] [data-prompt-text]') as HTMLElement
+    const badgeEl = document.querySelector('[data-message-id="1"] [data-selection-anchor]') as HTMLElement
+    const toggleEl = document.querySelector('[data-message-id="1"] [data-prompt-toggle]') as HTMLElement
+    const bodyRect = bodyEl.getBoundingClientRect()
+    const badgeRect = badgeEl.getBoundingClientRect()
+    return {
+      expanded: bodyEl.dataset.promptCollapsed,
+      ariaExpanded: toggleEl.getAttribute("aria-expanded"),
+      badgeTop: badgeRect.top - bodyRect.top,
+      badgeBottom: badgeRect.bottom - bodyRect.top,
+      bodyHeight: bodyRect.height,
+      bodyLines: Number(bodyEl.dataset.promptLines),
+    }
+  })
+}
+
+test("first click locates a clipped reference while the target row is still mounted", async ({ page }) => {
+  await page.goto(`${harness!.url}?mode=single`)
+  await quoteLineEleven(page)
+  await locateFromSummary(page)
+  const geo = await geometry(page)
+  expect(geo.expanded, "one click expands the prompt").toBe("false")
+  expect(geo.ariaExpanded).toBe("true")
+  expect(geo.badgeTop).toBeGreaterThan(100)
+  expect(geo.badgeBottom).toBeLessThanOrEqual(geo.bodyHeight)
+})
+
+test("first click locates a clipped reference after the row was virtually unmounted", async ({ page }) => {
+  await page.goto(`${harness!.url}?mode=virtual`)
+  const viewport = page.getByRole("log")
+  // 目标行先在底部不可见 → 被 VirtualMessage 卸载（正文元素消失）。
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await viewport.evaluate(el => {
+    el.scrollTop = 0
+  })
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await quoteLineEleven(page)
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await viewport.evaluate(el => {
+    el.scrollTop = el.scrollHeight
+  })
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await expect(page.locator(body)).toHaveCount(0)
+
+  // 首次点击：必须一次就重挂 + 展开 + 出徽标 + 滚到位。
+  await locateFromSummary(page)
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "true")
+  await expect(page.locator(badge)).toHaveCount(1)
+  const geo = await geometry(page)
+  expect(geo.expanded).toBe("false")
+  expect(geo.badgeTop).toBeGreaterThan(100)
+  expect(geo.badgeBottom).toBeLessThanOrEqual(geo.bodyHeight)
+})
+
+test("a second click on an already-revealed reference does not expand or scroll again", async ({ page }) => {
+  // QA 的诊断用例改成断言：旧实现需要第二次点击；修复后第二次必须是无副作用的重复定位。
+  await page.goto(`${harness!.url}?mode=virtual`)
+  const viewport = page.getByRole("log")
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await viewport.evaluate(el => {
+    el.scrollTop = 0
+  })
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await quoteLineEleven(page)
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await viewport.evaluate(el => {
+    el.scrollTop = el.scrollHeight
+  })
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await locateFromSummary(page)
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "true")
+  const first = await geometry(page)
+  await locateFromSummary(page)
+  const second = await geometry(page)
+  expect(second.ariaExpanded, "still expanded after the second click").toBe("true")
+  expect(second.badgeTop).toBeCloseTo(first.badgeTop, 0)
+  expect(second.badgeBottom).toBeCloseTo(first.badgeBottom, 0)
+})
+
+test("copy and inline edit still use the full visible question after expanding", async ({ page }) => {
+  await page.goto(`${harness!.url}?mode=single`)
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "false")
+  const visible: string = await page.evaluate(() => (window as unknown as { qa: { visible: string } }).qa.visible)
+  await page.locator(body).hover()
+  await page.getByRole("button", { name: "复制提问" }).click()
+  expect(await page.evaluate(() => (window as unknown as { qa: { copies: string[] } }).qa.copies)).toEqual([visible])
+  await page.getByRole("button", { name: "编辑提问" }).click()
+  await expect(page.getByRole("textbox", { name: "编辑提问" })).toHaveValue(visible)
+  await expect(page.locator(body)).toHaveCount(0)
+  await page.getByRole("button", { name: "重新发送" }).click()
+  const parent: string = await page.evaluate(() => (window as unknown as { qa: { parent: string } }).qa.parent)
+  expect(await page.evaluate(() => (window as unknown as { qa: { resends: unknown[] } }).qa.resends)).toEqual([
+    [visible, undefined, parent + visible],
+  ])
+})

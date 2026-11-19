@@ -159,7 +159,15 @@ test("clipped references are hidden while collapsed and revealed before locating
   // 裁剪区里的徽标不画（否则徽标落在气泡下方空白处）。
   expect(quotes).toMatch(/if \(isClippedOut\(wrapper, rect\)\) return/)
   // 定位/编辑前先展开正文，再重算锚点（否则只滚到看不见的徽标）。
-  expect(quotes).toMatch(/await revealClippedSelection\(/)
+  // 定位链路每次重新查目标正文；卸载/重挂后也要再查一次（`scrollToMessage` 之后）。
+  expect(quotes).toMatch(/return revealClippedSelection\(wrapper, targetEndOffset, targetMessageId\)/)
+  expect(quotes.indexOf("await conversation.value?.scrollToMessage")).toBeGreaterThan(-1)
+  // 重挂之后（`scrollToMessage` 之后）还有一次 `revealTargetIfClipped()`。
+  expect(quotes.lastIndexOf("await revealTargetIfClipped()")).toBeGreaterThan(
+    quotes.indexOf("await conversation.value?.scrollToMessage"),
+  )
+  // 重算后仍有徽标滚动的收尾步骤，保证首次点击即可定位。
+  expect(quotes.indexOf("await recomputeAnchors()")).toBeGreaterThan(-1)
   expect(quotes).toMatch(/await recomputeAnchors\(\)\n\s*\}/)
   // 展开入口由列表层提供，并按 entry id 幂等。
   expect(quotes).toMatch(/revealClippedPrompt\?: \(messageId: number\) => boolean/)

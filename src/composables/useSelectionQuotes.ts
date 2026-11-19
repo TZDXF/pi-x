@@ -303,9 +303,22 @@ export function useSelectionQuotes(deps: {
     const request = locateRequest
     const scope = selectionScope.value
     const root = selectionRoot.value
-    // 引用落在折叠裁剪区：先展开正文（TZD-138 P2），后面才有可定位的徽标与高亮。
-    const targetWrapper = root?.querySelector(`[data-message-id="${target.messageId}"] [data-selection-source]`)
-    if (await revealClippedSelection(targetWrapper, target.endOffset, target.messageId)) {
+    /**
+     * 把目标消息的行内正文查出来，必要时展开（TZD-138 P2）。
+     *
+     * 必须**每次重新查**：虚拟化（`VirtualMessage`）会把滚出视口的行整行卸载，此时
+     * `[data-selection-source]` 根本不存在，收起判定无从谈起。QA 实测卸载链路只经过
+     * `scrollToMessage` 重挂后就没再查一次正文，于是第一次点击只把正文重挂出来、
+     * 仍是收起态且没有徽标，要再点一次才生效。
+     */
+    const targetMessageId = target.messageId
+    const targetEndOffset = target.endOffset
+    async function revealTargetIfClipped() {
+      const wrapper = root?.querySelector(`[data-message-id="${targetMessageId}"] [data-selection-source]`)
+      return revealClippedSelection(wrapper, targetEndOffset, targetMessageId)
+    }
+    // 引用落在折叠裁剪区（目标行还挂载着）：先展开正文，后面才有可定位的徽标与高亮。
+    if (await revealTargetIfClipped()) {
       if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
       if (!pendingSelections.value.some(entry => entry.id === id)) return
       await recomputeAnchors()
@@ -316,9 +329,15 @@ export function useSelectionQuotes(deps: {
       flashLocatedSelection(item)
       return
     }
+    // 没有徽标：目标行可能根本被虚拟化卸载了，先把它滚（重挂）出来。
     await conversation.value?.scrollToMessage(target.messageId)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
+    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
+    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    // 重挂后**重新查一次正文并判断裁剪**：卸载时那次查询拿不到元素，不能把它的结论
+    // 沿用到重挂之后。这里补上展开（内部已等一帧布局稳定），保证首次点击即可定位。
+    await revealTargetIfClipped()
     if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
     if (!pendingSelections.value.some(entry => entry.id === id)) return
     await recomputeAnchors()
