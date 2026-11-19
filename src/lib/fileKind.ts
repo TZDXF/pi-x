@@ -7,6 +7,9 @@ import { baseName } from "./paths"
 /** 可作为图片预览的扩展名；svg 是文本，由预览面板单独按图片渲染并可切源码 */
 export const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "jfif", "gif", "webp", "ico", "bmp", "avif"])
 
+/** 以表格渲染的扩展名：CSV 与 TSV（分隔符在内容里嗅探，见 `lib/csvTable`） */
+export const CSV_EXTS = new Set(["csv", "tsv"])
+
 /** 以 Markdown 渲染的扩展名 */
 export const MD_EXTS = new Set(["md", "markdown"])
 
@@ -20,3 +23,5 @@ export function extOf(path: string): string {
 export const isImageExt = (path: string) => IMAGE_EXTS.has(extOf(path))
 
 export const isMarkdownExt = (path: string) => MD_EXTS.has(extOf(path))
+
+export const isCsvTableExt = (path: string) => CSV_EXTS.has(extOf(path))

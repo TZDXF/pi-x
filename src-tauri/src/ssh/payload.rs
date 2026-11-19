@@ -279,6 +279,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn files_script_carries_offset_and_limit_only_when_given() {
+        // 其它 op 的 argv 必须与改动前逐字一致；CSV 分支只多出 offset/limit。
+        let argv = |script: &str| -> String {
+            let marker = "' -- '";
+            script
+                .rsplit(marker)
+                .next()
+                .unwrap()
+                .trim_end_matches('\'')
+                .to_string()
+        };
+        let plain = build_files_script("/home/dev/work", "a.csv", "preview", None);
+        assert_eq!(
+            argv(&plain),
+            serde_json::json!({"project": "/home/dev/work", "path": "a.csv", "op": "preview"})
+                .to_string()
+        );
+        let csv = build_files_script(
+            "/home/dev/work",
+            "a.csv",
+            "csv",
+            Some(serde_json::json!({ "offset": 500, "limit": 500 })),
+        );
+        let payload: serde_json::Value = serde_json::from_str(&argv(&csv)).unwrap();
+        assert_eq!(payload["op"], "csv");
+        assert_eq!(payload["offset"], 500);
+        assert_eq!(payload["limit"], 500);
+        assert_eq!(payload["project"], "/home/dev/work");
+        // 路径仍是单引号包裹的 argv，不进入 JavaScript 源码。
+        assert!(
+            csv.contains("-- '"),
+            "arguments stay an argv, not source text"
+        );
+    }
+
+    #[test]
     fn posix_quote_wraps_and_escapes_single_quotes() {
         assert_eq!(posix_quote("abc"), "'abc'");
         assert_eq!(posix_quote(""), "''");
@@ -429,10 +465,24 @@ mod tests {
 }
 
 /// File arguments are JSON encoded and shell quoted, never interpolated into JavaScript.
-pub fn build_files_script(project: &str, path: &str, op: &str) -> String {
+pub fn build_files_script(
+    project: &str,
+    path: &str,
+    op: &str,
+    extra: Option<serde_json::Value>,
+) -> String {
+    let mut payload = serde_json::json!({ "project": project, "path": path, "op": op });
+    // Only the CSV reader passes extra fields (offset/limit); every other op
+    // keeps the original payload shape byte for byte.
+    if let (Some(extras), Some(object)) = (
+        extra.and_then(|value| value.as_object().cloned()),
+        payload.as_object_mut(),
+    ) {
+        object.extend(extras);
+    }
     format!(
         "node --input-type=module --eval {} -- {}",
         posix_quote(include_str!("../../resources/remote_files.mjs")),
-        posix_quote(&serde_json::json!({ "project": project, "path": path, "op": op }).to_string())
+        posix_quote(&payload.to_string())
     )
 }

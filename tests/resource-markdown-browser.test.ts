@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import * as vue from "vue"
-import { isMarkdownExt } from "@/lib/fileKind"
+import { isCsvTableExt, isMarkdownExt } from "@/lib/fileKind"
 import { normalizeSlashes } from "@/lib/paths"
 import { useContentTranslation } from "@/composables/useContentTranslation"
 import { usePointerDrag } from "@/composables/usePointerDrag"
@@ -33,6 +33,7 @@ function setup(component: string, props: Record<string, unknown>, fields: string
   const context = vm.createContext({
     ...vue,
     isMarkdownExt,
+    isCsvTableExt,
     normalizeSlashes,
     // Markdown 图片接管（TZD-132）：setup 体只建映射/provider，渲染路径由
     // tests/markdown-preview-images.test.ts 单独覆盖。

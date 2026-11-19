@@ -1,0 +1,118 @@
+# CSV 表格预览规格（TZD-137）
+
+基线 `dev@c6050d0`。本规格是实现的唯一依据：需求口径、现有预览链路、方案取舍、性能验收目标与已知限制。
+
+## 1. 需求
+
+把项目文件预览里的 `.csv` / `.tsv` 渲染成表格（列标题、行号、分隔符、行数/列数摘要），并在**大文件**下保持可用：打开不被整份读入阻塞，滚动不随行数线性变慢，任何时刻的内存与 DOM 规模只与视口有关。
+
+## 2. 现有预览链路（调研结论）
+
+| 层 | 现状 | 对 CSV 的限制 |
+| --- | --- | --- |
+| 前端入口 | `ProjectFilePreview.vue`：`read_file_preview` 读回 `{kind: text/image/binary, text, truncated, mime, data}` | `kind` 只有三种，表格没有承载结构 |
+| 传输上限 | 后端文本预览上限 `TEXT_PREVIEW_MAX_BYTES = 512 KB`，超限按 UTF-8 边界截断 | 一份 100 万行 CSV 约 40 MB，只能看到前 512 KB（约 1.2 万行） |
+| 渲染 | `highlightFileLines` → 逐行 `<div data-line>`，整文件一次性进 DOM；着色上限 20 万字符 | 行数即 DOM 节点数，几十万行必然卡死 |
+| 后端 | `src-tauri/src/file_preview.rs`：canonicalize + 根目录包含校验 + 二进制嗅探 + 大小上限 | 无表格/分页概念 |
+| 远程 | `src-tauri/src/commands/files.rs::remote_files` → `ssh/payload.rs::build_files_script` → `resources/remote_files.mjs`（远端 Node 脚本） | 三处（本地 Rust、远端 Node、前端）必须保持同一套语义，否则同一文件在本地与远端会渲染出不同结果 |
+| 代码批注 | 行号栏 gutter 拖拽、`[data-line]` 定位、选区取文本 | 表格行与源码行号不是一回事，批注仍只用于源码视图 |
+
+结论：表格预览不能复用文本预览通道——它同时受「512 KB 截断」「整文件进 DOM」两条硬限制，必须新增一条**分页读取**通道，并保留源码视图作为回退。
+
+## 3. 方案
+
+### 3.1 传输：一页一请求
+
+新增命令 `read_csv_page(project, path, offset?, limit?, sshConnectionId?)`，返回：
+
+```ts
+interface CsvPage {
+  offset: number // rows[0] 对应的数据行序号（表头不含在 rows 内）
+  rows: string[][]
+  header: string[] | null // 首条记录，用作列标题
+  more: boolean // 后面还有数据行
+  totalRows: number | null // 仅首页给出（首页本来就要扫一遍全文）
+  columnCount: number // 最宽行的真实字段数
+  truncatedColumns: boolean // 有行超过 128 列
+  truncatedCells: boolean // 有单元格被截到 4096 字符
+  delimiter: string // "," / "\t" / ";"
+  fileBytes: number
+}
+```
+
+后端逐物理行流式解析（`BufReader::read_until`，一次只持有一行），不把文件读进内存；`limit` 上限硬编码 1000 行，`offset` 之后的页不再统计总数（省一遍全文扫描）。
+
+### 3.2 解析规则（三处共用同一口径）
+
+RFC 4180 宽松版：
+
+- `"` 只在字段起始处开启引用块；块内 `""` 是字面引号；块内分隔符与换行是字面内容（多行单元格）；块在行尾未闭合则记录延续到下一物理行。
+- 引用块外的空行不是记录（不产生行、不移动行号）。
+- 首条记录固定当表头（与 GitHub / Excel 一致）；无表头文件会「损失」第一行数据，这是明确取舍。
+- 分隔符嗅探：首行中引号外的 `,` `\t` `;` 计数取最多者；单列文件按扩展名回退（`.tsv` → TAB）。
+- 文件最开头的 UTF-8 BOM 剥掉。
+- 单元格超过 4096 字符按**字符**截断（不按字节，避免中文被切坏）；行超过 128 字段保留前 128 并报告真实列数。
+- 上限：文件 > 256 MB 直接报 `csvFileTooLarge`（每页请求都从文件头扫，超大文件不合适）。
+
+三处实现：`src-tauri/src/csv_preview.rs`（本地 Rust）、`src-tauri/resources/remote_files.mjs`（远端 Node，`op: "csv"`）、`src/lib/csvTable.ts::parseCsvRows`（`readFile` 覆盖的无分页通道，如包资源与代码批注弹窗）。三者的列上限、单元格上限、分页语义一致，并有各自的单测与一组「本地/远端同结果」用例。
+
+### 3.3 渲染：固定行高虚拟窗口
+
+- 行高常量 `CSV_ROW_HEIGHT = 26px`，单元格强制单行 + `truncate`（多行单元格把硬换行显示成 `⏎`），因此行高恒定。
+- 滚动面高度 = 行数 × 26px，行用绝对定位放在窗口位置；DOM 里只有 `视口行数 + 2×overscan(8)` 行（700px 视口约 27+16 = 43 行）。
+- 滚动 → 由 `csvRowWindow` 反算窗口 → 由 `csvPagesForWindow` 反算所需页 → 请求缺页。页缓存只保留 6 页（含首页与当前页邻域），往回滚动内存不会线性增长。
+- 超过 `CSV_MAX_VIRTUAL_ROWS = 100 万行`后，单一滚动面高度会越过浏览器元素上限（Chromium 约 33.5M px，26px 行高下约 128 万行），「滚到底」不再等于最后一行，因此自动切换为「一页一屏 + 上一页/下一页」：渲染与请求规模同样与总行数无关。
+- 页内仍走同一套虚拟化，所以翻页模式每帧 DOM 行数也是 40 行量级，而不是 500 行。
+
+### 3.4 接线
+
+- `ProjectFilePreview.vue`：`.csv` / `.tsv` 默认进表格视图，工具栏 `[data-csv-toggle]` 可切回源码视图。
+- 项目模式（无 `readFile` 覆盖）：`load()` **不**调用 `read_file_preview`，直接渲染 `CsvTablePreview`，由它分页取数；切回源码时才补读一次。
+- `readFile` 覆盖模式（包资源预览、代码批注弹窗）：没有分页通道，把已读回的有界文本交给子组件本地解析，不新增读取入口。
+- 远程：`read_csv_page` 进入 `remote/dispatch/app.rs` 的命令表，远端脚本 `op: "csv"` 走 Node 流式解析；`build_files_script` 增加可选扩展字段（offset/limit）。
+- 错误沿用 `PIXERR:` 编码：`previewPathInvalid` / `previewReadFailed` / `csvFileTooLarge` / `projectDirMissing`，前端按 `backendErrors.*` 翻译。
+
+## 4. 性能验收目标
+
+目标是**结构性上界**（可测、与机器无关），墙上时钟作为参考记录：
+
+| 指标 | 目标 | 依据 |
+| --- | --- | --- |
+| 打开大 CSV | 不发全文读取请求；首屏只取 500 行 | E2E 统计 `read_csv_page` 调用 |
+| 任意时刻 DOM 行数 | ≤ 80 行（700px 视口），且与总行数无关 | `csvRowWindow` 单测 + E2E |
+| 分页请求数 | 首屏 1 次；滚到尾部再 +1 次；并发 ≤ 2 | E2E 调用计数 |
+| 单页载荷 | ≤ 128 列 × 500 行；实测 500 行 3 列 = 25 KB | Rust 性能用例断言 < 512 KB |
+| 单页解析（100 万行 / 41.8 MB 文件） | release ≤ 300ms，dev ≤ 1s（上界） | `csv_perf_million_rows` |
+| 行数超过 100 万 | 自动翻页，不出现不可达的滚动尾部 | E2E（150 万行） |
+| 页缓存 | ≤ 6 页 | 常量 + 裁剪逻辑 |
+
+## 5. 验证记录（本分支实测）
+
+合成数据全部本地生成，不访问任何模型服务或外部接口。
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 前端单测（全量） | `pnpm run test:web:all` | 227 文件 / 1901 用例通过（11 skip） |
+| Rust 单测 | `pnpm test` | 538 通过（31 ignored，其中含 1 个 `#[ignore]` 的大数据量性能用例） |
+| 完整检查 | `pnpm run check` | lint / typecheck / build / rust / rust:remote 全部 OK |
+| E2E 全量 | `pnpm run test:e2e` | 112 通过（含新增 `csv-table-preview.spec.ts` 3 例与 `project-files.spec.ts` 新增 1 例） |
+| Rust 大数据量性能 | `cargo test csv_perf -- --ignored --nocapture`（release） | 100 万行 / 41.8 MB：首页全扫 136ms，尾部页 133ms，单页载荷 25 KB |
+| 同上（dev profile） | 同命令（默认 profile） | 398ms / 399ms（未优化上界） |
+
+E2E 实测（Chromium，700px 视口，合成数据）：
+
+- 30 万行虚拟滚动：DOM 行数 42；滚到中段首行 ≈ 中点；滚到底最后一行 = 300000。
+- 150 万行：自动进翻页模式，DOM 行数 42，翻页 500 行/页、共 3000 页。
+- 后端分页模式（mock IPC，10ms/页）：首屏 1 次请求；跳尾部再 1 次；最大 `offset` < 总行数，`limit` 恒为 500，并发 ≤ 2。
+
+## 6. 未验证 / 已知限制
+
+- **未做真实桌面端手测**：本地没有启动 `pnpm run dev:desktop`（需要打包/编译 Tauri 窗口）逐一手动验证；表格 UI 通过 Playwright 真实 Vue 模块图 + mock IPC 验证。远程 SSH/WSL/Docker 的 CSV 分支只跑了 Node 脚本级单测（`tests/remote-files.test.ts`），**没有连真实远端主机验证**。
+- **墙上时钟不是断言**：E2E 只断言结构性上界；不同机器、不同 profile 的毫秒数仅供参考，CI 不做耗时门槛。
+- **表头固定为首行**：无表头文件会丢掉第一行数据；不做「无表头」判定（自动判定不可靠）。
+- **编码**：只按 UTF-8 解码（非法序列按 lossy 处理）。GBK 等编码的 CSV 会显示为乱码，未做编码嗅探。
+- **批注**：表格视图不支持代码批注与行区间定位（只有源码视图支持），这是刻意保留的行为。
+- **列宽**：固定档位宽度（≤4 列 224px / ≤12 列 160px / 其他 128px），没有按内容自适应或手动拖拽列宽。
+- **`readFile` 覆盖模式仍是整段文本**：包资源/批注预览的文本本身有上游上限，表格在那里不做分页，只做虚拟滚动；超过 100 万行的有界文本会进翻页模式。
+- **文件变更刷新**：磁盘变更时表格重新加载当前页（保留页码而非滚动位置）。
+- **排序/筛选/列固定**：未实现（本次需求只要求渲染与高性能）。

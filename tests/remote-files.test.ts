@@ -17,10 +17,10 @@ function fixture() {
   roots.push(root)
   const project = join(root, "project ' 中文")
   mkdirSync(project)
-  const call = (path: string, op = "preview") => {
+  const call = (path: string, op = "preview", extra: Record<string, number> = {}) => {
     const result = spawnSync(
       process.execPath,
-      ["--input-type=module", "--eval", helper, "--", JSON.stringify({ project, path, op })],
+      ["--input-type=module", "--eval", helper, "--", JSON.stringify({ project, path, op, ...extra })],
       { encoding: "utf8", timeout: 10000 },
     )
     expect(result.status, result.stderr).toBe(0)
@@ -59,4 +59,40 @@ test("remote file access rejects traversal, directories and escaping links", () 
   expect(call("link", "list").error.code).toBe("previewPathInvalid")
   expect(call("", "list").data).toEqual([])
   expect(call("missing").error.code).toBe("previewReadFailed")
+})
+
+// TZD-137：远端 CSV 表格预览必须与本地 Rust 侧同语义——同一套引号/换行规则、
+// 同一套 offset/limit 分页、同一份列数与截断标志。
+test("remote csv pages follow the local parser and page contract", () => {
+  const { project, call } = fixture()
+  const crlf = String.fromCharCode(13)
+  const lf = String.fromCharCode(10)
+  const tab = String.fromCharCode(9)
+  const csv = ["id,note", '1,"a, b"', '2,"say ""hi"""', '3,"line one', 'line two"', ""].join(crlf + lf)
+  writeFileSync(join(project, "table.csv"), csv)
+  writeFileSync(join(project, "wide.tsv"), ["a" + tab + "b" + tab + "c", "1" + tab + "2" + tab + "3", ""].join(lf))
+
+  expect(call("table.csv", "csv", { offset: 0, limit: 10 }).data).toMatchObject({
+    offset: 0,
+    header: ["id", "note"],
+    rows: [
+      ["1", "a, b"],
+      ["2", 'say "hi"'],
+      ["3", "line one" + lf + "line two"],
+    ],
+    totalRows: 3,
+    columnCount: 2,
+    more: false,
+    delimiter: ",",
+  })
+  // 翻页：只回请求窗口，后续页不再统计总数（少一遍全文扫描）。
+  expect(call("table.csv", "csv", { offset: 1, limit: 1 }).data).toMatchObject({
+    offset: 1,
+    rows: [["2", 'say "hi"']],
+    more: true,
+    totalRows: null,
+  })
+  expect(call("wide.tsv", "csv").data).toMatchObject({ header: ["a", "b", "c"], delimiter: "\\t" })
+  expect(call("table.csv", "csv", { offset: 0, limit: 1000 }).data.rows).toHaveLength(3)
+  expect(call("../table.csv", "csv").error.code).toBe("previewPathInvalid")
 })

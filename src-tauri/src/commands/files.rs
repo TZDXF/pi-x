@@ -36,7 +36,7 @@ pub async fn list_project_directory(
     ssh_connection_id: Option<String>,
 ) -> Result<Vec<fs_search::ProjectEntry>, String> {
     if crate::ssh::is_remote_uri(&project) {
-        return remote_files(&project, &path, ssh_connection_id.as_deref(), "list").await;
+        return remote_files(&project, &path, ssh_connection_id.as_deref(), "list", None).await;
     }
     fs_search::list_directory(project, path).await
 }
@@ -49,9 +49,43 @@ pub async fn read_file_preview(
     ssh_connection_id: Option<String>,
 ) -> Result<file_preview::FilePreview, String> {
     if crate::ssh::is_remote_uri(&project) {
-        return remote_files(&project, &path, ssh_connection_id.as_deref(), "preview").await;
+        return remote_files(
+            &project,
+            &path,
+            ssh_connection_id.as_deref(),
+            "preview",
+            None,
+        )
+        .await;
     }
     file_preview::read_file_preview(project, path).await
+}
+
+/// Read one page of a project CSV/TSV for the table preview.
+///
+/// Every row is parsed backend-side and only a bounded window travels back, so
+/// a multi-hundred-MB sheet never becomes one JSON payload (or one DOM tree).
+#[tauri::command]
+pub async fn read_csv_page(
+    project: String,
+    path: String,
+    offset: Option<u64>,
+    limit: Option<u64>,
+    ssh_connection_id: Option<String>,
+) -> Result<crate::csv_preview::CsvPage, String> {
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(crate::csv_preview::CSV_PAGE_DEFAULT_ROWS);
+    if crate::ssh::is_remote_uri(&project) {
+        return remote_files(
+            &project,
+            &path,
+            ssh_connection_id.as_deref(),
+            "csv",
+            Some(json!({ "offset": offset, "limit": limit })),
+        )
+        .await;
+    }
+    crate::csv_preview::read_csv_page(project, path, offset, limit).await
 }
 
 /// Export a stored Pi session without activating or switching any runtime.
@@ -139,11 +173,12 @@ async fn remote_files<T: serde::de::DeserializeOwned>(
     path: &str,
     connection_id: Option<&str>,
     op: &str,
+    extra: Option<serde_json::Value>,
 ) -> Result<T, String> {
     let (target, connection) =
         super::ssh::resolve_ssh_connection(project, connection_id.unwrap_or(""))?;
     let endpoint = connection.to_remote_endpoint();
-    let script = crate::ssh::payload::build_files_script(target.path(), path, op);
+    let script = crate::ssh::payload::build_files_script(target.path(), path, op, extra);
     let output =
         crate::ssh::transport::remote_exec(&endpoint, &script, std::time::Duration::from_secs(20))
             .await
