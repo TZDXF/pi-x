@@ -55,6 +55,8 @@ interface HostOptions {
   initial?: Record<string, string>
   /** Hold `pi://app-config-changed` events so the test can deliver them out of order. */
   delayEvents?: boolean
+  /** 模拟「主机先广播、命令结果后返回」（严格写入幽灵记录的回归场景）。 */
+  echoBeforeReturn?: boolean
 }
 
 /** 主机配置（config.json 的 preferences 段）用 sessionStorage 模拟：同一标签页重载后仍在。 */
@@ -98,6 +100,10 @@ async function installHostConfig(page: Page, options: HostOptions = {}) {
       harnessWindow.__pendingEvents = held.length
     }
     harnessWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined }
+    // 偏好修订号：真实后端每次写入递增，并随推送事件与主动读取一起下发；
+    // 前端据此识别「自己那笔写入的回执」，而不是靠值是否相同。
+    const revisionKey = "__hostRevision"
+    const readRevision = () => Number(sessionStorage.getItem(revisionKey) ?? "0")
     const internals = {
       transformCallback: (callback: (payload: unknown) => void) => {
         const id = nextId++
@@ -105,20 +111,27 @@ async function installHostConfig(page: Page, options: HostOptions = {}) {
         return id
       },
       invoke: async (command: string, args: Record<string, string>) => {
-        if (command === "app_config_get") return { preferences: readPreferences() }
+        if (command === "app_config_get") return { preferences: readPreferences(), preferencesRevision: readRevision() }
         if (command === "app_preference_set") {
           harnessWindow.__writes!.push({ key: args.key, value: args.value })
           sessionStorage.setItem(`pref:${args.key}`, args.value)
+          sessionStorage.setItem(revisionKey, String(readRevision() + 1))
+          const revision = readRevision()
           const snapshot = readPreferences()
           const emit = () => {
             for (const callback of callbacks.values())
-              callback({ event: "pi://app-config-changed", id: nextId, payload: { preferences: snapshot } })
+              callback({
+                event: "pi://app-config-changed",
+                id: nextId,
+                payload: { preferences: snapshot, preferencesRevision: revision },
+              })
           }
           if (config.delayEvents) {
             held.push(emit)
             harnessWindow.__pendingEvents = held.length
-          } else emit()
-          return null
+          } else if (config.echoBeforeReturn) emit()
+          else emit()
+          return revision
         }
         if (command === "plugin:event|listen") return nextId
         if (command === "plugin:event|unlisten") return null
@@ -291,6 +304,61 @@ test("a late stale config event never reverses the newest local toggle", async (
   await expect.poll(() => inlineWrapState(page)).toEqual(["pre-wrap", "pre-wrap", "pre-wrap"])
   expect(await page.getByRole("button", { name: wrapButtonName(true) }).count()).toBe(3)
   await expectPersisted(page, "1", { last: true })
+
+  expect(errors).toEqual([])
+})
+
+test("three consecutive toggles survive their ordered echoes", async ({ page }) => {
+  const errors: string[] = []
+  page.on("pageerror", error => errors.push(error.message))
+  await installHostConfig(page, { initial: { markdownCodeWrap: "1" }, delayEvents: true })
+  await page.goto(harness!.url)
+  const message = page.locator('[data-message="first"]')
+  await expect(inlineBlocks(page)).toHaveCount(3)
+
+  // 连点「关 → 开 → 关」：三笔写入依次是 0、1、0，回执都还在路上。
+  await message.getByRole("button", { name: wrapButtonName(true) }).click()
+  await message.getByRole("button", { name: wrapButtonName(false) }).click()
+  await message.getByRole("button", { name: wrapButtonName(true) }).click()
+  await expect.poll(() => inlineWrapState(page)).toEqual(["pre", "pre", "pre"])
+  await expect.poll(async () => (await writes(page)).map(write => write.value)).toEqual(["0", "1", "0"])
+
+  // 三笔回执按序投递：首笔的 `0` 与最终值同值，但它是更旧的写入，绝不能生效。
+  for (const value of ["0", "1", "0"]) {
+    console.log(`ordered ${value} echo released`)
+    await page.evaluate(() => Reflect.get(window, "__releaseEvent")!(0))
+    await expect.poll(() => inlineWrapState(page)).toEqual(["pre", "pre", "pre"])
+  }
+  // 仍是「不换行」，三个块都显示「开启换行」文案（含首笔同值的 0 回执也不翻转）。
+  expect(await page.getByRole("button", { name: wrapButtonName(false) }).count()).toBe(3)
+  await expectPersisted(page, "0", { last: true })
+
+  expect(errors).toEqual([])
+})
+
+test("an event echo that arrives before the command result leaves no phantom record", async ({ page }) => {
+  const errors: string[] = []
+  page.on("pageerror", error => errors.push(error.message))
+  await installHostConfig(page, { initial: { markdownCodeWrap: "1" }, echoBeforeReturn: true })
+  await page.goto(harness!.url)
+  await expect(inlineBlocks(page)).toHaveCount(3)
+
+  await page
+    .locator('[data-message="first"]')
+    .getByRole("button", { name: wrapButtonName(true) })
+    .click()
+  await expect.poll(() => inlineWrapState(page)).toEqual(["pre", "pre", "pre"])
+  await expectPersisted(page, "0")
+
+  // 模拟另一台客户端把该键从主机配置里删掉后的一次权威快照：主动读取（重载）必须生效，
+  // 不能被「已收到回执却仍记为待确认」的幽灵记录挡住。
+  await page.evaluate(() => {
+    sessionStorage.removeItem("pref:markdownCodeWrap")
+    sessionStorage.setItem("__hostRevision", String(Number(sessionStorage.getItem("__hostRevision") ?? "0") + 1))
+  })
+  await page.reload()
+  await expect(inlineBlocks(page)).toHaveCount(3)
+  await expect.poll(() => inlineWrapState(page)).toEqual(["pre-wrap", "pre-wrap", "pre-wrap"])
 
   expect(errors).toEqual([])
 })

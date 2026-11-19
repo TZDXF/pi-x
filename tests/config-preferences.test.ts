@@ -31,6 +31,9 @@ async function harness(preferences: Record<string, string> = {}) {
   mocks.changed = null
   mocks.failWrite = false
   mocks.writes = []
+  // 预先加载客户端配置模块：`startConfigListener` 用动态 import，isolate:false 下
+  // 每轮 resetModules 后首次解析这个模块会慢一拍，测试不应因此偶发失败。
+  await import("@/api/client/config")
   const module = await import("@/lib/configPreference")
   return module
 }

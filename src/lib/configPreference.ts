@@ -16,22 +16,44 @@ interface ConfigPreferenceOptions<T> {
   throwOnWriteError?: boolean
 }
 
+/**
+ * 一笔还没有被主机确认的本地写入。
+ * `revision` 是主机回执里的修订号（旧后端或未连接远程时为 null）。
+ */
+interface PendingWrite {
+  raw: string
+  revision: number | null
+}
+
+/** 主机视图：主机最后一次告诉我们的 preferences。**不是**显示值。 */
 let preferences: Record<string, string> = {}
 let initialized = false
 let listening = false
+let reconnectListening = false
 /**
- * 本客户端最近写入的各偏好值（key → 值序列，最新在末尾）。
+ * 本客户端尚未被确认的写入（key → FIFO）。
  *
- * 写入是排队的：连点「关→开」会先后写 `0`、`1`，而主机事件可能乱序到达（例如
- * 第一笔的 `0` 回执晚于第二笔写入）。整表应用这样的旧回执照会把 UI 从刚选的 `1`
- * 短暂扳回 `0`，所以：
- * - 快照值等于最新一次本地写入 → 这是它的回执，应用并清除记录；
- * - 快照值是本地写过的旧值但不等于最新 → 迟到的旧回执，跳过这个 key；
- * - 其余值 → 其它客户端 / 主机侧的真实变更，正常应用。
- * 这样既能拦住延迟旧事件，也不会永久屏蔽外部修改（有界记录，最多 4 个）。
+ * 写入身份不靠「值相同」判定 —— 用户可能连续选回同一个值，值匹配无法区分「自己那笔的
+ * 回执」和「用户后续又切了一次」。这里改用主机修订号（`app_preference_set` 返回新修订、
+ * `pi://app-config-changed` 与 `app_config_get` 携带 `preferencesRevision`）：
+ * - 快照修订号 >= 某笔本地写入的修订号 → 那笔写入已经被主机采纳，删掉它的记录；
+ * - 仍有一笔未确认的新写入 → 显示值继续用那笔写入的 raw（主机视图照常更新）；
+ * - 旧后端没有修订号 → 退化为「每个事件算作最老一笔本地写入的回执」（FIFO 假设），
+ *   这是有界降级，真实后端始终带修订号。
+ *
+ * 这样迟到的旧回执既不会反转最新的选择，也不会让权威快照被旧记录长期屏蔽：
+ * 主动读取（`initializeConfigPreferences`）与重连后的重新读取是无条件权威的。
  */
-const RECENT_WRITE_LIMIT = 4
-const recentWrites = new Map<string, string[]>()
+const pendingWrites = new Map<string, PendingWrite[]>()
+/**
+ * 写入失败但仍然保留在界面上的本地选择（key → raw）。
+ * 主机明确表示「没写成」时不该闪回默认值，但这也不再是可以屏蔽权威状态的记录：
+ * 任何一次主机快照（推送或主动读取）都会清空它。
+ */
+const failedOverrides = new Map<string, string>()
+/** 已应用过的最新主机修订号；-1 表示主机没有提供修订号。 */
+let hostRevision = -1
+
 const listeners = new Set<() => void>()
 const migrationCallbacks = new Set<() => void>()
 const migrations = new Set<string>()
@@ -63,55 +85,128 @@ function notify() {
   for (const listener of listeners) listener()
 }
 
-function applyRawValue(key: string, raw: string, localWrite = false) {
-  // 本地写入先乐观生效，并记下值序列，供迟到回执的判定使用。
-  if (localWrite) {
-    const writes = recentWrites.get(key) ?? []
-    recentWrites.set(key, [...writes, raw].slice(-RECENT_WRITE_LIMIT))
-  }
-  preferences = { ...preferences, [key]: raw }
-  notify()
+function newestPending(key: string): PendingWrite | undefined {
+  const list = pendingWrites.get(key)
+  return list?.[list.length - 1]
+}
+
+function addPending(key: string, entry: PendingWrite) {
+  pendingWrites.set(key, [...(pendingWrites.get(key) ?? []), entry])
+}
+
+/** 只删这一笔（按对象身份），同键的其它写入不受影响 —— 写失败不牵连后续写入。 */
+function removePending(key: string, entry: PendingWrite) {
+  const list = pendingWrites.get(key)
+  if (!list) return
+  const remaining = list.filter(candidate => candidate !== entry)
+  if (remaining.length) pendingWrites.set(key, remaining)
+  else pendingWrites.delete(key)
+}
+
+/** 显示用的 raw：仍在主机途中的本地写入优先，其次写失败保留的本地选择，最后主机视图。 */
+function effectiveRaw(key: string): string | undefined {
+  const pending = newestPending(key)
+  if (pending) return pending.raw
+  const failed = failedOverrides.get(key)
+  if (failed !== undefined) return failed
+  return hasConfigValue(key) ? preferences[key] : undefined
 }
 
 /**
- * 用主机快照替换本地偏好，但不让尚未确认的旧快照反转较新的本地写入。
- * 其余 key 仍按整表替换（快照里没有的 key 会被丢弃），与原有语义一致。
+ * 应用一份主机快照。
+ *
+ * `snapshot.authoritative` 用于「主动读取」（启动 / 重连 / 显式刷新）：整表直接采用并清空
+ * 所有待确认记录 —— 权威读取永远不该被旧记录屏蔽。
+ * 否则是推送事件：按修订号判定哪些本地写入已被采纳，其余键保持本地的更新值。
  */
-function replacePreferences(next: Record<string, string> | undefined) {
+function replacePreferences(
+  next: Record<string, string> | undefined,
+  snapshot: { revision?: number; authoritative?: boolean } = {},
+) {
   const incoming = next ?? {}
-  const merged: Record<string, string> = {}
-  for (const [key, raw] of Object.entries(incoming)) {
-    const writes = recentWrites.get(key)
-    if (writes?.length) {
-      const latest = writes[writes.length - 1]!
-      if (raw === latest) recentWrites.delete(key)
-      // 迟到的旧回执：跳过这个 key，保留用户最后的选择。
-      else if (writes.includes(raw)) continue
-      // 其它值视为真实的外部变更，正常应用。
+  const revision = snapshot.revision
+
+  if (snapshot.authoritative) {
+    preferences = { ...incoming }
+    pendingWrites.clear()
+    failedOverrides.clear()
+    if (revision !== undefined && revision > hostRevision) hostRevision = revision
+    initialized = true
+    notify()
+    for (const migrate of migrationCallbacks) migrate()
+    return
+  }
+
+  if (typeof revision === "number") {
+    // 修订号严格单调：更旧的快照（乱序到达的旧事件）整份丢弃。
+    if (revision < hostRevision) return
+    hostRevision = revision
+    // 修订号已覆盖的本地写入即回执：删掉记录，显示值回落到主机视图。
+    for (const [key, list] of [...pendingWrites]) {
+      const remaining = list.filter(entry => entry.revision === null || entry.revision > revision)
+      if (remaining.length) pendingWrites.set(key, remaining)
+      else pendingWrites.delete(key)
     }
-    merged[key] = raw
+  } else {
+    // 旧后端没有修订号：快照里出现的键，其最老一笔本地写入按 FIFO 视为已确认。
+    // 快照里没出现的键（只改了别的 key 的旧事件）不能吞掉本地记录，否则会闪回默认值。
+    for (const [key, list] of [...pendingWrites]) {
+      if (!Object.prototype.hasOwnProperty.call(incoming, key)) continue
+      if (list.length > 1) pendingWrites.set(key, list.slice(1))
+      else pendingWrites.delete(key)
+    }
   }
-  // 快照没提到的 key：本地写入还没收到回执时不能被快照抹掉，否则会闪回默认值。
-  for (const [key, raw] of Object.entries(preferences)) {
-    if (!Object.prototype.hasOwnProperty.call(merged, key) && recentWrites.has(key)) merged[key] = raw
-  }
-  preferences = merged
+
+  // 推送快照同样代表主机当前状态：写失败留下的本地值到此为止。
+  failedOverrides.clear()
+  preferences = { ...incoming }
   initialized = true
   notify()
   for (const migrate of migrationCallbacks) migrate()
 }
 
 /** Serialize writes within this client; the backend merges each key into the latest config. */
-function persistRawValue(key: string, raw: string, legacyKey?: string): Promise<void> {
+function persistRawValue(key: string, raw: string, legacyKey?: string): Promise<number | undefined> {
   const write = writeQueue
     .catch(() => {})
     .then(async () => {
       const { saveConfigPreference } = await import("@/api/client/config")
-      await saveConfigPreference(key, raw)
+      const revision = await saveConfigPreference(key, raw)
       removeLegacyValue(legacyKey)
+      return typeof revision === "number" ? revision : undefined
     })
-  writeQueue = write
+  writeQueue = write.then(
+    () => undefined,
+    () => undefined,
+  )
   return write
+}
+
+/**
+ * 乐观写入一笔偏好：先登记待确认，主机回执到了才解除。
+ * `keepOnFailure`：宽松写入（不抛错）在失败后仍保留界面上的选择（沿用既有乐观 UI）；
+ * 严格写入则回落到主机视图（调用方会看到拒绝异常）。
+ */
+async function commit(key: string, raw: string, legacyKey?: string, keepOnFailure = false) {
+  // 新写入接管这个 key：之前写失败保留的旧选择不再显示。
+  failedOverrides.delete(key)
+  const entry: PendingWrite = { raw, revision: null }
+  addPending(key, entry)
+  notify()
+  try {
+    const revision = await persistRawValue(key, raw, legacyKey)
+    entry.revision = revision ?? null
+    // 主机有时先广播事件、后返回命令结果：回执已经途经本端时不能再留下幽灵记录，
+    // 否则之后的权威读取会被它挡住（严格写入路径曾出现这个回归）。
+    if (revision !== undefined && revision <= hostRevision) removePending(key, entry)
+  } catch (error) {
+    // 只清理这一笔：同键其它仍在途 / 后续写入的记录不受影响。
+    removePending(key, entry)
+    if (keepOnFailure) failedOverrides.set(key, raw)
+    throw error
+  } finally {
+    notify()
+  }
 }
 
 function migrateLegacyValue(options: ConfigPreferenceOptions<unknown>) {
@@ -123,8 +218,7 @@ function migrateLegacyValue(options: ConfigPreferenceOptions<unknown>) {
   const raw = legacyValue(options.legacyKey)
   if (raw === null) return
   migrations.add(options.key)
-  void persistRawValue(options.key, raw, options.legacyKey)
-    .then(() => applyRawValue(options.key, raw, true))
+  void commit(options.key, raw, options.legacyKey)
     .catch(error => console.warn(`[pi] failed to migrate preference ${options.key}:`, error))
     .finally(() => migrations.delete(options.key))
 }
@@ -133,22 +227,57 @@ function startConfigListener() {
   if (listening) return
   listening = true
   void import("@/api/client/config")
-    .then(({ onAppConfigChanged }) => onAppConfigChanged(config => replacePreferences(config.preferences)))
+    .then(({ onAppConfigChanged }) =>
+      onAppConfigChanged(config => replacePreferences(config.preferences, { revision: config.preferencesRevision })),
+    )
     .catch(() => {
       listening = false
     })
+  startReconnectListener()
 }
 
-/** Load host-owned preferences. Safe to retry after remote authentication. */
-export async function initializeConfigPreferences(config?: AppConfig): Promise<boolean> {
+/**
+ * 远程传输断开期间事件会丢（见 `api/transport.ts` 的 RECONNECTED_EVENT 契约）。
+ * 重连后主动读一次权威配置，避免本地残留的待确认记录继续屏蔽真实状态。
+ */
+function startReconnectListener() {
+  if (reconnectListening) return
+  reconnectListening = true
+  void import("@/api/transport")
+    .then(({ listen, RECONNECTED_EVENT }) => {
+      if (!RECONNECTED_EVENT) {
+        reconnectListening = false
+        return undefined
+      }
+      return listen(RECONNECTED_EVENT, () => void refreshFromHost())
+    })
+    .catch(() => {
+      reconnectListening = false
+    })
+}
+
+/** 主动读取权威配置；永远整表采用，并清空待确认记录。 */
+export async function refreshFromHost(): Promise<boolean> {
   try {
-    const loaded = config ?? (await (await import("@/api/client/config")).getConfig())
-    replacePreferences(loaded.preferences)
-    startConfigListener()
+    const { getConfig } = await import("@/api/client/config")
+    const loaded = await getConfig()
+    replacePreferences(loaded.preferences, { authoritative: true, revision: loaded.preferencesRevision })
     return true
   } catch {
     return false
   }
+}
+
+/** Load host-owned preferences. Safe to retry after remote authentication. */
+export async function initializeConfigPreferences(config?: AppConfig): Promise<boolean> {
+  if (config) {
+    replacePreferences(config.preferences, { authoritative: true, revision: config.preferencesRevision })
+    startConfigListener()
+    return true
+  }
+  const loaded = await refreshFromHost()
+  if (loaded) startConfigListener()
+  return loaded
 }
 
 /** A validated config.json ref with optimistic UI updates and legacy migration. */
@@ -157,10 +286,11 @@ export function createConfigPreference<T>(options: ConfigPreferenceOptions<T>) {
     typeof options.defaultValue === "function" ? (options.defaultValue as () => T)() : options.defaultValue
 
   function read(): T {
-    const raw = hasConfigValue(options.key) ? preferences[options.key]! : legacyValue(options.legacyKey)
+    const current = effectiveRaw(options.key)
+    const raw = current !== undefined ? current : legacyValue(options.legacyKey)
     try {
       if (options.read) return options.read(raw)
-      if (raw === null) return fallback()
+      if (raw === null || raw === undefined) return fallback()
       const value = options.parse ? options.parse(raw) : raw
       return !options.validate || options.validate(value) ? (value as T) : fallback()
     } catch {
@@ -182,16 +312,12 @@ export function createConfigPreference<T>(options: ConfigPreferenceOptions<T>) {
   async function set(value: T) {
     const raw = options.serialize ? options.serialize(value) : String(value)
     if (options.throwOnWriteError) {
-      await persistRawValue(options.key, raw, options.legacyKey)
-      applyRawValue(options.key, raw, true)
+      await commit(options.key, raw, options.legacyKey, false)
       return
     }
-    applyRawValue(options.key, raw, true)
     try {
-      await persistRawValue(options.key, raw, options.legacyKey)
+      await commit(options.key, raw, options.legacyKey, true)
     } catch (error) {
-      // 写失败：这台机器上没有待确认的本地值了，后续快照应当照常应用。
-      recentWrites.delete(options.key)
       console.warn(`[pi] failed to save preference ${options.key}:`, error)
     }
   }
