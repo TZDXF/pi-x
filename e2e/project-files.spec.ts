@@ -224,6 +224,7 @@ test.describe("project files", () => {
     await page.locator("[data-csv-toggle]").click()
     await expect(page.locator("[data-csv-preview]")).toHaveCount(0)
     const commands = await page.evaluate(() => (window as any).__csvCommands as string[])
+    // 表格视图只取一页（500 行）；128 列的宽表也仍是同一页。
     expect(commands.filter(command => command === "read_csv_page")).toHaveLength(1)
     expect(commands.filter(command => command === "read_file_preview")).toHaveLength(1)
     expect(errors).toEqual([])

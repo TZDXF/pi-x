@@ -23,9 +23,12 @@ export interface CsvPage {
   more: boolean
   /** Data-row count excluding the header; null on later pages. */
   totalRows: number | null
+  /** Real width of the widest row; may exceed {@link CSV_MAX_COLUMNS}. */
   columnCount: number
   truncatedColumns: boolean
   truncatedCells: boolean
+  /** The backend cut this page at its byte budget instead of at `limit`. */
+  budgetTruncated: boolean
   /** Display form of the field separator: `,` `\t` or `;`. */
   delimiter: string
   fileBytes: number
@@ -120,6 +123,17 @@ export const csvBodyHeight = (rowCount: number, rowHeight = CSV_ROW_HEIGHT) => M
 /** Header title for a column without a header cell (ragged or headerless files). */
 export const csvColumnLabel = (header: string[] | null, index: number) => header?.[index]?.trim() || `#${index + 1}`
 
+/**
+ * Columns actually rendered: the backend reports the real width of the widest
+ * row (which can exceed the cap for diagnostics), but rendering more than
+ * [`CSV_MAX_COLUMNS`] columns would mean hundreds of header/DOM nodes per row.
+ */
+export function csvRenderedColumns(columnCount: number): number {
+  const count = Math.floor(columnCount)
+  if (!Number.isFinite(count)) return 0
+  return Math.max(0, Math.min(CSV_MAX_COLUMNS, count))
+}
+
 /** Column width in px, narrower as the table gets wider. */
 export function csvCellWidth(columns: number): number {
   if (columns <= 4) return 224
@@ -179,6 +193,7 @@ export function parseCsvRows(
   let started = false
   let truncatedCells = false
   let inQuotes = false
+  let pendingCr = false
   let atFieldStart = true
 
   const commitField = () => {
@@ -207,12 +222,27 @@ export function parseCsvRows(
 
   for (let index = 0; index < body.length; index++) {
     const char = body[index]
+    if (pendingCr) {
+      pendingCr = false
+      if (char === "\n") {
+        field += "\n"
+        started = true
+        continue
+      }
+      field += "\r"
+    }
     if (inQuotes) {
       if (char === '"') {
         if (body[index + 1] === '"') {
           field += '"'
           index += 1
         } else inQuotes = false
+        continue
+      }
+      // 单元格内 CRLF 折叠成一个 LF；孤立 CR 原样保留（与 Rust/Node 同口径）。
+      if (char === "\r") {
+        pendingCr = true
+        started = true
         continue
       }
       field += char
@@ -292,6 +322,8 @@ export function parseCsvPage(
     columnCount: parsed.columnCount,
     truncatedColumns: parsed.truncatedColumns,
     truncatedCells: parsed.truncatedCells,
+    // 本地解析持有整份有界文本，不存在「按字节裁剪」。
+    budgetTruncated: false,
     delimiter: parsed.delimiter,
     fileBytes: parsed.fileBytes,
   }

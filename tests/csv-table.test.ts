@@ -13,8 +13,10 @@ import {
   csvColumnLabel,
   csvPageOf,
   csvPagesForWindow,
+  csvRenderedColumns,
   csvRowWindow,
   csvUsesVirtualScroll,
+  CSV_MAX_COLUMNS,
   parseCsvPage,
   parseCsvRows,
   sniffDelimiter,
@@ -175,4 +177,43 @@ test("the file preview routes csv files to the table view without pre-reading th
   expect(source).toMatch(/<CsvTablePreview\s+v-if="showCsvTable && !readFile"/)
   // readFile 覆盖（资源/批注预览）没有分页通道，改为把有界文本交给子组件解析。
   expect(source).toMatch(/const csvText = computed\(\(\) => \(props\.readFile \? text\.value : undefined\)\)/)
+})
+
+// 验收回归（TZD-137 复验 P1/P2）——纯逻辑部分。
+
+test("only the first 128 columns are rendered, however wide the file is", () => {
+  // 后端报「真实宽度」用于提示，渲染必须被 128 截断，否则 200 列会渲染 200 个
+  // 表头与每行 200 格（验收 P1）。
+  expect(csvRenderedColumns(200)).toBe(CSV_MAX_COLUMNS)
+  expect(csvRenderedColumns(CSV_MAX_COLUMNS)).toBe(CSV_MAX_COLUMNS)
+  expect(csvRenderedColumns(3)).toBe(3)
+  expect(csvRenderedColumns(0)).toBe(0)
+  expect(csvRenderedColumns(Number.NaN)).toBe(0)
+  const cells = csvCells(
+    Array.from({ length: 200 }, (_, index) => `c${index}`),
+    CSV_MAX_COLUMNS,
+  )
+  expect(cells.length).toBe(200, "pads only, never grows")
+  expect(cells.slice(0, CSV_MAX_COLUMNS).at(-1)).toBe("c127")
+})
+
+test("delimiter ties resolve to comma, then tab, then semicolon (same as Rust/Node)", () => {
+  expect(sniffDelimiter("a,b;c", "x.csv")).toBe(",")
+  expect(sniffDelimiter("a\tb;c", "x.csv")).toBe("\t")
+  expect(sniffDelimiter("a;b\tc", "x.csv")).toBe("\t")
+  expect(sniffDelimiter("a;b;c", "x.csv")).toBe(";")
+})
+
+test("CRLF inside a quoted cell collapses to one LF", () => {
+  const parsed = parseCsvRows('id,body\n1,"line one\r\nline two"\n', "data.csv")
+  expect(parsed.rows[0][1]).toBe("line one\nline two")
+  const crlfRecords = parseCsvRows("a,b\r\n1,2\r\n", "data.csv")
+  expect(crlfRecords.rows).toEqual([["1", "2"]])
+})
+
+test("the client page mirrors the backend's byte-budget flag", () => {
+  const page = parseCsvPage("a,b\n1,2\n", "data.csv", 0, 10)
+  // 本地解析持有整份有界文本，不存在按字节裁剪的页。
+  expect(page.budgetTruncated).toBe(false)
+  expect(page.totalRows).toBe(1)
 })

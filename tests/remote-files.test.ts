@@ -96,3 +96,95 @@ test("remote csv pages follow the local parser and page contract", () => {
   expect(call("table.csv", "csv", { offset: 0, limit: 1000 }).data.rows).toHaveLength(3)
   expect(call("../table.csv", "csv").error.code).toBe("previewPathInvalid")
 })
+
+// TZD-137 复验 P2：本地 Rust 与远端 Node 必须逐项同口径。这里直接比对两份
+// 实现里的契约常量与关键行为，任一单边漂移都会让本用例失败。
+test("local Rust and remote Node enforce the same csv contract", () => {
+  const rust = readFileSync(resolve("src-tauri/src/csv_preview.rs"), "utf8")
+  const node = readFileSync(resolve("src-tauri/resources/remote_files.mjs"), "utf8")
+  const rustConst = (name: string) => {
+    const match = new RegExp(`pub const ${name}: [^=]+ = ([^;]+);`).exec(rust)
+    return match?.[1].trim()
+  }
+  const nodeConst = (name: string) => {
+    const match = new RegExp(`const ${name} = ([^\n]+)`).exec(node)
+    return match?.[1].trim()
+  }
+  const pairs: [string, string][] = [
+    ["CSV_PAGE_MAX_ROWS", "CSV_PAGE_MAX_ROWS"],
+    ["CSV_PAGE_DEFAULT_ROWS", "CSV_PAGE_DEFAULT_ROWS"],
+    ["CSV_MAX_COLUMNS", "CSV_MAX_COLUMNS"],
+    ["CSV_CELL_MAX_CHARS", "CSV_CELL_MAX_CHARS"],
+    ["CSV_MAX_FILE_BYTES", "CSV_MAX_FILE_BYTES"],
+    ["CSV_PAGE_MAX_BYTES", "CSV_PAGE_MAX_BYTES"],
+  ]
+  for (const [rustName, nodeName] of pairs) {
+    const rustValue = rustConst(rustName)
+    const nodeValue = nodeConst(nodeName)
+    expect(rustValue, `missing ${rustName}`).toBeTruthy()
+    expect(nodeValue, `missing ${nodeName}`).toBeTruthy()
+    // `1024 * 1024` / `8 * 1024` 这类表达式原样比较即可：两边写法必须一致。
+    expect(nodeValue!.replace(/\s+/g, "")).toBe(rustValue!.replace(/\s+/g, ""))
+  }
+  // 平票优先级：逗号 → 制表符 → 分号（两边的候选顺序一致，只是写法不同）。
+  const rustCandidates = /const CANDIDATES: \[u8; 3\] = \[([^\]]+)\];/.exec(rust)?.[1]
+  expect(rustCandidates, "missing Rust CANDIDATES").toBeTruthy()
+  expect(rustCandidates!.replace(/\s+/g, "")).toBe("b',',b'\\t',b';'")
+  expect(node).toContain("const CANDIDATES = [44, 9, 59]")
+})
+
+// 复验 P2：BOM + 引号表头、平票分隔符、恰好 4096 个 4 字节字符、limit=0 的默认值。
+test("remote csv matches the local parser on the reported divergences", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const bom = String.fromCharCode(0xfeff)
+  writeFileSync(join(project, "bom.csv"), `${bom}"id",note${lf}1,2${lf}`)
+  writeFileSync(join(project, "tie.csv"), `a,b;c${lf}1,2${lf}`)
+  const emoji = "😀".repeat(4096)
+  writeFileSync(join(project, "emoji.csv"), `id,text${lf}1,${emoji}${lf}`)
+  writeFileSync(join(project, "many.csv"), `${lf}`.repeat(0) + ["id", ...Array(600).fill("row")].join(lf) + lf)
+
+  expect(call("bom.csv", "csv").data.header).toEqual(["id", "note"])
+  expect(call("tie.csv", "csv").data.delimiter).toBe(",")
+  const emojiPage = call("emoji.csv", "csv").data
+  expect(Array.from(emojiPage.rows[0][1])).toHaveLength(4096)
+  expect(emojiPage.truncatedCells).toBe(false)
+  const zeroLimit = call("many.csv", "csv", { offset: 0, limit: 0 }).data
+  expect(zeroLimit.rows).toHaveLength(200)
+})
+
+// 复验 P1：一页的序列化字节必须有界，且下一段 offset 不跳行。
+test("remote csv slices stay inside the byte budget without skipping rows", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const columns = 128
+  const cell = "x".repeat(4096)
+  const header = Array.from({ length: columns }, (_, index) => `c${index}`).join(",")
+  const cells = Array.from({ length: columns - 1 }, () => cell).join(",")
+  const lines = [header]
+  for (let row = 0; row < 40; row++) lines.push(`${row},${cells}`)
+  writeFileSync(join(project, "wide.csv"), lines.join(lf) + lf)
+
+  const first = call("wide.csv", "csv", { offset: 0, limit: 500 }).data
+  expect(first.budgetTruncated).toBe(true)
+  expect(first.more).toBe(true)
+  expect(first.rows.length).toBeLessThan(40)
+  expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(1024 * 1024 + 64 * 1024)
+  const next = call("wide.csv", "csv", { offset: first.rows.length, limit: 500 }).data
+  expect(next.rows[0][0]).toBe(String(first.rows.length))
+})
+
+// 复验 P2：首页必须报出整表真实列数（含第 501 行才出现的宽行）。
+test("a wide row beyond the first slice is still reported on the first page", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const wide = Array.from({ length: 129 }, (_, index) => `v${index}`).join(",")
+  const lines = ["id"]
+  for (let row = 0; row < 500; row++) lines.push(`r${row}`)
+  lines.push(wide)
+  writeFileSync(join(project, "late-wide.csv"), lines.join(lf) + lf)
+  const page = call("late-wide.csv", "csv", { offset: 0, limit: 500 }).data
+  expect(page.totalRows).toBe(501)
+  expect(page.columnCount).toBe(129)
+  expect(page.truncatedColumns).toBe(true)
+})

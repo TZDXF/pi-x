@@ -14,9 +14,11 @@ export async function invokeProjectFile<T>(
 }
 
 /**
- * Read one page of a project CSV/TSV for the table preview. Rows are parsed by
+ * Read one slice of a project CSV/TSV for the table preview. Rows are parsed by
  * the backend and only a bounded window comes back, so a large sheet never
- * becomes one IPC payload.
+ * becomes one IPC payload. A returned slice may be **shorter than `limit`**
+ * when the backend hits its byte budget: callers continue from
+ * `offset + page.rows.length`, never from `offset + limit`.
  */
 export async function readCsvPage(project: string, path: string, offset: number, limit: number): Promise<CsvPage> {
   const sshConnectionId = await terminalConnectionId(project, sshConnectionList)
