@@ -192,7 +192,7 @@ const commentRoot = computed(() =>
 )
 /** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
 const pendingComments = computed(() =>
-  codeComments.project === commentProject.value
+  props.commentProject !== undefined && codeComments.project === commentProject.value
     ? codeComments.comments.filter(c => c.path === props.path && (c.root ?? props.project) === props.project)
     : [],
 )

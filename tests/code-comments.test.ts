@@ -184,6 +184,21 @@ test("editable inserted comments preserve following prose and coexist with multi
   expect(parsed.comments.some(comment => comment.comment.includes("# Code comments:"))).toBe(false)
 })
 
+test("tail markers inside an editable selection fence do not hide the real chip block", () => {
+  const inserted = formatCodeCommentForComposer({
+    path: "src/editable.ts",
+    startLine: 1,
+    endLine: 3,
+    selectedText: "before\n\n# Code comments:\n\nafter",
+    comment: "quoted marker",
+  })
+  const chip = { path: "src/chip.ts", startLine: 8, endLine: 8, selectedText: "real", comment: "real chip" }
+  const parsed = parsePromptCodeComments(buildPromptWithCodeComments(inserted, [chip]))
+  expect(parsed.visibleContent).toBe(inserted)
+  expect(parsed.comments).toHaveLength(1)
+  expect(parsed.comments[0]).toMatchObject({ path: "src/chip.ts", comment: "real chip" })
+})
+
 // ---- 持久化消息解析回附件（对齐 ZCode 的 parsePromptCodeComments） ----
 
 test("parsePromptCodeComments round-trips comments built by buildPromptWithCodeComments", () => {

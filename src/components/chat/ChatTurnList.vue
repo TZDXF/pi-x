@@ -332,6 +332,7 @@ onBeforeUnmount(() => {
   <CodeCommentPreview
     :comment="openedComment"
     :roots="commentRoots"
+    :comment-project="auxRuntimeId ? undefined : session.cwd || project"
     @close="openedComment = null"
     @insert-code-comment="emit('insert-code-comment', $event)"
   />

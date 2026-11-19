@@ -10,7 +10,12 @@ import type { ParsedCodeComment } from "@/lib/codeComments"
 import type { FilePreview } from "@/lib/projectFiles"
 import type { PendingCodeComment } from "@/stores/codeComments"
 
-const props = defineProps<{ comment: ParsedCodeComment | null; roots: string[] }>()
+const props = defineProps<{
+  comment: ParsedCodeComment | null
+  roots: string[]
+  /** 主会话目录；缺省表示无 composer 接收方，不展示主会话待发送 chip。 */
+  commentProject?: string
+}>()
 const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
 const target = computed(() => props.comment && resolveCodeCommentFile(props.comment.path, props.roots))
@@ -53,6 +58,7 @@ const readFile = computed(() => {
         :read-file="readFile"
         :line-range="{ start: comment.startLine, end: comment.endLine }"
         :closable="false"
+        :comment-project="commentProject"
         @insert-code-comment="emit('insert-code-comment', $event)"
       />
       <p v-else role="alert" class="text-sm text-destructive">

@@ -25,6 +25,9 @@ test("project files and history previews reach the composer before consuming a c
   const chat = read("../src/components/ChatView.vue")
 
   expect(preview).toContain('emit("insert-code-comment", comment)')
+  expect(preview).toContain("props.commentProject !== undefined")
+  expect(historyPreview).toContain(':comment-project="commentProject"')
+  expect(turns).toContain(':comment-project="auxRuntimeId ? undefined : session.cwd || project"')
   expect(files).toMatch(/<ProjectFilePreview[\s\S]*?@insert-code-comment="emit\('insert-code-comment', \$event\)"/)
   expect(sidebar).toMatch(/<ProjectFiles[\s\S]*?@insert-code-comment="\$emit\('insert-code-comment', \$event\)"/)
   expect(historyPreview).toMatch(

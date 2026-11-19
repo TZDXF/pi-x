@@ -158,6 +158,27 @@ function readFencedText(lines: readonly string[], start: number): { text: string
   return null
 }
 
+/** 找最后一个围栏外的尾块标题；可编辑正文/选区里的同名文本不参与机器解析。 */
+function codeCommentsBlockStart(content: string): number | null {
+  const lines = content.split("\n")
+  let offset = 0
+  let fenceLength = 0
+  let candidate: number | null = null
+  for (let index = 0; index < lines.length; index++) {
+    const line = (lines[index] ?? "").replace(/\r$/, "")
+    const fence = /^ {0,3}(`{3,})/.exec(line)
+    if (fenceLength) {
+      if (fence && fence[1].length >= fenceLength && /^ {0,3}`{3,}[ \t]*$/.test(line)) fenceLength = 0
+    } else if (fence) {
+      fenceLength = fence[1].length
+    } else if (/^# Code comments:[ \t]*$/.test(line) && !(lines[index + 1] ?? "").trim()) {
+      candidate = offset
+    }
+    offset += (lines[index]?.length ?? 0) + 1
+  }
+  return candidate
+}
+
 /**
  * 解析 prompt 尾部的 "# Code comments:" 块：按字段顺序读取，选区围栏内不识别条目头。
  * 普通批注只有「Comment 标题 + File 字段」才是下一条的边界；受保护批注完整读到闭合围栏。
@@ -165,7 +186,9 @@ function readFencedText(lines: readonly string[], start: number): { text: string
  */
 export function parsePromptCodeComments(content: string): ParsedPromptComments {
   const unparsed = { visibleContent: content, comments: [] }
-  const blockMatch = /(?:^|\n\n)# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(content)
+  const blockStart = codeCommentsBlockStart(content)
+  if (blockStart === null) return unparsed
+  const blockMatch = /^# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(content.slice(blockStart))
   if (!blockMatch) return unparsed
   // 保留正文行尾的 CR；只在读取结构字段时去掉它，避免改变 Windows 选区内容。
   const lines = blockMatch[1].split("\n")
@@ -218,5 +241,5 @@ export function parsePromptCodeComments(content: string): ParsedPromptComments {
     })
   }
   if (!comments.length) return unparsed
-  return { visibleContent: content.slice(0, blockMatch.index).trimEnd(), comments }
+  return { visibleContent: content.slice(0, blockStart).trimEnd(), comments }
 }
