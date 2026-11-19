@@ -64,6 +64,7 @@ vi.mock("@/lib/auxSpawn", () => ({
 import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
 import { auxSelectionItems } from "@/stores/auxSelections"
 import {
+  auxDeliverableFor,
   auxInstancesFor,
   auxTabBySidebarId,
   registerAuxRuntimeBridge,
@@ -562,7 +563,7 @@ function keyedRuntime(runtimeId: string) {
       onLastTabClosed() {},
     }),
   )!
-  return { side, session }
+  return { side, session, scope }
 }
 
 /** 文件键上已有 `[files]` 并落盘；aux 在临时运行时键上以 id=1 启动，期间换到该文件键。 */
@@ -879,4 +880,64 @@ test("an aux whose group is queued at the 24-group limit is neither offered nor 
   expect([explicit.ok, auto.ok]).toEqual([false, false])
   expect(auxSelectionItems(instance.runtimeId)).toHaveLength(0)
   for (let index = 0; index < 23; index++) releaseGroup(`qa-pinned-${index}`)
+})
+
+/**
+ * 父视图卸载后的划词投递（TZD-131 返工，来自 `qa-tzd131-router-disposal`）。
+ *
+ * `useAuxTabs` 的 `onScopeDispose` 会注销该父会话的 router；此时实例仍在表里、还带着
+ * 旧槽号，但它**没有任何当前组的入口**。因此不能靠"实例表自查"兜底：没有当前 router
+ * 一律视为无入口 —— 候选为空、投递 `unavailable`、不写桶（与「父视图卸载后不投递」
+ * 的既有契约一致）。重新挂载且当前入口有效时，在途请求仍应正常投给原实例。
+ */
+test("an in-flight quote must not land in a live aux after the parent view was disposed", async () => {
+  const parent = "qa-scope-away"
+  const mounted = keyedRuntime(parent)
+  let finish!: () => void
+  controls.spawn.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)))
+  const asking = mounted.side.askAux({ text: "quote while the parent view goes away" }, null)
+  const instance = auxInstancesFor(parent)[0]!
+  try {
+    expect(instance.tabId).toBe(1)
+    mounted.scope.stop()
+    // 实例还带着旧号，但当前组没有入口：候选为空、新请求被拒。
+    expect(auxDeliverableFor(parent)).toHaveLength(0)
+    const later = await mounted.side.askAux({ text: "a new handoff after disposal" }, instance.runtimeId)
+    expect(later.ok).toBe(false)
+    finish()
+    const outcome = await asking
+    expect({
+      result: outcome.ok ? "ok" : outcome.reason,
+      quotes: auxSelectionItems(instance.runtimeId).length,
+      alive: auxInstancesFor(parent)[0]?.runtimeId,
+      killed: controls.kill.mock.calls.flat(),
+    }).toEqual({ result: "unavailable", quotes: 0, alive: instance.runtimeId, killed: [] })
+  } finally {
+    finish()
+    await asking
+  }
+})
+
+test("a remounted parent with an authoritative entry still receives the in-flight quote", async () => {
+  const parent = "qa-scope-remount"
+  const mounted = keyedRuntime(parent)
+  let finish!: () => void
+  controls.spawn.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)))
+  const asking = mounted.side.askAux({ text: "quote with a live entry restored" }, null)
+  const instance = auxInstancesFor(parent)[0]!
+  try {
+    mounted.scope.stop()
+    const remounted = keyedRuntime(parent)
+    expect(remounted.side.auxTargets.value.map(tab => tab.runtimeId)).toEqual([instance.runtimeId])
+    finish()
+    const outcome = await asking
+    expect(outcome.ok && outcome.tab.runtimeId).toBe(instance.runtimeId)
+    expect(auxSelectionItems(instance.runtimeId)).toHaveLength(1)
+    expect(remounted.side.activeId.value).toBe(instance.tabId)
+    expect(controls.spawn).toHaveBeenCalledTimes(1)
+    expect(controls.kill).not.toHaveBeenCalled()
+  } finally {
+    finish()
+    await asking
+  }
 })

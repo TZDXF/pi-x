@@ -266,12 +266,13 @@ export interface AuxAskRouter {
   /** 该父会话当前**激活**的 aux（侧栏 active 槽位指向它）；没有则 `null`。 */
   active: (parentRuntimeId: string) => AuxTab | null
   /**
-   * 该实例此刻**在本组侧栏里有没有入口**（槽位存在、类型为 `aux`、且由它占据）。
+   * 该实例此刻**在本组侧栏里有没有入口**（槽位存在、类型为 `aux`、且由它占据）。**必填**。
    *
    * 只有接线层（`useAuxTabs`）能回答这个问题：实例表里的 `tabId` 是"上一次分配到的号"，
-   * 组被淘汰/排队/换键后可能与当前组完全脱节（TZD-131）。所有"能不能投递"的判据都走它。
+   * 组被淘汰/排队/换键后可能与当前组完全脱节（TZD-131）。所有"能不能投递"的判据都走它，
+   * 且**不设实例表兜底** —— 父视图卸载后 router 注销，此时恰好正是"不能投递"的状态。
    */
-  entry?: (tab: AuxTab) => boolean
+  entry: (tab: AuxTab) => boolean
   /** 新建一个 aux（加槽位 + spawn）；槽位不可用或创建期间关闭时返回 `null`。 */
   open: (parentRuntimeId: string) => Promise<AuxTab | null>
   /** 把该实例的槽位切成激活并展开侧栏（复用与新建后都要做）。 */
@@ -405,24 +406,16 @@ export function auxSlotlessFor(parentRuntimeId: string): AuxTab[] {
 }
 
 /**
- * 该实例当前**有没有入口**（本组槽位确实属于它）。
- *
- * 没有槽位的实例（`tabId === null`：补格时组满被收回号）仍在跑，但用户打不开它的面板，
- * 因此不能作为划词目标或自动路由候选 —— 否则引用会被写进一个看不见的待发送桶（TZD-131）。
- */
-export function auxHasEntry(tab: AuxTab): boolean {
-  return tab.tabId !== null && auxTabBySidebarId(tab.parentRuntimeId, tab.tabId)?.runtimeId === tab.runtimeId
-}
-
-/**
  * 该实例此刻有没有**当前组**的入口。
  *
- * 优先问接线层（`router.entry` 读的是当前侧栏组的真实槽位），没有 router 时才退回
- * 实例表自查 —— 后者只说明"上一次分配到的号还在自己名下"，组被淘汰/排队时并不成立。
+ * 只认接线层（`router.entry`）的回答：它读的是**当前侧栏组**的真实槽位。没有当前 router
+ * （父 `ChatView` 已卸载/尚未挂载）或未注入 `entry` 时一律视为**无入口** ——
+ * 实例表自查只说明"上一次分配到的号还在自己名下"，组被淘汰/排队/换键后并不成立，
+ * 也与"父视图卸载后不投递"的既有契约冲突（TZD-131）。
  */
 function hasLiveEntry(parentRuntimeId: string, tab: AuxTab): boolean {
   const router = askRouters.get(parentRuntimeId)
-  return router?.entry ? router.entry(tab) : auxHasEntry(tab)
+  return router?.entry ? router.entry(tab) : false
 }
 
 /** 该父会话里**可以当作划词目标**的实例（当前组有入口、且未关闭）。 */
