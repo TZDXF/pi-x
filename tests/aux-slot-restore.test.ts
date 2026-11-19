@@ -810,3 +810,73 @@ test("the automatic single-aux route ignores a slotless instance and reports fai
   expect(auto.ok).toBe(false)
   expect(auxSelectionItems(hidden.runtimeId)).toHaveLength(0)
 })
+
+/**
+ * 投递前的"入口"判据必须问**当前侧栏组**（TZD-131 返工，来自 `qa-tzd131-live-aux-entry`）。
+ *
+ * 实例表里的 `tabId` 是"上一次分配到的号"：组被淘汰/排队/换键后它与当前组无关。若只拿
+ * 实例表自查，就会把引用写进一个打不开的桶。两条典型路径：
+ * 1. 划词选「新建」、spawn 在途时换到已满（20 个普通 Tab）的文件键 → 新实例无槽位，
+ *    放行 spawn 后仍不能算投递成功；
+ * 2. 24 组占满时回滚身份键 → 新运行时组排队、侧栏无任何槽，但实例还带旧 `tabId = 1`，
+ *    候选、显式目标与自动路由都必须拒绝。
+ */
+test("an in-flight new aux that lost its slot during a rebind must not accept the reference", async () => {
+  const parent = "qa-live-new-rebind"
+  const mounted = keyedRuntime(parent)
+  let finish!: () => void
+  controls.spawn.mockImplementationOnce(() => new Promise<void>(resolve => (finish = resolve)))
+  const asking = mounted.side.askAux({ text: "in-flight new quote" }, null)
+  const instance = auxInstancesFor(parent)[0]!
+  try {
+    expect(instance.tabId).not.toBeNull()
+    controls.persisted[groupKeyFor(parent, `${parent}.jsonl`, "qa")] = {
+      kinds: Array.from({ length: 20 }, () => "files"),
+      active: 0,
+    }
+    mounted.session.sessionFile = `${parent}.jsonl`
+    await nextTick()
+    expect(kindOf(mounted.side.tabs.value)).toEqual(Array.from({ length: 20 }, () => "files"))
+    expect(instance.tabId).toBeNull()
+    finish()
+    const outcome = await asking
+    expect(outcome.ok).toBe(false)
+    expect(auxSelectionItems(instance.runtimeId)).toHaveLength(0)
+  } finally {
+    finish()
+    await asking
+  }
+})
+
+test("an aux whose group is queued at the 24-group limit is neither offered nor delivered to", async () => {
+  const parent = "qa-live-queued"
+  const session = reactive({ sessionFile: `${parent}.jsonl` as string | null, cwd: "qa" })
+  const scope = effectScope()
+  scopes.push(scope)
+  const side = scope.run(() =>
+    useChatViewSidebar({
+      runtimeId: parent,
+      session: session as never,
+      ui: { pushToast: () => {} } as never,
+      project: () => "qa",
+      onFirstTabAdded() {},
+      onLastTabClosed() {},
+    }),
+  )!
+  await side.addTab("aux")
+  const instance = auxInstancesFor(parent)[0]!
+  for (let index = 0; index < 23; index++) expect(retainGroup(`qa-pinned-${index}`)).toBe(true)
+
+  // 回滚身份键：新运行时组排队，当前侧栏没有任何槽，但实例还带旧号 1。
+  session.sessionFile = null
+  await nextTick()
+  expect(side.tabs.value).toHaveLength(0)
+  expect(instance.tabId).toBe(1)
+  expect(side.auxTargets.value).toHaveLength(0)
+
+  const explicit = await side.askAux({ text: "explicit quote into the old group" }, instance.runtimeId)
+  const auto = await side.askAux({ text: "automatic quote into the old group" })
+  expect([explicit.ok, auto.ok]).toEqual([false, false])
+  expect(auxSelectionItems(instance.runtimeId)).toHaveLength(0)
+  for (let index = 0; index < 23; index++) releaseGroup(`qa-pinned-${index}`)
+})

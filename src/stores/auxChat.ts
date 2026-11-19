@@ -265,6 +265,13 @@ export async function reconcileAuxLeases(): Promise<string[]> {
 export interface AuxAskRouter {
   /** 该父会话当前**激活**的 aux（侧栏 active 槽位指向它）；没有则 `null`。 */
   active: (parentRuntimeId: string) => AuxTab | null
+  /**
+   * 该实例此刻**在本组侧栏里有没有入口**（槽位存在、类型为 `aux`、且由它占据）。
+   *
+   * 只有接线层（`useAuxTabs`）能回答这个问题：实例表里的 `tabId` 是"上一次分配到的号"，
+   * 组被淘汰/排队/换键后可能与当前组完全脱节（TZD-131）。所有"能不能投递"的判据都走它。
+   */
+  entry?: (tab: AuxTab) => boolean
   /** 新建一个 aux（加槽位 + spawn）；槽位不可用或创建期间关闭时返回 `null`。 */
   open: (parentRuntimeId: string) => Promise<AuxTab | null>
   /** 把该实例的槽位切成激活并展开侧栏（复用与新建后都要做）。 */
@@ -407,9 +414,22 @@ export function auxHasEntry(tab: AuxTab): boolean {
   return tab.tabId !== null && auxTabBySidebarId(tab.parentRuntimeId, tab.tabId)?.runtimeId === tab.runtimeId
 }
 
-/** 该父会话里**可以当作划词目标**的实例（有入口、且未关闭）。 */
+/**
+ * 该实例此刻有没有**当前组**的入口。
+ *
+ * 优先问接线层（`router.entry` 读的是当前侧栏组的真实槽位），没有 router 时才退回
+ * 实例表自查 —— 后者只说明"上一次分配到的号还在自己名下"，组被淘汰/排队时并不成立。
+ */
+function hasLiveEntry(parentRuntimeId: string, tab: AuxTab): boolean {
+  const router = askRouters.get(parentRuntimeId)
+  return router?.entry ? router.entry(tab) : auxHasEntry(tab)
+}
+
+/** 该父会话里**可以当作划词目标**的实例（当前组有入口、且未关闭）。 */
 export function auxDeliverableFor(parentRuntimeId: string): AuxTab[] {
-  return auxInstancesFor(parentRuntimeId).filter(tab => !isClosedAux(tab.runtimeId) && auxHasEntry(tab))
+  return auxInstancesFor(parentRuntimeId).filter(
+    tab => !isClosedAux(tab.runtimeId) && hasLiveEntry(parentRuntimeId, tab),
+  )
 }
 
 /** 某个父会话最后一个实例（切回父会话时恢复它的面板）。 */
@@ -718,14 +738,14 @@ export async function askInAux(
     if (!selected || selected.parentRuntimeId !== parentRuntimeId) return { ok: false, reason: "unavailable" }
     // 目标还必须**真的有入口**：等槽位（`tabId === null`）的实例打不开面板，收下引用
     // 只会落进一个看不见的待发送桶（TZD-131）。此时沿用"没有可用入口"的失败文案。
-    if (!auxHasEntry(selected)) return { ok: false, reason: "unavailable" }
+    if (!hasLiveEntry(parentRuntimeId, selected)) return { ok: false, reason: "unavailable" }
     return deliverToAux(selected, payload)
   }
   if (target !== null) {
     // 未显式选择时保留原有自动路由；多实例浮层会传入已有 id 或 null（新建）。
     // 自动路由只挑**可打开**的实例：激活的排在前面，其次该父会话最近的可用实例。
     const active = router.active(parentRuntimeId)
-    if (active && auxHasEntry(active)) return deliverToAux(active, payload)
+    if (active && hasLiveEntry(parentRuntimeId, active)) return deliverToAux(active, payload)
     const deliverable = auxDeliverableFor(parentRuntimeId)
     const recent = deliverable[deliverable.length - 1]
     // 没有可打开的实例时落到下面的"新建"分支（新建能拿到槽位才可投递）。
@@ -735,6 +755,9 @@ export async function askInAux(
   if (!created) return { ok: false, reason: "unavailable" }
   // 新建的实例可能在 spawn 期间就被关闭：墓碑命中时不再往它的桶里塞引用。
   if (isClosedAux(created.runtimeId)) return { ok: false, reason: "unavailable" }
+  // 也必须**在写桶之前重新确认当前组入口**：等待期间可能换键/被淘汰/组满，实例变成
+  // 没有槽位（`tabId === null`）的状态；此时收下引用只会落进一个打不开的桶（TZD-131）。
+  if (!hasLiveEntry(parentRuntimeId, created)) return { ok: false, reason: "unavailable" }
   return deliverToAux(created, payload)
 }
 

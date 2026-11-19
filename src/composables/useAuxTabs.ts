@@ -287,7 +287,14 @@ export function useAuxTabs(deps: {
     return tab
   }
 
-  registerAuxAskRouter(deps.runtimeId, { active: activeAuxTab, open: openForAsk, reveal })
+  registerAuxAskRouter(deps.runtimeId, {
+    active: activeAuxTab,
+    open: openForAsk,
+    reveal,
+    // 划词投递前的"有没有入口"判据：判**当前侧栏组**的真实槽位（存在 + 类型 + 归属），
+    // 不看实例记着的旧号 —— 组被淘汰/排队/换键后旧号与当前组无关（TZD-131）。
+    entry: tab => ownsSlot(tab.tabId, tab.runtimeId),
+  })
   onScopeDispose(() => registerAuxAskRouter(deps.runtimeId, null))
 
   return {
