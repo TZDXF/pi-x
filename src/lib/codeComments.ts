@@ -158,38 +158,33 @@ function readFencedText(lines: readonly string[], start: number): { text: string
   return null
 }
 
-/** 找最后一个围栏外的尾块标题；可编辑正文/选区里的同名文本不参与机器解析。 */
-function codeCommentsBlockStart(content: string): number | null {
+/**
+ * 尾块标题的候选位置：必须是行首、前面是空行或消息开头，且标题后紧跟空行。
+ * 只按行形状列候选（不跟踪围栏）：草稿里未闭合的围栏不能把真正附加的尾块吞掉，
+ * 而选区/草稿里凑巧出现的同名标题会在解析阶段被否定。
+ */
+function codeCommentsCandidates(content: string): number[] {
   const lines = content.split("\n")
+  const starts: number[] = []
   let offset = 0
-  let fenceLength = 0
-  let candidate: number | null = null
+  let boundary = true
   for (let index = 0; index < lines.length; index++) {
     const line = (lines[index] ?? "").replace(/\r$/, "")
-    const fence = /^ {0,3}(`{3,})/.exec(line)
-    if (fenceLength) {
-      if (fence && fence[1].length >= fenceLength && /^ {0,3}`{3,}[ \t]*$/.test(line)) fenceLength = 0
-    } else if (fence) {
-      fenceLength = fence[1].length
-    } else if (/^# Code comments:[ \t]*$/.test(line) && !(lines[index + 1] ?? "").trim()) {
-      candidate = offset
-    }
+    if (boundary && /^# Code comments:[ \t]*$/.test(line) && !(lines[index + 1] ?? "").trim()) starts.push(offset)
+    boundary = !line.trim()
     offset += (lines[index]?.length ?? 0) + 1
   }
-  return candidate
+  return starts
 }
 
 /**
  * 解析 prompt 尾部的 "# Code comments:" 块：按字段顺序读取，选区围栏内不识别条目头。
  * 普通批注只有「Comment 标题 + File 字段」才是下一条的边界；受保护批注完整读到闭合围栏。
- * 任一条目不能解析就原样返回整个块，避免剥离时隐藏损坏条目或未知内容。
+ * 任一条目不能解析就整块作废（返回 null），避免剥离时隐藏损坏条目或未知内容。
  */
-export function parsePromptCodeComments(content: string): ParsedPromptComments {
-  const unparsed = { visibleContent: content, comments: [] }
-  const blockStart = codeCommentsBlockStart(content)
-  if (blockStart === null) return unparsed
-  const blockMatch = /^# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(content.slice(blockStart))
-  if (!blockMatch) return unparsed
+function parseCodeCommentsBlock(block: string): ParsedCodeComment[] | null {
+  const blockMatch = /^# Code comments:\s*\n\n([\s\S]*?)\s*$/.exec(block)
+  if (!blockMatch) return null
   // 保留正文行尾的 CR；只在读取结构字段时去掉它，避免改变 Windows 选区内容。
   const lines = blockMatch[1].split("\n")
   const lineAt = (index: number) => (lines[index] ?? "").replace(/\r$/, "")
@@ -209,23 +204,23 @@ export function parsePromptCodeComments(content: string): ParsedPromptComments {
     if (/^Side:/.test(lines[cursor] ?? "")) cursor++
     const linesMatch = /^Lines:[ \t]*(.+)$/.exec(lineAt(cursor++))
     const range = linesMatch ? parseLineRange(linesMatch[1]) : null
-    if (!fileMatch?.[1].trim() || !range || !/^Selected text:[ \t]*$/.test(lineAt(cursor++))) return unparsed
+    if (!fileMatch?.[1].trim() || !range || !/^Selected text:[ \t]*$/.test(lineAt(cursor++))) return null
     const selected = readFencedText(lines, cursor)
-    if (!selected) return unparsed
+    if (!selected) return null
     cursor = selected.nextLine
     skipBlankLines()
     const commentMatch = /^Comment:[ \t]*(.*)$/.exec(lineAt(cursor++))
-    if (!commentMatch) return unparsed
+    if (!commentMatch) return null
 
     let comment: string
     if (!commentMatch[1] && COMMENT_FENCE.test(lineAt(cursor))) {
       const body = readFencedText(lines, cursor)
-      if (!body) return unparsed
+      if (!body) return null
       comment = body.text
       cursor = body.nextLine
       skipBlankLines()
       // 围栏外的非结构文本不能被静默丢弃。
-      if (cursor < lines.length && !isItemStart(cursor)) return unparsed
+      if (cursor < lines.length && !isItemStart(cursor)) return null
     } else {
       const start = cursor
       while (cursor < lines.length && !isItemStart(cursor)) cursor++
@@ -240,6 +235,17 @@ export function parsePromptCodeComments(content: string): ParsedPromptComments {
       comment,
     })
   }
-  if (!comments.length) return unparsed
-  return { visibleContent: content.slice(0, blockStart).trimEnd(), comments }
+  return comments.length ? comments : null
+}
+
+/**
+ * 从最早的候选标题开始试解析，取第一个能完整吃掉到消息末尾的候选：
+ * 正常发送时那正是真正追加的尾块；正文里凑巧同名的标题解析不过关而被绕过。
+ */
+export function parsePromptCodeComments(content: string): ParsedPromptComments {
+  for (const start of codeCommentsCandidates(content)) {
+    const comments = parseCodeCommentsBlock(content.slice(start))
+    if (comments) return { visibleContent: content.slice(0, start).trimEnd(), comments }
+  }
+  return { visibleContent: content, comments: [] }
 }

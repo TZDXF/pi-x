@@ -184,6 +184,35 @@ test("editable inserted comments preserve following prose and coexist with multi
   expect(parsed.comments.some(comment => comment.comment.includes("# Code comments:"))).toBe(false)
 })
 
+test("a comment body ending with a lone tail marker keeps both tags", () => {
+  const drafts = [
+    {
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 1,
+      selectedText: "a",
+      comment: "note\n\n# Code comments:",
+    },
+    { path: "src/b.ts", startLine: 2, endLine: 2, selectedText: "b", comment: "second chip" },
+  ]
+  const prompt = buildPromptWithCodeComments("正文", drafts)
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe("正文")
+  expect(parsed.comments).toHaveLength(2)
+  expect(parsed.comments[0]).toMatchObject({ path: "src/a.ts", comment: "note\n\n# Code comments:" })
+  expect(parsed.comments[1]).toMatchObject({ path: "src/b.ts", comment: "second chip" })
+})
+
+test("an unclosed fence in the draft does not hide the appended block", () => {
+  const draft = "看看这段\n```ts\nconst a = 1"
+  const chip = { path: "src/a.ts", startLine: 4, endLine: 4, selectedText: "a", comment: "real chip" }
+  const prompt = buildPromptWithCodeComments(draft, [chip])
+  const parsed = parsePromptCodeComments(prompt)
+  expect(parsed.visibleContent).toBe(draft)
+  expect(parsed.comments).toHaveLength(1)
+  expect(parsed.comments[0]).toMatchObject({ path: "src/a.ts", comment: "real chip" })
+})
+
 test("tail markers inside an editable selection fence do not hide the real chip block", () => {
   const inserted = formatCodeCommentForComposer({
     path: "src/editable.ts",
