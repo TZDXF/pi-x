@@ -62,6 +62,7 @@ vi.mock("@/lib/auxSpawn", () => ({
 }))
 
 import { useChatViewSidebar } from "@/composables/useChatViewSidebar"
+import { auxSelectionItems } from "@/stores/auxSelections"
 import {
   auxInstancesFor,
   auxTabBySidebarId,
@@ -679,7 +680,7 @@ test("two instances keep their own slots when one still holds a slot of the othe
  * 因此补格失败的实例一律**收回槽位号**（`tabId = null`，缺槽不 kill），退出按槽位的
  * 查找；名额空出后优先给它补格。
  */
-async function rebindAtCapacity(parent: string, count: number) {
+async function rebindAtCapacity(parent: string, count: number, savedCount = 15) {
   const session = reactive({ sessionFile: null as string | null, cwd: "qa" })
   const file = `${parent}.jsonl`
   const scope = effectScope()
@@ -705,7 +706,7 @@ async function rebindAtCapacity(parent: string, count: number) {
   expect(original.map(aux => aux.tabId)).toEqual(Array.from({ length: count }, (_, index) => 16 + index))
 
   const fileKey = groupKeyFor(parent, file, "qa")
-  const saved = { kinds: Array.from({ length: 15 }, () => "files"), active: 0 }
+  const saved = { kinds: Array.from({ length: savedCount }, () => "files"), active: 0 }
   controls.persisted[fileKey] = saved
   session.sessionFile = file
   await nextTick()
@@ -768,4 +769,44 @@ test("an aux that could not get a slot on a full rebind drops its old id and is 
   const persisted = controls.persisted[groupKeyFor(parent, `${parent}.jsonl`, "qa")] as { kinds: string[] }
   expect(persisted.kinds.every(kind => kind === "files")).toBe(true)
   expect(persisted.kinds.length).toBe(side.tabs.value.filter(tab => tab.type === "files").length)
+})
+
+/**
+ * 等位实例不能被当成可用目标（TZD-131 返工，来自质量复验的 `qa-tzd131-waiting-slots`）。
+ *
+ * 补格失败的实例（`tabId === null`）仍在跑、草稿也保留，但它**没有面板入口**：把它列进
+ * 划词菜单、或被单实例自动路由挑中，只会把引用写进一个用户打不开的待发送桶，而且不报错。
+ * 因此目标必须按「确有本组槽位」过滤；没有可用目标时沿用容量不足的失败提示。
+ */
+test("a slotless waiting aux is not offered as a target and never receives a hidden reference", async () => {
+  const parent = "qa-waiting-targets"
+  const { side } = await rebindAtCapacity(parent, 6)
+  const hidden = auxInstancesFor(parent)[5]!
+  expect(hidden.tabId).toBeNull()
+  const files = side.tabs.value.find(tab => tab.type === "files")!
+  side.activeId.value = files.id
+
+  // 菜单只列有入口的实例：等位实例不在候选里。
+  expect(side.auxTargets.value.map(target => target.runtimeId)).not.toContain(hidden.runtimeId)
+  expect(side.auxTargets.value).toHaveLength(5)
+
+  // 显式选中它（例如浮层里的旧选项）：拒绝、不写桶、保持原激活、不激活不存在的格。
+  const refused = await side.askAux({ text: "quote from the parent conversation" }, hidden.runtimeId)
+  expect(refused.ok).toBe(false)
+  expect(auxSelectionItems(hidden.runtimeId)).toHaveLength(0)
+  expect(side.activeId.value).toBe(files.id)
+})
+
+test("the automatic single-aux route ignores a slotless instance and reports failure", async () => {
+  const parent = "qa-waiting-auto"
+  // 20 个普通 Tab 的文件键 + 1 个 aux：换键后这个 aux 没有槽位，是组里唯一的实例。
+  const { side } = await rebindAtCapacity(parent, 1, 20)
+  const hidden = auxInstancesFor(parent)[0]!
+  expect(hidden.tabId).toBeNull()
+  expect(side.tabs.value.every(tab => tab.type === "files")).toBe(true)
+  expect(side.auxTargets.value).toHaveLength(0)
+
+  const auto = await side.askAux({ text: "quote via the single-aux automatic route" })
+  expect(auto.ok).toBe(false)
+  expect(auxSelectionItems(hidden.runtimeId)).toHaveLength(0)
 })

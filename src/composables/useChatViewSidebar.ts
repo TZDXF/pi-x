@@ -9,7 +9,7 @@ import { useSidebarTabs } from "@/composables/useSidebarTabs"
 import type { SessionStore } from "@/stores/session"
 import type { UiStore } from "@/stores/ui"
 import { useWorkspaceStore } from "@/stores/workspace"
-import { auxInstancesFor } from "@/stores/auxChat"
+import { auxDeliverableFor } from "@/stores/auxChat"
 
 /**
  * `ChatView` 的右侧侧栏接线：一次装配两套注册表。
@@ -89,7 +89,9 @@ export function useChatViewSidebar(deps: {
     return outcome
   }
 
-  const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))
+  // 划词菜单只列**可打开**的实例：没有侧栏槽位的等位实例（`tabId === null`）不能被选中，
+  // 否则引用会写进一个用户打不开的待发送桶（TZD-131）。
+  const auxTargets = computed(() => auxDeliverableFor(deps.runtimeId))
 
   return {
     askAux,

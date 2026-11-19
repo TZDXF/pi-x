@@ -397,6 +397,21 @@ export function auxSlotlessFor(parentRuntimeId: string): AuxTab[] {
   return tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === null)
 }
 
+/**
+ * 该实例当前**有没有入口**（本组槽位确实属于它）。
+ *
+ * 没有槽位的实例（`tabId === null`：补格时组满被收回号）仍在跑，但用户打不开它的面板，
+ * 因此不能作为划词目标或自动路由候选 —— 否则引用会被写进一个看不见的待发送桶（TZD-131）。
+ */
+export function auxHasEntry(tab: AuxTab): boolean {
+  return tab.tabId !== null && auxTabBySidebarId(tab.parentRuntimeId, tab.tabId)?.runtimeId === tab.runtimeId
+}
+
+/** 该父会话里**可以当作划词目标**的实例（有入口、且未关闭）。 */
+export function auxDeliverableFor(parentRuntimeId: string): AuxTab[] {
+  return auxInstancesFor(parentRuntimeId).filter(tab => !isClosedAux(tab.runtimeId) && auxHasEntry(tab))
+}
+
 /** 某个父会话最后一个实例（切回父会话时恢复它的面板）。 */
 export function activeAuxFor(parentRuntimeId: string): AuxTab | undefined {
   for (let i = tabs.length - 1; i >= 0; i--) {
@@ -701,12 +716,20 @@ export async function askInAux(
     // 多实例选择器给出的目标必须仍属于这个父会话；关闭/切换后的旧选项不得落到别的实例。
     const selected = auxTabByRuntime(target)
     if (!selected || selected.parentRuntimeId !== parentRuntimeId) return { ok: false, reason: "unavailable" }
+    // 目标还必须**真的有入口**：等槽位（`tabId === null`）的实例打不开面板，收下引用
+    // 只会落进一个看不见的待发送桶（TZD-131）。此时沿用"没有可用入口"的失败文案。
+    if (!auxHasEntry(selected)) return { ok: false, reason: "unavailable" }
     return deliverToAux(selected, payload)
   }
   if (target !== null) {
     // 未显式选择时保留原有自动路由；多实例浮层会传入已有 id 或 null（新建）。
-    const existing = router.active(parentRuntimeId) ?? activeAuxFor(parentRuntimeId)
-    if (existing && !isClosedAux(existing.runtimeId)) return deliverToAux(existing, payload)
+    // 自动路由只挑**可打开**的实例：激活的排在前面，其次该父会话最近的可用实例。
+    const active = router.active(parentRuntimeId)
+    if (active && auxHasEntry(active)) return deliverToAux(active, payload)
+    const deliverable = auxDeliverableFor(parentRuntimeId)
+    const recent = deliverable[deliverable.length - 1]
+    // 没有可打开的实例时落到下面的"新建"分支（新建能拿到槽位才可投递）。
+    if (recent) return deliverToAux(recent, payload)
   }
   const created = await router.open(parentRuntimeId)
   if (!created) return { ok: false, reason: "unavailable" }

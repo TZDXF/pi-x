@@ -68,7 +68,8 @@ test("ChatView routes the chat selection gesture without growing the view", () =
   expect(chat.split("\n").length).toBeLessThan(500)
   const sidebar = read("composables/useChatViewSidebar.ts")
   expect(sidebar).toContain("async function askAux(payload: AuxAskPayload, target?: AuxAskTarget)")
-  expect(sidebar).toContain("const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))")
+  // 划词目标只列**可打开**的实例（等槽位的 `tabId === null` 实例不能当目标，TZD-131）。
+  expect(sidebar).toContain("const auxTargets = computed(() => auxDeliverableFor(deps.runtimeId))")
   expect(sidebar).toContain("parentRuntimeId: deps.runtimeId")
   // 复用与新建都要让面板可见。
   expect(sidebar).toContain("if (outcome.ok) deps.onFirstTabAdded()")

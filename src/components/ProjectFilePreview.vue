@@ -20,7 +20,7 @@ import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelect
 import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
-import { auxInstancesFor } from "@/stores/auxChat"
+import { auxDeliverableFor } from "@/stores/auxChat"
 import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
@@ -209,7 +209,8 @@ const markdownRoot = ref<HTMLElement | null>(null)
 const menuRoot = computed<HTMLElement | null>(() => (showCode.value ? codeRoot.value : markdownRoot.value))
 const auxTargets = computed(() => {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
-  return parentRuntimeId ? auxInstancesFor(parentRuntimeId) : []
+  // 只列可打开的实例：等槽位的实例（`tabId === null`）没有面板，不能当目标（TZD-131）。
+  return parentRuntimeId ? auxDeliverableFor(parentRuntimeId) : []
 })
 async function onAuxAsk(payload: AuxAskPayload, target?: AuxAskTarget) {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
