@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, provide, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import { ArrowLeft, Code, ExternalLink, Eye, FileX, Plus, Trash2, WrapText } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -27,7 +27,9 @@ import ImageViewer from "@/components/ImageViewer.vue"
 import { markdownLinkOptions } from "@/lib/linkOptions"
 import { markdownParserOptions } from "@/lib/markdownAutoLink"
 import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
+import { markdownImageContextKey, previewImageUrl } from "@/lib/markdownImages"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
+import MarkdownImage from "@/components/MarkdownImage.vue"
 import "vue-stream-markdown/index.css"
 
 /**
@@ -95,8 +97,39 @@ const imageSrc = computed(() => {
 const showRenderedMarkdown = computed(() => preview.value?.kind === "text" && isMarkdown.value && mdRendered.value)
 const showCode = computed(() => preview.value?.kind === "text" && !showRenderedMarkdown.value && !imageSrc.value)
 
+// ---- Markdown 图片（TZD-132）----
+// 渲染器默认的 URL 硬校验会拦掉 `assets/a.png` 这类相对地址，webview 也读不到
+// 项目目录里的文件；因此接管 `img`：相对地址按本文件目录解析成项目内路径，
+// 再走 `read_file_preview` 读成 data URL（远端 SSH 项目同样适用）。
+const markdownComponents = { img: MarkdownImage }
+/** 同一张图在一次预览会话内只读一次；文件或路径切换时整表作废。 */
+const markdownImageCache = new Map<string, Promise<string | null>>()
+function loadMarkdownImage(path: string): Promise<string | null> {
+  const cached = markdownImageCache.get(path)
+  if (cached) return cached
+  const pending = (async () => {
+    try {
+      const result = props.readFile
+        ? await props.readFile(path)
+        : await invokeProjectFile<FilePreview>("read_file_preview", props.project, path)
+      return previewImageUrl(result, path)
+    } catch {
+      return null
+    }
+  })()
+  markdownImageCache.set(path, pending)
+  return pending
+}
+provide(markdownImageContextKey, {
+  get docPath() {
+    return props.path
+  },
+  load: loadMarkdownImage,
+})
+
 async function load(resetView = true) {
   const current = ++seq
+  markdownImageCache.clear()
   loading.value = true
   errorCause.value = null
   openError.value = null
@@ -412,6 +445,7 @@ onBeforeUnmount(() => {
             :content="markdownContent.body"
             mode="static"
             :enable-animate="false"
+            :components="markdownComponents"
             :link-options="markdownLinkOptions"
             :parser-options="markdownParserOptions"
             class="text-sm"

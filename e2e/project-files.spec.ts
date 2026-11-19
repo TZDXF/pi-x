@@ -58,6 +58,9 @@ const dirs: ProjectDirectoryMap = {
   ],
   src: [{ name: "lib.ts", path: "src/lib.ts", is_dir: false }],
 }
+/** 1x1 透明 PNG；预览图片的接口用 base64 回传，前端拼成 data URL。 */
+const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+const markdownWithImage = "# 图示\n\n![图 2-1 角色协作关系](assets/pic.png)\n\n后文"
 const html = `<!doctype html><html><body><div id="app"></div><script type="module">
 import { createApp, h } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -154,6 +157,49 @@ test.describe("project files", () => {
     expect(lineClass, "annotated line remains highlighted").toContain("bg-amber-500/15")
     await expect(page.getByPlaceholder("Write a comment…")).toHaveCount(0)
 
+    expect(errors).toEqual([])
+  })
+
+  test("renders relative Markdown images from the project directory", async ({ page }: { page: Page }) => {
+    const errors: string[] = []
+    page.on("pageerror", error => errors.push(error.message))
+
+    const markdownDirs: ProjectDirectoryMap = {
+      "": [
+        { name: "assets", path: "assets", is_dir: true },
+        { name: "guide.md", path: "guide.md", is_dir: false },
+      ],
+      assets: [{ name: "pic.png", path: "assets/pic.png", is_dir: false }],
+    }
+    await page.addInitScript(
+      (fixture: { dirs: ProjectDirectoryMap; markdown: string; png: string }) => {
+        const projectWindow = window as Window & typeof globalThis & ProjectFilesWindow
+        projectWindow.isTauri = true
+        Reflect.set(projectWindow, "__TAURI_INTERNALS__", {
+          invoke: async (command: string, args: ProjectFilesInvokeArguments): Promise<unknown> => {
+            if (command === "list_project_directory") return fixture.dirs[args.path ?? ""] ?? []
+            if (command === "read_file_preview") {
+              if (args.path === "guide.md")
+                return { kind: "text", text: fixture.markdown, truncated: false, mime: null, data: null }
+              if (args.path === "assets/pic.png")
+                return { kind: "image", text: null, truncated: false, mime: "image/png", data: fixture.png }
+              throw Error("unexpected preview path " + args.path)
+            }
+            throw Error("unexpected command " + command)
+          },
+        })
+      },
+      { dirs: markdownDirs, markdown: markdownWithImage, png: pngBase64 },
+    )
+
+    await page.goto(harness.url)
+    await page.getByRole("button", { name: "guide.md" }).click()
+    const rendered = page.locator("[data-markdown-image]")
+    await expect(rendered).toHaveCount(1)
+    await expect(rendered).toHaveAttribute("src", `data:image/png;base64,${pngBase64}`)
+    // 回归：相对地址曾被 URL 硬校验拦成错误占位，不能只剩一段提示文字。
+    await expect(page.locator("[data-markdown-image-missing]")).toHaveCount(0)
+    await expect(page.getByText("后文")).toBeVisible()
     expect(errors).toEqual([])
   })
 })

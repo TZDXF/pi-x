@@ -34,6 +34,11 @@ function setup(component: string, props: Record<string, unknown>, fields: string
     ...vue,
     isMarkdownExt,
     normalizeSlashes,
+    // Markdown 图片接管（TZD-132）：setup 体只建映射/provider，渲染路径由
+    // tests/markdown-preview-images.test.ts 单独覆盖。
+    MarkdownImage: {},
+    markdownImageContextKey: Symbol("pix-markdown-image"),
+    previewImageUrl: () => null,
     useContentTranslation,
     usePointerDrag,
     defineProps: () => props,
