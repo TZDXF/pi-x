@@ -152,3 +152,41 @@ test("top selection keeps every existing and new target inside the viewport", as
   await newChat.click()
   await expect.poll(async () => (await state(page)).count).toBe(4)
 })
+
+for (const surface of ["chat", "file"] as const) {
+  test(`short viewport (${surface}): internal wheel keeps the picker open and new chat clickable`, async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 180 })
+    await page.goto(harness.url + "?top&count=4" + (surface === "file" ? "&file" : ""))
+    await select(page, surface === "file" ? '[data-line="1"]' : "#quote")
+    const menu = page.getByRole("menu", { name: "Choose auxiliary chat" })
+    const newChat = menu.getByRole("menuitem", { name: "New auxiliary chat" })
+    const geometry = await menu.evaluate(el => {
+      const rect = el.getBoundingClientRect()
+      return { x: rect.x, y: rect.y, bottom: rect.bottom, height: el.clientHeight, scrollHeight: el.scrollHeight }
+    })
+    expect(geometry.y).toBeGreaterThanOrEqual(0)
+    expect(geometry.bottom).toBeLessThanOrEqual(180)
+    expect(geometry.scrollHeight).toBeGreaterThan(geometry.height)
+
+    await page.mouse.move(geometry.x + 90, geometry.y + 65)
+    await page.mouse.wheel(0, 500)
+    await expect.poll(() => menu.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+    await expect(menu).toBeVisible()
+    expect((await state(page)).buckets).toEqual([[], [], [], []])
+    await expectActionable(newChat)
+    await newChat.click()
+    await expect.poll(async () => (await state(page)).count).toBe(5)
+  })
+}
+
+test("a real wheel outside the picker still closes it", async ({ page }) => {
+  await page.goto(harness.url + "?top&count=3")
+  await select(page)
+  const menu = page.getByRole("menu", { name: "Choose auxiliary chat" })
+  await expect(menu).toBeVisible()
+  await page.evaluate(() => (document.body.style.height = "1000px"))
+  await page.mouse.move(700, 100)
+  await page.mouse.wheel(0, 200)
+  await expect(menu).toHaveCount(0)
+  expect((await state(page)).buckets).toEqual([[], [], []])
+})

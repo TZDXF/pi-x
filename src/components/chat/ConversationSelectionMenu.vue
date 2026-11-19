@@ -148,8 +148,10 @@ function onKeyUp(event: KeyboardEvent) {
   if (!event.shiftKey && event.key !== "Shift") return
   showSelection()
 }
-function onScroll() {
-  // 滚动后选区矩形已失准，直接收起。
+function onScroll(event: Event) {
+  // 多目标选择器自身在矮视口内可滚动；内部滚动不改变外部选区矩形，不能收起菜单。
+  if (menuBox.value?.contains(event.target as Node)) return
+  // 外部内容滚动后选区矩形已失准，直接收起。
   clearState()
 }
 // mousedown.prevent 防止点击菜单时选区被清掉导致菜单先消失。
