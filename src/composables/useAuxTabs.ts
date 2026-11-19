@@ -8,6 +8,7 @@ import {
   auxCreationPending,
   auxInstancesFor,
   auxPendingCreation,
+  auxSlotlessFor,
   closeAux,
   openAux,
   registerAuxAskRouter,
@@ -53,6 +54,13 @@ export function useAuxTabs(deps: {
    */
   async function addAux() {
     if (auxCreationPending(deps.runtimeId)) return
+    // 有实例在等槽位（补格时组满被收回号）：先把它补回来，不叠加新建 ——
+    // 否则新建分到的号可能与它原有的旧号重合，两个实例抢同一格。
+    const restored = fillWaitingAuxSlots()
+    if (restored.length) {
+      for (const instance of restored) revealReady(instance)
+      return
+    }
     const tabId = deps.addSidebarTab("aux")
     if (tabId === null) return
     const tab = await openAux(deps.runtimeId, {
@@ -88,10 +96,33 @@ export function useAuxTabs(deps: {
     return auxInstancesFor(deps.runtimeId).find(tab => tab.tabId === id)
   }
 
+  /** 该实例当前是否真的占着本组该格（类型、存在、归属三者同时成立）。 */
+  function ownsSlot(id: number | null, runtimeId: string): boolean {
+    if (id === null) return false
+    return slotAt(deps.tabs(), id)?.type === "aux" && auxInstanceAtSlot(id)?.runtimeId === runtimeId
+  }
+
   /** 关闭槽位：先同步撤槽位，再销毁**已解析**的实例；页面清理与 rpc_kill 不应拖住 Tab 关闭。 */
   async function closeAuxBySidebarId(tabId: number, aux: AuxTab | undefined) {
     deps.closeSidebarTab(tabId)
-    if (aux) await closeAux(aux.runtimeId)
+    // `closeAux` 在第一个 `await` 之前就写好墓碑并摘除实例，所以这里先起它、不 await：
+    // 槽位与实例都已让出，等槽位的实例立刻可以补格（不必等 rpc_kill 返回）。
+    const closing = aux ? closeAux(aux.runtimeId) : Promise.resolve()
+    fillWaitingAuxSlots()
+    await closing
+  }
+
+  /**
+   * 把**没有槽位**的存活实例补回本组（TZD-131），返回已补上的实例。
+   *
+   * 顺序是「已在等的先补，再允许新建」：小于上限时换键、补格失败的实例（组满 20 条被
+   * 收回号的）都靠这条路径自愈；同父会话因此不会出现两个同号实例抢一格。
+   */
+  function fillWaitingAuxSlots(): AuxTab[] {
+    const waiting = auxSlotlessFor(deps.runtimeId)
+    if (!waiting.length) return []
+    restoreSlots(deps.tabs())
+    return waiting.filter(instance => instance.tabId !== null)
   }
 
   /**
@@ -103,9 +134,8 @@ export function useAuxTabs(deps: {
    * `aux`，且当前确实由这个实例占据。
    */
   function revealReady(tab: AuxTab) {
-    const slot = slotAt(deps.tabs(), tab.tabId)
-    if (slot?.type !== "aux") return
-    if (auxInstanceAtSlot(tab.tabId)?.runtimeId !== tab.runtimeId) return
+    if (tab.tabId === null) return
+    if (!ownsSlot(tab.tabId, tab.runtimeId)) return
     deps.activate(tab.tabId)
   }
 
@@ -141,7 +171,7 @@ export function useAuxTabs(deps: {
     for (const instance of auxInstancesFor(deps.runtimeId)) {
       // 两个实例的旧 id 可能同时撞到同一个新槽位（都在组被淘汰前分配）：先到先得，
       // 后来者必须另开一格，否则两格会渲染同一个实例、另一个实例反而没有入口。
-      if (auxSlots.includes(instance.tabId) && !claimed.has(instance.tabId)) {
+      if (instance.tabId !== null && auxSlots.includes(instance.tabId) && !claimed.has(instance.tabId)) {
         claimed.add(instance.tabId)
         continue
       }
@@ -153,7 +183,13 @@ export function useAuxTabs(deps: {
     const spare = auxSlots.filter(id => !claimed.has(id))
     for (const instance of pending) {
       const slot = spare.length ? spare.shift()! : deps.addSidebarTab("aux")
-      if (slot === null) continue
+      if (slot === null) {
+        // 本组已到 20 条上限：补不上就**收回**槽位号，别让旧号继续参与查找 ——
+        // 否则后来创建分到的同号会和它撞在一格里（显示/关闭都命中旧的），新实例没有入口。
+        // 进程与 store 不动（缺槽不 kill）；名额空出后 `restoreSlotsNow` 会优先给它补格。
+        setAuxTabId(instance.runtimeId, null)
+        continue
+      }
       setAuxTabId(instance.runtimeId, slot)
       claimed.add(slot)
     }
@@ -179,6 +215,8 @@ export function useAuxTabs(deps: {
     const slot = slotAt(deps.tabs(), id)
     if (slot?.type !== "aux") {
       deps.closeSidebarTab(id)
+      // 腾出名额：优先给仍在等的存活实例补格（它们没有入口也关不掉）。
+      fillWaitingAuxSlots()
       return
     }
     await closeAuxBySidebarId(id, auxInstanceAtSlot(id))
@@ -226,6 +264,12 @@ export function useAuxTabs(deps: {
   async function openForAsk() {
     const pending = auxPendingCreation(deps.runtimeId)
     if (pending) return (await pending) ?? null
+    // 有实例在等槽位：先补回它并回报该实例（引用投给它，不另起进程）。
+    const restored = fillWaitingAuxSlots()
+    if (restored.length) {
+      revealReady(restored[0]!)
+      return restored[0]!
+    }
     const tabId = deps.addSidebarTab("aux")
     if (tabId === null) return null
     const tab = await openAux(deps.runtimeId, {

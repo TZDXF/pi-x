@@ -41,8 +41,14 @@ import { createUiStore, type UiStore } from "@/stores/ui"
 export type AuxTabStatus = "creating" | "ready" | "error"
 
 export interface AuxTab {
-  /** 侧栏 Tab 槽位 id（`stores/sidebarTabs.ts` 的 `SidebarTabItem.id`）。 */
-  tabId: number
+  /**
+   * 侧栏 Tab 槽位 id（`stores/sidebarTabs.ts` 的 `SidebarTabItem.id`）。
+   *
+   * `null` = **本组没有入口**：槽位随 LRU 淘汰消失、或补槽位时本组已满 20 格（TZD-131）。
+   * 这种实例仍活着（进程与 store 都在，缺槽不 kill），但不参与按槽位的显示/关闭查找 ——
+   * 否则它会用旧号继续被命中，与后来分到同一个号的实例撞在一起。
+   */
+  tabId: number | null
   /** aux 运行时 id，`aux:` 前缀；同时是 session/ui store 的键。 */
   runtimeId: string
   /** 父（主）会话 runtimeId。 */
@@ -354,8 +360,10 @@ export function auxTabByRuntime(runtimeId: string): AuxTab | undefined {
 /**
  * 按父会话 + 侧栏槽位 id 查实例（`RightSidebar` 渲染面板用）。
  * 槽位 id 由各父会话的侧栏组分别从 1 分配，裸 id 不是全局键。
+ * 没有槽位的实例（`tabId === null`）不参与匹配：它们不该再被任何格命中（TZD-131）。
  */
 export function auxTabBySidebarId(parentRuntimeId: string, tabId: number): AuxTab | undefined {
+  if (tabId === null) return undefined
   return tabs.find(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === tabId)
 }
 
@@ -374,10 +382,19 @@ export function auxInstancesFor(parentRuntimeId: string): AuxTab[] {
   return tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId)
 }
 
-/** 把实例的槽位 id 改成新的（侧栏组被淘汰后补槽位时用）。 */
-export function setAuxTabId(runtimeId: string, tabId: number) {
+/**
+ * 把实例的槽位 id 改成新的（侧栏组被淘汰后补槽位时用）。
+ *
+ * `null` 表示**收回**槽位：本组已满/补不上时不能用旧号继续参与查找（TZD-131）。
+ */
+export function setAuxTabId(runtimeId: string, tabId: number | null) {
   const tab = auxTabByRuntime(runtimeId)
   if (tab) tab.tabId = tabId
+}
+
+/** 本会话里**没有槽位**的实例（名额空出后优先给它们补槽，见 `restoreSlots`）。 */
+export function auxSlotlessFor(parentRuntimeId: string): AuxTab[] {
+  return tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId && tab.tabId === null)
 }
 
 /** 某个父会话最后一个实例（切回父会话时恢复它的面板）。 */

@@ -668,3 +668,104 @@ test("two instances keep their own slots when one still holds a slot of the othe
   expect(controls.kill.mock.calls).toEqual([[second!.runtimeId]])
   expect(auxInstancesFor(parent).map(tab => tab.runtimeId)).toEqual([first!.runtimeId])
 })
+
+/**
+ * 满槽换键撞号（TZD-131 返工，来自质量复验的 `qa-tzd131-rebase-capacity` 夹具）。
+ *
+ * 同父临时组有 6 个存活 aux（旧槽号 16–21），换到已有 15 个普通 Tab 的文件键：本组只
+ * 容得下 5 个 aux（20 格上限）。第 6 个补格失败时若**继续留着旧号 21**，后来新建分到
+ * 同一个号就会两实例共用一格 —— 显示/关闭都命中旧的，新的没有入口。
+ *
+ * 因此补格失败的实例一律**收回槽位号**（`tabId = null`，缺槽不 kill），退出按槽位的
+ * 查找；名额空出后优先给它补格。
+ */
+async function rebindAtCapacity(parent: string, count: number) {
+  const session = reactive({ sessionFile: null as string | null, cwd: "qa" })
+  const file = `${parent}.jsonl`
+  const scope = effectScope()
+  scopes.push(scope)
+  const toast = vi.fn()
+  const side = scope.run(() =>
+    useChatViewSidebar({
+      runtimeId: parent,
+      session: session as never,
+      ui: { pushToast: toast } as never,
+      project: () => "qa",
+      onFirstTabAdded() {},
+      onLastTabClosed() {},
+    }),
+  )!
+  // 先开 15 格再逐一关闭，让 aux 的槽号从 16 起（仍在上限内）。
+  for (let index = 0; index < 15; index++) {
+    await side.addTab("files")
+    await side.closeTab(side.tabs.value[0]!.id)
+  }
+  for (let index = 0; index < count; index++) await side.addTab("aux")
+  const original = auxInstancesFor(parent)
+  expect(original.map(aux => aux.tabId)).toEqual(Array.from({ length: count }, (_, index) => 16 + index))
+
+  const fileKey = groupKeyFor(parent, file, "qa")
+  const saved = { kinds: Array.from({ length: 15 }, () => "files"), active: 0 }
+  controls.persisted[fileKey] = saved
+  session.sessionFile = file
+  await nextTick()
+  return { original, side, saved }
+}
+
+test("aux restored within the slot limit keep their own slots after a 15+5 rebind", async () => {
+  const parent = "qa-exact-cap"
+  const { original, side } = await rebindAtCapacity(parent, 5)
+  expect(kindOf(side.tabs.value)).toEqual([
+    ...Array.from({ length: 15 }, () => "files"),
+    ...Array.from({ length: 5 }, () => "aux"),
+  ])
+  const slots = side.tabs.value.filter(tab => tab.type === "aux")
+  expect(slots.map(slot => auxTabBySidebarId(parent, slot.id)?.runtimeId)).toEqual(original.map(tab => tab.runtimeId))
+  expect(controls.spawn).toHaveBeenCalledTimes(5)
+})
+
+test("an aux that could not get a slot on a full rebind drops its old id and is restored when a slot frees", async () => {
+  const parent = "qa-over-cap"
+  const { original, side } = await rebindAtCapacity(parent, 6)
+  const overflowed = original[5]!
+  // 20 格已满：第 6 个 aux 没有入口，但进程仍在。
+  expect(kindOf(side.tabs.value).filter(type => type === "aux")).toHaveLength(5)
+  expect(overflowed.tabId).toBeNull()
+  expect(auxTabBySidebarId(parent, 21)).toBeUndefined()
+  expect(controls.kill).not.toHaveBeenCalled()
+  expect(auxInstancesFor(parent)).toHaveLength(6)
+
+  // 关一个普通 Tab（15 → 14）：名额优先补回第 6 个，而不是留给下一次新建。
+  const files = side.tabs.value.find(tab => tab.type === "files")!
+  await side.closeTab(files.id)
+  const restoredSlot = side.tabs.value
+    .filter(tab => tab.type === "aux")
+    .find(slot => auxTabBySidebarId(parent, slot.id)?.runtimeId === overflowed.runtimeId)
+  expect(restoredSlot).toBeDefined()
+  expect(overflowed.tabId).toBe(restoredSlot!.id)
+  expect(controls.kill).not.toHaveBeenCalled()
+
+  // 此刻 20 格已满（14 文件 + 6 aux）：再开 aux 会被上限拒绝，且不新增实例。
+  await side.addTab("aux")
+  expect(auxInstancesFor(parent)).toHaveLength(6)
+  expect(side.tabs.value).toHaveLength(20)
+
+  // 再腾一格后新建：新实例拿到的是另一个号，两实例各占一格、互不干扰。
+  await side.closeTab(side.tabs.value.find(tab => tab.type === "files")!.id)
+  await side.addTab("aux")
+  const newest = auxInstancesFor(parent)[6]!
+  expect(newest.tabId).not.toBe(overflowed.tabId)
+  const instancesAtNewSlot = auxInstancesFor(parent)
+    .filter(tab => tab.tabId === newest.tabId)
+    .map(tab => tab.runtimeId)
+  expect(instancesAtNewSlot).toEqual([newest.runtimeId])
+  expect(auxTabBySidebarId(parent, newest.tabId!)?.runtimeId).toBe(newest.runtimeId)
+
+  await side.closeTab(newest.tabId!)
+  expect(controls.kill.mock.calls.flat()).toEqual([newest.runtimeId])
+  expect(auxInstancesFor(parent).map(tab => tab.runtimeId)).toContain(overflowed.runtimeId)
+  // 磁盘上的普通 Tab 布局跟着实际关闭数变化（aux 永不落盘），此处只核对没有 aux 混入。
+  const persisted = controls.persisted[groupKeyFor(parent, `${parent}.jsonl`, "qa")] as { kinds: string[] }
+  expect(persisted.kinds.every(kind => kind === "files")).toBe(true)
+  expect(persisted.kinds.length).toBe(side.tabs.value.filter(tab => tab.type === "files").length)
+})

@@ -67,10 +67,10 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   // 添加：先开进程（openAux 同步入表再 await spawn），实例数量不设专属上限。
   expect(auxTabs).toMatch(/const tab = await openAux\(deps\.runtimeId, \{/)
   expect(auxTabs).not.toMatch(/auxChat\.limitReached|auxCanOpen|AUX_MAX_TABS/)
-  // 关闭：先同步撤槽位（TZD-130），再销毁**已解析**的实例（本父会话 + 本组槽位，TZD-131）。
-  expect(auxTabs).toMatch(
-    /async function closeAuxBySidebarId\(tabId: number, aux: AuxTab \| undefined\) \{\s*deps\.closeSidebarTab\(tabId\)\s*if \(aux\) await closeAux\(aux\.runtimeId\)/,
-  )
+  // 关闭：先同步撤槽位（TZD-130），再销毁**已解析**的实例（本父会话 + 本组槽位，TZD-131）；
+  // `closeAux` 仍要在第一个 await 之前起，让等槽位的实例立刻能补格。
+  expect(auxTabs).toMatch(/async function closeAuxBySidebarId\(tabId: number, aux: AuxTab \| undefined\) \{/)
+  expect(auxTabs).toMatch(/const closing = aux \? closeAux\(aux\.runtimeId\)/)
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
   // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。
@@ -107,7 +107,10 @@ test("a mount restores the aux slot when the sidebar group was evicted", () => {
   // 异步收尾不得再用创建时捕获的旧槽位 id：成功按实例**当前** tabId 验证归属后激活，
   // 失败/关闭只撤仍为 aux 且无实例认领的格（TZD-131）。
   expect(auxTabs).toMatch(/function revealReady\(tab: AuxTab\) \{/)
-  expect(auxTabs).toMatch(/if \(auxInstanceAtSlot\(tab\.tabId\)\?\.runtimeId !== tab\.runtimeId\) return/)
+  expect(auxTabs).toMatch(/if \(!ownsSlot\(tab\.tabId, tab\.runtimeId\)\) return/)
+  // 补槽失败（组满 20 条）必须**收回**槽位号：否则旧号会与后来分到同一个号的实例撞一格。
+  expect(auxTabs).toMatch(/setAuxTabId\(instance\.runtimeId, null\)/)
+  expect(auxTabs).toMatch(/function fillWaitingAuxSlots\(\): AuxTab\[\] \{/)
   expect(auxTabs).toMatch(/function dropUnclaimedAuxSlot\(tabId: number\) \{/)
   expect(auxTabs).not.toMatch(/deps\.activate\(tabId\)/)
 })
