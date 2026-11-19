@@ -435,6 +435,98 @@ test("a legacy host read supersedes all successful writes in a single pass", asy
   expect(theme.value.value).toBe("dark")
 })
 
+test("an early 0 response cannot dequeue the last 0 while 1 is still pending", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const wrap = module.createConfigPreference({
+    key: "markdownCodeWrap",
+    defaultValue: "1",
+    read: raw => raw !== "0",
+    serialize: value => (value ? "1" : "0"),
+  })
+
+  // 从「开启」快速点三次：关 → 开 → 关，三笔命令都排在主机侧。
+  const gates = [deferred<number>(), deferred<number>(), deferred<number>()]
+  host.writeGate = () => {
+    const index = host.writes.length - 1
+    return gates[index]!.promise
+  }
+  const first = wrap.set(false)
+  const middle = wrap.set(true)
+  const last = wrap.set(false)
+  expect(wrap.value.value).toBe(false)
+
+  // 第一笔（0）先返回：它只能按身份删除自己，后面仍在排队的 0 必须保留。
+  gates[0]!.resolve(6)
+  await first
+  expect(wrap.value.value).toBe(false)
+
+  // 第二笔（1）返回：第三笔（0）仍在途，显示继续跟随最新意图。
+  gates[1]!.resolve(7)
+  await middle
+  expect(wrap.value.value).toBe(false)
+
+  gates[2]!.resolve(8)
+  await last
+  expect(wrap.value.value).toBe(false)
+})
+
+test("in-flight optimism hides a value but keeps merging newer host snapshots", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 本端写入 dark（主机已在 r6 落盘），命令响应还没回来。
+  const gate = deferred<number>()
+  host.writeGate = () => gate.promise
+  const writing = theme.set("dark")
+  await vi.waitFor(() => expect(host.writes).toEqual([{ key: "theme", value: "dark" }]))
+
+  // 另一客户端在 r7 写成 light，整表推送先到：显示仍被在途写入遮住，但主机状态要记录 r7。
+  host.preferences = { theme: "light", markdownCodeWrap: "1" }
+  host.revision = 7
+  broadcast(7)
+  expect(theme.value.value).toBe("dark")
+
+  // 命令返回 r6：不能把已知状态倒回 r6，显示让位给已收到的 r7/light。
+  gate.resolve(6)
+  await writing
+  expect(theme.value.value).toBe("light")
+})
+
+test("a newer snapshot that drops a key prevents an older push from reviving it", async () => {
+  const module = await harness({ theme: "system", markdownCodeWrap: "1" }, 5)
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 主机在 r8 的完整快照里已经没有 theme（默认值生效）。
+  host.preferences = { markdownCodeWrap: "1" }
+  host.revision = 8
+  await module.refreshFromHost()
+  expect(theme.value.value).toBe("system")
+
+  // 迟到的 r7 推送里还有 theme=dark：更旧的证据不能让它复活。
+  broadcast(7, { theme: "dark", markdownCodeWrap: "1" })
+  expect(theme.value.value).toBe("system")
+})
+
+test("legacy host early echoes do not mask the next genuine external change", async () => {
+  // 旧后端：每笔写入的回执快照都早于命令结果返回。
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  host.writeGate = async () => {
+    const latest = host.writes[host.writes.length - 1]!
+    host.preferences = { theme: latest.value }
+    broadcast(undefined, { theme: latest.value })
+    return undefined as unknown as number
+  }
+  await theme.set("dark")
+  await theme.set("light")
+  expect(theme.value.value).toBe("light")
+
+  // 之后真正的外部变更（不是我们写入的回执）必须显示出来，而不是被 FIFO 队列吞掉。
+  broadcast(undefined, { theme: "system" })
+  expect(theme.value.value).toBe("system")
+})
+
 test("a legacy host without revisions degrades to bounded FIFO", async () => {
   // 旧后端：写入不返回修订号、事件也不携带 —— 从初始化起就是这种形态。
   const module = await harness({ theme: "system" }, 0, { legacyHost: true })
