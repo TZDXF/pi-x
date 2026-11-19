@@ -227,5 +227,6 @@ test.each([
   expect(aboveBubble).toContain(`@click="emit('previewImage', im.url)"`)
   expect(aboveBubble).toMatch(/<img :src="im.url"/)
   expect(bubble).not.toContain("<img")
-  expect(bubble).toContain("<ComposerText")
+  // 正文由可折叠的只读正文承载（TZD-138）：首条回显与真实提问同一套折叠语义。
+  expect(bubble).toContain("<CollapsiblePromptText")
 })

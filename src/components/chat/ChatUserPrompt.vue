@@ -7,18 +7,29 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { parseComposerPromptContexts } from "@/lib/promptContexts"
 import { commentLineLabel, commentPathLabel, type ParsedCodeComment } from "@/lib/codeComments"
-import ComposerText from "@/components/ComposerText.vue"
+import CollapsiblePromptText from "@/components/chat/CollapsiblePromptText.vue"
 import { formatMessageTime } from "@/lib/format"
 import type { UserEntry } from "@/stores/session"
 import type { usePromptEdit, PromptEditTextarea } from "@/composables/usePromptEdit"
 import type { UnwrapRef } from "vue"
 
-const props = defineProps<{ entry: UserEntry; edit: UnwrapRef<ReturnType<typeof usePromptEdit>> }>()
+const props = defineProps<{
+  entry: UserEntry
+  edit: UnwrapRef<ReturnType<typeof usePromptEdit>>
+  /**
+   * 折叠态（TZD-138）：由 `ChatTurnList` 按 entry id 持有，虚拟行卸载后仍记得展开过。
+   * 只影响**只读展示**：正文超过 6 行时先裁到 6 行高，点击/按钮展开全文；
+   * `entry.text` / `contextText`、复制与编辑重发的 prompt 都不受折叠影响。
+   */
+  promptExpanded?: boolean
+}>()
 const emit = defineEmits<{
   previewImage: [url: string]
   copyText: [text: string]
   editTextarea: [textarea: PromptEditTextarea | null]
   openCodeComment: [comment: ParsedCodeComment]
+  /** 切换本提问气泡的折叠态（超过 6 行才可能触发）。 */
+  togglePrompt: []
 }>()
 const { t } = useI18n()
 const { editedPrompt, editedText, editBusy, editBlocked, lastUserPromptId } = toRefs(props.edit)
@@ -84,7 +95,13 @@ const visibleText = computed(() => parseComposerPromptContexts(props.entry.text)
           >
         </div>
       </div>
-      <ComposerText v-else :text="parsedPrompt.visibleContent" />
+      <!-- 只读正文：超过 6 行折叠，点击/按钮展开（编辑态走上面的 Textarea，始终是全文）。 -->
+      <CollapsiblePromptText
+        v-else
+        :text="parsedPrompt.visibleContent"
+        :expanded="!!promptExpanded"
+        @toggle="emit('togglePrompt')"
+      />
       <!-- 历史消息里解析回的划词引用：只读展示，样式对齐 composer 的待发送 chips -->
       <div v-if="parsedPrompt.selections.length" class="mt-1.5 flex min-w-0 flex-wrap gap-1.5">
         <div

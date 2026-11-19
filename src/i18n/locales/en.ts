@@ -969,6 +969,8 @@ export default {
       "**The pi process exited unexpectedly; the run was interrupted.** The conversation is saved — send your message again to continue. If the last action killed processes by matching the project name, target exact PIDs instead.",
     editSessionChanged: "The conversation has changed. Please edit the prompt in the current conversation.",
     copyPrompt: "Copy prompt",
+    expandPrompt: "Show the full prompt",
+    collapsePrompt: "Collapse prompt",
     parentContextFailed: "Could not read the parent conversation context ({reason}); sending this prompt without it.",
     executionDuration: "Elapsed {seconds}s",
     actualResponseModel: "Actual response model",

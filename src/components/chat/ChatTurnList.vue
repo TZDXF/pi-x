@@ -11,10 +11,10 @@ import { Message, MessageContent } from "@/components/ai-elements/message"
 import { Loader } from "@/components/ai-elements/loader"
 import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/components/ai-elements/queue"
 import PiXLogo from "@/components/PiXLogo.vue"
-import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
+import CollapsiblePromptText from "./CollapsiblePromptText.vue"
 import CodeCommentPreview from "./CodeCommentPreview.vue"
 import type { ParsedCodeComment } from "@/lib/codeComments"
 import type { PendingCodeComment } from "@/stores/codeComments"
@@ -93,10 +93,28 @@ async function stopRetry() {
 // Kept outside VirtualMessage: virtualization may unmount an answer, but must
 // not forget that its process was already materialized.
 const openedProcesses = reactive(new Set<number>())
+// 折叠态按 entry id 记：虚拟行卸载后重建仍记得用户已经展开过（TZD-138）。
+// 只影响只读展示，正文/复制/编辑重发永远用完整原文。
+const expandedPrompts = reactive(new Set<number>())
 watch(
   () => props.session.sessionFile,
-  () => openedProcesses.clear(),
+  () => {
+    openedProcesses.clear()
+    expandedPrompts.clear()
+  },
 )
+/** 冷启动回显的首条提问与真实 entry 不同源，用自己的展开态。 */
+const pendingPromptExpanded = ref(false)
+watch(
+  () => props.ui.pendingUserMessage,
+  () => {
+    pendingPromptExpanded.value = false
+  },
+)
+function togglePrompt(entryId: number) {
+  if (expandedPrompts.has(entryId)) expandedPrompts.delete(entryId)
+  else expandedPrompts.add(entryId)
+}
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
 const {
   selectionRoot,
@@ -207,6 +225,8 @@ onBeforeUnmount(() => {
                 v-if="entry.kind === 'user'"
                 :entry="entry"
                 :edit="edit"
+                :prompt-expanded="expandedPrompts.has(entry.id)"
+                @toggle-prompt="togglePrompt(entry.id)"
                 @open-code-comment="openedComment = $event"
                 @preview-image="emit('previewImage', $event)"
                 @copy-text="emit('copyText', $event)"
@@ -251,7 +271,12 @@ onBeforeUnmount(() => {
             </div>
             <MessageContent>
               <div class="text-sm">
-                <ComposerText :text="ui.pendingUserMessage.text" />
+                <!-- 冷启动回显的气泡与真实提问同样折叠，避免秒级启动等待时糊一屏正文。 -->
+                <CollapsiblePromptText
+                  :text="ui.pendingUserMessage.text"
+                  :expanded="pendingPromptExpanded"
+                  @toggle="pendingPromptExpanded = !pendingPromptExpanded"
+                />
               </div>
             </MessageContent>
           </div>

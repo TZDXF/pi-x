@@ -77,6 +77,16 @@ for (const locale of ["zh-CN", "en"]) {
       expect(rendered, `${key} is missing`).not.toBe(key)
     }
   })
+
+  // TZD-138：提问折叠按钮的文案，两个语言包必须同步。
+  test(`${locale}: prompt collapse toggle keys exist`, () => {
+    const zh = locale === "zh-CN"
+    expect(i18n.global.t("chat.expandPrompt")).toBe(zh ? "展开完整提问" : "Show the full prompt")
+    expect(i18n.global.t("chat.collapsePrompt")).toBe(zh ? "收起提问" : "Collapse prompt")
+    const collapse = readFileSync(new URL("../src/components/chat/CollapsiblePromptText.vue", import.meta.url), "utf8")
+    for (const key of ["chat.expandPrompt", "chat.collapsePrompt"])
+      expect(collapse, `${key} is not used`).toContain(`t("${key}")`)
+  })
 }
 
 for (const locale of ["zh-CN", "en"]) {
