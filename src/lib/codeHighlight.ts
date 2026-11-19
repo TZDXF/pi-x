@@ -78,10 +78,15 @@ function ensureLanguage(core: HighlighterCore, lang: string): Promise<boolean> {
 
 /**
  * 整段文本按行分词；返回的第一维与 `text.split("\n")` 一一对应（含末尾空行）。
- * 空文本、语言未收录、分词失败都返回 null，由调用方回退纯文本渲染。
+ *
+ * 空串不是错误：`"".split("\n")` 是单行，shiki 对空串也返回一行空 token，
+ * 所以这里保留 `[[]]` 而不是 `null`。diff 侧只要有一行内容为空（如“新增一段代码、
+ * 旧侧只有一个空行”），两侧分别 join 后就会得到空串 —— 若这里返回 null，
+ * 调用方会连带丢掉整个 diff 的着色（TZD-136 验收发现的 P2 回归）。
+ * 语言未收录、分词失败仍返回 null，由调用方回退纯文本。
  */
 export async function tokenizeLines(text: string, lang: string): Promise<ThemedToken[][] | null> {
-  if (!text || lang === "text") return null
+  if (lang === "text") return null
   try {
     const core = await getCore()
     if (!(await ensureLanguage(core, lang))) return null

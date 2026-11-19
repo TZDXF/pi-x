@@ -60,12 +60,16 @@ test("CRLF 与制表符不破坏行对齐", async () => {
   expect(lines?.[1].map(token => token.content).join("")).toBe("\tb")
 })
 
-test("未收录语言与空内容返回 null，调用方回退纯文本", async () => {
-  expect(await tokenizeLines("", "typescript")).toBeNull()
+test("未收录语言返回 null，调用方回退纯文本", async () => {
   expect(await tokenizeLines("plain", "text")).toBeNull()
   expect(await highlightFileLines("hello", "notes.txt")).toBeNull()
   expect(await highlightFileLines("node_modules\n", ".gitignore")).toBeNull()
   expect(await highlightFileLines("x", "a.unknownext")).toBeNull()
+})
+
+test("空文本仍保留一行空 token，不是 null", async () => {
+  // `"".split("\n")` 是单行；返回 null 会让 diff 的一侧空行连带拖死整个 diff 的着色。
+  expect(await tokenizeLines("", "typescript")).toEqual([[]])
 })
 
 test("超大文件跳过着色，保留纯文本渲染", async () => {
@@ -79,6 +83,34 @@ test("diff 审查与文件预览共用同一个着色器", async () => {
   expect(html?.get(lines[0])).toContain("--shiki-light")
   expect(html?.get(lines[1])).toContain("--shiki-light")
 })
+
+// TZD-136 验收回归（P2）：某一侧只有一个空行时，join("\n") 得到空串。
+// 早前 tokenizeLines 把空串当"空输入"返回 null，于是整个 diff 都不着色。
+for (const direction of ["add", "del"] as const) {
+  test(`diff 单空行一侧不再拖死整份着色（${direction === "add" ? "新增" : "删除"}）`, async () => {
+    const patch =
+      direction === "add"
+        ? "@@ -1 +1 @@\n-\n+export const fresh = 42"
+        : "@@ -1 +1 @@\n-export const gone = 42\n+"
+    const lines = parseDiff(patch).slice(1)
+    expect(lines.map(line => line.kind)).toEqual(["del", "add"])
+    const blank = lines.find(line => line.text === (direction === "add" ? "-" : "+"))
+    const code = lines.find(line => line !== blank)
+    if (!blank || !code) throw new Error("fixture must carry one blank and one code line")
+
+    const html = await withoutWebAssembly(() => highlightDiffLines(lines, "a.ts"))
+    // 任何一侧为空串都不能让整份 diff 返回 null
+    expect(html, "a blank side must not null the whole diff").not.toBeNull()
+    // 有内容的那一行必须真的着色（多 token、带双主题变量）
+    const codeHtml = html?.get(code) ?? ""
+    expect(codeHtml).toContain("--shiki-light")
+    expect(codeHtml).toContain("--shiki-dark")
+    expect(codeHtml.match(/<span/g)?.length ?? 0).toBeGreaterThan(1)
+    // 空行一侧保留一个（空的）行条目，而不是被丢掉或整份 null
+    expect(html?.has(blank)).toBe(true)
+    expect(html?.get(blank)).toBe("")
+  })
+}
 
 test("着色器不走 shiki 默认的 WASM 引擎入口", () => {
   // 只有 `shiki/core` + 纯 JS 引擎才是无 WASM 的路径；`shiki` 默认入口会加载 oniguruma。
