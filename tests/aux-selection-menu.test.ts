@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import ts from "typescript"
 import * as vue from "vue"
-import { menuPlacement } from "@/lib/selectionMenuPlacement"
+import { MENU_FLIP_THRESHOLD, menuPlacement } from "@/lib/selectionMenuPlacement"
 
 /**
  * 划词浮层的两个挂载点（TZD-103）：
@@ -68,6 +68,7 @@ function setup(props: Record<string, unknown>, selection: SelectionStub) {
     captureOffsets: () => ({ start: 3, end: 12 }),
     // 纯函数按真实实现注入（像素级断言在 `aux-selection-placement.test.ts`）。
     menuPlacement,
+    MENU_FLIP_THRESHOLD,
     MenuPlacement: undefined,
     selectionEndRect: () => selection.anchor ?? { right: 120, top: 40, bottom: 60 },
     selectionLineRange: () => (selection.lineRange ? { ...selection.lineRange } : null),
@@ -289,10 +290,12 @@ test("code mode renders only the aux action and chat mode renders both", () => {
   expect(template).toContain('@click="chooseAuxTarget(null)"')
 })
 
-test("the anchor / flip / clamp rules are unchanged and only the width source moved", () => {
+test("the anchor stays fixed while clamp and flip use the measured menu size", () => {
   // 定位规则委派给纯函数（像素级用例见 `aux-selection-placement.test.ts`）：
   // 锚点仍是 selectionEndRect（多行取最后一行），翻转阈值 48、间距 4、左边距 8 全部保留。
-  expect(source).toContain('import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"')
+  expect(source).toContain(
+    'import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"',
+  )
   expect(source).toContain("return menuPlacement(")
   expect(source).toContain("state.value.anchor")
   expect(source).toContain("{ width: window.innerWidth, height: window.innerHeight }")
@@ -300,6 +303,9 @@ test("the anchor / flip / clamp rules are unchanged and only the width source mo
   expect(source).not.toContain("window.innerWidth - 168")
   expect(source).toContain("measuredWidth.value || estimatedWidth.value")
   expect(source).toContain("menuBox.value?.offsetWidth")
+  expect(source).toContain("measuredHeight.value || estimatedHeight.value")
+  expect(source).toContain("menuBox.value?.offsetHeight")
+  expect(source).toContain("max-h-[calc(100vh-16px)]")
   // 锚点来源仍是 selectionEndRect（不自造矩形）。
   expect(source).toContain("const endRect = selectionEndRect(range)")
   // 四个 document 级监听（含捕获阶段的 scroll）与卸载清理。

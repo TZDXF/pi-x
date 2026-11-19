@@ -50,7 +50,33 @@ test("a menu wider than the viewport sticks to the left margin instead of overfl
   expect(Number.parseFloat(style.left)).toBe(MENU_MARGIN)
 })
 
-test("flipping above still triggers on the same 48px threshold", () => {
+test("a multi-row chooser flips by its measured height and keeps every action inside the viewport", () => {
+  const shortViewport = { width: 1000, height: 600 }
+  const height = 189
+  const style = menuPlacement({ left: 200, top: 480, bottom: 500 }, shortViewport, 224, height)
+  // 下方只剩 100px，必须按 189px 的实际高度翻转，而不是仍用单行菜单的 48px 阈值。
+  expect(style.bottom).toBe(`${shortViewport.height - 480 + MENU_GAP}px`)
+  expect(style.top).toBeUndefined()
+  const bottom = shortViewport.height - Number.parseFloat(style.bottom!)
+  const top = bottom - height
+  expect(top).toBeGreaterThanOrEqual(MENU_MARGIN)
+  expect(bottom).toBeLessThanOrEqual(shortViewport.height - MENU_MARGIN)
+})
+
+test("top-edge and short-viewport placements never put actions outside the viewport", () => {
+  const height = 189
+  const topEdge = menuPlacement({ left: 100, top: 8, bottom: 26 }, { width: 1000, height: 600 }, 224, height)
+  expect(topEdge.top).toBe(`${26 + MENU_GAP}px`)
+  expect(Number.parseFloat(topEdge.top!) + height).toBeLessThan(600)
+
+  // 两侧都容纳不下时不向负坐标翻转；模板同时限制最大高度并允许滚动。
+  const clamped = menuPlacement({ left: 100, top: 80, bottom: 100 }, { width: 1000, height: 180 }, 224, 164)
+  expect(clamped.top).toBe(`${MENU_MARGIN}px`)
+  expect(clamped.bottom).toBeUndefined()
+  expect(Number.parseFloat(clamped.top!) + 164).toBe(180 - MENU_MARGIN)
+})
+
+test("flipping above still triggers on the same 48px threshold by default", () => {
   const bottom = viewport.height - (MENU_FLIP_THRESHOLD - 1)
   const flipped = menuPlacement({ left: 100, top: bottom - 16, bottom }, viewport, 262)
   expect(flipped.bottom).toBe(`${viewport.height - (bottom - 16) + MENU_GAP}px`)

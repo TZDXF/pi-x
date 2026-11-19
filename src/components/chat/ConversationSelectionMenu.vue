@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n"
 import { MessageSquare, MessageSquarePlus, Plus, TextQuote, X } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { captureOffsets, selectionEndRect } from "@/lib/selectionAnchors"
-import { menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
+import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
 import { selectionLineRange } from "@/lib/codeComments"
 import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
 import { AUX_MAX_TABS } from "@/lib/auxRuntime"
@@ -206,20 +206,32 @@ onBeforeUnmount(() => {
  *
  * 为什么不再写死 168：chat 模式有两个横排按钮（"引用到输入框" + "在辅助对话中提问"），
  * 真实宽度远超 168，1280px 视口右缘划词会把按钮推出视口（TZD-103 P2-1）。这里先给
- * 一个保守估计值，`nextTick` 后按 `offsetWidth` 实测覆盖；钳制/翻转规则本身没变
- * （见 `lib/selectionMenuPlacement.ts`）。
+ * 一个保守估计值，`nextTick` 后按实际尺寸覆盖。目标选择是多行菜单，纵向定位也必须
+ * 使用实测高度，否则底部划词会把后面的目标与新建按钮放到视口外。
  */
 const menuBox = ref<HTMLElement | null>(null)
 const measuredWidth = ref(0)
+const measuredHeight = ref(0)
 const estimatedWidth = computed(() => (props.mode === "code" ? 148 : 262))
-async function measureWidth() {
+const estimatedHeight = computed(() =>
+  choosingAux.value ? 56 + ((props.auxTargets?.length ?? 0) + 1) * 32 : MENU_FLIP_THRESHOLD - 12,
+)
+async function measureMenu() {
   await nextTick()
   const width = menuBox.value?.offsetWidth ?? 0
+  const height = menuBox.value?.offsetHeight ?? 0
   if (width > 0 && width !== measuredWidth.value) measuredWidth.value = width
+  if (height > 0 && height !== measuredHeight.value) measuredHeight.value = height
 }
 watch(
-  () => state.value,
-  shown => (shown ? void measureWidth() : (measuredWidth.value = 0)),
+  () => [state.value, choosingAux.value, props.auxTargets?.length ?? 0] as const,
+  ([shown]) => {
+    if (shown) void measureMenu()
+    else {
+      measuredWidth.value = 0
+      measuredHeight.value = 0
+    }
+  },
   { immediate: true },
 )
 
@@ -230,6 +242,7 @@ const placement = computed<MenuPlacement | null>(() => {
     state.value.anchor,
     { width: window.innerWidth, height: window.innerHeight },
     measuredWidth.value || estimatedWidth.value,
+    measuredHeight.value || estimatedHeight.value,
   )
 })
 </script>
@@ -238,7 +251,7 @@ const placement = computed<MenuPlacement | null>(() => {
   <div ref="menuBox" v-if="state && placement" class="fixed z-50 max-w-[calc(100vw-16px)]" :style="placement">
     <div
       v-if="choosingAux"
-      class="w-56 rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md"
+      class="max-h-[calc(100vh-16px)] w-56 overflow-y-auto rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md"
       role="menu"
       :aria-label="t('auxChat.chooseTarget')"
       @keydown.esc.stop="clearState"

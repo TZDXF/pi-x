@@ -254,10 +254,12 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 `ChatTurnList` 已 expose 的 `locateSelection` / `editSelection`，否则动作在子组件 emit
 处中断。
 
-**浮层定位**（P2-1）：锚点仍是 `selectionEndRect`（多行取最后一行），翻转阈值 48px、
-间距 4px、左边距 8px、四个 document 级监听与控件内选区排除**全部不变**；**只有横向
-钳制**从写死的 168px 换成浮层**实测宽度**（`lib/selectionMenuPlacement.ts` 纯函数：
-左缘不早于 8px、右缘不超出视口）。1280px 视口右缘划词时双按钮整体在视口内。
+**浮层定位**（P2-1；TZD-129 复审补充实测高度）：锚点仍是 `selectionEndRect`
+（多行取最后一行），间距 4px、左边距 8px、四个 document 级监听与控件内选区排除不变；
+横向钳制使用浮层**实测宽度**（左缘不早于 8px、右缘不超出视口），纵向翻转使用
+**实测高度**。下侧空间不足且上侧可容纳时翻转；两侧都不足时钳制在视口内，目标选择
+列表另设 `100vh - 16px` 最大高度与纵向滚动，保证上下边缘处已有目标和新建均可操作。
+1280px 视口右缘划词时双按钮整体在视口内；1000×600 视口底部三目标场景有浏览器回归。
 
 **`ProjectFilePreview` 的两个根**：模板是 `<section>` + 覆盖层浮层（fragment 下 Vue 3
 **不再自动继承 attrs**），因此显式 `defineOptions({ inheritAttrs: false })` 并把
