@@ -341,77 +341,63 @@ export function parseCsvPage(
 }
 
 /**
- * Paged mode shows one slice at a time, and slice lengths vary (the backend trims
- * to its byte budget), so "previous screen = current offset − current length"
- * is wrong across every length change.
+ * Paged mode shows one slice at a time, and slice lengths vary (the backend
+ * trims to its byte budget), so neither "current offset − current length" nor
+ * "the largest smaller offset we ever showed" proves which screen comes before
+ * the current one.
  *
- * The only trustworthy predecessor is a **verified screen start**: an offset the
- * user actually landed on as a screen, recorded while leaving it. Ordinary cache
- * chunks do not qualify — a viewport prefetch can end exactly where a screen
- * starts (`2592 + 8` ends at `2600` just like the real predecessor `2400 + 200`),
- * and treating that as the predecessor navigates to a slice boundary the user
- * never saw. When no verified start is known the caller disables back-paging
- * instead of guessing.
+ * Two different facts must not be confused:
+ *
+ * * **seen start** — an offset the user has been on. It proves nothing about
+ *   adjacency: after a refresh the restored screen may sit at 1500 while 0 is
+ *   merely the home screen.
+ * * **confirmed edge** — "we moved from A to B in this generation", recorded at
+ *   the moment of navigation (forward: A + its *measured* length; backward: the
+ *   predecessor we just resolved).
+ *
+ * Back-paging only uses confirmed edges, and only inside the current
+ * `generation`. Without an edge it reports `null` and the caller disables the
+ * control instead of jumping to a guessed offset.
  */
-export interface ScreenChunk {
-  offset: number
-  rows: string[][]
-}
-
-export function rememberScreenStart(history: number[], offset: number, limit: number): number[] {
-  if (history.includes(offset)) return history
-  const next = [...history, offset]
-  while (next.length > limit) next.shift()
-  return next
-}
-
-/**
- * Exact start of the screen preceding `baseRow`, taken from verified screen
- * starts only, or `null` when none is known. Never guesses from the current
- * screen length or from a cached chunk that merely ends at `baseRow`.
- */
-export function previousScreenStart(history: number[], baseRow: number): number | null {
-  // 只认「验证过的屏起点」。缓存里末尾恰好相接的预取片段（`2592 + 8` 止于
-  // `2600`，与真实前驱 `2400 + 200` 同终点）不是屏起点，不能拿来当上一屏。
-  const known = history.filter(candidate => candidate < baseRow)
-  return known.length ? Math.max(...known) : null
-}
-
-/**
- * Whether a remembered screen start is still a valid predecessor: the screen
- * must have been visited **in this generation**. A revision refresh invalidates
- * every older start, because slice boundaries move when the file changes width
- * (a 100-row screen becomes 200 rows); keeping them would let the old generation
- * claim the new generation's predecessor (`0 → 200`, back lands on stale `100`).
- */
-export interface ScreenStartEntry {
-  offset: number
+export interface ScreenEdge {
+  /** Screen the user left. */
+  from: number
+  /** Screen the user landed on. */
+  to: number
+  /** Load generation the move happened in. */
   generation: number
 }
 
-/** Record a screen start for `generation`, dropping entries from older ones. */
-export function rememberScreenEntry(
-  entries: ScreenStartEntry[],
-  offset: number,
+/**
+ * Record `from → to` as a confirmed adjacency for `generation`. Only forward
+ * moves create an edge: going back re-uses the edge it came from, and recording
+ * the reverse pair too would evict the forward edges under a bounded list (back
+ * paging then lost its predecessor and started bouncing). Edges from older
+ * generations are dropped — slice boundaries move when the file changes.
+ */
+export function rememberScreenEdge(
+  edges: ScreenEdge[],
+  from: number,
+  to: number,
   generation: number,
   limit: number,
-): ScreenStartEntry[] {
-  // 新一代开始时整表作废：旧代的屏边界对新文件不再成立。
-  const base = entries.filter(entry => entry.generation === generation)
-  if (base.some(entry => entry.offset === offset)) return entries.length === base.length ? entries : base
-  const next = [...base, { offset, generation }]
+): ScreenEdge[] {
+  if (to <= from) return edges.filter(edge => edge.generation === generation)
+  // 去重按 (from, to) 这一对，而不是只按 `to`：一次「前进 A→B」和随后的
+  // 「后退 B→A」会共享同一个 `to`，只按 `to` 去重会把真正的前向边覆盖掉。
+  const base = edges.filter(edge => edge.generation === generation && !(edge.from === from && edge.to === to))
+  const next = [...base, { from, to, generation }]
   while (next.length > limit) next.shift()
   return next
 }
 
-/** Verified predecessor from the current generation only, or `null`. */
-export function previousScreenStartFor(
-  entries: ScreenStartEntry[],
-  generation: number,
-  baseRow: number,
-): number | null {
-  const known = entries
-    .filter(entry => entry.generation === generation && entry.offset < baseRow)
-    .map(entry => entry.offset)
-  return known.length ? Math.max(...known) : null
+/** Verified predecessor of `baseRow` in `generation`, or `null`. */
+export function confirmedPredecessor(edges: ScreenEdge[], generation: number, baseRow: number): number | null {
+  // 只要「真正在它之前」的边：后退操作也会记下 `300 → 150`，那个 `from` 大于
+  // 当前屏，不是前驱。
+  const incoming = edges.filter(
+    candidate => candidate.generation === generation && candidate.to === baseRow && candidate.from < baseRow,
+  )
+  if (!incoming.length) return null
+  return Math.max(...incoming.map(candidate => candidate.from))
 }

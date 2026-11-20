@@ -19,9 +19,9 @@ import {
   csvColumnLabel,
   csvRenderedColumns,
   csvRowWindow,
-  previousScreenStartFor,
-  rememberScreenEntry,
-  type ScreenStartEntry,
+  confirmedPredecessor,
+  rememberScreenEdge,
+  type ScreenEdge,
   csvUsesVirtualScroll,
   parseCsvRows,
   type CsvPage,
@@ -218,21 +218,30 @@ const lastScreenRows = ref(CSV_PAGE_ROWS)
  */
 const loadGeneration = ref(0)
 /**
- * Screen start offsets visited **for the file currently open** (row indexes only,
- * no cell data). Cleared on every file change so a previous file's pagination can
- * never leak into the next one. 0 is recorded too: the first screen must stay a
- * valid back target even after its rows were evicted from the cache.
- *
- * The list grows with how far the user actually paged (8 bytes per screen), so
- * `SCREEN_HISTORY_LIMIT` only guards pathological paging sessions; past it we
- * stop guessing and disable the back button instead of landing on a wrong offset.
+ * Confirmed screen adjacencies for the current load generation (`from → to`),
+ * recorded only when the user actually moved between screens. A "seen start"
+ * alone proves nothing about adjacency: after a refresh the restored screen may
+ * sit at 1500 while 0 is merely the home screen, and treating 0 as its
+ * predecessor sent back-paging to the top of the file (复验 P2).
  */
-const screenHistory = ref<ScreenStartEntry[]>([])
+const screenEdges = ref<ScreenEdge[]>([])
 /** Row that maps to `top: 0` inside the scroll surface. */
 const baseRow = computed(() => (virtual.value ? 0 : pageStart.value))
-/** Rows in the current screen (a byte-trimmed slice can be shorter than 500). */
+/**
+ * Rows in the current screen, measured from a chunk that starts at exactly
+ * `baseRow`. `null` means "not measured yet": after a refresh the new
+ * generation's slice length is unknown until the slice at this precise offset
+ * has been fetched, and paging forward on the previous generation's length
+ * skipped rows (100 → 300 instead of 180, 复验 P2).
+ */
 const currentChunk = computed(() => chunkAt(baseRow.value))
-const currentScreenRows = computed(() => currentChunk.value?.rows.length ?? lastScreenRows.value)
+const measuredScreenRows = computed(() => {
+  // 客户端模式（有界文本）里整份行都在内存里，屏长可直接算出，无需等请求。
+  if (clientRows.value) return Math.max(0, Math.min(rowsPerChunk, clientRows.value.length - baseRow.value))
+  return currentChunk.value?.rows.length ?? null
+})
+/** Last measured length in this generation; only for rendering until the refetch lands. */
+const currentScreenRows = computed(() => measuredScreenRows.value ?? lastScreenRows.value)
 watch(currentChunk, chunk => {
   if (chunk?.rows.length) lastScreenRows.value = chunk.rows.length
 })
@@ -276,7 +285,7 @@ const visibleRows = computed(() => {
 function clampPage() {
   const rows = rowCount.value
   if (!virtual.value && pageStart.value > 0 && pageStart.value >= rows) {
-    screenHistory.value = []
+    screenEdges.value = []
     pageStart.value = Math.max(0, Math.min(rows - 1, Math.floor((rows - 1) / rowsPerChunk) * rowsPerChunk))
     scrollTop.value = 0
     if (scroller.value) scroller.value.scrollTop = 0
@@ -409,7 +418,10 @@ async function load(preservePosition: boolean) {
   // 刷新也会改变短页边界（文件变宽/变窄后每屏行数不同），所以新旧两代的屏起点
   // 不能混用：提升代号并把历史重建为「首页」，随后走到的每一屏再各自登记。
   loadGeneration.value += 1
-  screenHistory.value = [{ offset: 0, generation: loadGeneration.value }]
+  // Edges belong to a generation: a refresh rebuilds them from scratch.
+  screenEdges.value = []
+  // 上一代的页长不能用于新一代：文件变宽/变窄或预算裁剪不同都会改每屏行数。
+  lastScreenRows.value = CSV_PAGE_ROWS
   if (preservePosition) {
     header.value = previous.header
     columnCount.value = previous.columnCount
@@ -441,14 +453,12 @@ async function load(preservePosition: boolean) {
     tick.value += 1
     return
   }
-  // 刷新时先要回**首页元数据**（总行数/表头可能变，文件也可能被改小），
-  // 再要回当前这一屏；两者都不改变页码本身。当前页在新一代里仍是一个**真实
-  // 屏起点**（用户正看着它），因此登记到新代历史。
-  if (preservePosition && pageStart.value > 0) {
-    rememberScreen(pageStart.value)
-  }
+  // 刷新时先要回**首页元数据**（总行数/表头可能变，文件也可能被改小），再**从
+  // 当前精确 offset 重取当前屏**：刷新会改变每屏行数（文件变宽变窄、或后端预算
+  // 裁剪不同），只有重取过才知道新代的真实页长。旧实现只按视口预取，于是沿用旧
+  // 代 `lastScreenRows` 计算「下一屏」，会跳过数据（复验 P2：100 → 300 而非 180）。
   queue.push(0)
-  if (preservePosition && desiredWindow.value.start > 0) queue.push(desiredWindow.value.start)
+  if (preservePosition && pageStart.value > 0) queue.push(pageStart.value)
   pump()
 }
 
@@ -471,39 +481,43 @@ function onScroll() {
 
 watch(desiredWindow, () => pump())
 
-function goToScreen(offset: number) {
-  rememberScreen(pageStart.value)
-  pageStart.value = Math.max(0, Math.min(offset, Math.max(0, rowCount.value - 1)))
+/**
+ * Move to `offset` and record the move as a **confirmed adjacency** for this
+ * generation. Only this proves which screen precedes another: a merely seen
+ * start (e.g. the home screen 0 after a refresh restored 1500) must never be
+ * treated as a predecessor.
+ */
+function goToScreen(offset: number, from = pageStart.value) {
+  const target = Math.max(0, Math.min(offset, Math.max(0, rowCount.value - 1)))
+  if (target !== from) {
+    screenEdges.value = rememberScreenEdge(
+      screenEdges.value,
+      from,
+      target,
+      loadGeneration.value,
+      props.screenHistoryLimit,
+    )
+  }
+  pageStart.value = target
   scrollTop.value = 0
   if (scroller.value) scroller.value.scrollTop = 0
   if (props.text !== undefined) {
     tick.value += 1
     return
   }
-  queue.push(pageStart.value)
+  queue.push(target)
   tick.value += 1
   pump()
 }
 
 /**
- * Exact start of the screen before `baseRow`, or `null` when no exact target is
- * known. Slice lengths vary (the backend trims to its byte budget), so the
- * current screen's length says nothing about the previous one — guessing with it
- * landed one slice short (1800 → 1700 instead of 1600) once the history and the
- * cached predecessor were both gone. When that happens the back button is
- * disabled instead of navigating to a wrong offset.
+ * Exact start of the screen before `baseRow`, or `null` when no confirmed edge
+ * is known in this generation. Never inferred from the current screen length or
+ * from "some smaller offset we once showed": after a refresh those are not
+ * adjacency.
  */
 function previousScreenOffset(): number | null {
-  return previousScreenStartFor(screenHistory.value, loadGeneration.value, baseRow.value)
-}
-
-/**
- * Record the screen we are leaving, so back-paging can return to its exact start.
- * `0` is recorded like any other start (skipping it made "back to the first
- * screen" fall through to a length guess once the first chunk was evicted).
- */
-function rememberScreen(offset: number) {
-  screenHistory.value = rememberScreenEntry(screenHistory.value, offset, loadGeneration.value, props.screenHistoryLimit)
+  return confirmedPredecessor(screenEdges.value, loadGeneration.value, baseRow.value)
 }
 
 const canPageBack = computed(() => previousScreenOffset() != null)
@@ -518,7 +532,20 @@ function goToPreviousScreen() {
   if (target == null) return
   goToScreen(target)
 }
-const canPageForward = computed(() => baseRow.value + currentScreenRows.value < rowCount.value)
+/**
+ * Forward paging needs the **current** screen length measured in this
+ * generation: `baseRow + length` is the next screen's start only if the length
+ * came from the slice at `baseRow` itself.
+ */
+const canPageForward = computed(
+  () => measuredScreenRows.value != null && baseRow.value + measuredScreenRows.value < rowCount.value,
+)
+
+function goToNextScreen() {
+  const length = measuredScreenRows.value
+  if (length == null) return
+  goToScreen(baseRow.value + length)
+}
 
 onBeforeUnmount(() => {
   unmounted = true
@@ -649,7 +676,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           class="h-6 px-1.5 text-[11px]"
           :disabled="!canPageForward || loading"
           data-csv-page-next
-          @click="goToScreen(baseRow + currentScreenRows)"
+          @click="goToNextScreen()"
           >{{ t("projectFiles.csvNextPage") }}</Button
         >
       </span>

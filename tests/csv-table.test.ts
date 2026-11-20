@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { expect, test } from "vitest"
+import { confirmedPredecessor, rememberScreenEdge, type ScreenEdge } from "@/lib/csvTable"
 import { isCsvTableExt } from "@/lib/fileKind"
 import {
   CSV_MAX_VIRTUAL_ROWS,
@@ -252,65 +253,48 @@ test("the row cache is bounded by rows, not by chunk count", () => {
   expect(CSV_PAGE_CACHE_ROWS).toBeLessThan(9 * CSV_PAGE_ROWS)
 })
 
-// 复验 P2（第五轮）：分页定位的纯逻辑部分——历史按文件隔离、首页可回、
-// 历史缺失时拒绝猜测。
+// 复验 P2（第九轮）：分页定位的纯逻辑——「见过的起点」与「确认的相邻」必须分开。
 
-import { previousScreenStart, previousScreenStartFor, rememberScreenEntry, rememberScreenStart } from "@/lib/csvTable"
-
-test("screen history keeps the first screen and respects the limit", () => {
-  let history: number[] = []
-  for (const offset of [0, 100, 300, 500]) history = rememberScreenStart(history, offset, 64)
-  expect(history).toEqual([0, 100, 300, 500])
-  // 重复记录不增长。
-  expect(rememberScreenStart(history, 300, 64)).toEqual([0, 100, 300, 500])
-  // 超过上限时丢最旧的；0 只有在真的被挤出去之后才消失。
-  for (let offset = 700; offset <= 900; offset += 100) history = rememberScreenStart(history, offset, 4)
-  expect(history).toEqual([500, 700, 800, 900])
-  expect(history).not.toContain(0)
+test("a merely seen start is never a confirmed predecessor", () => {
+  // 刷新后恢复在 1500，仅登记过首页 0（seen）而没有 1000 → 1500 的确认边。
+  const edges: ScreenEdge[] = []
+  expect(confirmedPredecessor(edges, 1, 1500)).toBeNull()
 })
 
-test("previous screen is exact from history, including offset 0", () => {
-  const history = [0, 100, 300]
-  expect(previousScreenStart(history, 300)).toBe(100)
-  // 第二屏回退时，首页（offset 0）仍是一步可达的目标（旧实现跳过 0，只能猜）。
-  expect(previousScreenStart(history, 100)).toBe(0)
-  expect(previousScreenStart(history, 0)).toBeNull()
+test("confirmed edges resolve the predecessor exactly, and forward moves survive a back move", () => {
+  let edges: ScreenEdge[] = []
+  edges = rememberScreenEdge(edges, 0, 500, 1, 64)
+  edges = rememberScreenEdge(edges, 500, 1000, 1, 64)
+  edges = rememberScreenEdge(edges, 1000, 1500, 1, 64)
+  expect(confirmedPredecessor(edges, 1, 1500)).toBe(1000)
+
+  // 后退不新增边（否则在有限额的历史里会把前向边挤掉，回退开始打转）。
+  edges = rememberScreenEdge(edges, 1500, 1000, 1, 64)
+  expect(edges).toHaveLength(3)
+  expect(confirmedPredecessor(edges, 1, 1500)).toBe(1000)
+  expect(confirmedPredecessor(edges, 1, 1000)).toBe(500)
+  expect(confirmedPredecessor(edges, 1, 500)).toBe(0)
+  expect(confirmedPredecessor(edges, 1, 0)).toBeNull()
 })
 
-test("only verified screen starts count as a predecessor, never a cached chunk", () => {
-  // 没有直接前驱时，缓存里那些「末尾相接」的普通 chunk 不算数。
-  expect(previousScreenStart([100, 300], 400)).toBe(300)
-  // 历史里没有更小的起点：返回 null（调用方禁用回退），而不是用屏长猜。
-  expect(previousScreenStart([300], 300)).toBeNull()
-  expect(previousScreenStart([], 500)).toBeNull()
+test("edges from the previous generation never resolve in the new one", () => {
+  let edges: ScreenEdge[] = []
+  edges = rememberScreenEdge(edges, 0, 500, 1, 64)
+  edges = rememberScreenEdge(edges, 500, 1000, 1, 64)
+  // 刷新（第 2 代）后只有恢复点 1000，没有确认边。
+  edges = rememberScreenEdge(edges, 0, 500, 2, 64)
+  expect(confirmedPredecessor(edges, 2, 1000)).toBeNull()
+  expect(confirmedPredecessor(edges, 2, 500)).toBe(0)
 })
 
-test("a refresh invalidates the previous generation's screen starts", () => {
-  // 第一代：100/200 交替时走过 0、100、300。
-  let entries = rememberScreenEntry([], 0, 1, 64)
-  entries = rememberScreenEntry(entries, 100, 1, 64)
-  entries = rememberScreenEntry(entries, 300, 1, 64)
-  expect(previousScreenStartFor(entries, 1, 300)).toBe(100)
-
-  // 文件刷新（每屏变成 200）后进入第 2 代：旧代的 100 不再是有效前驱。
-  entries = rememberScreenEntry(entries, 0, 2, 64)
-  expect(previousScreenStartFor(entries, 2, 200)).toBe(0)
-
-  // 第 2 代里走过 0 → 200 后回退，只能回到 0（不能落到旧代的 100）。
-  entries = rememberScreenEntry(entries, 200, 2, 64)
-  expect(previousScreenStartFor(entries, 2, 400)).toBe(200)
-  expect(previousScreenStartFor(entries, 2, 200)).toBe(0)
-})
-
-test("rememberScreenEntry keeps only the current generation and respects the limit", () => {
-  let entries = rememberScreenEntry([], 0, 1, 2)
-  entries = rememberScreenEntry(entries, 100, 1, 2)
-  entries = rememberScreenEntry(entries, 300, 1, 2)
-  expect(entries).toEqual([
-    { offset: 100, generation: 1 },
-    { offset: 300, generation: 1 },
+test("rememberScreenEdge dedupes by pair and respects the limit", () => {
+  let edges = rememberScreenEdge([], 0, 100, 1, 2)
+  edges = rememberScreenEdge(edges, 100, 200, 1, 2)
+  edges = rememberScreenEdge(edges, 200, 300, 1, 2)
+  expect(edges.map(edge => [edge.from, edge.to])).toEqual([
+    [100, 200],
+    [200, 300],
   ])
-  entries = rememberScreenEntry(entries, 0, 2, 2)
-  expect(entries).toEqual([{ offset: 0, generation: 2 }])
-  expect(rememberScreenEntry(entries, 0, 2, 2)).toBe(entries)
+  // 同一条边重复记录不增长。
+  expect(rememberScreenEdge(edges, 200, 300, 1, 2)).toEqual(edges)
 })
