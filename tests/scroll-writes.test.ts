@@ -9,6 +9,7 @@ import {
   isAppScrolling,
   isInputDispatch,
   observeScrollWrites,
+  recordScrollWrite,
 } from "../src/lib/scrollWrites"
 
 /** Emulates an element whose `scrollTop` accessor lives on the prototype. */
@@ -72,14 +73,17 @@ test("writes performed inside the input dispatch are not recorded", () => {
   // the thumb position.
   const close = beginUserInput(element)
   expect(isInputDispatch(element)).toBe(true)
-  element.scrollTop = 120
-  element.scrollTop = 600
+  // The library positions the thumb from its own listener inside that dispatch;
+  // that stack is what makes the write the reader's.
+  const library = " at handleWheelScroll (reka-ui) at HTMLDocument.handleWheel (reka-ui)"
+  recordScrollWrite(element, 120, Date.now(), library)
+  recordScrollWrite(element, 600, Date.now(), library)
   expect(consumeScrollWrite(element, 120)).toBe(false)
   expect(consumeScrollWrite(element, 600)).toBe(false)
   close()
   expect(isInputDispatch(element)).toBe(false)
-  // After the dispatch the app's writes are recorded again.
-  element.scrollTop = 500
+  // After the dispatch the app's writes are recorded again (whatever the stack).
+  recordScrollWrite(element, 500)
   expect(consumeScrollWrite(element, 500)).toBe(true)
 })
 
@@ -89,9 +93,25 @@ test("a write outside the dispatch stays the app's even in the same task chain",
   // Closing at the end of the dispatch is what keeps a rendering-step write
   // (ResizeObserver compensation) attributed to the app, however late the browser
   // schedules that step.
-  beginUserInput(element)()
+  const close = beginUserInput(element)
+  close()
   element.scrollTop = 600
   expect(consumeScrollWrite(element, 600)).toBe(true)
+})
+
+test("a write that is not the library's stays the app's inside a leaked window", () => {
+  const element = viewport()
+  observeScrollWrites(element)
+  const close = beginUserInput(element)
+  // A stopped input leaves the window open for the rest of the frame; an
+  // unrelated animation-frame callback writing the position is still the app's.
+  recordScrollWrite(element, 600, Date.now(), " at pinToBottom (src/lib/bottomPin.ts) at earlyFrame (harness)")
+  expect(consumeScrollWrite(element, 600)).toBe(true)
+  // The library's own write in the same window is the reader's.
+  recordScrollWrite(element, 300, Date.now(), " at handleWheelScroll (reka-ui)")
+  expect(consumeScrollWrite(element, 300)).toBe(false)
+  close()
+  expect(isInputDispatch(element)).toBe(false)
 })
 
 test("a listener that stops propagation cannot leak the exemption", async () => {

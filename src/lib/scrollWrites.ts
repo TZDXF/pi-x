@@ -104,11 +104,42 @@ export function beginUserInput(target: object): InputScopeCloser {
   return close
 }
 
+/**
+ * Frames that identify the storage library's own input handling.
+ *
+ * The exemption covers the browser's dispatch of one input, which normally starts
+ * and ends with our own listeners. A listener in between may stop propagation so
+ * our bubble closer never runs, leaving the exemption open for the rest of the
+ * frame — long enough for an unrelated animation frame callback to write too.
+ * So a write is only exempt when its stack shows the library listener that
+ * positions the scrollbar: that is the one write the reader's input is
+ * responsible for, and any other write during the window belongs to the app.
+ */
+const INPUT_WRITE_FRAMES = [
+  "handleWheelScroll",
+  "handleDragScroll",
+  "onDragScroll",
+  "handleThumbDown",
+  "handleThumbUp",
+  "getScrollPositionFromPointer",
+  "ScrollAreaScrollbarVisible",
+  "reka-ui",
+]
+
+/** Whether this call stack is the storage library positioning its scrollbar. */
+export function isLibraryInputWrite(stack: string | undefined = new Error().stack): boolean {
+  // No stack support: fall back to the exemption, never to a wrong attribution.
+  if (!stack) return true
+  return INPUT_WRITE_FRAMES.some(frame => stack.includes(frame))
+}
+
 /** Record that a scroll event at `scrollTop` was produced by code. */
-export function recordScrollWrite(target: object, scrollTop: number, now = Date.now()): void {
+export function recordScrollWrite(target: object, scrollTop: number, now = Date.now(), stack?: string): void {
   // A write the input dispatch performs itself is the reader's: leaving it
-  // unrecorded is what makes the resulting scroll event count as a gesture.
-  if (isInputDispatch(target)) return
+  // unrecorded is what makes the resulting scroll event count as a gesture. Any
+  // other write during that window (a stopped input leaking the exemption into
+  // the animation-frame callback, say) still belongs to the app.
+  if (isInputDispatch(target) && isLibraryInputWrite(stack)) return
   const list = writes.get(target)
   if (!list) {
     writes.set(target, [{ scrollTop, at: now }])

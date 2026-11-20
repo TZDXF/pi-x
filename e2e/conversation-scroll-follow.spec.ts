@@ -596,3 +596,74 @@ test("a stopped input propagation still closes the reader exemption", async ({ p
   await page.waitForFunction(() => (window as any).__arrival === true, undefined, { timeout: 2000 })
   expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
 })
+
+test("a sideways touch swipe does not take over the app navigation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await viewportOf(page).boundingBox())!
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }],
+  })
+  // Horizontal only: a sideways swipe is not scrolling the conversation.
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [{ x: box.x + box.width / 2 + 6, y: box.y + box.height / 2 }],
+  })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a cancellation from another pointer does not end the app navigation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  // Dragging a pane outside the conversation only scrolls that pane; its
+  // cancellation belongs to that gesture, not to the conversation.
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await viewportOf(page).boundingBox())!
+  const outsideX = box.x + box.width + 40
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: outsideX, y: box.y + box.height - 80 }],
+  })
+  for (const step of [40, 80, 120]) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: outsideX, y: box.y + box.height - 80 - step }],
+    })
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
