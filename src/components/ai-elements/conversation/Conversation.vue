@@ -30,6 +30,13 @@ const emit = defineEmits<{ scroll: [event: Event] }>()
  */
 const revealLock = ref(0)
 /**
+ * 是否真有**用户发起的定位**正在接管滚动（不含"阅读锚定"自己占用的锁）。
+ *
+ * 两者分开：锚定流程也在 `revealLock` 里（要抑制行高补偿），但它自己必须能继续工作，
+ * 不能用"有锁"判断"有更新定位"——那样锚定一进循环就把自己当让位对象。
+ */
+const locating = ref(0)
+/**
  * 在**发起定位的那一刻**为该视口取得请求身份（TZD-138 P2 跨入口竞态）。
  *
  * 重挂虚拟行、展开折叠正文、重算锚点都是 `await`：如果等到真正滚动时才领身份，
@@ -66,9 +73,14 @@ async function revealInViewport(
   if (!started.request.isCurrent()) return false
   // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
   releaseBottomLock()
-  return withRevealLock(() =>
-    revealElement(started.viewport as HTMLElement, element, { animated: options.animated, request: started.request }),
-  )
+  locating.value++
+  try {
+    return await withRevealLock(() =>
+      revealElement(started.viewport as HTMLElement, element, { animated: options.animated, request: started.request }),
+    )
+  } finally {
+    locating.value--
+  }
 }
 defineExpose({
   stopScroll: releaseBottomLock,
@@ -80,6 +92,14 @@ defineExpose({
    * `await` 之前就拿到它，并贯穿到最终滚动（否则先发起、后恢复的旧请求会顶掉新目标）。
    */
   beginRevealRequest: (): RevealRequest | null => beginRequest()?.request ?? null,
+  /**
+   * 在一段"自己写 `scrollTop`"的流程里抑制虚拟行的行高补偿（TZD-138 历史前插锚定）。
+   * 两套补偿同时生效会互相追加（`VirtualMessage` 按差值补、调用方也按增量补），
+   * 结果会冲过头；这里让已注册的那一套让位给调用方。
+   */
+  withAnchorLock: withRevealLock,
+  /** 当前是否有定位正在接管滚动（此时外部的滚动补偿应让位）。 */
+  isRevealActive: () => locating.value > 0,
   scrollToMessage: async (id: number, inherited?: RevealRequest) => {
     const message = scrollRef.value?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
     if (!message) return false
@@ -92,7 +112,9 @@ defineExpose({
     // 作废后立刻终止，不改走别的回退（否则旧请求会重新取得滚动权）。
     if (!request.isCurrent()) return false
     releaseBottomLock()
-    return withRevealLock(async () => {
+    locating.value++
+    try {
+      return await withRevealLock(async () => {
       // 虚拟行可能整行卸载，`virtual-reveal` 让它重挂；等一帧布局稳定再量位置。
       message.dispatchEvent(new Event('virtual-reveal'))
       await nextTick()
@@ -105,7 +127,10 @@ defineExpose({
         margin: 24,
         request,
       })
-    })
+      })
+    } finally {
+      locating.value--
+    }
   },
 })
 

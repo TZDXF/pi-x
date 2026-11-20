@@ -17,6 +17,10 @@ export interface ChatHistoryHandle {
   revealInViewport?: (target: Element, options?: { animated?: boolean; request?: RevealRequest }) => Promise<boolean>
   /** 在**发起定位的那一刻**取得该视口的请求身份（跨入口竞态的根修复点）。 */
   beginRevealRequest?: () => RevealRequest | null
+  /** 在这段流程里抑制虚拟行的行高补偿（历史前插的阅读锚定自己写 `scrollTop`）。 */
+  withAnchorLock?: <T>(run: () => Promise<T>) => Promise<T>
+  /** 是否有定位正在接管滚动（有的话阅读锚定立刻让位，不去争滚动位置）。 */
+  isRevealActive?: () => boolean
   historyViewport: () => HTMLElement | null
 }
 
@@ -96,6 +100,45 @@ export function useChatTurnList(deps: {
     return turns
   })
 
+  /** 等一帧（没有 rAF 的环境退化成微任务，便于纯单测）。 */
+  const waitFrame = () =>
+    new Promise<void>(resolve => {
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve())
+      else resolve()
+    })
+
+  /**
+   * 历史分页会把一整页更早的消息**插到最前面**：即便 `scrollTop` 不动，用户眼前的内容也会
+   * 整体下移（QA 实测：引用正文跑到视口顶下 4608px）。
+   *
+   * 做法：按**内容高度增量**把可见内容钉在原处（前插发生在可见行之上，`scrollTop` 跟着
+   * 内容总高的变化同步移动，眼前这批内容就不会跑），并连续跟踪若干帧 —— 前插出来的行先是
+   * 占位估算高度（`VirtualMessage`），随后陆续换成真实高度，总量还会继续变化。
+   *
+   * 与 `VirtualMessage` 的行高补偿**互斥**（`withAnchorLock`）：两边都按增量补会互相追高、
+   * 把内容顶出视口。它刻意**不是导航**：只固定"此刻正在读的内容"；用户更晚发起的定位
+   * （`isRevealActive`）接管滚动后这里立刻让位，绝不覆盖更新的意图。
+   */
+  async function holdReadingContent(scrollHeight: number, frames = 14) {
+    let known = scrollHeight
+    const hold = async () => {
+      for (let frame = 0; frame < frames; frame++) {
+        await nextTick()
+        await waitFrame()
+        if (conversation.value?.isRevealActive?.()) return
+        const viewport = conversation.value?.historyViewport?.()
+        if (!viewport || !viewport.isConnected) return
+        const delta = viewport.scrollHeight - known
+        if (Math.abs(delta) < 1) continue
+        viewport.scrollTop += delta
+        known = viewport.scrollHeight
+      }
+    }
+    const handle = conversation.value
+    if (handle?.withAnchorLock) await handle.withAnchorLock(hold)
+    else await hold()
+  }
+
   async function navigateToQuestion(turn: TimelineTurn) {
     /**
      * 视口请求身份必须在**点击那一刻**取得（TZD-138 历史分页竞态）：未挂载的时间线节点
@@ -107,8 +150,12 @@ export function useChatTurnList(deps: {
      * 有用的副作用），但已过期的点击**不得再导航**（`stopScroll` / `scrollToMessage` 都不发）。
      */
     const request = conversation.value?.beginRevealRequest?.() ?? null
+    // 未挂载的节点会**前插一整页历史**：先记下当前内容总高，提交后按增量把眼前的内容钉住
+    // （只固定阅读内容，不是导航，也不覆盖更新的定位意图）。
+    const reading = turn.entryId == null ? (conversation.value?.historyViewport?.()?.scrollHeight ?? null) : null
     // Unmaterialized turns load their history pages first, then scroll.
     const id = turn.entryId ?? (await session.revealTimelineTurn(turn.id))
+    if (reading !== null) await holdReadingContent(reading)
     if (id == null) return
     // 分页期间已有更新的定位：数据照常保留，但这次点击不再抢滚动位置。
     if (request && !request.isCurrent()) return

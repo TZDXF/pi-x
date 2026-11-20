@@ -162,7 +162,12 @@ export async function revealElement(
   target: HTMLElement,
   options: RevealOptions = {},
 ): Promise<boolean> {
-  const attempts = options.attempts ?? 4
+  /**
+   * 轮数上限：冷跳历史目标时，被重挂出来的虚拟行会陆续用真实高度替换估算高度，
+   * 每一轮目标的真实位置都会再下一城（4 轮常常还没到）；这里给足余量，并在每轮之间
+   * 等布局稳定，避免"写入一次就收工"却在视口外。
+   */
+  const attempts = options.attempts ?? 12
   // 用调用方在发起定位时取得的身份；没有则现在取得（同一视口上的旧定位立刻作废）。
   const request = options.request ?? beginReveal(viewport)
   const current = () => request.isCurrent()
@@ -188,6 +193,16 @@ export async function revealElement(
       top: viewport.scrollTop + delta,
       behavior: attempt === 0 && options.animated ? "smooth" : "instant",
     })
+    await waitForScrollSettle(viewport, { cancelled: () => !current() })
+    // 等两帧让行高测量/重挂的布局变化落定，下一轮读到的是真实位置而不是中间态。
+    await nextFrame()
+    await nextFrame()
+  }
+  if (!current()) return false
+  // 轮次用尽仍不到位时，最后再即时写一次（不再滚动动画），并如实返回是否真的到了。
+  const finalDelta = offset()
+  if (Math.abs(finalDelta) >= 1) {
+    viewport.scrollTo({ top: viewport.scrollTop + finalDelta, behavior: "instant" })
     await waitForScrollSettle(viewport, { cancelled: () => !current() })
     await nextFrame()
   }

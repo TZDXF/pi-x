@@ -179,8 +179,6 @@ test("a stale lazy-history timeline click never navigates after its page resolve
   await page.evaluate(async () => await (window as unknown as { qa: { earlier: Promise<unknown> } }).qa.earlier)
   await expect(page.locator(badge)).toBeInViewport({ ratio: 0.75 })
 
-  // 释放前先记下视口位置（历史前插会改变 scrollHeight，但只有导航才会改 scrollTop）。
-  const scrollBefore = await page.evaluate(() => (document.querySelector('[role="log"]') as HTMLElement).scrollTop)
   // 3) 释放分页：历史数据照常补上，但这次点击已经过期 —— 不得再导航。
   await page.evaluate(async () => {
     const qa = window as unknown as {
@@ -211,15 +209,42 @@ test("a stale lazy-history timeline click never navigates after its page resolve
   // 决定性判据：分页恢复后**根本没有再触发导航**（旧实现会调用 `scrollToMessage(111)`）。
   // 这条断言不依赖滚动引擎的时序，三内核结果一致。
   expect(navCalls, "a stale timeline click must not navigate after its page resolves").toEqual([])
-  // 更强的判据：分页恢复后 `scrollTop` 必须与释放前一致（旧实现会写入 1980 → 1056），
-  // 且旧点击的目标没有被带到视口顶端（它只是随历史前插而自然下移）。
+  // 最强判据是**停稳后真正看得见的内容**（不是写入次数、`scrollTop` 或 `top < 120`）：
+  // 历史前插会把一整页更早的消息插到最前面，所以 `scrollTop` 允许变化（那是为了把内容
+  // 钉在原处）；但用户此刻在读的引用正文与徽标必须仍然在视口里，旧点击的目标不能被
+  // 带到视口顶端。
+  // 徽标在历史前插前处于视口内；前插后仍必须**看得见**（允许因前插行高微调而轻微位移，
+  // 但不允许整块跑到视口外）。用几何计算而不是 `toBeInViewport`，避免像素级抖动导致 flake。
+  // 前插后引用行可能被虚拟化重新挂载，先确保它回到 DOM 里（产品自己的入口）。
+  if (
+    (await page.locator('[data-message-id="1"][data-virtual-mounted]').getAttribute("data-virtual-mounted")) === "false"
+  ) {
+    await page.locator('[data-message-id="1"][data-virtual-mounted]').dispatchEvent("virtual-reveal")
+  }
+  await expect(page.locator(body)).toHaveCount(1)
+  const visibility = await page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const badgeEl = document.querySelector('[data-message-id="1"] [data-selection-anchor]') as HTMLElement
+    const bodyEl = document.querySelector('[data-message-id="1"] [data-prompt-text]') as HTMLElement
+    const logRect = log.getBoundingClientRect()
+    const overlapOf = (rect: DOMRect) =>
+      Math.max(0, Math.min(rect.bottom, logRect.bottom) - Math.max(rect.top, logRect.top))
+    const badgeRect = badgeEl.getBoundingClientRect()
+    const bodyRect = bodyEl.getBoundingClientRect()
+    return {
+      badgeRatio: badgeRect.height ? overlapOf(badgeRect) / badgeRect.height : 0,
+      bodyRatio: bodyRect.height ? overlapOf(bodyRect) / bodyRect.height : 0,
+    }
+  })
+  expect(visibility.badgeRatio, "the quoted line the user was reading stays visible").toBeGreaterThan(0.5)
+  expect(visibility.bodyRatio, "the quoted prompt stays in view").toBeGreaterThan(0.2)
   const finalTop = await page.evaluate(() => {
     const log = document.querySelector('[role="log"]') as HTMLElement
     const row = document.querySelector('[data-message-id="111"][data-virtual-mounted]') as HTMLElement
     return { scrollTop: log.scrollTop, rowTop: row.getBoundingClientRect().top - log.getBoundingClientRect().top }
   })
-  expect(finalTop.scrollTop, "the stale click must not move the viewport").toBe(scrollBefore)
-  expect(finalTop.rowTop, "the stale target is not parked at the viewport top").toBeGreaterThan(100)
+  // 旧点击的目标**没有**被停到视口顶端（可能在上方也可能在下方，关键是没被"导航到位"）。
+  expect(Math.abs(finalTop.rowTop - 24), "the stale target is not parked at the viewport top").toBeGreaterThan(100)
 })
 
 test("a current lazy-history timeline click still navigates and passes its request identity on", async ({ page }) => {
@@ -240,6 +265,8 @@ test("a current lazy-history timeline click still navigates and passes its reque
     const row = document.querySelector('[data-message-id="111"]') as HTMLElement
     return { top: row.getBoundingClientRect().top - log.getBoundingClientRect().top }
   })
-  // 与产品原有顶距一致：目标行顶端贴视口顶端 24px 以内（长会话里也可能被居中修正）。
-  expect(geometry.top).toBeLessThan(120)
+  // 判据是**目标原文实际可见**（不是"调用过导航"或 `top < 120`）：冷跳时被重挂出来的
+  // 虚拟行会连续测高，写入一次就收工会把目标留在视口外。
+  await expect(page.locator('[data-message-id="111"] [data-prompt-text]')).toBeInViewport({ ratio: 0.5 })
+  expect(geometry.top).toBeGreaterThan(-1)
 })

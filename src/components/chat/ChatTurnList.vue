@@ -154,6 +154,9 @@ defineExpose({
   revealInViewport: async (target: Element, options?: { animated?: boolean; request?: RevealRequest }) =>
     (await conversation.value?.revealInViewport?.(target, options)) ?? false,
   beginRevealRequest: () => conversation.value?.beginRevealRequest() ?? null,
+  withAnchorLock: async <T>(run: () => Promise<T>) =>
+    conversation.value?.withAnchorLock ? conversation.value.withAnchorLock(run) : run(),
+  isRevealActive: () => conversation.value?.isRevealActive?.() ?? false,
   locateSelection,
   editSelection,
 })

@@ -181,6 +181,71 @@ test("timeline reveals unmaterialized questions and shortcuts scroll only the ow
   expect(right.viewport.scrollTo).not.toHaveBeenCalled()
 })
 
+test("history paging that prepends rows pins the content being read (TZD-138)", async () => {
+  // 历史分页会**前插一整页更早的消息**：即便 `scrollTop` 不动，眼前的内容也会整体下移。
+  // 修复后按"提交前视口里第一条可见消息"锚定，把这条消息钉回原位；并且它不是导航
+  // （不再额外 stopScroll / scrollToMessage），所以不会覆盖更新的定位意图。
+  let prepended = 0
+  const row = {
+    isConnected: true,
+    // 视口坐标 = 内容位置 + 前插量 − scrollTop（向下滚动时内容上移）。
+    getBoundingClientRect: () => {
+      const top = 540 + prepended - scrollTop.value
+      return { top, bottom: top + 160 }
+    },
+  }
+  const scrollTop = { value: 500 }
+  const viewport = {
+    get scrollTop() {
+      return scrollTop.value
+    },
+    set scrollTop(next: number) {
+      scrollTop.value = next
+    },
+    get scrollHeight() {
+      return 3000 + prepended
+    },
+    clientHeight: 550,
+    isConnected: true,
+    contains: () => true,
+    querySelectorAll: () => [row],
+    getBoundingClientRect: () => ({ top: 0, bottom: 550 }),
+  }
+  const session = reactive({
+    entries: [],
+    isStreaming: false,
+    partialBlocks: null,
+    streamingTurnId: null,
+    sessionFile: "current",
+    hasOlderHistory: true,
+    historyLoading: false,
+    olderHistoryLoading: false,
+    loadOlderHistory: vi.fn(async () => {}),
+    revealTimelineTurn: vi.fn(async () => {
+      // 前插 32 行：参照行按占位高度先下移 1600px（随后会被真实高度替换）。
+      prepended += 1600
+      return 111
+    }),
+  })
+  const ui = { pushToast: vi.fn() }
+  const handle = {
+    stopScroll: vi.fn(),
+    scrollToMessage: vi.fn(),
+    historyViewport: () => viewport,
+    beginRevealRequest: () => ({ isCurrent: () => true }),
+    withAnchorLock: async <T>(run: () => Promise<T>) => run(),
+    isRevealActive: () => false,
+  }
+  const controls = useChatTurnList({ session, ui, connecting: () => false, conversation: ref(handle) })
+  await controls.navigateToQuestion({ id: "older", entryId: null })
+  // 参照行被钉回原位：`scrollTop` 跟上了 1600px 的前插。
+  expect(viewport.scrollTop).toBe(2100)
+  // 已挂载的节点（entryId 已知）不触发前插补偿。
+  prepended += 1600
+  await controls.navigateToQuestion({ id: "known", entryId: 12 })
+  expect(viewport.scrollTop).toBe(2100)
+})
+
 test("a stale timeline click returns its loaded page but never navigates (TZD-138)", async () => {
   // 未挂载的时间线节点要先 `await revealTimelineTurn`（拉历史分页），期间用户可能点了引用定位。
   // 旧实现等到分页结束才领请求身份，于是"先点击、后恢复"的旧导航被当成最新，反把新目标顶掉。
