@@ -18,27 +18,29 @@
  * 1. **Observed writes.** The viewport's `scrollTop` is observed. An assignment
  *    made outside an input dispatch records the position the browser settled on,
  *    and the scroll event it causes consumes that record.
- * 2. **Input dispatches.** An input that moves the viewport *itself* (a wheel, a
- *    scrolling key, a scrollbar pointer interaction) opens an exemption that
- *    covers exactly that input's dispatch — the whole task the browser dispatches
- *    the event in, including the library listeners that run after ours. Only
- *    writes performed within that task are the reader's; a layout write that
- *    merely *follows* the input in a later task stays the app's.
+ * 2. **Input dispatches.** Reka positions the scrollbar thumb by assigning
+ *    `scrollTop` from its own listeners — the `wheel` listener it registers on
+ *    `document`, and the `pointermove` handler on the scrollbar. Those writes are
+ *    the reader's, but they never reach our handlers.
  *
- *    This is what keeps Reka honest — its scrollbar listens for `wheel` on the
- *    document and positions the thumb by assigning `scrollTop`, so neither
- *    reaches the viewport's own handlers — while a same-frame compensation
- *    triggered by the same keystroke is no longer swallowed.
+ *    So the exemption is opened by a capture-phase listener and closed by a
+ *    bubble-phase listener of the *same* event (`beginUserInput` /
+ *    `endUserInput`): it is exactly as long as the browser's dispatch of that
+ *    event, which is when those library listeners run. Nothing else is exempt —
+ *    in particular a layout write that merely happens during the same input task
+ *    (the ResizeObserver compensation a keystroke may trigger) is the app's, even
+ *    when the browser schedules the rendering step late. A timer would close
+ *    *after* the rendering step and swallow exactly that write.
  *
  * App-initiated scrolling (`scrollTo`, `scrollBy`, `scrollIntoView`) never touches
  * the accessor, so its events cannot be matched to a record. `beginAppScroll`
  * marks the viewport with the position the app asked for, and the mark stays
  * until the movement is **confirmed** finished: the arrival event at that
  * position, the browser's `scrollend`, a replacement request, or the reader
- * actually taking the viewport over. A timeout never stands in for that
- * confirmation — a busy frame can delay the first frame of an animation by
- * hundreds of milliseconds, and the arrival would then be attributed to the
- * reader.
+ * actually taking the viewport over (any input that moves this viewport itself).
+ * A timeout never stands in for that confirmation — a busy frame can delay the
+ * first frame of an animation by hundreds of milliseconds, and the arrival would
+ * then be attributed to the reader.
  */
 
 interface AppScroll {
@@ -57,7 +59,7 @@ const WRITE_TTL_MS = 400
 const TOLERANCE_PX = 1
 
 const writes = new WeakMap<object, ScrollWrite[]>()
-/** Input dispatches currently executing for this viewport (nested ones count). */
+/** Input dispatches currently executing for this viewport (paired begin/end). */
 const dispatches = new WeakMap<object, number>()
 const appScrolls = new WeakMap<object, AppScroll>()
 
@@ -67,28 +69,23 @@ export function isInputDispatch(target: object): boolean {
 }
 
 /**
- * Open an exemption for the input dispatch that is running now.
+ * Open the exemption for this input dispatch.
  *
- * The exemption ends when the browser finishes dispatching this event — i.e. at
- * the end of the current task, after every listener of the same event ran. A
- * write the dispatch itself performs (Reka's thumb write for a wheel over the
- * track or a pointer drag) is the reader's; a layout write in a later task
- * belongs to the app.
+ * Call it from a **capture** listener of the event and close it with
+ * `endUserInput` from a **bubble** listener of the same event: the exemption then
+ * covers exactly the browser's dispatch, which is where the library listeners
+ * that write `scrollTop` run. No timer is involved, so the exemption can never
+ * extend into the rendering step and swallow an app write.
  */
 export function beginUserInput(target: object): void {
   dispatches.set(target, (dispatches.get(target) ?? 0) + 1)
-  // The reader outranks anything the app still has pending for this viewport.
-  writes.delete(target)
-  setTimeout(() => {
-    const remaining = (dispatches.get(target) ?? 1) - 1
-    if (remaining > 0) dispatches.set(target, remaining)
-    else dispatches.delete(target)
-  }, 0)
 }
 
-/** Close the exemption early, once the dispatch is known to be finished. */
+/** Close the exemption, once the dispatch (and its listeners) finished. */
 export function endUserInput(target: object): void {
-  dispatches.delete(target)
+  const remaining = (dispatches.get(target) ?? 0) - 1
+  if (remaining > 0) dispatches.set(target, remaining)
+  else dispatches.delete(target)
 }
 
 /** Record that a scroll event at `scrollTop` was produced by code. */
@@ -137,9 +134,19 @@ export function clearScrollWrites(target: object): void {
  * it is the app's own confirmation that the movement finished. Pass `null` when
  * the movement has no known endpoint (`scrollIntoView`) and let `scrollend`, a
  * replacement request or a reader takeover finish it.
+ *
+ * A request that is already satisfied (the viewport sits at `targetTop` within a
+ * pixel) produces no scroll event at all, so it must not leave a mark behind:
+ * `beginAppScroll` refuses it and returns `false`.
  */
-export function beginAppScroll(target: object, targetTop: number | null): void {
+export function beginAppScroll(target: object, targetTop: number | null, scrollTop: number): boolean {
+  // Nothing to wait for: the browser fires neither `scroll` nor `scrollend`.
+  if (targetTop !== null && Math.abs(targetTop - scrollTop) <= TOLERANCE_PX) {
+    appScrolls.delete(target)
+    return false
+  }
   appScrolls.set(target, { targetTop })
+  return true
 }
 
 /**

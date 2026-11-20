@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest"
+import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest"
 import {
+  keyScrollsConversation,
   shouldReleaseBottomLock,
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
@@ -7,7 +8,7 @@ import {
 } from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
-  const node = {
+  const node: any = Object.assign(Object.create((globalThis as any).Element.prototype), {
     parentElement,
     scrollTop: 0,
     scrollHeight: 100,
@@ -22,14 +23,18 @@ function element(parentElement: Element | null = null, options = {}) {
       return false
     },
     ...options,
-  }
+  })
   return node as unknown as HTMLElement
 }
 
 beforeEach(() => {
   vi.stubGlobal("getComputedStyle", (element: HTMLElement) => element.style)
+  // `keyScrollsConversation` checks `instanceof Element`; the node environment has
+  // no DOM, so the fixtures stand in for elements.
+  vi.stubGlobal("Element", class Element {})
 })
 afterEach(() => vi.unstubAllGlobals())
+afterAll(() => vi.unstubAllGlobals())
 
 test("layout clamping and the library's one-pixel correction keep bottom following", () => {
   expect(shouldReleaseBottomLockOnScroll(1000, 800, 800)).toBe(false)
@@ -124,4 +129,34 @@ test("a wheel over the conversation's own scrollbar targets the viewport", () =>
   // Nested scrollbars inside the viewport are not the conversation's own rail.
   const nestedBar = element(viewport, {})
   expect(shouldReleaseBottomLock(viewport, element(nestedBar), -100)).toBe(true)
+})
+
+test("a scrolling key is only the reader's when it scrolls the conversation", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const key = (target: unknown, name: string) => ({ key: name, target, defaultPrevented: false }) as KeyboardEvent
+  // Focus inside the conversation but not on a nested scroller: the key scrolls it.
+  expect(keyScrollsConversation(viewport, key(element(viewport), "ArrowDown"))).toBe(true)
+  expect(keyScrollsConversation(viewport, key(viewport, "PageUp"))).toBe(true)
+  // Space activates the focused control instead of scrolling.
+  expect(keyScrollsConversation(viewport, key(viewport, " "))).toBe(false)
+  // A nested independently scrollable region consumes the key (TZD-135 review):
+  // its own movement must not be read as the reader taking over the conversation.
+  const nested = element(viewport, {
+    scrollTop: 0,
+    scrollHeight: 300,
+    style: { overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(false)
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowUp"))).toBe(true)
+  nested.scrollTop = 200
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(true)
+  nested.style.overscrollBehaviorY = "contain"
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(false)
+  // A modified or already handled key is never the reader.
+  expect(keyScrollsConversation(viewport, { key: "ArrowDown", target: viewport, ctrlKey: true } as KeyboardEvent)).toBe(
+    false,
+  )
+  expect(
+    keyScrollsConversation(viewport, { key: "ArrowDown", target: viewport, defaultPrevented: true } as KeyboardEvent),
+  ).toBe(false)
 })

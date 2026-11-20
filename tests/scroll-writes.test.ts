@@ -30,9 +30,6 @@ function viewport() {
   return new FakeViewport() as unknown as HTMLElement
 }
 
-/** Wait for the browser task that opened the input exemption to finish. */
-const nextTask = () => new Promise(resolve => setTimeout(resolve, 0))
-
 test("a recorded write is consumed by the scroll event it causes", () => {
   const element = viewport()
   observeScrollWrites(element)
@@ -68,50 +65,70 @@ test("a fresh gesture clears pending records", () => {
   expect(consumeScrollWrite(element, 400)).toBe(false)
 })
 
-test("writes performed by the reader's own dispatch are not recorded", async () => {
+test("writes performed inside the input dispatch are not recorded", () => {
   const element = viewport()
   observeScrollWrites(element)
+  // The capture listener opens, the bubble listener closes: the exemption is
+  // exactly one browser dispatch, which is when Reka writes the thumb position.
   beginUserInput(element)
   expect(isInputDispatch(element)).toBe(true)
-  // Reka's scrollbar positions the thumb by assigning scrollTop inside the
-  // document-level wheel/pointermove dispatch.
   element.scrollTop = 120
   element.scrollTop = 600
   expect(consumeScrollWrite(element, 120)).toBe(false)
   expect(consumeScrollWrite(element, 600)).toBe(false)
-  await nextTask()
+  endUserInput(element)
   expect(isInputDispatch(element)).toBe(false)
-  // The exemption ends with the dispatch: a later layout write is the app's.
+  // After the dispatch the app's writes are recorded again.
   element.scrollTop = 500
   expect(consumeScrollWrite(element, 500)).toBe(true)
 })
 
-test("a same-frame write that merely follows the input stays the app's", async () => {
+test("a write outside the dispatch stays the app's even in the same task chain", () => {
   const element = viewport()
   observeScrollWrites(element)
+  // No timer closes the exemption: closing it is the bubble listener, so a
+  // rendering-step write (ResizeObserver compensation) is recorded as the app's
+  // however late the browser schedules that step.
   beginUserInput(element)
-  await nextTask()
-  // The keystroke itself did not scroll; the virtual-row compensation that
-  // followed in the next task must still be attributed to the app.
-  expect(isInputDispatch(element)).toBe(false)
+  endUserInput(element)
   element.scrollTop = 600
   expect(consumeScrollWrite(element, 600)).toBe(true)
 })
 
+test("nested opens and closes are counted", () => {
+  const element = viewport()
+  beginUserInput(element)
+  beginUserInput(element)
+  endUserInput(element)
+  expect(isInputDispatch(element)).toBe(true)
+  endUserInput(element)
+  expect(isInputDispatch(element)).toBe(false)
+})
+
 test("a reader input closes an app-initiated scroll", () => {
   const element = viewport()
-  beginAppScroll(element, 600)
+  element.scrollTop = 0
+  expect(beginAppScroll(element, 600, 0)).toBe(true)
   expect(hasAppScroll(element)).toBe(true)
   expect(isAppScrolling(element, 300)).toBe(true)
-  beginUserInput(element)
   finishAppScroll(element)
   expect(hasAppScroll(element)).toBe(false)
-  endUserInput(element)
+})
+
+test("a navigation already at its target leaves no mark behind", () => {
+  const element = viewport()
+  observeScrollWrites(element)
+  element.scrollTop = 576
+  // The browser fires neither `scroll` nor `scrollend` for a no-op request.
+  expect(beginAppScroll(element, 576, 576)).toBe(false)
+  expect(hasAppScroll(element)).toBe(false)
+  expect(beginAppScroll(element, 577, 576)).toBe(false)
+  expect(beginAppScroll(element, 578, 576)).toBe(true)
 })
 
 test("an app-initiated scroll owns its events until the requested position arrives", () => {
   const element = viewport()
-  beginAppScroll(element, 600)
+  expect(beginAppScroll(element, 600, 0)).toBe(true)
   // Intermediate frames of a smooth scroll are the app's, however late they are.
   for (const at of [100, 250, 420, 580]) expect(isAppScrolling(element, at)).toBe(true)
   // The arrival is attributed too, then the viewport is handed back to the reader.
@@ -122,7 +139,7 @@ test("an app-initiated scroll owns its events until the requested position arriv
 
 test("a busy frame does not expire the app attribution", () => {
   const element = viewport()
-  beginAppScroll(element, 600)
+  expect(beginAppScroll(element, 600, 0)).toBe(true)
   // No time-based release exists: a frame delayed by hundreds of milliseconds
   // still reports its first scroll as the app's.
   expect(isAppScrolling(element, 197)).toBe(true)
@@ -131,7 +148,7 @@ test("a busy frame does not expire the app attribution", () => {
 test("scrollend or a reader takeover finishes an app scroll without a target", () => {
   const element = viewport()
   // `scrollIntoView` has no known endpoint: it ends on scrollend or takeover.
-  beginAppScroll(element, null)
+  expect(beginAppScroll(element, null, 0)).toBe(true)
   expect(isAppScrolling(element, 400)).toBe(true)
   expect(isAppScrolling(element, 400)).toBe(true)
   finishAppScroll(element)

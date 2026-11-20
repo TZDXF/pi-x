@@ -43,21 +43,41 @@ export function targetsConversationViewport(viewport: HTMLElement, target: Eleme
 }
 
 /** Keys whose default action scrolls the conversation. */
-const KEY_SCROLL_KEYS = new Set(["End", "Home", "PageDown", "PageUp", "ArrowDown", "ArrowUp", " "])
+const KEY_SCROLL_KEYS = new Set(["End", "Home", "PageDown", "PageUp", "ArrowDown", "ArrowUp"])
 
 /**
- * Whether this key press scrolls the conversation viewport.
+ * Whether this key press scrolls the **conversation** viewport.
  *
- * Keys scroll the nearest scrollable ancestor of the focused element, so focus
- * has to be inside the conversation. Space is the exception: it activates the
- * focused control (a button, a summary, a checkbox) instead of scrolling, so it
- * only scrolls when the viewport itself holds focus.
+ * A key scrolls the nearest scrollable ancestor of whatever holds focus. So a key
+ * only counts when the focus is inside the conversation **and** no nested scroller
+ * between it and the viewport can still move that way: pressing ArrowDown inside
+ * an independently scrollable block must not be taken as the reader taking over
+ * the conversation (TZD-135 review).
+ *
+ * Space is not a scroll key here: it activates the focused control (a button, a
+ * summary, a checkbox), which is why it used to launder the layout write that
+ * followed the keystroke.
  */
 export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEvent): boolean {
   if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return false
-  if (!(event.target instanceof Element) || !targetsConversationViewport(viewport, event.target)) return false
-  if (!KEY_SCROLL_KEYS.has(event.key)) return false
-  return event.key !== " " || event.target === viewport
+  const target = event.target
+  if (!(target instanceof Element) || !viewport.contains(target)) return false
+  const key = event.key
+  if (!KEY_SCROLL_KEYS.has(key)) return false
+  const down = key === "End" || key === "PageDown" || key === "ArrowDown"
+
+  let element: Element | null = target
+  while (element && element !== viewport) {
+    const style = getComputedStyle(element)
+    if ((style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight) {
+      const canMove = down ? element.scrollTop < element.scrollHeight - element.clientHeight : element.scrollTop > 0
+      // The nested scroller consumes the key while it can still move, or when its
+      // overscroll policy prevents chaining to the conversation.
+      if (canMove || style.overscrollBehaviorY === "contain" || style.overscrollBehaviorY === "none") return false
+    }
+    element = element.parentElement
+  }
+  return element === viewport
 }
 
 /**
