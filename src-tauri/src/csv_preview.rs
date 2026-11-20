@@ -326,26 +326,44 @@ impl RowParser {
     }
 
     /// Complete the record currently in the parser (used by the LF branch and
-    /// by the end-of-file flush).
+    /// by the end-of-file flush). A cell that was still inside a quoted run
+    /// when the file ended may hold an unwritten CR (`"a<CR>` then EOF), and a
+    /// trailing `"` may still be waiting for its one-byte lookahead — both must
+    /// be written before the field is sealed, otherwise the value silently
+    /// loses its last characters. A `pending_quote` at EOF is the run's closing
+    /// quote (the file simply ends there) and must **not** be added as content.
     fn finish_record(&mut self) -> ParsedRow {
+        if self.pending_cr {
+            self.pending_cr = false;
+            self.push(b'\r');
+        }
+        self.pending_quote = false;
+        self.in_quotes = false;
         self.end_field();
         self.take_row()
     }
 }
 
-/// Rough serialized size of one cell: the UTF-8 bytes, the quotes JSON adds,
-/// and one byte per character that needs escaping.
-/// Rough serialized size of one cell: the UTF-8 bytes, the quotes JSON adds,
-/// and one byte per character that needs an escape. JSON escapes `"` and `\\`
-/// as two bytes, and every control character (`\n`, `\r`, `\t`, other C0)
-/// as two bytes or more — counting only quotes/backslashes under-counted a page
-/// full of LF cells by 2x (2.08 MB observed against a 1 MiB budget).
+/// Rough serialized size of one cell: the UTF-8 bytes, the two quotes JSON adds
+/// to every string, and the bytes its escapes consume.
+///
+/// JSON's short escapes (`\\`, `\"`, `\b`, `\t`, `\n`, `\f`, `\r`)
+/// add one byte; every other C0 character (U+0000..U+001F apart from those) is
+/// written as a six-byte `\u0001`-style escape, i.e. five extra bytes.
+/// Charging control characters a single extra byte let a page of U+0001 cells
+/// reach 3.12 MB against the 1 MiB budget, and charging only quotes and
+/// backslashes under-counted LF cells by 2x (2.08 MB observed).
 fn cell_cost(cell: &str) -> usize {
-    let escapes = cell
-        .chars()
-        .filter(|c| *c == '"' || *c == '\\' || (*c as u32) < 0x20 || *c == '\u{7f}')
-        .count();
-    cell.len() + 3 + escapes
+    let mut cost = cell.len() + 3;
+    for c in cell.chars() {
+        cost += match c {
+            '"' | '\\' => 1,
+            '\u{8}' | '\t' | '\n' | '\u{c}' | '\r' => 1,
+            c if (c as u32) < 0x20 => 5,
+            _ => 0,
+        };
+    }
+    cost
 }
 
 fn row_cost(row: &[String]) -> usize {
@@ -457,6 +475,10 @@ fn scan<R: Read>(
                 if byte == b'"' {
                     parser.pending_quote = true;
                 } else if byte == b'\r' {
+                    if parser.pending_cr {
+                        parser.pending_cr = false;
+                        parser.push(b'\r');
+                    }
                     parser.pending_cr = true;
                 } else {
                     if parser.pending_cr {
@@ -1180,6 +1202,66 @@ mod repro_tests {
                 vec!["2".to_string(), "b".to_string()]
             ]
         );
+    }
+
+    /// 复验 P1（EOF 边界）：引用块在文件末尾直接结束时，尚未落盘的 CR 也是内容。
+    #[test]
+    fn a_quoted_cell_ending_in_cr_before_eof_keeps_that_cr() {
+        let csv = format!("id,note\n1,\"a\r\"");
+        let out = page(&csv, 0, 10);
+        assert_eq!(out.total_rows, Some(1));
+        assert_eq!(out.rows, vec![vec!["1".to_string(), format!("a\r")]]);
+        // 结尾引号只是引用块的收尾，不能被当成内容追加。
+        let plain = page(&format!("id,note\n1,\"a\""), 0, 10);
+        assert_eq!(plain.rows, vec![vec!["1".to_string(), "a".to_string()]]);
+    }
+
+    /// 复验 P1（连续 CR 边界）：`pending_cr` 只有一个槽位，连续两个 CR 都必须保留。
+    #[test]
+    fn consecutive_crs_inside_quotes_are_all_kept() {
+        let csv = format!("id,note\n1,\"a\r\r\"\n2,b\n");
+        let out = page(&csv, 0, 10);
+        assert_eq!(out.total_rows, Some(2));
+        assert_eq!(
+            out.rows,
+            vec![
+                vec!["1".to_string(), format!("a\r\r")],
+                vec!["2".to_string(), "b".to_string()]
+            ]
+        );
+    }
+
+    /// 复验 P1：U+0001 / U+001F 序列化为 6 字节 `\uXXXX`，旧的「控制字符只 +1」
+    /// 估算让整页到 3.12 MB，必须计满 5 字节额外开销。
+    #[test]
+    fn six_byte_control_escapes_count_against_the_page_budget() {
+        for code in [1u32, 0x1f] {
+            let unit = char::from_u32(code).unwrap();
+            let cell = unit.to_string().repeat(CSV_CELL_MAX_CHARS);
+            let header = (0..CSV_MAX_COLUMNS)
+                .map(|i| format!("c{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let cells = (0..CSV_MAX_COLUMNS - 1)
+                .map(|_| format!("\"{cell}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut csv = String::from(&header);
+            csv.push('\n');
+            for row in 0..3 {
+                csv.push_str(&format!("{row},{cells}\n"));
+            }
+            let out = page(&csv, 0, 500);
+            let serialized = serde_json::to_vec(&out).unwrap().len();
+            println!("U+{code:04X} page: {} rows, {serialized} B", out.rows.len());
+            assert!(
+                serialized <= CSV_PAGE_MAX_BYTES,
+                "U+{code:04X} page {serialized} must stay inside {CSV_PAGE_MAX_BYTES}"
+            );
+            assert!(out.budget_truncated);
+            let next = page(&csv, out.rows.len() as u64, 500);
+            assert_eq!(next.rows[0][0], out.rows.len().to_string());
+        }
     }
 
     /// 复验 P1：JSON 控制字符（LF 等）转义后每字符 2 字节，旧估算只算双引号和

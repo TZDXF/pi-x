@@ -105,17 +105,21 @@ function sniffDelimiter(head, relative) {
 /**
  * 单元格序列化成本：UTF-8 字节 + JSON 引号 + 需要转义的字符。JSON 会把引号和
  * 反斜杠转成 2 字节，把每个控制字符（LF / CR / TAB / 其他 C0 与 DEL）转成 2
- * 字节以上——只算引号和反斜杠会让「整页都是 LF 单元格」少算一半（实测 2.08 MB
- * 对 1 MiB 预算）。与 Rust 侧 `cell_cost` 同口径。
+ * 字节以上。与 Rust 侧 `cell_cost` 同口径（见下方逐字符估算）。
  */
 function cellCost(cell) {
-  const bytes = Buffer.byteLength(cell, "utf8")
-  let escapes = 0
+  // JSON 的短转义（\\ " \b \t \n \f \r）只多 1 字节；
+  // 其余 C0（U+0000..U+001F）写成 6 字节的 \u0001 形式，即多 5 字节。
+  // 只按 1 字节计让 U+0001 单元格整页到 3.12 MB（预算 1 MiB）；只算引号/反斜杠
+  // 又让 LF 单元格少算一半（实测 2.08 MB）。与 Rust 侧 `cell_cost` 同口径。
+  let cost = Buffer.byteLength(cell, "utf8") + 3
   for (const char of cell) {
     const code = char.charCodeAt(0)
-    if (char === '"' || char === "\\" || code < 0x20 || code === 0x7f) escapes += 1
+    if (char === '"' || char === "\\") cost += 1
+    else if (code === 8 || code === 9 || code === 10 || code === 12 || code === 13) cost += 1
+    else if (code < 0x20) cost += 5
   }
-  return bytes + 3 + escapes
+  return cost
 }
 const rowCost = row => row.reduce((total, cell) => total + cellCost(cell), 0)
 
@@ -203,6 +207,14 @@ class RowParser {
     this.atFieldStart = true
   }
   finishRecord() {
+    // EOF flush：引用块里尚未落盘的 CR 属于单元格内容；`pendingQuote` 只是
+    // 文件末尾缺失的前瞻，不能当成内容追加。
+    if (this.pendingCr) {
+      this.pendingCr = false
+      this.push(13)
+    }
+    this.pendingQuote = false
+    this.inQuotes = false
     this.endField()
     const row = { fields: this.fields, fieldCount: this.fieldCount, truncatedCells: this.cellTruncated }
     this.fields = []
@@ -290,8 +302,15 @@ function readCsv({ file, relative, offset, limit }) {
         }
         if (parser.inQuotes) {
           if (byte === 34) parser.pendingQuote = true
-          else if (byte === 13) parser.pendingCr = true
-          else {
+          else if (byte === 13) {
+            // `pendingCr` 只有一个槽位：连续的第二个 CR 必须先把前一个落盘，
+            // 否则 `"a<CR><CR>"` 只剩下一个 CR（复验 P1）。
+            if (parser.pendingCr) {
+              parser.pendingCr = false
+              parser.push(13)
+            }
+            parser.pendingCr = true
+          } else {
             if (parser.pendingCr) {
               parser.pendingCr = false
               if (byte === 10) { parser.push(10); index += 1; continue }

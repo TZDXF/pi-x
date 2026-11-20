@@ -203,6 +203,9 @@ const pageStart = ref(0)
  * use the real length both forward and back.
  */
 const lastScreenRows = ref(CSV_PAGE_ROWS)
+/** Screens we have shown before (row offsets only, no cell data): bounded. */
+const screenHistory = ref<number[]>([])
+const SCREEN_HISTORY_LIMIT = 64
 /** Row that maps to `top: 0` inside the scroll surface. */
 const baseRow = computed(() => (virtual.value ? 0 : pageStart.value))
 /** Rows in the current screen (a byte-trimmed slice can be shorter than 500). */
@@ -251,6 +254,7 @@ const visibleRows = computed(() => {
 function clampPage() {
   const rows = rowCount.value
   if (!virtual.value && pageStart.value > 0 && pageStart.value >= rows) {
+    screenHistory.value = []
     pageStart.value = Math.max(0, Math.min(rows - 1, Math.floor((rows - 1) / rowsPerChunk) * rowsPerChunk))
     scrollTop.value = 0
     if (scroller.value) scroller.value.scrollTop = 0
@@ -277,6 +281,8 @@ function clampPage() {
  * against the cap (clearing it let a refresh push the peak to 3).
  */
 const pending = new Map<number, number>()
+/** Set on unmount: no further scheduling, whatever a late request does. */
+let unmounted = false
 /** Explicit offsets to fetch next (refresh metadata/current screen, paging). */
 const queue: number[] = []
 let generation = 0
@@ -297,7 +303,9 @@ function firstPendingGap(start: number, end: number): number | null {
 }
 
 function pump() {
-  if (props.text !== undefined) return
+  // 卸载后 `finally` 里的无条件 pump() 仍会被旧请求触发；必须在这里拦住，
+  // 否则组件已经销毁还会继续发请求（复验 P2）。
+  if (unmounted || props.text !== undefined) return
   // 失败的请求不再自动重试：否则「永久错误」（例如超 256 MB）会无限循环。
   if (errorCause.value != null) return
   while (pending.size < MAX_INFLIGHT_PAGES) {
@@ -432,6 +440,7 @@ function onScroll() {
 watch(desiredWindow, () => pump())
 
 function goToScreen(offset: number) {
+  rememberScreen(pageStart.value)
   pageStart.value = Math.max(0, Math.min(offset, Math.max(0, rowCount.value - 1)))
   scrollTop.value = 0
   if (scroller.value) scroller.value.scrollTop = 0
@@ -444,21 +453,36 @@ function goToScreen(offset: number) {
   pump()
 }
 
-/** Row index of the screen before `baseRow`; uses the real screen length, not 500. */
+/** Row index of the previous screen: exact history first, then a length guess. */
 function previousScreenOffset(): number {
+  // 1) 走过的屏起点有历史：直接用它。切片长度可以每屏不同（后端按字节预算裁剪，
+  //    复验的 mock 甚至 100/200 交替），用「当前屏长」推前驱必然错位。
+  const visited = screenHistory.value
+  const known = [...visited].sort((a, b) => b - a).find(candidate => candidate < baseRow.value)
+  if (known != null) return known
+  // 2) 历史也没有：用缓存里紧邻的前驱（它自己带着真实长度）。
   const previous = chunks.value
     .filter(chunk => chunk.offset + chunk.rows.length <= baseRow.value)
     .sort((a, b) => b.offset - a.offset)[0]
   if (previous && previous.offset + previous.rows.length === baseRow.value) return previous.offset
-  // 前驱已被逐出：按**本次会话实际见到的屏长**回退，而不是固定 500（后端按预算
-  // 只回 150 行时，固定 500 会跳到 1201→701 这种错位）。
-  return Math.max(0, baseRow.value - lastScreenRows.value)
+  // 3) 都没有（第一次反向且前驱已被逐出）：退到「当前屏长」这一步，至少不会跳太远。
+  return Math.max(0, baseRow.value - currentScreenRows.value)
+}
+
+/** Offsets of previously shown screens (bounded), so back-paging stays exact. */
+function rememberScreen(offset: number) {
+  if (offset <= 0) return
+  const history = screenHistory.value
+  if (history.includes(offset)) return
+  history.push(offset)
+  if (history.length > SCREEN_HISTORY_LIMIT) history.shift()
 }
 
 const canPageBack = computed(() => baseRow.value > 0)
 const canPageForward = computed(() => baseRow.value + currentScreenRows.value < rowCount.value)
 
 onBeforeUnmount(() => {
+  unmounted = true
   generation += 1
   observer?.disconnect()
   observer = null

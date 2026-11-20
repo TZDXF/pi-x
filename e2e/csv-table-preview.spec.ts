@@ -40,6 +40,7 @@ const app = createApp({
   render: () => h('div', { style: 'display:flex;height:700px;width:1200px' }, [h(CsvTablePreview, props)]),
 })
 app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).mount('#app')
+window.__unmount = () => app.unmount()
 window.__ready = true
 </script></body></html>`
 }
@@ -548,6 +549,135 @@ test.describe("csv table preview", () => {
     const firstRowCells = await renderedRows(page).first().locator("> div").count()
     // 行号单元格 + 剩下的一列（Playwright 的 expect 只接受一个参数）。
     expect(firstRowCells, "row-number cell + the single remaining column").toBe(2)
+  })
+
+  // 复验 P2（新）：卸载后旧请求结束不得再触发调度（旧实现只递增 generation，
+  // 而 `finally` 里的无条件 pump() 仍会发请求）。
+  test("a late request after unmount never schedules anything", async ({ page }: { page: Page }) => {
+    await page.addInitScript(() => {
+      const target = window as any
+      target.isTauri = true
+      target.__csvCalls = []
+      target.__release = null as null | (() => void)
+      Reflect.set(target, "__TAURI_INTERNALS__", {
+        invoke: (command: string, args: { offset?: number }) => {
+          if (command !== "read_csv_page") return Promise.reject(new Error("unexpected " + command))
+          target.__csvCalls.push(args.offset)
+          if (args.offset === 0) {
+            return Promise.resolve({
+              offset: 0,
+              rows: Array.from({ length: 500 }, (_, i) => [String(i), `v${i}`]),
+              header: ["c0", "c1"],
+              more: true,
+              totalRows: 300_002,
+              columnCount: 2,
+              truncatedColumns: false,
+              truncatedCells: false,
+              budgetTruncated: false,
+              delimiter: ",",
+              fileBytes: 1,
+            })
+          }
+          // 远处的请求挂住，直到测试手动放行。
+          return new Promise(resolve => {
+            target.__release = () =>
+              resolve({
+                offset: args.offset,
+                rows: Array.from({ length: 500 }, (_, i) => [String(args.offset! + i), "v"]),
+                header: ["c0", "c1"],
+                more: true,
+                totalRows: null,
+                columnCount: 2,
+                truncatedColumns: false,
+                truncatedCells: false,
+                budgetTruncated: false,
+                delimiter: ",",
+                fileBytes: 1,
+              })
+          })
+        },
+      })
+    })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toBeVisible()
+
+    const scroller = page.locator("[data-csv-scroll]")
+    await scroller.evaluate(element => {
+      element.scrollTop = element.scrollHeight * 0.6
+      element.dispatchEvent(new Event("scroll"))
+    })
+    await page.waitForFunction(() => (window as any).__release !== null)
+
+    // 卸载组件（模拟关闭预览），再放行旧请求。
+    await page.evaluate(() => {
+      const target = window as any
+      target.__unmount?.()
+    })
+    const callsBefore = await page.evaluate(() => (window as any).__csvCalls.length as number)
+    await page.evaluate(() => (window as any).__release())
+    await page.waitForTimeout(300)
+    const callsAfter = await page.evaluate(() => (window as any).__csvCalls.length as number)
+    expect(callsAfter, "unmounted preview must not schedule new requests").toBe(callsBefore)
+  })
+
+  // 复验 P2（新）：切片长度可变（100/200 交替）时，驱逐后回退必须精确，
+  // 不能因为「当前屏长」推断前驱而错位（旧实现 1001 → 801，预期 901）。
+  test("back-paging with variable slice lengths never skips rows", async ({ page }: { page: Page }) => {
+    await page.addInitScript(() => {
+      const target = window as any
+      target.isTauri = true
+      target.__csvCalls = []
+      const total = 1_500_000
+      Reflect.set(target, "__TAURI_INTERNALS__", {
+        invoke: (command: string, args: { offset: number; limit: number }) => {
+          if (command !== "read_csv_page") return Promise.reject(new Error("unexpected " + command))
+          target.__csvCalls.push(args.offset)
+          // 起点是 300 的倍数时只回 100 行，其余回 200 行。
+          const length = args.offset % 300 === 0 ? 100 : 200
+          const rows: string[][] = []
+          for (let row = args.offset; row < Math.min(args.offset + length, total); row++) {
+            rows.push([String(row), `v${row}`])
+          }
+          return Promise.resolve({
+            offset: args.offset,
+            rows,
+            header: ["c0", "c1"],
+            more: args.offset + rows.length < total,
+            totalRows: args.offset === 0 ? total : null,
+            columnCount: 2,
+            truncatedColumns: false,
+            truncatedCells: false,
+            budgetTruncated: false,
+            delimiter: ",",
+            fileBytes: 1,
+          })
+        },
+      })
+    })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    // 记录每一屏的首行号，前进若干屏后再逐屏回退，必须原路返回。
+    const starts: number[] = [1]
+    for (let step = 0; step < 20; step++) {
+      await expect(page.locator("[data-csv-page-next]")).toBeEnabled()
+      await page.locator("[data-csv-page-next]").click()
+      const first = Number(await renderedRows(page).first().getAttribute("data-csv-row"))
+      starts.push(first)
+      if (first >= 901) break
+    }
+    expect(starts).toContain(901)
+
+    const back: number[] = []
+    for (let step = starts.length - 1; step > 0; step--) {
+      await expect(page.locator("[data-csv-page-prev]")).toBeEnabled()
+      await page.locator("[data-csv-page-prev]").click()
+      back.push(Number(await renderedRows(page).first().getAttribute("data-csv-row")))
+    }
+    // 回退序列必须与前进序列（去掉最后一屏）完全一致，不能错位。
+    expect(back).toEqual(starts.slice(0, -1).reverse())
   })
 
   // 复验 P2（新）：连续翻 9 屏后回头取第 1 屏，必须重新请求（缓存有行数上限），

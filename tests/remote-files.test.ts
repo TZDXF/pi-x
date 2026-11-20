@@ -292,3 +292,58 @@ test("remote csv counts JSON control-character escapes against the budget", () =
   const next = call("lf-cells.csv", "csv", { offset: first.rows.length, limit: 500 }).data
   expect(next.rows[0][0]).toBe(String(first.rows.length))
 })
+
+// 复验 P1（EOF 边界）：引用块在文件末尾结束、尚未落盘的 CR 仍是内容。
+test("remote csv keeps a CR that was still pending when the file ended", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const cr = String.fromCharCode(13)
+  const quote = String.fromCharCode(34)
+  writeFileSync(join(project, "eof-cr.csv"), ["id,note", "1," + quote + "a" + cr + quote].join(lf))
+  const page = call("eof-cr.csv", "csv").data
+  expect(page.totalRows).toBe(1)
+  expect(page.rows).toEqual([["1", "a" + cr]])
+})
+
+// 复验 P1（连续 CR 边界）：pendingCr 只有一个槽位，连续两个 CR 必须保留。
+test("remote csv keeps consecutive CRs inside one quoted cell", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const cr = String.fromCharCode(13)
+  const quote = String.fromCharCode(34)
+  writeFileSync(join(project, "two-cr.csv"), ["id,note", "1," + quote + "a" + cr + cr + quote, "2,b", ""].join(lf))
+  const page = call("two-cr.csv", "csv").data
+  expect(page.totalRows).toBe(2)
+  expect(page.rows).toEqual([
+    ["1", "a" + cr + cr],
+    ["2", "b"],
+  ])
+})
+
+// 复验 P1：U+0001 / U+001F 是 6 字节 \\uXXXX 转义，旧的「控制字符 +1」估算让整页到 3.12 MB。
+test("remote csv counts six-byte control escapes against the budget", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const quote = String.fromCharCode(34)
+  const cases: [string, number][] = [
+    ["soh", 1],
+    ["us", 0x1f],
+  ]
+  for (const [name, code] of cases) {
+    const unit = String.fromCharCode(code)
+    const cell = unit.repeat(4096)
+    const header = Array.from({ length: 128 }, (_, index) => `c${index}`).join(",")
+    const cells = Array.from({ length: 127 }, () => quote + cell + quote).join(",")
+    const lines = [header]
+    for (let row = 0; row < 3; row++) lines.push(`${row},${cells}`)
+    writeFileSync(join(project, `${name}.csv`), lines.join(lf) + lf)
+
+    const first = call(`${name}.csv`, "csv", { offset: 0, limit: 500 }).data
+    const size = Buffer.byteLength(JSON.stringify(first))
+    console.log(`${name}: ${first.rows.length} rows, ${size} B`)
+    expect(size, `${name} page must fit the 1 MiB budget`).toBeLessThanOrEqual(1024 * 1024)
+    expect(first.budgetTruncated).toBe(true)
+    const next = call(`${name}.csv`, "csv", { offset: first.rows.length, limit: 500 }).data
+    expect(next.rows[0][0]).toBe(String(first.rows.length))
+  }
+})
