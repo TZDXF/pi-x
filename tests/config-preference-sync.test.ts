@@ -26,6 +26,8 @@ const host = vi.hoisted(() => ({
   getOverride: null as null | (() => Promise<{ preferences: Record<string, string>; preferencesRevision?: number }>),
   /** 每次 `app_config_get` 的记录（用于断言「一次权威读取」）。 */
   reads: [] as number[],
+  /** 监听 `pi://reconnected` 的处理器（重连时主动读取）。 */
+  reconnected: undefined as undefined | (() => void),
 
   /** 让 `app_preference_set` 的完成受测试控制（模拟在途写入）。 */
   writeGate: null as null | (() => Promise<number>),
@@ -68,6 +70,7 @@ vi.mock("@/api/transport", () => ({
   },
   listen: async (name: string, handler: (event: { payload: Record<string, unknown> }) => void) => {
     if (name === "pi://app-config-changed") host.changed = handler
+    if (name === "pi://reconnected") host.reconnected = () => handler({ payload: {} })
     return () => {}
   },
 }))
@@ -108,6 +111,7 @@ async function harness(preferences: Record<string, string> = {}, revision = 0, o
   host.failValue = null
   host.getOverride = null
   host.reads = []
+  host.reconnected = undefined
   host.writeGate = null
   host.writeHook = null
   host.writes = []
@@ -270,6 +274,7 @@ test("a delayed reconnect GET never replaces an already applied higher revision"
   // 更新修订的读取才允许纠正丢事件：r8 覆盖后变为 dark。
   host.getOverride = null
   host.reads = []
+  host.reconnected = undefined
   host.preferences = { theme: "dark" }
   host.revision = 8
   await module.refreshFromHost()
@@ -835,6 +840,48 @@ test("a same-value local write after a read starts is still protected", async ()
   // 旧响应不得覆盖：显示仍是 dark，主机也是 dark。
   expect(theme.value.value).toBe("dark")
   expect(host.preferences.theme).toBe("dark")
+})
+
+test("a delayed legacy read missing a key cannot remove a newer value adopted meanwhile", async () => {
+  // 旧后端：读取抓取时主机还没有这个 key，响应返回前另一客户端首次写入并被 WS 采纳。
+  const module = await harness({ locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system", onChange: () => undefined })
+
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  // 期间外部首次写入 theme=dark 并被采纳。
+  host.preferences = { locale: "en", theme: "dark" }
+  broadcast(undefined, host.preferences)
+  expect(theme.value.value).toBe("dark")
+
+  network.resolve({ preferences: { locale: "en" } })
+  expect(await refreshing).toBe(true)
+  // 过期快照的「缺键」同样不能 forget 掉这个值（也不会退回默认 system）。
+  expect(theme.value.value).toBe("dark")
+  // 按既有机制补读收敛到主机真值。
+  await vi.waitFor(() => expect(host.reads.length).toBeGreaterThan(1))
+  expect(theme.value.value).toBe("dark")
+})
+
+test("the ambiguous legacy revert converges automatically without manual refresh", async () => {
+  // 新契约：推送当下保持最新本地意图（light），随后自动权威读取收敛到主机真值（dark）。
+  const module = await harness({ theme: "system", processDetail: "detailed" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const detail = module.createConfigPreference({ key: "processDetail", defaultValue: "detailed" })
+
+  await theme.set("dark")
+  await theme.set("light")
+  expect(host.preferences.theme).toBe("light")
+  broadcast(undefined, { theme: "dark", processDetail: "detailed" })
+  host.preferences = { theme: "dark", processDetail: "concise" }
+  broadcast(undefined, host.preferences)
+  // 推送当下：主题仍保持最新本地意图，其它键正常合入。
+  expect(theme.value.value).toBe("light")
+  expect(detail.value.value).toBe("concise")
+  // 无需手工刷新：自动读取后收敛。
+  await vi.waitFor(() => expect(theme.value.value).toBe("dark"))
+  expect(host.reads.length).toBeGreaterThanOrEqual(2)
 })
 
 test("a legacy host without revisions degrades to bounded FIFO", async () => {

@@ -282,12 +282,11 @@ function replacePreferences(
     const readStartedAt = typeof snapshot.readStartedAt === "number" ? snapshot.readStartedAt : null
     // 读取发起后：主机状态变过（外部推送）**或**出现新的本地写入（成功 / 待确认，哪怕同值）
     // 的 key 都不能被这份旧响应覆盖。
+    // 该 key 在读取发起后变过：只有当旧响应给出的值与我们已知的值**相同**（无冲突）时才
+    // 能采用。缺键（`undefined`）同样是一次冲突 —— 否则会 `forget` 掉读取期间已采纳的
+    // 外部值，让界面退回默认值。
     const isSuperseded = (key: string) =>
-      readStartedAt !== null &&
-      (knownVersions.get(key) ?? 0) > readStartedAt &&
-      // 响应值与我们已经采纳的值一致时没有冲突，不必为它补读。
-      incoming[key] !== undefined &&
-      incoming[key] !== known.get(key)?.raw
+      readStartedAt !== null && (knownVersions.get(key) ?? 0) > readStartedAt && incoming[key] !== known.get(key)?.raw
     // 本地意图（新增成功 / 待确认写入，哪怕同值）在读取发起后推进过：这份响应可能产生于
     // 那笔写入之前，不能拿它覆盖，也不能清掉那笔的待确认记录。
     const hasNewerIntent = (key: string) => readStartedAt !== null && (intentVersions.get(key) ?? 0) > readStartedAt
