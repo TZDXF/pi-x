@@ -527,6 +527,55 @@ test("legacy host early echoes do not mask the next genuine external change", as
   expect(theme.value.value).toBe("system")
 })
 
+test("legacy same-key queued writes match early echoes to the dispatched request", async () => {
+  // 旧后端：每笔写入先广播完整快照、再返回（无修订号），命令按序执行。
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  const gates = [deferred<number>(), deferred<number>()]
+  host.writeGate = () => {
+    const index = host.writes.length - 1
+    // 真实旧端顺序：落盘 → 广播完整快照 → 返回（这里返回无修订号）。
+    const value = host.writes[index]!.value
+    host.preferences = { theme: value }
+    broadcast(undefined, { theme: value })
+    return gates[index]!.promise
+  }
+
+  const first = theme.set("dark")
+  const second = theme.set("light")
+  // 两笔都在排队/执行中：显示跟随最新意图 light。
+  expect(theme.value.value).toBe("light")
+
+  // 第一笔（dark）返回：它的回执已被队首匹配到，不能进 unseen 覆盖后面的 light。
+  gates[0]!.resolve(undefined as unknown as number)
+  await first
+  expect(theme.value.value).toBe("light")
+
+  gates[1]!.resolve(undefined as unknown as number)
+  await second
+  expect(theme.value.value).toBe("light")
+  expect(host.preferences.theme).toBe("light")
+})
+
+test("an older unseen record never outranks a later confirmed write", async () => {
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 第一笔成功但回执没到（进 unseen 队列），第二笔成功且回执已到。
+  host.writeGate = null
+  await theme.set("dark")
+  expect(theme.value.value).toBe("dark")
+  // 第二笔：主机广播了它自己的快照（值 light）后再返回。
+  host.preferences = { theme: "dark" }
+  broadcast(undefined, { theme: "dark" })
+  await theme.set("light")
+  expect(theme.value.value).toBe("light")
+  // 之后真正的外部变更仍可显示，旧记录不会压住它。
+  broadcast(undefined, { theme: "system" })
+  expect(theme.value.value).toBe("system")
+})
+
 test("a legacy host without revisions degrades to bounded FIFO", async () => {
   // 旧后端：写入不返回修订号、事件也不携带 —— 从初始化起就是这种形态。
   const module = await harness({ theme: "system" }, 0, { legacyHost: true })

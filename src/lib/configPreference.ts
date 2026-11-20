@@ -24,8 +24,9 @@ interface ConfigPreferenceOptions<T> {
  * 一起下发（新后端始终输出该字段，包括真实的 `0`）。
  *
  * 模型分三层，互不替代：
- * 1. `known` / `absent`：**主机状态**，按 key 记录「在哪一修订上得知这个值」，以及
- *    「在哪一修订上确认主机没有这个 key」。快照永远按 key 合并进这一层。
+ * 1. `known` / `coverage`：**主机状态**。`known` 按 key 记录「在哪一修订上得知这个值」；
+ *    `coverage` 记住最新一份完整快照的修订与它包含的 key 集合，因此「该修订上主机确实
+ *    没有某个 key」（包括本端从未见过的 key）同样有水位，更旧的快照无法把它复活。
  * 2. `inflight` / `unseen` / `failedOverrides`：**显示遮挡**，只决定此刻的显示值，
  *    不参与「主机状态」的判断。因此慢连接下收到的更新快照照样被记录，命令一完成就
  *    让位给更高修订的外部值。
@@ -46,15 +47,27 @@ interface InflightWrite {
   raw: string
   /** 旧后端：这笔写入的回执快照是否已经途经本端。 */
   echoed: boolean
+  /** 命令是否已经真正发出（写入在本端是按顺序排队的，队首才是正在执行的那一笔）。 */
+  dispatched: boolean
 }
 
 /** 我们已知的主机 preferences（按 key 带上得知时的修订号）。**不是**显示值。 */
 const known = new Map<string, KnownValue>()
-/** 已知「主机在该修订上确实没有这个 key」的证据（key → 修订号）。 */
-const absent = new Map<string, number>()
+/**
+ * 最新一份完整快照的修订号与它列出的 key 集合。
+ * 快照永远是「整表 preferences」，所以「在 rN 上主机没有某个 key」是一份合法证据 ——
+ * 包括本端从未见过的 key（`known` 里没有它的记录）。更旧的快照不能把这类 key 复活。
+ */
+let coverage: { revision: number; keys: Set<string> } | null = null
 /** 命令尚未返回的写入（key → 队列，末尾是最新意图）：只影响显示。 */
 const inflight = new Map<string, InflightWrite[]>()
-/** 旧后端专用：命令已成功、但回执快照还没到的写入（key → raw 队列），按 FIFO 确认。 */
+/**
+ * 旧后端专用：命令已成功、但回执快照还没到的写入（key → raw 队列，末尾是最新一笔）。
+ *
+ * 旧后端按序执行写入、每笔先广播完整快照再返回，所以早到的回执只对应「已经发出的
+ * 队首请求」（见 `inflight` 的 dispatched 标志）；这里的队列只负责在推送到达时按 FIFO
+ * 认领回执，显示只用末尾那一笔（最新一笔尚未确认的本地写入）。
+ */
 const unseen = new Map<string, string[]>()
 /** 宽松写入失败后仍保留在界面上的本地选择；被采纳的主机快照会清掉它。 */
 const failedOverrides = new Map<string, string>()
@@ -108,7 +121,11 @@ function lastOf<T>(map: Map<string, T[]>, key: string): T | undefined {
   return list?.[list.length - 1]
 }
 
-/** 显示用的 raw：在途写入 > 旧后端待回执写入 > 写失败保留值 > 主机状态。 */
+/**
+ * 显示用的 raw：在途写入 > 旧后端待回执写入 > 写失败保留值 > 主机状态。
+ * `unseen` 只保存「已成功但回执还没到」的那一笔（acceptWrite 会整组替换），
+ * 因此它不会盖住之后被确认的更新写入。
+ */
 function effectiveRaw(key: string): string | undefined {
   const pending = lastOf(inflight, key)
   if (pending) return pending.raw
@@ -125,20 +142,23 @@ function effectiveRaw(key: string): string | undefined {
  */
 function adopt(key: string, raw: string, revision: number) {
   const knownRev = known.get(key)?.revision
+  // 我们已知的修订更新 → 旧快照不能回退它。
   if (knownRev != null && typeof revision === "number" && knownRev > revision) return
-  const absentRev = absent.get(key)
-  if (absentRev !== undefined && typeof revision === "number" && revision < absentRev) return
+  // 更旧的快照里没有这个 key，而更新的完整快照里也没有：说明主机那里它已不存在。
+  if (typeof revision === "number" && coverage && revision < coverage.revision && !coverage.keys.has(key)) return
   known.set(key, { raw, revision })
-  absent.delete(key)
 }
 
-/** 记录「主机在该修订上没有这个 key」，并清掉不比它新的已知值。 */
-function recordAbsent(key: string, revision: number) {
-  const current = absent.get(key)
-  if (current !== undefined && current >= revision) return
-  absent.set(key, revision)
-  const knownValue = known.get(key)
-  if (knownValue && knownValue.revision !== null && knownValue.revision <= revision) known.delete(key)
+/** 记录一份完整快照的覆盖范围（修订 + 它列出的 key）。 */
+function recordCoverage(revision: number, keys: Set<string>) {
+  if (coverage && revision < coverage.revision) return
+  coverage = { revision, keys }
+  // 该修订上不存在的 key，其已知值一律作废。
+  for (const key of [...known.keys()]) {
+    if (keys.has(key)) continue
+    const knownValue = known.get(key)!
+    if (knownValue.revision !== null && knownValue.revision <= revision) known.delete(key)
+  }
 }
 
 function clearFailedOverrides() {
@@ -170,10 +190,7 @@ function replacePreferences(
       // 数字快照已覆盖这笔写入的更早阶段，之后不再需要 FIFO 确认。
       unseen.delete(key)
     }
-    for (const key of [...known.keys()]) {
-      if (Object.prototype.hasOwnProperty.call(incoming, key)) continue
-      recordAbsent(key, revision)
-    }
+    recordCoverage(revision, new Set(keys))
   } else if (snapshot.authoritative) {
     // 旧后端主动读取：整表即主机真值。命令已返回的旧写入不再逐笔确认 —— 否则要读多次，
     // 且键被外部删掉时也永远不会回落到默认值。
@@ -187,19 +204,26 @@ function replacePreferences(
     }
   } else {
     // 旧后端推送：可能既是「我们某笔写入的回执」，也可能是别的客户端的真实变更。
+    //
+    // 旧后端的写入按顺序执行（本端也是排队发出），因此早到的回执只可能对应
+    // **队首那笔已经发出的请求**；拿队尾的「最新意图」去匹配会把第一笔的回执当成外部
+    // 变更，进而让它在 unseen 里盖住后面被确认的写入。这里只匹配队首。
     for (const key of keys) {
-      const pending = lastOf(inflight, key)
-      if (pending) {
+      const executing = inflight.get(key)?.find(entry => entry.dispatched)
+      if (executing) {
         // 回执先于命令结果到达：标记它，成功后就不必再等 FIFO 确认。
-        if (pending.raw === incoming[key]) pending.echoed = true
+        if (executing.raw === incoming[key]) executing.echoed = true
         continue
       }
       const waiting = unseen.get(key)
-      if (waiting?.length) {
+      // 推送值与队首那笔（最早的未确认写入）相同 → 认领它的回执。
+      if (waiting?.length && waiting[0] === incoming[key]) {
         if (waiting.length > 1) unseen.set(key, waiting.slice(1))
         else unseen.delete(key)
-        if (unseen.has(key)) continue
+        continue
       }
+      // 否则是别的客户端的真实变更（或比我们记录更新的状态）：采用，并作废旧记录。
+      unseen.delete(key)
       adopt(key, incoming[key]!, -1)
     }
   }
@@ -210,11 +234,20 @@ function replacePreferences(
   for (const migrate of migrationCallbacks) migrate()
 }
 
-/** Serialize writes within this client; the backend merges each key into the latest config. */
-function persistRawValue(key: string, raw: string, legacyKey?: string): Promise<number | undefined> {
+/**
+ * Serialize writes within this client; the backend merges each key into the latest config.
+ * `onDispatch` 在这笔命令真正发出前触发（排队等待期间还没有发出，旧后端的早到回执不可能对应它）。
+ */
+function persistRawValue(
+  key: string,
+  raw: string,
+  legacyKey: string | undefined,
+  onDispatch: () => void,
+): Promise<number | undefined> {
   const write = writeQueue
     .catch(() => {})
     .then(async () => {
+      onDispatch()
       const { saveConfigPreference } = await import("@/api/client/config")
       const revision = await saveConfigPreference(key, raw)
       removeLegacyValue(legacyKey)
@@ -230,13 +263,22 @@ function persistRawValue(key: string, raw: string, legacyKey?: string): Promise<
 /** 主机接受了这笔写入：只更新**这一个 key** 的已知修订（绝不动完整快照的水位）。 */
 function acceptWrite(key: string, raw: string, revision: number | undefined, echoed: boolean) {
   if (revision === undefined) {
-    // 旧后端：命令成功即主机已接受；回执没到达时进 FIFO 队列，由推送 / 主动读取确认。
+    // 旧后端：命令成功即主机已接受。
     adopt(key, raw, -1)
-    if (!echoed) unseen.set(key, [...(unseen.get(key) ?? []), raw])
+    if (echoed) {
+      // 回执已经途经本端：主机状态已越过这笔写入，之前的「待回执」记录全部作废
+      //（否则旧记录会盖住这次已确认的更新）。
+      unseen.delete(key)
+    } else {
+      // 回执还没到：记账等待 FIFO 认领；显示只用末尾那笔（最新意图）。
+      unseen.set(key, [...(unseen.get(key) ?? []), raw])
+    }
     notify()
     return
   }
   if (revision > seenRevision) seenRevision = revision
+  // 带修订号的写入：数字快照已经能表达主机状态，旧后端队列不再需要。
+  unseen.delete(key)
   adopt(key, raw, revision)
   notify()
 }
@@ -251,7 +293,7 @@ function acceptWrite(key: string, raw: string, revision: number | undefined, ech
 async function commit(key: string, raw: string, legacyKey: string | undefined, mode: { optimistic: boolean }) {
   // 新写入接管这个 key：之前写失败保留的旧选择不再显示。
   failedOverrides.delete(key)
-  const entry: InflightWrite | null = mode.optimistic ? { raw, echoed: false } : null
+  const entry: InflightWrite | null = mode.optimistic ? { raw, echoed: false, dispatched: false } : null
   if (entry) {
     inflight.set(key, [...(inflight.get(key) ?? []), entry])
     notify()
@@ -266,7 +308,9 @@ async function commit(key: string, raw: string, legacyKey: string | undefined, m
     else inflight.delete(key)
   }
   try {
-    const revision = await persistRawValue(key, raw, legacyKey)
+    const revision = await persistRawValue(key, raw, legacyKey, () => {
+      if (entry) entry.dispatched = true
+    })
     acceptWrite(key, raw, revision, entry?.echoed ?? false)
   } catch (error) {
     dropInflight()
