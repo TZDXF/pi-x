@@ -13,10 +13,12 @@ import {
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
   touchScrollsConversation,
+  TOUCH_SCROLL_CLAIM_PX,
   travelClaims,
 } from '@/lib/scrollIntent'
 import type { InputScopeCloser } from '@/lib/scrollWrites'
 import {
+  appScrollHasMoved,
   beginAppScroll,
   beginUserInput,
   consumeScrollWrite,
@@ -275,8 +277,23 @@ function handleScroll(event: Event) {
     // or an app-initiated scroll means the reader did not move it, so the
     // downward check below must not re-arm following on that account (TZD-135).
     const recordedWrite = consumeScrollWrite(scroll, scroll.scrollTop)
+    // A navigation that has already moved the viewport is an animation that is
+    // *running*: it keeps owning the movement it produces. One that never moved
+    // anything was cancelled by the browser before its first frame and is only a
+    // leftover mark — but it stays harmless until a touch gesture is actually
+    // pending, because until then there is no reader to protect from it.
+    const navigationMoved = appScrollHasMoved(scroll)
     const appNavigation = isAppScrolling(scroll, scroll.scrollTop)
-    const appOwned = recordedWrite || appNavigation
+    const gesturePending = touchCandidate || touchPointerId !== undefined
+    const staleNavigation = appNavigation && !navigationMoved && gesturePending
+    if (staleNavigation) finishAppScroll(scroll)
+    const appOwned = recordedWrite || (appNavigation && !staleNavigation)
+    // While an animation is running, its own movement re-bases the baselines so it
+    // can never accumulate into a touch claim; app writes do the same.
+    if (appOwned) {
+      touchStartTop = scroll.scrollTop
+      if (touchCandidate) touchCandidateTop = scroll.scrollTop
+    }
     // A touch claims the viewport only once **this viewport** moved vertically, and
     // only for a scroll no app write accounts for: finger coordinates prove nothing,
     // and a streaming pin or a compensation write stays the app's even while a
@@ -287,21 +304,31 @@ function handleScroll(event: Event) {
     // (`touchCandidate`) may override that mark: the browser ended the request, so
     // a stale mark must not block a real drag.
     //
-    // A cancelled gesture is confirmed by movement the browser produced *after* the
-    // cancel, and only when the finger's own direction corroborates it: whatever an
-    // app animation did is not the gesture's, and a gesture that never moved
-    // vertically (a sideways swipe over a horizontal ancestor) cannot have scrolled
-    // the conversation at all. A cancelled gesture may override a pending mark —
-    // the browser ended that request — so a stale mark never blocks a real drag
-    // (TZD-135 review).
+    // A *live* press is corroborated by the finger: the reader drags the content,
+    // so the viewport has to move opposite to the finger. Finger data is still
+    // arriving there, and a purely sideways swipe has no vertical direction at all.
+    //
+    // A *cancelled* gesture has no such data: the platform stops delivering moves at
+    // the cancel, so the direction seen before it describes an earlier movement —
+    // a sideways pan's vertical jitter, or a drag the reader reversed after the
+    // browser took over. It can never be evidence for the scrolls that follow
+    // (TZD-135 review). What separates the two cases instead is the app mark:
+    //
+    // - a *running* animation (it already moved the viewport) keeps owning the
+    //   movement it produces, so a cancelled gesture may not claim it;
+    // - a mark that never moved anything is a leftover of a request the browser
+    //   already cancelled. It is dropped above, which both frees this frame for the
+    //   following check and lets the gesture claim movement in either direction.
     const candidateTravel = scroll.scrollTop - touchCandidateTop
     const pressTravel = scroll.scrollTop - touchStartTop
-    const corroborated = (travel: number) => travelClaims(travel, touchTravelDirection)
+    const navigationOwns = appNavigation && !staleNavigation
     const claims =
       !touchScrolled &&
       !recordedWrite &&
-      ((touchCandidate && corroborated(candidateTravel)) ||
-        (touchPointerId !== undefined && !appNavigation && corroborated(pressTravel)))
+      ((touchCandidate && !navigationOwns && Math.abs(candidateTravel) >= TOUCH_SCROLL_CLAIM_PX) ||
+        (touchPointerId !== undefined &&
+          !navigationOwns &&
+          travelClaims(pressTravel, touchTravelDirection)))
     if (claims) claimTouchGesture(scroll)
     // Once claimed, the gesture owns the scrolls it causes (momentum included) and
     // it cancels any programmatic animation still pending (TZD-135 review).
