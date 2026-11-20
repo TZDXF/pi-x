@@ -114,16 +114,22 @@ function resetMetadata() {
 }
 
 function applyChunk(page: CsvPage) {
-  if (page.header) header.value = page.header
-  columnCount.value = Math.max(columnCount.value, page.columnCount, page.header?.length ?? 0)
   if (page.offset === 0) {
-    // 首页是元数据的唯一来源：总行数可能因为文件被改小而变小，必须覆盖而不是取大。
+    // 首页是元数据的唯一来源：总行数/列数/截断标记可能因为文件被改小、改窄而变小，
+    // 必须**覆盖**而不是取大（旧实现取 max，于是 8 列缩到 1 列后仍渲染 8 个表头）。
+    header.value = page.header
+    columnCount.value = Math.max(page.columnCount, page.header?.length ?? 0)
     totalRows.value = page.totalRows
     delimiter.value = page.delimiter
+    truncatedColumns.value = page.truncatedColumns
+    truncatedCells.value = page.truncatedCells
+  } else {
+    if (page.header) header.value = page.header
+    columnCount.value = Math.max(columnCount.value, page.columnCount, page.header?.length ?? 0)
+    truncatedColumns.value ||= page.truncatedColumns
+    truncatedCells.value ||= page.truncatedCells
   }
   fileBytes.value = page.fileBytes
-  truncatedColumns.value ||= page.truncatedColumns
-  truncatedCells.value ||= page.truncatedCells
   budgetTruncated.value ||= page.budgetTruncated
   if (!page.rows.length) {
     // 空段：该 offset 之后没有数据了。
@@ -191,10 +197,22 @@ watch(
 const virtual = computed(() => csvUsesVirtualScroll(rowCount.value))
 /** First row index of the screen shown in paged mode. */
 const pageStart = ref(0)
+/**
+ * Length of the screen currently shown in paged mode. Slices can be shorter than
+ * [`CSV_PAGE_ROWS`] (the backend trims them to its byte budget), and paging must
+ * use the real length both forward and back.
+ */
+const lastScreenRows = ref(CSV_PAGE_ROWS)
 /** Row that maps to `top: 0` inside the scroll surface. */
 const baseRow = computed(() => (virtual.value ? 0 : pageStart.value))
+/** Rows in the current screen (a byte-trimmed slice can be shorter than 500). */
+const currentChunk = computed(() => chunkAt(baseRow.value))
+const currentScreenRows = computed(() => currentChunk.value?.rows.length ?? lastScreenRows.value)
+watch(currentChunk, chunk => {
+  if (chunk?.rows.length) lastScreenRows.value = chunk.rows.length
+})
 const visibleRowCount = computed(() =>
-  virtual.value ? rowCount.value : Math.max(0, Math.min(rowsPerChunk, rowCount.value - baseRow.value)),
+  virtual.value ? rowCount.value : Math.max(0, Math.min(currentScreenRows.value, rowCount.value - baseRow.value)),
 )
 const bodyHeight = computed(() => csvBodyHeight(visibleRowCount.value))
 
@@ -207,11 +225,10 @@ const rowWindow = computed(() => {
 
 const desiredWindow = computed<{ start: number; end: number }>(() => {
   void tick.value
-  if (virtual.value) {
-    const { start, end } = rowWindow.value
-    return { start: Math.max(0, start - CSV_OVERSCAN), end: end + CSV_OVERSCAN }
-  }
-  return { start: baseRow.value, end: Math.min(baseRow.value + rowsPerChunk, rowCount.value) }
+  const { start, end } = rowWindow.value
+  // 两种模式都只取「视口 + overscan」。分页模式曾把整个 500 行屏都算进缺口，
+  // 于是后端每次只回 10 行时要连发 50 个请求才允许翻屏（复验 P2）。
+  return { start: Math.max(0, start - CSV_OVERSCAN), end: end + CSV_OVERSCAN }
 })
 
 const renderedColumns = computed(() =>
@@ -307,6 +324,7 @@ async function requestChunk(offset: number) {
   const startedIn = generation
   pending.set(offset, rowsPerChunk)
   loading.value = true
+
   try {
     const page = await readCsvPage(props.project, props.path, offset, rowsPerChunk)
     if (startedIn !== generation) return
@@ -319,7 +337,10 @@ async function requestChunk(offset: number) {
     // 计数只随请求结束而释放，跨代也一样：刷新时旧请求仍在占用名额。
     pending.delete(offset)
     loading.value = pending.size > 0
-    if (startedIn === generation) pump()
+    // 关键：失败/丢弃的那一代也必须唤醒**当前**排队的缺口。旧实现把 pump()
+    // 关在 `startedIn === generation` 里，刷新后旧请求结束时名额已释放、队列
+    // 却再没人推，画面就一直空白（复验 P1）。
+    pump()
   }
 }
 
@@ -423,18 +444,15 @@ function goToScreen(offset: number) {
   pump()
 }
 
-/** Rows in the current screen (a byte-trimmed page can be shorter than 500). */
-const currentChunk = computed(() => chunkAt(baseRow.value))
-const currentScreenRows = computed(() => currentChunk.value?.rows.length ?? rowsPerChunk)
-
-/** Row index of the screen before `baseRow`; uses real chunk lengths, not 500. */
+/** Row index of the screen before `baseRow`; uses the real screen length, not 500. */
 function previousScreenOffset(): number {
-  const ending = chunks.value
+  const previous = chunks.value
     .filter(chunk => chunk.offset + chunk.rows.length <= baseRow.value)
-    .sort((a, b) => b.offset - a.offset)
-  const previous = ending[0]
+    .sort((a, b) => b.offset - a.offset)[0]
   if (previous && previous.offset + previous.rows.length === baseRow.value) return previous.offset
-  return Math.max(0, baseRow.value - rowsPerChunk)
+  // 前驱已被逐出：按**本次会话实际见到的屏长**回退，而不是固定 500（后端按预算
+  // 只回 150 行时，固定 500 会跳到 1201→701 这种错位）。
+  return Math.max(0, baseRow.value - lastScreenRows.value)
 }
 
 const canPageBack = computed(() => baseRow.value > 0)

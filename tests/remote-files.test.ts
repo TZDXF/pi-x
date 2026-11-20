@@ -245,3 +245,50 @@ test("remote csv charges the header to the page budget", () => {
   expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024)
   expect(page.rows).toHaveLength(1)
 })
+
+// 复验 P1（两端同口径，带超时保护）：字段中间的字面引号曾让 Node 扫描原地打转。
+test("remote csv terminates on a literal quote in the middle of a field", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const quote = String.fromCharCode(34)
+  writeFileSync(join(project, "mid-quote.csv"), ["id,note", "1,a" + quote + "b", ""].join(lf))
+  const page = call("mid-quote.csv", "csv")
+  expect(page.data.rows).toEqual([["1", 'a"b']])
+  expect(page.data.totalRows).toBe(1)
+})
+
+// 复验 P1（两端同口径）：引用块内的孤立 CR 是内容，收尾引号后不能吞掉下一条记录。
+test("remote csv keeps a lone CR inside quotes from swallowing the next record", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const cr = String.fromCharCode(13)
+  const quote = String.fromCharCode(34)
+  writeFileSync(join(project, "lone-cr.csv"), ["id,note", "1," + quote + "a" + cr + quote, "2,b", ""].join(lf))
+  const page = call("lone-cr.csv", "csv")
+  expect(page.data.totalRows).toBe(2)
+  expect(page.data.rows).toEqual([
+    ["1", "a" + cr],
+    ["2", "b"],
+  ])
+})
+
+// 复验 P1：控制字符（LF）JSON 转义后每字符 2 字节，必须计入页预算。
+test("remote csv counts JSON control-character escapes against the budget", () => {
+  const { project, call } = fixture()
+  const lf = String.fromCharCode(10)
+  const quote = String.fromCharCode(34)
+  const columns = 128
+  const cell = lf.repeat(4096)
+  const header = Array.from({ length: columns }, (_, index) => `c${index}`).join(",")
+  const cells = Array.from({ length: columns - 1 }, () => quote + cell + quote).join(",")
+  const lines = [header]
+  for (let row = 0; row < 5; row++) lines.push(`${row},${cells}`)
+  writeFileSync(join(project, "lf-cells.csv"), lines.join(lf) + lf)
+
+  const first = call("lf-cells.csv", "csv", { offset: 0, limit: 500 }).data
+  const size = Buffer.byteLength(JSON.stringify(first))
+  expect(size).toBeLessThanOrEqual(1024 * 1024)
+  expect(first.budgetTruncated).toBe(true)
+  const next = call("lf-cells.csv", "csv", { offset: first.rows.length, limit: 500 }).data
+  expect(next.rows[0][0]).toBe(String(first.rows.length))
+})

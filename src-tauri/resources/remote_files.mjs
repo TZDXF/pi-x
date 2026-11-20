@@ -102,11 +102,19 @@ function sniffDelimiter(head, relative) {
   }
 }
 
-/** 单元格成本：UTF-8 字节（不是 UTF-16 长度）+ JSON 引号 + 需转义的字符。 */
+/**
+ * 单元格序列化成本：UTF-8 字节 + JSON 引号 + 需要转义的字符。JSON 会把引号和
+ * 反斜杠转成 2 字节，把每个控制字符（LF / CR / TAB / 其他 C0 与 DEL）转成 2
+ * 字节以上——只算引号和反斜杠会让「整页都是 LF 单元格」少算一半（实测 2.08 MB
+ * 对 1 MiB 预算）。与 Rust 侧 `cell_cost` 同口径。
+ */
 function cellCost(cell) {
   const bytes = Buffer.byteLength(cell, "utf8")
   let escapes = 0
-  for (const char of cell) if (char === '"' || char === "\\") escapes += 1
+  for (const char of cell) {
+    const code = char.charCodeAt(0)
+    if (char === '"' || char === "\\" || code < 0x20 || code === 0x7f) escapes += 1
+  }
   return bytes + 3 + escapes
 }
 const rowCost = row => row.reduce((total, cell) => total + cellCost(cell), 0)
@@ -268,39 +276,42 @@ function readCsv({ file, relative, offset, limit }) {
           atBoundary = false
         }
         const byte = buffer[index]
-        if (byte === 34 && parser.atFieldStart) {
-          parser.inQuotes = true
-          parser.atFieldStart = false
-          parser.started = true
+        // 引号内的引号前瞻：块内 `""` 是字面引号，单个引号结束引用块。
+        // 收尾引号之前待处理的 CR 属于单元格内容，否则它会与记录分隔 LF 配对，
+        // 把下一条记录吞进同一格。
+        if (parser.pendingQuote) {
+          parser.pendingQuote = false
+          if (parser.pendingCr) {
+            parser.pendingCr = false
+            parser.push(13)
+          }
+          if (byte === 34) { parser.push(34); index += 1; continue }
+          parser.inQuotes = false
+        }
+        if (parser.inQuotes) {
+          if (byte === 34) parser.pendingQuote = true
+          else if (byte === 13) parser.pendingCr = true
+          else {
+            if (parser.pendingCr) {
+              parser.pendingCr = false
+              if (byte === 10) { parser.push(10); index += 1; continue }
+              parser.push(13)
+            }
+            parser.push(byte)
+          }
           index += 1
           continue
         }
-        if (parser.inQuotes || parser.pendingQuote) {
-          if (parser.pendingQuote) {
-            parser.pendingQuote = false
-            if (byte === 34) { parser.push(34); index += 1; continue }
-            parser.inQuotes = false
-          }
-          if (parser.inQuotes) {
-            if (byte === 34) parser.pendingQuote = true
-            else if (byte === 13) parser.pendingCr = true
-            else {
-              if (parser.pendingCr) {
-                parser.pendingCr = false
-                if (byte === 10) { parser.push(10); index += 1; continue }
-                parser.push(13)
-              }
-              parser.push(byte)
-            }
-            index += 1
-            continue
-          }
+        // 字段起始处的引号开启引用块；字段中间的字面引号是普通内容，必须在这里
+        // 被消耗掉，否则快路径遇到引号就停下，扫描原地打转。
+        if (byte === 34) {
+          if (parser.atFieldStart) {
+            parser.inQuotes = true
+            parser.started = true
+          } else parser.push(34)
+          parser.atFieldStart = false
+          index += 1
           continue
-        }
-        if (parser.pendingCr) {
-          parser.pendingCr = false
-          if (byte === 10) { parser.push(10); index += 1; continue }
-          parser.push(13)
         }
         if (byte === 13) { index += 1; continue }
         if (byte === 10) {

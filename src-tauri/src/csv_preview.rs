@@ -335,8 +335,17 @@ impl RowParser {
 
 /// Rough serialized size of one cell: the UTF-8 bytes, the quotes JSON adds,
 /// and one byte per character that needs escaping.
+/// Rough serialized size of one cell: the UTF-8 bytes, the quotes JSON adds,
+/// and one byte per character that needs an escape. JSON escapes `"` and `\\`
+/// as two bytes, and every control character (`\n`, `\r`, `\t`, other C0)
+/// as two bytes or more — counting only quotes/backslashes under-counted a page
+/// full of LF cells by 2x (2.08 MB observed against a 1 MiB budget).
 fn cell_cost(cell: &str) -> usize {
-    cell.len() + 3 + cell.bytes().filter(|b| *b == b'"' || *b == b'\\').count()
+    let escapes = cell
+        .chars()
+        .filter(|c| *c == '"' || *c == '\\' || (*c as u32) < 0x20 || *c == '\u{7f}')
+        .count();
+    cell.len() + 3 + escapes
 }
 
 fn row_cost(row: &[String]) -> usize {
@@ -423,66 +432,70 @@ fn scan<R: Read>(
                 parser.begin_row(header.is_none() || windowed);
                 at_boundary = false;
             }
+
             let byte = chunk[i];
-            // 引号内：逐字节处理（需要 CRLF/quoted-quote 的前瞻状态）。
-            if parser.in_quotes || parser.pending_quote {
-                if parser.pending_quote {
-                    parser.pending_quote = false;
-                    if byte == b'"' {
-                        parser.push(b'"');
-                        i += 1;
-                        continue;
-                    }
-                    parser.in_quotes = false;
+
+            // 引号内的引号前瞻：块内 `""` 是字面引号，单个引号结束引用块。
+            // 收尾引号之前待处理的 CR 属于单元格内容（`"a<CR>"` 的单元格就是 `a<CR>`），
+            // 否则它会与后面的记录分隔 LF 配对，把下一条记录吞进同一格。
+            if parser.pending_quote {
+                parser.pending_quote = false;
+                if parser.pending_cr {
+                    parser.pending_cr = false;
+                    parser.push(b'\r');
                 }
-                if parser.in_quotes {
-                    if byte == b'"' {
-                        parser.pending_quote = true;
-                    } else if byte == b'\r' {
-                        parser.pending_cr = true;
-                    } else {
-                        if parser.pending_cr {
-                            parser.pending_cr = false;
-                            if byte == b'\n' {
-                                // 单元格内 CRLF 折叠成一个 LF。
-                                parser.push(b'\n');
-                                i += 1;
-                                continue;
-                            }
-                            parser.push(b'\r');
-                        }
-                        parser.push(byte);
-                    }
+                if byte == b'"' {
+                    parser.push(b'"');
                     i += 1;
                     continue;
                 }
-                // 引用块刚结束：当前字节按普通内容重放，不再前进索引。
+                parser.in_quotes = false;
+            }
+
+            // 引用块内：`<CR><LF>` 折叠成一个 LF，其余字节原样保留（CR 也算内容）。
+            if parser.in_quotes {
+                if byte == b'"' {
+                    parser.pending_quote = true;
+                } else if byte == b'\r' {
+                    parser.pending_cr = true;
+                } else {
+                    if parser.pending_cr {
+                        parser.pending_cr = false;
+                        if byte == b'\n' {
+                            parser.push(b'\n');
+                            i += 1;
+                            continue;
+                        }
+                        parser.push(b'\r');
+                    }
+                    parser.push(byte);
+                }
+                i += 1;
                 continue;
             }
-            if parser.pending_cr {
-                parser.pending_cr = false;
-                if byte == b'\n' {
-                    parser.push(b'\n');
-                    i += 1;
-                    continue;
-                }
-                parser.push(b'\r');
-            }
-            match byte {
-                b'"' if parser.at_field_start => {
+
+            // 字段起始处的引号开启引用块；字段中间的字面引号是普通内容。
+            // 后者必须在这里被消耗掉，否则扫描会在同一位置原地打转
+            // （复验的 2 秒超时卡死即此）。
+            if byte == b'"' {
+                if parser.at_field_start {
                     parser.in_quotes = true;
-                    parser.at_field_start = false;
                     parser.started = true;
-                    i += 1;
-                    continue;
+                } else {
+                    parser.push(b'"');
                 }
+                parser.at_field_start = false;
+                i += 1;
+                continue;
+            }
+
+            match byte {
                 b'\r' => {
                     // CRLF：CR 属于行尾分隔，不算记录内容。
                     i += 1;
                     continue;
                 }
                 b'\n' => {
-                    // 普通行内的 LF 结束记录；引用块内的 LF 已在上面处理。
                     i += 1;
                     if !parser.started && parser.field_count == 0 {
                         at_boundary = true;
@@ -1114,5 +1127,96 @@ mod perf_tests {
             "one page must fit the SSH exec output limit"
         );
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod repro_tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::time::{Duration, Instant};
+
+    fn page(csv: &str, offset: u64, limit: u64) -> CsvPage {
+        let sniff = sniff_delimiter(csv.as_bytes(), "data.csv");
+        scan(
+            &mut Cursor::new(csv.as_bytes()),
+            &sniff,
+            offset,
+            limit,
+            csv.len() as u64,
+        )
+        .unwrap()
+    }
+
+    /// 复验 P1：字段中间的字面引号曾让扫描原地打转（探针 2s 超时、无输出）。
+    #[test]
+    fn a_literal_quote_mid_field_never_stalls_the_scan() {
+        let started = Instant::now();
+        let out = page("id,note\n1,a\"b\n", 0, 10);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "scan must terminate quickly, took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(out.total_rows, Some(1));
+        assert_eq!(out.rows, vec![vec!["1".to_string(), "a\"b".to_string()]]);
+        // 连续多个字面引号同样不能卡住。
+        let started = Instant::now();
+        let many = page("id\n1\na\"\"\"\"b\n", 0, 10);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(many.rows.len(), 2);
+    }
+
+    /// 复验 P1：引用块内孤立 CR 曾是内容，收尾引号后却与记录分隔 LF 配对，
+    /// 把下一条记录吞进同一格。
+    #[test]
+    fn a_lone_cr_inside_quotes_never_swallows_the_next_record() {
+        let out = page("id,note\n1,\"a\r\"\n2,b\n", 0, 10);
+        assert_eq!(out.total_rows, Some(2));
+        assert_eq!(
+            out.rows,
+            vec![
+                vec!["1".to_string(), "a\r".to_string()],
+                vec!["2".to_string(), "b".to_string()]
+            ]
+        );
+    }
+
+    /// 复验 P1：JSON 控制字符（LF 等）转义后每字符 2 字节，旧估算只算双引号和
+    /// 反斜杠，128 列 × 4096 个 LF 的首页实测 2.08 MB，远超 1 MiB 预算。
+    #[test]
+    fn control_characters_count_against_the_page_budget() {
+        let cell = "\n".repeat(CSV_CELL_MAX_CHARS);
+        let header = (0..CSV_MAX_COLUMNS)
+            .map(|i| format!("c{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let cells = (0..CSV_MAX_COLUMNS - 1)
+            .map(|_| format!("\"{cell}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut csv = String::from(&header);
+        csv.push('\n');
+        for row in 0..3 {
+            csv.push_str(&format!("{row},{cells}\n"));
+        }
+        let out = page(&csv, 0, 500);
+        let serialized = serde_json::to_vec(&out).unwrap().len();
+        println!(
+            "control-char page: {} rows, {} B",
+            out.rows.len(),
+            serialized
+        );
+        assert!(
+            serialized <= CSV_PAGE_MAX_BYTES,
+            "serialized page {serialized} must stay inside {CSV_PAGE_MAX_BYTES}"
+        );
+        assert!(out.budget_truncated);
+        let next = page(&csv, out.rows.len() as u64, 500);
+        assert_eq!(
+            next.rows[0][0],
+            out.rows.len().to_string(),
+            "no row skipped by the budget"
+        );
     }
 }

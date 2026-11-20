@@ -108,21 +108,25 @@ async function mockBackendPages(page: Page, options: FakeOptions) {
     target.__csvShrinkTo = (rows: number) => {
       target.__csvTotal = rows
     }
-    const columns = config.columns ?? 4
-    const header = Array.from({ length: columns }, (_, index) => `c${index}`)
+    target.__csvColumns = config.columns ?? 4
+    target.__csvSetColumns = (cols: number) => {
+      target.__csvColumns = cols
+    }
+    const header = () => Array.from({ length: target.__csvColumns as number }, (_, index) => `c${index}`)
     const pageOf = (offset: number, limit: number) => {
       const rows: string[][] = []
       const total = target.__csvTotal as number
+      const width = target.__csvColumns as number
       for (let row = offset; row < Math.min(offset + limit, total); row++) {
-        rows.push(Array.from({ length: columns }, (_, index) => (index === 0 ? String(row) : `v${row}_${index}`)))
+        rows.push(Array.from({ length: width }, (_, index) => (index === 0 ? String(row) : `v${row}_${index}`)))
       }
       return {
         offset,
         rows,
-        header,
+        header: header(),
         more: offset + rows.length < total,
         totalRows: offset === 0 ? total : null,
-        columnCount: columns,
+        columnCount: width,
         truncatedColumns: false,
         truncatedCells: false,
         budgetTruncated: rows.length < Math.min(limit, total - offset),
@@ -451,6 +455,99 @@ test.describe("csv table preview", () => {
 
     await page.locator("[data-csv-page-prev]").click()
     await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+  })
+
+  // 复验 P1（新）：旧代请求结束时必须唤醒新代队列。场景：两个请求在途 → 刷新
+  // （回到顶部）→ 旧请求才结束。旧实现只在同代 finally 里 pump()，名额释放后
+  // 画面一直空白，必须手工滚动才恢复。
+  test("finishing stale requests still wakes the refreshed queue", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: VIRTUAL_ROWS, delayMs: PAGE_DELAY })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toBeVisible()
+
+    const scroller = page.locator("[data-csv-scroll]")
+    // 跳到远处，让两个请求都挂住。
+    for (const fraction of [0.25, 0.65]) {
+      await scroller.evaluate((element, ratio) => {
+        element.scrollTop = element.scrollHeight * ratio
+        element.dispatchEvent(new Event("scroll"))
+      }, fraction)
+    }
+    await page.waitForTimeout(100)
+    expect(await page.evaluate(() => (window as any).__csvActive as number)).toBeGreaterThan(0)
+
+    // 回到顶部并刷新：新代排队的 0 号缺口必须被旧请求结束后的那次唤醒带走。
+    await scroller.evaluate(element => {
+      element.scrollTop = 0
+      element.dispatchEvent(new Event("scroll"))
+    })
+    await page.evaluate(() => (window as any).__bumpRevision())
+
+    // 不手动滚动：等旧请求全部结束 + 新代补齐。
+    await page.waitForTimeout(PAGE_DELAY * 4)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+    expect(await renderedRows(page).count()).toBeGreaterThan(0)
+    const maxConcurrent = await page.evaluate(() => (window as any).__csvMaxConcurrent as number)
+    expect(maxConcurrent).toBeLessThanOrEqual(2)
+  })
+
+  // 复验 P2（新）：每次只回 10 行时，首屏「下一屏」可用前不应已经打满 50 个请求。
+  test("a tiny slice size does not prefetch the whole 500-row screen", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: PAGED_ROWS, rowsPerPage: 10, delayMs: 5 })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+    await page.waitForTimeout(400)
+
+    const calls = await page.evaluate(() => (window as any).__csvCalls.length as number)
+    // 只取视口（~27 行 + overscan）所需的几个 10 行片段，而不是整屏 500 行。
+    expect(calls, `prefetched ${calls} slices before paging`).toBeLessThanOrEqual(10)
+
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "11")
+  })
+
+  // 复验 P2（新）：前驱被逐出后按**实际屏长**回退，不跳行。
+  test("paging back without a cached predecessor uses the real screen length", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: PAGED_ROWS, rowsPerPage: 150, delayMs: 5 })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    for (let step = 0; step < 8; step++) {
+      await expect(page.locator("[data-csv-page-next]")).toBeEnabled()
+      await page.locator("[data-csv-page-next]").click()
+    }
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1201")
+
+    // 8 屏 150 行已超过缓存上限（3000 行），第 1 屏与第 2 屏都应被逐出。
+    for (let step = 0; step < 8; step++) {
+      await expect(page.locator("[data-csv-page-prev]")).toBeEnabled()
+      await page.locator("[data-csv-page-prev]").click()
+    }
+    // 回退步长必须是 150，而不是固定 500：8 次回退 = 1201 → 1，不出现 701 之类的错位。
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+  })
+
+  // 复验 P2（新）：文件从 8 列缩到 1 列后刷新，不能残留 8 个表头。
+  test("a refresh after the file got narrower drops the stale columns", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: 5000, columns: 8, delayMs: 20 })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(csvColumnHeaders(page)).toHaveCount(8)
+
+    await page.evaluate(() => {
+      const target = window as any
+      target.__csvSetColumns(1)
+      target.__bumpRevision()
+    })
+
+    await expect(csvColumnHeaders(page)).toHaveCount(1)
+    await expect(page.locator("[data-csv-preview]")).toContainText("1 columns")
+    const firstRowCells = await renderedRows(page).first().locator("> div").count()
+    // 行号单元格 + 剩下的一列（Playwright 的 expect 只接受一个参数）。
+    expect(firstRowCells, "row-number cell + the single remaining column").toBe(2)
   })
 
   // 复验 P2（新）：连续翻 9 屏后回头取第 1 屏，必须重新请求（缓存有行数上限），
