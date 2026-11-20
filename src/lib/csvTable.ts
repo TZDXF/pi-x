@@ -339,3 +339,41 @@ export function parseCsvPage(
     fileBytes: parsed.fileBytes,
   }
 }
+
+/**
+ * Screen start offsets visited for the file currently open, and the exact
+ * "previous screen" resolution built on them.
+ *
+ * Paged mode shows one slice at a time and slice lengths vary (the backend trims
+ * to its byte budget), so "previous screen = current offset − current length" is
+ * wrong across every length change. Instead we keep the start offsets the user
+ * actually visited and resolve the predecessor from that set; when nothing exact
+ * is known we return `null` and the caller disables the back button rather than
+ * navigating to a guessed (wrong) offset.
+ */
+export interface ScreenChunk {
+  offset: number
+  rows: string[][]
+}
+
+/** Drop the oldest entries past `limit`, keeping the recent ones back-paging needs. */
+export function rememberScreenStart(history: number[], offset: number, limit: number): number[] {
+  if (history.includes(offset)) return history
+  const next = [...history, offset]
+  while (next.length > limit) next.shift()
+  return next
+}
+
+/**
+ * Exact start of the screen preceding `baseRow`, or `null` when no exact target
+ * is known (history was trimmed past it **and** no cached chunk ends exactly at
+ * `baseRow`). Never guesses from the current screen length.
+ */
+export function previousScreenStart(history: number[], chunks: ScreenChunk[], baseRow: number): number | null {
+  const known = history.filter(candidate => candidate < baseRow)
+  if (known.length) return Math.max(...known)
+  const adjacent = chunks
+    .filter(chunk => chunk.offset < baseRow && chunk.offset + chunk.rows.length === baseRow)
+    .sort((a, b) => b.offset - a.offset)[0]
+  return adjacent ? adjacent.offset : null
+}

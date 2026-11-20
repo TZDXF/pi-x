@@ -19,6 +19,8 @@ import {
   csvColumnLabel,
   csvRenderedColumns,
   csvRowWindow,
+  previousScreenStart,
+  rememberScreenStart,
   csvUsesVirtualScroll,
   parseCsvRows,
   type CsvPage,
@@ -50,8 +52,13 @@ const props = withDefaults(
     text?: string | null
     /** Bumped when the file changed on disk; reloads in place. */
     revision?: number
+    /**
+     * How many screen starts the paging history keeps. Only lowered by tests, to
+     * exercise the "history evicted past the predecessor" boundary.
+     */
+    screenHistoryLimit?: number
   }>(),
-  { text: undefined, revision: 0 },
+  { text: undefined, revision: 0, screenHistoryLimit: 2048 },
 )
 const { t } = useI18n()
 
@@ -203,9 +210,17 @@ const pageStart = ref(0)
  * use the real length both forward and back.
  */
 const lastScreenRows = ref(CSV_PAGE_ROWS)
-/** Screens we have shown before (row offsets only, no cell data): bounded. */
+/**
+ * Screen start offsets visited **for the file currently open** (row indexes only,
+ * no cell data). Cleared on every file change so a previous file's pagination can
+ * never leak into the next one. 0 is recorded too: the first screen must stay a
+ * valid back target even after its rows were evicted from the cache.
+ *
+ * The list grows with how far the user actually paged (8 bytes per screen), so
+ * `SCREEN_HISTORY_LIMIT` only guards pathological paging sessions; past it we
+ * stop guessing and disable the back button instead of landing on a wrong offset.
+ */
 const screenHistory = ref<number[]>([])
-const SCREEN_HISTORY_LIMIT = 64
 /** Row that maps to `top: 0` inside the scroll surface. */
 const baseRow = computed(() => (virtual.value ? 0 : pageStart.value))
 /** Rows in the current screen (a byte-trimmed slice can be shorter than 500). */
@@ -392,6 +407,9 @@ async function load(preservePosition: boolean) {
     pageStart.value = previous.pageStart
     scrollTop.value = previous.scrollTop
   } else {
+    // 文件切换：分页历史按文件隔离，否则上一个文件的屏起点会被当成当前文件
+    // 的前驱（复验：切到 b.csv 后「上一屏」落到 a.csv 的 100）。
+    screenHistory.value = [0]
     pageStart.value = 0
     scrollTop.value = 0
     delimiter.value = ","
@@ -453,32 +471,39 @@ function goToScreen(offset: number) {
   pump()
 }
 
-/** Row index of the previous screen: exact history first, then a length guess. */
-function previousScreenOffset(): number {
-  // 1) 走过的屏起点有历史：直接用它。切片长度可以每屏不同（后端按字节预算裁剪，
-  //    复验的 mock 甚至 100/200 交替），用「当前屏长」推前驱必然错位。
-  const visited = screenHistory.value
-  const known = [...visited].sort((a, b) => b - a).find(candidate => candidate < baseRow.value)
-  if (known != null) return known
-  // 2) 历史也没有：用缓存里紧邻的前驱（它自己带着真实长度）。
-  const previous = chunks.value
-    .filter(chunk => chunk.offset + chunk.rows.length <= baseRow.value)
-    .sort((a, b) => b.offset - a.offset)[0]
-  if (previous && previous.offset + previous.rows.length === baseRow.value) return previous.offset
-  // 3) 都没有（第一次反向且前驱已被逐出）：退到「当前屏长」这一步，至少不会跳太远。
-  return Math.max(0, baseRow.value - currentScreenRows.value)
+/**
+ * Exact start of the screen before `baseRow`, or `null` when no exact target is
+ * known. Slice lengths vary (the backend trims to its byte budget), so the
+ * current screen's length says nothing about the previous one — guessing with it
+ * landed one slice short (1800 → 1700 instead of 1600) once the history and the
+ * cached predecessor were both gone. When that happens the back button is
+ * disabled instead of navigating to a wrong offset.
+ */
+function previousScreenOffset(): number | null {
+  return previousScreenStart(screenHistory.value, chunks.value, baseRow.value)
 }
 
-/** Offsets of previously shown screens (bounded), so back-paging stays exact. */
+/**
+ * Record the screen we are leaving, so back-paging can return to its exact start.
+ * `0` is recorded like any other start (skipping it made "back to the first
+ * screen" fall through to a length guess once the first chunk was evicted).
+ */
 function rememberScreen(offset: number) {
-  if (offset <= 0) return
-  const history = screenHistory.value
-  if (history.includes(offset)) return
-  history.push(offset)
-  if (history.length > SCREEN_HISTORY_LIMIT) history.shift()
+  screenHistory.value = rememberScreenStart(screenHistory.value, offset, props.screenHistoryLimit)
 }
 
-const canPageBack = computed(() => baseRow.value > 0)
+const canPageBack = computed(() => previousScreenOffset() != null)
+
+/**
+ * Back one screen, or do nothing when no exact predecessor is known. The guard
+ * lives in the handler as well as the button state: a synthetic click on a
+ * disabled control must not move the table to a guessed offset.
+ */
+function goToPreviousScreen() {
+  const target = previousScreenOffset()
+  if (target == null) return
+  goToScreen(target)
+}
 const canPageForward = computed(() => baseRow.value + currentScreenRows.value < rowCount.value)
 
 onBeforeUnmount(() => {
@@ -598,7 +623,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           class="h-6 px-1.5 text-[11px]"
           :disabled="!canPageBack || loading"
           data-csv-page-prev
-          @click="goToScreen(previousScreenOffset())"
+          @click="goToPreviousScreen()"
           >{{ t("projectFiles.csvPrevPage") }}</Button
         >
         <span data-csv-page-label>{{

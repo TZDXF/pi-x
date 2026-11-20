@@ -64,6 +64,24 @@ app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
 window.__ready = true
 </script></body></html>`
 
+/**
+ * 真实 `ProjectFiles` 文件树：用于验证「切换 CSV 后分页历史按文件隔离」。
+ * 文件页数据由 mock IPC 按文件名提供（a.csv 100/200/200…，b.csv 固定 200）。
+ */
+const projectFilesHtml = `<!doctype html><html><body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
+import messages from '/src/i18n/locales/en.ts'
+import ProjectFiles from '/src/components/ProjectFiles.vue'
+import '/src/style.css'
+createApp({ render: () => h('div', { style: 'display:flex;height:650px;width:1100px' }, [h(ProjectFiles, { project: 'C:/demo' })]) })
+  .use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } }))
+  .use(createPinia())
+  .mount('#app')
+window.__ready = true
+</script></body></html>`
+
 /** 后端模式 + 可外部触发的 `revision` 递增（模拟磁盘变更）。 */
 const refreshHtml = `<!doctype html><html><body><div id="app"></div><script type="module">
 import { createApp, h, ref } from 'vue'
@@ -73,9 +91,11 @@ import CsvTablePreview from '/src/components/CsvTablePreview.vue'
 import '/src/style.css'
 const revision = ref(0)
 window.__bumpRevision = () => { revision.value += 1 }
+const limitParam = Number(new URLSearchParams(location.search).get('historyLimit'))
+const screenHistoryLimit = limitParam > 0 ? limitParam : 2048
 const app = createApp({
   render: () => h('div', { style: 'display:flex;height:700px;width:1200px' }, [
-    h(CsvTablePreview, { project: 'C:/demo', path: 'big.csv', revision: revision.value }),
+    h(CsvTablePreview, { project: 'C:/demo', path: 'big.csv', revision: revision.value, screenHistoryLimit }),
   ]),
 })
 app.use(createI18n({ legacy: false, locale: 'en', messages: { en: messages } })).mount('#app')
@@ -162,6 +182,7 @@ test.describe("csv table preview", () => {
   let narrowHarness!: VueHarness
   let wideHarness!: VueHarness
   let refreshHarness!: VueHarness
+  let projectFilesHarness!: VueHarness
 
   test.beforeAll(async () => {
     virtualHarness = await startVueHarness({ name: "csv-text", port: 1464, html: harnessHtml(VIRTUAL_ROWS, "text") })
@@ -174,6 +195,7 @@ test.describe("csv table preview", () => {
     narrowHarness = await startVueHarness({ name: "csv-narrow", port: 1467, html: narrowHtml })
     wideHarness = await startVueHarness({ name: "csv-wide", port: 1468, html: harnessHtml(200, "text", WIDE_COLUMNS) })
     refreshHarness = await startVueHarness({ name: "csv-refresh", port: 1469, html: refreshHtml })
+    projectFilesHarness = await startVueHarness({ name: "csv-project-files", port: 1470, html: projectFilesHtml })
   })
 
   test.afterAll(async () => {
@@ -183,6 +205,7 @@ test.describe("csv table preview", () => {
     await narrowHarness.close()
     await wideHarness.close()
     await refreshHarness.close()
+    await projectFilesHarness.close()
   })
 
   test("a 300k-row file renders a viewport-sized row set and follows scrolling", async ({ page }: { page: Page }) => {
@@ -509,8 +532,8 @@ test.describe("csv table preview", () => {
     await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "11")
   })
 
-  // 复验 P2（新）：前驱被逐出后按**实际屏长**回退，不跳行。
-  test("paging back without a cached predecessor uses the real screen length", async ({ page }: { page: Page }) => {
+  // 复验 P2：前驱缓存被逐出后靠屏历史精确回退（不再用当前屏长猜）。
+  test("paging back without a cached predecessor still lands on the exact screen", async ({ page }: { page: Page }) => {
     await mockBackendPages(page, { total: PAGED_ROWS, rowsPerPage: 150, delayMs: 5 })
     await page.goto(refreshHarness.url)
     await page.waitForFunction(() => (window as any).__ready === true)
@@ -522,12 +545,11 @@ test.describe("csv table preview", () => {
     }
     await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1201")
 
-    // 8 屏 150 行已超过缓存上限（3000 行），第 1 屏与第 2 屏都应被逐出。
+    // 8 屏 150 行远超缓存上限（3000 行），前几屏的 chunk 已被逐出。
     for (let step = 0; step < 8; step++) {
       await expect(page.locator("[data-csv-page-prev]")).toBeEnabled()
       await page.locator("[data-csv-page-prev]").click()
     }
-    // 回退步长必须是 150，而不是固定 500：8 次回退 = 1201 → 1，不出现 701 之类的错位。
     await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
   })
 
@@ -678,6 +700,133 @@ test.describe("csv table preview", () => {
     }
     // 回退序列必须与前进序列（去掉最后一屏）完全一致，不能错位。
     expect(back).toEqual(starts.slice(0, -1).reverse())
+  })
+
+  // 复验 P2（新）：切换文件后分页历史必须按文件隔离——旧文件的屏起点不能成为
+  // 新文件的「上一屏」（真实 ProjectFiles 文件树里复现：a.csv 的 100 被用给 b.csv）。
+  test("pagination history does not leak between files", async ({ page }: { page: Page }) => {
+    await page.addInitScript(() => {
+      const target = window as any
+      target.isTauri = true
+      target.__csvFiles = {
+        // a.csv 的切片是 100/200/…，b.csv 固定 200。
+        "a.csv": { lengths: [100, 200, 200], total: 1_500_002 },
+        "b.csv": { lengths: [200], total: 1_500_002 },
+      }
+      target.__csvCalls = []
+      Reflect.set(target, "__TAURI_INTERNALS__", {
+        invoke: (command: string, args: { path?: string; offset?: number; limit?: number }) => {
+          if (command === "list_project_directory") {
+            return args.path
+              ? []
+              : [
+                  { name: "a.csv", path: "a.csv", is_dir: false },
+                  { name: "b.csv", path: "b.csv", is_dir: false },
+                ]
+          }
+          if (command !== "read_csv_page") return Promise.reject(new Error("unexpected " + command))
+          const file = target.__csvFiles[args.path as string]
+          const offset = args.offset ?? 0
+          const index = offset === 0 ? 0 : target.__csvCalls.filter((call: any) => call.path === args.path).length
+          const length = file.lengths[index] ?? file.lengths[file.lengths.length - 1]
+          target.__csvCalls.push({ path: args.path, offset })
+          const rows: string[][] = []
+          for (let row = offset; row < Math.min(offset + length, file.total); row++) {
+            rows.push([String(row), `${args.path}-${row}`])
+          }
+          return Promise.resolve({
+            offset,
+            rows,
+            header: ["c0", "c1"],
+            more: offset + rows.length < file.total,
+            totalRows: offset === 0 ? file.total : null,
+            columnCount: 2,
+            truncatedColumns: false,
+            truncatedCells: false,
+            budgetTruncated: false,
+            delimiter: ",",
+            fileBytes: 1,
+          })
+        },
+      })
+    })
+    await page.goto(projectFilesHarness.url)
+    await page.getByRole("button", { name: "a.csv" }).click()
+    await expect(page.locator("[data-csv-preview]")).toBeVisible()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    // a.csv：0 → 100 → 300。
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "101")
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "301")
+
+    // 切到 b.csv（固定 200/屏）：0 → 200，再回退必须回到 b.csv 的 0。
+    await page.getByRole("button", { name: "b.csv" }).click()
+    const preview = page.locator("[data-csv-preview]")
+    await expect(preview).toBeVisible()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "201")
+    await page.locator("[data-csv-page-prev]").click()
+    // 旧实现会落到 a.csv 遗留的 101 —— 内容仍是 b.csv，但位置错了。
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+  })
+
+  // 复验 P2（新）：首页 chunk 被逐出后，仍要能一步退回 offset 0。
+  test("the first screen stays reachable after its rows were evicted", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: PAGED_ROWS, rowsPerPage: 100, delayMs: 5 })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    for (let step = 0; step < 12; step++) {
+      await expect(page.locator("[data-csv-page-next]")).toBeEnabled()
+      await page.locator("[data-csv-page-next]").click()
+    }
+    for (let step = 0; step < 11; step++) {
+      await expect(page.locator("[data-csv-page-prev]")).toBeEnabled()
+      await page.locator("[data-csv-page-prev]").click()
+    }
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "101")
+    await expect(page.locator("[data-csv-page-prev]")).toBeEnabled()
+    await page.locator("[data-csv-page-prev]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+  })
+
+  // 复验 P2（新）：历史被裁到不含前驱、且缓存里也没有紧邻前驱 chunk 时，
+  // 回退必须**禁用**，而不是用当前屏长猜一个错误 offset。
+  test("back-paging refuses instead of guessing once the history is gone", async ({ page }: { page: Page }) => {
+    await mockBackendPages(page, { total: PAGED_ROWS, rowsPerPage: 100, delayMs: 5 })
+    // historyLimit=3：只保留最近 3 个屏起点，前进 10 屏后最早的那些已被裁掉。
+    await page.goto(`${refreshHarness.url}?historyLimit=3`)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    for (let step = 0; step < 10; step++) {
+      await expect(page.locator("[data-csv-page-next]")).toBeEnabled()
+      await page.locator("[data-csv-page-next]").click()
+    }
+    // 逐屏回退，直到历史里已经没有更早的起点且缓存也没有紧邻前驱。
+    let guard = 0
+    while (guard++ < 10) {
+      const enabled = await page.locator("[data-csv-page-prev]").isEnabled()
+      if (!enabled) break
+      const before = await renderedRows(page).first().getAttribute("data-csv-row")
+      await page.locator("[data-csv-page-prev]").click()
+      const after = await renderedRows(page).first().getAttribute("data-csv-row")
+      // 每次回退都必须严格前进（行号变小），绝不能停在同一个位置。
+      expect(Number(after), `back from ${before} must move to an earlier row`).toBeLessThan(Number(before))
+    }
+    // 无精确目标时按钮禁用：不是「点了落到猜测 offset」。
+    await expect(page.locator("[data-csv-page-prev]")).toBeDisabled()
+
+    // 且再点也不会产生新的分页请求（不会偷偷跳到猜测的 offset）。
+    const callsBefore = await page.evaluate(() => (window as any).__csvCalls.length as number)
+    await page.locator("[data-csv-page-prev]").click({ force: true })
+    await page.waitForTimeout(200)
+    const callsAfter = await page.evaluate(() => (window as any).__csvCalls.length as number)
+    expect(callsAfter, "a disabled back button must not page to a guessed offset").toBe(callsBefore)
   })
 
   // 复验 P2（新）：连续翻 9 屏后回头取第 1 屏，必须重新请求（缓存有行数上限），

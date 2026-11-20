@@ -251,3 +251,40 @@ test("the row cache is bounded by rows, not by chunk count", () => {
   // 九屏 500 行远超上限：这正是旧实现「相邻段合并后无人裁剪」的场景。
   expect(CSV_PAGE_CACHE_ROWS).toBeLessThan(9 * CSV_PAGE_ROWS)
 })
+
+// 复验 P2（第五轮）：分页定位的纯逻辑部分——历史按文件隔离、首页可回、
+// 历史缺失时拒绝猜测。
+
+import { previousScreenStart, rememberScreenStart, type ScreenChunk } from "@/lib/csvTable"
+
+test("screen history keeps the first screen and respects the limit", () => {
+  let history: number[] = []
+  for (const offset of [0, 100, 300, 500]) history = rememberScreenStart(history, offset, 64)
+  expect(history).toEqual([0, 100, 300, 500])
+  // 重复记录不增长。
+  expect(rememberScreenStart(history, 300, 64)).toEqual([0, 100, 300, 500])
+  // 超过上限时丢最旧的；0 只有在真的被挤出去之后才消失。
+  for (let offset = 700; offset <= 900; offset += 100) history = rememberScreenStart(history, offset, 4)
+  expect(history).toEqual([500, 700, 800, 900])
+  expect(history).not.toContain(0)
+})
+
+test("previous screen is exact from history, including offset 0", () => {
+  const history = [0, 100, 300]
+  expect(previousScreenStart(history, [], 300)).toBe(100)
+  // 第二屏回退时，首页（offset 0）仍是一步可达的目标（旧实现跳过 0，只能猜）。
+  expect(previousScreenStart(history, [], 100)).toBe(0)
+  expect(previousScreenStart(history, [], 0)).toBeNull()
+})
+
+test("previous screen falls back to an adjacent cached chunk, never a guess", () => {
+  const chunks: ScreenChunk[] = [
+    { offset: 100, rows: Array.from({ length: 200 }, () => ["x"]) },
+    { offset: 300, rows: Array.from({ length: 100 }, () => ["x"]) },
+  ]
+  // 没有历史，但缓存里 offset 300、长 100 的 chunk 正好在本屏（400）之前结束。
+  expect(previousScreenStart([], chunks, 400)).toBe(300)
+  // 既不接壤、历史也没有：返回 null（调用方禁用回退），而不是用屏长猜。
+  expect(previousScreenStart([], chunks, 800)).toBeNull()
+  expect(previousScreenStart([], [], 500)).toBeNull()
+})
