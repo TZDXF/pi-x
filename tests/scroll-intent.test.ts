@@ -5,6 +5,7 @@ import {
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
   targetsConversationViewport,
+  touchScrollsConversation,
 } from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
@@ -159,4 +160,23 @@ test("a scrolling key is only the reader's when it scrolls the conversation", ()
   expect(
     keyScrollsConversation(viewport, { key: "ArrowDown", target: viewport, defaultPrevented: true } as KeyboardEvent),
   ).toBe(false)
+})
+
+test("a touch only scrolls the conversation when no nested scroller can move", () => {
+  const viewport = element(null, { scrollHeight: 1000, clientHeight: 400 })
+  // Directly on the conversation: the gesture belongs to it.
+  expect(touchScrollsConversation(viewport, element(viewport))).toBe(true)
+  // A nested independently scrollable block pans itself, not the conversation.
+  const nested = element(viewport, {
+    scrollHeight: 600,
+    clientHeight: 200,
+    style: { overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  expect(touchScrollsConversation(viewport, element(nested))).toBe(false)
+  // A non-scrolling wrapper in between stays transparent.
+  const wrapper = element(viewport, { scrollHeight: 120, clientHeight: 120 })
+  expect(touchScrollsConversation(viewport, element(wrapper))).toBe(true)
+  // Targets outside the conversation never claim it.
+  expect(touchScrollsConversation(viewport, element())).toBe(false)
+  expect(touchScrollsConversation(viewport, null)).toBe(false)
 })

@@ -99,6 +99,17 @@ test("a write outside the dispatch stays the app's even in the same task chain",
   expect(consumeScrollWrite(element, 600)).toBe(true)
 })
 
+test("a write without a usable stack is the app's, never the reader's", () => {
+  const element = viewport()
+  observeScrollWrites(element)
+  const close = beginUserInput(element)
+  // Platforms or hardened environments may hide the stack; assuming the write is
+  // exempt would let every app write during the window pass for a reader gesture.
+  recordScrollWrite(element, 600, Date.now(), undefined)
+  expect(consumeScrollWrite(element, 600)).toBe(true)
+  close()
+})
+
 test("a write that is not the library's stays the app's inside a leaked window", () => {
   const element = viewport()
   observeScrollWrites(element)

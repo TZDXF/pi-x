@@ -7,7 +7,13 @@ import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect 
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { canScrollConversation, keyScrollsConversation, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
+import {
+  canScrollConversation,
+  keyScrollsConversation,
+  shouldReleaseBottomLockOnScroll,
+  shouldResumeBottomLock,
+  touchScrollsConversation,
+} from '@/lib/scrollIntent'
 import type { InputScopeCloser } from '@/lib/scrollWrites'
 import {
   beginAppScroll,
@@ -124,23 +130,39 @@ function ownScrollbar(target: Element): boolean {
 /**
  * The touch gesture, if any, that is scrolling **this** conversation.
  *
- * A press alone is not scrolling, and a gesture is not necessarily ours: a finger
- * can drag a nested scroller or a completely different pane. Only the points the
- * browser actually delivers for a touch that started inside the viewport count,
- * and the takeover is decided by the *vertical* movement of that same pointer —
- * a sideways swipe is not scrolling the conversation (TZD-135 review).
+ * A gesture is only the reader's once it actually moved this viewport: pointer
+ * coordinates prove nothing (a sideways swipe, a three-pixel wobble, or a pan
+ * inside a nested scroller all move the finger without moving the conversation).
  *
- * `pointerId` binds every further event (including `pointercancel`) to the gesture
- * we are tracking, so a cancellation from another pointer on the page cannot end
- * the app's navigation. A gesture that scrolled stays claimed after release:
- * momentum and the scrolls a cancellation causes arrive afterwards.
+ * So the claim rests on the viewport's own movement:
+ *
+ * - a scroll event while the tracked pointer is down, further than
+ *   `TOUCH_SCROLL_CLAIM_PX` from the position it started at, and not itself an
+ *   app-initiated scroll — that is the gesture scrolling the conversation;
+ * - the browser's `pointercancel` for **that** pointer, which is how it signals
+ *   that it took the touch over (it stops delivering moves then, and the scrolls
+ *   that follow are the gesture's). This is also the only signal on platforms
+ *   whose cancellation never reaches the viewport.
+ *
+ * `touchScrollsConversation` keeps nested scrollers out of both paths, and
+ * `pointerId` binds a cancellation to the gesture being tracked, so a cancel from
+ * another pointer (or another pane) cannot end the app's navigation.
  */
 let touchPointerId: number | undefined
-let touchStartY = 0
-/** A tracked touch that scrolled vertically and therefore owns the viewport. */
+/** Viewport position when the tracked touch started. */
+let touchStartTop = 0
+/** Largest vertical finger travel reported for the tracked pointer. */
+let touchTravelY = 0
+/** The tracked gesture has been attributed to the reader. */
 let touchScrolled = false
-/** Vertical distance a tracked touch must travel to count as scrolling. */
-const TOUCH_VERTICAL_THRESHOLD_PX = 3
+/** Viewport travel a touch must cause before it counts as scrolling. */
+const TOUCH_SCROLL_CLAIM_PX = 4
+/**
+ * Finger travel needed to accept a `pointercancel` that arrives before the first
+ * scroll event: that is how platforms whose cancellation hides the scrolls
+ * deliver a genuine drag. A wobble or a sideways swipe stays well below it.
+ */
+const TOUCH_DRAG_CLAIM_PX = 10
 /** Closers of the exemptions opened by the input currently being dispatched. */
 let wheelScope: InputScopeCloser | undefined
 let keyScope: InputScopeCloser | undefined
@@ -168,17 +190,17 @@ function handleKeyDownCapture(event: KeyboardEvent) {
 function handlePointerCapture(event: PointerEvent) {
   const scroll = scrollRef.value
   if (!scroll || !(event.target instanceof Element)) return
-  if (event.pointerType === "touch") {
-    if (event.type === "pointerdown" && scroll.contains(event.target)) {
-      // Start tracking this specific pointer. Only its own moves and its own
-      // cancellation may claim the conversation.
-      touchPointerId = event.pointerId
-      touchStartY = event.clientY
-      touchScrolled = false
-    } else if (event.type === "pointermove" && event.pointerId === touchPointerId && !touchScrolled) {
-      // Vertical movement scrolls the conversation; a sideways swipe does not.
-      if (Math.abs(event.clientY - touchStartY) >= TOUCH_VERTICAL_THRESHOLD_PX) claimTouchGesture(scroll)
-    }
+  if (event.type === "pointerdown" && event.pointerType === "touch") {
+    // Track only gestures the conversation itself could be scrolling: a press on
+    // a nested scroller pans that block, not the conversation.
+    touchPointerId = touchScrollsConversation(scroll, event.target) ? event.pointerId : undefined
+    touchStartTop = scroll.scrollTop
+    touchScrolled = false
+    touchTravelY = 0
+  } else if (event.type === "pointermove" && event.pointerType === "touch" && event.pointerId === touchPointerId) {
+    // Remember how far the tracked finger travelled; a cancellation that arrives
+    // before the first scroll is accepted on this, never on cancel coordinates.
+    touchTravelY = Math.max(touchTravelY, Math.abs(event.movementY || 0))
   }
   if (event.type !== "pointerdown" && event.type !== "pointermove") return
   if (!ownScrollbar(event.target)) return
@@ -196,12 +218,13 @@ function claimTouchGesture(scroll: HTMLElement) {
 function handlePointerRelease(event: PointerEvent) {
   const scroll = scrollRef.value
   if (event.pointerType === "touch" && event.pointerId === touchPointerId) {
-    // `pointercancel` for *this* pointer is the browser taking the touch over for
-    // scrolling (it stops delivering moves then); a plain `pointerup` means the
-    // finger lifted. Only the gesture we tracked can claim the viewport, and only
-    // if it actually scrolled vertically (see `handleScroll`).
-    if (event.type === "pointercancel" && scroll && Math.abs(event.clientY - touchStartY) >= TOUCH_VERTICAL_THRESHOLD_PX)
-      claimTouchGesture(scroll)
+    // `pointercancel` for the tracked pointer is the browser taking the touch over
+    // for scrolling (it stops delivering moves then); a plain `pointerup` means
+    // the finger lifted. The cancellation itself is only accepted when the tracked
+    // finger actually travelled vertically, because a sideways swipe or a wobble
+    // cancels too — and its coordinates, which the platform may zero out, are
+    // never evidence (TZD-135 review).
+    if (event.type === "pointercancel" && scroll && touchTravelY >= TOUCH_DRAG_CLAIM_PX) claimTouchGesture(scroll)
     touchPointerId = undefined
   }
   endPointerScope()
@@ -227,15 +250,25 @@ function handleScroll(event: Event) {
   if (scroll) {
     const previous = lastScrollTop ?? scroll.scrollTop
     lastScrollTop = scroll.scrollTop
-    // A tracked touch that scrolled vertically is the reader: it cancels any
-    // programmatic animation, so its scroll events belong to the gesture even when
-    // an app mark was still pending (TZD-135 review).
-    if (touchScrolled) finishAppScroll(scroll)
     // Code moves this viewport too: bottom pinning, virtual-row height
     // compensation, navigation and the storage library's clamps. A recorded write
     // or an app-initiated scroll means the reader did not move it, so the
     // downward check below must not re-arm following on that account (TZD-135).
     const appOwned = consumeScrollWrite(scroll, scroll.scrollTop) || isAppScrolling(scroll, scroll.scrollTop)
+    // A tracked touch only claims the viewport once it moved it *itself*: a still
+    // pending app animation also moves the viewport while a finger rests on it, and
+    // finger coordinates prove nothing either (sideways swipes, tiny wobbles and
+    // pans inside a nested scroller all leave the conversation where it was).
+    if (
+      touchPointerId !== undefined &&
+      !touchScrolled &&
+      !appOwned &&
+      Math.abs(scroll.scrollTop - touchStartTop) >= TOUCH_SCROLL_CLAIM_PX
+    )
+      claimTouchGesture(scroll)
+    // Once claimed, the gesture owns the scrolls it causes (momentum included) and
+    // it cancels any programmatic animation still pending (TZD-135 review).
+    if (touchScrolled) finishAppScroll(scroll)
     // Scroll events also cover scrollbar dragging and keyboard navigation, but
     // layout shrinkage clamps scrollTop to the new bottom without user intent.
     if (shouldReleaseBottomLockOnScroll(previous, scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight))

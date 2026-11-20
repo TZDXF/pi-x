@@ -128,8 +128,11 @@ const INPUT_WRITE_FRAMES = [
 
 /** Whether this call stack is the storage library positioning its scrollbar. */
 export function isLibraryInputWrite(stack: string | undefined = new Error().stack): boolean {
-  // No stack support: fall back to the exemption, never to a wrong attribution.
-  if (!stack) return true
+  // Without a stack the write cannot be attributed to the library, so it must be
+  // treated as the app's. The opposite default would let every write during the
+  // exemption pass for a reader gesture — the direction that glues the panel to
+  // the bottom, which is the bug this file exists to prevent (TZD-135 review).
+  if (!stack) return false
   return INPUT_WRITE_FRAMES.some(frame => stack.includes(frame))
 }
 

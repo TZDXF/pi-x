@@ -101,6 +101,28 @@ export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEve
 }
 
 /**
+ * Whether a touch starting at `target` scrolls the conversation **itself**.
+ *
+ * A finger inside a nested scroller (a code block, a file tree, a tall preview)
+ * pans that scroller; the conversation only moves once the nested one is exhausted
+ * and its overscroll policy allows chaining. Treating such a gesture as the reader
+ * taking the conversation over is wrong (TZD-135 review), so the gesture is only
+ * claimed when nothing between the target and the viewport can scroll vertically.
+ */
+export function touchScrollsConversation(viewport: HTMLElement, target: Element | null): boolean {
+  if (!target || !viewport.contains(target)) return false
+  if (viewport.scrollHeight <= viewport.clientHeight) return false
+  let element: Element | null = target
+  while (element && element !== viewport) {
+    const style = getComputedStyle(element)
+    if ((style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight)
+      return false
+    element = element.parentElement
+  }
+  return element === viewport
+}
+
+/**
  * Whether a gesture in `deltaY`'s direction moves the conversation viewport,
  * rather than being consumed by a nested scroller.
  *

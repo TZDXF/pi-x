@@ -667,3 +667,60 @@ test("a cancellation from another pointer does not end the app navigation", asyn
   await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBe(40)
 })
+
+test("a touch pan inside a nested scroller does not claim the conversation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    const pane = document.createElement("div")
+    pane.id = "inline-pane"
+    pane.style.cssText =
+      "position:fixed;left:380px;top:150px;width:220px;height:180px;overflow-y:auto;overscroll-behavior:contain;background:#abc;z-index:5"
+    pane.innerHTML = '<div style="height:700px">tall block</div>'
+    document.querySelector<HTMLElement>("[role=log]")!.append(pane)
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await page.locator("#inline-pane").boundingBox())!
+  const x = box.x + box.width / 2
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: box.y + 150 }] })
+  for (const step of [30, 60, 90, 120]) {
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: box.y + 150 - step }] })
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  // Only the nested block panned; the conversation's app navigation still owns it.
+  await expect.poll(() => page.locator("#inline-pane").evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a genuine vertical touch drag still claims the conversation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  // A real downward drag on the conversation itself: it must reach the bottom and
+  // restore following (the positive control for the touch attribution).
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await viewportOf(page).boundingBox())!
+  const x = box.x + box.width / 2
+  // A finger moving up scrolls the content towards the bottom.
+  await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: box.y + box.height - 60 }] })
+  for (const step of [60, 120, 180, 240, 300, 340]) {
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: box.y + box.height - 60 - step }] })
+  }
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(false)
+  expect(await streamChunk(page)).toBeLessThanOrEqual(1)
+})
