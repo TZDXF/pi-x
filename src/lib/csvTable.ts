@@ -341,22 +341,23 @@ export function parseCsvPage(
 }
 
 /**
- * Screen start offsets visited for the file currently open, and the exact
- * "previous screen" resolution built on them.
+ * Paged mode shows one slice at a time, and slice lengths vary (the backend trims
+ * to its byte budget), so "previous screen = current offset − current length"
+ * is wrong across every length change.
  *
- * Paged mode shows one slice at a time and slice lengths vary (the backend trims
- * to its byte budget), so "previous screen = current offset − current length" is
- * wrong across every length change. Instead we keep the start offsets the user
- * actually visited and resolve the predecessor from that set; when nothing exact
- * is known we return `null` and the caller disables the back button rather than
- * navigating to a guessed (wrong) offset.
+ * The only trustworthy predecessor is a **verified screen start**: an offset the
+ * user actually landed on as a screen, recorded while leaving it. Ordinary cache
+ * chunks do not qualify — a viewport prefetch can end exactly where a screen
+ * starts (`2592 + 8` ends at `2600` just like the real predecessor `2400 + 200`),
+ * and treating that as the predecessor navigates to a slice boundary the user
+ * never saw. When no verified start is known the caller disables back-paging
+ * instead of guessing.
  */
 export interface ScreenChunk {
   offset: number
   rows: string[][]
 }
 
-/** Drop the oldest entries past `limit`, keeping the recent ones back-paging needs. */
 export function rememberScreenStart(history: number[], offset: number, limit: number): number[] {
   if (history.includes(offset)) return history
   const next = [...history, offset]
@@ -365,15 +366,52 @@ export function rememberScreenStart(history: number[], offset: number, limit: nu
 }
 
 /**
- * Exact start of the screen preceding `baseRow`, or `null` when no exact target
- * is known (history was trimmed past it **and** no cached chunk ends exactly at
- * `baseRow`). Never guesses from the current screen length.
+ * Exact start of the screen preceding `baseRow`, taken from verified screen
+ * starts only, or `null` when none is known. Never guesses from the current
+ * screen length or from a cached chunk that merely ends at `baseRow`.
  */
-export function previousScreenStart(history: number[], chunks: ScreenChunk[], baseRow: number): number | null {
+export function previousScreenStart(history: number[], baseRow: number): number | null {
+  // 只认「验证过的屏起点」。缓存里末尾恰好相接的预取片段（`2592 + 8` 止于
+  // `2600`，与真实前驱 `2400 + 200` 同终点）不是屏起点，不能拿来当上一屏。
   const known = history.filter(candidate => candidate < baseRow)
-  if (known.length) return Math.max(...known)
-  const adjacent = chunks
-    .filter(chunk => chunk.offset < baseRow && chunk.offset + chunk.rows.length === baseRow)
-    .sort((a, b) => b.offset - a.offset)[0]
-  return adjacent ? adjacent.offset : null
+  return known.length ? Math.max(...known) : null
+}
+
+/**
+ * Whether a remembered screen start is still a valid predecessor: the screen
+ * must have been visited **in this generation**. A revision refresh invalidates
+ * every older start, because slice boundaries move when the file changes width
+ * (a 100-row screen becomes 200 rows); keeping them would let the old generation
+ * claim the new generation's predecessor (`0 → 200`, back lands on stale `100`).
+ */
+export interface ScreenStartEntry {
+  offset: number
+  generation: number
+}
+
+/** Record a screen start for `generation`, dropping entries from older ones. */
+export function rememberScreenEntry(
+  entries: ScreenStartEntry[],
+  offset: number,
+  generation: number,
+  limit: number,
+): ScreenStartEntry[] {
+  // 新一代开始时整表作废：旧代的屏边界对新文件不再成立。
+  const base = entries.filter(entry => entry.generation === generation)
+  if (base.some(entry => entry.offset === offset)) return entries.length === base.length ? entries : base
+  const next = [...base, { offset, generation }]
+  while (next.length > limit) next.shift()
+  return next
+}
+
+/** Verified predecessor from the current generation only, or `null`. */
+export function previousScreenStartFor(
+  entries: ScreenStartEntry[],
+  generation: number,
+  baseRow: number,
+): number | null {
+  const known = entries
+    .filter(entry => entry.generation === generation && entry.offset < baseRow)
+    .map(entry => entry.offset)
+  return known.length ? Math.max(...known) : null
 }

@@ -19,8 +19,9 @@ import {
   csvColumnLabel,
   csvRenderedColumns,
   csvRowWindow,
-  previousScreenStart,
-  rememberScreenStart,
+  previousScreenStartFor,
+  rememberScreenEntry,
+  type ScreenStartEntry,
   csvUsesVirtualScroll,
   parseCsvRows,
   type CsvPage,
@@ -211,6 +212,12 @@ const pageStart = ref(0)
  */
 const lastScreenRows = ref(CSV_PAGE_ROWS)
 /**
+ * Bumped on every (re)load — file switch and revision refresh alike. Screen
+ * starts are tagged with it, so a refresh rebuilds the paging history instead of
+ * carrying stale boundaries from the previous generation.
+ */
+const loadGeneration = ref(0)
+/**
  * Screen start offsets visited **for the file currently open** (row indexes only,
  * no cell data). Cleared on every file change so a previous file's pagination can
  * never leak into the next one. 0 is recorded too: the first screen must stay a
@@ -220,7 +227,7 @@ const lastScreenRows = ref(CSV_PAGE_ROWS)
  * `SCREEN_HISTORY_LIMIT` only guards pathological paging sessions; past it we
  * stop guessing and disable the back button instead of landing on a wrong offset.
  */
-const screenHistory = ref<number[]>([])
+const screenHistory = ref<ScreenStartEntry[]>([])
 /** Row that maps to `top: 0` inside the scroll surface. */
 const baseRow = computed(() => (virtual.value ? 0 : pageStart.value))
 /** Rows in the current screen (a byte-trimmed slice can be shorter than 500). */
@@ -399,6 +406,10 @@ async function load(preservePosition: boolean) {
   const previous = keepMetadata()
   resetState()
   chunks.value = []
+  // 刷新也会改变短页边界（文件变宽/变窄后每屏行数不同），所以新旧两代的屏起点
+  // 不能混用：提升代号并把历史重建为「首页」，随后走到的每一屏再各自登记。
+  loadGeneration.value += 1
+  screenHistory.value = [{ offset: 0, generation: loadGeneration.value }]
   if (preservePosition) {
     header.value = previous.header
     columnCount.value = previous.columnCount
@@ -407,9 +418,8 @@ async function load(preservePosition: boolean) {
     pageStart.value = previous.pageStart
     scrollTop.value = previous.scrollTop
   } else {
-    // 文件切换：分页历史按文件隔离，否则上一个文件的屏起点会被当成当前文件
-    // 的前驱（复验：切到 b.csv 后「上一屏」落到 a.csv 的 100）。
-    screenHistory.value = [0]
+    // 文件切换：历史已在上方按**新一代**重建（只含首页），上一个文件的屏起点
+    // 不会成为当前文件的前驱（复验：切到 b.csv 后「上一屏」落到 a.csv 的 100）。
     pageStart.value = 0
     scrollTop.value = 0
     delimiter.value = ","
@@ -432,7 +442,11 @@ async function load(preservePosition: boolean) {
     return
   }
   // 刷新时先要回**首页元数据**（总行数/表头可能变，文件也可能被改小），
-  // 再要回当前这一屏；两者都不改变页码本身。
+  // 再要回当前这一屏；两者都不改变页码本身。当前页在新一代里仍是一个**真实
+  // 屏起点**（用户正看着它），因此登记到新代历史。
+  if (preservePosition && pageStart.value > 0) {
+    rememberScreen(pageStart.value)
+  }
   queue.push(0)
   if (preservePosition && desiredWindow.value.start > 0) queue.push(desiredWindow.value.start)
   pump()
@@ -480,7 +494,7 @@ function goToScreen(offset: number) {
  * disabled instead of navigating to a wrong offset.
  */
 function previousScreenOffset(): number | null {
-  return previousScreenStart(screenHistory.value, chunks.value, baseRow.value)
+  return previousScreenStartFor(screenHistory.value, loadGeneration.value, baseRow.value)
 }
 
 /**
@@ -489,7 +503,7 @@ function previousScreenOffset(): number | null {
  * screen" fall through to a length guess once the first chunk was evicted).
  */
 function rememberScreen(offset: number) {
-  screenHistory.value = rememberScreenStart(screenHistory.value, offset, props.screenHistoryLimit)
+  screenHistory.value = rememberScreenEntry(screenHistory.value, offset, loadGeneration.value, props.screenHistoryLimit)
 }
 
 const canPageBack = computed(() => previousScreenOffset() != null)

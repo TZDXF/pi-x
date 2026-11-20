@@ -255,7 +255,7 @@ test("the row cache is bounded by rows, not by chunk count", () => {
 // 复验 P2（第五轮）：分页定位的纯逻辑部分——历史按文件隔离、首页可回、
 // 历史缺失时拒绝猜测。
 
-import { previousScreenStart, rememberScreenStart, type ScreenChunk } from "@/lib/csvTable"
+import { previousScreenStart, previousScreenStartFor, rememberScreenEntry, rememberScreenStart } from "@/lib/csvTable"
 
 test("screen history keeps the first screen and respects the limit", () => {
   let history: number[] = []
@@ -271,20 +271,46 @@ test("screen history keeps the first screen and respects the limit", () => {
 
 test("previous screen is exact from history, including offset 0", () => {
   const history = [0, 100, 300]
-  expect(previousScreenStart(history, [], 300)).toBe(100)
+  expect(previousScreenStart(history, 300)).toBe(100)
   // 第二屏回退时，首页（offset 0）仍是一步可达的目标（旧实现跳过 0，只能猜）。
-  expect(previousScreenStart(history, [], 100)).toBe(0)
-  expect(previousScreenStart(history, [], 0)).toBeNull()
+  expect(previousScreenStart(history, 100)).toBe(0)
+  expect(previousScreenStart(history, 0)).toBeNull()
 })
 
-test("previous screen falls back to an adjacent cached chunk, never a guess", () => {
-  const chunks: ScreenChunk[] = [
-    { offset: 100, rows: Array.from({ length: 200 }, () => ["x"]) },
-    { offset: 300, rows: Array.from({ length: 100 }, () => ["x"]) },
-  ]
-  // 没有历史，但缓存里 offset 300、长 100 的 chunk 正好在本屏（400）之前结束。
-  expect(previousScreenStart([], chunks, 400)).toBe(300)
-  // 既不接壤、历史也没有：返回 null（调用方禁用回退），而不是用屏长猜。
-  expect(previousScreenStart([], chunks, 800)).toBeNull()
-  expect(previousScreenStart([], [], 500)).toBeNull()
+test("only verified screen starts count as a predecessor, never a cached chunk", () => {
+  // 没有直接前驱时，缓存里那些「末尾相接」的普通 chunk 不算数。
+  expect(previousScreenStart([100, 300], 400)).toBe(300)
+  // 历史里没有更小的起点：返回 null（调用方禁用回退），而不是用屏长猜。
+  expect(previousScreenStart([300], 300)).toBeNull()
+  expect(previousScreenStart([], 500)).toBeNull()
+})
+
+test("a refresh invalidates the previous generation's screen starts", () => {
+  // 第一代：100/200 交替时走过 0、100、300。
+  let entries = rememberScreenEntry([], 0, 1, 64)
+  entries = rememberScreenEntry(entries, 100, 1, 64)
+  entries = rememberScreenEntry(entries, 300, 1, 64)
+  expect(previousScreenStartFor(entries, 1, 300)).toBe(100)
+
+  // 文件刷新（每屏变成 200）后进入第 2 代：旧代的 100 不再是有效前驱。
+  entries = rememberScreenEntry(entries, 0, 2, 64)
+  expect(previousScreenStartFor(entries, 2, 200)).toBe(0)
+
+  // 第 2 代里走过 0 → 200 后回退，只能回到 0（不能落到旧代的 100）。
+  entries = rememberScreenEntry(entries, 200, 2, 64)
+  expect(previousScreenStartFor(entries, 2, 400)).toBe(200)
+  expect(previousScreenStartFor(entries, 2, 200)).toBe(0)
+})
+
+test("rememberScreenEntry keeps only the current generation and respects the limit", () => {
+  let entries = rememberScreenEntry([], 0, 1, 2)
+  entries = rememberScreenEntry(entries, 100, 1, 2)
+  entries = rememberScreenEntry(entries, 300, 1, 2)
+  expect(entries).toEqual([
+    { offset: 100, generation: 1 },
+    { offset: 300, generation: 1 },
+  ])
+  entries = rememberScreenEntry(entries, 0, 2, 2)
+  expect(entries).toEqual([{ offset: 0, generation: 2 }])
+  expect(rememberScreenEntry(entries, 0, 2, 2)).toBe(entries)
 })
