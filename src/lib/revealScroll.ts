@@ -9,6 +9,10 @@
  *
  * 调用方还需要在这段时间里暂停会打架的高度补偿（见 `Conversation` 的 `revealLock`）。
  *
+ * 同一视口上的定位是**互斥**的：新定位一开始旧定位就作废（`invalidateReveals` /
+ * `startReveal`），并且每次写 `scrollTop` 之前都重新校验 token —— 用户在动画没结束时
+ * 点了另一个目标时，只有最后一次点击会生效，旧定位不会再把它顶回去。
+ *
  * 两种对齐方式：
  * - `center`（默认）：目标竖直居中 —— 用于小目标，例如划词引用的徽标；
  * - `start`：目标顶端贴视口顶端（留 `margin` 像素）—— 用于"跳到某条消息"，
@@ -42,7 +46,10 @@ export function scrollOffsetFor(
   options: { align?: "center" | "start"; margin?: number } = {},
 ): number {
   const margin = options.margin ?? 0
-  const desiredTop = options.align === "start" ? target.top - viewport.top - margin : (target.top + target.bottom) / 2 - (viewport.top + viewport.bottom) / 2
+  const desiredTop =
+    options.align === "start"
+      ? target.top - viewport.top - margin
+      : (target.top + target.bottom) / 2 - (viewport.top + viewport.bottom) / 2
   const desired = Math.max(0, Math.min(max, scrollTop + desiredTop))
   return desired - scrollTop
 }
@@ -53,7 +60,7 @@ export function scrollOffsetFor(
  */
 export function waitForScrollSettle(
   viewport: { scrollTop: number },
-  options: { timeoutMs?: number; stableFrames?: number } = {},
+  options: { timeoutMs?: number; stableFrames?: number; cancelled?: () => boolean } = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 900
   const stableFrames = options.stableFrames ?? 3
@@ -62,6 +69,8 @@ export function waitForScrollSettle(
     let last = viewport.scrollTop
     let stable = 0
     const tick = () => {
+      // 被新定位顶替后立即返回，不再白等到超时（调用方随后会作废整轮修正）。
+      if (options.cancelled?.()) return resolve()
       const now = viewport.scrollTop
       stable = Math.abs(now - last) < 1 ? stable + 1 : 0
       last = now
@@ -78,6 +87,38 @@ export function nextFrame(): Promise<void> {
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve())
     else resolve()
   })
+}
+
+/**
+ * 同一个视口里的定位是**互斥**的：新定位一开始，旧的立即作废。
+ *
+ * 为什么需要：定位是"滚 → 等停 → 复核 → 修正"的多轮过程，期间会**多次写** `scrollTop`。
+ * 用户在动画没结束时点了另一个目标（时间线的"跳转到第 N 次提问"很容易连点），
+ * 旧定位在那之后的一轮即时修正就会把新目标顶掉 —— 表现为"第二次点击赢了又输"。
+ * 因此每个视口维护一个序号：每次定位领取自己的 token，之后**每一次滚动写入前**都比对
+ * 序号，过期就立刻退出（返回 `false`），不再碰滚动位置。
+ */
+const revealTokens = new WeakMap<object, { seq: number }>()
+
+function registryFor(viewport: object): { seq: number } {
+  const existing = revealTokens.get(viewport)
+  if (existing) return existing
+  const created = { seq: 0 }
+  revealTokens.set(viewport, created)
+  return created
+}
+
+/** 让该视口上所有在途定位作废（不含即将开始的新定位）。 */
+export function invalidateReveals(viewport: object): void {
+  const registry = revealTokens.get(viewport)
+  if (registry) registry.seq++
+}
+
+/** 领取一个新 token；此时旧 token 全部失效。 */
+function startReveal(viewport: object): { registry: { seq: number }; token: number } {
+  const registry = registryFor(viewport)
+  registry.seq++
+  return { registry, token: registry.seq }
 }
 
 export interface RevealOptions {
@@ -102,22 +143,33 @@ export async function revealElement(
   options: RevealOptions = {},
 ): Promise<boolean> {
   const attempts = options.attempts ?? 4
+  // 领取 token：同一视口上的旧定位从这一刻起作废，不再写滚动位置。
+  const session = startReveal(viewport)
+  const current = () => session.registry.seq === session.token
   const max = () => Math.max(0, viewport.scrollHeight - viewport.clientHeight)
   const offset = () => {
     if (!target.isConnected) return Number.POSITIVE_INFINITY
-    return scrollOffsetFor(viewport.getBoundingClientRect(), target.getBoundingClientRect(), viewport.scrollTop, max(), options)
+    return scrollOffsetFor(
+      viewport.getBoundingClientRect(),
+      target.getBoundingClientRect(),
+      viewport.scrollTop,
+      max(),
+      options,
+    )
   }
   for (let attempt = 0; attempt < attempts; attempt++) {
-    if (!target.isConnected) return false
+    // 每次写入前都校验：被更新的定位顶替后立刻退出，绝不再动滚动位置。
+    if (!current() || !target.isConnected) return false
     const delta = offset()
     // 已经在要求的位置（亚像素误差内）：不必发滚动指令。
     if (Math.abs(delta) < 1) return true
+    if (!current()) return false
     viewport.scrollTo({
       top: viewport.scrollTop + delta,
       behavior: attempt === 0 && options.animated ? "smooth" : "instant",
     })
-    await waitForScrollSettle(viewport)
+    await waitForScrollSettle(viewport, { cancelled: () => !current() })
     await nextFrame()
   }
-  return Math.abs(offset()) < 1
+  return current() && Math.abs(offset()) < 1
 }

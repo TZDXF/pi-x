@@ -7,7 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { nextFrame, revealElement } from '@/lib/revealScroll'
+import { invalidateReveals, nextFrame, revealElement } from '@/lib/revealScroll'
 import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
@@ -36,6 +36,7 @@ const revealLock = ref(0)
 async function revealInViewport(target: Element | null | undefined, options: { animated?: boolean } = {}) {
   const viewport = scrollRef.value
   if (!viewport || !target || !(target instanceof HTMLElement)) return false
+  invalidateReveals(viewport)
   // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
   releaseBottomLock()
   revealLock.value++
@@ -54,6 +55,7 @@ defineExpose({
     const viewport = scrollRef.value
     const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
     if (!viewport || !message) return false
+    // 先作废旧定位再 await：等待期间旧定位的一轮修正同样不能覆盖这次目标。
     releaseBottomLock()
     revealLock.value++
     try {

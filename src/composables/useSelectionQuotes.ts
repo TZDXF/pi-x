@@ -326,11 +326,13 @@ export function useSelectionQuotes(deps: {
       const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
       if (!badge) return false
       const handle = conversation.value
-      if (handle?.revealInViewport) await handle.revealInViewport(badge, { animated: true })
+      let revealed = true
+      if (handle?.revealInViewport) revealed = await handle.revealInViewport(badge, { animated: true })
       // 没有会话定位句柄（测试替身或非会话宿主）时退回浏览器原生滚动，行为不变。
       else badge.scrollIntoView({ block: "center", behavior: "smooth" })
-      flashLocatedSelection(item!)
-      return true
+      // 被同一视口里更新的定位顶替时不闪亮：那块正文可能已经不在屏幕上了。
+      if (revealed) flashLocatedSelection(item!)
+      return revealed
     }
     // 引用落在折叠裁剪区（目标行还挂载着）：先展开正文，后面才有可定位的徽标与高亮。
     if (await revealTargetIfClipped()) {

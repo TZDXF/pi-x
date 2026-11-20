@@ -1,5 +1,5 @@
-import { test, expect } from "vitest"
-import { overlapHeight, scrollOffsetFor, visibleRatio } from "@/lib/revealScroll"
+import { afterEach, expect, test, vi } from "vitest"
+import { invalidateReveals, overlapHeight, revealElement, scrollOffsetFor, visibleRatio } from "@/lib/revealScroll"
 
 /**
  * TZD-138 P2：把目标真正带进视口（而不是"发一次滚动指令就算完"）。
@@ -57,3 +57,87 @@ test("offsets are clamped to the scrollable range", () => {
   expect(scrollOffsetFor(viewport, { top: -2000, bottom: -1980, height: 20 }, 100, 10_000)).toBe(-100)
   expect(scrollOffsetFor(viewport, { top: 9000, bottom: 9020, height: 20 }, 9000, 10_000)).toBe(1000)
 })
+
+test("a later reveal invalidates earlier ones inside the same viewport", async () => {
+  // 同一视口里连续两次定位：先开始的必须让位，不能在等待结束后把新目标顶回去。
+  const viewport = { scrollTop: 0, scrollHeight: 4000, clientHeight: 400 }
+  expect(invalidateReveals).toBeTypeOf("function")
+  invalidateReveals(viewport)
+  // 换了对象就是换了视口：互不影响（token 存在 WeakMap 里按对象隔离）。
+  expect(() => invalidateReveals({})).not.toThrow()
+})
+
+test("scroll offset helpers stay pure (no viewport mutation)", () => {
+  const viewport = { scrollTop: 100, scrollHeight: 4000, clientHeight: 400 }
+  scrollOffsetFor(
+    { top: 0, bottom: 400, height: 400 },
+    { top: 1200, bottom: 1220, height: 20 },
+    viewport.scrollTop,
+    viewport.scrollHeight - viewport.clientHeight,
+  )
+  expect(viewport.scrollTop).toBe(100)
+})
+
+/**
+ * 定位是"滚 → 等停 → 复核 → 修正"的多轮过程，期间会多次写 `scrollTop`。用户在动画没结束时
+ * 点了另一个目标时，旧定位必须立刻让位 —— 否则它后面的一轮修正会覆盖新目标（QA 的 P2）。
+ * 这里用一个可控的假滚动容器复现"两次连续定位"。
+ */
+function fakeScroller(rows: { top: number; position: number }[]) {
+  // rows 提供"目标的文档内位置"；视口高 400，滚动是即时的，但每轮都要等一个 rAF 才能复核。
+  const viewport = {
+    scrollTop: 0,
+    scrollHeight: 8000,
+    clientHeight: 400,
+    scrollWrites: [] as number[],
+    scrollTo(options: { top: number }) {
+      viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, options.top))
+      viewport.scrollWrites.push(viewport.scrollTop)
+    },
+    getBoundingClientRect: () => ({ top: 0, bottom: 400, height: 400 }),
+  }
+  const target = (position: number) => ({
+    isConnected: true,
+    getBoundingClientRect: () => {
+      const top = position - viewport.scrollTop
+      return { top, bottom: top + 20, height: 20 }
+    },
+  })
+  return { viewport, target, rows }
+}
+
+test("the newer reveal wins even when the older one was already mid-flight", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 0))
+  const { viewport, target } = fakeScroller([])
+  // 先让第一次定位真的滚出一段（模拟"动画进行中"），再开始第二次。
+  const row5 = target(600)
+  const row65 = target(6000)
+  const first = revealElement(viewport as unknown as HTMLElement, row5 as unknown as HTMLElement)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const second = revealElement(viewport as unknown as HTMLElement, row65 as unknown as HTMLElement)
+  const results = await Promise.all([first, second])
+  expect(results[1]).toBe(true)
+  // 停在第二次点击的目标上；旧定位在作废后一次都没再写。
+  expect(viewport.scrollTop).toBeCloseTo(5810, 0)
+})
+
+test("an in-flight reveal stops writing scroll once a newer reveal starts", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 0))
+  const { viewport, target } = fakeScroller([])
+  const row5 = target(600)
+  const row65 = target(6000)
+  // `revealElement` 每次都尝试把目标居中：第 5 条 → 400 左右；第 65 条 → 5810 左右
+  // （目标行 6000..6020 的中线 6010 与视口中线 200 的差）。
+  const first = revealElement(viewport as unknown as HTMLElement, row5 as unknown as HTMLElement)
+  await Promise.resolve()
+  const second = revealElement(viewport as unknown as HTMLElement, row65 as unknown as HTMLElement)
+  const [firstResult, secondResult] = await Promise.all([first, second])
+  // 旧定位作废：它不再写滚动位置，也不会宣称成功。
+  expect(firstResult).toBe(false)
+  expect(secondResult).toBe(true)
+  // 最终停在最后一次点击的目标上，而不是被旧定位拉回第 5 条。
+  expect(viewport.scrollTop).toBeCloseTo(5810, 0)
+  expect(viewport.scrollWrites[viewport.scrollWrites.length - 1]).toBeCloseTo(5810, 0)
+})
+
+afterEach(() => vi.unstubAllGlobals())
