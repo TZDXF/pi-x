@@ -27,7 +27,9 @@ import { useChatTurnList } from '/src/composables/useChatTurnList.ts'
 import { useWorkspaceStore } from '/src/stores/workspace.ts'
 import { useConversationSelectionsStore } from '/src/stores/conversationSelections.ts'
 import '/src/style.css'
-const lines = Array.from({ length: 12 }, (_, i) => 'Line-' + String(i + 1).padStart(2, '0') + ' readable words')
+// ?long：100 行的长提问 —— 展开它带来的高度增量远超历史前插，用来验证补偿只算前插。
+const lineCount = new URLSearchParams(location.search).has('long') ? 100 : 12
+const lines = Array.from({ length: lineCount }, (_, i) => 'Line-' + String(i + 1).padStart(2, '0') + ' readable words')
 const visible = lines.join('\\n')
 const parent = '<aux_parent_context>\\nImmutable context.\\n</aux_parent_context>\\n\\n'
 const target = { kind: 'user', id: 1, text: visible, contextText: parent + visible }
@@ -117,7 +119,10 @@ async function quoteLineEleven(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "引用到输入框" }).click()
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await expect(page.locator(badge)).toHaveCount(1)
-  await page.locator(toggle).click()
+  // 准备动作（不是被测行为）：长提问里"收起提问"按钮可能已被滚到视口外很远，pointer 点击
+  // 会先触发自动滚动、命中目标容易漂移（WebKit 实测会点空）；摘要浮层也可能盖住它。
+  // 这里直接派发一次 click 收起气泡，把状态准备成"收起 + 无徽标"。
+  await page.locator(toggle).evaluate(element => (element as HTMLElement).click())
   await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "false")
   await expect(page.locator(badge)).toHaveCount(0)
 }
@@ -245,6 +250,84 @@ test("a stale lazy-history timeline click never navigates after its page resolve
   })
   // 旧点击的目标**没有**被停到视口顶端（可能在上方也可能在下方，关键是没被"导航到位"）。
   expect(Math.abs(finalTop.rowTop - 24), "the stale target is not parked at the viewport top").toBeGreaterThan(100)
+})
+
+/**
+ * 分页等待期间**展开折叠提问并完成引用定位**（TZD-138 第九轮）。
+ *
+ * QA 复现：展开带来的高度增量会被旧实现误当成"前插量"（旧实现跨这段异步等待比较列表总高），
+ * 前插一落地就把刚定位的正文与徽标滚出视口（可见比例 100% → 0%）。
+ * 修复后补偿只算**前插行的实际高度**，因此这两样在停稳后仍然完整可见。
+ */
+test("expanding and locating during paging keeps the quoted text visible after prepend", async ({ page }) => {
+  await page.goto(`${harness!.url}?long`)
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await page.locator(shell).dispatchEvent("virtual-reveal")
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  // 收起态先保存第 11 行的引用。
+  await quoteLineEleven(page)
+  await expect(page.locator(badge)).toHaveCount(0)
+  await instrumentScroll(page)
+
+  // 1) 点尚未挂载的历史节点：进入分页等待。
+  await page.locator("button.timeline-node").click()
+  await page.waitForFunction(
+    () => typeof (window as unknown as { qa: { releaseHistory?: unknown } }).qa.releaseHistory === "function",
+  )
+  // 2) 等待期间展开提问并完成引用定位（这正是旧实现把"展开高度"误算成前插的场景）。
+  await locateFromSummary(page)
+  await page.evaluate(async () => await (window as unknown as { qa: { earlier: Promise<unknown> } }).qa.earlier)
+  await expect(page.locator(toggle)).toHaveAttribute("aria-expanded", "true")
+  await expect(page.locator(badge)).toHaveCount(1)
+  // 定位完成时，第 11 行与徽标都已完整可见。
+  await expect(page.locator(badge)).toBeInViewport({ ratio: 0.95 })
+
+  // 3) 释放分页：历史数据照常补上，旧点击已经过期不导航，而且**前插补偿只算前插**。
+  await page.evaluate(async () => {
+    const qa = window as unknown as {
+      qaWrites: { phase: string }
+      qa: { releaseHistory: () => void; historyNavigation: Promise<unknown> }
+    }
+    qa.qaWrites.phase = "history resolved after quote"
+    qa.qa.releaseHistory()
+    await qa.qa.historyNavigation
+  })
+  await expect(page.locator('[data-message-id="111"][data-virtual-mounted]')).toHaveCount(1)
+  const writes = await page.evaluate(
+    () => (window as unknown as { qaWrites: { writes: { phase: string }[] } }).qaWrites.writes,
+  )
+  expect(
+    writes.filter(write => write.phase === "history resolved after quote"),
+    "the stale timeline click must not scroll after its page resolves",
+  ).toEqual([])
+  // 停稳后（几何计算，避免像素级抖动）：刚定位的第 11 行与徽标都还在视口里。
+  const settled = await page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const text = document.querySelector('[data-message-id="1"] [data-prompt-text]') as HTMLElement
+    const badgeEl = document.querySelector('[data-message-id="1"] [data-selection-anchor]') as HTMLElement
+    const logRect = log.getBoundingClientRect()
+    const overlapRatio = (rect: DOMRect) =>
+      rect.height
+        ? Math.max(0, Math.min(rect.bottom, logRect.bottom) - Math.max(rect.top, logRect.top)) / rect.height
+        : 0
+    const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT)
+    let node = walker.nextNode()
+    while (node && !node.textContent?.includes("Line-11")) node = walker.nextNode()
+    const range = document.createRange()
+    if (node) {
+      const index = node.textContent!.indexOf("Line-11")
+      range.setStart(node, index)
+      range.setEnd(node, index + 7)
+    }
+    return {
+      lineRatio: node ? overlapRatio(range.getBoundingClientRect()) : 0,
+      badgeRatio: overlapRatio(badgeEl.getBoundingClientRect()),
+      rows: (window as unknown as { qa: { session: { entries: unknown[] } } }).qa.session.entries.length,
+    }
+  })
+  expect(settled.rows, "history data is still committed").toBe(88)
+  expect(settled.lineRatio, "the selected line stays visible after the prepend").toBeGreaterThan(0.95)
+  expect(settled.badgeRatio, "the selection badge stays visible after the prepend").toBeGreaterThan(0.95)
 })
 
 test("a current lazy-history timeline click still navigates and passes its request identity on", async ({ page }) => {

@@ -111,31 +111,62 @@ export function useChatTurnList(deps: {
    * 历史分页会把一整页更早的消息**插到最前面**：即便 `scrollTop` 不动，用户眼前的内容也会
    * 整体下移（QA 实测：引用正文跑到视口顶下 4608px）。
    *
-   * 做法：按**内容高度增量**把可见内容钉在原处（前插发生在可见行之上，`scrollTop` 跟着
-   * 内容总高的变化同步移动，眼前这批内容就不会跑），并连续跟踪若干帧 —— 前插出来的行先是
-   * 占位估算高度（`VirtualMessage`），随后陆续换成真实高度，总量还会继续变化。
+   * 补偿量必须**只算前插本身**：不能跨这段异步等待去比"列表总高" —— 等待期间用户完全可能
+   * 展开了折叠提问、或做完了一次引用定位，这些高度变化都不是前插，按总高差补会把人刚定位
+   * 的正文与徽标直接滚出视口（QA 三内核复现：可见比例 100% → 0%）。
    *
-   * 与 `VirtualMessage` 的行高补偿**互斥**（`withAnchorLock`）：两边都按增量补会互相追高、
-   * 把内容顶出视口。它刻意**不是导航**：只固定"此刻正在读的内容"；用户更晚发起的定位
-   * （`isRevealActive`）接管滚动后这里立刻让位，绝不覆盖更新的意图。
+   * 做法：点击那一刻记下**已存在的消息 id**，分页落地后新增的 id 全部是前插行，且都在
+   * 参照行之上 —— 它们的实际高度之和就是前插高度。新行先是占位估算高度
+   * （`VirtualMessage`），随后陆续换成真实高度，所以要逐帧累积"这次新增了多少"，
+   * 而不是一次性加总高差。
+   *
+   * 与 `VirtualMessage` 的行高补偿**互斥**（`withAnchorLock`），否则两边都补会互相追高。
+   * 它刻意**不是导航**：只固定"此刻正在读的内容"；用户更晚发起的定位（`isRevealActive`）
+   * 接管滚动后这里立刻让位，绝不覆盖更新的意图。
    */
-  async function holdReadingContent(scrollHeight: number, frames = 14) {
-    let known = scrollHeight
+  /** 记录点击那一刻已存在的消息 id（分页新增的 id 就是前插行）。 */
+  function captureKnownRows(): { ids: Set<number>; scope: string | null } {
+    return { ids: new Set(session.entries.map(entry => entry.id)), scope: session.sessionFile }
+  }
+  /** 前插行的实际高度之和（含尚未真实测量的占位行）。 */
+  function prependHeight(ids: Set<number>, viewport: HTMLElement): number {
+    let total = 0
+    for (const row of Array.from(viewport.querySelectorAll("[data-message-id]"))) {
+      const id = Number(row.getAttribute("data-message-id"))
+      if (ids.has(id)) continue
+      total += row.getBoundingClientRect().height
+    }
+    return total
+  }
+  async function holdReadingContent(known: { ids: Set<number>; scope: string | null } | null, frames = 16) {
+    if (!known || known.scope !== session.sessionFile) return
+    const handle = conversation.value
+    // 测试替身/非 DOM 宿主没有行几何能力：跳过补偿，不影响导航本身。
+    if (!handle?.historyViewport) return
+    const probe = handle.historyViewport()
+    if (!probe || typeof probe.querySelectorAll !== "function") return
     const hold = async () => {
-      for (let frame = 0; frame < frames; frame++) {
+      let knownHeight = 0
+      let stable = 0
+      for (let frame = 0; frame < frames && stable < 4; frame++) {
         await nextTick()
         await waitFrame()
+        // 有更新的定位正在滚动：让位，不去争滚动位置（否则会把用户的意图顶掉）。
         if (conversation.value?.isRevealActive?.()) return
         const viewport = conversation.value?.historyViewport?.()
-        if (!viewport || !viewport.isConnected) return
-        const delta = viewport.scrollHeight - known
-        if (Math.abs(delta) < 1) continue
+        if (!viewport || !viewport.isConnected || known.scope !== session.sessionFile) return
+        const current = prependHeight(known.ids, viewport)
+        const delta = current - knownHeight
+        if (Math.abs(delta) < 1) {
+          stable += 1
+          continue
+        }
         viewport.scrollTop += delta
-        known = viewport.scrollHeight
+        knownHeight = current
+        stable = 0
       }
     }
-    const handle = conversation.value
-    if (handle?.withAnchorLock) await handle.withAnchorLock(hold)
+    if (handle.withAnchorLock) await handle.withAnchorLock(hold)
     else await hold()
   }
 
@@ -150,12 +181,12 @@ export function useChatTurnList(deps: {
      * 有用的副作用），但已过期的点击**不得再导航**（`stopScroll` / `scrollToMessage` 都不发）。
      */
     const request = conversation.value?.beginRevealRequest?.() ?? null
-    // 未挂载的节点会**前插一整页历史**：先记下当前内容总高，提交后按增量把眼前的内容钉住
-    // （只固定阅读内容，不是导航，也不覆盖更新的定位意图）。
-    const reading = turn.entryId == null ? (conversation.value?.historyViewport?.()?.scrollHeight ?? null) : null
+    // 未挂载的节点会**前插一整页历史**：先记下此刻已存在的消息，提交后只按前插行的实际
+    // 高度补偿（只固定阅读内容，不是导航，也不覆盖更新的定位意图）。
+    const known = turn.entryId == null ? captureKnownRows() : null
     // Unmaterialized turns load their history pages first, then scroll.
     const id = turn.entryId ?? (await session.revealTimelineTurn(turn.id))
-    if (reading !== null) await holdReadingContent(reading)
+    await holdReadingContent(known)
     if (id == null) return
     // 分页期间已有更新的定位：数据照常保留，但这次点击不再抢滚动位置。
     if (request && !request.isCurrent()) return
