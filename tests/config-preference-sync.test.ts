@@ -737,6 +737,47 @@ test("an unclaimable legacy snapshot keeps the local intent and resolves via one
   expect(theme.value.value).toBe("system")
 })
 
+test("a delayed authoritative read never overwrites a change adopted after it started", async () => {
+  // 旧后端没有修订号：读取的响应可能比「发起之后才采纳的外部回写」更旧。
+  const module = await harness({ theme: "system", locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const locale = module.createConfigPreference({ key: "locale", defaultValue: "en" })
+
+  // 读取发出时主机是 system；响应还没回来，期间外部把主题写成 dark 并被采纳。
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  broadcast(undefined, { theme: "dark", locale: "zh-CN" })
+  expect(theme.value.value).toBe("dark")
+  expect(locale.value.value).toBe("zh-CN")
+
+  network.resolve({ preferences: { theme: "system", locale: "en" } })
+  expect(await refreshing).toBe(true)
+  // 旧响应不能把这些 key 盖回 system/en；其余 key 照常以主机为准。
+  expect(theme.value.value).toBe("dark")
+  expect(locale.value.value).toBe("zh-CN")
+})
+
+test("a single remaining pending echo still blocks a duplicate full snapshot from reverting", async () => {
+  // 旧后端：只剩一笔待回执时，「别的键写入」广播的重复旧值同样不能清队、不能让显示倒退。
+  const module = await harness({ theme: "system", locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const locale = module.createConfigPreference({ key: "locale", defaultValue: "en" })
+
+  await theme.set("dark")
+  await theme.set("light")
+  // 先认领第一笔（dark），只剩 light 待回执。
+  broadcast(undefined, { theme: "dark", locale: "en" })
+  expect(theme.value.value).toBe("light")
+  // 携带旧主题 dark 的「locale 广播」：只剩一笔也要保护，不能倒退到 dark。
+  broadcast(undefined, { theme: "dark", locale: "zh-CN" })
+  expect(theme.value.value).toBe("light")
+  expect(locale.value.value).toBe("zh-CN")
+  // 最后确认 light：显示与主机一致。
+  broadcast(undefined, { theme: "light", locale: "zh-CN" })
+  expect(theme.value.value).toBe("light")
+})
+
 test("a legacy host without revisions degrades to bounded FIFO", async () => {
   // 旧后端：写入不返回修订号、事件也不携带 —— 从初始化起就是这种形态。
   const module = await harness({ theme: "system" }, 0, { legacyHost: true })

@@ -51,6 +51,16 @@ interface InflightWrite {
   dispatched: boolean
 }
 
+/**
+ * 主机状态的「改动序号」与每个 key 最近一次被改动的序号。
+ *
+ * 旧后端没有修订号，一次主动读取的响应可能比它发起后已采纳的推送更旧（例：读取抓到
+ * `system`，响应返回前已经采纳了外部回写的 `dark`）。用改动序号记录「读取发起之后
+ * 哪些 key 变过」，这些 key 的旧响应值就不再生效，并再读一次消除歧义。
+ */
+let stateVersion = 0
+const knownVersions = new Map<string, number>()
+
 /** 我们已知的主机 preferences（按 key 带上得知时的修订号）。**不是**显示值。 */
 const known = new Map<string, KnownValue>()
 /**
@@ -143,6 +153,17 @@ function effectiveRaw(key: string): string | undefined {
   return known.get(key)?.raw
 }
 
+/** 记录某个 key 的主机状态发生了改动（旧的主动读取响应据此判断是否已过时）。 */
+function markChanged(key: string) {
+  stateVersion += 1
+  knownVersions.set(key, stateVersion)
+}
+
+function forget(key: string) {
+  if (!known.delete(key)) return
+  markChanged(key)
+}
+
 /**
  * 采用快照里的一个 key（写入**主机状态**层）。
  * 只有比我们已知的更新（或同级）才写；若已知「该修订上主机没有这个 key」，更旧的快照不能复活它。
@@ -153,7 +174,9 @@ function adopt(key: string, raw: string, revision: number) {
   if (knownRev != null && typeof revision === "number" && knownRev > revision) return
   // 更旧的快照里没有这个 key，而更新的完整快照里也没有：说明主机那里它已不存在。
   if (typeof revision === "number" && coverage && revision < coverage.revision && !coverage.keys.has(key)) return
+  const unchanged = known.get(key)?.raw === raw
   known.set(key, { raw, revision })
+  if (!unchanged) markChanged(key)
 }
 
 /** 记录一份完整快照的覆盖范围（修订 + 它列出的 key）。 */
@@ -164,7 +187,7 @@ function recordCoverage(revision: number, keys: Set<string>) {
   for (const key of [...known.keys()]) {
     if (keys.has(key)) continue
     const knownValue = known.get(key)!
-    if (knownValue.revision !== null && knownValue.revision <= revision) known.delete(key)
+    if (knownValue.revision !== null && knownValue.revision <= revision) forget(key)
   }
 }
 
@@ -207,7 +230,7 @@ function clearFailedOverrides() {
  */
 function replacePreferences(
   next: Record<string, string> | undefined,
-  snapshot: { revision?: number; authoritative?: boolean } = {},
+  snapshot: { revision?: number; authoritative?: boolean; readStartedAt?: number } = {},
 ) {
   const incoming = next ?? {}
   const revision = effectiveRevision(snapshot.revision)
@@ -222,16 +245,33 @@ function replacePreferences(
     }
     recordCoverage(revision, new Set(keys))
   } else if (snapshot.authoritative) {
-    // 旧后端主动读取：整表即主机真值。命令已返回的旧写入不再逐笔确认 —— 否则要读多次，
-    // 且键被外部删掉时也永远不会回落到默认值。
-    for (const key of [...unseen.keys()]) if (!inflight.has(key)) unseen.delete(key)
+    // 旧后端主动读取：整表即主机真值 —— 但**发起这份读取之后**已被采纳的更新更真实。
+    // `readStartedAt` 是发起读取时的改动序号；此后变过的 key 一律不采用这份旧响应，
+    // 并再读一次消除歧义（否则会把已经生效的外部回写盖回读取时的旧值）。
+    const readStartedAt = typeof snapshot.readStartedAt === "number" ? snapshot.readStartedAt : null
+    const isSuperseded = (key: string) => readStartedAt !== null && (knownVersions.get(key) ?? 0) > readStartedAt
+    let superseded = false
+    for (const key of [...unseen.keys()]) {
+      if (inflight.has(key) || isSuperseded(key)) continue
+      unseen.delete(key)
+    }
     for (const key of keys) {
+      if (isSuperseded(key)) {
+        superseded = true
+        continue
+      }
       adopt(key, incoming[key]!, -1)
     }
     for (const key of [...known.keys()]) {
       if (Object.prototype.hasOwnProperty.call(incoming, key)) continue
-      known.delete(key)
+      if (inflight.has(key)) continue
+      if (isSuperseded(key)) {
+        superseded = true
+        continue
+      }
+      forget(key)
     }
+    if (superseded) requestAuthoritativeResolution()
   } else {
     // 旧后端推送：可能既是「我们某笔写入的回执」，也可能是别的客户端的真实变更。
     //
@@ -262,11 +302,10 @@ function replacePreferences(
       // 值与我们已知的主机状态相同 → 这就是「别的键写入时重复广播」的整表快照，
       // 不是新的主机状态：既不改状态，也不能清掉该键的待回执记录。
       if (known.get(key)?.raw === value) continue
-      // 值与我们尚未确认的写入集合同源（本端写过的值，且该键仍有多笔待确认 / 在途写入）：
-      // 旧协议下无法把它与「重复广播」区分开。保留最新本地意图、不让显示倒退，
-      // 其余键照常合入，并交给一次权威读取裁决。
-      const pendingCount = (inflight.get(key)?.length ?? 0) + (unseen.get(key)?.length ?? 0)
-      if (pendingCount >= 2 && isOwnEarlierWrite(key, value)) {
+      // 值是本端写过的旧值、且该键仍有待确认 / 在途写入：这是「别的键写入时重复广播
+      // 的旧值」（哪怕只剩一笔），不能清队；保留最新本地意图、不让显示倒退，
+      // 其余键照常合入，并交给一次权威读取裁决（主机真值会决定它究竟是复读还是外部回写）。
+      if (isOwnEarlierWrite(key, value) && (unseen.has(key) || inflight.has(key))) {
         ambiguous = true
         continue
       }
@@ -423,9 +462,16 @@ function startReconnectListener() {
 /** 主动读取主机配置：能纠正丢事件，但不覆盖更新状态、不吞掉未被覆盖的本地写入。 */
 export async function refreshFromHost(): Promise<boolean> {
   try {
+    // 记录发起读取时的改动序号：响应返回时据此保护期间已采纳的更新（旧后端没有修订号）。
+    // 必须在任何 await 之前取值 —— 动态 import 也会让出事件循环，期间的推送会被漏算。
+    const readStartedAt = stateVersion
     const { getConfig } = await import("@/api/client/config")
     const loaded = await getConfig()
-    replacePreferences(loaded.preferences, { authoritative: true, revision: loaded.preferencesRevision })
+    replacePreferences(loaded.preferences, {
+      authoritative: true,
+      revision: loaded.preferencesRevision,
+      readStartedAt,
+    })
     return true
   } catch {
     return false
