@@ -2,8 +2,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import { createPinia, getActivePinia, setActivePinia } from "pinia"
 
 /**
- * aux（辅助对话）注册表的单测：序号分配、上限 5（含创建中）、关闭即销毁的清理序列、
- * spawn 失败的 coded error、迟到事件的墓碑丢弃。
+ * aux（辅助对话）注册表的单测：序号分配、实例数量不设上限（含创建中）、关闭即销毁的
+ * 清理序列、spawn 失败的 coded error、迟到事件的墓碑丢弃。
  *
  * 不访问任何真实模型/进程：`@/api/piClient` 全部替身，`kill` 走注入的 bridge。
  */
@@ -59,9 +59,8 @@ vi.mock("@/stores/auxChat", async importOriginal => {
   return wrapped
 })
 
-const { AUX_MAX_TABS, nextAuxOrdinal } = await import("@/lib/auxRuntime")
+const { nextAuxOrdinal } = await import("@/lib/auxRuntime")
 const {
-  auxCanOpen,
   auxCreationPending,
   auxLiveCount,
   auxSessionExisting,
@@ -123,7 +122,7 @@ test("each aux instance gets a distinct aux: runtime id, ordinal and title", asy
   expect(second?.title).toBe("aux 2")
   expect(first?.runtimeId.startsWith("aux:")).toBe(true)
   expect(first?.runtimeId).not.toBe(second?.runtimeId)
-  expect(auxTabBySidebarId(10)?.runtimeId).toBe(first?.runtimeId)
+  expect(auxTabBySidebarId("runtime:parent", 10)?.runtimeId).toBe(first?.runtimeId)
 })
 
 test("every instance carries a stable local clientId for later lease/reconnect filtering", async () => {
@@ -143,26 +142,28 @@ test("a different parent session keeps its own ordinal sequence", async () => {
   expect(other?.parentRuntimeId).toBe("runtime:b")
 })
 
-test("creating instances count against the limit of five", async () => {
-  const gates = Array.from({ length: AUX_MAX_TABS }, () => pending<void>())
-  expect(auxCanOpen()).toBe(true)
-  // 五个父会话各自开一个：spawn 都还悬着（status === "creating"），但名额已被占用。
-  for (let index = 0; index < AUX_MAX_TABS; index++) {
-    const opening = openAux(`runtime:p${index}`, {
-      tabId: index + 1,
-      titlePrefix: "aux",
-      spawn: () => gates[index]!.promise,
-    })
+test("creating instances do not hit the former global limit of five", async () => {
+  const gates = Array.from({ length: 7 }, () => pending<void>())
+  const openings: Promise<unknown>[] = []
+  // 前 7 个 spawn 全部悬着：创建中的实例也不占用任何全局名额。
+  for (let index = 0; index < gates.length; index++) {
+    openings.push(
+      openAux(`runtime:p${index}`, {
+        tabId: index + 1,
+        titlePrefix: "aux",
+        spawn: () => gates[index]!.promise,
+      }),
+    )
     expect(auxLiveCount()).toBe(index + 1)
-    expect(opening).toBeInstanceOf(Promise)
   }
   expect(auxTabs().every(tab => tab.status === "creating")).toBe(true)
-  // 第 6 个必须被拒绝（返回 null），而不是先入表再补删。
-  expect(await openAux("runtime:p6", { tabId: 99, titlePrefix: "aux", spawn: async () => {} })).toBeNull()
-  expect(auxLiveCount()).toBe(AUX_MAX_TABS)
-  expect(auxCanOpen()).toBe(false)
+  // 旧实现会在第 6 个返回 null；现在第 8 个仍应正常创建。
+  const extra = await openAux("runtime:extra", { tabId: 99, titlePrefix: "aux", spawn: async () => {} })
+  expect(extra).not.toBeNull()
+  expect(extra?.status).toBe("ready")
+  expect(auxLiveCount()).toBe(8)
   for (const gate of gates) gate.resolve()
-  await Promise.all(auxTabs().map(tab => Promise.resolve(tab)))
+  await Promise.all(openings)
 })
 
 test("the same parent gesture is deduplicated into one creation", async () => {
@@ -176,7 +177,7 @@ test("the same parent gesture is deduplicated into one creation", async () => {
   expect(await second).toBe(await first)
   expect(auxCreationPending("runtime:parent")).toBe(false)
   // 整个手势只建了一个实例，槽位 2 从未对应任何实例。
-  expect(auxTabBySidebarId(2)).toBeUndefined()
+  expect(auxTabBySidebarId("runtime:parent", 2)).toBeUndefined()
 })
 
 test("a spawn failure keeps the instance with its coded error and does not kill it", async () => {
@@ -275,7 +276,7 @@ test("closeAux is idempotent and kills exactly once", async () => {
 test("closing while the creation is still in flight kills the late process instead of reviving it", async () => {
   const gate = pending<void>()
   const opening = openAux("runtime:parent", { tabId: 5, titlePrefix: "aux", spawn: () => gate.promise })
-  const tab = auxTabBySidebarId(5)!
+  const tab = auxTabBySidebarId("runtime:parent", 5)!
   await closeAux(tab.runtimeId)
   gate.resolve()
   expect(await opening).toBeNull()
@@ -335,10 +336,10 @@ test("aux ui store keeps an unanswered question visible for the sidebar badge", 
   const tab = await openAux("runtime:parent", { tabId: 13, titlePrefix: "aux", spawn: async () => {} })
   auxUiFor(tab!.runtimeId).handleRequest({ type: "extension_ui_request", id: "q", method: "confirm" } as never)
   const { auxHasPendingQuestion, auxTitleForSidebarId } = await import("@/stores/auxChat")
-  expect(auxHasPendingQuestion(13)).toBe(true)
-  expect(auxTitleForSidebarId(13)).toBe("aux 1")
+  expect(auxHasPendingQuestion("runtime:parent", 13)).toBe(true)
+  expect(auxTitleForSidebarId("runtime:parent", 13)).toBe("aux 1")
   auxUiFor(tab!.runtimeId).resolveRequest("q")
-  expect(auxHasPendingQuestion(13)).toBe(false)
+  expect(auxHasPendingQuestion("runtime:parent", 13)).toBe(false)
 })
 
 test("drafts are memory-only and cleared per runtime on close", async () => {

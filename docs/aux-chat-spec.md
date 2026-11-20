@@ -74,13 +74,18 @@
 
 ## 5. 生命周期
 
-- Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。
+- Tab 注册表模块级 `src/stores/auxChat.ts`（键 runtimeId，含 parentRuntimeId/clientId/tabId/ordinal），`ChatView` 挂载时 hydrate；切父会话 Pane 卸载、store 与进程存活，回切重建。`force-mount + v-show` 只保证同父组件内隐藏不卸载。槽位 id 由各父会话分别从 1 分配，显示、标题、未答标记必须按 `parentRuntimeId + tabId` 联合查找，不能用裸 tabId 全局匹配。
+- **槽位恢复按类型、不按数字 id**（TZD-131）：`aux` 槽位永不落盘，侧栏组被 24 组容量 LRU 淘汰后重挂载时，落盘的普通 Tab 会**重新分配** 1..n 的 id —— 可能与存活实例记着的旧 `tabId` 撞号（先 aux(1) 再 files(2)，重挂载后 files 拿 1）。`useAuxTabs` 的 `restoreSlots` 因此以“该 id 上确实是一个 `aux` 槽位、且未被同父会话的另一个实例认领”为判据补槽位（未被认领的现存 `aux` 槽位优先复用，避免旧 id 被普通 Tab 顶掉时多出一格空槽），关闭与划词路由（`closeTab` / `activeAuxTab`）同样按「**本父会话 + 本组槽位**」解析：本组没有该槽位或坐的是普通 Tab 时只撤槽位、不发 kill（不按裸 id 查全局实例表 —— A、B 的首个 aux 也都是 `id=1`，否则重复关闭或过期手势会误关另一会话的存活实例）；坐的是 `aux` 槽位时先同步撤槽位（TZD-130），再按已解析实例的 `runtimeId` 关进程；否则恢复后 aux 没有入口，关闭同号普通 Tab 会发出 `kill(aux)` 中断用户对话。常驻用例：`tests/aux-slot-restore.test.ts`。
+- **异步创建收尾不用旧槽位 id**（TZD-131）：`addAux` / `openForAsk` 会等到 spawn/handshake 完成，期间身份键变化会重排槽位，创建时捕获的 id 可能已属于普通 Tab 或已不存在。因此成功时按实例**当前** `tabId` 验证“本组 aux 槽 + 该实例占据”后才激活；失败或已在途被关闭时只撤“仍为 `aux` 且无实例认领”的格，绝不按旧 id 删普通 Tab 及其落盘布局。
+- **组获准后重试补槽位**（TZD-131 收尾）：构造期补不上不是终态 —— 组数满时 `addSidebarTab` 返回 `null`，而组可能稍后才被**延迟准入**（`useSidebarTabs` 的排队回调）。`useSidebarTabs` 因此在组获准且带上落盘载荷后回调 `onGroupAdopted`，`useChatViewSidebar` 把它接到 `aux.restoreSlotsNow` 幂等补一次；否则存活 aux 会在侧栏无任何入口（既看不到也关不掉）。回调必须晚于 hydrate，否则刚补的 aux 槽位会被 `hydrateGroup` 的整表重建覆盖。缺槽仍不 kill。
+- **满槽补不上就收回槽位号**（TZD-131）：单个侧栏组最多 20 条，换键/淘汰重挂载时若组已满，补不上槽位的实例保留进程与 store（缺槽不 kill），但把 `tabId` 置为 `null` —— 它因此**退出**按槽位的显示/关闭查找，不会用旧号被后来的新建撞上（同父同号会让显示/关闭都命中旧的、新的没有入口）。名额一空出（关闭普通/aux Tab）先给这些实例补格，再允许新建；`addAux` / `openForAsk` 在有人等槽时优先补回它并回报该实例。
+- **投递前只看当前组入口**（TZD-131）：实例表里的 `tabId` 是"上一次分配到的号"，组被淘汰/排队/换键后与当前组无关。判据是接线层注入的 `AuxAskRouter.entry(tab)`（**必填**：槽位存在 + 类型为 `aux` + 由该实例占据，读的是**当前侧栏组**）；**没有当前 router 即视为无入口，不设实例表兜底** —— 父 `ChatView` 卸载后 router 已注销，正是"不能投递"的状态。候选过滤（`auxDeliverableFor`）、显式 target、自动路由以及**异步新建返回后**的收尾都走它，且异步返回后问的是**当前** router（已重挂载且入口有效则正常投递）。无入口一律 `unavailable`、不写引用桶；等位实例的进程、草稿与自动补槽保留（不为腾位杀既有对话）。
 - 草稿仅内存 `src/stores/auxDrafts.ts`（不写 localStorage、不改 `composerDrafts`）；附件保留原始 `File`，blob URL 由 `PromptInput.onBeforeUnmount` revoke。
 - 引用按 runtime 分桶 `src/stores/auxSelections.ts`，捕获/展示/发送/清理同源；主会话 `useChatSendControl` 的 clear 时机不变。
 - 回收（TZD-104 落地位置见 §11）：不续期探针（不经 `RpcState::process`，不刷 `last_activity`；`last_user_activity` 只在 prompt/steer/follow_up 更新）+ 租约（`aux_claim/aux_release` 心跳 20s，**租约 TTL 90s**：停心跳的条目在 claim/list/reap 任一入口惰性过期，过期只让 `claims` 归零、仍由 30 分钟空闲门槛兜底）+ 三条件（非流式非待答无在途 ∧ 无未过期租约 ∧ 空闲 >30 分钟）。判定与 kill 在租约表同一把锁内仲裁（`begin_reap` 置 `reaping` 墓碑，`claim` 见墓碑即 `auxLeaseReaping`）；`aux_release` **只认 lease token**，clientId 只是标识不是凭证。`aux_*` 只注册为宿主命令（桌面 `lib.rs` + 远程 dispatch），**不进 JSONL 白名单**，不写 stdin、不改 policy。
-- 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例计入上限（5），关闭置 `cancelRequested`。
+- 销毁：墓碑 → 取消计时器 → `session.clear()` → `ui.clear()` + 补 `toasts`/`toastTimers`/`pendingEditorText`/`responding` → 清草稿与引用桶 → `rpc_kill` → 释放租约 → store `$dispose()` + Pinia state。迟到 `pi://exit`/事件走 `auxStore.get(id)`，墓碑命中丢弃，不 `sessionFor` 重建。创建中的实例同步入表，关闭置 `cancelRequested`。
 - 对话框：`ExtensionDialog` 传 aux `session-id`；`StatusBar` 只展示；隐藏 Tab 不渲染弹框并出未答标记；有 timeout 由 `activity.rs` 过期，无 timeout 关闭时先发 `cancelled`；aux 的 `notifyQuestion`/`notifyTurnComplete`/`setTitle` 静默。
-- 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；上限 5 → 约 0.75GB 空闲基线。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
+- 资源：单进程空闲基线约 138MB RSS（实测，非峰值）；实例数量不设辅助对话专属上限，通用侧栏容量与 30 分钟空闲回收规则不变。artifacts 上限 200 条 / 32 MiB（含 before+after），超限丢最旧并标记；单文件 2 MiB（`pix-file-changes.js:6`）。`pix-file-changes` 只跟踪成功的 `edit`/`write`，bash/powershell 改文件不产卡。**远程 aux 不承诺差异卡**（`rpc.rs:303` 仅 LocalPi 注入）。
 
 ## 6. 验收矩阵
 
@@ -112,8 +117,8 @@
 
 | 职责                                                                | 文件                                                                      |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 实例注册表（Tab/序号/上限 5/关闭销毁、clientId）                    | `src/stores/auxChat.ts`                                                   |
-| 纯逻辑（前缀、上限、序号分配）                                      | `src/lib/auxRuntime.ts`                                                   |
+| 实例注册表（Tab/序号/关闭销毁、clientId）                           | `src/stores/auxChat.ts`                                                   |
+| 纯逻辑（前缀、序号分配）                                            | `src/lib/auxRuntime.ts`                                                   |
 | 草稿（仅内存）                                                      | `src/stores/auxDrafts.ts` + `src/composables/useAuxDraft.ts`              |
 | `aux_spawn` 前端调用（独立字段，无拼接）                            | `src/api/client/process.ts` 的 `spawnAuxPi`                               |
 | 启动上下文（继承模型/工作区/SSH 连接）+ 逐段判活的 `initAuxSession` | `src/lib/auxLaunch.ts`（纯逻辑）+ `src/lib/auxSpawn.ts`（调用）           |
@@ -133,8 +138,6 @@
   记名）与重连恢复（只恢复本机 clientId 条目，见 §11）。**不另生成第二份标识**。
 - `activeAuxFor` / `closeAllFor`：划词复用与"父会话关闭即销毁"（§5/§10 已在用）。
 - `auxLiveCount` / `auxModelTargetKey` / `hasConversation`：仅测试与诊断使用，可接受。
-- `RightSidebar` 的 `aux-limit` 事件：名额已满时入口本就禁用，该事件是"用户仍点到
-  禁用态"的可执行提示兜底，实际几乎不可达但保留。
 
 与规格正文的**两处写法差异**（**非等价**：§5 的 `cancelRequested` 语义由下面的机制实现）：
 
@@ -170,7 +173,7 @@ refreshThinkingLevels → applyRememberedSelection`，关闭落在首批飞行�
    **对公共 `stores/session.ts` 的唯一改动是加宽导出**：`refreshThinkingLevels` 原本
    只在 store 内部用，`initAuxSession` 需要逐段调用它，因此进了 store 的返回值；
    `init()` 本身一行未改（主会话行为不变）。
-   `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser），上限 5 是 `auxChat` 自己的计数，与侧栏 20 条 / 24 组无关。
+   `aux` 槽位永不落盘（`persistedFromTabs` / `normalizePersistedSidebarTabs` 的白名单只含 review/files/terminal/browser）。辅助对话不设专属实例上限，通用侧栏 20 条 / 24 组规则不变。
 
 ## 9. 上下文取材与折叠块（TZD-102 落地）
 
@@ -240,9 +243,9 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 且**不写任何桶**。入口可用时：没有 aux → 新建后投递；只有一个 aux → 直接复用；
 **有多个 aux → 浮层先展开目标选择，列出全部已有对话与"新建辅助对话"，用户选择后才
 投递**。已有目标按 runtimeId 精确匹配且必须属于当前父会话，失效选项不落到其他实例；
-新建受全局 5 实例上限约束，达到上限时选择项置灰。选择已有或新建成功后都激活对应槽位。
+辅助对话不设专属实例上限，"新建辅助对话"始终可点。选择已有或新建成功后都激活对应槽位。
 连点同一手势只建一个实例（`pendingCreations` 复用 + `appendConversationSelection` 判重）。
-入口缺失/名额满/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。aux 面板内的划词仍
+入口缺失/新建未完成/引用超限各有一次用户可见提示（`lib/auxAsk.ts`）。aux 面板内的划词仍
 直接进本实例，不弹目标选择。
 
 **来源身份与本地定位**（P2-4/P2-5）：桶条目带 `sourceRuntimeId`（手势发生在哪个会话）。
@@ -270,7 +273,7 @@ router 存在，再谈复用与新建；router 不存在（父 `ChatView` 已卸
 **发送与清理同源**（`composables/useChatSendControl.ts`）：`contexts` 从
 `"shared" | "none"` 扩为 `"shared" | "aux" | "none"`；`"aux"` 读本桶、序列化仍走
 `serializeComposerPromptContexts`（`# userselect:` 契约不变），发送成功后**只清本桶**
-（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可被 Esc 恢复）。关闭
+（与主会话的 clear 时机同源，含延迟发送）；`abort` 不清（文本可由停止按钮恢复）。关闭
 实例（`closeAux`）与迟到收尾（`settleLateAux`）都清本桶。
 
 验收用例：`tests/aux-selection-buckets.test.ts`（桶隔离/去重键/8000·8·16000/clear）、

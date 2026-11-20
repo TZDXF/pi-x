@@ -10,7 +10,7 @@ import { createI18n } from 'vue-i18n'
 import messages from '/src/i18n/locales/en.ts'
 import SelectionMenu from '/src/components/chat/ConversationSelectionMenu.vue'
 import ProjectFilePreview from '/src/components/ProjectFilePreview.vue'
-import { openAux, auxInstancesFor, auxCanOpen, registerAuxAskRouter, registerAuxRuntimeBridge } from '/src/stores/auxChat.ts'
+import { openAux, auxInstancesFor, registerAuxAskRouter, registerAuxRuntimeBridge } from '/src/stores/auxChat.ts'
 import { auxSelectionItems } from '/src/stores/auxSelections.ts'
 import { askAuxSelection } from '/src/lib/auxAsk.ts'
 import '/src/style.css'
@@ -25,7 +25,7 @@ let id = 0
 const open = () => openAux(parent, { tabId: ++id, titlePrefix: 'QA Aux', spawn: async () => {} })
 for (let i = 0; i < count; i++) await open()
 let active = auxInstancesFor(parent)[0]
-registerAuxAskRouter(parent, {active: () => active, open, reveal: tab => { active = tab }})
+registerAuxAskRouter(parent, {active: () => active, open, reveal: tab => { active = tab }, entry: () => true})
 window.qa = () => ({ count: auxInstancesFor(parent).length, active: active?.title, buckets: auxInstancesFor(parent).map(tab => auxSelectionItems(tab.runtimeId)) })
 createApp({setup() {
   const root = ref(null)
@@ -33,7 +33,7 @@ createApp({setup() {
   return () => q.has('file') ? h(ProjectFilePreview, {project:'qa', path:'notes.txt', auxParentRuntimeId:parent, readFile: async () => ({kind:'text', text:'File sample text for quoting', truncated:false})}) : [
     h('div', { ref: root, style: {position:'absolute', top: (q.has('bottom') ? 500 : q.has('top') ? 8 : 130)+'px', left:'60px'} },
       h('div', {'data-message-id': '42'}, h('p', {'data-selection-source':'assistant', id:'quote'}, 'Select exactly this text'))),
-    h(SelectionMenu, {root:root.value, maxTextLength:8000, auxTargets:targets.value, auxCanCreate:auxCanOpen(),
+    h(SelectionMenu, {root:root.value, maxTextLength:8000, auxTargets:targets.value,
       onAuxAsk:(payload,target) => askAuxSelection({parentRuntimeId:parent, payload, target, t:i18n.global.t, toast:console.warn})})
   ]
 }}).use(pinia).use(i18n).mount('#app')
@@ -101,21 +101,24 @@ test("existing precisely routes and activates, then explicit new does not reuse 
     })
 })
 
-test("zero opens directly; one reuses without picker; five disables new", async ({ page }) => {
-  for (const count of [0, 1, 5]) {
+test("zero opens directly; one reuses without picker; five still allow new", async ({ page }) => {
+  for (const count of [0, 1]) {
     await page.goto(harness.url + "?count=" + count)
     await select(page)
-    if (count === 5) {
-      await expect(page.getByRole("menuitem", { name: "New auxiliary chat" })).toBeDisabled()
-      await page.getByRole("menuitem", { name: "QA Aux 5" }).click()
-      await expect.poll(async () => (await state(page)).active).toBe("QA Aux 5")
-    } else {
-      await expect
-        .poll(() => state(page))
-        .toMatchObject({ count: 1, active: "QA Aux 1", buckets: [[{ text: "Select exactly this text" }]] })
-      await expect(page.getByRole("menu")).toHaveCount(0)
-    }
+    await expect
+      .poll(() => state(page))
+      .toMatchObject({ count: 1, active: "QA Aux 1", buckets: [[{ text: "Select exactly this text" }]] })
+    await expect(page.getByRole("menu")).toHaveCount(0)
   }
+
+  // 辅助对话不设专属实例上限（TZD-127）：已有 5 个时新建项仍可点，且真的会再开一个。
+  await page.goto(harness.url + "?count=5")
+  await select(page)
+  const newChat = page.getByRole("menuitem", { name: "New auxiliary chat" })
+  await expect(newChat).toBeEnabled()
+  await newChat.click()
+  await expect.poll(async () => (await state(page)).count).toBe(6)
+  await expect.poll(async () => (await state(page)).active).toBe("QA Aux 6")
 })
 
 test("actual file preview carries parent, path and line to exact target", async ({ page }) => {

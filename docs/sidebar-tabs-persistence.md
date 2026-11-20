@@ -38,6 +38,10 @@ terminal"当成活着的 shell，重挂载会静默新开一个 shell 并冒充"
     不写的话磁盘上只剩草稿键，完整重启后 Tab 全丢。
   - **源为空**：**不写回**（新键可能已有磁盘载荷，写 `null` 会把它删掉），也不把新键标记 hydrated
     （否则随后到达的落盘条目会被 `isHydrated` 永久挡住）。
+  - **源只有不落盘的临时槽位（`aux`）**（TZD-131）：同上按“空源”处理。这类组只是
+    LRU 淘汰后由 `restoreSlots` 在临时运行时键上补出来的，搬过去会整组顶掉目标文件键的
+    普通 Tab，写回的 `null` 还会删掉磁盘条目（丢 Tab 布局）。存活 aux 实例由获准后的
+    `onGroupAdopted` 在**目标组**上重新补槽位。
 - 迁移**直接搬内存状态**，不经落盘载荷重建：重建会把 terminal 一律标 `stale`，而这条路径上
   `ChatView` 并没有卸载、shell 还活着，标失联就是伪造死亡。
 
@@ -147,5 +151,8 @@ rounds accumulate no ghost holds`）；
 - 只做 Tab 结构恢复，不把 `RightSidebar` 提升为 App 级驻留。
 - `aux`（TZD-94 辅助对话）Tab 明确不落盘：写侧白名单直接丢弃，读盘时按未知 kind 丢弃，
   且只含未知 kind 的组会被整条丢弃（不报错，不影响其它组）。
+  正因如此，组被 LRU 淘汰后重挂载时 `aux` 槽位一定不在列表里，而普通 Tab 会拿到
+  **重新分配**的数字 id：恢复必须按槽位类型（`type === "aux"`）认定，不能只比数字 id
+  （TZD-131，见 `docs/aux-chat-spec.md` §5）。
 - 后端 `normalize` 做**局部净化**（超限截断 / 全非法则丢该条 / `active` 越界与负数钳制），
   单条脏记录不会再让整个 `workspace.json` 读取失败；被污染的键也能用删除 patch 清掉。

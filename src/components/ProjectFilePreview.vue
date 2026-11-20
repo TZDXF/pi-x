@@ -20,7 +20,7 @@ import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelect
 import type { AuxAskPayload, AuxAskTarget } from "@/lib/auxSelection"
 import { askAuxSelection } from "@/lib/auxAsk"
 import { activeRuntimeId } from "@/stores/conversations"
-import { auxCanOpen, auxInstancesFor } from "@/stores/auxChat"
+import { auxDeliverableFor } from "@/stores/auxChat"
 import { useCodeCommentsStore, type PendingCodeComment } from "@/stores/codeComments"
 import { useUiStore } from "@/stores/conversations"
 import { Markdown } from "vue-stream-markdown"
@@ -52,6 +52,11 @@ const props = withDefaults(
     /** Store key for pending code comments; defaults to project. When set and
      *  different, comments carry `root` so the prompt can address the file. */
     commentProject?: string
+    /**
+     * 会话根（回跳预览传入）：`commentProject` 缺省时只看它判断文件是否在会话根之外，
+     * 保证从回跳预览再次划词仍能保留来源根。不影响待发送 chip 的展示（那由
+     * `commentProject` 决定，aux 无 composer 接收方时不应出现在场 chip）。 */
+    selectionProject?: string
     /** Bumped by the file tree when the file changed on disk; reloads the content. */
     revision?: number
     /**
@@ -204,9 +209,9 @@ const markdownRoot = ref<HTMLElement | null>(null)
 const menuRoot = computed<HTMLElement | null>(() => (showCode.value ? codeRoot.value : markdownRoot.value))
 const auxTargets = computed(() => {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
-  return parentRuntimeId ? auxInstancesFor(parentRuntimeId) : []
+  // 只列可打开的实例：等槽位的实例（`tabId === null`）没有面板，不能当目标（TZD-131）。
+  return parentRuntimeId ? auxDeliverableFor(parentRuntimeId) : []
 })
-const auxCanCreate = computed(() => auxCanOpen())
 async function onAuxAsk(payload: AuxAskPayload, target?: AuxAskTarget) {
   const parentRuntimeId = props.auxParentRuntimeId ?? activeRuntimeId.value
   if (!parentRuntimeId) return
@@ -230,6 +235,15 @@ const commentProject = computed(() => props.commentProject ?? props.project)
 const commentRoot = computed(() =>
   props.commentProject && !samePath(props.commentProject, props.project) ? props.project : undefined,
 )
+/**
+ * 划词引用的来源根：优先沿用批注归属算出的跨目录根；回跳预览没有 `commentProject`
+ * （aux 不消费项目级批注）时改用会话根，否则再次划词会退化成相对路径、回到会话主目录。
+ */
+const selectionRoot = computed(() => {
+  if (commentRoot.value) return commentRoot.value
+  const session = props.selectionProject
+  return session && !samePath(session, props.project) ? props.project : undefined
+})
 /** 当前文件已确认、待发送的批注：预览侧的内联卡片直接从共享 store 派生。 */
 const pendingComments = computed(() =>
   props.commentProject !== undefined && codeComments.project === commentProject.value
@@ -582,9 +596,9 @@ onBeforeUnmount(() => {
     mode="code"
     :root="menuRoot"
     :path="path"
+    :source-root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     :aux-targets="auxTargets"
-    :aux-can-create="auxCanCreate"
     @aux-ask="onAuxAsk"
   />
 </template>

@@ -1,6 +1,13 @@
 import { effectScope } from "vue"
-import { beforeEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
+/**
+ * 关闭 aux 槽位的顺序（TZD-130）：先同步撤槽位，再销毁实例。
+ *
+ * `isolate: false`：模块缓存跨测试文件共享。每个用例前 `vi.resetModules()` 再动态
+ * import，`vi.mock` 才会作用到本次求值的模块 —— 否则可能拿到别的文件已缓存的真实
+ * 注册表，两个来源的顺序断言会随执行顺序时好时坏。
+ */
 const controls = vi.hoisted(() => ({
   events: [] as string[],
   closeAux: vi.fn(),
@@ -13,19 +20,27 @@ vi.mock("@/lib/auxSpawn", () => ({
   spawnAuxRuntime: async () => {},
 }))
 vi.mock("@/stores/auxChat", () => ({
-  auxCanOpen: () => true,
   auxCreationPending: () => false,
-  auxInstancesFor: () => [],
+  // 本组 7 号 `aux` 槽对应的实例（关闭入口按「本父会话 + 槽位」解析它）。
+  auxInstancesFor: () => [{ tabId: 7, runtimeId: "aux:test", parentRuntimeId: "runtime:parent" }],
   auxPendingCreation: () => undefined,
-  auxTabBySidebarId: (id: number) =>
-    id === 7 ? { tabId: id, runtimeId: "aux:test", parentRuntimeId: "runtime:parent" } : undefined,
+  // 没有等槽位的实例：本文件只验关闭顺序。
+  auxSlotlessFor: () => [],
+  // 槽位按父会话 + id 联合定位（TZD-127）：只命中本父会话的 id=7。
+  auxTabBySidebarId: (parentRuntimeId: string, tabId: number) =>
+    parentRuntimeId === "runtime:parent" && tabId === 7
+      ? { tabId, runtimeId: "aux:test", parentRuntimeId: "runtime:parent" }
+      : undefined,
   closeAux: (...args: unknown[]) => controls.closeAux(...args),
   openAux: async () => null,
   registerAuxAskRouter: () => {},
   setAuxTabId: () => {},
 }))
 
-const { useAuxTabs } = await import("@/composables/useAuxTabs")
+afterEach(() => {
+  // 与接线用例同理：本文件的 `vi.mock` 替身不得随模块缓存漏给后续测试文件。
+  vi.resetModules()
+})
 
 function pending() {
   let resolve!: () => void
@@ -35,11 +50,15 @@ function pending() {
   return { promise, resolve }
 }
 
-beforeEach(() => {
+let useAuxTabs: (typeof import("@/composables/useAuxTabs"))["useAuxTabs"]
+
+beforeEach(async () => {
   controls.events = []
   controls.closeAux.mockReset()
   controls.closeSidebarTab.mockReset()
   controls.closeSidebarTab.mockImplementation((id: number) => controls.events.push(`tab:${id}:close`))
+  vi.resetModules()
+  ;({ useAuxTabs } = await import("@/composables/useAuxTabs"))
 })
 
 function harness() {
@@ -48,13 +67,14 @@ function harness() {
     useAuxTabs({
       runtimeId: "runtime:parent",
       session: { cwd: "C:/project" } as never,
-      ui: { pushToast: () => {} } as never,
       workspace: {} as never,
       project: () => "C:/project",
       addSidebarTab: () => 7,
       closeSidebarTab: controls.closeSidebarTab,
       activate: () => {},
-      tabs: () => [],
+      // 关闭 aux 的前提是本组**真有**一个 `aux` 槽位（TZD-131：没槽位的 id 只撤槽位、
+      // 不按数字去全局表里找实例，否则会误关另一个父会话的同号 aux）。
+      tabs: () => [{ id: 7, type: "aux" }],
       activeTabId: () => 7,
     }),
   )!

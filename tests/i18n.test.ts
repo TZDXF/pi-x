@@ -93,6 +93,13 @@ for (const locale of ["zh-CN", "en"]) {
   const messages = await loadLocale(locale)
   const i18n = createI18n({ legacy: false, locale, fallbackLocale: false, messages: { [locale]: messages } })
 
+  // 快捷键页把停止动作保留为「未绑定」（TZD-134 只移除默认 Esc），文案需中英同步。
+  test(`${locale}: stop action copy is restored and an unbound label exists`, () => {
+    expect(i18n.global.t("shortcuts.actions.stop")).toBe(locale === "en" ? "Stop generating" : "停止生成")
+    expect(i18n.global.t("settings.shortcutStop")).toBe(locale === "en" ? "Stop" : "停止生成")
+    expect(i18n.global.t("shortcuts.unbound")).toBe(locale === "en" ? "Not bound" : "未绑定")
+  })
+
   // 内置插件页新增的 pi 内置扩展说明,两个语言包必须同步。
   test(`${locale}: built-in packages tab explains pi's own builtin extensions`, () => {
     const hint = i18n.global.t("packages.builtinPiHint")

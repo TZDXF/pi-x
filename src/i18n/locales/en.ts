@@ -176,7 +176,6 @@ export default {
     creating: "Starting auxiliary chat…",
     spawnFailedUnknown: "Auxiliary chat failed to start",
     retry: "Retry",
-    limitReached: "Auxiliary chat allows at most {count} open instances; close one before adding another.",
     askFailed: "Cannot ask in auxiliary chat: no auxiliary chat entry is available for this session.",
     chooseTarget: "Choose auxiliary chat",
     newChat: "New auxiliary chat",
@@ -1408,6 +1407,7 @@ export default {
     reset: "Reset",
     resetAll: "Reset all",
     locked: "Locked",
+    unbound: "Not bound",
   },
 
   blocks: {

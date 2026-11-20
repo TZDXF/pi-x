@@ -9,8 +9,9 @@
  * （`{path, text}` + 可选 comment），因此 `# userselect:` 契约一字未改；行号等元数据
  * 只用于摘要展示与诊断，不参与去重、上限与序列化。
  *
- * 本文件保持无依赖（只读类型），便于单测直接加载。
+ * 跨目录文件与代码批注共用 `commentFilePath` 的根路径编码，其他依赖仍只读类型。
  */
+import { commentFilePath } from "@/lib/codeComments"
 import type { ConversationSelectionSource, ConversationSelectionText } from "@/lib/conversationSelections"
 
 /** 代码预览的 1 基闭区间行号。 */
@@ -44,8 +45,10 @@ export interface AuxAskPayload {
    * 行号是文件维度，跨 runtime 仍然有效）。
    */
   sourceRuntimeId?: string
-  /** 代码预览来源的文件路径（相对会话目录）；聊天来源不带。 */
+  /** 代码预览来源的文件路径（相对来源根）；聊天来源不带。 */
   path?: string
+  /** 文件实际所属根；仅跨目录来源携带，发送时编码进 path 供历史消息回跳。 */
+  root?: string
   /** 代码预览来源的行区间；聊天来源不带。 */
   lineRange?: CodeSelectionRange
   source?: ConversationSelectionSource
@@ -73,7 +76,11 @@ export interface PendingAuxSelection extends ConversationSelectionText {
  * 否则同一段文字在不同来源（行号不同、消息 id 不同）下会被当成两条。
  */
 export function auxSelectionWire(payload: AuxAskPayload): ConversationSelectionText {
-  return { text: payload.text, ...(payload.path?.trim() ? { path: payload.path } : {}) }
+  const path = payload.path?.trim()
+  return {
+    text: payload.text,
+    ...(path ? { path: payload.root ? commentFilePath({ path, root: payload.root }) : payload.path } : {}),
+  }
 }
 
 /**

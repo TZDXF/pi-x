@@ -7,18 +7,31 @@ import { invokeProjectFile } from "@/api/client/projectFiles"
 import { parseCodedError } from "@/lib/backendError"
 import { resolveCodeCommentFile } from "@/lib/codeCommentNavigation"
 import type { ParsedCodeComment } from "@/lib/codeComments"
+import type { ParsedConversationSelection } from "@/lib/conversationSelections"
 import type { FilePreview } from "@/lib/projectFiles"
 import type { PendingCodeComment } from "@/stores/codeComments"
 
 const props = defineProps<{
-  comment: ParsedCodeComment | null
+  /** 代码行批注（带行号）与文件划词引用（无行号）共用这一预览入口。 */
+  comment: ParsedCodeComment | ParsedConversationSelection | null
   roots: string[]
-  /** 主会话目录；缺省表示无 composer 接收方，不展示主会话待发送 chip。 */
+  /** 主会话目录；缺省表示无 composer 接收方（aux），不展示主会话待发送 chip。 */
   commentProject?: string
 }>()
 const emit = defineEmits<{ close: []; "insert-code-comment": [comment: PendingCodeComment] }>()
 const { t } = useI18n()
-const target = computed(() => props.comment && resolveCodeCommentFile(props.comment.path, props.roots))
+const target = computed(() => {
+  const path = props.comment?.path
+  return path ? resolveCodeCommentFile(path, props.roots) : null
+})
+const lineRange = computed(() => {
+  const comment = props.comment
+  return comment && "startLine" in comment ? { start: comment.startLine, end: comment.endLine } : null
+})
+const selectedText = computed(() => {
+  const comment = props.comment
+  return comment && ("selectedText" in comment ? comment.selectedText : comment.text)
+})
 const readFile = computed(() => {
   const file = target.value
   const path = props.comment?.path ?? ""
@@ -46,11 +59,14 @@ const readFile = computed(() => {
     <DialogContent v-if="comment" class="flex h-[min(80dvh,48rem)] flex-col sm:max-w-4xl">
       <DialogHeader class="min-w-0 pr-8">
         <DialogTitle class="truncate"
-          >{{ comment.path }}:{{ comment.startLine
-          }}<template v-if="comment.endLine !== comment.startLine">-{{ comment.endLine }}</template></DialogTitle
+          >{{ comment.path
+          }}<template v-if="lineRange"
+            >:{{ lineRange.start
+            }}<template v-if="lineRange.end !== lineRange.start">-{{ lineRange.end }}</template></template
+          ></DialogTitle
         >
         <DialogDescription class="whitespace-pre-wrap break-words max-h-24 overflow-auto">{{
-          comment.comment || comment.selectedText
+          comment.comment || selectedText
         }}</DialogDescription>
       </DialogHeader>
       <ProjectFilePreview
@@ -58,10 +74,11 @@ const readFile = computed(() => {
         :key="comment.id + comment.path"
         :project="target.project"
         :path="target.path"
-        :read-file="readFile"
-        :line-range="{ start: comment.startLine, end: comment.endLine }"
-        :closable="false"
         :comment-project="commentProject"
+        :selection-project="roots[0]"
+        :read-file="readFile"
+        :line-range="lineRange ?? undefined"
+        :closable="false"
         @insert-code-comment="emit('insert-code-comment', $event)"
       />
       <p v-else role="alert" class="text-sm text-destructive">

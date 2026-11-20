@@ -13,8 +13,7 @@ import ProjectFiles from "@/components/ProjectFiles.vue"
 import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import BrowserPanel from "@/components/browser/BrowserPanel.vue"
 import AuxChatPane from "@/components/aux-chat/AuxChatPane.vue"
-import { auxCanOpen, auxHasPendingQuestion, auxTabBySidebarId, auxTitleForSidebarId } from "@/stores/auxChat"
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
+import { auxHasPendingQuestion, auxTabBySidebarId, auxTitleForSidebarId } from "@/stores/auxChat"
 import type { FileChange } from "@/lib/sessionChanges"
 import { usePointerDrag } from "@/composables/usePointerDrag"
 import type { AuxParentContext } from "@/lib/auxSpawn"
@@ -42,8 +41,6 @@ const emit = defineEmits<{
   close: []
   "update:activeId": [id: number | null]
   "add-tab": [type: SidebarTabType]
-  /** aux 名额已满（用户在禁用入口上仍点到了），由父层给可执行提示。 */
-  "aux-limit": []
   "close-tab": [id: number]
   "reorder-tabs": [tabs: SidebarTabItem[]]
   "send-to-chat": [text: string]
@@ -63,7 +60,10 @@ function iconFor(type: SidebarTabType) {
 function titleFor(tab: SidebarTabItem): string {
   // aux 的标题由注册表给出（"辅助对话 2"），不按同类 Tab 序号推算：关闭后重开
   // 会复用序号，与同类型 Tab 的"第几个"不是一回事。
-  if (tab.type === "aux") return auxTitleForSidebarId(tab.id) ?? t("sidebarTabs.aux")
+  if (tab.type === "aux") {
+    if (!props.auxParent) return t("sidebarTabs.aux")
+    return auxTitleForSidebarId(props.auxParent.runtimeId, tab.id) ?? t("sidebarTabs.aux")
+  }
   const base = t(`sidebarTabs.${tab.type}`)
   const sameType = props.tabs.filter(item => item.type === tab.type)
   if (sameType.length > 1) return `${base} ${sameType.findIndex(item => item.id === tab.id) + 1}`
@@ -71,26 +71,11 @@ function titleFor(tab: SidebarTabItem): string {
 }
 /** 未答扩展询问的标记：只在标题上出圆点，不弹窗（隐藏 Tab 不抢焦点）。 */
 function pendingQuestion(tab: SidebarTabItem) {
-  return tab.type === "aux" && auxHasPendingQuestion(tab.id)
+  return tab.type === "aux" && !!props.auxParent && auxHasPendingQuestion(props.auxParent.runtimeId, tab.id)
 }
-/** aux 槽位对应的实例；缺失（上限被拒/已关闭）时整格不渲染面板。 */
+/** 当前父会话的 aux 槽位；不同父会话的相同槽位 id 不得串线。 */
 function auxInstance(tabId: number) {
-  return auxTabBySidebarId(tabId)
-}
-/**
- * 添加"辅助对话"入口的可用性：上限 5 由 aux 注册表自己计数（**创建中的实例计入**），
- * 与侧栏的 20 条/24 组无关。名额满时禁用入口并给出原因，而不是点了没反应。
- */
-function canAddAux() {
-  return auxCanOpen() && !!props.auxParent
-}
-function addAux() {
-  // 名额检查在注册表 `openAux` 里仍会再做一次（这是 UI 侧的提前提示）。
-  if (!canAddAux()) {
-    emit("aux-limit")
-    return
-  }
-  addTab("aux")
+  return props.auxParent ? auxTabBySidebarId(props.auxParent.runtimeId, tabId) : undefined
 }
 function addTab(type: SidebarTabType) {
   addOpen.value = false
@@ -363,15 +348,14 @@ onBeforeUnmount(() => {
               >
                 <Globe class="size-4 shrink-0" />{{ t("sidebarTabs.newBrowser") }}
               </Button>
-              <!-- 辅助对话：上限 5 由 aux 注册表自己计数（与侧栏 20 条无关） -->
+              <!-- 辅助对话数量不设专属上限；父上下文未就绪时暂不可启动。 -->
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 class="w-full justify-start gap-2"
-                :disabled="!canAddAux()"
-                :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
-                @click="addAux()"
+                :disabled="!auxParent"
+                @click="addTab('aux')"
               >
                 <MessageSquarePlus class="size-4 shrink-0" />{{ t("sidebarTabs.newAux") }}
               </Button>
@@ -470,9 +454,8 @@ onBeforeUnmount(() => {
             variant="outline"
             size="lg"
             class="h-auto flex-col gap-2 py-4"
-            :disabled="!canAddAux()"
-            :title="canAddAux() ? undefined : t('auxChat.limitReached', { count: AUX_MAX_TABS })"
-            @click="addAux()"
+            :disabled="!auxParent"
+            @click="addTab('aux')"
           >
             <MessageSquarePlus class="size-6 shrink-0" />{{ t("sidebarTabs.newAux") }}
           </Button>

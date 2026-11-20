@@ -30,7 +30,7 @@ import ConversationSelectionMenu from "./ConversationSelectionMenu.vue"
 import ConversationSelectionPopup from "./ConversationSelectionPopup.vue"
 import { useSelectionQuotes } from "@/composables/useSelectionQuotes"
 import { useTurnChanges } from "@/composables/useTurnChanges"
-import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH } from "@/lib/conversationSelections"
+import { CONVERSATION_SELECTION_MAX_TEXT_LENGTH, type ParsedConversationSelection } from "@/lib/conversationSelections"
 import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
 import { formatCodedError } from "@/lib/backendError"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
@@ -55,7 +55,6 @@ const props = defineProps<{
   auxRuntimeId?: string
   /** 主会话多 aux 时的选择项；aux 面板内不传，仍直接投递到本实例。 */
   auxTargets?: AuxTargetOption[]
-  auxCanCreate?: boolean
 }>()
 const emit = defineEmits<{
   historyScroll: [event: Event]
@@ -72,7 +71,7 @@ const emit = defineEmits<{
 const changes = useTurnChanges(props.session, props.ui)
 const { t } = useI18n()
 const workspace = useWorkspaceStore()
-const openedComment = ref<ParsedCodeComment | null>(null)
+const openedFileReference = ref<ParsedCodeComment | ParsedConversationSelection | null>(null)
 const commentRoots = computed(() => [
   props.project,
   ...workspace.projectFolders(props.project).filter(root => root !== props.project),
@@ -80,7 +79,7 @@ const commentRoots = computed(() => [
 watch(
   () => [props.project, props.session.sessionFile],
   () => {
-    openedComment.value = null
+    openedFileReference.value = null
   },
 )
 /** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
@@ -245,7 +244,8 @@ onBeforeUnmount(() => {
                 :edit="edit"
                 :prompt-expanded="expandedPrompts.has(entry.id)"
                 @toggle-prompt="togglePrompt(entry.id)"
-                @open-code-comment="openedComment = $event"
+                @open-code-comment="openedFileReference = $event"
+                @open-selection="openedFileReference = $event"
                 @preview-image="emit('previewImage', $event)"
                 @copy-text="emit('copyText', $event)"
                 @edit-textarea="emit('editTextarea', $event)"
@@ -367,7 +367,6 @@ onBeforeUnmount(() => {
     :root="selectionRoot"
     :max-text-length="CONVERSATION_SELECTION_MAX_TEXT_LENGTH"
     :aux-targets="auxTargets"
-    :aux-can-create="auxCanCreate"
     @quote="onSelectionQuote"
     @aux-ask="(payload, target) => emit('auxAsk', payload, target)"
   />
@@ -378,10 +377,10 @@ onBeforeUnmount(() => {
     @cancel="onSelectionCancel"
   />
   <CodeCommentPreview
-    :comment="openedComment"
+    :comment="openedFileReference"
     :roots="commentRoots"
     :comment-project="auxRuntimeId ? undefined : session.cwd || project"
-    @close="openedComment = null"
+    @close="openedFileReference = null"
     @insert-code-comment="emit('insert-code-comment', $event)"
   />
 </template>

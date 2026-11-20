@@ -7,7 +7,6 @@ import { captureOffsets, selectionEndRect } from "@/lib/selectionAnchors"
 import { MENU_FLIP_THRESHOLD, menuPlacement, type MenuPlacement } from "@/lib/selectionMenuPlacement"
 import { selectionLineRange } from "@/lib/codeComments"
 import type { AuxAskPayload, AuxAskTarget, AuxTargetOption } from "@/lib/auxSelection"
-import { AUX_MAX_TABS } from "@/lib/auxRuntime"
 import type { ConversationSelectionSource } from "@/lib/conversationSelections"
 
 /**
@@ -33,14 +32,14 @@ const props = withDefaults(
     maxTextLength: number
     /** `chat` 在会话正文上；`code` 在文件预览（代码 / Markdown）上。 */
     mode?: "chat" | "code"
-    /** `code` 模式下引用的文件路径（相对会话目录），随引用发给 agent。 */
+    /** `code` 模式下引用的文件路径（相对来源根），随引用发给 agent。 */
     path?: string
+    /** 文件实际所属根；跨目录预览必须保留，避免历史消息回跳到会话根同名文件。 */
+    sourceRoot?: string
     /** 当前父会话的存活 aux；多于一个时先让用户选择投递目标。 */
     auxTargets?: AuxTargetOption[]
-    /** 是否还能新建 aux；达到全局上限时保留新建项但置灰并说明原因。 */
-    auxCanCreate?: boolean
   }>(),
-  { mode: "chat", auxTargets: () => [], auxCanCreate: true },
+  { mode: "chat", auxTargets: () => [] },
 )
 const emit = defineEmits<{
   quote: [
@@ -106,7 +105,8 @@ function inspectCodeSelection(root: HTMLElement, text: string): AuxAskPayload | 
   if (!path) return null
   // 行区间靠 `selectionLineRange`（与代码批注同源）：两端都得落在本容器内的 [data-line]。
   const lineRange = selectionLineRange(root, window.getSelection())
-  return { text, path, ...(lineRange ? { lineRange } : {}) }
+  const sourceRoot = props.sourceRoot?.trim()
+  return { text, path, ...(sourceRoot ? { root: sourceRoot } : {}), ...(lineRange ? { lineRange } : {}) }
 }
 
 function inspectSelection() {
@@ -293,8 +293,6 @@ const placement = computed<MenuPlacement | null>(() => {
         size="sm"
         class="h-8 w-full justify-start gap-2 border-t px-2 text-xs font-normal"
         role="menuitem"
-        :disabled="!auxCanCreate"
-        :title="!auxCanCreate ? t('auxChat.limitReached', { count: AUX_MAX_TABS }) : undefined"
         @mousedown.prevent
         @click="chooseAuxTarget(null)"
       >

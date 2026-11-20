@@ -2,6 +2,7 @@ import { reactive } from "vue"
 import {
   MAX_SIDEBAR_TAB_GROUPS,
   MAX_SIDEBAR_TABS,
+  isPersistedSidebarTabKind,
   markDetachedTabs,
   normalizePersistedSidebarTabs,
   persistedFromTabs,
@@ -354,6 +355,8 @@ function flushPendingHydrateOnce(): number {
  * - 源不存在/为空 → 不动目标，也不把新键标记 hydrated。磁盘条目可能比 sessionFile
  *   先到，把新键标成 hydrated 会让随后到达的落盘记录被永久挡住；此时写 null 也会
  *   把文件键上已有的载荷删掉。
+ * - 源只有不落盘的临时槽位（`aux`）→ 同上（当空源）：这类组只是 LRU 淘汰后由
+ *   `restoreSlots` 在临时运行时键上补出来的，搬过去会覆盖目标的普通 Tab 并删掉磁盘条目。
  * - 源非空 → 以源为准搬到目标（用户刚在草稿会话里操作过）。
  *   直接搬内存状态、不经落盘载荷重建：重建会把 terminal 一律标成 `stale`，而这条
  *   路径上 `ChatView` 并没有卸载、shell 还活着，标失联就是伪造死亡。
@@ -367,7 +370,12 @@ export function rebindGroup(fromKey: string, toKey: string): boolean {
   hydratedKeys.delete(fromKey)
   if (!source) return false
   sidebarTabRegistry.delete(fromKey)
-  if (!source.tabs.length) return false
+  // 源里只有**不落盘的临时槽位**（`aux`）时，它不代表用户在草稿会话里加过内容：
+  // 这类槽位常常是 LRU 淘汰后由 `restoreSlots` 在临时运行时键上补出来的。
+  // 把它当"源非空"搬过去，会整组覆盖文件键的普通 Tab，并让调用方写 null 删掉磁盘
+  // 条目（TZD-131）。按"空源"处理：丢弃这份临时组、不动目标、不标 hydrated ——
+  // 存活的 aux 实例由获准后的 `onGroupAdopted` 在**目标组**上重新补槽位。
+  if (!source.tabs.some(tab => isPersistedSidebarTabKind(tab.type))) return false
   // 迁入目标同样要走容量准入：源先被删掉，所以这里实际是"原地改名"，仍受上限约束。
   const target = ensureGroup(toKey)
   if (!target) {

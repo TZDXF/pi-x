@@ -18,6 +18,10 @@ test("the file preview mounts the same floating menu in code mode with path and 
   expect(preview).toContain("<ConversationSelectionMenu")
   expect(preview).toContain('mode="code"')
   expect(preview).toContain(':path="path"')
+  expect(preview).toContain(':source-root="selectionRoot"')
+  // 来源根优先取批注归属算出的跨目录根，回跳预览则回落到会话根（`selectionProject`）。
+  expect(preview).toContain("const selectionRoot = computed(() => {")
+  expect(preview).toContain("const session = props.selectionProject")
   expect(preview).toContain('@aux-ask="onAuxAsk"')
   // 代码视图与渲染态 Markdown 都要能被同一浮层检测到（渲染态没有 [data-line]，只带 path）。
   expect(preview).toContain("const menuRoot = computed<HTMLElement | null>(() => (showCode.value")
@@ -49,7 +53,6 @@ test("the chat list forwards auxAsk and routes quotes into the aux pane's own bu
   expect(list).toContain("auxRuntimeId?: string")
   expect(list).toContain("@aux-ask=\"(payload, target) => emit('auxAsk', payload, target)\"")
   expect(list).toContain(':aux-targets="auxTargets"')
-  expect(list).toContain(':aux-can-create="auxCanCreate"')
   expect(list).toContain("auxRuntimeId: props.auxRuntimeId")
   const pane = read("components/aux-chat/AuxChatPane.vue")
   expect(pane).toContain(':aux-runtime-id="runtimeId"')
@@ -65,7 +68,8 @@ test("ChatView routes the chat selection gesture without growing the view", () =
   expect(chat.split("\n").length).toBeLessThan(500)
   const sidebar = read("composables/useChatViewSidebar.ts")
   expect(sidebar).toContain("async function askAux(payload: AuxAskPayload, target?: AuxAskTarget)")
-  expect(sidebar).toContain("const auxTargets = computed(() => auxInstancesFor(deps.runtimeId))")
+  // 划词目标只列**可打开**的实例（等槽位的 `tabId === null` 实例不能当目标，TZD-131）。
+  expect(sidebar).toContain("const auxTargets = computed(() => auxDeliverableFor(deps.runtimeId))")
   expect(sidebar).toContain("parentRuntimeId: deps.runtimeId")
   // 复用与新建都要让面板可见。
   expect(sidebar).toContain("if (outcome.ok) deps.onFirstTabAdded()")
@@ -79,6 +83,14 @@ test("the aux pane send control reads its own bucket instead of full isolation",
   expect(control).toContain('contexts?: "shared" | "aux" | "none"')
   expect(control).toContain("if (auxScoped) return [...auxSelectionItems(session.runtimeId)]")
   expect(control).toContain("if (auxScoped) clearAuxSelectionBucket(session.runtimeId)")
+})
+
+test("the reopened file preview keeps the session root for subsequent selections", () => {
+  const preview = read("components/chat/CodeCommentPreview.vue")
+  expect(preview).toContain(':selection-project="roots[0]"')
+  // #31 的 composer 归属入参原样保留（主会话待发送 chip 与引入按钮）。
+  expect(preview).toContain(':comment-project="commentProject"')
+  expect(preview).toContain("@insert-code-comment=\"emit('insert-code-comment', $event)\"")
 })
 
 test("the preview keeps caller attrs on its single visible root (fragment regression)", () => {

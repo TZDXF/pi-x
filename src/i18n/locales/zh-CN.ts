@@ -174,7 +174,6 @@ export default {
     creating: "正在启动辅助对话…",
     spawnFailedUnknown: "辅助对话启动失败",
     retry: "重试",
-    limitReached: "辅助对话最多同时开启 {count} 个实例，请先关闭一个再添加。",
     askFailed: "无法在辅助对话中提问：当前会话没有可用的辅助对话入口。",
     chooseTarget: "选择辅助对话",
     newChat: "新建辅助对话",
@@ -1365,6 +1364,7 @@ export default {
     reset: "重置",
     resetAll: "全部恢复默认",
     locked: "固定",
+    unbound: "未绑定",
   },
 
   blocks: {
