@@ -26,6 +26,8 @@ const host = vi.hoisted(() => ({
   getOverride: null as null | (() => Promise<{ preferences: Record<string, string>; preferencesRevision?: number }>),
   /** 让 `app_preference_set` 的完成受测试控制（模拟在途写入）。 */
   writeGate: null as null | (() => Promise<number>),
+  /** 完全接管一笔写入的主机行为（落盘、广播、收起响应各由测试决定）。 */
+  writeHook: null as null | ((key: string, value: string) => Promise<number | undefined>),
   writes: [] as { key: string; value: string }[],
 }))
 
@@ -49,6 +51,7 @@ vi.mock("@/api/transport", () => ({
         host.writes.pop()
         throw new Error("mock transient write error")
       }
+      if (host.writeHook) return host.writeHook(args.key, args.value)
       if (host.writeGate) return host.writeGate()
       host.preferences[args.key] = args.value
       if (!host.legacyHost) {
@@ -101,6 +104,7 @@ async function harness(preferences: Record<string, string> = {}, revision = 0, o
   host.failValue = null
   host.getOverride = null
   host.writeGate = null
+  host.writeHook = null
   host.writes = []
   vi.stubGlobal("localStorage", { getItem: () => null, removeItem() {} })
   // 预加载客户端配置模块：监听器用动态 import，isolate:false 下每轮 resetModules 后
@@ -333,6 +337,7 @@ test("a strict write never exposes the value before the host accepts it", async 
 
   // 成功时才切换：主机接受后立刻生效（且不依赖回执事件是否送达）。
   host.writeGate = null
+  host.writeHook = null
   await editor.setOpenWith("cursor")
   expect(editor.openWithPreference.value.kind).toBe("cursor")
 })
@@ -564,6 +569,7 @@ test("an older unseen record never outranks a later confirmed write", async () =
 
   // 第一笔成功但回执没到（进 unseen 队列），第二笔成功且回执已到。
   host.writeGate = null
+  host.writeHook = null
   await theme.set("dark")
   expect(theme.value.value).toBe("dark")
   // 第二笔：主机广播了它自己的快照（值 light）后再返回。
@@ -574,6 +580,95 @@ test("an older unseen record never outranks a later confirmed write", async () =
   // 之后真正的外部变更仍可显示，旧记录不会压住它。
   broadcast(undefined, { theme: "system" })
   expect(theme.value.value).toBe("system")
+})
+
+const wrapFlag = {
+  read: (raw: string) => raw !== "0",
+  serialize: (value: unknown) => (value ? "1" : "0"),
+}
+
+test.each([
+  // `values` 是传给 set() 的**领域值**；wrapFlag 的序列化会把它变成 "1"/"0"。
+  { key: "markdownCodeWrap", values: [false, true, false], initial: "1", codec: wrapFlag, shown: false },
+  { key: "theme", values: ["dark", "light", "system"], initial: "system", codec: {}, shown: "system" },
+])(
+  "legacy ordered echoes staggered across commands must not reverse $key",
+  async ({ key, values, initial, codec, shown: finalValue }) => {
+    // 旧后端：写入按序落地、每笔先广播整表快照再返回（无修订号）。回执与命令返回
+    // 各自独立投递 —— 回执可能晚于「下一笔已发出的命令」到达。
+    const module = await harness({ [key]: initial }, 0, { legacyHost: true })
+    const preference = module.createConfigPreference<unknown>({
+      key,
+      defaultValue: initial,
+      ...codec,
+    } as never)
+
+    const gates = [deferred<void>(), deferred<void>(), deferred<void>()]
+    const sent: Record<string, string>[] = []
+    host.writeHook = async (writtenKey, value) => {
+      // 旧后端按序落地：每笔写入都把当前整表快照广播出去，再等测试放行响应。
+      host.preferences = { ...host.preferences, [writtenKey]: value }
+      sent.push({ ...host.preferences })
+      const index = sent.length - 1
+      await gates[index]!.promise
+      return undefined
+    }
+
+    const first = preference.set(values[0] as never)
+    const second = preference.set(values[1] as never)
+    const third = preference.set(values[2] as never)
+    const shown = [preference.value.value]
+
+    // 第一笔返回；它的回执在第二笔已发出之后才到。
+    gates[0]!.resolve()
+    await first
+    await vi.waitFor(() => expect(sent).toHaveLength(2))
+    // 回执按序到达 1、2、3 —— 每一次都必须被认领为「我们自己的写入」。
+    broadcast(undefined, sent[0]!)
+    shown.push(preference.value.value)
+
+    gates[1]!.resolve()
+    await second
+    await vi.waitFor(() => expect(sent).toHaveLength(3))
+    gates[2]!.resolve()
+    await third
+    // 末笔的原始值由 codec 决定（wrap 是 "0"，theme 是 "system"）。
+    await vi.waitFor(() => expect(host.preferences[key]).toBe(sent[2]![key]))
+
+    broadcast(undefined, sent[1]!)
+    shown.push(preference.value.value)
+    broadcast(undefined, sent[2]!)
+    shown.push(preference.value.value)
+
+    // 三笔回执都到齐之后，界面必须停在“主机已保存的最后一次选择”。
+    await vi.waitFor(() => expect(preference.value.value).toBe(finalValue))
+    expect(shown).toEqual(Array(4).fill(finalValue))
+  },
+)
+
+test("a legacy echo of a finished write is claimed before the current request", async () => {
+  // 已完成但待回执（unseen）的记录必须先被认领：否则匹配到正在执行的请求时
+  // 会把这条合法回执当成外部变更，并清空整队。
+  const module = await harness({ theme: "system" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 第一笔成功但回执未到（进入 unseen）。
+  host.writeGate = async () => undefined as unknown as number
+  await theme.set("dark")
+  expect(theme.value.value).toBe("dark")
+
+  // 第二笔已发出（用 gate 拖住响应），期间到达第一笔的回执 dark。
+  const gate = deferred<number>()
+  host.writeGate = () => gate.promise
+  const second = theme.set("light")
+  await vi.waitFor(() => expect(host.writes.map(write => write.value)).toEqual(["dark", "light"]))
+  broadcast(undefined, { theme: "dark" })
+  // 仍在显示最新意图 light，且未把 dark 当外部状态清队。
+  expect(theme.value.value).toBe("light")
+  gate.resolve(undefined as unknown as number)
+  await second
+  broadcast(undefined, { theme: "light" })
+  expect(theme.value.value).toBe("light")
 })
 
 test("a legacy host without revisions degrades to bounded FIFO", async () => {

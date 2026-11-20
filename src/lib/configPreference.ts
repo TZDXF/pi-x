@@ -205,26 +205,31 @@ function replacePreferences(
   } else {
     // 旧后端推送：可能既是「我们某笔写入的回执」，也可能是别的客户端的真实变更。
     //
-    // 旧后端的写入按顺序执行（本端也是排队发出），因此早到的回执只可能对应
-    // **队首那笔已经发出的请求**；拿队尾的「最新意图」去匹配会把第一笔的回执当成外部
-    // 变更，进而让它在 unseen 里盖住后面被确认的写入。这里只匹配队首。
+    // 旧后端的写入按序执行、每笔先落地再广播，所以回执按我们的写入顺序到达。判定顺序：
+    // 1. **先认领已完成的待回执记录**（`unseen`）：命令已返回但回执还没到的那些写入，
+    //    它们的回执可能晚于「下一笔已发出的命令」到达 —— 若先比对正在执行的请求，
+    //    这些合法回执会被误判成外部状态并整队清空；
+    // 2. 再认领当前已发请求（`inflight` 里 dispatched 的那笔），回执先于命令结果到达；
+    // 3. 两者都不匹配 → 别的客户端的真实变更：采用并作废旧记录。
     for (const key of keys) {
-      const executing = inflight.get(key)?.find(entry => entry.dispatched)
-      if (executing) {
-        // 回执先于命令结果到达：标记它，成功后就不必再等 FIFO 确认。
-        if (executing.raw === incoming[key]) executing.echoed = true
-        continue
-      }
+      const value = incoming[key]!
       const waiting = unseen.get(key)
-      // 推送值与队首那笔（最早的未确认写入）相同 → 认领它的回执。
-      if (waiting?.length && waiting[0] === incoming[key]) {
-        if (waiting.length > 1) unseen.set(key, waiting.slice(1))
+      const unacknowledged = waiting ? waiting.indexOf(value) : -1
+      if (waiting && unacknowledged >= 0) {
+        // 回执按序到达：它以及它之前的记录都已被主机确认。
+        const rest = waiting.slice(unacknowledged + 1)
+        if (rest.length) unseen.set(key, rest)
         else unseen.delete(key)
         continue
       }
-      // 否则是别的客户端的真实变更（或比我们记录更新的状态）：采用，并作废旧记录。
+      const executing = inflight.get(key)?.find(entry => entry.dispatched)
+      if (executing) {
+        // 回执先于命令结果到达：标记它，成功后就不必再等 FIFO 确认。
+        if (executing.raw === value) executing.echoed = true
+        continue
+      }
       unseen.delete(key)
-      adopt(key, incoming[key]!, -1)
+      adopt(key, value, -1)
     }
   }
 
