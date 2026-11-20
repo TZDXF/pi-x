@@ -23,14 +23,16 @@
  *    `document`, and the `pointermove` handler on the scrollbar. Those writes are
  *    the reader's, but they never reach our handlers.
  *
- *    So the exemption is opened by a capture-phase listener and closed by a
- *    bubble-phase listener of the *same* event (`beginUserInput` /
- *    `endUserInput`): it is exactly as long as the browser's dispatch of that
- *    event, which is when those library listeners run. Nothing else is exempt —
- *    in particular a layout write that merely happens during the same input task
- *    (the ResizeObserver compensation a keystroke may trigger) is the app's, even
- *    when the browser schedules the rendering step late. A timer would close
- *    *after* the rendering step and swallow exactly that write.
+ *    So the exemption is opened by a capture-phase listener and closed three
+ *    ways, all idempotent: by a bubble-phase listener of the *same* event (the
+ *    normal case, which ends it at the end of that dispatch), and — because a
+ *    listener in between may stop propagation — by the next animation frame and
+ *    by a zero-delay task. All three run after the library listeners that write
+ *    `scrollTop` and before the rendering step, so a layout write that merely
+ *    *follows* the input (the ResizeObserver compensation a keystroke triggers)
+ *    is still the app's. A plain timer window would end after that step and
+ *    swallow exactly that write; a microtask would end between the listeners of
+ *    one dispatch and miss the library's own write.
  *
  * App-initiated scrolling (`scrollTo`, `scrollBy`, `scrollIntoView`) never touches
  * the accessor, so its events cannot be matched to a record. `beginAppScroll`
@@ -68,24 +70,38 @@ export function isInputDispatch(target: object): boolean {
   return (dispatches.get(target) ?? 0) > 0
 }
 
-/**
- * Open the exemption for this input dispatch.
- *
- * Call it from a **capture** listener of the event and close it with
- * `endUserInput` from a **bubble** listener of the same event: the exemption then
- * covers exactly the browser's dispatch, which is where the library listeners
- * that write `scrollTop` run. No timer is involved, so the exemption can never
- * extend into the rendering step and swallow an app write.
- */
-export function beginUserInput(target: object): void {
-  dispatches.set(target, (dispatches.get(target) ?? 0) + 1)
-}
+/** Closes one input exemption; idempotent, safe to call more than once. */
+export type InputScopeCloser = () => void
 
-/** Close the exemption, once the dispatch (and its listeners) finished. */
-export function endUserInput(target: object): void {
-  const remaining = (dispatches.get(target) ?? 0) - 1
-  if (remaining > 0) dispatches.set(target, remaining)
-  else dispatches.delete(target)
+/**
+ * Open the exemption for this input dispatch and return its closer.
+ *
+ * Call it from a **capture** listener of the event and invoke the closer from a
+ * **bubble** listener of the same event, which ends the exemption exactly at the
+ * end of that dispatch — before the rendering step, so the compensation a
+ * keystroke triggers is still attributed to the app.
+ *
+ * A listener in between may call `stopPropagation()` (or even stop the event at
+ * the target), so the bubble closer cannot be the only one. Two idempotent
+ * fallbacks close the scope *after* the dispatch nevertheless: the next animation
+ * frame (before layout and before the resize observers) and a zero-delay task.
+ * A microtask would be wrong here: microtasks are drained between the listeners
+ * of one dispatch, which would end the exemption before the library listeners
+ * that position the scrollbar even run (TZD-135 review).
+ */
+export function beginUserInput(target: object): InputScopeCloser {
+  dispatches.set(target, (dispatches.get(target) ?? 0) + 1)
+  let closed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    const remaining = (dispatches.get(target) ?? 0) - 1
+    if (remaining > 0) dispatches.set(target, remaining)
+    else dispatches.delete(target)
+  }
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(close)
+  setTimeout(close, 0)
+  return close
 }
 
 /** Record that a scroll event at `scrollTop` was produced by code. */

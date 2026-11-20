@@ -44,6 +44,21 @@ export function targetsConversationViewport(viewport: HTMLElement, target: Eleme
 
 /** Keys whose default action scrolls the conversation. */
 const KEY_SCROLL_KEYS = new Set(["End", "Home", "PageDown", "PageUp", "ArrowDown", "ArrowUp"])
+/** Keys that only move a caret when the focus is in a text field. */
+const CARET_KEYS = new Set(["End", "Home", "ArrowDown", "ArrowUp"])
+
+/** Whether this element takes arrow keys as caret movement, not scrolling. */
+export function isTextEntry(target: Element): boolean {
+  const element = target as HTMLElement
+  const tag = element.tagName
+  if (tag === "TEXTAREA") return true
+  if (tag === "INPUT") {
+    // Non-text inputs (range, checkbox, …) do not move a caret.
+    const type = (element as HTMLInputElement).type
+    return type === "" || type === "text" || type === "search" || type === "url" || type === "email" || type === "tel"
+  }
+  return element.isContentEditable === true
+}
 
 /**
  * Whether this key press scrolls the **conversation** viewport.
@@ -57,6 +72,10 @@ const KEY_SCROLL_KEYS = new Set(["End", "Home", "PageDown", "PageUp", "ArrowDown
  * Space is not a scroll key here: it activates the focused control (a button, a
  * summary, a checkbox), which is why it used to launder the layout write that
  * followed the keystroke.
+ *
+ * Anchors and arrows inside a text field move the caret instead of scrolling, so
+ * the inline prompt editor (or any other textarea) must not be read as the
+ * reader taking over the conversation (TZD-135 review).
  */
 export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEvent): boolean {
   if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return false
@@ -64,6 +83,7 @@ export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEve
   if (!(target instanceof Element) || !viewport.contains(target)) return false
   const key = event.key
   if (!KEY_SCROLL_KEYS.has(key)) return false
+  if (CARET_KEYS.has(key) && isTextEntry(target)) return false
   const down = key === "End" || key === "PageDown" || key === "ArrowDown"
 
   let element: Element | null = target

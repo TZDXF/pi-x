@@ -8,11 +8,11 @@ import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
 import { canScrollConversation, keyScrollsConversation, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
+import type { InputScopeCloser } from '@/lib/scrollWrites'
 import {
   beginAppScroll,
   beginUserInput,
   consumeScrollWrite,
-  endUserInput,
   finishAppScroll,
   isAppScrolling,
   observeScrollWrites,
@@ -86,6 +86,8 @@ async function scrollToMessage(id: number) {
   // A request already satisfied produces neither `scroll` nor `scrollend`, so it
   // must not leave an attribution mark behind (TZD-135 review). `beginAppScroll`
   // reports whether there is anything to wait for.
+  // A new navigation replaces any earlier gesture's claim.
+  touchMoved = false
   if (!beginAppScroll(scroll, targetTop, scroll.scrollTop)) return
   scroll.scrollTo({ top: requested, behavior: instant ? 'instant' : 'smooth' })
   // Instant scrolling settles inside this task, but its `scroll` event still
@@ -118,15 +120,32 @@ function ownScrollbar(target: Element): boolean {
   const scrollbar = target.closest('[data-slot="scroll-area-scrollbar"]')
   return !!scrollbar && scrollbar.parentElement === scroll.parentElement
 }
-/** A touch pointer is down on the conversation viewport. */
-let touchActive = false
+/**
+ * A touch gesture that actually scrolled the content.
+ *
+ * A press alone is not scrolling: the browser only takes the touch over once the
+ * finger moves, and it signals that with `pointercancel` (after which no further
+ * `pointermove` arrives, and the first `scroll` may come later or after momentum).
+ * So the takeover is armed by the movement itself — `pointercancel`, or a
+ * `pointermove` past the threshold on platforms that keep delivering moves — and
+ * deliberately survives `pointerup`/`pointercancel`, because the scrolls those
+ * gestures cause arrive afterwards (TZD-135 review).
+ */
+let touchMoved = false
+let touchOrigin: { x: number; y: number } | undefined
+/** Distance, in px, a touch must travel before it counts as scrolling content. */
+const TOUCH_MOVE_THRESHOLD_PX = 3
+/** Closers of the exemptions opened by the input currently being dispatched. */
+let wheelScope: InputScopeCloser | undefined
+let keyScope: InputScopeCloser | undefined
+let pointerScope: InputScopeCloser | undefined
 function handleWheelCapture(event: WheelEvent) {
   const scroll = scrollRef.value
   if (!scroll || event.ctrlKey || !(event.target instanceof Element)) return
   // Reka uses overflow: hidden scroll, which the library's shorthand overflow
   // check misses. Release before virtual row resizing can pin us back down.
   if (!canScrollConversation(scroll, event.target, event.deltaY)) return
-  beginUserInput(scroll)
+  wheelScope = beginUserInput(scroll)
   // The reader outranks an app navigation still in flight.
   finishAppScroll(scroll)
   if (event.deltaY < 0) releaseBottomLock()
@@ -137,35 +156,73 @@ function handleKeyDownCapture(event: KeyboardEvent) {
   // scrollable region consumes it, and Space activates the focused control
   // instead of scrolling at all (TZD-135 review).
   if (!scroll || !keyScrollsConversation(scroll, event)) return
-  beginUserInput(scroll)
+  keyScope = beginUserInput(scroll)
   finishAppScroll(scroll)
 }
 function handlePointerCapture(event: PointerEvent) {
   const scroll = scrollRef.value
   if (!scroll || !(event.target instanceof Element)) return
-  if (event.type === "pointerdown" && event.pointerType === "touch" && scroll.contains(event.target)) touchActive = true
+  if (event.pointerType === "touch") {
+    if (event.type === "pointerdown" && scroll.contains(event.target)) {
+      // A press alone is not scrolling: remember where it started and wait for
+      // the gesture to become one before claiming anything from the app.
+      touchOrigin = { x: event.clientX, y: event.clientY }
+      touchMoved = false
+    } else if (event.type === "pointermove" && touchOrigin && !touchMoved) {
+      const dx = Math.abs(event.clientX - touchOrigin.x)
+      const dy = Math.abs(event.clientY - touchOrigin.y)
+      if (Math.max(dx, dy) >= TOUCH_MOVE_THRESHOLD_PX) claimTouchGesture(scroll)
+    }
+  }
   if (event.type !== "pointerdown" && event.type !== "pointermove") return
   if (!ownScrollbar(event.target)) return
-  beginUserInput(scroll)
+  pointerScope = beginUserInput(scroll)
   if (event.type === "pointerdown") finishAppScroll(scroll)
 }
-function handlePointerRelease(event: PointerEvent) {
-  if (event.type === "pointerup" || event.type === "pointercancel") touchActive = false
+/**
+ * The touch became a content scroll, so it cancels any programmatic animation and
+ * owns the scrolls that follow it.
+ */
+function claimTouchGesture(scroll: HTMLElement) {
+  touchMoved = true
+  finishAppScroll(scroll)
 }
-/** Close the exemption once the browser finished dispatching that same input. */
-function handleInputEnd() {
+function handlePointerRelease(event: PointerEvent) {
   const scroll = scrollRef.value
-  if (scroll) endUserInput(scroll)
+  if (event.pointerType === "touch") {
+    // `pointercancel` is the browser taking the touch over for scrolling (it stops
+    // delivering moves at that point); a plain `pointerup` means the finger
+    // lifted without scrolling the content.
+    if (event.type === "pointercancel" && scroll) claimTouchGesture(scroll)
+    touchOrigin = undefined
+  }
+  endPointerScope()
+}
+function endPointerScope() {
+  pointerScope?.()
+  pointerScope = undefined
+}
+/** Close the exemption of the input dispatch that just finished. */
+function endWheelScope() {
+  wheelScope?.()
+  wheelScope = undefined
+}
+function endKeyScope() {
+  keyScope?.()
+  keyScope = undefined
+}
+function endPointerScopeOnBubble() {
+  endPointerScope()
 }
 function handleScroll(event: Event) {
   const scroll = scrollRef.value
   if (scroll) {
     const previous = lastScrollTop ?? scroll.scrollTop
     lastScrollTop = scroll.scrollTop
-    // A native touch drag on the viewport is the reader: it cancels any
-    // programmatic animation, so its scroll events belong to the gesture even
-    // when an app mark was still pending (TZD-135 review).
-    if (touchActive) finishAppScroll(scroll)
+    // A native touch gesture that moved is the reader: it cancels any programmatic
+    // animation, so its scroll events belong to the gesture even when an app mark
+    // was still pending (TZD-135 review).
+    if (touchMoved) finishAppScroll(scroll)
     // Code moves this viewport too: bottom pinning, virtual-row height
     // compensation, navigation and the storage library's clamps. A recorded write
     // or an app-initiated scroll means the reader did not move it, so the
@@ -212,14 +269,16 @@ watchEffect((onCleanup) => {
   })
 })
 onMounted(() => {
+  // Capture opens an exemption, bubble closes it; the closer is also armed with a
+  // microtask so a listener that stops propagation cannot leak it.
   window.addEventListener('wheel', handleWheelCapture, { capture: true, passive: true })
-  window.addEventListener('wheel', handleInputEnd)
+  window.addEventListener('wheel', endWheelScope)
   window.addEventListener('keydown', handleKeyDownCapture, true)
-  window.addEventListener('keydown', handleInputEnd)
+  window.addEventListener('keydown', endKeyScope)
   window.addEventListener('pointerdown', handlePointerCapture, true)
-  window.addEventListener('pointerdown', handleInputEnd)
+  window.addEventListener('pointerdown', endPointerScopeOnBubble)
   window.addEventListener('pointermove', handlePointerCapture, true)
-  window.addEventListener('pointermove', handleInputEnd)
+  window.addEventListener('pointermove', endPointerScopeOnBubble)
   window.addEventListener('pointerup', handlePointerRelease, true)
   window.addEventListener('pointercancel', handlePointerRelease, true)
   if (props.initial === 'instant' && scrollRef.value)
@@ -244,13 +303,13 @@ watchEffect((onCleanup) => {
 })
 onBeforeUnmount(() => {
   window.removeEventListener('wheel', handleWheelCapture, { capture: true })
-  window.removeEventListener('wheel', handleInputEnd)
+  window.removeEventListener('wheel', endWheelScope)
   window.removeEventListener('keydown', handleKeyDownCapture, true)
-  window.removeEventListener('keydown', handleInputEnd)
+  window.removeEventListener('keydown', endKeyScope)
   window.removeEventListener('pointerdown', handlePointerCapture, true)
-  window.removeEventListener('pointerdown', handleInputEnd)
+  window.removeEventListener('pointerdown', endPointerScopeOnBubble)
   window.removeEventListener('pointermove', handlePointerCapture, true)
-  window.removeEventListener('pointermove', handleInputEnd)
+  window.removeEventListener('pointermove', endPointerScopeOnBubble)
   window.removeEventListener('pointerup', handlePointerRelease, true)
   window.removeEventListener('pointercancel', handlePointerRelease, true)
 })

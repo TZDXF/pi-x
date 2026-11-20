@@ -317,12 +317,27 @@ test("a smooth scrollToMessage survives a non-scrolling Space keystroke", async 
 test("a smooth scrollToMessage under one busy frame does not re-arm following", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" })
   await readUp(page)
-  // A frame delayed by hundreds of milliseconds must not end the app
-  // attribution: there is no timeout-based release any more.
-  // Start the browser animation first (`await`), then block. Blocking before the
-  // scroll even starts would not produce the delayed-first-frame timing.
-  await page.evaluate(() => (window as any).__conversation.scrollToMessage(1))
-  await viewportOf(page).evaluate(() => (window as any).__busy(330))
+  // The official timing: start the browser animation (`await`), then block the
+  // same task for 330ms so its first frame is delayed by that much. A frame
+  // delayed by hundreds of milliseconds must not end the app attribution: there
+  // is no timeout-based release any more.
+  await page.evaluate(async () => {
+    const started = performance.now()
+    const frames: { ms: number; gap: number }[] = []
+    ;(window as any).__slowNavFrames = frames
+    const viewport = document.querySelector<HTMLElement>("[role=log]")!
+    viewport.addEventListener("scroll", () => {
+      frames.push({
+        ms: Math.round(performance.now() - started),
+        gap: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+      })
+    })
+    await (window as any).__conversation.scrollToMessage(1)
+    ;(window as any).__busy(330)
+  })
+  // The first animation frame arrives after the block ended, which is exactly the
+  // sequence a timeout-based release would misattribute.
+  await page.waitForFunction(() => ((window as any).__slowNavFrames as any[])?.length > 0, undefined, { timeout: 3000 })
   await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBe(40)
 })
@@ -436,4 +451,148 @@ test("a pending navigation does not swallow the reader's next gesture", async ({
   await page.mouse.wheel(0, 400)
   await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
   expect(await streamChunk(page)).toBeLessThanOrEqual(1)
+})
+
+test("a stationary touch does not claim a running app navigation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  // A press that never moves must leave the app's animation alone.
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await viewportOf(page).boundingBox())!
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: box.x + box.width / 2, y: box.y + 200 }],
+  })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(false)
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a real touch takes over even when pointercancel precedes the first scroll", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).hover()
+  // Simulate the platform that misses the cancellation's `scrollend`, so a mark is
+  // still pending when the gesture arrives.
+  await viewportOf(page).evaluate(async viewport => {
+    const events = { scroll: 0, end: 0, hiddenEnd: 0 }
+    ;(window as any).__cancellationEvents = events
+    viewport.addEventListener("scroll", () => (events.scroll += 1))
+    viewport.addEventListener("scrollend", () => (events.end += 1))
+    window.addEventListener(
+      "scrollend",
+      event => {
+        if (event.target !== viewport) return
+        events.hiddenEnd += 1
+        event.stopImmediatePropagation()
+      },
+      { capture: true, once: true },
+    )
+    const before = viewport.scrollTop
+    await (window as any).__conversation.scrollToMessage(0)
+    viewport.scrollTo({ top: before, behavior: "instant" })
+    ;(window as any).__markPending = true
+  })
+  // The mark survives the cancelled navigation.
+  expect(await page.evaluate(() => (window as any).__markPending)).toBe(true)
+  const client = await page.context().newCDPSession(page)
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+  const box = (await viewportOf(page).boundingBox())!
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height - 60 }],
+  })
+  for (const step of [40, 80, 120, 160, 200, 240]) {
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height - 60 - step }],
+    })
+  }
+  // Chromium takes the touch over for scrolling here and stops delivering moves.
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(false)
+  expect(await streamChunk(page)).toBeLessThanOrEqual(1)
+})
+
+test("ArrowDown that only moves a caret does not claim the outer navigation", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" })
+  await readUp(page)
+  await viewportOf(page).evaluate(() => {
+    // A textarea mirrors the inline history-prompt editor inside the list.
+    const editor = document.createElement("textarea")
+    editor.id = "inline-prompt-editor"
+    editor.style.cssText = "position:fixed;left:10px;top:10px;height:90px;width:160px"
+    editor.value = "line one\nline two"
+    document.querySelector<HTMLElement>("[role=log]")!.append(editor)
+    editor.focus({ preventScroll: true })
+    editor.setSelectionRange(0, 0)
+    document.querySelector<HTMLElement>("[role=log]")!.addEventListener(
+      "scroll",
+      event => {
+        const viewport = event.currentTarget as HTMLElement
+        ;(window as any).__navInterimGap = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
+      },
+      { once: true },
+    )
+    void (window as any).__conversation.scrollToMessage(1)
+  })
+  await page.waitForFunction(() => (window as any).__navInterimGap > 1, undefined, { timeout: 2000 })
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  await page.keyboard.press("ArrowDown")
+  // The caret moved inside the editor; the outer navigation still owns the view.
+  const caret = await page.locator("#inline-prompt-editor").evaluate(el => (el as HTMLTextAreaElement).selectionStart)
+  expect(caret).toBeGreaterThan(0)
+  expect(await page.evaluate(() => (window as any).__appMark())).toBe(true)
+  await expect.poll(() => gapOf(page)).toBeLessThanOrEqual(1)
+  expect(await streamChunk(page)).toBe(40)
+})
+
+test("a stopped input propagation still closes the reader exemption", async ({ page }) => {
+  await readUp(page, "?compensation")
+  // A listener that stops a real wheel's propagation: the bubble closer never
+  // runs, and a leaked exemption would swallow the next app write.
+  await viewportOf(page).evaluate(viewport => {
+    viewport.addEventListener(
+      "wheel",
+      event => {
+        event.preventDefault()
+        event.stopPropagation()
+      },
+      { once: true, passive: false },
+    )
+  })
+  await viewportOf(page).hover()
+  await page.mouse.wheel(0, 50)
+  await page.waitForTimeout(120)
+  expect(await gapOf(page)).toBe(200)
+  await page.mouse.wheel(0, 15)
+  await expect.poll(() => gapOf(page)).toBe(185)
+  await page.evaluate(async () => {
+    const viewport = document.querySelector<HTMLElement>("[role=log]")!
+    const w = window as unknown as { __arrival?: boolean }
+    w.__arrival = false
+    viewport.addEventListener("scroll", () => {
+      if (viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 1) return
+      w.__arrival = true
+    })
+    await (window as any).__compensate()
+  })
+  await page.waitForFunction(() => (window as any).__arrival === true, undefined, { timeout: 2000 })
+  expect(await streamChunk(page)).toBeGreaterThanOrEqual(40)
 })

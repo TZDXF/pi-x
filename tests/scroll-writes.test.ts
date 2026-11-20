@@ -4,7 +4,6 @@ import {
   beginUserInput,
   consumeScrollWrite,
   clearScrollWrites,
-  endUserInput,
   finishAppScroll,
   hasAppScroll,
   isAppScrolling,
@@ -68,15 +67,16 @@ test("a fresh gesture clears pending records", () => {
 test("writes performed inside the input dispatch are not recorded", () => {
   const element = viewport()
   observeScrollWrites(element)
-  // The capture listener opens, the bubble listener closes: the exemption is
-  // exactly one browser dispatch, which is when Reka writes the thumb position.
-  beginUserInput(element)
+  // The capture listener opens and returns the closer; the bubble listener calls
+  // it. The exemption is exactly one browser dispatch, which is when Reka writes
+  // the thumb position.
+  const close = beginUserInput(element)
   expect(isInputDispatch(element)).toBe(true)
   element.scrollTop = 120
   element.scrollTop = 600
   expect(consumeScrollWrite(element, 120)).toBe(false)
   expect(consumeScrollWrite(element, 600)).toBe(false)
-  endUserInput(element)
+  close()
   expect(isInputDispatch(element)).toBe(false)
   // After the dispatch the app's writes are recorded again.
   element.scrollTop = 500
@@ -86,22 +86,35 @@ test("writes performed inside the input dispatch are not recorded", () => {
 test("a write outside the dispatch stays the app's even in the same task chain", () => {
   const element = viewport()
   observeScrollWrites(element)
-  // No timer closes the exemption: closing it is the bubble listener, so a
-  // rendering-step write (ResizeObserver compensation) is recorded as the app's
-  // however late the browser schedules that step.
+  // Closing at the end of the dispatch is what keeps a rendering-step write
+  // (ResizeObserver compensation) attributed to the app, however late the browser
+  // schedules that step.
+  beginUserInput(element)()
+  element.scrollTop = 600
+  expect(consumeScrollWrite(element, 600)).toBe(true)
+})
+
+test("a listener that stops propagation cannot leak the exemption", async () => {
+  const element = viewport()
+  observeScrollWrites(element)
+  // No bubble closer runs in this case; the scope still has to end after the
+  // dispatch, before any rendering step.
   beginUserInput(element)
-  endUserInput(element)
+  expect(isInputDispatch(element)).toBe(true)
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  // The zero-delay fallback has run by now.
+  expect(isInputDispatch(element)).toBe(false)
   element.scrollTop = 600
   expect(consumeScrollWrite(element, 600)).toBe(true)
 })
 
 test("nested opens and closes are counted", () => {
   const element = viewport()
-  beginUserInput(element)
-  beginUserInput(element)
-  endUserInput(element)
+  const outer = beginUserInput(element)
+  const inner = beginUserInput(element)
+  inner()
   expect(isInputDispatch(element)).toBe(true)
-  endUserInput(element)
+  outer()
   expect(isInputDispatch(element)).toBe(false)
 })
 
