@@ -161,3 +161,21 @@ export function canScrollConversation(viewport: HTMLElement, target: Element | n
 export function shouldReleaseBottomLock(viewport: HTMLElement, target: Element | null, deltaY: number): boolean {
   return deltaY < 0 && canScrollConversation(viewport, target, deltaY)
 }
+
+/**
+ * Whether a touch gesture's viewport travel is corroborated by the finger.
+ *
+ * The reader drags the content: a finger moving up (`fingerDirection === -1`)
+ * scrolls the viewport down (`travel > 0`). Anything the finger does not match —
+ * layout writes, an animation left running after an unrelated gesture, or a purely
+ * sideways swipe with no vertical direction at all — cannot be this gesture's own
+ * scrolling, so it never claims the conversation (TZD-135 review).
+ */
+export function travelClaims(travel: number, fingerDirection: number, threshold = TOUCH_SCROLL_CLAIM_PX): boolean {
+  if (Math.abs(travel) < threshold) return false
+  if (fingerDirection === 0) return false
+  return travel > 0 === fingerDirection < 0
+}
+
+/** Viewport travel a touch must cause before it can count as scrolling. */
+export const TOUCH_SCROLL_CLAIM_PX = 4

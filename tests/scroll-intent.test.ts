@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest"
 import {
   keyScrollsConversation,
+  travelClaims,
   shouldReleaseBottomLock,
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
@@ -188,4 +189,17 @@ test("a touch only scrolls the conversation when no nested scroller can move", (
   // Targets outside the conversation never claim it.
   expect(touchScrollsConversation(viewport, element())).toBe(false)
   expect(touchScrollsConversation(viewport, null)).toBe(false)
+})
+
+test("a gesture is only corroborated when the finger direction matches the viewport", () => {
+  // The claim needs both a qualifying travel and a finger that dragged the content:
+  // a finger moving up (negative movementY) scrolls the content down.
+  expect(travelClaims(10, -1)).toBe(true)
+  expect(travelClaims(10, 1)).toBe(false)
+  expect(travelClaims(-10, 1)).toBe(true)
+  expect(travelClaims(-10, -1)).toBe(false)
+  // A sideways swipe has no vertical direction, so it never corroborates anything.
+  expect(travelClaims(10, 0)).toBe(false)
+  // Below the threshold nothing is claimed, whichever way the finger went.
+  expect(travelClaims(3, -1)).toBe(false)
 })
