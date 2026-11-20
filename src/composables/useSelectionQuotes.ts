@@ -304,6 +304,23 @@ export function useSelectionQuotes(deps: {
     const scope = selectionScope.value
     const root = selectionRoot.value
     /**
+     * 该视口上的定位请求身份（TZD-138 跨入口竞态）：**一进入就取得**，并贯穿重挂、展开、
+     * 锚点重算与最终滚动。`locateRequest` 只是本 composable 内部的序号，看不到别的入口
+     * （时间线跳转走 `Conversation.scrollToMessage`），所以这里必须用视口级身份。
+     *
+     * 课程：之前把「这次被取消」和「徽标不存在」都当成 `false`，于是旧的引用定位会接着走
+     * "重挂 → 重算 → 再滚"的回退，反把用户后来点的时间线目标顶掉。
+     * 现在取消是**终态**：`request.isCurrent()` 一旦为假就 return，绝不改走回退路径。
+     */
+    const viewportRequest = conversation.value?.beginRevealRequest?.() ?? null
+    const stillMine = () => viewportRequest?.isCurrent() !== false
+    const aborted = () =>
+      !stillMine() ||
+      request !== locateRequest ||
+      scope !== selectionScope.value ||
+      root !== selectionRoot.value ||
+      !pendingSelections.value.some(entry => entry.id === id)
+    /**
      * 把目标消息的行内正文查出来，必要时展开（TZD-138 P2）。
      *
      * 必须**每次重新查**：虚拟化（`VirtualMessage`）会把滚出视口的行整行卸载，此时
@@ -327,7 +344,8 @@ export function useSelectionQuotes(deps: {
       if (!badge) return false
       const handle = conversation.value
       let revealed = true
-      if (handle?.revealInViewport) revealed = await handle.revealInViewport(badge, { animated: true })
+      if (handle?.revealInViewport)
+        revealed = await handle.revealInViewport(badge, { animated: true, request: viewportRequest ?? undefined })
       // 没有会话定位句柄（测试替身或非会话宿主）时退回浏览器原生滚动，行为不变。
       else badge.scrollIntoView({ block: "center", behavior: "smooth" })
       // 被同一视口里更新的定位顶替时不闪亮：那块正文可能已经不在屏幕上了。
@@ -336,27 +354,25 @@ export function useSelectionQuotes(deps: {
     }
     // 引用落在折叠裁剪区（目标行还挂载着）：先展开正文，后面才有可定位的徽标与高亮。
     if (await revealTargetIfClipped()) {
-      if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
-      if (!pendingSelections.value.some(entry => entry.id === id)) return
+      if (aborted()) return
       await recomputeAnchors()
     }
-    if (await revealBadge()) return
-    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
-    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    // 只在"这次请求仍有效"时才把徽标滚进视口：被取消时**终止**，不落回重挂回退。
+    if (stillMine() && (await revealBadge())) return
+    if (aborted()) return
     // 没有徽标：目标行可能根本被虚拟化卸载了，先把它滚（重挂）出来。
-    await conversation.value?.scrollToMessage(target.messageId)
+    // 传入自己的请求身份，重挂阶段不会再领新 token（否则会顶掉更晚发起的定位）。
+    await conversation.value?.scrollToMessage(target.messageId, viewportRequest ?? undefined)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
-    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
-    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    if (aborted()) return
     // 重挂后**重新查一次正文并判断裁剪**：卸载时那次查询拿不到元素，不能把它的结论
     // 沿用到重挂之后。这里补上展开（内部已等一帧布局稳定），保证首次点击即可定位。
     await revealTargetIfClipped()
-    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
-    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    if (aborted()) return
     await recomputeAnchors()
     await nextTick()
-    if (request !== locateRequest) return
+    if (aborted()) return
     await revealBadge()
   }
   async function editSelection(id: string) {

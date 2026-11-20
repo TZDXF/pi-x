@@ -43,6 +43,19 @@ const session = reactive({
 const ui = reactive({ pendingUserMessage: null, pushToast: () => {} })
 const list = ref(null)
 window.qa = { session, ui, list, visible, parent, copies, resends }
+// 跨入口竞态回归用：记录两条定位链各自的 promise，便于断言"谁获胜"。
+window.qa.pending = []
+window.qa.locate = id => {
+  const promise = list.value?.locateSelection(id)
+  window.qa.pending.push(promise)
+  return promise
+}
+window.qa.jump = id => {
+  list.value?.stopScroll()
+  const promise = list.value?.scrollToMessage(id)
+  window.qa.pending.push(promise)
+  return promise
+}
 createApp({ setup() {
   const editTextarea = ref(null)
   const edit = reactive(usePromptEdit({
@@ -52,6 +65,8 @@ createApp({ setup() {
   const selections = useConversationSelectionsStore()
   window.qa.selections = selections
   return () => h('div', { style: 'width:700px;height:550px;display:flex;flex-direction:column' }, [
+    // 时间线跳转按钮：与 useChatTurnList.navigateToQuestion 同一入口（stopScroll → scrollToMessage）。
+    h('button', { id: 'qa-jump-52', onClick: () => window.qa.jump(52) }, 'Jump to message 52'),
     h(ChatTurnList, {
       ref: list, session, ui, project: '/qa', projectName: 'QA', connecting: false,
       renderedEntries: session.entries, edit,
@@ -60,7 +75,7 @@ createApp({ setup() {
     }),
     selections.items.length ? h(Summary, {
       items: selections.items,
-      onLocate: id => list.value?.locateSelection(id),
+      onLocate: id => window.qa.locate(id),
       onEdit: id => list.value?.editSelection(id),
     }) : null,
   ])
@@ -245,4 +260,75 @@ test("copy and inline edit still use the full visible question after expanding",
   expect(await page.evaluate(() => (window as unknown as { qa: { resends: unknown[] } }).qa.resends)).toEqual([
     [visible, undefined, parent + visible],
   ])
+})
+
+/**
+ * 跨入口竞态（TZD-138 第六轮）：引用定位进行中点时间线跳转。
+ *
+ * 旧的引用定位在 `await`（重挂/展开/重算）之后仍会再写一次 `scrollTop`，把用户后来点的
+ * 时间线目标顶回去；更糟的是它把自己的"被取消"当成"徽标不存在"，接着走重挂回退，
+ * 重新取得滚动权。修复后在**发起定位时就取得视口请求身份**，取消即终态。
+ */
+test("a later timeline jump is not overridden by a cancelled quote locate", async ({ page }) => {
+  await page.goto(`${harness!.url}?mode=virtual`)
+  const viewport = page.getByRole("log")
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+  await page.locator(shell).dispatchEvent("virtual-reveal")
+  await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+  await quoteLineEleven(page)
+  // 展开并保留徽标，把视口挪开一点，让引用定位真的要滚动。
+  await page.locator(toggle).click()
+  await expect(page.locator(badge)).toHaveCount(1)
+  await viewport.evaluate(el => {
+    ;(el as HTMLElement).scrollTop = 650
+  })
+  await expect(page.locator(badge)).not.toBeInViewport()
+
+  // 记录滚动写入的先后顺序：第一条是引用定位，之后必须只有面向第 52 条的写入。
+  await page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const native = log.scrollTo.bind(log)
+    const state: { writes: { top: number | undefined; behavior?: string }[]; phase: number } = { writes: [], phase: 1 }
+    ;(window as unknown as { qaWrites: typeof state }).qaWrites = state
+    document.addEventListener(
+      "click",
+      event => {
+        if ((event.target as Element).closest("#qa-jump-52")) state.phase = 2
+      },
+      true,
+    )
+    log.scrollTo = ((...args: unknown[]) => {
+      state.writes.push({ top: (args[0] as ScrollToOptions | undefined)?.top, behavior: (args[0] as ScrollToOptions)?.behavior })
+      return (native as unknown as (...inner: unknown[]) => void)(...args)
+    }) as typeof log.scrollTo
+  })
+  // 引用定位先起步（等它真的发出了第一笔滚动写入），再点时间线。
+  await page.getByRole("button", { name: /1 条注释/ }).hover()
+  await page.locator("button[title=Line-11]").click()
+  await page.waitForFunction(
+    () => (window as unknown as { qaWrites: { writes: unknown[] } }).qaWrites.writes.length > 0,
+  )
+  await page.getByRole("button", { name: "Jump to message 52" }).click()
+
+  const outcomes = await page.evaluate(async () => {
+    const pending = (window as unknown as { qa: { pending: unknown[] } }).qa.pending
+    return await Promise.all(pending.map(item => Promise.resolve(item)))
+  })
+  // 引用定位被取消（返回 `null` 表示它在展开/重挂阶段就终止，没有进入滚动阶段），时间线成功。
+  expect(outcomes[outcomes.length - 1], "the timeline jump wins").toBe(true)
+  const result = await page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const later = document.querySelector('[data-message-id="52"]') as HTMLElement
+    return {
+      writes: (window as unknown as { qaWrites: { writes: { phase: number; top?: number }[] } }).qaWrites.writes,
+      laterTop: later.getBoundingClientRect().top - log.getBoundingClientRect().top,
+    }
+  })
+  // 时间线点击之后不得再出现"回到旧引用附近"的写入（旧引用的字符位置在气泡顶部附近）。
+  expect(
+    result.writes.filter(write => write.phase === 2 && (write.top ?? Infinity) < 1000),
+    "the cancelled quote must not scroll again after the timeline click",
+  ).toEqual([])
+  // 第 52 条贴视口顶端 24px（与产品原有顶距一致）。
+  expect(result.laterTop).toBeCloseTo(24, 0)
 })

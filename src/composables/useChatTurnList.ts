@@ -1,4 +1,5 @@
 import { computed, nextTick, type Ref } from "vue"
+import type { RevealRequest } from "@/lib/revealScroll"
 import { responseTurns, type AssistantTurn } from "@/lib/responseTurns"
 import type { TimelineTurn } from "@/lib/conversationTimeline"
 import type { SessionStore } from "@/stores/session"
@@ -6,10 +7,16 @@ import type { UiStore } from "@/stores/ui"
 
 export interface ChatHistoryHandle {
   stopScroll: () => void
-  /** 把消息滚进视口并验证结果（返回是否到位，TZD-138 P2）。 */
-  scrollToMessage: (id: number) => Promise<boolean> | void
+  /**
+   * 把消息滚进视口并验证结果（返回是否到位，TZD-138 P2）。
+   * `request` 是调用方**发起定位时**取得的视口请求身份（引用定位会传自己那份，
+   * 避免在重挂阶段重新领身份而顶掉用户更新的定位）。
+   */
+  scrollToMessage: (id: number, request?: RevealRequest) => Promise<boolean> | void
   /** 把视口内任意元素（例如划词引用徽标）滚进视口并验证结果。 */
-  revealInViewport?: (target: Element, options?: { animated?: boolean }) => Promise<boolean>
+  revealInViewport?: (target: Element, options?: { animated?: boolean; request?: RevealRequest }) => Promise<boolean>
+  /** 在**发起定位的那一刻**取得该视口的请求身份（跨入口竞态的根修复点）。 */
+  beginRevealRequest?: () => RevealRequest | null
   historyViewport: () => HTMLElement | null
 }
 

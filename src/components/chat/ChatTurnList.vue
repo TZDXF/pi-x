@@ -17,6 +17,7 @@ import ChatUserPrompt from "./ChatUserPrompt.vue"
 import CollapsiblePromptText from "./CollapsiblePromptText.vue"
 import CodeCommentPreview from "./CodeCommentPreview.vue"
 import type { ParsedCodeComment } from "@/lib/codeComments"
+import type { RevealRequest } from "@/lib/revealScroll"
 import type { PendingCodeComment } from "@/stores/codeComments"
 import { useWorkspaceStore } from "@/stores/workspace"
 import ChatErrorRecord from "./ChatErrorRecord.vue"
@@ -149,9 +150,10 @@ defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToBottom: () => conversation.value?.scrollToBottom(),
-  scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
-  revealInViewport: async (target: Element, options?: { animated?: boolean }) =>
+  scrollToMessage: (id: number, request?: RevealRequest) => conversation.value?.scrollToMessage(id, request),
+  revealInViewport: async (target: Element, options?: { animated?: boolean; request?: RevealRequest }) =>
     (await conversation.value?.revealInViewport?.(target, options)) ?? false,
+  beginRevealRequest: () => conversation.value?.beginRevealRequest() ?? null,
   locateSelection,
   editSelection,
 })

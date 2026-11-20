@@ -1,5 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest"
-import { invalidateReveals, overlapHeight, revealElement, scrollOffsetFor, visibleRatio } from "@/lib/revealScroll"
+import {
+  beginReveal,
+  invalidateReveals,
+  overlapHeight,
+  revealElement,
+  scrollOffsetFor,
+  visibleRatio,
+} from "@/lib/revealScroll"
 
 /**
  * TZD-138 P2：把目标真正带进视口（而不是"发一次滚动指令就算完"）。
@@ -141,3 +148,41 @@ test("an in-flight reveal stops writing scroll once a newer reveal starts", asyn
 })
 
 afterEach(() => vi.unstubAllGlobals())
+
+/**
+ * 跨入口竞态（TZD-138 第六轮）：请求身份必须在**发起定位的那一刻**取得，并贯穿后面的
+ * `await`（重挂虚拟行、展开折叠正文、重算锚点）。否则"先发起、后恢复"的旧请求会被当成最新：
+ * 时间线跳转与引用定位共用同一视口时，旧引用会把用户后来点的目标顶回去。
+ */
+test("a request taken before an await goes stale if a newer reveal starts meanwhile", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 0))
+  const viewport = {} as HTMLElement
+  const early = beginReveal(viewport)
+  expect(early.isCurrent(), "the first request is current").toBe(true)
+  // 模拟「用户又点了别处」：新请求在同一视口上开始。
+  const later = beginReveal(viewport)
+  expect(later.isCurrent()).toBe(true)
+  expect(early.isCurrent(), "the earlier request is now stale").toBe(false)
+})
+
+test("an inherited request is respected: an older caller cannot re-acquire the viewport", async () => {
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => setTimeout(callback, 0))
+  const { viewport, target } = fakeScroller([])
+  const row5 = target(600)
+  const row65 = target(6000)
+  // 旧请求先取得身份，再**带着这个身份**去滚动：它必须立刻退出，不能写到第 5 条。
+  const stale = beginReveal(viewport)
+  beginReveal(viewport)
+  const result = await revealElement(viewport as unknown as HTMLElement, row5 as unknown as HTMLElement, {
+    request: stale,
+  })
+  expect(result, "a stale request never scrolls").toBe(false)
+  expect(viewport.scrollWrites, "no scroll write from the stale request").toEqual([])
+  // 同一次调用会沿用传来的身份：新请求照常生效。
+  const fresh = beginReveal(viewport)
+  const landed = await revealElement(viewport as unknown as HTMLElement, row65 as unknown as HTMLElement, {
+    request: fresh,
+  })
+  expect(landed).toBe(true)
+  expect(viewport.scrollTop).toBeCloseTo(5810, 0)
+})

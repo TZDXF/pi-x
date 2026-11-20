@@ -108,17 +108,32 @@ function registryFor(viewport: object): { seq: number } {
   return created
 }
 
+/**
+ * 一次定位请求的身份。**必须在用户发起定位的那一刻取得**（不是等到真正滚动时才取）：
+ * 重挂、展开、锚点重算都是 `await`，期间用户可能又点了别的目标；如果等到最后一刻才领
+ * token，先发起、后恢复的旧请求会被当成"最新"，反把新目标顶掉（QA 实测跨入口三内核复现）。
+ */
+export interface RevealRequest {
+  /** 该请求是否仍是最新的定位（被更新的请求作废后恒为 `false`）。 */
+  isCurrent(): boolean
+}
+
 /** 让该视口上所有在途定位作废（不含即将开始的新定位）。 */
 export function invalidateReveals(viewport: object): void {
   const registry = revealTokens.get(viewport)
   if (registry) registry.seq++
 }
 
-/** 领取一个新 token；此时旧 token 全部失效。 */
-function startReveal(viewport: object): { registry: { seq: number }; token: number } {
+/**
+ * 在**发起定位的那一刻**为该视口取得请求身份：同一视口上的旧请求立刻作废。
+ * 之后把同一个 `RevealRequest` 贯穿重挂、展开、锚点重算与最终滚动，
+ * 每一步都先问 `isCurrent()`；已作废的请求必须**终止**，不能改走别的回退路径。
+ */
+export function beginReveal(viewport: object): RevealRequest {
   const registry = registryFor(viewport)
-  registry.seq++
-  return { registry, token: registry.seq }
+  registry.seq += 1
+  const token = registry.seq
+  return { isCurrent: () => registry.seq === token }
 }
 
 export interface RevealOptions {
@@ -128,6 +143,11 @@ export interface RevealOptions {
   attempts?: number
   align?: "center" | "start"
   margin?: number
+  /**
+   * 调用方在发起定位时取得的请求身份。给了就用它（不再自作主张领新 token），
+   * 这样"先发起、后恢复"的旧请求不会把后来的目标顶掉。不给则在本函数内取得。
+   */
+  request?: RevealRequest
 }
 
 /**
@@ -143,9 +163,9 @@ export async function revealElement(
   options: RevealOptions = {},
 ): Promise<boolean> {
   const attempts = options.attempts ?? 4
-  // 领取 token：同一视口上的旧定位从这一刻起作废，不再写滚动位置。
-  const session = startReveal(viewport)
-  const current = () => session.registry.seq === session.token
+  // 用调用方在发起定位时取得的身份；没有则现在取得（同一视口上的旧定位立刻作废）。
+  const request = options.request ?? beginReveal(viewport)
+  const current = () => request.isCurrent()
   const max = () => Math.max(0, viewport.scrollHeight - viewport.clientHeight)
   const offset = () => {
     if (!target.isConnected) return Number.POSITIVE_INFINITY

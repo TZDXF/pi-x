@@ -114,7 +114,8 @@ test("restores anchors after virtual content mounts and locates a missing badge 
     expect(result.anchorOverlays.value).toBe(previous)
     mounted = false
     await result.locateSelection(store.items[0]!.id)
-    expect(scrollToMessage).toHaveBeenCalledWith(1)
+    // 现在会把"发起定位时取得的视口请求身份"一并传下去（测试替身没有该入口时为 undefined）。
+    expect(scrollToMessage).toHaveBeenCalledWith(1, undefined)
     expect(badge.scrollIntoView).toHaveBeenCalledTimes(1)
   } finally {
     unmount()
@@ -297,7 +298,8 @@ test("a virtualized (unmounted) target is revealed on the first click, after rem
     expect(result.anchorOverlays.value.size, "unmounted row contributes no badge").toBe(0)
     // 首次点击：一次调用就要完成"重挂 → 判断裁剪 → 展开 → 重算 → 滚到徽标"。
     await result.locateSelection(item.id)
-    expect(scrollToMessage).toHaveBeenCalledWith(1)
+    // 现在会把"发起定位时取得的视口请求身份"一并传下去（测试替身没有该入口时为 undefined）。
+    expect(scrollToMessage).toHaveBeenCalledWith(1, undefined)
     expect(revealClippedPrompt, "revealed exactly once, after the remount").toHaveBeenCalledTimes(1)
     expect(expanded).toBe(true)
     expect(result.anchorOverlays.value.get(1), "badge recomputed for the remounted row").toHaveLength(1)

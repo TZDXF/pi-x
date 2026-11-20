@@ -7,7 +7,7 @@ import { nextTick, onMounted, provide, ref, watch, watchEffect } from 'vue'
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { invalidateReveals, nextFrame, revealElement } from '@/lib/revealScroll'
+import { beginReveal, nextFrame, revealElement, type RevealRequest } from '@/lib/revealScroll'
 import { shouldReleaseBottomLock, shouldReleaseBottomLockOnScroll, shouldResumeBottomLock } from '@/lib/scrollIntent'
 import { conversationKey } from './context'
 
@@ -30,49 +30,82 @@ const emit = defineEmits<{ scroll: [event: Event] }>()
  */
 const revealLock = ref(0)
 /**
- * 把一个元素滚进视口并验证结果（返回是否到位）：先把目标虚拟行重挂出来，再进入
- * “滚 → 等停 → 复核 → 修正”循环。这期间禁止行高补偿写 `scrollTop`。
+ * 在**发起定位的那一刻**为该视口取得请求身份（TZD-138 P2 跨入口竞态）。
+ *
+ * 重挂虚拟行、展开折叠正文、重算锚点都是 `await`：如果等到真正滚动时才领身份，
+ * "先发起、后恢复"的旧请求会被当成最新，把用户后来点的目标顶掉（QA 三内核复现）。
+ * 所以调用方一进入定位就 `beginReveal(viewport)`，并把同一个身份贯穿到最终滚动。
  */
-async function revealInViewport(target: Element | null | undefined, options: { animated?: boolean } = {}) {
+function beginRequest(): { viewport: HTMLElement; request: RevealRequest } | null {
   const viewport = scrollRef.value
-  if (!viewport || !target || !(target instanceof HTMLElement)) return false
-  invalidateReveals(viewport)
-  // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
-  releaseBottomLock()
+  if (!viewport) return null
+  return { viewport, request: beginReveal(viewport) }
+}
+/** 定位期间抑制行高补偿的写入（`VirtualMessage` 通过 context 读这个计数）。 */
+async function withRevealLock<T>(run: () => Promise<T>): Promise<T> {
   revealLock.value++
   try {
-    return await revealElement(viewport, target, { animated: options.animated })
+    return await run()
   } finally {
     revealLock.value--
   }
+}
+/**
+ * 把一个元素滚进视口并验证结果（返回是否到位）：沿用调用方给的请求身份（没有则在此取得），
+ * 期间禁止行高补偿写 `scrollTop`。
+ */
+async function revealInViewport(
+  target: Element | null | undefined,
+  options: { animated?: boolean; request?: RevealRequest } = {},
+) {
+  const element = target
+  if (!element || !(element instanceof HTMLElement)) return false
+  const started = options.request ? { viewport: scrollRef.value, request: options.request } : beginRequest()
+  if (!started?.viewport) return false
+  // 已被更新的定位顶替：直接终止，不再动滚动位置。
+  if (!started.request.isCurrent()) return false
+  // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
+  releaseBottomLock()
+  return withRevealLock(() =>
+    revealElement(started.viewport as HTMLElement, element, { animated: options.animated, request: started.request }),
+  )
 }
 defineExpose({
   stopScroll: releaseBottomLock,
   scrollToBottom,
   /** 通用入口：把任意视口内元素滚到视口里（划词引用徽标就用它）。 */
   revealInViewport,
-  scrollToMessage: async (id: number) => {
-    const viewport = scrollRef.value
-    const message = viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
-    if (!viewport || !message) return false
-    // 先作废旧定位再 await：等待期间旧定位的一轮修正同样不能覆盖这次目标。
+  /**
+   * 在**发起定位的那一刻**取得该视口的请求身份。引用定位需要在"展开正文 / 重算锚点"等
+   * `await` 之前就拿到它，并贯穿到最终滚动（否则先发起、后恢复的旧请求会顶掉新目标）。
+   */
+  beginRevealRequest: (): RevealRequest | null => beginRequest()?.request ?? null,
+  scrollToMessage: async (id: number, inherited?: RevealRequest) => {
+    const message = scrollRef.value?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+    if (!message) return false
+    // **进入即领取身份**（在任何 await 之前）：重挂要等一帧，期间可能已有更新的定位。
+    // 引用定位会把**自己发起时**取得的身份传进来：它不能在这里重新领，否则会反过来
+    // 顶掉用户更晚发起的那次定位。
+    const started = inherited ? { viewport: scrollRef.value, request: inherited } : beginRequest()
+    if (!started?.viewport) return false
+    const { viewport, request } = started as { viewport: HTMLElement; request: RevealRequest }
+    // 作废后立刻终止，不改走别的回退（否则旧请求会重新取得滚动权）。
+    if (!request.isCurrent()) return false
     releaseBottomLock()
-    revealLock.value++
-    try {
+    return withRevealLock(async () => {
       // 虚拟行可能整行卸载，`virtual-reveal` 让它重挂；等一帧布局稳定再量位置。
       message.dispatchEvent(new Event('virtual-reveal'))
       await nextTick()
       await nextFrame()
-      if (!message.isConnected) return false
+      if (!request.isCurrent() || !message.isConnected) return false
       // 与原有行为一致：目标顶端贴视口顶端（留 24px），长消息也能从开头读起。
       return await revealElement(viewport, message, {
         animated: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
         align: 'start',
         margin: 24,
+        request,
       })
-    } finally {
-      revealLock.value--
-    }
+    })
   },
 })
 

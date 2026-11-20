@@ -34,11 +34,19 @@ const nav = id => {
   return promise
 }
 window.nav = nav
+window.conversation = conversation
+window.reveal = id => {
+  const target = document.querySelector('[data-message-id="' + id + '"]')
+  const promise = conversation.value.revealInViewport(target, { animated: true })
+  ;(window.completed ||= []).push(promise)
+  return promise
+}
 window.grow = () => { heights.value += 40 }
 createApp({ render: () => h('div', { style: 'display:flex;flex-direction:column' }, [
   h('div', { style: 'display:flex;gap:8px' }, [
     h('button', { id: 'jump-5', onClick: () => nav(5) }, 'Jump to 5'),
     h('button', { id: 'jump-65', onClick: () => nav(65) }, 'Jump to 65'),
+    h('button', { id: 'reveal-65', onClick: () => window.reveal(65) }, 'Reveal element 65'),
     h('button', { id: 'grow-row', onClick: () => window.grow() }, 'Grow row'),
   ]),
   h('div', { style: 'height:400px;display:flex;flex-direction:column' }, [
@@ -117,4 +125,49 @@ test("height compensation still works after a navigation has settled", async ({ 
   await expect.poll(async () => (await layout(page)).scrollTop - before.scrollTop).toBe(40)
   const after = await layout(page)
   expect(after.anchor, "reading anchor stays put").toBeCloseTo(before.anchor!, 0)
+})
+
+/**
+ * 跨入口竞态（TZD-138 第六轮）：消息定位还在**重挂准备阶段**（`virtual-reveal` + 等一帧）时，
+ * 用户点了元素定位（划词引用走的就是 `revealInViewport`）。修复前消息入口等到真正滚动时
+ * 才领 token，于是"先发起、后恢复"的旧消息请求被当成最新、反把元素目标顶掉。
+ * 修复后请求身份在**发起那一刻**取得，旧请求必须终止。
+ */
+test("an older message preflight does not override a later element reveal", async ({ page }) => {
+  await page.goto(harness!.url)
+  await expect.poll(async () => (await layout(page)).scrollTop).toBeGreaterThan(5500)
+  await page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const native = log.scrollTo.bind(log)
+    const writes: number[] = []
+    ;(window as unknown as { qaWrites: number[] }).qaWrites = writes
+    log.scrollTo = ((...args: unknown[]) => {
+      writes.push((args[0] as ScrollToOptions | undefined)?.top ?? Number.NaN)
+      return (native as unknown as (...inner: unknown[]) => void)(...args)
+    }) as typeof log.scrollTo
+    // 第一条消息定位一进入准备阶段（还没写滚动）就点元素定位。
+    const handle = (window as unknown as { conversation: { value: Record<string, unknown> } }).conversation.value
+    const original = (handle.scrollToMessage as (...inner: unknown[]) => unknown).bind(handle)
+    handle.scrollToMessage = (id: number, request?: unknown) => {
+      const promise = original(id, request)
+      queueMicrotask(() => document.querySelector<HTMLButtonElement>("#reveal-65")?.click())
+      return promise
+    }
+  })
+  await page.getByRole("button", { name: "Jump to 5" }).click()
+  await settled(page)
+  const results = await page.evaluate(async () =>
+    Promise.all((window as unknown as { completed: Promise<unknown>[] }).completed),
+  )
+  const writes = await page.evaluate(() => (window as unknown as { qaWrites: number[] }).qaWrites)
+  const final = await layout(page)
+  // 旧消息请求一笔都没写（所有写入都属于较新的元素定位）。
+  expect(
+    writes.every(top => top > 4500),
+    "the stale message request never writes",
+  ).toBe(true)
+  // 较新的元素定位获胜（居中），旧消息定位返回 false。
+  expect(results[results.length - 1]).toBe(true)
+  expect(results[0]).toBe(false)
+  expect(final.last).toBeCloseTo(160, 0)
 })
