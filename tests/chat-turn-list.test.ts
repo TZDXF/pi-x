@@ -168,16 +168,70 @@ test("timeline reveals unmaterialized questions and shortcuts scroll only the ow
   const right = harness()
   await left.controls.navigateToQuestion({ id: "turn" })
   expect(left.session.revealTimelineTurn).toHaveBeenCalledWith("turn")
-  expect(left.handle.scrollToMessage).toHaveBeenCalledWith(7)
+  // 时间线导航会把"点击时取得的视口请求身份"一并传给滚动（测试替身没有该入口时为 undefined）。
+  expect(left.handle.scrollToMessage).toHaveBeenCalledWith(7, undefined)
   await left.controls.navigateToQuestion({ id: "known", entryId: 12 })
   expect(left.session.revealTimelineTurn).toHaveBeenCalledOnce()
-  expect(left.handle.scrollToMessage).toHaveBeenLastCalledWith(12)
+  expect(left.handle.scrollToMessage).toHaveBeenLastCalledWith(12, undefined)
   left.controls.scrollHistory(1)
   expect(left.viewport.scrollTo).toHaveBeenCalledWith({ top: 2000 })
   left.controls.scrollHistory(-1)
   expect(left.viewport.scrollTo).toHaveBeenLastCalledWith({ top: 0 })
   expect(right.handle.stopScroll).not.toHaveBeenCalled()
   expect(right.viewport.scrollTo).not.toHaveBeenCalled()
+})
+
+test("a stale timeline click returns its loaded page but never navigates (TZD-138)", async () => {
+  // 未挂载的时间线节点要先 `await revealTimelineTurn`（拉历史分页），期间用户可能点了引用定位。
+  // 旧实现等到分页结束才领请求身份，于是"先点击、后恢复"的旧导航被当成最新，反把新目标顶掉。
+  // 现在身份在点击时取得：分页照常返回数据，但过期点击不得再 stopScroll / scrollToMessage。
+  // 用一个可切换的"当前身份"替身模拟视口请求序号。
+  let seq = 0
+  const requests: { isCurrent: () => boolean }[] = []
+  const beginRevealRequest = () => {
+    seq += 1
+    const token = seq
+    const request = { isCurrent: () => seq === token }
+    requests.push(request)
+    return request
+  }
+  let release!: (id: number) => void
+  const session = reactive({
+    entries: [],
+    isStreaming: false,
+    partialBlocks: null,
+    streamingTurnId: null,
+    sessionFile: "current",
+    hasOlderHistory: false,
+    historyLoading: false,
+    olderHistoryLoading: false,
+    loadOlderHistory: vi.fn(async () => {}),
+    revealTimelineTurn: vi.fn(() => new Promise<number>(resolve => (release = resolve))),
+  })
+  const ui = { pushToast: vi.fn() }
+  const viewport = { scrollTop: 0, scrollHeight: 1000, isConnected: true, scrollTo: vi.fn() }
+  const handle = { stopScroll: vi.fn(), scrollToMessage: vi.fn(), historyViewport: () => viewport, beginRevealRequest }
+  const controls = useChatTurnList({ session, ui, connecting: () => false, conversation: ref(handle) })
+
+  // 第一次点击：未挂载的旧节点 → 开始拉分页（挂起）。
+  const oldClick = controls.navigateToQuestion({ id: "old", entryId: null })
+  await Promise.resolve()
+  expect(session.revealTimelineTurn).toHaveBeenCalledWith("old")
+  // 等待期间用户又点了一次（更新的定位就此取得身份）。
+  beginRevealRequest()
+  // 分页结束：数据照常返回，但这次点击已过期，不得再导航。
+  release(111)
+  await oldClick
+  expect(handle.stopScroll).not.toHaveBeenCalled()
+  expect(handle.scrollToMessage).not.toHaveBeenCalled()
+
+  // 对照：没有更新的请求时，分页结束后正常导航，并把身份往后传。
+  const freshClick = controls.navigateToQuestion({ id: "fresh", entryId: null })
+  await Promise.resolve()
+  release(222)
+  await freshClick
+  expect(handle.stopScroll).toHaveBeenCalledTimes(1)
+  expect(handle.scrollToMessage).toHaveBeenCalledWith(222, requests[requests.length - 1])
 })
 
 test("process materialization survives virtual row unmounting and content/actions keep their layout boundary", () => {

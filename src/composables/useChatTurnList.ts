@@ -97,11 +97,24 @@ export function useChatTurnList(deps: {
   })
 
   async function navigateToQuestion(turn: TimelineTurn) {
+    /**
+     * 视口请求身份必须在**点击那一刻**取得（TZD-138 历史分页竞态）：未挂载的时间线节点
+     * 要先 `await revealTimelineTurn`（拉历史分页），这个等待可能长达几秒；期间用户完全
+     * 可能点了引用定位。如果在等待之后才取身份，"先点击、后恢复"的旧导航就会被当成最新，
+     * 反把用户后来点的目标顶掉（QA 三内核复现：旧请求写入 `top: 1980` → `1056`）。
+     *
+     * 校验点是**导航之前**：分页可以照常返回数据（历史已加载、条目已补上，这些都是
+     * 有用的副作用），但已过期的点击**不得再导航**（`stopScroll` / `scrollToMessage` 都不发）。
+     */
+    const request = conversation.value?.beginRevealRequest?.() ?? null
     // Unmaterialized turns load their history pages first, then scroll.
     const id = turn.entryId ?? (await session.revealTimelineTurn(turn.id))
     if (id == null) return
+    // 分页期间已有更新的定位：数据照常保留，但这次点击不再抢滚动位置。
+    if (request && !request.isCurrent()) return
     conversation.value?.stopScroll()
-    conversation.value?.scrollToMessage(id)
+    // 身份往后传：`Conversation.scrollToMessage` 不能在这里重新领 token。
+    await conversation.value?.scrollToMessage(id, request ?? undefined)
   }
   let restoringHistory = false
   async function onHistoryScroll(event: Event) {
