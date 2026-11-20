@@ -26,6 +26,7 @@ const host = vi.hoisted(() => ({
   getOverride: null as null | (() => Promise<{ preferences: Record<string, string>; preferencesRevision?: number }>),
   /** 每次 `app_config_get` 的记录（用于断言「一次权威读取」）。 */
   reads: [] as number[],
+
   /** 让 `app_preference_set` 的完成受测试控制（模拟在途写入）。 */
   writeGate: null as null | (() => Promise<number>),
   /** 完全接管一笔写入的主机行为（落盘、广播、收起响应各由测试决定）。 */
@@ -776,6 +777,64 @@ test("a single remaining pending echo still blocks a duplicate full snapshot fro
   // 最后确认 light：显示与主机一致。
   broadcast(undefined, { theme: "light", locale: "zh-CN" })
   expect(theme.value.value).toBe("light")
+})
+
+test("a superseded automatic resolution schedules exactly one serial retry", async () => {
+  // 旧后端歧义契约：保持最新本地意图，并由自动读取在「读后收敛」；若本轮响应已失效，
+  // 必须在它结束后合并安排一次串行补读（不能被去重锁吞掉）。
+  const module = await harness({ theme: "system", locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  await theme.set("dark")
+  await theme.set("light")
+  // 先认领第一笔回执（dark），随后「另一键广播」里重复的旧值才构成歧义。
+  broadcast(undefined, { theme: "dark", locale: "en" })
+
+  const network = deferred<Snapshot>()
+  let overrideCalls = 0
+  host.getOverride = () => {
+    overrideCalls += 1
+    // 第一轮歧义裁决挂起；补读直接返回主机真值。
+    if (overrideCalls === 1) return network.promise
+    return Promise.resolve({ preferences: { ...host.preferences } })
+  }
+  const readsBefore = host.reads.length
+  broadcast(undefined, { theme: "dark", locale: "zh-CN" })
+  await vi.waitFor(() => expect(host.reads.length).toBeGreaterThan(readsBefore))
+
+  // 这轮裁决读取挂起期间，主机被改成 system 并推送（我们从未写过 system → 真实外部变更）：
+  // 读取发起后的这次采纳会让旧响应失效。
+  host.preferences = { theme: "system", locale: "zh-CN" }
+  broadcast(undefined, { theme: "system", locale: "zh-CN" })
+  expect(theme.value.value).toBe("system")
+  network.resolve({ preferences: { theme: "light", locale: "zh-CN" } })
+  // 旧响应被跳过 → 串行补读一次，最终收敛到主机真值。
+  await vi.waitFor(() => expect(host.reads.length).toBeGreaterThan(readsBefore + 1))
+  expect(theme.value.value).toBe("system")
+})
+
+test("a same-value local write after a read starts is still protected", async () => {
+  // GET 发起后成功提交的同值写入（raw 未变，但新增了待确认记录）同样不能被旧响应覆盖。
+  const module = await harness({ theme: "dark" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  const network = deferred<Snapshot>()
+  host.getOverride = () => network.promise
+  const refreshing = module.refreshFromHost()
+  // 读取发起后：主机被外部改成 light（还没推送），本端成功写回 dark（与已知值同值）。
+  host.preferences = { theme: "dark" }
+  const write = deferred<number>()
+  host.writeGate = () => write.promise
+  const saving = theme.set("dark")
+  expect(theme.value.value).toBe("dark")
+  write.resolve(undefined as unknown as number)
+  await saving
+
+  network.resolve({ preferences: { theme: "light" } })
+  expect(await refreshing).toBe(true)
+  // 旧响应不得覆盖：显示仍是 dark，主机也是 dark。
+  expect(theme.value.value).toBe("dark")
+  expect(host.preferences.theme).toBe("dark")
 })
 
 test("a legacy host without revisions degrades to bounded FIFO", async () => {

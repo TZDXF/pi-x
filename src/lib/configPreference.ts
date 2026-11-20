@@ -33,6 +33,11 @@ interface ConfigPreferenceOptions<T> {
  * 3. `seenRevision`：仅用于识别「缺字段的旧格式快照」（新后端始终输出该字段），
  *    不用来判断整表是否过时 —— 那是逐 key 的事。
  *
+ * **旧后端（没有修订号）的歧义契约**：整表推送里出现「本端写过的旧值」时，仅凭值无法
+ * 区分「别的键写入时的重复广播」与「外部真的把该值写回来」。此时一律**保持最新的本地
+ * 意图**（不清队、显示不倒退），并由一次自动权威读取在**读后收敛**到主机真值；该读取
+ * 自身也可能被期间的变化作废，因此在它结束后会合并安排一次串行补读。
+ *
  * 之所以按 key 记录修订：单键写成功只证明这一个 key 在 rN 上是我们的值，不能把
  * 「完整快照」的水位推到 rN，否则仍带其它 key 新信息的 r(N-1) 全量事件会被整份丢弃。
  */
@@ -60,6 +65,12 @@ interface InflightWrite {
  */
 let stateVersion = 0
 const knownVersions = new Map<string, number>()
+/**
+ * 本地「意图序号」：每新增一笔在途写入 / 每笔写入被主机接受都会推进（**即使 raw 值没变**）。
+ * 旧后端的延迟 GET 响应据此判断：读取发起后又出现了新的本地写入，就不能拿旧响应覆盖它。
+ * 与 `knownVersions` 共用同一计数器 `stateVersion`，这样两者能与读取发起序号直接比较。
+ */
+const intentVersions = new Map<string, number>()
 
 /** 我们已知的主机 preferences（按 key 带上得知时的修订号）。**不是**显示值。 */
 const known = new Map<string, KnownValue>()
@@ -159,6 +170,12 @@ function markChanged(key: string) {
   knownVersions.set(key, stateVersion)
 }
 
+/** 记录一笔新的本地写入意图（与 raw 是否变化无关）。 */
+function markIntent(key: string) {
+  stateVersion += 1
+  intentVersions.set(key, stateVersion)
+}
+
 function forget(key: string) {
   if (!known.delete(key)) return
   markChanged(key)
@@ -206,11 +223,25 @@ function isOwnEarlierWrite(key: string, value: string): boolean {
  * 只保留一个在途请求，避免多次歧义快照堆叠成读取风暴。
  */
 let resolving = false
+/** 在途自动裁决期间又出现的歧义：本轮结束后若响应确实失效，必须**合并安排一次补读**。 */
+let retryResolution = false
+/** 本轮裁决响应是否真的失效（有 key 因读取发起后发生变化而被跳过）。 */
+let resolutionSuperseded = false
 function requestAuthoritativeResolution() {
-  if (resolving) return
+  if (resolving) {
+    retryResolution = true
+    return
+  }
   resolving = true
+  retryResolution = false
+  resolutionSuperseded = false
   void refreshFromHost().finally(() => {
     resolving = false
+    // 只在「本轮响应确实失效、且期间又出现歧义」时补读一次（串行，`peak` 保持 1）；
+    // 响应本身已消除歧义时不补读，避免重复读取。
+    const shouldRetry = retryResolution && resolutionSuperseded
+    retryResolution = false
+    if (shouldRetry) requestAuthoritativeResolution()
   })
 }
 
@@ -249,14 +280,24 @@ function replacePreferences(
     // `readStartedAt` 是发起读取时的改动序号；此后变过的 key 一律不采用这份旧响应，
     // 并再读一次消除歧义（否则会把已经生效的外部回写盖回读取时的旧值）。
     const readStartedAt = typeof snapshot.readStartedAt === "number" ? snapshot.readStartedAt : null
-    const isSuperseded = (key: string) => readStartedAt !== null && (knownVersions.get(key) ?? 0) > readStartedAt
+    // 读取发起后：主机状态变过（外部推送）**或**出现新的本地写入（成功 / 待确认，哪怕同值）
+    // 的 key 都不能被这份旧响应覆盖。
+    const isSuperseded = (key: string) =>
+      readStartedAt !== null &&
+      (knownVersions.get(key) ?? 0) > readStartedAt &&
+      // 响应值与我们已经采纳的值一致时没有冲突，不必为它补读。
+      incoming[key] !== undefined &&
+      incoming[key] !== known.get(key)?.raw
+    // 本地意图（新增成功 / 待确认写入，哪怕同值）在读取发起后推进过：这份响应可能产生于
+    // 那笔写入之前，不能拿它覆盖，也不能清掉那笔的待确认记录。
+    const hasNewerIntent = (key: string) => readStartedAt !== null && (intentVersions.get(key) ?? 0) > readStartedAt
     let superseded = false
     for (const key of [...unseen.keys()]) {
-      if (inflight.has(key) || isSuperseded(key)) continue
+      if (inflight.has(key) || isSuperseded(key) || hasNewerIntent(key)) continue
       unseen.delete(key)
     }
     for (const key of keys) {
-      if (isSuperseded(key)) {
+      if (isSuperseded(key) || hasNewerIntent(key)) {
         superseded = true
         continue
       }
@@ -265,13 +306,16 @@ function replacePreferences(
     for (const key of [...known.keys()]) {
       if (Object.prototype.hasOwnProperty.call(incoming, key)) continue
       if (inflight.has(key)) continue
-      if (isSuperseded(key)) {
+      if (isSuperseded(key) || hasNewerIntent(key)) {
         superseded = true
         continue
       }
       forget(key)
     }
-    if (superseded) requestAuthoritativeResolution()
+    if (superseded) {
+      resolutionSuperseded = true
+      requestAuthoritativeResolution()
+    }
   } else {
     // 旧后端推送：可能既是「我们某笔写入的回执」，也可能是别的客户端的真实变更。
     //
@@ -350,6 +394,7 @@ function persistRawValue(
 
 /** 主机接受了这笔写入：只更新**这一个 key** 的已知修订（绝不动完整快照的水位）。 */
 function acceptWrite(key: string, raw: string, revision: number | undefined, echoed: boolean) {
+  markIntent(key)
   if (revision === undefined) {
     // 旧后端：命令成功即主机已接受。
     adopt(key, raw, -1)
@@ -382,6 +427,7 @@ async function commit(key: string, raw: string, legacyKey: string | undefined, m
   // 新写入接管这个 key：之前写失败保留的旧选择不再显示。
   failedOverrides.delete(key)
   rememberLocalWrite(key, raw)
+  markIntent(key)
   const entry: InflightWrite | null = mode.optimistic ? { raw, echoed: false, dispatched: false } : null
   if (entry) {
     inflight.set(key, [...(inflight.get(key) ?? []), entry])
