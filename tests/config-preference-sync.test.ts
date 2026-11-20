@@ -24,6 +24,8 @@ const host = vi.hoisted(() => ({
   failValue: null as string | null,
   /** 覆盖 `app_config_get`（模拟「重连读取的响应还在路上」）。 */
   getOverride: null as null | (() => Promise<{ preferences: Record<string, string>; preferencesRevision?: number }>),
+  /** 每次 `app_config_get` 的记录（用于断言「一次权威读取」）。 */
+  reads: [] as number[],
   /** 让 `app_preference_set` 的完成受测试控制（模拟在途写入）。 */
   writeGate: null as null | (() => Promise<number>),
   /** 完全接管一笔写入的主机行为（落盘、广播、收起响应各由测试决定）。 */
@@ -36,6 +38,7 @@ vi.mock("@/api/transport", () => ({
   RECONNECTED_EVENT: "pi://reconnected",
   invoke: async (command: string, args: { key: string; value: string }) => {
     if (command === "app_config_get") {
+      host.reads.push(Date.now())
       if (host.getOverride) return host.getOverride()
       return host.legacyHost
         ? { preferences: { ...host.preferences } }
@@ -103,6 +106,7 @@ async function harness(preferences: Record<string, string> = {}, revision = 0, o
   host.legacyHost = options.legacyHost ?? false
   host.failValue = null
   host.getOverride = null
+  host.reads = []
   host.writeGate = null
   host.writeHook = null
   host.writes = []
@@ -264,6 +268,7 @@ test("a delayed reconnect GET never replaces an already applied higher revision"
 
   // 更新修订的读取才允许纠正丢事件：r8 覆盖后变为 dark。
   host.getOverride = null
+  host.reads = []
   host.preferences = { theme: "dark" }
   host.revision = 8
   await module.refreshFromHost()
@@ -669,6 +674,67 @@ test("a legacy echo of a finished write is claimed before the current request", 
   await second
   broadcast(undefined, { theme: "light" })
   expect(theme.value.value).toBe("light")
+})
+
+test("legacy repeated full-snapshot broadcasts from another key never revert a saved value", async () => {
+  // 旧后端：每笔写入（任意 key）都广播整表。另一客户端在本端第二笔主题写入前改了 locale，
+  // 于是本端会收到一份携带自己旧主题值的重复快照 —— 它不能被当成外部主题回写。
+  const module = await harness({ theme: "system", locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+  const locale = module.createConfigPreference({ key: "locale", defaultValue: "en" })
+
+  const gates = [deferred<void>(), deferred<void>(), deferred<void>()]
+  const sent: Record<string, string>[] = []
+  host.writeHook = async (key, value) => {
+    host.preferences = { ...host.preferences, [key]: value }
+    if (key === "theme" && value === "dark") host.preferences = { ...host.preferences, locale: "zh-CN" }
+    sent.push({ ...host.preferences })
+    await gates[sent.length - 1]!.promise
+    return undefined
+  }
+
+  const first = theme.set("dark")
+  const second = theme.set("light")
+  const third = theme.set("system")
+  const shown = [theme.value.value]
+  for (const [index, write] of [first, second, third].entries()) {
+    await vi.waitFor(() => expect(sent).toHaveLength(index + 1))
+    gates[index]!.resolve()
+    await write
+    shown.push(theme.value.value)
+  }
+  // 四份整表推送按主机顺序到达：dark / dark（含 locale 变更）/ light / system。
+  for (const snapshot of sent) {
+    broadcast(undefined, snapshot)
+    shown.push(theme.value.value)
+  }
+  // 每一刻主题都停在已保存的末值，locale 正常更新。
+  expect(shown).toEqual(Array(shown.length).fill("system"))
+  expect(locale.value.value).toBe("zh-CN")
+})
+
+test("an unclaimable legacy snapshot keeps the local intent and resolves via one read", async () => {
+  const module = await harness({ theme: "system", locale: "en" }, 0, { legacyHost: true })
+  const theme = module.createConfigPreference({ key: "theme", defaultValue: "system" })
+
+  // 三笔主题写入都成功、回执都还没到（unseen = dark/light/system，主机已保存 system）。
+  await theme.set("dark")
+  await theme.set("light")
+  await theme.set("system")
+  expect(theme.value.value).toBe("system")
+  const readsBefore = host.reads.length
+
+  // 第一份回执（dark）被认领。
+  broadcast(undefined, { theme: "dark" })
+  expect(theme.value.value).toBe("system")
+  // 又一份重复整表快照（另一键写入时广播的旧值 dark）：无法认领 —— 保留最新本地意图，
+  // 不倒退显示，并由一次权威读取消解歧义。
+  broadcast(undefined, { theme: "dark" })
+  expect(theme.value.value).toBe("system")
+  await vi.waitFor(() => expect(host.reads.length).toBeGreaterThan(readsBefore))
+  // 权威读取以主机真值为准：主机已保存 system，因此显示仍是 system。
+  await vi.waitFor(() => expect(host.reads.length).toBeGreaterThan(readsBefore))
+  expect(theme.value.value).toBe("system")
 })
 
 test("a legacy host without revisions degrades to bounded FIFO", async () => {

@@ -69,6 +69,13 @@ const inflight = new Map<string, InflightWrite[]>()
  * 认领回执，显示只用末尾那一笔（最新一笔尚未确认的本地写入）。
  */
 const unseen = new Map<string, string[]>()
+/**
+ * 本端为该 key 写过的原始值历史（有界）。旧协议里「别的键写入」也会广播整表，
+ * 于是我们会收到携带自己旧值的重复快照 —— 值能在历史里找到就说明它是重复广播，
+ * 而不是别的客户端把该键改回某个我们从未写过的值。
+ */
+const RECENT_LOCAL_WRITES_LIMIT = 8
+const localWrites = new Map<string, string[]>()
 /** 宽松写入失败后仍保留在界面上的本地选择；被采纳的主机快照会清掉它。 */
 const failedOverrides = new Map<string, string>()
 
@@ -161,6 +168,29 @@ function recordCoverage(revision: number, keys: Set<string>) {
   }
 }
 
+function rememberLocalWrite(key: string, raw: string) {
+  const previous = localWrites.get(key) ?? []
+  localWrites.set(key, [...previous, raw].slice(-RECENT_LOCAL_WRITES_LIMIT))
+}
+
+/** 这个值是本端自己写过的（因此这份快照很可能是重复整表广播，而不是主机的更新）。 */
+function isOwnEarlierWrite(key: string, value: string): boolean {
+  return localWrites.get(key)?.includes(value) ?? false
+}
+
+/**
+ * 一次歧义引发的权威读取：把「无法认领的旧协议快照」交给主机真值裁决。
+ * 只保留一个在途请求，避免多次歧义快照堆叠成读取风暴。
+ */
+let resolving = false
+function requestAuthoritativeResolution() {
+  if (resolving) return
+  resolving = true
+  void refreshFromHost().finally(() => {
+    resolving = false
+  })
+}
+
 function clearFailedOverrides() {
   for (const key of [...failedOverrides.keys()]) if (!inflight.has(key)) failedOverrides.delete(key)
 }
@@ -211,6 +241,7 @@ function replacePreferences(
     //    这些合法回执会被误判成外部状态并整队清空；
     // 2. 再认领当前已发请求（`inflight` 里 dispatched 的那笔），回执先于命令结果到达；
     // 3. 两者都不匹配 → 别的客户端的真实变更：采用并作废旧记录。
+    let ambiguous = false
     for (const key of keys) {
       const value = incoming[key]!
       const waiting = unseen.get(key)
@@ -228,9 +259,22 @@ function replacePreferences(
         if (executing.raw === value) executing.echoed = true
         continue
       }
+      // 值与我们已知的主机状态相同 → 这就是「别的键写入时重复广播」的整表快照，
+      // 不是新的主机状态：既不改状态，也不能清掉该键的待回执记录。
+      if (known.get(key)?.raw === value) continue
+      // 值与我们尚未确认的写入集合同源（本端写过的值，且该键仍有多笔待确认 / 在途写入）：
+      // 旧协议下无法把它与「重复广播」区分开。保留最新本地意图、不让显示倒退，
+      // 其余键照常合入，并交给一次权威读取裁决。
+      const pendingCount = (inflight.get(key)?.length ?? 0) + (unseen.get(key)?.length ?? 0)
+      if (pendingCount >= 2 && isOwnEarlierWrite(key, value)) {
+        ambiguous = true
+        continue
+      }
+      // 其余情况视为别的客户端的真实变更：采用，并作废旧记录。
       unseen.delete(key)
       adopt(key, value, -1)
     }
+    if (ambiguous) requestAuthoritativeResolution()
   }
 
   clearFailedOverrides()
@@ -298,6 +342,7 @@ function acceptWrite(key: string, raw: string, revision: number | undefined, ech
 async function commit(key: string, raw: string, legacyKey: string | undefined, mode: { optimistic: boolean }) {
   // 新写入接管这个 key：之前写失败保留的旧选择不再显示。
   failedOverrides.delete(key)
+  rememberLocalWrite(key, raw)
   const entry: InflightWrite | null = mode.optimistic ? { raw, echoed: false, dispatched: false } : null
   if (entry) {
     inflight.set(key, [...(inflight.get(key) ?? []), entry])
