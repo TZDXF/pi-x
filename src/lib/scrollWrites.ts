@@ -48,6 +48,8 @@
 interface AppScroll {
   /** Position the app asked for, clamped to the scrollable range; null if unknown. */
   targetTop: number | null
+  /** Whether this request has actually moved the viewport since it was made. */
+  moved: boolean
 }
 
 interface ScrollWrite {
@@ -195,7 +197,7 @@ export function beginAppScroll(target: object, targetTop: number | null, scrollT
     appScrolls.delete(target)
     return false
   }
-  appScrolls.set(target, { targetTop })
+  appScrolls.set(target, { targetTop, moved: false })
   return true
 }
 
@@ -221,8 +223,21 @@ export function hasAppScroll(target: object): boolean {
 export function isAppScrolling(target: object, scrollTop: number): boolean {
   const state = appScrolls.get(target)
   if (!state) return false
+  state.moved = true
   if (state.targetTop !== null && Math.abs(state.targetTop - scrollTop) <= TOLERANCE_PX) appScrolls.delete(target)
   return true
+}
+
+/**
+ * Whether the pending app navigation has ever moved this viewport.
+ *
+ * A mark that was created but never moved anything is a request the browser
+ * cancelled before its first frame (or a platform that never reports `scrollend`).
+ * It must not stand in the reader's way: the mark is only there to attribute the
+ * app's own movement, and there is none to attribute.
+ */
+export function appScrollHasMoved(target: object): boolean {
+  return appScrolls.get(target)?.moved === true
 }
 
 /**

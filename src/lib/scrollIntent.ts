@@ -103,11 +103,14 @@ export function keyScrollsConversation(viewport: HTMLElement, event: KeyboardEve
 /**
  * Whether a touch starting at `target` scrolls the conversation **itself**.
  *
- * A finger inside a nested scroller (a code block, a file tree, a tall preview)
- * pans that scroller; the conversation only moves once the nested one is exhausted
- * and its overscroll policy allows chaining. Treating such a gesture as the reader
- * taking the conversation over is wrong (TZD-135 review), so the gesture is only
- * claimed when nothing between the target and the viewport can scroll vertically.
+ * A finger inside a nested scroller pans that scroller: a tall code block, a file
+ * tree, a preview, or a horizontally scrollable strip (`touch-action: pan-x`).
+ * The conversation only moves once that block is exhausted and its overscroll
+ * policy allows chaining. Treating such a gesture as the reader taking the
+ * conversation over is wrong — a diagonal swipe over a horizontal-only block
+ * cancels the app's animation while scrolling nothing here (TZD-135 review), so
+ * the gesture is only tracked when nothing between the target and the viewport
+ * can scroll on either axis.
  */
 export function touchScrollsConversation(viewport: HTMLElement, target: Element | null): boolean {
   if (!target || !viewport.contains(target)) return false
@@ -115,8 +118,10 @@ export function touchScrollsConversation(viewport: HTMLElement, target: Element 
   let element: Element | null = target
   while (element && element !== viewport) {
     const style = getComputedStyle(element)
-    if ((style.overflowY === "auto" || style.overflowY === "scroll") && element.scrollHeight > element.clientHeight)
-      return false
+    const scrollX = style.overflowX === "auto" || style.overflowX === "scroll"
+    const scrollY = style.overflowY === "auto" || style.overflowY === "scroll"
+    if (scrollY && element.scrollHeight > element.clientHeight) return false
+    if (scrollX && element.scrollWidth > element.clientWidth) return false
     element = element.parentElement
   }
   return element === viewport

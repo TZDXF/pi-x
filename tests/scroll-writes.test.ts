@@ -1,5 +1,6 @@
 import { expect, test } from "vitest"
 import {
+  appScrollHasMoved,
   beginAppScroll,
   beginUserInput,
   consumeScrollWrite,
@@ -168,6 +169,18 @@ test("a navigation already at its target leaves no mark behind", () => {
   expect(hasAppScroll(element)).toBe(false)
   expect(beginAppScroll(element, 577, 576)).toBe(false)
   expect(beginAppScroll(element, 578, 576)).toBe(true)
+})
+
+test("a mark reports whether it has actually moved the viewport", () => {
+  const element = viewport()
+  expect(beginAppScroll(element, 600, 0)).toBe(true)
+  // Created but not yet moved: a request the browser cancelled before its first
+  // frame. It must not block a real reader takeover.
+  expect(appScrollHasMoved(element)).toBe(false)
+  expect(isAppScrolling(element, 200)).toBe(true)
+  expect(appScrollHasMoved(element)).toBe(true)
+  finishAppScroll(element)
+  expect(appScrollHasMoved(element)).toBe(false)
 })
 
 test("an app-initiated scroll owns its events until the requested position arrives", () => {

@@ -14,6 +14,8 @@ function element(parentElement: Element | null = null, options = {}) {
     scrollTop: 0,
     scrollHeight: 100,
     clientHeight: 100,
+    scrollWidth: 100,
+    clientWidth: 100,
     style: { overflowY: "visible", overscrollBehaviorY: "auto" },
     contains: (candidate: unknown) => {
       let current = candidate as { parentElement?: Element | null } | null
@@ -173,6 +175,13 @@ test("a touch only scrolls the conversation when no nested scroller can move", (
     style: { overflowY: "auto", overscrollBehaviorY: "auto" },
   })
   expect(touchScrollsConversation(viewport, element(nested))).toBe(false)
+  // A horizontally scrollable strip consumes a diagonal swipe the same way.
+  const strip = element(viewport, {
+    scrollWidth: 600,
+    clientWidth: 200,
+    style: { overflowX: "auto", overflowY: "hidden" },
+  })
+  expect(touchScrollsConversation(viewport, element(strip))).toBe(false)
   // A non-scrolling wrapper in between stays transparent.
   const wrapper = element(viewport, { scrollHeight: 120, clientHeight: 120 })
   expect(touchScrollsConversation(viewport, element(wrapper))).toBe(true)
