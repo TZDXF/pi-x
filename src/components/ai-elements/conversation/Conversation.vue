@@ -7,6 +7,7 @@ import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect 
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
+import { beginReveal, invalidateReveals, revealElement, waitForScrollSettle, type RevealRequest } from '@/lib/revealScroll'
 import {
   canScrollConversation,
   keyScrollsConversation,
@@ -40,10 +41,75 @@ interface Props {
 }
 
 const emit = defineEmits<{ scroll: [event: Event] }>()
+/**
+ * 定位过程中的抑制计数（TZD-138 P2）：`VirtualMessage` 的行高补偿会直接写 `scrollTop`，
+ * 一次写入就会打断平滑滚动。定位期间把计数抬起来，让行高照常量、不写滚动位置；
+ * 定位流程自己按最新布局反复校正，直到目标真的进入视口。
+ */
+const revealLock = ref(0)
+/**
+ * 是否真有**用户发起的定位**正在接管滚动（不含"阅读锚定"自己占用的锁）。
+ * 两者分开：锚定流程也在 `revealLock` 里（要抑制行高补偿），但它自己必须能继续工作。
+ */
+const locating = ref(0)
+/**
+ * 在**发起定位的那一刻**为该视口取得请求身份（TZD-138 P2 跨入口竞态）。
+ * 重挂虚拟行、展开折叠正文、重算锚点都是 `await`：如果等到真正滚动时才领身份，
+ * "先发起、后恢复"的旧请求会被当成最新，把用户后来点的目标顶掉（QA 三内核复现）。
+ */
+function beginRequest(): { viewport: HTMLElement; request: RevealRequest } | null {
+  const viewport = scrollRef.value
+  if (!viewport) return null
+  return { viewport, request: beginReveal(viewport) }
+}
+/** 定位期间抑制行高补偿的写入（`VirtualMessage` 通过 context 读这个计数）。 */
+async function withRevealLock<T>(run: () => Promise<T>): Promise<T> {
+  revealLock.value++
+  try {
+    return await run()
+  } finally {
+    revealLock.value--
+  }
+}
+/**
+ * 把一个元素滚进视口并验证结果（返回是否到位）：沿用调用方给的请求身份（没有则在此取得），
+ * 期间禁止行高补偿写 `scrollTop`。
+ */
+async function revealInViewport(
+  target: Element | null | undefined,
+  options: { animated?: boolean; request?: RevealRequest } = {},
+) {
+  const element = target
+  if (!element || !(element instanceof HTMLElement)) return false
+  const started = options.request ? { viewport: scrollRef.value, request: options.request } : beginRequest()
+  if (!started?.viewport) return false
+  // 已被更新的定位顶替：直接终止，不再动滚动位置。
+  if (!started.request.isCurrent()) return false
+  // 定位是"去读历史"的意图：释放底部跟随，否则内容变动会把人拉回底部。
+  releaseBottomLock()
+  locating.value++
+  try {
+    return await withRevealLock(() =>
+      revealElement(started.viewport as HTMLElement, element, { animated: options.animated, request: started.request }),
+    )
+  } finally {
+    locating.value--
+  }
+}
 defineExpose({
   stopScroll: releaseBottomLock,
   scrollToBottom,
+  /** 通用入口：把任意视口内元素滚到视口里（划词引用徽标就用它）。 */
+  revealInViewport,
+  /** 在**发起定位的那一刻**取得该视口的请求身份（跨入口竞态的根修复点）。 */
+  beginRevealRequest: (): RevealRequest | null => beginRequest()?.request ?? null,
+  /** 在一段"自己写 `scrollTop`"的流程里抑制虚拟行的行高补偿（历史前插锚定）。 */
+  withAnchorLock: withRevealLock,
+  /** 当前是否有定位正在接管滚动（此时外部的滚动补偿应让位）。 */
+  isRevealActive: () => locating.value > 0,
   scrollToMessage,
+  /** 定位后复核并校正（TZD-138）：首轮滚动停稳后按需补写，直到目标真的进入视口。 */
+  settleScrollToMessage,
 })
 
 const props = withDefaults(defineProps<Props>(), {
@@ -69,40 +135,94 @@ function scrollToBottom(options?: Parameters<typeof context.scrollToBottom>[0]) 
   return context.scrollToBottom(options)
 }
 /**
- * Scroll to a message, keeping the movement attributable to the app until it is
- * confirmed finished (TZD-135).
+ * Scroll to a message: **一笔**应用发起的滚动（TZD-135 的归因语义），外加 TZD-138 的
+ * 请求身份校验（被更新的定位顶替后立刻终止，不改走回退）。
  *
- * `scrollTo()` bypasses the `scrollTop` accessor, so observed writes cannot cover
- * it. The requested position is handed over as the confirmation target: the
- * arrival at that position ends the attribution, as does `scrollend` or an actual
- * takeover by the reader. A timeout is deliberately not used — a busy frame can
- * delay the first animation frame by hundreds of milliseconds, and cutting the
- * attribution there would attribute the arrival to the reader.
+ * 虚拟行重挂/测高会让这一笔停在视口外，所以需要"到位"保证的调用方（时间线跳转、引用定位）
+ * 随后再调用 `settleScrollToMessage` 复核并校正 —— 两步分开，才不会给 TZD-135 的
+ * 事件计数与"抵达即结束归因"引入额外的写入。
  */
-async function scrollToMessage(id: number) {
+async function scrollToMessage(id: number, inherited?: RevealRequest) {
   const scroll = scrollRef.value
   const message = scroll?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
-  if (!scroll || !message) return
+  if (!scroll || !message) return false
+  // **进入即领取身份**（在任何 await 之前）：重挂要等一帧，期间可能已有更新的定位。
+  // 引用定位会把**自己发起时**取得的身份传进来：它不能在这里重新领，否则会反过来
+  // 顶掉用户更晚发起的那次定位。
+  const started = inherited ? { viewport: scroll, request: inherited } : beginRequest()
+  if (!started?.viewport) return false
+  const { request } = started as { viewport: HTMLElement; request: RevealRequest }
+  // 作废后立刻终止，不改走别的回退（否则旧请求会重新取得滚动权）。
+  if (!request.isCurrent()) return false
   releaseBottomLock()
-  message.dispatchEvent(new Event('virtual-reveal'))
+  locating.value++
+  try {
+    return await withRevealLock(async () => {
+      // 虚拟行可能整行卸载，`virtual-reveal` 让它重挂；等一帧布局稳定再量位置。
+      message.dispatchEvent(new Event('virtual-reveal'))
+      await nextTick()
+      if (!request.isCurrent() || !message.isConnected) return false
+      // **首轮滚动完全沿用 TZD-135 的单笔语义**：一次 `scrollTo`、一个归因终点，
+      // 不做额外写入 —— 额外写入会产生多余的 scroll 事件并打断"抵达即结束归因"的判定。
+      const requested = scroll.scrollTop + message.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 24
+      const max = scroll.scrollHeight - scroll.clientHeight
+      const instant = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      touchScrolled = false
+      touchCandidate = false
+      touchPointerId = undefined
+      // 归因登记沿用 TZD-135：终点 = 24px 顶距，抵达即结束归因（由 `handleScroll` /
+      // `scrollend` / 读者接管收尾）。
+      if (beginAppScroll(scroll, Math.max(0, Math.min(requested, max)), scroll.scrollTop))
+        scroll.scrollTo({ top: requested, behavior: instant ? 'instant' : 'smooth' })
+      return true
+    })
+  } finally {
+    locating.value--
+  }
+}
+
+/**
+ * 复核并**校正**一次消息定位（TZD-138）：`scrollToMessage` 只发一笔滚动，虚拟行重挂/测高会
+ * 让目标停在视口外（冷跳历史目标即为此）。这里在首轮滚动停稳后按需补写，直到目标到位。
+ *
+ * 用 `scrollTop` 赋值（`observeScrollWrites` 会记为应用写入），因此不会污染 TZD-135 的
+ * 归因；读者手势待定、或归因标记已被取消/接管清掉时一律收手。
+ */
+async function settleScrollToMessage(id: number, inherited?: RevealRequest) {
+  const viewport = scrollRef.value
+  // 目标行可能因为分页前插而被虚拟化卸载：派发产品自己的入口让它重挂（外壳仍在，能等）。
+  const locate = () => viewport?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+  locate()?.dispatchEvent(new Event('virtual-reveal'))
   await nextTick()
-  if (!message.isConnected) return
-  const requested = scroll.scrollTop + message.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 24
-  // The browser clamps the request; that is the position the arrival reports.
-  const max = scroll.scrollHeight - scroll.clientHeight
-  const targetTop = Math.max(0, Math.min(requested, max))
-  const instant = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  // A request already satisfied produces neither `scroll` nor `scrollend`, so it
-  // must not leave an attribution mark behind (TZD-135 review). `beginAppScroll`
-  // reports whether there is anything to wait for.
-  // A new navigation replaces any earlier gesture's claim and candidate.
-  touchScrolled = false
-  touchCandidate = false
-  touchPointerId = undefined
-  if (!beginAppScroll(scroll, targetTop, scroll.scrollTop)) return
-  scroll.scrollTo({ top: requested, behavior: instant ? 'instant' : 'smooth' })
-  // Instant scrolling settles inside this task, but its `scroll` event still
-  // arrives afterwards: the mark stays and the arrival consumes it.
+  const message = locate()
+  if (!viewport || !message) return false
+  // **不自己领身份**：校正只是同一次定位的收尾。没有身份（或已被更新定位顶替）就不写，
+  // 否则一个已经过期的旧定位会在这里重新取得滚动权（QA 跨入口用例正是这种形态）。
+  const request = inherited
+  if (!request || !request.isCurrent()) return false
+  locating.value++
+  try {
+    return await withRevealLock(async () => {
+      await waitForScrollSettle(viewport, { cancelled: () => !request.isCurrent(), timeoutMs: 1600 })
+      if (!request.isCurrent() || !message.isConnected) return false
+      return await revealElement(viewport, message, {
+        align: 'start',
+        margin: 24,
+        request,
+        attempts: 12,
+        canCorrect: () => !gesturePendingNow(),
+        write: top => {
+          // 每一笔修正都重新登记为应用发起的滚动（终点 = 这次的目标），再用 `scrollTop`
+          // 赋值：写入会被 `observeScrollWrites` 记录，因此派生的事件归因给应用，不会被
+          // 误判成"读者向下滚到底"而重新吸底。
+          beginAppScroll(viewport, Math.max(0, Math.min(top, viewport.scrollHeight - viewport.clientHeight)), viewport.scrollTop)
+          viewport.scrollTop = top
+        },
+      })
+    })
+  } finally {
+    locating.value--
+  }
 }
 watchEffect(() => { scrollRef.value = viewport.value?.viewportElement ?? null })
 watch(() => ({ ...delegatedProps }), options => context.setOptions(options))
@@ -176,6 +296,33 @@ let touchCandidateTop = 0
 let touchTravelDirection = 0
 /** The tracked gesture has been attributed to the reader. */
 let touchScrolled = false
+/**
+ * 是否有触摸手势正在接管本视口（或刚刚被浏览器取消、等待认领）。
+ *
+ * 定位的"多轮修正"必须在这种时候收手：抢位置既会顶掉读者的拖动，也会让 TZD-135 的
+ * 归因判定把应用写入误当成读者向下滚动（`staleNavigation` → 重新吸底）。
+ */
+function gesturePendingNow(): boolean {
+  return touchCandidate || touchPointerId !== undefined
+}
+/**
+ * 读者**真的接管了**本视口时，终止在途的定位（TZD-138 P2）。
+ *
+ * 为什么需要单独一步：读者的滚轮 / 键盘 / 触摸会 `finishAppScroll`（结束归因），但**不会**
+ * 作废 `RevealRequest` —— 于是旧的 `settleScrollToMessage` 校正还能继续写，把读者刚滚到的
+ * 位置拉回旧目标（QA 三内核复现）。这里在"确认接管"的那一刻作废该视口的请求，旧定位的
+ * 后续写入便会自行终止。
+ *
+ * 只在**真正接管**时调用：滚轮/键盘必须作用在视口本身（`canScrollConversation` /
+ * `keyScrollsConversation` 已筛过嵌套滚动），触摸必须已经认领（`claimTouchGesture`）。
+ * 未接管的嵌套滚动或游移手势不会走到这里，因此不会误取消，下一次显式定位照常完成。
+ */
+function endRevealsForReader(scroll: HTMLElement) {
+  // 只作废请求身份：其后的每一笔写入都会先校验身份、自行终止。
+  // 不动 `revealLock` / `locating` —— 在途定位的 `finally` 还要各自递减，
+  // 在这里清零会造成重复递减；`VirtualMessage` 的抑制会随它自然结束。
+  invalidateReveals(scroll)
+}
 /** Closers of the exemptions opened by the input currently being dispatched. */
 let wheelScope: InputScopeCloser | undefined
 let keyScope: InputScopeCloser | undefined
@@ -191,6 +338,8 @@ function handleWheelCapture(event: WheelEvent) {
   touchCandidate = false
   // The reader outranks an app navigation still in flight.
   finishAppScroll(scroll)
+  // 读者接管：终止在途定位，旧校正不得再写滚动位置。
+  endRevealsForReader(scroll)
   if (event.deltaY < 0) releaseBottomLock()
 }
 function handleKeyDownCapture(event: KeyboardEvent) {
@@ -203,6 +352,7 @@ function handleKeyDownCapture(event: KeyboardEvent) {
   // Another input ends a pending touch candidate: that gesture is over.
   touchCandidate = false
   finishAppScroll(scroll)
+  endRevealsForReader(scroll)
 }
 function handlePointerCapture(event: PointerEvent) {
   const scroll = scrollRef.value
@@ -224,7 +374,11 @@ function handlePointerCapture(event: PointerEvent) {
   if (event.type !== "pointerdown" && event.type !== "pointermove") return
   if (!ownScrollbar(event.target)) return
   pointerScope = beginUserInput(scroll)
-  if (event.type === "pointerdown") finishAppScroll(scroll)
+  if (event.type === "pointerdown") {
+    finishAppScroll(scroll)
+    // 拖动本视口的滚动条也是读者接管。
+    endRevealsForReader(scroll)
+  }
 }
 /**
  * The tracked touch scrolled the conversation, so it cancels any programmatic
@@ -234,6 +388,8 @@ function claimTouchGesture(scroll: HTMLElement) {
   touchScrolled = true
   touchCandidate = false
   finishAppScroll(scroll)
+  // 触摸已经真的认领了本视口：终止在途定位（同样的理由，见 `endRevealsForReader`）。
+  endRevealsForReader(scroll)
 }
 function handlePointerRelease(event: PointerEvent) {
   const scroll = scrollRef.value
@@ -367,7 +523,7 @@ watchEffect((onCleanup) => {
   observer.observe(scroll)
   onCleanup(() => observer.disconnect())
 })
-provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock })
+provide(conversationKey, { ...context, scrollToBottom, stopScroll: releaseBottomLock, revealLock })
 let stopObservingWrites: (() => void) | undefined
 watchEffect((onCleanup) => {
   const scroll = scrollRef.value

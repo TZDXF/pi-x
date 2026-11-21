@@ -33,6 +33,11 @@ export function useSelectionQuotes(deps: {
    * 写进主会话的桶（同项目下两者 scope 相同，会真的串）。
    */
   auxRuntimeId?: string
+  /**
+   * 展开被折叠裁剪的提问（TZD-138）：定位/编辑一个落在裁剪区外的引用前，先让对应消息
+   * 展开正文并返回 `true`（没展开返回 `false`）。不传时退化为"裁剪区不显示徽标"。
+   */
+  revealClippedPrompt?: (messageId: number) => boolean
 }) {
   const { session, ui, conversation } = deps
   const { t } = useI18n()
@@ -149,6 +154,38 @@ export function useSelectionQuotes(deps: {
   }
   // ---- 索引标记覆盖层：按引用在列表中的序号渲染到划词结束处（布局变化时重算） ----
   const anchorOverlays = ref<Map<number, { id: string; index: number; left: number; top: number }[]>>(new Map())
+  /** 折叠态正文容器（`CollapsiblePromptText`）：只有它带这个标记。 */
+  const CLIPPED_PROMPT = '[data-prompt-text][data-prompt-collapsed="true"]'
+  /**
+   * 该矩形是否落在折叠裁剪区。折叠只裁高度（`overflow: hidden`），所以只看竖直方向：
+   * 矩形整体在可见下边界以下即"看不见"。矩形与包装元素都可能是测试替身，取不到几何
+   * 时一律当作"没被裁"（宁可不收起，也不要错误地藏徽标）。
+   */
+  function isClippedOut(wrapper: Element | null | undefined, rect: DOMRect | null | undefined): boolean {
+    if (!wrapper || !rect || typeof wrapper.querySelector !== "function") return false
+    const body = wrapper.querySelector(CLIPPED_PROMPT)
+    if (!body || typeof body.getBoundingClientRect !== "function") return false
+    const bodyRect = body.getBoundingClientRect()
+    if (!bodyRect || !bodyRect.height) return false
+    return rect.top >= bodyRect.bottom - 0.5
+  }
+  /**
+   * 定位前把被裁剪的正文展开（TZD-138 P2）：收起状态下引用位于裁剪区，徽标只能画到气泡
+   * 下方空白处，滚动与闪亮也都指向看不见的行。先展开、再等一帧让布局稳定，调用方随后重算
+   * 锚点。返回是否真的展开了。
+   */
+  async function revealClippedSelection(
+    wrapper: Element | null | undefined,
+    offset: number,
+    messageId: number,
+  ): Promise<boolean> {
+    const reveal = deps.revealClippedPrompt
+    if (!reveal || !wrapper || !isClippedOut(wrapper, boundaryRect(wrapper, offset))) return false
+    if (!reveal(messageId)) return false
+    await nextTick()
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    return true
+  }
   async function recomputeAnchors() {
     const root = selectionRoot.value
     const map = new Map<number, { id: string; index: number; left: number; top: number }[]>()
@@ -161,6 +198,9 @@ export function useSelectionQuotes(deps: {
         const rect = boundaryRect(wrapper, target.endOffset)
         const wrapperRect = wrapper.getBoundingClientRect()
         if (!rect) return
+        // 裁剪区里的引用在折叠态没有可见锚点：不画徽标。否则徽标落在气泡下方空白处，
+        // 看起来指向一个不存在的位。定位/编辑时先展开正文再重算（locateSelection）。
+        if (isClippedOut(wrapper, rect)) return
         const list = map.get(target.messageId) ?? []
         list.push({
           id: item.id,
@@ -261,24 +301,79 @@ export function useSelectionQuotes(deps: {
     // 文件来源/跨 runtime 的引用没有本面板可定位的正文：不滚动、不闪亮（摘要仍可用）。
     if (!target) return
     const request = locateRequest
-    const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
-    if (badge) {
-      badge.scrollIntoView({ block: "center", behavior: "smooth" })
-      flashLocatedSelection(item)
-      return
-    }
     const scope = selectionScope.value
     const root = selectionRoot.value
-    await conversation.value?.scrollToMessage(target.messageId)
+    /**
+     * 该视口上的定位请求身份（TZD-138 跨入口竞态）：**一进入就取得**，并贯穿重挂、展开、
+     * 锚点重算与最终滚动。`locateRequest` 只是本 composable 内部的序号，看不到别的入口
+     * （时间线跳转走 `Conversation.scrollToMessage`），所以这里必须用视口级身份。
+     *
+     * 课程：之前把「这次被取消」和「徽标不存在」都当成 `false`，于是旧的引用定位会接着走
+     * "重挂 → 重算 → 再滚"的回退，反把用户后来点的时间线目标顶掉。
+     * 现在取消是**终态**：`request.isCurrent()` 一旦为假就 return，绝不改走回退路径。
+     */
+    const viewportRequest = conversation.value?.beginRevealRequest?.() ?? null
+    const stillMine = () => viewportRequest?.isCurrent() !== false
+    const aborted = () =>
+      !stillMine() ||
+      request !== locateRequest ||
+      scope !== selectionScope.value ||
+      root !== selectionRoot.value ||
+      !pendingSelections.value.some(entry => entry.id === id)
+    /**
+     * 把目标消息的行内正文查出来，必要时展开（TZD-138 P2）。
+     *
+     * 必须**每次重新查**：虚拟化（`VirtualMessage`）会把滚出视口的行整行卸载，此时
+     * `[data-selection-source]` 根本不存在，收起判定无从谈起。QA 实测卸载链路只经过
+     * `scrollToMessage` 重挂后就没再查一次正文，于是第一次点击只把正文重挂出来、
+     * 仍是收起态且没有徽标，要再点一次才生效。
+     */
+    const targetMessageId = target.messageId
+    const targetEndOffset = target.endOffset
+    async function revealTargetIfClipped() {
+      const wrapper = root?.querySelector(`[data-message-id="${targetMessageId}"] [data-selection-source]`)
+      return revealClippedSelection(wrapper, targetEndOffset, targetMessageId)
+    }
+    /**
+     * 把徽标滚进视口并**验证**结果（TZD-138 P2）：`scrollIntoView({behavior:"smooth"})` 的动画
+     * 会被 `VirtualMessage` 的行高补偿写入 `scrollTop` 打断，停在半路，徽标仍在视口外。
+     * `Conversation.revealInViewport` 在定位期间抑制行高补偿，并反复校正到目标真的可见。
+     */
+    async function revealBadge() {
+      const badge = selectionRoot.value?.querySelector(`[data-selection-anchor="${id}"]`)
+      if (!badge) return false
+      const handle = conversation.value
+      let revealed = true
+      if (handle?.revealInViewport)
+        revealed = await handle.revealInViewport(badge, { animated: true, request: viewportRequest ?? undefined })
+      // 没有会话定位句柄（测试替身或非会话宿主）时退回浏览器原生滚动，行为不变。
+      else badge.scrollIntoView({ block: "center", behavior: "smooth" })
+      // 被同一视口里更新的定位顶替时不闪亮：那块正文可能已经不在屏幕上了。
+      if (revealed) flashLocatedSelection(item!)
+      return revealed
+    }
+    // 引用落在折叠裁剪区（目标行还挂载着）：先展开正文，后面才有可定位的徽标与高亮。
+    if (await revealTargetIfClipped()) {
+      if (aborted()) return
+      await recomputeAnchors()
+    }
+    // 只在"这次请求仍有效"时才把徽标滚进视口：被取消时**终止**，不落回重挂回退。
+    if (stillMine() && (await revealBadge())) return
+    if (aborted()) return
+    // 没有徽标：目标行可能根本被虚拟化卸载了，先把它滚（重挂）出来。
+    // 传入自己的请求身份，重挂阶段不会再领新 token（否则会顶掉更晚发起的定位）。
+    await conversation.value?.scrollToMessage(target.messageId, viewportRequest ?? undefined)
     await nextTick()
     await new Promise(resolve => requestAnimationFrame(resolve))
-    if (request !== locateRequest || scope !== selectionScope.value || root !== selectionRoot.value) return
-    if (!pendingSelections.value.some(entry => entry.id === id)) return
+    if (aborted()) return
+    // 重挂后**重新查一次正文并判断裁剪**：卸载时那次查询拿不到元素，不能把它的结论
+    // 沿用到重挂之后。这里补上展开（内部已等一帧布局稳定），保证首次点击即可定位。
+    await revealTargetIfClipped()
+    if (aborted()) return
     await recomputeAnchors()
     await nextTick()
-    if (request !== locateRequest) return
-    root?.querySelector(`[data-selection-anchor="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" })
-    flashLocatedSelection(item)
+    if (aborted()) return
+    await revealBadge()
   }
   async function editSelection(id: string) {
     const item = pendingSelections.value.find(entry => entry.id === id)

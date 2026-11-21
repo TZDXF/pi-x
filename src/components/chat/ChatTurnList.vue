@@ -11,12 +11,13 @@ import { Message, MessageContent } from "@/components/ai-elements/message"
 import { Loader } from "@/components/ai-elements/loader"
 import { QueueItem, QueueItemContent, QueueList, QueueSection } from "@/components/ai-elements/queue"
 import PiXLogo from "@/components/PiXLogo.vue"
-import ComposerText from "@/components/ComposerText.vue"
 import VirtualMessage from "@/components/VirtualMessage.vue"
 import ConversationTimeline from "@/components/ConversationTimeline.vue"
 import ChatUserPrompt from "./ChatUserPrompt.vue"
+import CollapsiblePromptText from "./CollapsiblePromptText.vue"
 import CodeCommentPreview from "./CodeCommentPreview.vue"
 import type { ParsedCodeComment } from "@/lib/codeComments"
+import type { RevealRequest } from "@/lib/revealScroll"
 import type { PendingCodeComment } from "@/stores/codeComments"
 import { useWorkspaceStore } from "@/stores/workspace"
 import ChatErrorRecord from "./ChatErrorRecord.vue"
@@ -92,10 +93,38 @@ async function stopRetry() {
 // Kept outside VirtualMessage: virtualization may unmount an answer, but must
 // not forget that its process was already materialized.
 const openedProcesses = reactive(new Set<number>())
+// 折叠态按 entry id 记：虚拟行卸载后重建仍记得用户已经展开过（TZD-138）。
+// 只影响只读展示，正文/复制/编辑重发永远用完整原文。
+const expandedPrompts = reactive(new Set<number>())
 watch(
   () => props.session.sessionFile,
-  () => openedProcesses.clear(),
+  () => {
+    openedProcesses.clear()
+    expandedPrompts.clear()
+  },
 )
+/** 冷启动回显的首条提问与真实 entry 不同源，用自己的展开态。 */
+const pendingPromptExpanded = ref(false)
+watch(
+  () => props.ui.pendingUserMessage,
+  () => {
+    pendingPromptExpanded.value = false
+  },
+)
+function togglePrompt(entryId: number) {
+  if (expandedPrompts.has(entryId)) expandedPrompts.delete(entryId)
+  else expandedPrompts.add(entryId)
+}
+/**
+ * 定位裁剪区里的引用的前置动作（TZD-138 P2）：展开正文并让锚点重算。
+ * 入口只处理“确实被裁着”的情况（判定在 `useSelectionQuotes` 里用 DOM 几何做），
+ * 已展开就返回 `false`，避免无意义的重复渲染。
+ */
+function revealClippedPrompt(entryId: number) {
+  if (expandedPrompts.has(entryId)) return false
+  expandedPrompts.add(entryId)
+  return true
+}
 const conversation = ref<InstanceType<typeof Conversation> | null>(null)
 const {
   selectionRoot,
@@ -114,12 +143,36 @@ const {
   renderedEntries: () => props.renderedEntries,
   conversation,
   auxRuntimeId: props.auxRuntimeId,
+  revealClippedPrompt,
 })
 defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToBottom: () => conversation.value?.scrollToBottom(),
-  scrollToMessage: (id: number) => conversation.value?.scrollToMessage(id),
+  /**
+   * 面板对外的"跳到某条消息"= **一笔**归因正确的滚动（`Conversation.scrollToMessage`，
+   * TZD-135 语义）+ 停稳后的复核校正（TZD-138：虚拟行重挂/测高会让目标停在视口外）。
+   *
+   * 两步放在这一层组合，`Conversation` 自己保持单笔语义 —— 它的事件计数用例
+   * （TZD-135 的 `conversation-scroll-follow`）直接调用 `Conversation.scrollToMessage`，
+   * 不应被校正写入干扰。
+   */
+  scrollToMessage: async (id: number, request?: RevealRequest): Promise<boolean> => {
+    // 身份在这里**一次性取得**，两步共用：校正若自己再领一个，就会把已被顶替的旧定位
+    // 重新变成"最新"，反过来抢走用户后来那次定位的滚动权。
+    const shared = request ?? conversation.value?.beginRevealRequest?.() ?? undefined
+    await conversation.value?.scrollToMessage(id, shared)
+    return (await conversation.value?.settleScrollToMessage?.(id, shared)) ?? false
+  },
+  /** 与 `Conversation.scrollToMessage` 同义：只有那一笔滚动，不做校正（TZD-135 用例用）。 */
+  scrollToMessageOnce: (id: number, request?: RevealRequest) =>
+    conversation.value?.scrollToMessage(id, request) ?? false,
+  revealInViewport: async (target: Element, options?: { animated?: boolean; request?: RevealRequest }) =>
+    (await conversation.value?.revealInViewport?.(target, options)) ?? false,
+  beginRevealRequest: () => conversation.value?.beginRevealRequest() ?? null,
+  withAnchorLock: async <T>(run: () => Promise<T>) =>
+    conversation.value?.withAnchorLock ? conversation.value.withAnchorLock(run) : run(),
+  isRevealActive: () => conversation.value?.isRevealActive?.() ?? false,
   locateSelection,
   editSelection,
 })
@@ -206,6 +259,8 @@ onBeforeUnmount(() => {
                 v-if="entry.kind === 'user'"
                 :entry="entry"
                 :edit="edit"
+                :prompt-expanded="expandedPrompts.has(entry.id)"
+                @toggle-prompt="togglePrompt(entry.id)"
                 @open-code-comment="openedFileReference = $event"
                 @open-selection="openedFileReference = $event"
                 @preview-image="emit('previewImage', $event)"
@@ -251,7 +306,12 @@ onBeforeUnmount(() => {
             </div>
             <MessageContent>
               <div class="text-sm">
-                <ComposerText :text="ui.pendingUserMessage.text" />
+                <!-- 冷启动回显的气泡与真实提问同样折叠，避免秒级启动等待时糊一屏正文。 -->
+                <CollapsiblePromptText
+                  :text="ui.pendingUserMessage.text"
+                  :expanded="pendingPromptExpanded"
+                  @toggle="pendingPromptExpanded = !pendingPromptExpanded"
+                />
               </div>
             </MessageContent>
           </div>

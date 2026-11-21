@@ -108,8 +108,11 @@ test("rendered user messages reuse the composer chip styling", () => {
   const view = readFileSync(new URL("../src/components/chat/ChatUserPrompt.vue", import.meta.url), "utf8")
   const display = readFileSync(new URL("../src/components/ComposerText.vue", import.meta.url), "utf8")
   const editor = readFileSync(new URL("../src/components/ComposerRichEditor.vue", import.meta.url), "utf8")
-  // 历史消息先解析掉 "# Code comments:" 尾块再交给 chip 渲染。
-  expect(view).toMatch(/<ComposerText v-else :text="parsedPrompt\.visibleContent" \/>/)
+  // 历史消息先解析掉 "# Code comments:" 尾块再交给 chip 渲染；TZD-138 之后正文
+  // 由 `CollapsiblePromptText` 承载（超过 6 行折叠，chip 渲染仍走 `ComposerText`）。
+  expect(view).toMatch(/<CollapsiblePromptText[^>]*:text="parsedPrompt\.visibleContent"/)
+  const collapse = readFileSync(new URL("../src/components/chat/CollapsiblePromptText.vue", import.meta.url), "utf8")
+  expect(collapse).toMatch(/<ComposerText :text="text" \/>/)
   expect(display).toMatch(/composerParts\(props\.text, sessionLabels\.value, undefined, "message"\)/)
   expect(display).toMatch(/composerChipClass/)
   expect(display).toMatch(/composerChipText\(part\)/)
