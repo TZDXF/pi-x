@@ -175,6 +175,17 @@ async function mockBackendPages(page: Page, options: FakeOptions) {
 const renderedRows = (page: Page) => page.locator("[data-csv-row]")
 const csvColumnHeaders = (page: Page) => page.locator("[data-csv-header]")
 
+/**
+ * Wait until the preview has no request in flight **and** a frame has painted.
+ * Paging state is only meaningful once the previous move settled; querying a
+ * disabled/enabled button mid-flight measures a transient, not the state under
+ * test. This is a synchronisation helper, not a relaxed timeout.
+ */
+async function settle(page: Page) {
+  await expect(page.locator("[data-csv-preview]")).toHaveAttribute("data-csv-pending", "0")
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+}
+
 test.describe("csv table preview", () => {
   let virtualHarness!: VueHarness
   let pagedHarness!: VueHarness
@@ -810,14 +821,17 @@ test.describe("csv table preview", () => {
     // 逐屏回退，直到历史里已经没有更早的起点且缓存也没有紧邻前驱。
     let guard = 0
     while (guard++ < 10) {
+      await settle(page)
       const enabled = await page.locator("[data-csv-page-prev]").isEnabled()
       if (!enabled) break
       const before = await renderedRows(page).first().getAttribute("data-csv-row")
       await page.locator("[data-csv-page-prev]").click()
+      await expect(renderedRows(page).first()).not.toHaveAttribute("data-csv-row", String(before))
       const after = await renderedRows(page).first().getAttribute("data-csv-row")
       // 每次回退都必须严格前进（行号变小），绝不能停在同一个位置。
       expect(Number(after), `back from ${before} must move to an earlier row`).toBeLessThan(Number(before))
     }
+    await settle(page)
     // 无精确目标时按钮禁用：不是「点了落到猜测 offset」。
     await expect(page.locator("[data-csv-page-prev]")).toBeDisabled()
 
@@ -1081,6 +1095,112 @@ test.describe("csv table preview", () => {
 
     const calls = await page.evaluate(() => (window as any).__csvCalls as { offset: number; gen: number }[])
     expect(calls.some(call => call.gen === 2 && call.offset === 100)).toBe(true)
+  })
+
+  // 复验 P2（第十轮·原始时序）：连续两次刷新时，最新代的精确 offset=100 测长
+  // 请求不能被「旧代同 offset 在途」或「首页行已覆盖第 100 行」吞掉。
+  test("consecutive refreshes keep the newest generation's exact measure request", async ({ page }: { page: Page }) => {
+    await page.addInitScript(() => {
+      const target = window as any
+      target.isTauri = true
+      target.__csvCalls = []
+      target.__csvGen = 1
+      const total = 1_500_000
+      // 第一代首页 100 行；之后每次刷新切换页长 160/80 并换代号。
+      target.__pageLen = 100
+      target.__bump = (len: number) => {
+        target.__csvGen += 1
+        target.__pageLen = len
+      }
+      // 可以挂起「非首页」的请求，测试手动放行。
+      target.__hold = false
+      target.__held = [] as { offset: number; gen: number; release: () => void }[]
+      Reflect.set(target, "__TAURI_INTERNALS__", {
+        invoke: (command: string, args: { offset: number; limit: number }) => {
+          if (command !== "read_csv_page") return Promise.reject(new Error("unexpected " + command))
+          const gen = target.__csvGen as number
+          const offset = args.offset
+          const length = offset === 0 ? (gen === 1 ? 100 : target.__pageLen) : target.__pageLen
+          target.__csvCalls.push({ offset, length, gen })
+          const build = () => {
+            const rows: string[][] = []
+            for (let row = offset; row < Math.min(offset + length, total); row++) {
+              rows.push([String(row), `g${gen}-${row}`])
+            }
+            return {
+              offset,
+              rows,
+              header: ["c0", "c1"],
+              more: offset + rows.length < total,
+              totalRows: offset === 0 ? total : null,
+              columnCount: 2,
+              truncatedColumns: false,
+              truncatedCells: false,
+              budgetTruncated: false,
+              delimiter: ",",
+              fileBytes: 1,
+            }
+          }
+          if (target.__hold && offset !== 0) {
+            return new Promise(resolve => {
+              target.__held.push({ offset, gen, release: () => resolve(build()) })
+            })
+          }
+          return Promise.resolve(build())
+        },
+      })
+    })
+    await page.goto(refreshHarness.url)
+    await page.waitForFunction(() => (window as any).__ready === true)
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "1")
+
+    // 第一代：0（100 行）→ 100。
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "101")
+
+    // 第一次刷新（页长 160）：挂起新代的 offset=100。
+    await page.evaluate(() => {
+      const target = window as any
+      target.__hold = true
+      target.__bump(160)
+      target.__bumpRevision()
+    })
+    await page.waitForFunction(() => {
+      const held = (window as any).__held as { offset: number; gen: number }[]
+      return held.some(entry => entry.offset === 100 && entry.gen === 2)
+    })
+
+    // 第二次刷新（页长 80）：最新代（3）必须**自己**精确请求 100，而不是被
+    // 「旧的 100 在途」或「首页行覆盖第 100 行」吞掉。
+    await page.evaluate(() => {
+      const target = window as any
+      target.__bump(80)
+      target.__bumpRevision()
+    })
+    // 旧代同 offset 仍在途时，最新代的**测长意图**必须保留（不是被吞掉）：
+    // 在途名额仍为 2、精确请求尚未发出，但一旦旧请求结束就必须按精确起点重发。
+    await page.waitForFunction(() => (window as any).__csvCalls.some((c: any) => c.gen === 3 && c.offset === 0))
+    const beforeRelease = await page.evaluate(() => (window as any).__csvCalls as { offset: number; gen: number }[])
+    expect(beforeRelease.some(call => call.gen === 3 && call.offset === 100)).toBe(false)
+
+    // 释放旧代的 160 长请求（其结果会被丢弃）；名额一释放，最新代立刻按精确
+    // 起点 100 重发测长请求，而不是靠「首页行已覆盖第 100 行」蒙过去。
+    await page.evaluate(() => {
+      const target = window as any
+      target.__hold = false
+      for (const entry of target.__held) entry.release()
+      target.__held = []
+    })
+    await page.waitForFunction(() => {
+      const calls = (window as any).__csvCalls as { offset: number; gen: number }[]
+      return calls.some(call => call.gen === 3 && call.offset === 100)
+    })
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "101")
+
+    // 新代页长 80：下一屏到 180（不是 260 或 300）。
+    await expect(page.locator("[data-csv-page-next]")).toBeEnabled()
+    await page.locator("[data-csv-page-next]").click()
+    await expect(renderedRows(page).first()).toHaveAttribute("data-csv-row", "181")
   })
 
   // 复验 P2（新）：连续翻 9 屏后回头取第 1 屏，必须重新请求（缓存有行数上限），

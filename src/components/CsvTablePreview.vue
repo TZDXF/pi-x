@@ -121,6 +121,17 @@ function resetMetadata() {
   budgetTruncated.value = false
 }
 
+/**
+ * Clear a measurement intent once this generation holds a chunk starting exactly
+ * at it. Called on every applied page so the intent survives viewport prefetches
+ * that only *cover* the row.
+ */
+function rememberMeasured() {
+  for (const offset of [...measureIntents]) {
+    if (chunkAt(offset)) measureIntents.delete(offset)
+  }
+}
+
 function applyChunk(page: CsvPage) {
   if (page.offset === 0) {
     // 首页是元数据的唯一来源：总行数/列数/截断标记可能因为文件被改小、改窄而变小，
@@ -153,6 +164,7 @@ function applyChunk(page: CsvPage) {
   ].sort((a, b) => a.offset - b.offset)
   trimChunks()
   clampPage()
+  rememberMeasured()
   tick.value += 1
 }
 
@@ -307,20 +319,51 @@ function clampPage() {
 
 // ---- 请求调度：最多 MAX_INFLIGHT_PAGES 个在途请求，失败后不自动重试 ----
 /**
- * Requests actually in flight, keyed by the offset they cover. This map is
- * **not** cleared on refresh: those requests are still running and still count
- * against the cap (clearing it let a refresh push the peak to 3).
+ * In-flight requests, keyed by generation **and** offset. Keying by offset alone
+ * let a request from the previous generation block the current one from asking
+ * for the same offset again — its payload is discarded anyway, so the newest
+ * generation would wait for a slice it never gets and keep "next screen"
+ * disabled forever (复验的连续刷新时序).
  */
-const pending = new Map<number, number>()
+interface PendingRequest {
+  offset: number
+  limit: number
+  generation: number
+}
+const pending: PendingRequest[] = []
 /** Set on unmount: no further scheduling, whatever a late request does. */
 let unmounted = false
-/** Explicit offsets to fetch next (refresh metadata/current screen, paging). */
+/**
+ * Offsets the current generation must fetch **exactly** to measure its slice
+ * length (a restored non-home screen after a refresh). Kept apart from viewport
+ * gap filling: a home-screen chunk may already *cover* row 100 and an older
+ * generation's request may still be in flight, but neither measures our slice —
+ * only a chunk that starts exactly at 100 does.
+ */
+const measureIntents = new Set<number>()
+/** Explicit offsets to fetch next (refresh metadata, retry). */
 const queue: number[] = []
+/** Current-generation in-flight count, mirrored as a reactive value for tests. */
+const pendingCount = ref(0)
 let generation = 0
 
+/**
+ * Total in-flight cap stays `MAX_INFLIGHT_PAGES`: a refresh does not multiply
+ * concurrency, it only defers the newest generation's request until the stale
+ * one settles.
+ */
+const inFlight = () => pending.length
+/** Any generation already asking for this exact offset. */
+const hasPending = (offset: number) => pending.some(entry => entry.offset === offset)
+
+/**
+ * A row counts as "on its way" if **any** generation is fetching it: a stale
+ * request still yields data we can ignore, but re-asking immediately would
+ * double the concurrency for rows that are already in transit.
+ */
 function pendingAt(row: number): boolean {
-  for (const [offset, limit] of pending) {
-    if (row >= offset && row < offset + limit) return true
+  for (const entry of pending) {
+    if (row >= entry.offset && row < entry.offset + entry.limit) return true
   }
   return false
 }
@@ -335,23 +378,44 @@ function firstPendingGap(start: number, end: number): number | null {
 
 function pump() {
   // 卸载后 `finally` 里的无条件 pump() 仍会被旧请求触发；必须在这里拦住，
-  // 否则组件已经销毁还会继续发请求（复验 P2）。
+  // 否则组件已经销毁还会继续发请求。
   if (unmounted || props.text !== undefined) return
   // 失败的请求不再自动重试：否则「永久错误」（例如超 256 MB）会无限循环。
   if (errorCause.value != null) return
-  while (pending.size < MAX_INFLIGHT_PAGES) {
+
+  // 1) 精确测长意图优先。完成条件只有一个：**本代**已有一块起点等于该 offset
+  //    的 chunk。视口里「已经有行」不算（可能被首页行覆盖），旧代同 offset 的
+  //    在途请求也不算（它的结果会被丢弃）。
+  //    若旧代同 offset 仍在途，就**等它结束**：`finally` 会再次 pump，那时它已
+  //    出队，本代再发一次精确请求 —— 峰值因此仍是 2，而意图不会被吞掉。
+  for (const offset of [...measureIntents]) {
+    if (chunkAt(offset)) {
+      measureIntents.delete(offset)
+      continue
+    }
+    if (hasPending(offset)) continue
+    if (inFlight() >= MAX_INFLIGHT_PAGES) return
+    dispatch(offset)
+  }
+
+  // 2) 显式队列（刷新取元数据、重试）与视口补洞。
+  while (inFlight() < MAX_INFLIGHT_PAGES) {
     let next: number | null = null
     while (queue.length) {
       const candidate = queue.shift() as number
-      if (!pending.has(candidate) && rowAt(candidate) === undefined && !exhaustedAt(candidate)) {
+      if (!hasPending(candidate) && !measureIntents.has(candidate) && rowAt(candidate) === undefined && !exhaustedAt(candidate)) {
         next = candidate
         break
       }
     }
     if (next == null) next = firstPendingGap(desiredWindow.value.start, desiredWindow.value.end)
-    if (next == null || pending.has(next)) return
-    void requestChunk(next)
+    if (next == null || hasPending(next)) return
+    dispatch(next)
   }
+}
+
+function dispatch(offset: number) {
+  void requestChunk(offset)
 }
 
 /** 已知末页之后不再请求（省一次空页往返）。 */
@@ -361,7 +425,8 @@ function exhaustedAt(offset: number): boolean {
 
 async function requestChunk(offset: number) {
   const startedIn = generation
-  pending.set(offset, rowsPerChunk)
+  pending.push({ offset, limit: rowsPerChunk, generation: startedIn })
+  pendingCount.value = pending.length
   loading.value = true
 
   try {
@@ -373,12 +438,12 @@ async function requestChunk(offset: number) {
     if (startedIn !== generation) return
     errorCause.value = cause
   } finally {
-    // 计数只随请求结束而释放，跨代也一样：刷新时旧请求仍在占用名额。
-    pending.delete(offset)
-    loading.value = pending.size > 0
-    // 关键：失败/丢弃的那一代也必须唤醒**当前**排队的缺口。旧实现把 pump()
-    // 关在 `startedIn === generation` 里，刷新后旧请求结束时名额已释放、队列
-    // 却再没人推，画面就一直空白（复验 P1）。
+    // 只移除**这一条**登记：新一代可能已为同一 offset 另发了一条请求。
+    const index = pending.findIndex(entry => entry.generation === startedIn && entry.offset === offset)
+    if (index >= 0) pending.splice(index, 1)
+    pendingCount.value = pending.length
+    loading.value = inFlight() > 0
+    // 失败/被丢弃的那一代也必须唤醒**当前**排队的缺口（含精确测长意图）。
     pump()
   }
 }
@@ -386,7 +451,7 @@ async function requestChunk(offset: number) {
 function retry() {
   errorCause.value = null
   queue.push(0)
-  if (!virtual.value && pageStart.value > 0) queue.push(pageStart.value)
+  if (!virtual.value && pageStart.value > 0) measureIntents.add(pageStart.value)
   pump()
 }
 
@@ -394,6 +459,7 @@ function retry() {
 function resetState() {
   generation += 1
   queue.length = 0
+  measureIntents.clear()
   chunks.value = []
   clientRows.value = null
   resetMetadata()
@@ -458,7 +524,12 @@ async function load(preservePosition: boolean) {
   // 裁剪不同），只有重取过才知道新代的真实页长。旧实现只按视口预取，于是沿用旧
   // 代 `lastScreenRows` 计算「下一屏」，会跳过数据（复验 P2：100 → 300 而非 180）。
   queue.push(0)
-  if (preservePosition && pageStart.value > 0) queue.push(pageStart.value)
+  if (preservePosition && pageStart.value > 0) {
+    // 恢复在非首页：本代**必须**拿到起点恰为该 offset 的切片才知道新页长，
+    // 这是精确测长意图，不能靠「视口里已有该行」或旧代同 offset 在途来满足。
+    measureIntents.add(pageStart.value)
+    rememberMeasured()
+  }
   pump()
 }
 
@@ -528,6 +599,10 @@ const canPageBack = computed(() => previousScreenOffset() != null)
  * disabled control must not move the table to a guessed offset.
  */
 function goToPreviousScreen() {
+  // 禁用状态只由「能否证明前驱/后继」决定，与在途请求无关：把可用性绑到 `loading`
+  // 会让按钮在请求期间闪烁 disabled，也会把自动测试变成时序竞速。请求期间的重复
+  // 点击天然无效——移动后 `baseRow` 变了、`measuredScreenRows` 为 null，后继按钮
+  // 会自动禁用，直到该 offset 的切片落地。
   const target = previousScreenOffset()
   if (target == null) return
   goToScreen(target)
@@ -578,7 +653,11 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
 </script>
 
 <template>
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-csv-preview>
+  <div
+    class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+    data-csv-preview
+    :data-csv-pending="pendingCount"
+  >
     <p
       v-if="error"
       role="alert"
@@ -662,7 +741,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           variant="ghost"
           size="sm"
           class="h-6 px-1.5 text-[11px]"
-          :disabled="!canPageBack || loading"
+          :disabled="!canPageBack"
           data-csv-page-prev
           @click="goToPreviousScreen()"
           >{{ t("projectFiles.csvPrevPage") }}</Button
@@ -674,7 +753,7 @@ const tableWidth = computed(() => renderedColumns.value * csvCellWidth(renderedC
           variant="ghost"
           size="sm"
           class="h-6 px-1.5 text-[11px]"
-          :disabled="!canPageForward || loading"
+          :disabled="!canPageForward"
           data-csv-page-next
           @click="goToNextScreen()"
           >{{ t("projectFiles.csvNextPage") }}</Button

@@ -21,7 +21,9 @@ function fixture() {
     const result = spawnSync(
       process.execPath,
       ["--input-type=module", "--eval", helper, "--", JSON.stringify({ project, path, op, ...extra })],
-      { encoding: "utf8", timeout: 10000 },
+      // 宽表/长行夹具（128 列 × 4096 字符）在 Node 里真实要跑数秒，并发时更久。
+      // 30s 只是「进程被杀死」的兜底，不是性能断言：性能用 Rust 基准衡量。
+      { encoding: "utf8", timeout: 30000 },
     )
     expect(result.status, result.stderr).toBe(0)
     return JSON.parse(result.stdout.trim().replace(/^PIX_FILES=/, ""))
@@ -49,7 +51,7 @@ test("remote previews enforce size limits and UTF-8 boundaries", () => {
   writeFileSync(join(project, "big.png"), Buffer.alloc(8 * 1024 * 1024 + 1))
   expect(call("big.png").error.code).toBe("previewImageTooLarge")
 })
-test("remote file access rejects traversal, directories and escaping links", () => {
+test("remote file access rejects traversal, directories and escaping links", { timeout: 20000 }, () => {
   const { root, project, call } = fixture()
   mkdirSync(join(root, "outside"))
   writeFileSync(join(root, "outside", "secret.txt"), "secret")
@@ -63,7 +65,7 @@ test("remote file access rejects traversal, directories and escaping links", () 
 
 // TZD-137：远端 CSV 表格预览必须与本地 Rust 侧同语义——同一套引号/换行规则、
 // 同一套 offset/limit 分页、同一份列数与截断标志。
-test("remote csv pages follow the local parser and page contract", () => {
+test("remote csv pages follow the local parser and page contract", { timeout: 20000 }, () => {
   const { project, call } = fixture()
   const crlf = String.fromCharCode(13)
   const lf = String.fromCharCode(10)
@@ -154,7 +156,7 @@ test("remote csv matches the local parser on the reported divergences", () => {
 })
 
 // 复验 P1：一页的序列化字节必须有界，且下一段 offset 不跳行。
-test("remote csv slices stay inside the byte budget without skipping rows", () => {
+test("remote csv slices stay inside the byte budget without skipping rows", { timeout: 30000 }, () => {
   const { project, call } = fixture()
   const lf = String.fromCharCode(10)
   const columns = 128
@@ -213,7 +215,7 @@ test("remote csv never lets a data row outvote the header", () => {
 })
 
 // 复验 P1：128 列 × 4096 个汉字（单行 ~1.5 MB）也必须落在 1 MB 预算内。
-test("remote csv wide CJK slices stay inside the byte budget", () => {
+test("remote csv wide CJK slices stay inside the byte budget", { timeout: 30000 }, () => {
   const { project, call } = fixture()
   const lf = String.fromCharCode(10)
   const columns = 128
@@ -236,7 +238,7 @@ test("remote csv wide CJK slices stay inside the byte budget", () => {
 })
 
 // 复验 P2：表头也计入页字节预算（旧实现只算数据行）。
-test("remote csv charges the header to the page budget", () => {
+test("remote csv charges the header to the page budget", { timeout: 30000 }, () => {
   const { project, call } = fixture()
   const lf = String.fromCharCode(10)
   const header = Array.from({ length: 128 }, (_, index) => `c${index}` + "界".repeat(4096)).join(",")
@@ -273,7 +275,7 @@ test("remote csv keeps a lone CR inside quotes from swallowing the next record",
 })
 
 // 复验 P1：控制字符（LF）JSON 转义后每字符 2 字节，必须计入页预算。
-test("remote csv counts JSON control-character escapes against the budget", () => {
+test("remote csv counts JSON control-character escapes against the budget", { timeout: 30000 }, () => {
   const { project, call } = fixture()
   const lf = String.fromCharCode(10)
   const quote = String.fromCharCode(34)
@@ -321,7 +323,7 @@ test("remote csv keeps consecutive CRs inside one quoted cell", () => {
 })
 
 // 复验 P1：U+0001 / U+001F 是 6 字节 \\uXXXX 转义，旧的「控制字符 +1」估算让整页到 3.12 MB。
-test("remote csv counts six-byte control escapes against the budget", () => {
+test("remote csv counts six-byte control escapes against the budget", { timeout: 30000 }, () => {
   const { project, call } = fixture()
   const lf = String.fromCharCode(10)
   const quote = String.fromCharCode(34)
