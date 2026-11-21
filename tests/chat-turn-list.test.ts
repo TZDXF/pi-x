@@ -181,12 +181,18 @@ test("timeline reveals unmaterialized questions and shortcuts scroll only the ow
   expect(right.viewport.scrollTo).not.toHaveBeenCalled()
 })
 
-test("history paging only compensates the prepended rows (TZD-138)", async () => {
-  // 历史分页会**前插一整页更早的消息**：即便 `scrollTop` 不动，眼前的内容也会整体下移。
-  // 补偿量必须只算**前插行**的实际高度：等待期间用户可能展开了折叠提问、或做完一次引用
-  // 定位，那些高度变化都不是前插（按总高差补会把人刚定位的正文滚出视口，QA 三内核复现）。
-  const rows = [{ id: 1, height: 240 }]
-  const scrollTop = { value: 500 }
+test("history paging compensates only layout inserted above the reading anchor (TZD-138)", async () => {
+  // 补偿必须只算"插在参照行之上"的布局。QA 打回过两类误算：把**流式尾行**（在下方、且不在
+  // 已提交条目里）算成前插；以及只加行高、漏掉行间距 `gap-5`。
+  // 这里用内容坐标系：参照行 = 分页前就存在的最上面一行，它的内容内位移 = 前插行 + 行间距。
+  const rows: { id: string; height: number; top: number }[] = [
+    { id: "1", height: 240, top: 0 },
+    { id: "2", height: 76, top: 260 },
+    { id: "3", height: 76, top: 356 },
+    // 阅读位置在下方的流式投影行：不在 session.entries 里，绝不能计入前插。
+    { id: "9001", height: 800, top: 452 },
+  ]
+  const scrollTop = { value: 400 }
   const viewport = {
     get scrollTop() {
       return scrollTop.value
@@ -199,16 +205,25 @@ test("history paging only compensates the prepended rows (TZD-138)", async () =>
     },
     clientHeight: 550,
     isConnected: true,
+    firstElementChild: { getBoundingClientRect: () => ({ top: 0 }) },
     getBoundingClientRect: () => ({ top: 0, bottom: 550 }),
-    querySelector: () => null,
     querySelectorAll: () =>
       rows.map(row => ({
-        getAttribute: (name: string) => (name === "data-message-id" ? String(row.id) : null),
-        getBoundingClientRect: () => ({ top: 0, bottom: row.height, height: row.height }),
+        getAttribute: (name: string) => (name === "data-message-id" ? row.id : null),
+        getBoundingClientRect: () => ({ top: row.top, bottom: row.top + row.height, height: row.height }),
       })),
+    querySelector: (selector: string) => {
+      const id = selector.match(/data-message-id="(\d+)"/)?.[1]
+      const row = rows.find(entry => entry.id === id)
+      if (!row) return null
+      return { getBoundingClientRect: () => ({ top: row.top, bottom: row.top + row.height, height: row.height }) }
+    },
   }
   const session = reactive({
-    entries: [{ kind: "user", id: 1, text: "q" }],
+    entries: [
+      { kind: "user", id: 1, text: "q" },
+      { kind: "user", id: 2, text: "q2" },
+    ],
     isStreaming: false,
     partialBlocks: null,
     streamingTurnId: null,
@@ -218,9 +233,12 @@ test("history paging only compensates the prepended rows (TZD-138)", async () =>
     olderHistoryLoading: false,
     loadOlderHistory: vi.fn(async () => {}),
     revealTimelineTurn: vi.fn(async () => {
-      // 前插 32 行（合计 1600px）—— 同时**已有行的展开**把高度从 240 变成 420（不是前插）。
-      rows[0]!.height = 420
-      for (let index = 0; index < 32; index += 1) rows.push({ id: 100 + index, height: 50 })
+      // 前插 4 行（各 60px），并在它们之上产生 4 处列表间距（各 20px）。
+      const prepended = [0, 1, 2, 3].map(index => ({ id: String(100 + index), height: 60, top: 0 }))
+      const shift = prepended.reduce((sum, row) => sum + row.height + 20, 0)
+      // 参照行与下方所有行整体下移（流式尾行也下移，但它不是前插）。
+      for (const row of rows) row.top += shift
+      rows.unshift(...prepended)
       return 111
     }),
   })
@@ -235,12 +253,7 @@ test("history paging only compensates the prepended rows (TZD-138)", async () =>
   }
   const controls = useChatTurnList({ session, ui, connecting: () => false, conversation: ref(handle) })
   await controls.navigateToQuestion({ id: "older", entryId: null })
-  // 只补前插行（32 × 50 = 1600），不含既有行展开带来的 180。
-  expect(viewport.scrollTop).toBe(2100)
-  // 已挂载的节点（entryId 已知）不触发前插补偿。
-  rows.push({ id: 200, height: 50 })
-  await controls.navigateToQuestion({ id: "known", entryId: 12 })
-  expect(viewport.scrollTop).toBe(2100)
+  expect(viewport.scrollTop).toBe(400 + 320)
 })
 
 test("a stale timeline click returns its loaded page but never navigates (TZD-138)", async () => {

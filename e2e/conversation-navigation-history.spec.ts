@@ -41,11 +41,17 @@ const session = reactive({
   sessionFile: 'qa-a.jsonl',
   steering: [], followUp: [],
   timelineTurns: [{ id: -100, entryId: null, rank: 1, question: 'Older history target', answer: '' }],
-  isStreaming: false, partialBlocks: null,
+  isStreaming: false, partialBlocks: null, streamingTurnId: null, runs: {},
   // 受控"历史分页"：点时间线后挂起，直到测试调用 releaseHistory。
+  // qa.gaps：前插行里混入模型切换分隔行（会比普通行多出额外高度/间距）；
+  // qa.older：前插条数。
   revealTimelineTurn: () => new Promise(resolve => {
     window.qa.releaseHistory = () => {
-      const oldRows = Array.from({ length: 32 }, (_, i) => ({ kind: 'user', id: 100 + i, text: 'Previously unloaded row ' + i }))
+      const count = window.qa.older ?? 32
+      const oldRows = Array.from({ length: count }, (_, i) =>
+        window.qa.gaps && i % 2
+          ? { kind: 'model_change', id: 100 + i, provider: 'fixture', modelId: 'model-' + i }
+          : { kind: 'user', id: 100 + i, text: 'Previously unloaded row ' + i })
       session.entries.unshift(...oldRows)
       session.timelineTurns[0].entryId = 111
       resolve(111)
@@ -63,12 +69,12 @@ createApp({ setup() {
     project: () => '/qa', connecting: () => false, connected: () => true, knownSessions: () => [],
   }))
   const selections = useConversationSelectionsStore()
-  const { navigateToQuestion } = useChatTurnList({ session, ui, conversation: list, connecting: () => false })
+  const { navigateToQuestion, renderedEntries } = useChatTurnList({ session, ui, conversation: list, connecting: () => false })
   window.qa.selections = selections
   return () => h('div', { style: 'width:700px;height:550px;display:flex;flex-direction:column' }, [
     h(ChatTurnList, {
       ref: list, session, ui, project: '/qa', projectName: 'QA', connecting: false,
-      renderedEntries: session.entries, edit,
+      renderedEntries: renderedEntries.value, edit,
       onNavigate: turn => { window.qa.historyNavigation = navigateToQuestion(turn) },
       onCopyText: t => copies.push(t),
       onEditTextarea: t => { editTextarea.value = t },
@@ -329,6 +335,111 @@ test("expanding and locating during paging keeps the quoted text visible after p
   expect(settled.lineRatio, "the selected line stays visible after the prepend").toBeGreaterThan(0.95)
   expect(settled.badgeRatio, "the selection badge stays visible after the prepend").toBeGreaterThan(0.95)
 })
+
+/** 起一条流式回复（真实 `partialBlocks` 投影，位于阅读位置**下方**）。 */
+async function startStreamingTail(page: import("@playwright/test").Page) {
+  await page.evaluate(() => {
+    const qa = (window as unknown as { qa: { session: Record<string, unknown> } }).qa
+    qa.session.streamingTurnId = 9001
+    qa.session.isStreaming = true
+    qa.session.partialBlocks = [
+      { type: "text", text: Array.from({ length: 36 }, (_, i) => "Streaming paragraph " + i).join("\n\n") },
+    ]
+  })
+  await expect(page.locator('[data-message-id="9001"][data-virtual-mounted]')).toHaveCount(1)
+}
+
+/** 停稳后的实际可见性：第 11 行原文与徽标的视口交集比例。 */
+async function settledVisibility(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const log = document.querySelector('[role="log"]') as HTMLElement
+    const text = document.querySelector('[data-message-id="1"] [data-prompt-text]') as HTMLElement
+    const badgeEl = document.querySelector('[data-message-id="1"] [data-selection-anchor]') as HTMLElement
+    const logRect = log.getBoundingClientRect()
+    const ratio = (rect: DOMRect) =>
+      rect.height
+        ? Math.max(0, Math.min(rect.bottom, logRect.bottom) - Math.max(rect.top, logRect.top)) / rect.height
+        : 0
+    const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT)
+    let node = walker.nextNode()
+    while (node && !node.textContent?.includes("Line-11")) node = walker.nextNode()
+    const range = document.createRange()
+    if (node) {
+      const index = node.textContent!.indexOf("Line-11")
+      range.setStart(node, index)
+      range.setEnd(node, index + 7)
+    }
+    return {
+      lineRatio: node ? ratio(range.getBoundingClientRect()) : 0,
+      badgeRatio: ratio(badgeEl.getBoundingClientRect()),
+    }
+  })
+}
+
+/**
+ * 分页停稳后**目标正文与引用徽标仍在视口内**（TZD-138 第十轮，QA 的两个边界）。
+ *
+ * 1. `streaming-tail` / `existing-streaming-tail`：会话末尾有流式回复时，旧实现把这条
+ *    （以及更下方）的高度也算成"前插"，补多了四倍左右，正文被推到上方 −1755px。
+ * 2. `prepend-with-gaps`：前插行之间隔着列表 `gap-5`，旧实现只加行高、漏掉间距，补少了
+ *    ≈520px，正文停在视口下沿之外。
+ * 锚点改为"分页前就存在的最上面一行"，它的内容内位移恰好只等于前插行 + 行间距。
+ */
+for (const mode of ["only-prepend", "existing-streaming-tail", "streaming-tail", "prepend-with-gaps"]) {
+  test(`prepend accounting keeps the quoted text visible: ${mode}`, async ({ page }) => {
+    // 所有模式都用 100 行长提问：收起态下第 11 行在裁剪区外，定位必须真的滚动。
+    await page.goto(`${harness!.url}?long`)
+    // 100 行长提问：先收起，才能把引用点定位到裁剪区外。
+    await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "false")
+    await page.locator(shell).dispatchEvent("virtual-reveal")
+    await expect(page.locator(shell)).toHaveAttribute("data-virtual-mounted", "true")
+    await quoteLineEleven(page)
+    if (mode === "existing-streaming-tail") await startStreamingTail(page)
+    if (mode === "prepend-with-gaps")
+      await page.evaluate(() => {
+        ;(window as unknown as { qa: { gaps?: boolean; older?: number } }).qa.gaps = true
+        ;(window as unknown as { qa: { gaps?: boolean; older?: number } }).qa.older = 64
+      })
+    await instrumentScroll(page)
+
+    // 1) 点尚未挂载的历史节点：进入分页等待；2) 期间展开并定位（真实交互），确认已可见。
+    await page.locator("button.timeline-node").click()
+    await page.waitForFunction(
+      () => typeof (window as unknown as { qa: { releaseHistory?: unknown } }).qa.releaseHistory === "function",
+    )
+    await locateFromSummary(page)
+    await page.evaluate(async () => await (window as unknown as { qa: { earlier: Promise<unknown> } }).qa.earlier)
+    await expect(page.locator(badge)).toHaveCount(1)
+    // 3) 分页**还没回来**时插入流式回复（`streaming-tail` 场景）。
+    if (mode === "streaming-tail") await startStreamingTail(page)
+
+    // 4) 释放分页：数据补上、旧点击零导航；停稳后正文与徽标仍必须看得见。
+    await page.evaluate(async () => {
+      const qa = window as unknown as {
+        qaWrites: { phase: string }
+        qa: { releaseHistory: () => void; historyNavigation: Promise<unknown> }
+      }
+      qa.qaWrites.phase = "history resolved after quote"
+      qa.qa.releaseHistory()
+      await qa.qa.historyNavigation
+    })
+    await expect(page.locator('[data-message-id="111"][data-virtual-mounted]')).toHaveCount(1)
+    const writes = await page.evaluate(
+      () => (window as unknown as { qaWrites: { writes: { phase: string }[] } }).qaWrites.writes,
+    )
+    expect(
+      writes.filter(write => write.phase === "history resolved after quote"),
+      "the stale timeline click must not scroll after its page resolves",
+    ).toEqual([])
+    const rows = await page.evaluate(
+      () => (window as unknown as { qa: { session: { entries: unknown[] } } }).qa.session.entries.length,
+    )
+    expect(rows).toBe(mode === "prepend-with-gaps" ? 120 : 88)
+    const seen = await settledVisibility(page)
+    expect(seen.lineRatio, "the selected line stays visible after the prepend").toBeGreaterThan(0.95)
+    expect(seen.badgeRatio, "the selection badge stays visible after the prepend").toBeGreaterThan(0.95)
+  })
+}
 
 test("a current lazy-history timeline click still navigates and passes its request identity on", async ({ page }) => {
   await page.goto(harness!.url)
