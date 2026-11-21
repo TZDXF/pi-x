@@ -7,7 +7,7 @@ import { nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect 
 import { ScrollAreaRoot, ScrollAreaViewport } from 'reka-ui'
 import { ScrollBar } from '@/components/ui/scroll-area'
 import { pinToBottom } from '@/lib/bottomPin'
-import { beginReveal, revealElement, waitForScrollSettle, type RevealRequest } from '@/lib/revealScroll'
+import { beginReveal, invalidateReveals, revealElement, waitForScrollSettle, type RevealRequest } from '@/lib/revealScroll'
 import {
   canScrollConversation,
   keyScrollsConversation,
@@ -305,6 +305,24 @@ let touchScrolled = false
 function gesturePendingNow(): boolean {
   return touchCandidate || touchPointerId !== undefined
 }
+/**
+ * 读者**真的接管了**本视口时，终止在途的定位（TZD-138 P2）。
+ *
+ * 为什么需要单独一步：读者的滚轮 / 键盘 / 触摸会 `finishAppScroll`（结束归因），但**不会**
+ * 作废 `RevealRequest` —— 于是旧的 `settleScrollToMessage` 校正还能继续写，把读者刚滚到的
+ * 位置拉回旧目标（QA 三内核复现）。这里在"确认接管"的那一刻作废该视口的请求，旧定位的
+ * 后续写入便会自行终止。
+ *
+ * 只在**真正接管**时调用：滚轮/键盘必须作用在视口本身（`canScrollConversation` /
+ * `keyScrollsConversation` 已筛过嵌套滚动），触摸必须已经认领（`claimTouchGesture`）。
+ * 未接管的嵌套滚动或游移手势不会走到这里，因此不会误取消，下一次显式定位照常完成。
+ */
+function endRevealsForReader(scroll: HTMLElement) {
+  // 只作废请求身份：其后的每一笔写入都会先校验身份、自行终止。
+  // 不动 `revealLock` / `locating` —— 在途定位的 `finally` 还要各自递减，
+  // 在这里清零会造成重复递减；`VirtualMessage` 的抑制会随它自然结束。
+  invalidateReveals(scroll)
+}
 /** Closers of the exemptions opened by the input currently being dispatched. */
 let wheelScope: InputScopeCloser | undefined
 let keyScope: InputScopeCloser | undefined
@@ -320,6 +338,8 @@ function handleWheelCapture(event: WheelEvent) {
   touchCandidate = false
   // The reader outranks an app navigation still in flight.
   finishAppScroll(scroll)
+  // 读者接管：终止在途定位，旧校正不得再写滚动位置。
+  endRevealsForReader(scroll)
   if (event.deltaY < 0) releaseBottomLock()
 }
 function handleKeyDownCapture(event: KeyboardEvent) {
@@ -332,6 +352,7 @@ function handleKeyDownCapture(event: KeyboardEvent) {
   // Another input ends a pending touch candidate: that gesture is over.
   touchCandidate = false
   finishAppScroll(scroll)
+  endRevealsForReader(scroll)
 }
 function handlePointerCapture(event: PointerEvent) {
   const scroll = scrollRef.value
@@ -353,7 +374,11 @@ function handlePointerCapture(event: PointerEvent) {
   if (event.type !== "pointerdown" && event.type !== "pointermove") return
   if (!ownScrollbar(event.target)) return
   pointerScope = beginUserInput(scroll)
-  if (event.type === "pointerdown") finishAppScroll(scroll)
+  if (event.type === "pointerdown") {
+    finishAppScroll(scroll)
+    // 拖动本视口的滚动条也是读者接管。
+    endRevealsForReader(scroll)
+  }
 }
 /**
  * The tracked touch scrolled the conversation, so it cancels any programmatic
@@ -363,6 +388,8 @@ function claimTouchGesture(scroll: HTMLElement) {
   touchScrolled = true
   touchCandidate = false
   finishAppScroll(scroll)
+  // 触摸已经真的认领了本视口：终止在途定位（同样的理由，见 `endRevealsForReader`）。
+  endRevealsForReader(scroll)
 }
 function handlePointerRelease(event: PointerEvent) {
   const scroll = scrollRef.value

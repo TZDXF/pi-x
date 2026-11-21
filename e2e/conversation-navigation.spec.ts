@@ -40,6 +40,26 @@ const nav = id => {
   ;(window.completed ||= []).push(promise)
   return promise
 }
+/**
+ * 把两步拆开持有：先只做首轮那一笔，由测试在读者接管之后再触发 settle 校正。
+ * 这正是"旧校正晚到"的竞态窗口（QA 复现的形态）。
+ */
+window.startNav = id => {
+  conversation.value.stopScroll()
+  const shared = conversation.value.beginRevealRequest()
+  const first = conversation.value.scrollToMessage(id, shared)
+  const settle = () => conversation.value.settleScrollToMessage(id, shared)
+  ;(window.completed ||= []).push(first)
+  return { first, settle, shared }
+}
+window.anchorAt = id => {
+  conversation.value.stopScroll()
+  const shared = conversation.value.beginRevealRequest()
+  const target = document.querySelector('[data-message-id="' + id + '"]')
+  const anim = conversation.value.revealInViewport(target, { animated: true, request: shared })
+  ;(window.completed ||= []).push(anim)
+  return { settle: () => conversation.value.settleScrollToMessage(id, shared), shared }
+}
 window.nav = nav
 window.conversation = conversation
 window.reveal = id => {
@@ -177,4 +197,64 @@ test("an older message preflight does not override a later element reveal", asyn
   expect(results[results.length - 1]).toBe(true)
   expect(results[0]).toBe(false)
   expect(final.last).toBeCloseTo(160, 0)
+})
+
+/**
+ * 本轮 P2（QA 复现）：读者**真正接管**主视口后，旧校正不得再写滚动位置。
+ *
+ * 定位分两步：首轮那一笔（TZD-135 归因）+ `settleScrollToMessage` 的校正。若读者在两步
+ * 之间用滚轮接管了视口，旧的校正仍在等待（等停/测高），恢复后会继续写 —— 把读者刚滚到
+ * 的位置拉回旧目标。修复后读者接管即作废该视口上的请求，旧校正自行终止。
+ */
+test("a reader wheel takeover ends the pending settle correction", async ({ page }) => {
+  // 用即时滚动（`reducedMotion: reduce`）把"首轮已到位、校正尚未跑完"的窗口稳定复现。
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  await page.goto(harness!.url)
+  await page.evaluate(async () => {
+    const w = window as unknown as {
+      startNav: (id: number) => { first: Promise<unknown>; settle: () => Promise<boolean> }
+    }
+    const handle = w.startNav(5)
+    ;(window as unknown as { __settle: () => Promise<boolean> }).__settle = handle.settle
+    await handle.first
+  })
+  // 首轮那一位：第 5 条贴视口顶端（24px）。
+  await expect.poll(async () => (await layout(page)).first, { timeout: 4000 }).toBeCloseTo(24, 0)
+  // 读者接管：滚轮作用在主视口本身（不是嵌套滚动块）。
+  await page.locator('[role="log"]').hover()
+  await page.mouse.wheel(0, 240)
+  await expect.poll(async () => (await layout(page)).scrollTop, { timeout: 4000 }).toBeGreaterThan(100)
+  const readerTop = (await layout(page)).scrollTop
+  // 旧校正此刻才恢复：读者接管已作废该请求，它必须写不动。
+  const settled = await page.evaluate(async () =>
+    (window as unknown as { __settle: () => Promise<boolean> }).__settle(),
+  )
+  expect(settled, "the stale correction reports it did not land").toBe(false)
+  const after = await layout(page)
+  // 读者的滚轮带惯性，之后还可能继续往下走；关键是**没有被拉回旧目标**（上移）。
+  expect(after.scrollTop, "the old correction does not pull the reader back").toBeGreaterThanOrEqual(readerTop - 1)
+})
+
+test("a nested-scroller wheel does not cancel the next explicit navigation", async ({ page }) => {
+  await page.goto(`${harness!.url}?virtual`)
+  await expect.poll(async () => (await layout(page)).scrollTop).toBeGreaterThan(5500)
+  // 一个独立可滚的嵌套块：在它上面滚轮只滚它自己，不属于主视口。
+  await page.evaluate(() => {
+    const pane = document.createElement("div")
+    pane.id = "nested-pane"
+    pane.style.cssText =
+      "position:fixed;left:380px;top:120px;width:200px;height:140px;overflow-y:auto;overscroll-behavior:contain;z-index:20;background:#abc"
+    pane.innerHTML = '<div style="height:700px">tall</div>'
+    document.querySelector('[role="log"]')!.append(pane)
+  })
+  const nested = page.locator("#nested-pane")
+  await nested.evaluate(pane => {
+    pane.scrollTop = 120
+    // 真实滚轮会落在这里并向主视口冒泡：`canScrollConversation` 必须判成"不是本视口"，
+    // 因而**不作废**任何定位请求。
+    pane.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }))
+  })
+  // 紧接着一次显式定位：它必须照常完成（目标真的进入视口）。
+  await page.getByRole("button", { name: "Jump to 5" }).click()
+  await expect.poll(async () => (await layout(page)).first, { timeout: 6000 }).toBeCloseTo(24, 0)
 })
