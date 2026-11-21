@@ -1,6 +1,7 @@
 import { invoke } from "@/api/transport"
 import { listen } from "@/api/transport"
 import { terminalConnectionId } from "@/lib/sshTrust"
+import type { CsvPage } from "@/lib/csvTable"
 import { sshConnectionList } from "./ssh"
 
 export async function invokeProjectFile<T>(
@@ -10,6 +11,18 @@ export async function invokeProjectFile<T>(
 ): Promise<T> {
   const sshConnectionId = await terminalConnectionId(project, sshConnectionList)
   return invoke<T>(command, { project, path, sshConnectionId })
+}
+
+/**
+ * Read one slice of a project CSV/TSV for the table preview. Rows are parsed by
+ * the backend and only a bounded window comes back, so a large sheet never
+ * becomes one IPC payload. A returned slice may be **shorter than `limit`**
+ * when the backend hits its byte budget: callers continue from
+ * `offset + page.rows.length`, never from `offset + limit`.
+ */
+export async function readCsvPage(project: string, path: string, offset: number, limit: number): Promise<CsvPage> {
+  const sshConnectionId = await terminalConnectionId(project, sshConnectionList)
+  return invoke<CsvPage>("read_csv_page", { project, path, offset, limit, sshConnectionId })
 }
 
 /** Payload of `pi://project-files-changed`: changes inside the browsed scope. */

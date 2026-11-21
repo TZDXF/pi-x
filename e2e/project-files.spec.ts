@@ -11,6 +11,8 @@ type ProjectDirectoryMap = Record<string, ProjectDirectoryEntry[]>
 
 interface ProjectFilesInvokeArguments {
   path?: string
+  offset?: number
+  limit?: number
 }
 
 interface ProjectFilesWindow {
@@ -159,6 +161,72 @@ test.describe("project files", () => {
     expect(lineClass, "annotated line remains highlighted").toContain("bg-amber-500/15")
     await expect(page.getByPlaceholder("Write a comment…")).toHaveCount(0)
 
+    expect(errors).toEqual([])
+  })
+
+  // TZD-137：CSV 走表格视图，且**不再**走 512 KB 文本预读——大表按页读取。
+  test("renders csv files as a paginated table instead of a 512 KB text preview", async ({ page }: { page: Page }) => {
+    const errors: string[] = []
+    page.on("pageerror", error => errors.push(error.message))
+    const rows = 1200
+    await page.addInitScript((total: number) => {
+      const projectWindow = window as Window & typeof globalThis & ProjectFilesWindow
+      projectWindow.isTauri = true
+      const calls: string[] = []
+      Reflect.set(projectWindow, "__csvCommands", calls)
+      Reflect.set(projectWindow, "__TAURI_INTERNALS__", {
+        invoke: async (command: string, args: ProjectFilesInvokeArguments): Promise<unknown> => {
+          calls.push(command)
+          if (command === "list_project_directory") {
+            return args.path
+              ? []
+              : [
+                  { name: "data.csv", path: "data.csv", is_dir: false },
+                  { name: "main.rs", path: "main.rs", is_dir: false },
+                ]
+          }
+          if (command === "read_csv_page") {
+            const offset = args.offset ?? 0
+            const limit = args.limit ?? 500
+            const cells: string[][] = []
+            for (let row = offset; row < Math.min(offset + limit, total); row++)
+              cells.push([String(row), `name${row}`, `${row % 7}`])
+            return {
+              offset,
+              rows: cells,
+              header: ["id", "name", "amount"],
+              more: offset + limit < total,
+              totalRows: offset === 0 ? total : null,
+              columnCount: 3,
+              truncatedColumns: false,
+              truncatedCells: false,
+              delimiter: ",",
+              fileBytes: 64 * 1024,
+            }
+          }
+          // 表格视图下不应再出现整份文件的文本预读。
+          if (command === "read_file_preview") throw Error("csv must not use text preview")
+          throw Error("unexpected command " + command)
+        },
+      })
+    }, rows)
+
+    await page.goto(harness.url)
+    await page.getByRole("button", { name: "data.csv" }).click()
+    const preview = page.locator('section[aria-label="File preview"]')
+    await expect(preview).toBeVisible()
+    await expect(page.locator("[data-csv-preview]")).toBeVisible()
+    await expect(page.locator("[data-csv-rows]")).toContainText(String(rows))
+    expect(await page.locator("[data-csv-row]").count()).toBeLessThan(80)
+    await expect(page.locator("[data-csv-header]")).toHaveCount(3)
+
+    // 工具栏开关切回源码视图时才发起一次文本读取。
+    await page.locator("[data-csv-toggle]").click()
+    await expect(page.locator("[data-csv-preview]")).toHaveCount(0)
+    const commands = await page.evaluate(() => (window as any).__csvCommands as string[])
+    // 表格视图只取一页（500 行）；128 列的宽表也仍是同一页。
+    expect(commands.filter(command => command === "read_csv_page")).toHaveLength(1)
+    expect(commands.filter(command => command === "read_file_preview")).toHaveLength(1)
     expect(errors).toEqual([])
   })
 

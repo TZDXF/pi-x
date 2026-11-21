@@ -99,6 +99,15 @@ pub(super) async fn handle(
                     a["sshConnectionId"].as_str().map(str::to_owned),
                 ).await?,
             )?),
+            "read_csv_page" => Ok(to_json(
+                crate::commands::read_csv_page(
+                    text(a, "project")?,
+                    text(a, "path")?,
+                    a["offset"].as_u64(),
+                    a["limit"].as_u64(),
+                    a["sshConnectionId"].as_str().map(str::to_owned),
+                ).await?,
+            )?),
             "search_files" => Ok(to_json(
                 crate::commands::search_files(text(a, "project")?, text(a, "query")?).await?,
             )?),

@@ -71,7 +71,14 @@ fn image_mime_of(ext: &str) -> Option<&'static str> {
     })
 }
 
-fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
+/// Resolve a project-relative preview path to its canonical file, refusing
+/// absolute paths, `..` escapes and symlinks that land outside the project root.
+/// Returns the canonical project root alongside the file so callers can apply
+/// their own size policy (the CSV reader streams, the text reader caps at 512 KB).
+pub fn resolve_preview_file(
+    project: &str,
+    path: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let root = dunce::canonicalize(project)
         .map_err(|_| crate::errors::pix_error("projectDirMissing", "项目目录不存在"))?;
     if !root.is_dir() {
@@ -106,6 +113,11 @@ fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
             path,
         ));
     }
+    Ok((root, file))
+}
+
+fn read_preview(project: &str, path: &str) -> Result<FilePreview, String> {
+    let (_root, file) = resolve_preview_file(project, path)?;
     // Check file size before reading to avoid loading oversized files into memory.
     let metadata = std::fs::metadata(&file).map_err(|e| {
         crate::errors::pix_error_detail("previewReadFailed", "读取文件失败: {detail}", e)

@@ -6,6 +6,7 @@ mod aux_lifecycle_scenarios;
 mod aux_reap;
 mod builtin_extensions;
 mod commands;
+mod csv_preview;
 mod data_dir;
 mod desktop;
 mod editor;
@@ -185,6 +186,7 @@ pub fn run() {
             commands::files::search_files,
             commands::files::list_project_directory,
             commands::files::read_file_preview,
+            commands::files::read_csv_page,
             project_watch::watch_project_files,
             project_watch::unwatch_project_files,
             project_watch::set_project_files_interest,

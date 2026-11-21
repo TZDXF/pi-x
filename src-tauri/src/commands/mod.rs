@@ -34,7 +34,8 @@ pub use config::{
 };
 #[allow(unused_imports)]
 pub use files::{
-    list_project_directory, open_path, read_file_preview, search_files, session_export_file,
+    list_project_directory, open_path, read_csv_page, read_file_preview, search_files,
+    session_export_file,
     session_list, session_list_unarchived,
 };
 #[allow(unused_imports)]

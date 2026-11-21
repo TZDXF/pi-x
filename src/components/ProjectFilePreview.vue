@@ -1,7 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, provide, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
-import { ArrowLeft, Code, ExternalLink, Eye, FileX, MessageSquareQuote, Plus, Trash2, WrapText } from "@lucide/vue"
+import {
+  ArrowLeft,
+  Code,
+  ExternalLink,
+  Eye,
+  FileX,
+  MessageSquareQuote,
+  Plus,
+  Table2,
+  Trash2,
+  WrapText,
+} from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { invokeProjectFile } from "@/api/client/projectFiles"
@@ -10,7 +21,7 @@ import { isDesktop } from "@/api/transport"
 import { openFileInEditor } from "@/lib/openWith"
 import { formatCodedError } from "@/lib/backendError"
 import { usePointerDrag } from "@/composables/usePointerDrag"
-import { isMarkdownExt } from "@/lib/fileKind"
+import { isCsvTableExt, isMarkdownExt } from "@/lib/fileKind"
 import { baseName, samePath } from "@/lib/paths"
 import type { FilePreview } from "@/lib/projectFiles"
 import { highlightFileLines } from "@/lib/filePreviewCode"
@@ -31,6 +42,7 @@ import { markdownCodeWrapControls } from "@/lib/markdownCodeWrap"
 import { splitMarkdownFrontmatter } from "@/lib/markdownPreview"
 import { markdownImageContextKey, previewImageUrl } from "@/lib/markdownImages"
 import MarkdownFrontmatter from "@/components/MarkdownFrontmatter.vue"
+import CsvTablePreview from "@/components/CsvTablePreview.vue"
 import MarkdownImage from "@/components/MarkdownImage.vue"
 import "vue-stream-markdown/index.css"
 
@@ -84,9 +96,12 @@ const htmlLines = ref<string[] | null>(null)
 let seq = 0
 const mdRendered = ref(true)
 const svgRendered = ref(true)
+const csvRendered = ref(true)
 const wrap = ref(true)
 
 const isMarkdown = computed(() => isMarkdownExt(props.path))
+/** CSV/TSV：默认表格视图，可切回源码（表格分页由 CsvTablePreview 自行读取） */
+const isCsv = computed(() => isCsvTableExt(props.path))
 const isSvg = computed(() => baseName(props.path).toLowerCase().endsWith(".svg"))
 const text = computed(() => (preview.value?.kind === "text" ? (preview.value.text ?? "") : ""))
 const markdownContent = computed(() => splitMarkdownFrontmatter(text.value))
@@ -103,6 +118,13 @@ const imageSrc = computed(() => {
 })
 const showRenderedMarkdown = computed(() => preview.value?.kind === "text" && isMarkdown.value && mdRendered.value)
 const showCode = computed(() => preview.value?.kind === "text" && !showRenderedMarkdown.value && !imageSrc.value)
+/**
+ * 表格视图。项目模式下不预读文件：512 KB 文本上限对大表毫无意义，整份读回
+ * 也会把 IPC 打爆；交给子组件按页取。`readFile` 覆盖只给有界文本时（资源/
+ * 批注预览），把已读回的文本交给子组件本地解析，避免多一条读取通道。
+ */
+const showCsvTable = computed(() => isCsv.value && csvRendered.value)
+const csvText = computed(() => (props.readFile ? text.value : undefined))
 
 // ---- Markdown 图片（TZD-132）----
 // 渲染器默认的 URL 硬校验会拦掉 `assets/a.png` 这类相对地址，webview 也读不到
@@ -146,6 +168,13 @@ async function load(resetView = true) {
     // dev 的行号定位要求 Markdown/SVG 直接进源码视图；磁盘变更刷新则保留用户当前视图。
     mdRendered.value = !props.lineRange
     svgRendered.value = !props.lineRange
+    csvRendered.value = !props.lineRange
+  }
+  // 项目模式的表格视图由 CsvTablePreview 分页读取，这里既不需要也不该把
+  // 整份 CSV 读成一个 512 KB 的文本。
+  if (showCsvTable.value && !props.readFile) {
+    loading.value = false
+    return
   }
   try {
     const result = props.readFile
@@ -173,6 +202,13 @@ watch(
   () => props.revision,
   () => void load(false),
 )
+/**
+ * 表格视图不走 `load()` 的预读，因此从表格切回源码时需要在这里补读一次；
+ * 切回表格则无需任何读取（子组件自己分页）。
+ */
+watch(csvRendered, rendered => {
+  if (!rendered && !props.readFile && preview.value == null) void load(false)
+})
 
 const opening = ref(false)
 async function openInEditor() {
@@ -406,6 +442,17 @@ onBeforeUnmount(() => {
         ><Eye v-if="mdRendered" /><Code v-else
       /></Button>
       <Button
+        v-if="isCsv"
+        variant="ghost"
+        size="icon-xs"
+        data-csv-toggle
+        :aria-pressed="csvRendered"
+        :title="t(csvRendered ? 'projectFiles.source' : 'projectFiles.table')"
+        :aria-label="t(csvRendered ? 'projectFiles.source' : 'projectFiles.table')"
+        @click="csvRendered = !csvRendered"
+        ><Table2 v-if="csvRendered" /><Code v-else
+      /></Button>
+      <Button
         v-if="isSvg && preview?.kind === 'text' && !preview.truncated"
         variant="ghost"
         size="icon-xs"
@@ -449,7 +496,16 @@ onBeforeUnmount(() => {
     </p>
     <!-- isolate：内容区的 z-index（如行号栏 z-10）限制在本子树内，避免压过右侧栏的拖拽手柄（z-2） -->
     <div class="isolate flex min-h-0 flex-1 flex-col overflow-hidden">
-      <p v-if="loading" class="p-3 text-xs text-muted-foreground">{{ t("completion.loading") }}</p>
+      <!-- 表格视图：项目模式下不预读文件（512 KB 上限对大表没有意义，整份读回也会
+           压垮 IPC），由子组件按页流式读取；有 readFile 覆盖时走预览内的文本解析。 -->
+      <CsvTablePreview
+        v-if="showCsvTable && !readFile"
+        :project="project"
+        :path="path"
+        :revision="revision"
+        class="min-h-0 flex-1"
+      />
+      <p v-else-if="loading" class="p-3 text-xs text-muted-foreground">{{ t("completion.loading") }}</p>
       <template v-else-if="preview">
         <div
           v-if="preview.kind === 'binary'"
@@ -458,6 +514,15 @@ onBeforeUnmount(() => {
           <FileX class="size-6" />
           <p class="text-xs">{{ t("projectFiles.binary") }}</p>
         </div>
+        <!-- CSV/TSV 表格：虚拟滚动 + 分页读取，与图片一样自管滚动与错误态 -->
+        <CsvTablePreview
+          v-else-if="showCsvTable"
+          :project="project"
+          :path="path"
+          :text="csvText"
+          :revision="revision"
+          class="min-h-0 flex-1"
+        />
         <!-- 图片/查看器内部自管缩放平移与加载失败态 -->
         <ImageViewer v-else-if="imageSrc" :src="imageSrc" :alt="path" :svg="isSvg" class="min-h-0 flex-1" />
         <div

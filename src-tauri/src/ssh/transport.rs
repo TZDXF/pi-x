@@ -339,7 +339,7 @@ pub(crate) async fn remote_exec_session_snapshot(
 }
 
 // Bound each buffered stream separately; the streaming RPC path is unaffected.
-const MAX_EXEC_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_EXEC_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 async fn read_exec_output<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
