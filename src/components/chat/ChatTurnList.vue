@@ -149,7 +149,24 @@ defineExpose({
   historyViewport: () => conversation.value?.$el?.querySelector('[role="log"]') ?? null,
   stopScroll: () => conversation.value?.stopScroll(),
   scrollToBottom: () => conversation.value?.scrollToBottom(),
-  scrollToMessage: (id: number, request?: RevealRequest) => conversation.value?.scrollToMessage(id, request),
+  /**
+   * 面板对外的"跳到某条消息"= **一笔**归因正确的滚动（`Conversation.scrollToMessage`，
+   * TZD-135 语义）+ 停稳后的复核校正（TZD-138：虚拟行重挂/测高会让目标停在视口外）。
+   *
+   * 两步放在这一层组合，`Conversation` 自己保持单笔语义 —— 它的事件计数用例
+   * （TZD-135 的 `conversation-scroll-follow`）直接调用 `Conversation.scrollToMessage`，
+   * 不应被校正写入干扰。
+   */
+  scrollToMessage: async (id: number, request?: RevealRequest): Promise<boolean> => {
+    // 身份在这里**一次性取得**，两步共用：校正若自己再领一个，就会把已被顶替的旧定位
+    // 重新变成"最新"，反过来抢走用户后来那次定位的滚动权。
+    const shared = request ?? conversation.value?.beginRevealRequest?.() ?? undefined
+    await conversation.value?.scrollToMessage(id, shared)
+    return (await conversation.value?.settleScrollToMessage?.(id, shared)) ?? false
+  },
+  /** 与 `Conversation.scrollToMessage` 同义：只有那一笔滚动，不做校正（TZD-135 用例用）。 */
+  scrollToMessageOnce: (id: number, request?: RevealRequest) =>
+    conversation.value?.scrollToMessage(id, request) ?? false,
   revealInViewport: async (target: Element, options?: { animated?: boolean; request?: RevealRequest }) =>
     (await conversation.value?.revealInViewport?.(target, options)) ?? false,
   beginRevealRequest: () => conversation.value?.beginRevealRequest() ?? null,

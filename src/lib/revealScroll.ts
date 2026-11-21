@@ -148,6 +148,21 @@ export interface RevealOptions {
    * 这样"先发起、后恢复"的旧请求不会把后来的目标顶掉。不给则在本函数内取得。
    */
   request?: RevealRequest
+  /**
+   * 每轮修正是否允许写滚动。返回 `false` 时**立即收手**（不再写、也不再宣称到位）。
+   *
+   * 用途：读者正按住/拖动视口时（触摸手势待定），任何应用侧的修正写入都会和手势抢位置，
+   * 也会干扰 TZD-135 的"谁在滚"归因判定。此时宁可停在这、留给读者接管，也不要抢。
+   */
+  canCorrect?: () => boolean
+  /**
+   * 自己执行这一次滚动写入（默认是 `viewport.scrollTo`）。
+   *
+   * 调用方改成 `viewport.scrollTop = top` 时，写入会被 `observeScrollWrites` 记录，
+   * 由此产生的 scroll 事件也能归因给应用（见 `lib/scrollWrites`）；用 `scrollTo()` 的
+   * 修正写入无法被记录，会落到"读者向下滚到底"的判定上，错误地重新吸底（TZD-135 回归）。
+   */
+  write?: (top: number) => void
 }
 
 /**
@@ -189,10 +204,15 @@ export async function revealElement(
     // 已经在要求的位置（亚像素误差内）：不必发滚动指令。
     if (Math.abs(delta) < 1) return true
     if (!current()) return false
-    viewport.scrollTo({
-      top: viewport.scrollTop + delta,
-      behavior: attempt === 0 && options.animated ? "smooth" : "instant",
-    })
+    // 读者正在接管（手势待定）：收手，不再抢滚动位置。
+    if (options.canCorrect && !options.canCorrect()) return false
+    const nextTop = viewport.scrollTop + delta
+    if (options.write) options.write(nextTop)
+    else
+      viewport.scrollTo({
+        top: nextTop,
+        behavior: attempt === 0 && options.animated ? "smooth" : "instant",
+      })
     await waitForScrollSettle(viewport, { cancelled: () => !current() })
     // 等两帧让行高测量/重挂的布局变化落定，下一轮读到的是真实位置而不是中间态。
     await nextFrame()
@@ -201,8 +221,10 @@ export async function revealElement(
   if (!current()) return false
   // 轮次用尽仍不到位时，最后再即时写一次（不再滚动动画），并如实返回是否真的到了。
   const finalDelta = offset()
-  if (Math.abs(finalDelta) >= 1) {
-    viewport.scrollTo({ top: viewport.scrollTop + finalDelta, behavior: "instant" })
+  if (Math.abs(finalDelta) >= 1 && (!options.canCorrect || options.canCorrect())) {
+    const nextTop = viewport.scrollTop + finalDelta
+    if (options.write) options.write(nextTop)
+    else viewport.scrollTo({ top: nextTop, behavior: "instant" })
     await waitForScrollSettle(viewport, { cancelled: () => !current() })
     await nextFrame()
   }

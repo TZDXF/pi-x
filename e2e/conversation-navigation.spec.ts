@@ -27,9 +27,16 @@ const baseHeight = virtual ? 160 : 80
 const conversation = ref(null)
 const heights = ref(baseHeight)
 // 与 useChatTurnList 的时间线导航同构：先释放底部跟随，再滚到目标。
+// 两步：Conversation 的那一笔滚动（TZD-135 归因语义）+ 停稳后的复核校正（TZD-138）。
 const nav = id => {
   conversation.value.stopScroll()
-  const promise = conversation.value.scrollToMessage(id)
+  // 身份一次性取得，两步共用（同 ChatTurnList 的 scrollToMessage 转发）。
+  const shared = conversation.value.beginRevealRequest()
+  const promise = (async () => {
+    const landed = await conversation.value.scrollToMessage(id, shared)
+    const settled = await conversation.value.settleScrollToMessage(id, shared)
+    return landed && settled
+  })()
   ;(window.completed ||= []).push(promise)
   return promise
 }

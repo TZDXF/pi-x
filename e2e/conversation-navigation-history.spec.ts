@@ -454,6 +454,10 @@ test("a current lazy-history timeline click still navigates and passes its reque
     await qa.qa.historyNavigation
   })
   await expect(page.locator('[data-message-id="111"][data-virtual-mounted]')).toHaveCount(1)
+  // 定位是"发起 → 复核校正"两步：等它真正停稳再看几何（与用户看到的最终状态一致）。
+  await page.evaluate(
+    async () => await (window as unknown as { qa: { historyNavigation: Promise<unknown> } }).qa.historyNavigation,
+  )
   const geometry = await page.evaluate(() => {
     const log = document.querySelector('[role="log"]') as HTMLElement
     const row = document.querySelector('[data-message-id="111"]') as HTMLElement

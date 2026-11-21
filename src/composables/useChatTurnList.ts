@@ -13,6 +13,12 @@ export interface ChatHistoryHandle {
    * 避免在重挂阶段重新领身份而顶掉用户更新的定位）。
    */
   scrollToMessage: (id: number, request?: RevealRequest) => Promise<boolean> | void
+  /**
+   * 复核并校正上一步的消息定位（TZD-138）：虚拟行重挂/测高会让那一笔滚动停在视口外。
+   * 只在调用方需要"真的到位"时使用（时间线跳转、引用定位）。
+   */
+  settleScrollToMessage?: (id: number, request?: RevealRequest) => Promise<boolean>
+  /** 面板 `scrollToMessage` 是否把"复核校正"也做了（由宿主决定，测试替身可省略）。 */
   /** 把视口内任意元素（例如划词引用徽标）滚进视口并验证结果。 */
   revealInViewport?: (target: Element, options?: { animated?: boolean; request?: RevealRequest }) => Promise<boolean>
   /** 在**发起定位的那一刻**取得该视口的请求身份（跨入口竞态的根修复点）。 */
@@ -218,6 +224,7 @@ export function useChatTurnList(deps: {
     if (request && !request.isCurrent()) return
     conversation.value?.stopScroll()
     // 身份往后传：`Conversation.scrollToMessage` 不能在这里重新领 token。
+    // 一笔滚动 + 复核校正都在 `scrollToMessage` 里完成（见 `ChatTurnList` 的转发）。
     await conversation.value?.scrollToMessage(id, request ?? undefined)
   }
   let restoringHistory = false
