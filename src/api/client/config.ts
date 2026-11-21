@@ -21,6 +21,8 @@ export interface ModelRef {
 export interface AppConfig {
   /** Settings-page preferences, serialized by configPreference.ts. */
   preferences?: Record<string, string>
+  /** 偏好写入的单调修订号，由 `app_preference_set` 递增（旧后端缺省 0）。 */
+  preferencesRevision?: number
   piPath?: string
   lastProject?: string
   /** 应用自身更新通道（app_update.rs），缺省为 stable */
@@ -106,7 +108,9 @@ export function toggleDevtools(): Promise<boolean> {
 export const getConfig = () => invoke<AppConfig>("app_config_get")
 
 export const saveConfig = (config: AppConfig) => invoke<void>("app_config_save", { config })
-export const saveConfigPreference = (key: string, value: string) => invoke<void>("app_preference_set", { key, value })
+/** 写入一条偏好；返回主机的新修订号（旧后端可能返回 undefined，按无修订号处理）。 */
+export const saveConfigPreference = (key: string, value: string) =>
+  invoke<number | undefined>("app_preference_set", { key, value })
 export const onAppConfigChanged = (handler: (config: AppConfig) => void) =>
   listen<AppConfig>("pi://app-config-changed", event => handler(event.payload))
 

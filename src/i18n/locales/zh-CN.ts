@@ -1378,6 +1378,8 @@ export default {
     thinkingSeconds: "思考中 · {seconds} 秒",
     thoughtFew: "思考了片刻",
     thoughtSeconds: "思考了 {seconds} 秒",
+    wrapCodeOn: "关闭代码块自动换行（对所有代码块生效）",
+    wrapCodeOff: "开启代码块自动换行（对所有代码块生效）",
   },
 
   /** npm:pi-subagents 插件适配的文案。 */

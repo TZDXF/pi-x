@@ -31,6 +31,9 @@ async function harness(preferences: Record<string, string> = {}) {
   mocks.changed = null
   mocks.failWrite = false
   mocks.writes = []
+  // 预先加载客户端配置模块：`startConfigListener` 用动态 import，isolate:false 下
+  // 每轮 resetModules 后首次解析这个模块会慢一拍，测试不应因此偶发失败。
+  await import("@/api/client/config")
   const module = await import("@/lib/configPreference")
   return module
 }
@@ -113,4 +116,74 @@ test("strict writes reject without changing the in-memory preference", async () 
 
   await expect(preference.set("custom")).rejects.toThrow("denied")
   expect(preference.value.value).toBe("cursor")
+})
+
+test("a stale event snapshot never reverses a newer local write", async () => {
+  stubStorage()
+  const { createConfigPreference, initializeConfigPreferences } = await harness()
+  await initializeConfigPreferences({ preferences: { theme: "system" } })
+  const preference = createConfigPreference({ key: "theme", defaultValue: "system" })
+  await vi.waitFor(() => expect(mocks.changed).not.toBeNull())
+
+  // 连点「关 → 开」：两次本地写入，UI 立刻跟着最后一次。
+  await preference.set("dark")
+  await preference.set("light")
+  expect(preference.value.value).toBe("light")
+
+  // 迟到的旧回执（dark）：必须被忽略，否则 UI 会闪回上一次的选择。
+  mocks.changed?.({ payload: { preferences: { theme: "dark" } } })
+  expect(preference.value.value).toBe("light")
+
+  // 最新值的回执到达才解除「待确认」，之后主机事件照常生效。
+  mocks.changed?.({ payload: { preferences: { theme: "light" } } })
+  expect(preference.value.value).toBe("light")
+  mocks.changed?.({ payload: { preferences: { theme: "system" } } })
+  expect(preference.value.value).toBe("system")
+})
+
+test("a snapshot missing an unconfirmed key does not reset it to the default", async () => {
+  stubStorage()
+  const { createConfigPreference, initializeConfigPreferences } = await harness()
+  await initializeConfigPreferences({ preferences: { theme: "system", processDetail: "detailed" } })
+  const preference = createConfigPreference({ key: "theme", defaultValue: "system" })
+  await vi.waitFor(() => expect(mocks.changed).not.toBeNull())
+
+  await preference.set("dark")
+  // 旧快照里没有这一项（例如只改了别的 key 的很早期快照）：未确认的本地写入必须保留。
+  mocks.changed?.({ payload: { preferences: { processDetail: "detailed" } } })
+  expect(preference.value.value).toBe("dark")
+
+  mocks.changed?.({ payload: { preferences: { processDetail: "concise" } } })
+  expect(preference.value.value).toBe("dark")
+})
+
+test("a genuinely external value is still applied while a local write is pending", async () => {
+  stubStorage()
+  const { createConfigPreference, initializeConfigPreferences } = await harness()
+  await initializeConfigPreferences({ preferences: { theme: "system", processDetail: "detailed" } })
+  const theme = createConfigPreference({ key: "theme", defaultValue: "system" })
+  const detail = createConfigPreference({ key: "processDetail", defaultValue: "detailed" })
+  await vi.waitFor(() => expect(mocks.changed).not.toBeNull())
+
+  await theme.set("dark")
+  // 值不是本客户端写过的（别的窗口/远程端改了）：属于真实外部变更，正常应用；
+  // 同快照里 processDetail 的变化同样立刻生效。只有本地写过的旧值才被视为迟到回执。
+  mocks.changed?.({ payload: { preferences: { theme: "system", processDetail: "concise" } } })
+  expect(theme.value.value).toBe("system")
+  expect(detail.value.value).toBe("concise")
+})
+
+test("a failed write releases the unconfirmed guard", async () => {
+  stubStorage()
+  const { createConfigPreference, initializeConfigPreferences } = await harness()
+  await initializeConfigPreferences({ preferences: { theme: "system" } })
+  const preference = createConfigPreference({ key: "theme", defaultValue: "system" })
+  await vi.waitFor(() => expect(mocks.changed).not.toBeNull())
+
+  mocks.failWrite = true
+  await preference.set("dark")
+  expect(preference.value.value).toBe("dark")
+  // 没写进主机，就不该再拦着后续快照。
+  mocks.changed?.({ payload: { preferences: { theme: "light" } } })
+  expect(preference.value.value).toBe("light")
 })

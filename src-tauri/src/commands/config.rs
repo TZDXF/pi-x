@@ -33,6 +33,17 @@ pub struct AppConfig {
     /// serialization so existing validators and one-time migration stay small.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub preferences: BTreeMap<String, String>,
+    /// 偏好写入的单调修订号，随每次 `app_preference_set` 递增并落盘。
+    ///
+    /// 前端用它区分「自己那笔写入的回执」与「后续/外部的真实变更」：值相同无法判定
+    /// 身份（用户可能连点回同一个值），修订号可以，且重启后仍然单调。
+    ///
+    /// **线上快照必须始终输出该字段，即使是真实的 `0`**（因此不加
+    /// `skip_serializing_if`）：前端要靠「有没有这个字段」区分「新后端 r0」与「完全不
+    /// 支持修订号的旧后端」，否则旧配置升级后的迟到全量保存事件会被当成新事件。
+    /// 磁盘上也写出了它，让旧文件的 `0` 与「从未写过」在语义上一致（都是 r0）。
+    #[serde(rename = "preferencesRevision", default)]
+    pub preferences_revision: u64,
     #[serde(rename = "piPath", default, skip_serializing_if = "Option::is_none")]
     pub pi_path: Option<String>,
     #[serde(
@@ -165,14 +176,17 @@ fn emit_config_changed(app: &AppHandle, config: &AppConfig) {
 pub fn app_config_save(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
     let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
     // Most callers save a snapshot captured earlier. Preferences have their own
-    // single-key command, so a stale snapshot must never erase newer UI choices.
-    config.preferences = app_config_get(app.clone())?.preferences;
+    // single-key command, so a stale snapshot must never erase newer UI choices —
+    // nor rewind the preference revision that identifies those writes.
+    let current = app_config_get(app.clone())?;
+    config.preferences = current.preferences;
+    config.preferences_revision = current.preferences_revision;
     write_config(&config_path(&app)?, &config)?;
     emit_config_changed(&app, &config);
     Ok(())
 }
 
-const PREFERENCE_KEYS: [&str; 11] = [
+const PREFERENCE_KEYS: [&str; 12] = [
     "locale",
     "theme",
     "terminalTheme",
@@ -184,20 +198,26 @@ const PREFERENCE_KEYS: [&str; 11] = [
     "notifySound",
     "runningBehavior",
     "processDetail",
+    // Markdown 代码块的全局自动换行（TZD-133），值域 "1"/"0"。
+    "markdownCodeWrap",
 ];
 
 /// Persist one settings-page preference without racing unrelated config fields.
+///
+/// Returns the new preference revision: the caller uses it to recognise the echo of
+/// its own write (and to ignore older echoes that arrive late).
 #[tauri::command]
-pub fn app_preference_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+pub fn app_preference_set(app: AppHandle, key: String, value: String) -> Result<u64, String> {
     let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
     if !PREFERENCE_KEYS.contains(&key.as_str()) {
         return Err(format!("Unsupported app preference: {key}"));
     }
     let mut config = app_config_get(app.clone())?;
     config.preferences.insert(key, value);
+    config.preferences_revision = config.preferences_revision.saturating_add(1);
     write_config(&config_path(&app)?, &config)?;
     emit_config_changed(&app, &config);
-    Ok(())
+    Ok(config.preferences_revision)
 }
 
 /// 无项目会话的工作目录：`dir` 为实际使用路径，`default_dir` 用于设置页展示与「恢复默认」。
@@ -331,6 +351,54 @@ mod tests {
                 .get("preferences")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn preference_revision_is_monotonic_and_survives_a_full_config_save() {
+        // 前端靠 `preferencesRevision` 识别「自己那笔写入的回执」：它必须随每笔写入递增、
+        // 随 config.json 往返保持不变，且 `app_config_save` 不得把它改写回旧值。
+        let mut config = AppConfig {
+            preferences_revision: 7,
+            ..Default::default()
+        };
+        config.preferences.insert("theme".into(), "dark".into());
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["preferencesRevision"], 7);
+
+        let parsed: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.preferences_revision, 7);
+        assert_eq!(parsed.preferences["theme"], "dark");
+
+        // 线上快照必须**显式**输出 r0：前端要能区分「新后端 r0」和「旧后端没有该字段」。
+        let fresh = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(fresh["preferencesRevision"], 0);
+        // 旧配置（没有该字段）读成 r0，再写出时就带上显式 0。
+        let legacy: AppConfig = serde_json::from_str(r#"{"preferences":{"theme":"dark"}}"#).unwrap();
+        assert_eq!(legacy.preferences_revision, 0);
+        let rewritten = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(rewritten["preferencesRevision"], 0);
+    }
+
+    #[test]
+    fn preference_whitelist_covers_frontend_settings() {
+        // 前端 `createConfigPreference` 的 key 必须出现在白名单里，否则
+        // `app_preference_set` 会直接拒绝保存，重启后无从恢复（TZD-133）。
+        for key in [
+            "locale",
+            "theme",
+            "terminalTheme",
+            "openWith",
+            "developerMode",
+            "shortcuts",
+            "notifyTurnComplete",
+            "notifyQuestion",
+            "notifySound",
+            "runningBehavior",
+            "processDetail",
+            "markdownCodeWrap",
+        ] {
+            assert!(PREFERENCE_KEYS.contains(&key), "missing preference key: {key}");
+        }
     }
 
     #[test]
