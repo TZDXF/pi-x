@@ -1,0 +1,18 @@
+/* Markdown 代码块的全局自动换行开关（TZD-133）。
+ *
+ * 状态写在根元素属性上：前端偏好（~/.pix/config.json 的 preferences.markdownCodeWrap）
+ * 一变化就改写 `<html data-markdown-code-wrap="on|off">`。
+ *
+ * 选这里而不是 `<Markdown>` 根节点上的类，是因为渲染器的全屏弹层被 teleport 到
+ * `#stream-markdown-overlay`（在组件根之外），根节点上的类管不到。属性选择器同时
+ * 覆盖内嵌与全屏，全屏与内嵌因此永远同一个换行状态；缺省（属性缺失）按「开启换行」。
+ */
+:root pre[data-stream-markdown="code"] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+:root[data-markdown-code-wrap="off"] pre[data-stream-markdown="code"] {
+  white-space: pre;
+  overflow-wrap: normal;
+}

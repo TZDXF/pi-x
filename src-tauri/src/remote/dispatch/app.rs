@@ -25,14 +25,11 @@ pub(super) async fn handle(
                 crate::commands::app_config_save(app.clone(), cfg)?;
                 Ok(Value::Null)
             }
-            "app_preference_set" => {
-                crate::commands::app_preference_set(
-                    app.clone(),
-                    text(a, "key")?,
-                    text(a, "value")?,
-                )?;
-                Ok(Value::Null)
-            }
+            "app_preference_set" => to_json(crate::commands::app_preference_set(
+                app.clone(),
+                text(a, "key")?,
+                text(a, "value")?,
+            )?),
             "projectless_dir_resolve" => Ok(to_json(crate::commands::projectless_dir_resolve(
                 app.clone(),
             )?)?),

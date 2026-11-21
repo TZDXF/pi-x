@@ -1,25 +1,44 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest"
+import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest"
 import {
+  keyScrollsConversation,
+  travelClaims,
   shouldReleaseBottomLock,
   shouldReleaseBottomLockOnScroll,
   shouldResumeBottomLock,
+  targetsConversationViewport,
+  touchScrollsConversation,
 } from "../src/lib/scrollIntent"
 
 function element(parentElement: Element | null = null, options = {}) {
-  return {
+  const node: any = Object.assign(Object.create((globalThis as any).Element.prototype), {
     parentElement,
     scrollTop: 0,
     scrollHeight: 100,
     clientHeight: 100,
+    scrollWidth: 100,
+    clientWidth: 100,
     style: { overflowY: "visible", overscrollBehaviorY: "auto" },
+    contains: (candidate: unknown) => {
+      let current = candidate as { parentElement?: Element | null } | null
+      while (current) {
+        if (current === (node as unknown)) return true
+        current = current.parentElement ?? null
+      }
+      return false
+    },
     ...options,
-  } as unknown as HTMLElement
+  })
+  return node as unknown as HTMLElement
 }
 
 beforeEach(() => {
   vi.stubGlobal("getComputedStyle", (element: HTMLElement) => element.style)
+  // `keyScrollsConversation` checks `instanceof Element`; the node environment has
+  // no DOM, so the fixtures stand in for elements.
+  vi.stubGlobal("Element", class Element {})
 })
 afterEach(() => vi.unstubAllGlobals())
+afterAll(() => vi.unstubAllGlobals())
 
 test("layout clamping and the library's one-pixel correction keep bottom following", () => {
   expect(shouldReleaseBottomLockOnScroll(1000, 800, 800)).toBe(false)
@@ -90,4 +109,97 @@ test("non-scrollable viewports and targets outside the conversation keep their l
   viewport.scrollHeight = 1000
   expect(shouldReleaseBottomLock(viewport, element(), -100)).toBe(false)
   expect(shouldReleaseBottomLock(viewport, null, -100)).toBe(false)
+})
+
+test("a wheel over the conversation's own scrollbar targets the viewport", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const root = element(null, {})
+  ;(viewport as unknown as { parentElement: Element | null }).parentElement = root
+  const scrollbar = element(root, {})
+  scrollbar.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (scrollbar as unknown as Element) : null
+  const thumb = element(scrollbar, {})
+  thumb.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (scrollbar as unknown as Element) : null
+  // Reka's scrollbar is the viewport's sibling, not a descendant: its wheel must
+  // still count, while a scrollbar belonging to another ScrollArea must not.
+  expect(targetsConversationViewport(viewport, thumb)).toBe(true)
+  const otherRoot = element(null, {})
+  const otherScrollbar = element(otherRoot, {})
+  const otherThumb = element(otherScrollbar, {})
+  otherThumb.closest = (selector: string) =>
+    selector.includes("scroll-area-scrollbar") ? (otherScrollbar as unknown as Element) : null
+  expect(targetsConversationViewport(viewport, otherThumb)).toBe(false)
+  // Nested scrollbars inside the viewport are not the conversation's own rail.
+  const nestedBar = element(viewport, {})
+  expect(shouldReleaseBottomLock(viewport, element(nestedBar), -100)).toBe(true)
+})
+
+test("a scrolling key is only the reader's when it scrolls the conversation", () => {
+  const viewport = element(null, { scrollHeight: 1000 })
+  const key = (target: unknown, name: string) => ({ key: name, target, defaultPrevented: false }) as KeyboardEvent
+  // Focus inside the conversation but not on a nested scroller: the key scrolls it.
+  expect(keyScrollsConversation(viewport, key(element(viewport), "ArrowDown"))).toBe(true)
+  expect(keyScrollsConversation(viewport, key(viewport, "PageUp"))).toBe(true)
+  // Space activates the focused control instead of scrolling.
+  expect(keyScrollsConversation(viewport, key(viewport, " "))).toBe(false)
+  // A nested independently scrollable region consumes the key (TZD-135 review):
+  // its own movement must not be read as the reader taking over the conversation.
+  const nested = element(viewport, {
+    scrollTop: 0,
+    scrollHeight: 300,
+    style: { overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(false)
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowUp"))).toBe(true)
+  nested.scrollTop = 200
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(true)
+  nested.style.overscrollBehaviorY = "contain"
+  expect(keyScrollsConversation(viewport, key(element(nested), "ArrowDown"))).toBe(false)
+  // A modified or already handled key is never the reader.
+  expect(keyScrollsConversation(viewport, { key: "ArrowDown", target: viewport, ctrlKey: true } as KeyboardEvent)).toBe(
+    false,
+  )
+  expect(
+    keyScrollsConversation(viewport, { key: "ArrowDown", target: viewport, defaultPrevented: true } as KeyboardEvent),
+  ).toBe(false)
+})
+
+test("a touch only scrolls the conversation when no nested scroller can move", () => {
+  const viewport = element(null, { scrollHeight: 1000, clientHeight: 400 })
+  // Directly on the conversation: the gesture belongs to it.
+  expect(touchScrollsConversation(viewport, element(viewport))).toBe(true)
+  // A nested independently scrollable block pans itself, not the conversation.
+  const nested = element(viewport, {
+    scrollHeight: 600,
+    clientHeight: 200,
+    style: { overflowY: "auto", overscrollBehaviorY: "auto" },
+  })
+  expect(touchScrollsConversation(viewport, element(nested))).toBe(false)
+  // A horizontally scrollable strip consumes a diagonal swipe the same way.
+  const strip = element(viewport, {
+    scrollWidth: 600,
+    clientWidth: 200,
+    style: { overflowX: "auto", overflowY: "hidden" },
+  })
+  expect(touchScrollsConversation(viewport, element(strip))).toBe(false)
+  // A non-scrolling wrapper in between stays transparent.
+  const wrapper = element(viewport, { scrollHeight: 120, clientHeight: 120 })
+  expect(touchScrollsConversation(viewport, element(wrapper))).toBe(true)
+  // Targets outside the conversation never claim it.
+  expect(touchScrollsConversation(viewport, element())).toBe(false)
+  expect(touchScrollsConversation(viewport, null)).toBe(false)
+})
+
+test("a gesture is only corroborated when the finger direction matches the viewport", () => {
+  // The claim needs both a qualifying travel and a finger that dragged the content:
+  // a finger moving up (negative movementY) scrolls the content down.
+  expect(travelClaims(10, -1)).toBe(true)
+  expect(travelClaims(10, 1)).toBe(false)
+  expect(travelClaims(-10, 1)).toBe(true)
+  expect(travelClaims(-10, -1)).toBe(false)
+  // A sideways swipe has no vertical direction, so it never corroborates anything.
+  expect(travelClaims(10, 0)).toBe(false)
+  // Below the threshold nothing is claimed, whichever way the finger went.
+  expect(travelClaims(3, -1)).toBe(false)
 })
