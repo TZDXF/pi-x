@@ -356,12 +356,27 @@ test("set_auto_compaction sends the command and re-reads the authoritative state
   expect(store.state.autoCompactionEnabled).toBe(false)
 })
 
-test("abort_retry sends the command and leaves the outcome to auto_retry_end events", async () => {
+test("abortRetry stops the run instead of only cancelling pi's backoff delay", async () => {
   const { store, calls } = await harness()
   await store.init("project")
   calls.length = 0
   await store.abortRetry()
-  expect(calls.map(c => c.type)).toEqual(["abort_retry"])
+  // `abort_retry` only covers the pending delay; once the retried request is
+  // in flight pi drops its retry abort controller and the command is a no-op,
+  // so the stop button must abort the run (pi's abort also cancels the delay).
+  expect(calls.map(c => c.type)).toEqual(["abort"])
+})
+
+test("abortRetry surfaces a rejection instead of faking a stop", async () => {
+  const { store, calls } = await harness()
+  await store.init("project")
+  calls.length = 0
+  controls.state.rpcRequest = async command => {
+    calls.push(command)
+    return { success: false, error: "not supported" }
+  }
+  await expect(store.abortRetry()).rejects.toThrow("not supported")
+  expect(calls.map(c => c.type)).toEqual(["abort"])
 })
 
 test("cycle_model advances to the next model and reports when none is left", async () => {
