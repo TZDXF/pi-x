@@ -99,6 +99,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Darwin 上 `/var` 是指向 `/private/var` 的软链，runner 默认的
+      # `TMPDIR=/var/folders/...` 因此不是真实路径。仓库里有一批用例按
+      # `realpath` 比较路径（夹具取 `temp_dir()`，被测代码按真实路径归一），
+      # 不归一就会失败。这里统一把后续步骤的 TMPDIR 换成真实路径。
+      - name: Normalize TMPDIR to its real path
+        run: |
+          raw="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR)}"
+          real="$(cd "$raw" && pwd -P)"
+          echo "TMPDIR(raw)=$raw"
+          echo "TMPDIR(real)=$real"
+          echo "TMPDIR=$real" >> "$GITHUB_ENV"
+
       - name: Build
         run: pnpm run build
 
