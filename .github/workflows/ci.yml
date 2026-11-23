@@ -80,6 +80,41 @@ jobs:
       - name: Unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml ${{ matrix.args }}
 
+  macos:
+    name: macOS (frontend build / Rust check / tests)
+    # 独立 macOS 检查：GitHub 托管的 macos runner，不接自托管机器、不跑 E2E、不调用真实模型服务。
+    # 目的是在 Darwin 上跑一遍与 Linux 等价的前端构建和默认 Tauri/Rust 检查，
+    # 覆盖 cfg(target_os = "macos") 的代码路径（图标提取、终端打开、路径规范化等）。
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # macOS runner 自带 Xcode Command Line Tools，Tauri 的 Darwin 依赖无需额外安装。
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
