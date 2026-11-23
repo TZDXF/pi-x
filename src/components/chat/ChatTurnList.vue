@@ -82,7 +82,8 @@ watch(
     openedFileReference.value = null
   },
 )
-/** 停止等待中的自动重试：取消延时并不再重试，pi 经 auto_retry_end 报告取消。 */
+/** 停止自动重试：pi 的 abort 会先取消退避延时，再中断已在飞行中的重试请求
+ *  （abort_retry 只取消延时，请求发出后就变成空操作）。 */
 async function stopRetry() {
   try {
     await props.session.abortRetry()

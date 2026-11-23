@@ -716,10 +716,18 @@ export const createSessionStore = (runtimeId = "default") =>
       await refreshState()
     }
 
-    /** abort_retry: cancel the pending retry delay and stop retrying; pi
-     *  reports the cancellation through auto_retry_end(success:false). */
+    /** Stop the automatic retry the conversation banner advertises.
+     *
+     *  `abort_retry` alone is not enough: pi only cancels its pending backoff
+     *  delay, and once the retried request is in flight the abort controller
+     *  has already been released (the `finally` in `_prepareRetry`), so the
+     *  command answers `success` while pi keeps consuming the remaining
+     *  attempts — the banner stays and nothing stops. `abort` cancels the delay
+     *  as well (pi's `AgentSession.abort()` calls `abortRetry()` first), also
+     *  aborts the in-flight request, and settles the run as aborted instead of
+     *  failed, so a user-initiated stop leaves no error bubble or notification. */
     async function abortRetry() {
-      const result = await rpcRequest({ type: "abort_retry" })
+      const result = await rpcRequest({ type: "abort" })
       if (!result.success) throw new Error(result.error || i18n.global.t("chat.errors.abortRetry"))
     }
 

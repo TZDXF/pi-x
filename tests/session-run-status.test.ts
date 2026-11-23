@@ -360,6 +360,46 @@ test("retry banner clears as soon as the retried request streams content", async
   expect(store.retryInfo?.attempt).toBe(2)
 })
 
+// 用户点「停止重试」后 pi 实际发出的两组事件（实测 pi 1.6.0，见 TZD-143）。
+test("stopping a retry inside pi's backoff delay ends the run without an error", async () => {
+  const { statuses, session, notifications } = await harness()
+  const store = session("retry", "retry.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
+  store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "503" })
+  expect(store.retryInfo?.attempt).toBe(1)
+  // pi's abort cancels the delay: auto_retry_end(success:false, "Retry cancelled")
+  // followed by an aborted settle (no retried request was ever issued).
+  store.handleEvent({ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" })
+  store.handleEvent({ type: "agent_settled", aborted: true })
+  expect(store.retryInfo).toBe(null)
+  expect(store.isStreaming).toBe(false)
+  expect(statuses.get("retry.jsonl")).toBeUndefined()
+  expect(notifications.length).toBe(0)
+  expect(store.entries.some(e => e.kind === "assistant" && e.failed)).toBe(false)
+})
+
+test("stopping a retry already in flight ends the run without an error", async () => {
+  const { statuses, session, notifications } = await harness()
+  const store = session("retry", "retry.jsonl")
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "error", content: [] } })
+  store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: "503" })
+  // pi re-entered agent_start for the retried request; `abort_retry` alone is
+  // a no-op here because the retry abort controller was already released.
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "message_start", message: { role: "assistant", content: [] } })
+  store.handleEvent({ type: "message_end", message: { role: "assistant", stopReason: "aborted", content: [] } })
+  // pi reports the aborted message as a finished retry (success:true).
+  store.handleEvent({ type: "auto_retry_end", success: true, attempt: 1 })
+  store.handleEvent({ type: "agent_settled", aborted: true })
+  expect(store.retryInfo).toBe(null)
+  expect(store.isStreaming).toBe(false)
+  expect(statuses.get("retry.jsonl")).toBeUndefined()
+  expect(notifications.length).toBe(0)
+  expect(store.entries.some(e => e.kind === "assistant" && e.failed)).toBe(false)
+})
+
 const readSidebarPart = name =>
   readFileSync(new URL(`../src/components/workspace/sidebar/${name}`, import.meta.url), "utf8")
 
