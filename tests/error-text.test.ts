@@ -6,6 +6,7 @@ import {
   limitDisplayText,
   looksLikeHtml,
   normalizeErrorText,
+  normalizeProviderError,
 } from "@/lib/errorText"
 
 /**
@@ -24,11 +25,38 @@ const escapePage = (body: string) =>
 
 test("html detection accepts error pages but not angle brackets in plain errors", () => {
   expect(looksLikeHtml(escapePage("<p>upstream</p>"))).toBeTruthy()
-  expect(looksLikeHtml("<div>boom</div><div>detail</div>")).toBeTruthy()
+  expect(looksLikeHtml("<html><head><title>Oops</title></head><body><div>x</div></body></html>")).toBeTruthy()
+  // 片段：整段是标记且有开/闭标签（没有 doctype / html 外壳的真片段）。
+  expect(looksLikeHtml("<div><h1>down</h1><p>detail</p></div>")).toBeTruthy()
+  expect(looksLikeHtml("<table><tr><td>x</td></tr></table>")).toBeTruthy()
+  expect(looksLikeHtml("<pre>fatal: no space left on device</pre>")).toBeTruthy()
   // 普通报错：类型/泛型里的尖括号、单个标签片段都不算 HTML。
   expect(looksLikeHtml("Type 'Foo' is not assignable to type '<T>'")).toBe(false)
   expect(looksLikeHtml("unexpected token <div> at position 12")).toBe(false)
   expect(looksLikeHtml("503 boom")).toBe(false)
+})
+
+/**
+ * 回归（QA）：普通报错的标签承载关键诊断信息，不能被当成 HTML 剥掉。
+ * 两处原先的误判原因：
+ * - `<html|head|body>` 开标签一出现就判整页 —— 现在还要求闭合或另有 html 相关标签；
+ * - 同一元素的 `<span>` + `</span>` 被计成两个结构标签 —— 现在只计**不同**标签名。
+ */
+test("plain errors carrying a tag are never stripped", () => {
+  const cases = [
+    "unexpected token <body> at position 12",
+    "unexpected token <head> at position 7",
+    "rendering <span>Foo</span> failed",
+    "rendering <div>Foo</div> failed",
+    "cannot parse <script>const a = 1</script> snippet",
+    "<body> is not allowed here",
+    "unexpected close tag </div>",
+    "Type 'Foo' is not assignable to type '<T>'",
+  ]
+  for (const text of cases) {
+    expect(looksLikeHtml(text)).toBe(false)
+    expect(normalizeErrorText(text)).toBe(text)
+  }
 })
 
 test("entities decode once, numeric forms included, unknown names kept", () => {
@@ -82,4 +110,25 @@ test("normalizing an HTML error yields capped plain text", () => {
   expect(text.length).toBeLessThanOrEqual(ERROR_TEXT_MAX_LENGTH + 1)
   expect(text.endsWith("…")).toBeTruthy()
   expect(text).not.toMatch(/<[a-z]/i)
+})
+
+/**
+ * 回归（QA）：普通（非 HTML）provider 正文不截断。
+ * 之前 `normalizeProviderError` 对两种分支都调 `limitDisplayText`，600 字符的正常
+ * 诊断被截成 `500 · aaa…a…`，末尾信息丢失 —— 与"HTML 提取后限长、普通错误透传"的
+ * 验收口径相反。
+ */
+test("plain provider errors keep their full text, only HTML is capped", () => {
+  const detail = "a".repeat(600)
+  expect(normalizeProviderError(detail, "500")).toBe(`500 · ${detail}`)
+  expect(normalizeProviderError(detail)).toBe(detail)
+  // 带空白的长诊断同样完整。
+  const sentence = "context window exceeded ".repeat(60).trim()
+  expect(normalizeProviderError(sentence, "400")).toBe(`400 · ${sentence}`)
+  // HTML 分支仍然限长，并保留状态码前缀。
+  const page = escapePage(`<p>${"detail ".repeat(300)}</p>`)
+  const capped = normalizeProviderError(page, "500")
+  expect(capped.startsWith("500 · 502 Bad Gateway")).toBeTruthy()
+  expect(capped.endsWith("…")).toBeTruthy()
+  expect(capped.length).toBeLessThanOrEqual(ERROR_TEXT_MAX_LENGTH + 1)
 })

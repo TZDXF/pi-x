@@ -129,3 +129,12 @@ test("HTML error pages pass through formatCodedError as text, not markup", () =>
     "Type 'Foo' is not assignable to type '<T>'",
   )
 })
+
+test("plain errors quoting a tag pass through formatCodedError untouched", () => {
+  // 回归（QA）：`<body>` 开标签或一对 `<span>` 不构成 HTML，原文逐字节保留。
+  const cases = ["unexpected token <body> at position 12", "rendering <span>Foo</span> failed"]
+  for (const text of cases) expect(formatCodedError(t, text)).toBe(text)
+  // 普通长文本也不因错误通路被截断。
+  const long = "connection reset by peer ".repeat(30).trim()
+  expect(formatCodedError(t, long)).toBe(long)
+})

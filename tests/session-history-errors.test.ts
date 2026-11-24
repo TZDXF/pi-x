@@ -264,3 +264,27 @@ test("HTML inside a provider JSON payload is extracted after unwrapping", async 
   expect(last.blocks[0].text).toContain("retry later")
   expect(last.blocks[0].text).not.toMatch(/<h1|[<>]/)
 })
+
+test("a long plain provider message keeps its tail (only HTML is capped)", async () => {
+  // 回归（QA）：普通（非 HTML）payload 正文被截断会丢末尾诊断信息。
+  const detail = "a".repeat(600)
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: `500 {"error":{"message":"${detail}"}}` },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0].text).toBe(`500 · ${detail}`)
+})
+
+test("a plain error that quotes tags keeps them in the history record", async () => {
+  // 回归（QA）：普通报错里的 `<body>` / `<span>…</span>` 是诊断信息，不能被剥掉。
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: "unexpected token <body> at position 12" },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0]).toEqual({
+    type: "error",
+    text: "unexpected token <body> at position 12",
+  })
+})
