@@ -1,6 +1,7 @@
 import { i18n, tBackendError } from "@/i18n"
 import { pixLog } from "@/api/piClient"
 import { contentImages, contentText } from "@/lib/content"
+import { normalizeErrorText, normalizeProviderError } from "@/lib/errorText"
 import { builtinExtensionPath } from "@/lib/extensionNames"
 import { notifyTurnComplete } from "@/lib/notifications"
 import { isAuxRuntimeId } from "@/lib/auxRuntime"
@@ -20,7 +21,8 @@ import type {
   ToolRun,
 } from "./types"
 
-/** Keep the status code but unwrap JSON error payloads emitted by providers. */
+/** Keep the status code but unwrap JSON error payloads emitted by providers, then
+ *  turn HTML error pages into display text and cap the shown length (TZD-145). */
 export function formatRetryError(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : ""
   if (!raw) return ""
@@ -31,11 +33,11 @@ export function formatRetryError(value: unknown): string {
   try {
     const parsed = JSON.parse(json)
     const inner = typeof parsed?.error?.message === "string" ? parsed.error.message : parsed?.message
-    if (typeof inner === "string" && inner.trim()) return status ? `${status} · ${inner.trim()}` : inner.trim()
+    if (typeof inner === "string" && inner.trim()) return normalizeProviderError(inner, status)
   } catch {
     /* keep the original provider error */
   }
-  return raw
+  return normalizeErrorText(raw)
 }
 
 /** Shared plain-text error record for live failures and history. */

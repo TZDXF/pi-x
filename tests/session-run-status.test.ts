@@ -530,3 +530,20 @@ test("a failed API response with no error message still suppresses answer action
   expect(store.entries.at(-1).failed).toBe(true)
   expect(store.entries.at(-1).blocks).toEqual([{ type: "error", text: "chat.retryUnknownError" }])
 })
+
+test("an HTML retry error shows its text, capped, in the retry banner", async () => {
+  const { session } = await harness()
+  const store = session("html-retry", "html-retry.jsonl")
+  const html =
+    "<!DOCTYPE html><html><head><title>503 Service Unavailable</title><style>p{color:red}</style></head>" +
+    `<body><p>${"upstream busy ".repeat(200)}</p><script>trace()</script></body></html>`
+  store.handleEvent({ type: "agent_start" })
+  store.handleEvent({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, errorMessage: html })
+  const message = store.retryInfo.errorMessage
+  expect(message.startsWith("503 Service Unavailable")).toBeTruthy()
+  expect(message).toContain("upstream busy")
+  // 展示长度受限，且样式/脚本源码不进 banner。
+  expect(message.length).toBeLessThanOrEqual(501)
+  expect(message.endsWith("…")).toBeTruthy()
+  expect(message).not.toMatch(/color:red|trace\(\)|[<>]/)
+})

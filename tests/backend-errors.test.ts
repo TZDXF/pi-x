@@ -118,3 +118,14 @@ test("every Rust and transport error code is present in both catalogs, with no o
     expect(orphans, `${locale} has catalog entries without a Rust/transport call site`).toEqual([])
   }
 })
+
+test("HTML error pages pass through formatCodedError as text, not markup", () => {
+  const page = "<html><body><p>502 from gateway</p><script>var a=1</script></body></html>"
+  const text = formatCodedError(t, page)
+  expect(text).toContain("502 from gateway")
+  expect(text).not.toMatch(/<p>|var a=1/)
+  // 普通文本（含带尖括号的类型错误）不受影响。
+  expect(formatCodedError(t, "Type 'Foo' is not assignable to type '<T>'")).toBe(
+    "Type 'Foo' is not assignable to type '<T>'",
+  )
+})
