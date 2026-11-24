@@ -99,12 +99,16 @@ const TAG_RE = /<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi
 
 /** HTML 注释、doctype/声明与不可读块（源码不是错误信息的一部分）。 */
 const COMMENT_RE = /<!--[\s\S]*?-->/g
-const DECLARATION_RE = /<![^>]*>/g
+const DECLARATION_RE = /<![^>]*>|<\?[^>]*\?>/g
 const RAW_TEXT_BLOCK_RE = /<(script|style|template|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
 const HEAD_RE = /<head\b[^>]*>[\s\S]*?<\/head\s*>/gi
 
-/** 参与"像 HTML"计数的结构标签名（不含 `<T>` 这类泛型/占位符）。 */
-const STRUCTURAL_NAMES = new Set([
+/**
+ * 参与"像 HTML"判据的结构标签名（不含 `<T>` 这类泛型/占位符）。
+ * 导出是为了让测试能对**每一个**标签逐一验证同类绕过（普通报错里成对引用它们
+ * 都不应被剥标签），而不是只钉住 QA 举的那一个样例。
+ */
+export const STRUCTURAL_TAG_NAMES = [
   "html",
   "head",
   "body",
@@ -153,7 +157,15 @@ const STRUCTURAL_NAMES = new Set([
   "dl",
   "img",
   "a",
-])
+] as const
+
+const STRUCTURAL_NAMES = new Set<string>(STRUCTURAL_TAG_NAMES)
+
+/**
+ * 只有源码、没有可读文字的标签：单独的 `<script>…</script>` / `<style>…</style>` 是代码
+ * 片段而不是错误页，提取后会是空串（调用方还会落到"未知错误"），因此不算 HTML。
+ */
+const RAW_TEXT_NAMES = new Set(["script", "style", "template", "noscript"])
 
 /** 片段判定门槛：结构标签出现次数下限（一对元素 = 2 次出现）。 */
 const HTML_FRAGMENT_MIN_TAGS = 2
@@ -181,33 +193,53 @@ export function decodeHtmlEntities(text: string): string {
 /**
  * 是否像 HTML 文档/片段。
  *
- * 判据要**宁可漏判、不可误判**：判成 HTML 就会剥标签，而普通报错里的
- * `unexpected token <body> at position 12`、`rendering <span>Foo</span> failed`
- * 需要原样展示。因此：
- * - 整页信号：`<!doctype html>`；成对的 `<html>…</html>` 或 `<body>…</body>`；
- *   `<html` 另有 `head`/`body` 的名字；成对 `script`/`style`/`template`/`noscript`
- *   **且**至少还有一个别的结构标签（单独一句 `<script>…</script>` 仍是普通文本）；
- * - 片段：整段以 `<` 开头、以 `>` 结尾（是标记而不是"报错里引用了标签"），且至少有一
- *   对开/闭标签。判据看整段的形状而不是标签个数，所以 `rendering <span>Foo</span> failed`、
- *   `<body> is not allowed here` 这类普通报错里的标签引用不会被剥掉；而
- *   `<div>…</div>`、`<pre>…</pre>` 这样的片段仍会提取文字。
+ * 判据必须**宁可漏判、不可误判**：判成 HTML 就会剥标签，而普通报错里的标签引用
+ * （`unexpected token <body> at position 12`、`rendering <body>Foo</body> failed`）
+ * 承载关键诊断信息，必须原样展示。因此不再有"命中某一个标签就整段算 HTML"的特例，
+ * 所有结构标签一视同仁：
+ *
+ * 1. **整页**：`<!doctype html>`。
+ * 2. **片段**：文字**以标记开头**（去掉前导注释/声明/BOM 后首个 token 是开标签）——
+ *    这是"整段就是标记"与"一句报错里引用了标签"的分界，对**所有**结构标签一律生效；
+ *    再要求存在闭合标签，且结构标签出现 ≥ 2 次（一对元素 = 2 次）。
+ *    出现 `html` 元素且另有 `head`/`body` 名字或 `</html>` 也算整页。
+ * 3. **纯源码块**：只有 `script`/`style`/`template`/`noscript`（没有别的结构标签）时不算
+ *    HTML —— 提取后为空，展示原文更有信息量。
+ *
+ * 依据是**整段文本的形状**而不是标签计数，所以 `<body>Foo</body>` 出现在句子中间时
+ * 任何标签都不会触发剥离；`<div>…</div>`、`<pre>…</pre>`、`<body><h1>…</h1></body>`
+ * 这类真正以标记开头的片段仍照常提取。
  */
 export function looksLikeHtml(text: string): boolean {
   if (typeof text !== "string" || !text.includes("<")) return false
-  if (/<!\s*doctype\s+html/i.test(text)) return true
-  const names = htmlTagNames(text)
-  if (names.has("html") && (names.has("head") || names.has("body") || /<\/html\s*>/i.test(text))) return true
-  // 带闭合 body 的片段（没有 doctype / html 外壳的错误页）。
-  if (/<body\b[^>]*>[\s\S]*?<\/body\s*>/i.test(text)) return true
-  const rawPair = /<(script|style|template|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/i.exec(text)
-  if (rawPair) {
-    const others = [...names].filter(name => name !== rawPair[1]!.toLowerCase())
-    if (others.length > 0) return true
+  const value = text.trim()
+  // `<!doctype html>` 只出现在真正的 HTML 文档里，是最强的整页信号。
+  if (/<!\s*doctype\s+html/i.test(value)) return true
+  // 其余所有分支都要求**整段以标记开头**：前导注释/声明/BOM 之后首个 token 是开标签。
+  // 这是"整段就是标记"与"一句报错里引用了标签"的唯一分界，对所有结构标签一视同仁，
+  // 因此不存在"某个标签（如成对 body）能被普通报错绕过"的特例。
+  if (!/^<[a-z][a-z0-9-]*/i.test(stripLeadingMarkupNoise(value))) return false
+  const names = htmlTagNames(value)
+  // `html` 元素（配合 `head`/`body` 名字或 `</html>`）说明是文档外壳，不是片段里的一对标签。
+  if (names.has("html") && (names.has("head") || names.has("body") || /<\/html\s*>/i.test(value))) return true
+  if (!/<\/[a-z][a-z0-9-]*\s*>/i.test(value)) return false
+  // 纯 script/style 块不是错误页（提取后没有可读文字）。
+  if (names.size > 0 && [...names].every(name => RAW_TEXT_NAMES.has(name))) return false
+  return structuralTagCount(value) >= HTML_FRAGMENT_MIN_TAGS
+}
+
+/** 去掉开头的注释、`<!doctype …>`/`<![CDATA[…]]>`/`<?xml …?>` 声明与空白。 */
+function stripLeadingMarkupNoise(text: string): string {
+  let value = text.replace(/\uFEFF/g, "").trimStart()
+  for (;;) {
+    const before = value
+    value = value
+      .replace(/^<!--[\s\S]*?-->/, "")
+      .replace(/^<![^>]*>/, "")
+      .replace(/^<\?[^>]*\?>/, "")
+      .trimStart()
+    if (value === before) return value
   }
-  // 片段：整段就是标记（首尾都是标签），不是"一句报错里引用了一个标签"。
-  if (!text.trimStart().startsWith("<") || !text.trimEnd().endsWith(">")) return false
-  if (!/<\/[a-z][a-z0-9-]*\s*>/i.test(text)) return false
-  return structuralTagCount(text) >= HTML_FRAGMENT_MIN_TAGS
 }
 
 /** 文中出现过的结构标签名（小写、去重；未知标签名不参与计数）。 */
@@ -230,7 +262,7 @@ function structuralTagCount(text: string): number {
   return count
 }
 
-/** 去掉注释与 script/style/template/noscript（含未闭合的尾巴）。 */
+/** 去掉注释、声明（`<!doctype>` / `<?xml?>`）与 script/style/template/noscript（含未闭合尾巴）。 */
 function stripUnreadableBlocks(html: string): string {
   let out = html.replace(COMMENT_RE, " ").replace(DECLARATION_RE, " ").replace(RAW_TEXT_BLOCK_RE, " ")
   // 被截断的错误页可能没有闭合标签：从残余的开标签起全是源码，丢弃到结尾。

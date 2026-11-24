@@ -131,8 +131,15 @@ test("HTML error pages pass through formatCodedError as text, not markup", () =>
 })
 
 test("plain errors quoting a tag pass through formatCodedError untouched", () => {
-  // 回归（QA）：`<body>` 开标签或一对 `<span>` 不构成 HTML，原文逐字节保留。
-  const cases = ["unexpected token <body> at position 12", "rendering <span>Foo</span> failed"]
+  // 回归（QA 两轮）：`<body>` 开标签、一对 `<span>`、以及成对 `<body>Foo</body>`
+  // 都不构成 HTML，原文逐字节保留（成对 body 曾因特例分支被绕过）。
+  const cases = [
+    "unexpected token <body> at position 12",
+    "rendering <span>Foo</span> failed",
+    "rendering <body>Foo</body> failed",
+    "parse error near <div>Foo</div>",
+    "cannot render a <tr> element, found </tr> unexpectedly",
+  ]
   for (const text of cases) expect(formatCodedError(t, text)).toBe(text)
   // 普通长文本也不因错误通路被截断。
   const long = "connection reset by peer ".repeat(30).trim()

@@ -288,3 +288,14 @@ test("a plain error that quotes tags keeps them in the history record", async ()
     text: "unexpected token <body> at position 12",
   })
 })
+
+test("a plain error quoting a paired <body> keeps its tags in the history record", async () => {
+  // 回归（QA 第二轮）：成对 <body> 曾经绕过片段形状判断被剥成 "rendering Foo failed"。
+  const message = "rendering <body>Foo</body> failed"
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: message },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0]).toEqual({ type: "error", text: message })
+})
