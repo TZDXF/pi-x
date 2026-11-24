@@ -118,3 +118,30 @@ test("every Rust and transport error code is present in both catalogs, with no o
     expect(orphans, `${locale} has catalog entries without a Rust/transport call site`).toEqual([])
   }
 })
+
+test("HTML error pages pass through formatCodedError as text, not markup", () => {
+  const page = "<html><body><p>502 from gateway</p><script>var a=1</script></body></html>"
+  const text = formatCodedError(t, page)
+  expect(text).toContain("502 from gateway")
+  expect(text).not.toMatch(/<p>|var a=1/)
+  // 普通文本（含带尖括号的类型错误）不受影响。
+  expect(formatCodedError(t, "Type 'Foo' is not assignable to type '<T>'")).toBe(
+    "Type 'Foo' is not assignable to type '<T>'",
+  )
+})
+
+test("plain errors quoting a tag pass through formatCodedError untouched", () => {
+  // 回归（QA 两轮）：`<body>` 开标签、一对 `<span>`、以及成对 `<body>Foo</body>`
+  // 都不构成 HTML，原文逐字节保留（成对 body 曾因特例分支被绕过）。
+  const cases = [
+    "unexpected token <body> at position 12",
+    "rendering <span>Foo</span> failed",
+    "rendering <body>Foo</body> failed",
+    "parse error near <div>Foo</div>",
+    "cannot render a <tr> element, found </tr> unexpectedly",
+  ]
+  for (const text of cases) expect(formatCodedError(t, text)).toBe(text)
+  // 普通长文本也不因错误通路被截断。
+  const long = "connection reset by peer ".repeat(30).trim()
+  expect(formatCodedError(t, long)).toBe(long)
+})

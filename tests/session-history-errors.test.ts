@@ -228,3 +228,74 @@ test("a terminal error in raw history and supplemental last error is not duplica
   await store.loadHistory()
   expect(errorEntries(store)).toHaveLength(1)
 })
+
+test("an HTML error page in history renders its text, not the markup", async () => {
+  const html =
+    "<!DOCTYPE html><html><head><title>502 Bad Gateway</title><style>body{font-family:Arial}</style></head>" +
+    "<body><h1>502 Bad Gateway</h1><p>The upstream server is overloaded.</p>" +
+    "<script>window.__DATA__={}</script></body></html>"
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: html },
+  })
+  await store.loadHistory()
+  const last = store.entries.at(-1)
+  expect(last.blocks[0].type).toBe("error")
+  const text = last.blocks[0].text
+  expect(text.startsWith("502 Bad Gateway")).toBeTruthy()
+  expect(text).toContain("The upstream server is overloaded.")
+  // 样式表与脚本源码不该出现在错误记录里。
+  expect(text).not.toMatch(/font-family|__DATA__|[<>]/)
+})
+
+test("HTML inside a provider JSON payload is extracted after unwrapping", async () => {
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: {
+      timestamp: 2500,
+      errorMessage:
+        '500 {"error":{"message":"<html><body><h1>500 Internal Server Error</h1><p>retry later</p></body></html>"}}',
+    },
+  })
+  await store.loadHistory()
+  const last = store.entries.at(-1)
+  expect(last.blocks[0].text).toContain("500 · ")
+  expect(last.blocks[0].text).toContain("Internal Server Error")
+  expect(last.blocks[0].text).toContain("retry later")
+  expect(last.blocks[0].text).not.toMatch(/<h1|[<>]/)
+})
+
+test("a long plain provider message keeps its tail (only HTML is capped)", async () => {
+  // 回归（QA）：普通（非 HTML）payload 正文被截断会丢末尾诊断信息。
+  const detail = "a".repeat(600)
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: `500 {"error":{"message":"${detail}"}}` },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0].text).toBe(`500 · ${detail}`)
+})
+
+test("a plain error that quotes tags keeps them in the history record", async () => {
+  // 回归（QA）：普通报错里的 `<body>` / `<span>…</span>` 是诊断信息，不能被剥掉。
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: "unexpected token <body> at position 12" },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0]).toEqual({
+    type: "error",
+    text: "unexpected token <body> at position 12",
+  })
+})
+
+test("a plain error quoting a paired <body> keeps its tags in the history record", async () => {
+  // 回归（QA 第二轮）：成对 <body> 曾经绕过片段形状判断被剥成 "rendering Foo failed"。
+  const message = "rendering <body>Foo</body> failed"
+  const store = await harness({
+    messages: [user("hi", 1000), assistant("working", 2000)],
+    lastError: { timestamp: 2500, errorMessage: message },
+  })
+  await store.loadHistory()
+  expect(store.entries.at(-1).blocks[0]).toEqual({ type: "error", text: message })
+})
