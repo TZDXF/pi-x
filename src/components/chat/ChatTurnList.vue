@@ -157,12 +157,15 @@ defineExpose({
    * 两步放在这一层组合，`Conversation` 自己保持单笔语义 —— 它的事件计数用例
    * （TZD-135 的 `conversation-scroll-follow`）直接调用 `Conversation.scrollToMessage`，
    * 不应被校正写入干扰。
+   *
+   * `options.animated === false` 让首轮直接落位：时间轴跳转常要跨成百上千屏，平滑动画在
+   * 长距离上既慢又会在虚拟行重挂/测高时被打断（TZD-148）。跨入口的引用定位仍走动画。
    */
-  scrollToMessage: async (id: number, request?: RevealRequest): Promise<boolean> => {
+  scrollToMessage: async (id: number, request?: RevealRequest, options?: { animated?: boolean }): Promise<boolean> => {
     // 身份在这里**一次性取得**，两步共用：校正若自己再领一个，就会把已被顶替的旧定位
     // 重新变成"最新"，反过来抢走用户后来那次定位的滚动权。
     const shared = request ?? conversation.value?.beginRevealRequest?.() ?? undefined
-    await conversation.value?.scrollToMessage(id, shared)
+    await conversation.value?.scrollToMessage(id, shared, options)
     return (await conversation.value?.settleScrollToMessage?.(id, shared)) ?? false
   },
   /** 与 `Conversation.scrollToMessage` 同义：只有那一笔滚动，不做校正（TZD-135 用例用）。 */

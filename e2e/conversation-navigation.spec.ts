@@ -258,3 +258,50 @@ test("a nested-scroller wheel does not cancel the next explicit navigation", asy
   await page.getByRole("button", { name: "Jump to 5" }).click()
   await expect.poll(async () => (await layout(page)).first, { timeout: 6000 }).toBeCloseTo(24, 0)
 })
+
+/**
+ * TZD-148: 时间轴压缩到 6px 时，装饰层（数字/圆点）比节点本身更大且会溢出到相邻节点。
+ * 它们是 button 的子元素，默认参与命中测试，于是点第 N 颗按钮的中心实际命中第 N+1 颗：
+ * 长会话里每一次跳转都会错开一格，用户看到的就是"点了定位不过去"。
+ */
+test("a compressed timeline node clicks the turn it belongs to", async ({ page }) => {
+  const html = `<!doctype html><html><body style="margin:0"><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import { createI18n } from 'vue-i18n'
+import zh from '/src/i18n/locales/zh-CN.ts'
+import ConversationTimeline from '/src/components/ConversationTimeline.vue'
+import '/src/style.css'
+const turns = Array.from({ length: 150 }, (_, i) => ({ id: i + 1, entryId: i + 1, question: 'Question ' + i, answer: '' }))
+window.qa = { clicked: [] }
+createApp({ render: () => h('div', { style: 'position:relative;width:360px;height:600px' }, [
+  h(ConversationTimeline, { turns, partial: null, onNavigate: turn => window.qa.clicked.push(turn.rank) }),
+]) }).use(createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zh } })).mount('#app')
+window.__hit = index => {
+  const node = document.querySelectorAll('button.timeline-node')[index]
+  const rect = node.getBoundingClientRect()
+  // 压缩后节点只有 6px 高，中心点必须落在**这一颗**按钮上（装饰层不能抢）。
+  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+  if (hit) hit.closest('button.timeline-node')?.click()
+  return { rank: window.qa.clicked.at(-1) ?? null, label: node.getAttribute('aria-label') }
+}
+</script></body></html>`
+  const timelineHarness = await startVueHarness({ name: "timeline-hit-target", port: 1592, html })
+  try {
+    await page.goto(timelineHarness.url)
+    await page.waitForSelector("button.timeline-node")
+    // 150 轮在 600px 里连 20px 都放不下，已经是压缩态（6px 节点）。
+    const nodeHeight = await page.evaluate(
+      () => getComputedStyle(document.querySelector("button.timeline-node")!).height,
+    )
+    expect(nodeHeight, "the nodes are compressed").toBe("6px")
+    for (const index of [0, 40, 90]) {
+      const result = await page.evaluate(
+        index => (window as unknown as { __hit: (index: number) => { rank: number | null } }).__hit(index),
+        index,
+      )
+      expect(result.rank, `clicking node ${index} navigates its own turn`).toBe(index + 1)
+    }
+  } finally {
+    await timelineHarness.close()
+  }
+})

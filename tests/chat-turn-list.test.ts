@@ -168,11 +168,12 @@ test("timeline reveals unmaterialized questions and shortcuts scroll only the ow
   const right = harness()
   await left.controls.navigateToQuestion({ id: "turn" })
   expect(left.session.revealTimelineTurn).toHaveBeenCalledWith("turn")
-  // 时间线导航会把"点击时取得的视口请求身份"一并传给滚动（测试替身没有该入口时为 undefined）。
-  expect(left.handle.scrollToMessage).toHaveBeenCalledWith(7, undefined)
+  // 时间线导航会把"点击时取得的视口请求身份"一并传给滚动（测试替身没有该入口时为 undefined），
+  // 并要求首轮直接落位（`animated: false`）：跨千屏的平滑动画会被虚拟行重挂反复打断（TZD-148）。
+  expect(left.handle.scrollToMessage).toHaveBeenCalledWith(7, undefined, { animated: false })
   await left.controls.navigateToQuestion({ id: "known", entryId: 12 })
   expect(left.session.revealTimelineTurn).toHaveBeenCalledOnce()
-  expect(left.handle.scrollToMessage).toHaveBeenLastCalledWith(12, undefined)
+  expect(left.handle.scrollToMessage).toHaveBeenLastCalledWith(12, undefined, { animated: false })
   left.controls.scrollHistory(1)
   expect(left.viewport.scrollTo).toHaveBeenCalledWith({ top: 2000 })
   left.controls.scrollHistory(-1)
@@ -306,7 +307,7 @@ test("a stale timeline click returns its loaded page but never navigates (TZD-13
   release(222)
   await freshClick
   expect(handle.stopScroll).toHaveBeenCalledTimes(1)
-  expect(handle.scrollToMessage).toHaveBeenCalledWith(222, requests[requests.length - 1])
+  expect(handle.scrollToMessage).toHaveBeenCalledWith(222, requests[requests.length - 1], { animated: false })
 })
 
 test("process materialization survives virtual row unmounting and content/actions keep their layout boundary", () => {

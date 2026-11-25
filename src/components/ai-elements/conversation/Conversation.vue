@@ -142,7 +142,7 @@ function scrollToBottom(options?: Parameters<typeof context.scrollToBottom>[0]) 
  * 随后再调用 `settleScrollToMessage` 复核并校正 —— 两步分开，才不会给 TZD-135 的
  * 事件计数与"抵达即结束归因"引入额外的写入。
  */
-async function scrollToMessage(id: number, inherited?: RevealRequest) {
+async function scrollToMessage(id: number, inherited?: RevealRequest, options: { animated?: boolean } = {}) {
   const scroll = scrollRef.value
   const message = scroll?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
   if (!scroll || !message) return false
@@ -166,7 +166,7 @@ async function scrollToMessage(id: number, inherited?: RevealRequest) {
       // 不做额外写入 —— 额外写入会产生多余的 scroll 事件并打断"抵达即结束归因"的判定。
       const requested = scroll.scrollTop + message.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 24
       const max = scroll.scrollHeight - scroll.clientHeight
-      const instant = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const instant = options.animated === false || window.matchMedia('(prefers-reduced-motion: reduce)').matches
       touchScrolled = false
       touchCandidate = false
       touchPointerId = undefined

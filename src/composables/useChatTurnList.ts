@@ -11,8 +11,9 @@ export interface ChatHistoryHandle {
    * 把消息滚进视口并验证结果（返回是否到位，TZD-138 P2）。
    * `request` 是调用方**发起定位时**取得的视口请求身份（引用定位会传自己那份，
    * 避免在重挂阶段重新领身份而顶掉用户更新的定位）。
+   * `options.animated === false` 时首轮就直接落位（长会话时间轴跳转，TZD-148）。
    */
-  scrollToMessage: (id: number, request?: RevealRequest) => Promise<boolean> | void
+  scrollToMessage: (id: number, request?: RevealRequest, options?: { animated?: boolean }) => Promise<boolean> | void
   /**
    * 复核并校正上一步的消息定位（TZD-138）：虚拟行重挂/测高会让那一笔滚动停在视口外。
    * 只在调用方需要"真的到位"时使用（时间线跳转、引用定位）。
@@ -225,7 +226,12 @@ export function useChatTurnList(deps: {
     conversation.value?.stopScroll()
     // 身份往后传：`Conversation.scrollToMessage` 不能在这里重新领 token。
     // 一笔滚动 + 复核校正都在 `scrollToMessage` 里完成（见 `ChatTurnList` 的转发）。
-    await conversation.value?.scrollToMessage(id, request ?? undefined)
+    //
+    // 首轮**直接落位**（`animated: false`），不做平滑动画：时间轴跳转常常跨成百上千屏，
+    // 平滑滚动会让虚拟列表沿途把途经的每一行都重挂、测量、再卸载（长会话实测 500+ 次
+    // 挂载），并且动画会被这些行高变化反复打断、停在半路 —— 就是用户报的"滚动条只动一点"。
+    // 直接定位只渲染终点的相邻行，一次性到位（TZD-148）。
+    await conversation.value?.scrollToMessage(id, request ?? undefined, { animated: false })
   }
   let restoringHistory = false
   async function onHistoryScroll(event: Event) {
