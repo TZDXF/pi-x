@@ -458,3 +458,56 @@ test("an empty replacement clears old content only when committed", async () => 
   expect(store.entries).toEqual([])
   expect(store.runs).toEqual({})
 })
+
+test("jumping to an older turn materializes only the pages it needs", async () => {
+  // TZD-148：长会话里点时间轴上的旧轮次时，旧实现把 `while (historyCursor > 0)` 写成
+  // "一直补到最老一页"，于是定位倒数第 100 轮也会把整段历史物化并渲染一遍（实测 1000 轮
+  // 会话：2000 条 entry、79 次发布、12s）。用户点下去要等十几秒，期间每次前插的补偿还会
+  // 把视口来回推。现在补到目标轮次物化就收手。
+  const { store } = await harness()
+  const turns = 1000
+  await store.loadMessages(
+    Array.from({ length: turns * 2 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user", content: `q${i / 2}` }
+        : { role: "assistant", content: [{ type: "text", text: `a${(i - 1) / 2}` }] },
+    ),
+  )
+  // 首屏只有最后一页（每页 30 条 entry = 15 轮）。
+  expect(store.entries.length).toBe(30)
+  expect(store.hasOlderHistory).toBe(true)
+  // 倒数第 100 轮：只需要 6 页左右，绝不是整段历史。
+  const near = store.timelineTurns[turns - 100]!
+  expect(near.entryId).toBe(null)
+  const id = await store.revealTimelineTurn(near.id)
+  const entry = store.entries.find(candidate => candidate.id === id)!
+  expect(entry.kind).toBe("user")
+  expect(entry.text).toBe(near.question)
+  expect(store.entries.length).toBe(210)
+  // 更早的历史仍然留在边界上，没有被顺手全量物化。
+  expect(store.hasOlderHistory).toBe(true)
+  // 更早的轮次按需继续补页，且仍然解析到同一条提问。
+  const far = { ...store.timelineTurns[3]! }
+  const farId = await store.revealTimelineTurn(far.id)
+  const farEntry = store.entries.find(candidate => candidate.id === farId)!
+  expect(farEntry.text).toBe(far.question)
+  expect(store.entries.length).toBe(turns * 2)
+  expect(store.hasOlderHistory).toBe(false)
+})
+
+test("an already materialized turn is not paged at all", async () => {
+  const { store } = await harness()
+  await store.loadMessages(
+    Array.from({ length: 60 }, (_, i) =>
+      i % 2 === 0
+        ? { role: "user", content: `q${i / 2}` }
+        : { role: "assistant", content: [{ type: "text", text: "a" }] },
+    ),
+  )
+  const before = store.entries.length
+  // 最后几轮在首屏里，已经是物化状态（真实 entry id）。
+  const turn = store.timelineTurns.at(-1)!
+  expect(turn.entryId).not.toBe(null)
+  expect(await store.revealTimelineTurn(turn.id)).toBe(turn.entryId)
+  expect(store.entries.length).toBe(before)
+})

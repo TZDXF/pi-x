@@ -377,17 +377,34 @@ export function createSessionHistory(context: HistoryContext) {
     buildTimelineTurns(historyMessages.value, historyCursor.value, entries.value),
   )
 
-  /** Load older history until the turn materializes; returns its user entry id. */
+  /**
+   * Load older history **until the requested turn materializes**, then return its entry id.
+   *
+   * 分页是从末尾往前**前插**的，所以定位一个尚未物化的轮次确实要先补页。但旧实现把
+   * `while (historyCursor > 0)` 写成"一直补到最老的一页"：定位倒数第 30 轮和定位第 1 轮
+   * 一样会把**整段**历史都物化并渲染一遍（长会话实测 2000 条 entry / 79 次发布 / 12s），
+   * 用户点下去要等十几秒，中途滚动条还会被每次前插的补偿来回推。
+   *
+   * 判据仍然用"倒数位置"（`fromEnd`）而不是 id：未物化轮次的 id 是合成的
+   * `-(msgIndex + 1)`，物化后才会换成真实 entry id（见 `buildTimelineTurns`），而轮次总数
+   * 在补页过程中不变，所以倒数位置在每一页之后都指向同一个逻辑轮次。
+   */
   async function revealTimelineTurn(turnId: number): Promise<number | null> {
     const turns = timelineTurns.value
     const index = turns.findIndex(t => t.id === turnId)
     if (index < 0) return null
     if (turns[index].entryId != null) return turns[index].entryId
+    const question = turns[index].question
     const fromEnd = turns.length - 1 - index
     while (historyCursor.value > 0) {
       const cursorBefore = historyCursor.value
       await loadOlderHistory()
       if (historyCursor.value === cursorBefore) break
+      // 每补一页就看一眼：这一轮已经物化就立刻收手，不再把更早的历史也拉进来。
+      // 同时核对提问：流式期间可能有新轮次追加到末尾，"倒数位置"会因此偏移，
+      // 对不上就继续走完流程，交给下面的按提问兜底。
+      const arrived = timelineTurns.value[timelineTurns.value.length - 1 - fromEnd]
+      if (arrived?.entryId != null && arrived.question === question) return arrived.entryId
     }
     const loaded = timelineTurns.value
     const resolved =

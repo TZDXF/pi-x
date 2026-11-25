@@ -221,3 +221,17 @@ test("timeline tracks the scroll position and reveals visible turn numbers", () 
     expect(rule).not.toMatch(/outline:/)
   }
 })
+
+test("compressed timeline nodes keep their own clickable area (TZD-148)", () => {
+  // 轮次多到要压缩时（节点 6px），圆点与数字都比节点本身更大：它们是透明/装饰层，
+  // 但仍然是 `button.timeline-node` 的子元素，默认会**抢走**点击。浏览器实测：
+  // 点第 101 颗按钮的中心命中的是第 102 颗（`elementFromPoint` 落在溢出的数字上），
+  // 于是每次跳转都错开一格 —— 长会话里就是用户看到的"点了定位不过去"。
+  // 修复是把所有装饰层移出命中测试，点击永远落在那个按钮自己的 6px 上。
+  const component = readFileSync(new URL("../src/components/ConversationTimeline.vue", import.meta.url), "utf8")
+  for (const selector of [".timeline-dot", ".timeline-number", ".timeline-dash"]) {
+    const rule = component.match(new RegExp(`${selector.replace(".", "\\.")}\\s*\\{([^}]+)\\}`))?.[1]
+    expect(rule, `${selector} must declare its own rule`).toBeTruthy()
+    expect(rule, `${selector} must not intercept clicks meant for the node`).toContain("pointer-events: none;")
+  }
+})

@@ -216,6 +216,9 @@ function onViewportScroll() {
     color 180ms ease;
 }
 .timeline-dot {
+  /* 装饰层不参与命中测试：压缩到 6px 时圆点/数字会溢出到相邻节点上，
+     点中间那颗实际命中的是下一颗（长会话里每一次跳转都会错一格）。 */
+  pointer-events: none;
   width: clamp(2px, calc(var(--node-h, 20px) * 0.35), 6px);
   height: clamp(2px, calc(var(--node-h, 20px) * 0.35), 6px);
   border-radius: 50%;
@@ -228,6 +231,8 @@ function onViewportScroll() {
 }
 .timeline-number {
   position: absolute;
+  /* 数字比节点高（15px > 6px）：不加这条，透明数字会把点击吸到下一个轮次。 */
+  pointer-events: none;
   opacity: 0;
   font-size: 10px;
   font-weight: 600;
@@ -270,6 +275,7 @@ function onViewportScroll() {
   background: var(--accent);
 }
 .timeline-dash {
+  pointer-events: none;
   width: clamp(6px, calc(var(--node-h, 20px) * 0.6), 12px);
   height: 2px;
   border-radius: 1px;
