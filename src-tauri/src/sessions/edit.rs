@@ -85,20 +85,21 @@ pub(crate) async fn rewind_prompt(state: &ProcessState, command: &Value) -> Resu
     let messages = transport
         .request(json!({"type": "get_fork_messages"}))
         .await?;
-    // pi restores a virtual selection only while it is still registered, so the
-    // rewind has to know the catalog. A failed lookup falls back to treating any
-    // older `model_change` as possibly virtual (see `branch_model`).
-    let virtual_models = match transport
+    // pi resolves an older `model_change` through its full registered catalog,
+    // which RPC only exposes as the *available* snapshot. "Present" proves the
+    // api; "absent" proves nothing, so any decision depending on an absent model
+    // is treated as uncertain and re-recorded (see `restored_model`).
+    let catalog = match transport
         .request(json!({"type": "get_available_models"}))
         .await
     {
-        Ok(response) => virtual_models_from_catalog(&response),
+        Ok(response) => ModelCatalog::from_snapshot(&response),
         Err(error) => {
             crate::logs::write(
                 "sessions",
                 &format!("rewind catalog lookup failed: {error}"),
             );
-            None
+            ModelCatalog::default()
         }
     };
     let target = messages["data"]["messages"]
@@ -121,7 +122,7 @@ pub(crate) async fn rewind_prompt(state: &ProcessState, command: &Value) -> Resu
     // Read the live selection before the log is rewritten: the switch_session
     // below restores the model from the branch, so the rewind has to carry it.
     let live = LiveSelection::from_state(data);
-    let revised = rewind_log(&original, &target, &live, &virtual_models)?;
+    let revised = rewind_log(&original, &target, &live, &catalog)?;
     tauri::async_runtime::spawn_blocking({
         let file = file.clone();
         move || replace_session_log(&file, &revised)
@@ -216,23 +217,70 @@ fn branch_entries<'a>(kept: &[&'a Value], leaf: &str) -> Vec<&'a Value> {
     path
 }
 
-/// Which model pi would restore from this branch, following pi's
-/// `getBranchSelection` exactly:
+/// What the rewind can prove about the selection pi restores for a branch.
+#[derive(Debug, PartialEq, Eq)]
+enum Restore {
+    /// pi is proven to restore exactly this `(provider, model)`.
+    Exact((String, String)),
+    /// Not provable: either the branch records no selection at all (pi then falls
+    /// back to its settings default) or the answer routes the decision through the
+    /// model catalog, which the RPC surface only exposes as the *available*
+    /// snapshot. Re-recording the live selection is then the only safe move.
+    Uncertain,
+}
+
+/// The part of pi's registered catalog the RPC surface can prove.
 ///
-/// - the newest `model_change` wins outright;
-/// - a `model_change` older than the newest physical answer only wins when it
-///   names a model pi still registers as virtual (`api: pi-virtual`), because
-///   routed responses name the physical model that answered, not the selection;
-/// - otherwise the newest physical answer's own model is the selection.
+/// pi's `getBranchSelection` resolves an older `model_change` through
+/// `modelRuntime.getModel()` — the complete registered catalog. The only related
+/// RPC is `get_available_models`, whose snapshot is filtered by configured
+/// provider auth: a model missing from it may be unregistered, may be registered
+/// but currently unavailable (missing credentials, filtered provider), and may be
+/// virtual either way. Presence therefore proves the api; absence proves nothing.
+#[derive(Default)]
+struct ModelCatalog {
+    /// `(provider, model)` → `api == "pi-virtual"`.
+    known: HashMap<(String, String), bool>,
+}
+
+impl ModelCatalog {
+    fn from_snapshot(response: &Value) -> Self {
+        let mut known = HashMap::new();
+        for model in response["data"]["models"].as_array().into_iter().flatten() {
+            let (Some(provider), Some(id)) = (model["provider"].as_str(), model["id"].as_str())
+            else {
+                continue;
+            };
+            known.insert(
+                (provider.to_owned(), id.to_owned()),
+                model["api"].as_str() == Some("pi-virtual"),
+            );
+        }
+        Self { known }
+    }
+
+    /// `Some(true)` virtual, `Some(false)` physical, `None` not provable.
+    fn is_virtual(&self, key: &(String, String)) -> Option<bool> {
+        self.known.get(key).copied()
+    }
+}
+
+/// Which model pi's `getBranchSelection` restores from this branch (leaf→root),
+/// and whether that result is provable:
 ///
-/// `virtual_models` is `None` when the catalog could not be read. Any
-/// preceding `model_change` is then treated as possibly virtual: re-recording the
-/// live selection is harmless (it names the same model pi already runs), while
-/// guessing "physical" would drop the user's switch and reintroduce TZD-146.
-fn branch_model(path: &[&Value], virtual_models: &VirtualModels) -> Option<(String, String)> {
+/// - the newest `model_change` wins outright — pi returns it without a lookup;
+/// - before any `model_change`, issue-route answers decide: a `model_change`
+///   older than the newest physical answer holds only while the catalog reports
+///   it as virtual, otherwise the answer's own model is the selection;
+/// - the catalog lookup itself is `Uncertain` whenever the available snapshot
+///   cannot prove the api, because a registered-but-unavailable model may still
+///   be virtual and hold;
+/// - a branch without any selection record is `Uncertain` too: pi then falls back
+///   to its settings default, not to whatever the picker shows.
+fn restored_model(path: &[&Value], catalog: &ModelCatalog) -> Restore {
     for (index, item) in path.iter().enumerate() {
         if let Some(change) = model_change_key(item) {
-            return Some(change);
+            return Restore::Exact(change);
         }
         if item["type"] != "message" {
             continue;
@@ -247,23 +295,23 @@ fn branch_model(path: &[&Value], virtual_models: &VirtualModels) -> Option<(Stri
             (Some(provider), Some(model)) => (provider.to_owned(), model.to_owned()),
             _ => continue,
         };
-        // `path` runs leaf→root, so older entries are the ones after this index
-        // and the first match is the newest `model_change` before the answer.
-        let change = path[index + 1..]
+        // `path` runs leaf→root, so the first match is the newest `model_change`
+        // above the answer; without one, pi returns the answer's own model.
+        let Some(change) = path[index + 1..]
             .iter()
-            .find_map(|item| model_change_key(item));
-        return match change {
-            Some(change)
-                if virtual_models
-                    .as_ref()
-                    .is_none_or(|set| set.contains(&change)) =>
-            {
-                Some(change)
-            }
-            _ => Some(response),
+            .find_map(|item| model_change_key(item))
+        else {
+            return Restore::Exact(response);
+        };
+        return match catalog.is_virtual(&change) {
+            // Routed answers name the physical model that answered; the virtual
+            // selection they came from holds until the next `model_change`.
+            Some(true) => Restore::Exact(change),
+            Some(false) => Restore::Exact(response),
+            None => Restore::Uncertain,
         };
     }
-    None
+    Restore::Uncertain
 }
 
 fn model_change_key(item: &Value) -> Option<(String, String)> {
@@ -284,31 +332,11 @@ fn branch_thinking(path: &[&Value]) -> Option<String> {
     })
 }
 
-/// Provider/model keys pi still registers as virtual (`api: pi-virtual`), read
-/// from `get_available_models`. `None` means the catalog was unavailable.
-type VirtualModels = Option<std::collections::HashSet<(String, String)>>;
-
-fn virtual_models_from_catalog(response: &Value) -> VirtualModels {
-    let models = response["data"]["models"].as_array()?;
-    Some(
-        models
-            .iter()
-            .filter(|model| model["api"].as_str() == Some("pi-virtual"))
-            .filter_map(|model| {
-                Some((
-                    model["provider"].as_str()?.to_owned(),
-                    model["id"].as_str()?.to_owned(),
-                ))
-            })
-            .collect(),
-    )
-}
-
 fn rewind_log(
     raw: &str,
     target: &str,
     live: &LiveSelection,
-    virtual_models: &VirtualModels,
+    catalog: &ModelCatalog,
 ) -> Result<String, String> {
     let entries: Vec<Value> = raw
         .lines()
@@ -363,9 +391,11 @@ fn rewind_log(
     // with the newest record as leaf.
     let mut parent_id = marker_id.clone();
     if let Some((provider, model_id)) = &live.model {
-        if branch_model(&path, virtual_models).as_ref()
-            != Some(&(provider.clone(), model_id.clone()))
-        {
+        // Re-record unless pi is *proven* to restore the live selection. An
+        // uncertain branch (unprovable virtual check, or no selection record at
+        // all) must not be resolved by comparing the guess with live: the guess
+        // may equal live today and still differ from what pi reloads.
+        if restored_model(&path, catalog) != Restore::Exact((provider.clone(), model_id.clone())) {
             let id = format!("edit-model-{}", uuid::Uuid::new_v4());
             appended.push(
                 json!({"type": "model_change", "id": id, "parentId": parent_id,
@@ -431,9 +461,20 @@ mod session_path_tests {
 mod edit_tests {
     use super::*;
 
-    /// A catalog without virtual models: pi restores the newest physical answer.
-    fn physical_only() -> VirtualModels {
-        Some(std::collections::HashSet::new())
+    /// A catalog that proves the api of exactly the listed models. Anything else
+    /// is unprovable, just like a model that is registered but missing from the
+    /// available snapshot.
+    fn catalog(models: &[(&str, &str, bool)]) -> ModelCatalog {
+        let mut known = HashMap::new();
+        for (provider, id, virtual_model) in models {
+            known.insert((provider.to_string(), id.to_string()), *virtual_model);
+        }
+        ModelCatalog { known }
+    }
+
+    /// pi restores the newest physical answer; no virtual model is involved.
+    fn physical_only() -> ModelCatalog {
+        catalog(&[])
     }
 
     /// The `pix-edit-position` marker this rewind wrote, i.e. the branch that
@@ -446,13 +487,24 @@ mod edit_tests {
             .to_owned()
     }
 
-    fn virtual_set(models: &[(&str, &str)]) -> VirtualModels {
-        Some(
-            models
-                .iter()
-                .map(|(provider, id)| (provider.to_string(), id.to_string()))
-                .collect(),
-        )
+    /// A catalog proving these models are pi-virtual.
+    fn virtual_set(models: &[(&str, &str)]) -> ModelCatalog {
+        let entries: Vec<(&str, &str, bool)> = models
+            .iter()
+            .map(|(provider, id)| (*provider, *id, true))
+            .collect();
+        catalog(&entries)
+    }
+
+    /// The switch records a rewind appended (everything under `pix-edit-position`).
+    fn appended_switches(kept: &[Value]) -> Vec<&Value> {
+        kept.iter()
+            .filter(|entry| {
+                entry["id"].as_str().is_some_and(|id| {
+                    id.starts_with("edit-model-") || id.starts_with("edit-thinking-")
+                })
+            })
+            .collect()
     }
 
     #[test]
@@ -524,8 +576,8 @@ mod edit_tests {
         let leaf = kept.last().unwrap()["id"].as_str().unwrap().to_owned();
         let branch = branch_entries(&kept.iter().collect::<Vec<_>>(), &leaf);
         assert_eq!(
-            branch_model(&branch, &physical_only()),
-            Some(("p3".into(), "m3".into()))
+            restored_model(&branch, &physical_only()),
+            Restore::Exact(("p3".into(), "m3".into()))
         );
         assert_eq!(branch_thinking(&branch), Some("high".into()));
     }
@@ -599,14 +651,14 @@ mod edit_tests {
         assert_eq!(appended[0]["modelId"], "gpt");
         // pi now restores the physical model the user picked while editing...
         assert_eq!(
-            branch_model(&branch, &virtuals),
-            Some(("openai".into(), "gpt".into()))
+            restored_model(&branch, &virtuals),
+            Restore::Exact(("openai".into(), "gpt".into()))
         );
         // ...instead of the virtual selection the marker alone would keep.
         let marker_branch = branch_entries(&kept.iter().collect::<Vec<_>>(), &marker_of(&kept));
         assert_eq!(
-            branch_model(&marker_branch, &virtuals),
-            Some(("router".into(), "auto".into()))
+            restored_model(&marker_branch, &virtuals),
+            Restore::Exact(("router".into(), "auto".into()))
         );
     }
 
@@ -640,86 +692,166 @@ mod edit_tests {
         let leaf = kept.last().unwrap()["id"].as_str().unwrap().to_owned();
         let branch = branch_entries(&kept.iter().collect::<Vec<_>>(), &leaf);
         assert_eq!(
-            branch_model(&branch, &virtuals),
-            Some(("router".into(), "auto".into()))
+            restored_model(&branch, &virtuals),
+            Restore::Exact(("router".into(), "auto".into()))
         );
     }
 
-    /// An unknown catalog must assume the older `model_change` may be virtual: the
-    /// switch is re-recorded (harmless when it names the same model) instead of
-    /// silently keeping what pi would restore.
+    /// Symmetric half of the unknown-catalog rule: the surviving branch records a
+    /// *physical* switch (`openai/gpt-a`) above an answer from `anthropic/claude-b`
+    /// and the catalog lookup failed. Treating the old record as virtual would
+    /// infer `gpt-a` — exactly the live selection — yet pi, knowing it is physical,
+    /// restores `claude-b`. The uncertain inference must never equal live.
     #[test]
-    fn unknown_catalog_falls_back_to_rerecording() {
+    fn unknown_catalog_rerecords_even_when_the_guess_matches_live() {
         let raw = [
             json!({"type":"session","id":"session"}),
             json!({"type":"message","id":"q0","parentId":null,"message":{"role":"user"}}),
-            json!({"type":"model_change","id":"mc0","parentId":"q0","provider":"router","modelId":"auto"}),
-            json!({"type":"message","id":"a0","parentId":"mc0","message":{"role":"assistant","provider":"openai","model":"gpt","api":"openai"}}),
-            json!({"type":"message","id":"q1","parentId":"a0","message":{"role":"user"}}),
+            json!({"type":"message","id":"a0","parentId":"q0","message":{"role":"assistant","provider":"p1","model":"m1","api":"openai"}}),
+            json!({"type":"model_change","id":"mc0","parentId":"a0","provider":"openai","modelId":"gpt-a"}),
+            json!({"type":"message","id":"a1","parentId":"mc0","message":{"role":"assistant","provider":"anthropic","model":"claude-b","api":"anthropic"}}),
+            json!({"type":"message","id":"q1","parentId":"a1","message":{"role":"user"}}),
         ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        // The user switched back to `gpt-a` while editing; that record is dropped.
         let live = LiveSelection {
-            model: Some(("openai".into(), "gpt".into())),
+            model: Some(("openai".into(), "gpt-a".into())),
             thinking: None,
         };
-        let unknown: VirtualModels = None;
+        let unknown = physical_only();
         let entries: Vec<Value> = raw
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        let path = branch_entries(&entries.iter().collect::<Vec<_>>(), "a0");
-        assert_eq!(
-            branch_model(&path, &unknown),
-            Some(("router".into(), "auto".into()))
-        );
+        let path = branch_entries(&entries.iter().collect::<Vec<_>>(), "a1");
+        assert_eq!(restored_model(&path, &unknown), Restore::Uncertain);
         let result = rewind_log(&raw, "q1", &live, &unknown).unwrap();
-        assert!(result.contains("\"edit-model-"), "{result}");
+        let kept: Vec<Value> = result
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let switches = appended_switches(&kept);
+        assert_eq!(switches.len(), 1, "must re-record: {result}");
+        assert_eq!(switches[0]["provider"], "openai");
+        assert_eq!(switches[0]["modelId"], "gpt-a");
+        // With the catalog the answer's own model would win; re-recording live
+        // keeps the user's switch either way.
+        let known = catalog(&[("openai", "gpt-a", false)]);
+        let leaf = kept.last().unwrap()["id"].as_str().unwrap().to_owned();
+        let branch = branch_entries(&kept.iter().collect::<Vec<_>>(), &leaf);
+        assert_eq!(
+            restored_model(&branch, &known),
+            Restore::Exact(("openai".into(), "gpt-a".into()))
+        );
+    }
+
+    /// A model that is registered but missing from the available snapshot stays
+    /// pi-virtual (`getBranchSelection` looks it up in the full catalog), so the
+    /// available list may never be read as "this is physical".
+    #[test]
+    fn unavailable_virtual_model_is_not_treated_as_physical() {
+        let raw = [
+            json!({"type":"session","id":"session"}),
+            json!({"type":"message","id":"q0","parentId":null,"message":{"role":"user"}}),
+            json!({"type":"message","id":"a0","parentId":"q0","message":{"role":"assistant","provider":"p1","model":"m1","api":"openai"}}),
+            json!({"type":"model_change","id":"mc0","parentId":"a0","provider":"router","modelId":"auto"}),
+            json!({"type":"message","id":"a1","parentId":"mc0","message":{"role":"assistant","provider":"openai","model":"gpt","api":"openai"}}),
+            json!({"type":"message","id":"q1","parentId":"a1","message":{"role":"user"}}),
+        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        // The switch to the routed physical model happened while editing.
+        let live = LiveSelection {
+            model: Some(("openai".into(), "gpt".into())),
+            thinking: None,
+        };
+        // Snapshot only lists the physical model: `router/auto` is absent, but it
+        // may still be registered as virtual.
+        let snapshot = json!({"data": {"models": [
+            {"provider": "openai", "id": "gpt", "api": "openai"},
+        ]}});
+        let available = ModelCatalog::from_snapshot(&snapshot);
+        let entries: Vec<Value> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let path = branch_entries(&entries.iter().collect::<Vec<_>>(), "a1");
+        assert_eq!(restored_model(&path, &available), Restore::Uncertain);
+        let result = rewind_log(&raw, "q1", &live, &available).unwrap();
+        let kept: Vec<Value> = result
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let switches = appended_switches(&kept);
+        assert_eq!(switches.len(), 1, "must re-record: {result}");
+        assert_eq!(switches[0]["modelId"], "gpt");
+        // And pi's real answer, had the snapshot listed it, is the virtual one.
+        let full = virtual_set(&[("router", "auto")]);
+        let marker_branch = branch_entries(&kept.iter().collect::<Vec<_>>(), &marker_of(&kept));
+        assert_eq!(
+            restored_model(&marker_branch, &full),
+            Restore::Exact(("router".into(), "auto".into()))
+        );
     }
 
     #[test]
-    fn catalog_marks_only_pi_virtual_models() {
+    fn catalog_proves_only_what_it_lists() {
         let response = json!({"data": {"models": [
             {"provider": "openai", "id": "gpt", "api": "openai"},
             {"provider": "router", "id": "auto", "api": "pi-virtual"},
         ]}});
-        let virtuals = virtual_models_from_catalog(&response).unwrap();
-        assert!(virtuals.contains(&("router".into(), "auto".into())));
-        assert!(!virtuals.contains(&("openai".into(), "gpt".into())));
-        // A malformed catalog is "unknown", never "nothing is virtual".
-        assert!(virtual_models_from_catalog(&json!({"data": {}})).is_none());
+        let snapshot = ModelCatalog::from_snapshot(&response);
+        assert_eq!(
+            snapshot.is_virtual(&("router".into(), "auto".into())),
+            Some(true)
+        );
+        assert_eq!(
+            snapshot.is_virtual(&("openai".into(), "gpt".into())),
+            Some(false)
+        );
+        // A model the snapshot omits is unknown, never "physical".
+        assert_eq!(
+            snapshot.is_virtual(&("router".into(), "cheap".into())),
+            None
+        );
+        // A failed or malformed lookup proves nothing at all.
+        assert_eq!(
+            ModelCatalog::default().is_virtual(&("router".into(), "auto".into())),
+            None
+        );
     }
 
-    /// Table of branch shapes (leaf→root) whose restored selection follows pi's
-    /// `getBranchSelection`, including the virtual cases the review named.
+    /// Branch shapes (leaf→root) against pi's `getBranchSelection` semantics.
     #[test]
-    fn branch_model_matches_pi_restore_semantics() {
+    fn restored_model_matches_pi_restore_semantics() {
         let gpt = || json!({"type":"message","message":{"role":"assistant","provider":"openai","model":"gpt","api":"openai"}});
-        let cases: Vec<(Vec<Value>, Option<(&str, &str)>, bool)> = vec![
+        let virtuals = virtual_set(&[("router", "auto")]);
+        let no_virtuals = catalog(&[("router", "auto", false)]);
+        let unknown = physical_only();
+        let cases: Vec<(Vec<Value>, &ModelCatalog, Restore)> = vec![
             // A virtual selection holds past the routed answer naming `openai/gpt`.
             (
                 vec![
                     gpt(),
                     json!({"type":"model_change","provider":"router","modelId":"auto"}),
                 ],
-                Some(("router", "auto")),
-                true,
+                &virtuals,
+                Restore::Exact(("router".into(), "auto".into())),
             ),
-            // The same branch without a registered virtual model: the answer wins.
+            // Proven physical: the answer's model wins.
             (
                 vec![
                     gpt(),
                     json!({"type":"model_change","provider":"router","modelId":"auto"}),
                 ],
-                Some(("openai", "gpt")),
-                false,
+                &no_virtuals,
+                Restore::Exact(("openai".into(), "gpt".into())),
             ),
-            // A physical selection does not hold: the answer's model wins.
+            // Unprovable: an absent model may be virtual, so the restore is unknown.
             (
                 vec![
                     gpt(),
-                    json!({"type":"model_change","provider":"anthropic","modelId":"claude"}),
+                    json!({"type":"model_change","provider":"router","modelId":"auto"}),
                 ],
-                Some(("openai", "gpt")),
-                true,
+                &unknown,
+                Restore::Uncertain,
             ),
             // A virtual answer is skipped; the older physical answer decides.
             (
@@ -727,40 +859,39 @@ mod edit_tests {
                     json!({"type":"message","message":{"role":"assistant","provider":"router","model":"auto","api":"pi-virtual"}}),
                     gpt(),
                 ],
-                Some(("openai", "gpt")),
-                true,
+                &virtuals,
+                Restore::Exact(("openai".into(), "gpt".into())),
             ),
-            // The newest switch wins even when it names a virtual model.
+            // The newest switch wins even when the catalog cannot classify it.
             (
                 vec![
                     json!({"type":"model_change","provider":"router","modelId":"auto"}),
                     gpt(),
                 ],
-                Some(("router", "auto")),
-                true,
+                &unknown,
+                Restore::Exact(("router".into(), "auto".into())),
             ),
-            // A user question is not an answer and decides nothing.
+            // A question is not an answer and decides nothing.
             (
                 vec![
                     json!({"type":"model_change","provider":"openai","modelId":"gpt"}),
                     json!({"type":"message","message":{"role":"user"}}),
                 ],
-                Some(("openai", "gpt")),
-                true,
+                &unknown,
+                Restore::Exact(("openai".into(), "gpt".into())),
+            ),
+            // No selection record at all: pi falls back to its settings default.
+            (
+                vec![json!({"type":"message","message":{"role":"user"}})],
+                &virtuals,
+                Restore::Uncertain,
             ),
         ];
-        let virtuals = virtual_set(&[("router", "auto")]);
-        let unregistered: VirtualModels = Some(std::collections::HashSet::new());
-        for (path, expected, with_virtuals) in cases {
+        for (path, catalog, expected) in cases {
             let refs: Vec<&Value> = path.iter().collect();
-            let catalog = if with_virtuals {
-                &virtuals
-            } else {
-                &unregistered
-            };
             assert_eq!(
-                branch_model(&refs, catalog),
-                expected.map(|(provider, id)| (provider.to_string(), id.to_string())),
+                restored_model(&refs, catalog),
+                expected,
                 "branch: {:?}",
                 path.iter().map(Value::to_string).collect::<Vec<_>>()
             );
