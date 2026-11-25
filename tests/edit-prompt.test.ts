@@ -105,11 +105,14 @@ test("running prompt: waits for abort, then resends in the same session with ima
   expect(h.store.isResending).toBe(true)
   finishAbort({ success: true })
   await pending
-  expect(h.calls.slice(0, 5).map(call => call.type)).toEqual([
+  expect(h.calls.slice(0, 6).map(call => call.type)).toEqual([
     "clear_queue",
     "abort",
     "get_state",
     "rewind_prompt",
+    // Re-read the reloaded session before resending: the rewind drops switches
+    // made while editing, so the picker must follow what pi restored (TZD-146).
+    "get_state",
     "prompt",
   ])
   const prompt = h.calls.find(call => call.type === "prompt")
@@ -176,7 +179,7 @@ test("idle conversation resends without abort; empty text is ignored unless imag
   await h.store.resendPrompt("   ")
   expect(h.calls.length).toBe(0)
   await h.store.resendPrompt("", [{ data: "YWJj", mimeType: "image/png" }])
-  expect(h.calls.slice(0, 3).map(call => call.type)).toEqual(["get_state", "rewind_prompt", "prompt"])
+  expect(h.calls.slice(0, 4).map(call => call.type)).toEqual(["get_state", "rewind_prompt", "get_state", "prompt"])
 })
 
 test("duplicate clicks and a session switch during abort never submit a second question", async () => {
@@ -362,4 +365,44 @@ test("only the newest stats refresh wins", async () => {
   pending[0]({ success: true, data: { tokens: 1 } })
   await first
   expect(h.store.stats.tokens).toBe(2)
+})
+
+test("resend republishes the model pi restored after the rewind", async () => {
+  // The rewind drops the subtree that recorded switches made while editing, and
+  // pi reloads the log through `switch_session`, so the model pi reports after
+  // the rewind is the one the resent answer actually uses. Publishing that state
+  // keeps the model picker and the answer in agreement (TZD-146).
+  let states = 0
+  const restored = { model: { provider: "p1", id: "m1" }, thinkingLevel: "medium", sessionFile: "current.jsonl" }
+  const h = await harness({
+    get_state: () => {
+      states++
+      // first call: pre-rewind snapshot, second: state after the reload
+      return {
+        success: true,
+        data: states === 1 ? { model: { provider: "p2", id: "m2" }, sessionFile: "current.jsonl" } : restored,
+      }
+    },
+  })
+  h.store.state = { model: { provider: "p2", id: "m2" }, sessionFile: "current.jsonl" }
+  await h.store.resendPrompt("replacement")
+  expect(states).toBe(2)
+  expect(h.store.state.model).toEqual(restored.model)
+  expect(h.store.state.thinkingLevel).toBe("medium")
+})
+
+test("a broken state re-read after the rewind still resends the edit", async () => {
+  // The log is already rewritten by the time the state is re-read: losing the
+  // refresh must not abandon the edited question.
+  let states = 0
+  const h = await harness({
+    get_state: () => {
+      states++
+      if (states === 2) return { success: false, error: "pi is restarting" }
+      return { success: true, data: { sessionFile: "current.jsonl" } }
+    },
+  })
+  await expect(h.store.resendPrompt("replacement")).resolves.toBeUndefined()
+  expect(h.calls.some(call => call.type === "prompt")).toBe(true)
+  expect(h.store.entries[0].text).toBe("replacement")
 })

@@ -499,6 +499,15 @@ export const createSessionStore = (runtimeId = "default") =>
         const rewound = await rpcRequest({ type: "rewind_prompt", sessionFile: file })
         assertCurrent()
         if (!rewound.success) throw new Error(rewound.error ?? i18n.global.t("chat.editStopFailed"))
+        // The rewind dropped the switches made while the edit was open, and pi
+        // reloads the log through `switch_session`, deriving the model and thinking
+        // level from the branch it ends on (the backend re-records them there).
+        // Re-read the reloaded state so the picker and the next answer agree, and so
+        // a fallback pi had to apply is visible instead of masked by the old pick
+        // (TZD-146). The log is already rewritten here: a failed re-read must not
+        // abandon the edit, refreshState is best-effort like every other refresh.
+        await refreshState().catch(error => pixLog(`[perf] state after rewind failed: ${error}`, runtimeId))
+        assertCurrent()
         const replaceIndex = entries.value.findIndex(entry => entry.id === original.id)
         if (replaceIndex < 0) throw new Error(i18n.global.t("chat.editSessionChanged"))
         const removed = entries.value.splice(replaceIndex)
@@ -519,7 +528,9 @@ export const createSessionStore = (runtimeId = "default") =>
         // Late completion/rejection of the interrupted prompt cannot mark the new
         // run failed or clear its streaming state.
         version = ++conversationVersion
-        state.value = idle.data
+        // The refresh above already published pi's authoritative state; the
+        // pre-rewind snapshot must not overwrite it with the lost selection.
+        if (!state.value) state.value = idle.data
         isStreaming.value = false
         isCompacting.value = false
         partialBlocks.value = null
