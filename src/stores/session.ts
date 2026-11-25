@@ -756,6 +756,10 @@ export const createSessionStore = (runtimeId = "default") =>
         state.value = res.data
         sessionFile.value = res.data.sessionFile ?? null
         followUpMode.value = res.data.followUpMode ?? null
+      } else {
+        // A response-level failure resolves like a success; without this line a
+        // failed refresh would be silent for every caller that only awaits it.
+        pixLog(`[perf] get_state refresh failed: ${res.error ?? "no data"}`, runtimeId)
       }
     }
 

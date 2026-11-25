@@ -47,6 +47,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0))
 async function harness(overrides = {}) {
   const calls = []
   const titles = []
+  const logs = []
   const state = {
     sessionId: "current",
     sessionFile: "current.jsonl",
@@ -59,7 +60,7 @@ async function harness(overrides = {}) {
     sessionHistory: async () => [],
     sessionLastError: async () => null,
     sessionMtime: async () => 1,
-    pixLog() {},
+    pixLog: (...args) => logs.push(args.join(" ")),
     generateSessionTitle: async (file, message, overwrite) => {
       titles.push({ file, message, overwrite })
       return null
@@ -86,7 +87,7 @@ async function harness(overrides = {}) {
   store.state = state
   store.sessionFile = state.sessionFile
   store.entries = [{ kind: "user", id: 1, text: "original" }]
-  return { store, calls, titles, state }
+  return { store, calls, titles, logs, state }
 }
 
 test("running prompt: waits for abort, then resends in the same session with images", async () => {
@@ -391,9 +392,26 @@ test("resend republishes the model pi restored after the rewind", async () => {
   expect(h.store.state.thinkingLevel).toBe("medium")
 })
 
-test("a broken state re-read after the rewind still resends the edit", async () => {
+test("a rejected state re-read after the rewind still resends the edit and logs", async () => {
   // The log is already rewritten by the time the state is re-read: losing the
-  // refresh must not abandon the edited question.
+  // refresh must not abandon the edited question, but it must be observable.
+  let states = 0
+  const h = await harness({
+    get_state: () => {
+      states++
+      if (states === 2) throw new Error("pi is restarting")
+      return { success: true, data: { sessionFile: "current.jsonl" } }
+    },
+  })
+  await expect(h.store.resendPrompt("replacement")).resolves.toBeUndefined()
+  expect(h.calls.some(call => call.type === "prompt")).toBe(true)
+  expect(h.store.entries[0].text).toBe("replacement")
+  expect(h.logs).toContainEqual(expect.stringContaining("state after rewind failed"))
+})
+
+test("a response-level get_state failure is observable and does not block the resend", async () => {
+  // `refreshState` resolves on `{ success: false }`, so the `.catch` in the resend
+  // path never sees it; the store itself has to log that case.
   let states = 0
   const h = await harness({
     get_state: () => {
@@ -405,4 +423,5 @@ test("a broken state re-read after the rewind still resends the edit", async () 
   await expect(h.store.resendPrompt("replacement")).resolves.toBeUndefined()
   expect(h.calls.some(call => call.type === "prompt")).toBe(true)
   expect(h.store.entries[0].text).toBe("replacement")
+  expect(h.logs).toContainEqual(expect.stringContaining("get_state refresh failed"))
 })
