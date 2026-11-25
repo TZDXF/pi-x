@@ -44,7 +44,7 @@ test("task search uses Reka command menu with the overlay below the window title
   expect(sidebar).not.toContain('class="sidebar-search')
   expect(sidebar.indexOf('t("sidebar.taskList")')).toBeLessThan(sidebar.indexOf('class="project-groups'))
   expect(sidebar).toContain('<DialogRoot v-model:open="searchOpen">')
-  expect(sidebar).toContain("fixed inset-x-0 bottom-0 top-9")
+  expect(sidebar).toContain("fixed inset-x-0 bottom-0 top-[var(--titlebar-height)]")
   expect(sidebar).toContain("bg-black/30")
   expect(sidebar).toContain('<ComboboxRoot :open="true" model-value="" ignore-filter')
   expect(sidebar).toContain("<ComboboxInput")

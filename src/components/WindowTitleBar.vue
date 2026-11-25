@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { isDesktop } from "@/api/transport"
+import { isMacOS, resolveTitleBarDoubleClickAction } from "@/lib/platform"
 import { openPath, openTerminalInDir } from "@/api/piClient"
 import { isRemoteProject } from "@/lib/ssh"
 import { canGoBack, canGoForward, navigate, useRoute } from "@/lib/router"
@@ -111,6 +112,47 @@ function close() {
   void appWindow?.close()
 }
 
+// ---- 标题栏拖拽与双击 ----
+// macOS 改成紧凑标题栏 + 系统原生红绿灯，而 Tauri 注入的 drag.js 会把双击硬编码成
+// maximize（不区分「缩放 / 最小化 / 无操作」的系统偏好），所以 macOS 上把这个元素标成
+// `data-tauri-drag-region="false"` 关掉它的处理，改由这里的处理器驱动：单击拖拽，
+// 双击按 macOS 系统偏好执行。非 macOS 平台保持原有的 data-tauri-drag-region 行为。
+const macDragRegion = computed(() => (isMacOS.value ? "false" : "true"))
+
+let macDoubleClickStart: { x: number; y: number } | null = null
+
+function onDragRegionMouseDown(event: MouseEvent) {
+  if (!isMacOS.value || event.button !== 0) return
+  if (event.detail === 2) {
+    // 第二次按下只记录位置：是否触发双击动作在 mouseup 决定（与系统行为一致）。
+    macDoubleClickStart = { x: event.clientX, y: event.clientY }
+    return
+  }
+  if (event.detail === 1) {
+    macDoubleClickStart = null
+    // 拖拽由自己发起（drag.js 已被关掉），preventDefault 避免拖拽变成选中文本。
+    event.preventDefault()
+    void appWindow?.startDragging()
+  }
+}
+
+async function onDragRegionMouseUp(event: MouseEvent) {
+  if (!isMacOS.value || event.button !== 0 || event.detail !== 2) return
+  const start = macDoubleClickStart
+  macDoubleClickStart = null
+  // 按下后鼠标动过就不算双击：拖动窗口时不会顺带缩放（与 AppKit 一致）。
+  if (!start || Math.abs(event.clientX - start.x) > 3 || Math.abs(event.clientY - start.y) > 3) return
+  const action = await resolveTitleBarDoubleClickAction()
+  if (action === "maximize") toggleMaximize()
+  else if (action === "minimize") minimize()
+}
+
+function onDragRegionDoubleClick() {
+  // macOS 走 mouseup 分支（第二个 click 在 mouseup 才成立）；Windows / Linux 保持原行为。
+  if (isMacOS.value) return
+  toggleMaximize()
+}
+
 // ---- 标题栏打开方式：左键按默认方式打开，右侧下拉切换默认并与设置页同步 ----
 const ui = useUiStore()
 const editorAvailability = ref<Record<string, boolean>>({})
@@ -181,9 +223,10 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
 <template>
   <header
     data-testid="window-titlebar"
-    class="fixed inset-x-0 top-0 z-[200] flex h-9 select-none items-center bg-background text-foreground shadow-[0_1px_0_var(--border)]"
+    class="fixed inset-x-0 top-0 z-[200] flex h-[var(--titlebar-height)] select-none items-center bg-background text-foreground shadow-[0_1px_0_var(--border)]"
   >
-    <div class="flex h-full items-center">
+    <!-- macOS 的系统红绿灯由 AppKit 画在这一区域内，左侧功能按钮从它们后面开始排。 -->
+    <div class="flex h-full items-center pl-[var(--titlebar-lead)]">
       <button
         v-if="props.showSidebar !== false"
         type="button"
@@ -257,7 +300,13 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
       </Badge>
     </div>
     <!-- Modal layers disable body pointer events; keep native window dragging available. -->
-    <div data-tauri-drag-region class="pointer-events-auto h-full min-w-0 flex-1" @dblclick="toggleMaximize"></div>
+    <div
+      :data-tauri-drag-region="macDragRegion"
+      class="pointer-events-auto h-full min-w-0 flex-1"
+      @dblclick="onDragRegionDoubleClick"
+      @mousedown="onDragRegionMouseDown"
+      @mouseup="onDragRegionMouseUp"
+    ></div>
     <div v-if="openInEditorVisible" class="flex h-full items-center">
       <button
         type="button"
@@ -313,7 +362,8 @@ const appUpdateAvailable = computed(() => !!appUpdate.status?.updateAvailable)
     >
       <PanelRight :size="16" />
     </button>
-    <div v-if="isDesktop" class="flex h-full items-center">
+    <!-- macOS 不再自绘窗口按钮：红绿灯在左上角，右侧只保留应用自己的操作。 -->
+    <div v-if="isDesktop && !isMacOS" class="flex h-full items-center">
       <button
         type="button"
         class="titlebar-control"

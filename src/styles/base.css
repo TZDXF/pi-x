@@ -24,6 +24,20 @@
     @apply font-sans;
   }
 }
+/* 标题栏高度只在这里定义：标题栏自身、App.vue 的顶部让位以及贴着标题栏下沿的
+   覆盖层（图片预览、任务搜索）都引用同一个变量，避免改一处漏一处。
+   macOS 用 ~28px 的紧凑标题栏配合原生红绿灯；Windows / Linux 与浏览器预览保持 36px。 */
+:root {
+  --titlebar-height: 36px;
+  /* macOS 上左上方留给系统红绿灯（AppKit 从 x=9 开始画三颗 14px 的按钮）。 */
+  --titlebar-lead: 0px;
+}
+/* data-platform 由 src/lib/platform.ts 在确认运行在 macOS 桌面端后写入。 */
+:root[data-platform="macos"] {
+  --titlebar-height: 28px;
+  --titlebar-lead: 76px;
+}
+
 html,
 body,
 #app {

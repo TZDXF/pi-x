@@ -23,6 +23,7 @@ mod pi_data;
 mod pi_locate;
 mod pi_update;
 mod paths;
+mod platform;
 mod preview_guard;
 mod preview_proxy;
 mod project_watch;
@@ -229,6 +230,7 @@ pub fn run() {
             preview_proxy::preview_proxy_info,
             desktop::set_tray_labels,
             desktop::devtools_toggle,
+            platform::window_platform,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

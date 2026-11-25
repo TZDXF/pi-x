@@ -448,7 +448,7 @@ watch(
       <DialogPortal v-slot="{ onAfterLeave }">
         <!-- Keep both the backdrop and its content below the 36px desktop title bar. -->
         <DialogOverlay
-          class="task-search-overlay fixed inset-x-0 bottom-0 top-9 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-[min(12vh,5rem)] backdrop-blur-sm"
+          class="task-search-overlay fixed inset-x-0 bottom-0 top-[var(--titlebar-height)] z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-4 pt-[min(12vh,5rem)] backdrop-blur-sm"
           @pointerdown.self="searchOpen = false"
         >
           <SearchDialogContent

@@ -1,0 +1,19 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "PiX",
+        "create": false,
+        "width": 1280,
+        "height": 832,
+        "minWidth": 900,
+        "minHeight": 600,
+        "dragDropEnabled": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 9, "y": 16 }
+      }
+    ]
+  }
+}
