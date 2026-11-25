@@ -511,3 +511,75 @@ test("an already materialized turn is not paged at all", async () => {
   expect(await store.revealTimelineTurn(turn.id)).toBe(turn.entryId)
   expect(store.entries.length).toBe(before)
 })
+
+/** 一棵"每轮 user + assistant"的 transcript，可给提问正文/时间戳。 */
+const transcript = (turns: number, text: (turn: number) => string = turn => `q${turn}`) =>
+  Array.from({ length: turns * 2 }, (_, i) =>
+    i % 2 === 0
+      ? { role: "user", content: text(i / 2), timestamp: (i / 2) * 1000 }
+      : { role: "assistant", content: [{ type: "text", text: `a${(i - 1) / 2}` }], timestamp: (i / 2) * 1000 + 500 },
+  )
+
+/** 让出若干个宏任务，等分页真的把页插进来（每页开头/途中都有 `yieldHistory`）。 */
+const settle = async (rounds = 3) => {
+  for (let i = 0; i < rounds; i++) await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+test("a live turn appended while paging does not shift the target (TZD-148)", async () => {
+  // QA 复现：点在分页中发起了新提问的会话里的旧轮次，`fromEnd` 会被新轮次顶偏，
+  // 于是最终解析返回相邻的那一条（q80 → q81）。目标身份必须与末尾是否增长无关。
+  const { store } = await harness()
+  await store.loadMessages(transcript(100))
+  const target = store.timelineTurns[80]!
+  expect(target.entryId).toBe(null)
+  const pending = store.revealTimelineTurn(target.id)
+  // 分页还在跑：用户发起新提问（live 轮次追加到末尾）。
+  await settle(1)
+  store.entries.push({ kind: "user", id: 9001, text: "brand new live question", live: true })
+  const id = await pending
+  const resolved = store.entries.find(entry => entry.id === id)!
+  expect(resolved.kind).toBe("user")
+  expect((resolved as { text: string }).text).toBe("q80")
+  // 而按需分页的收益也保住了：没有把整段历史都物化。
+  expect(store.hasOlderHistory).toBe(true)
+  expect(store.entries.length).toBeLessThan(200)
+})
+
+test("identical question text resolves by position, not by text (TZD-148)", async () => {
+  // 提问文本不是唯一键：同一句话可能出现多次。旧实现最终的兜底只用文本匹配，
+  // 于是"第 20 轮"会被解析到第 80 轮（或反过来），QA 点名的另一半根因。
+  const same = "identical question"
+  const { store } = await harness()
+  await store.loadMessages(transcript(100, turn => (turn === 20 || turn === 80 ? same : `q${turn}`)))
+  const early = store.timelineTurns[20]!
+  expect(early.question).toBe(same)
+  expect(early.entryId).toBe(null)
+  const pending = store.revealTimelineTurn(early.id)
+  // 并发场景：分页中又有一条**同样文本**的新提问进来（文本兜底会被它抢走）。
+  await settle(1)
+  store.entries.push({ kind: "user", id: 9001, text: same, live: true })
+  const earlyId = await pending
+  const earlyEntry = store.entries.find(entry => entry.id === earlyId)!
+  // 用时间戳区分两条同文本轮次：第 20 轮 = 20000，第 80 轮 = 80000。
+  expect(earlyEntry.kind).toBe("user")
+  expect((earlyEntry as { timestamp?: number }).timestamp).toBe(20_000)
+  const late = store.timelineTurns[80]!
+  expect(late.question).toBe(same)
+  // 补第 20 轮时途经的页已把第 80 轮物化；即便如此它也必须解析到**自己**这一条。
+  const lateId = await store.revealTimelineTurn(late.id)
+  const lateEntry = store.entries.find(entry => entry.id === lateId)!
+  expect((lateEntry as { timestamp?: number }).timestamp).toBe(80_000)
+  expect(lateId).not.toBe(earlyId)
+})
+
+test("a live append before the click does not change later reveals (TZD-148)", async () => {
+  // 对照：末尾已经有 live 轮次时（没有竞态），定位仍然精确。
+  const { store } = await harness()
+  await store.loadMessages(transcript(100))
+  store.entries.push({ kind: "user", id: 9001, text: "live question", live: true })
+  const target = store.timelineTurns[70]!
+  expect(target.entryId).toBe(null)
+  const id = await store.revealTimelineTurn(target.id)
+  const resolved = store.entries.find(entry => entry.id === id)!
+  expect((resolved as { text: string }).text).toBe("q70")
+})

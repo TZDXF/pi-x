@@ -385,9 +385,18 @@ export function createSessionHistory(context: HistoryContext) {
    * 一样会把**整段**历史都物化并渲染一遍（长会话实测 2000 条 entry / 79 次发布 / 12s），
    * 用户点下去要等十几秒，中途滚动条还会被每次前插的补偿来回推。
    *
-   * 判据仍然用"倒数位置"（`fromEnd`）而不是 id：未物化轮次的 id 是合成的
-   * `-(msgIndex + 1)`，物化后才会换成真实 entry id（见 `buildTimelineTurns`），而轮次总数
-   * 在补页过程中不变，所以倒数位置在每一页之后都指向同一个逻辑轮次。
+   * 目标身份**不能**用"倒数位置"（`turns.length - 1 - index`）或提问文本：
+   * - 倒数位置会被**分页期间追加的 live 轮次**整体顶偏一格（QA 复现：点 `q80` 返回 `q81`）；
+   * - 提问文本不是唯一键，相同提问会同时命中多条（逐页的提前返回尤其危险）。
+   *
+   * 这里用两个**在分页期间不变的**身份：
+   * 1. 未物化轮次的合成 id `-(rawIndex + 1)` 指向固定的 raw 消息，物化后才会换成真实
+   *    entry id，所以物化前一直可用；
+   * 2. 物化后改用"提问序号"（跳过 compaction / context_edit 节点，从会话开头数）：
+   *    `messages` 派生的轮次永远排在 live 追加之前，而 live 追加只发生在末尾，
+   *    因此已在分页前存在的问答轮序号不会变。
+   *
+   * 两者都是精确身份，不依赖文本比对，也不受末尾追加影响。
    */
   async function revealTimelineTurn(turnId: number): Promise<number | null> {
     const turns = timelineTurns.value
@@ -395,22 +404,43 @@ export function createSessionHistory(context: HistoryContext) {
     if (index < 0) return null
     if (turns[index].entryId != null) return turns[index].entryId
     const question = turns[index].question
-    const fromEnd = turns.length - 1 - index
+    // 目标在"提问序列"里的序号（compaction / context_edit 不是提问，不计数）。
+    let ordinal = 0
+    for (let i = 0; i < index; i++) if (!turns[i]!.compaction && !turns[i]!.contextEdit) ordinal++
+    /** 解析目标当前是否已物化：合成 id 优先，物化后回落到提问序号。 */
+    const currentTarget = (): number | null => {
+      const bySyntheticId = timelineTurns.value.find(t => t.id === turnId)
+      if (bySyntheticId?.entryId != null) return bySyntheticId.entryId
+      let seen = -1
+      for (const turn of timelineTurns.value) {
+        if (turn.compaction || turn.contextEdit) continue
+        if (++seen !== ordinal) continue
+        return turn.entryId
+      }
+      return null
+    }
     while (historyCursor.value > 0) {
       const cursorBefore = historyCursor.value
       await loadOlderHistory()
       if (historyCursor.value === cursorBefore) break
-      // 每补一页就看一眼：这一轮已经物化就立刻收手，不再把更早的历史也拉进来。
-      // 同时核对提问：流式期间可能有新轮次追加到末尾，"倒数位置"会因此偏移，
-      // 对不上就继续走完流程，交给下面的按提问兜底。
-      const arrived = timelineTurns.value[timelineTurns.value.length - 1 - fromEnd]
-      if (arrived?.entryId != null && arrived.question === question) return arrived.entryId
+      // 每补一页就看一眼：目标已经物化就立刻收手，不再把更早的历史也拉进来。
+      const arrived = currentTarget()
+      if (arrived != null) return arrived
     }
-    const loaded = timelineTurns.value
-    const resolved =
-      loaded[loaded.length - 1 - fromEnd] ??
-      [...loaded].reverse().find(t => t.entryId != null && t.question === turns[index].question)
-    return resolved?.entryId ?? null
+    const resolved = currentTarget()
+    if (resolved != null) return resolved
+    // 走到这里说明目标提问已经不在快照里（例如编辑重发截断了历史）。只在这种情况下
+    // 才回落到提问文本，并且取**离目标序号最近**的那一条，而不是"最后一条"。
+    let best: { entryId: number; distance: number } | null = null
+    let position = -1
+    for (const turn of timelineTurns.value) {
+      if (turn.compaction || turn.contextEdit) continue
+      position++
+      if (turn.entryId == null || turn.question !== question) continue
+      const distance = Math.abs(position - ordinal)
+      if (!best || distance < best.distance) best = { entryId: turn.entryId, distance }
+    }
+    return best?.entryId ?? null
   }
 
   return {
