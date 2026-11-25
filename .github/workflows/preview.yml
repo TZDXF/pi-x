@@ -153,6 +153,22 @@ jobs:
       - name: 同步版本号
         run: node scripts/set-version.mjs "${{ needs.check.outputs.version }}"
 
+      # 与正式版走同一套 macOS 签名/公证策略（见 scripts/macos-signing.sh）：
+      # 凭据齐全时 Developer ID + 公证，缺失时显式降级为 ad-hoc 重签。
+      - name: 解析 macOS 签名模式
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+        run: bash scripts/macos-signing.sh plan
+
       - name: 构建并上传预览版到草稿
         uses: tauri-apps/tauri-action@v0
         env:
@@ -168,14 +184,37 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
+      # 预览版与正式版同样的自检门槛：bundle 签名不自洽就不允许公开。
+      - name: 校验 macOS 产物签名
+        if: matrix.platform == 'macos-latest'
+        run: bash scripts/macos-signing.sh verify src-tauri/target/release/bundle
+
   publish:
     name: 公开预览版
     # 默认 success() 门槛要求整个构建矩阵成功；失败、取消或跳过时保留草稿。
     needs: [check, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+
       - name: 全部平台构建成功后公开 release
+        # macOS 未公证时在 release notes 尾部追加用户处理说明（与正式版一致）。
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ needs.check.outputs.tag }}
-        run: gh release edit "$TAG_NAME" --draft=false --prerelease --repo "$GITHUB_REPOSITORY"
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          gh release view "$TAG_NAME" --json body --jq .body -R "$GITHUB_REPOSITORY" > "$NOTES"
+          bash scripts/macos-signing.sh notes >> "$NOTES"
+          gh release edit "$TAG_NAME" --notes-file "$NOTES" --draft=false --prerelease -R "$GITHUB_REPOSITORY"
