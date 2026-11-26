@@ -75,6 +75,16 @@ function envValue(envFile: string, name: string) {
   return line ? line.slice(name.length + 1) : undefined
 }
 
+/** 取出脚本里某个 shell 函数的函数体（`name() {` 到行首 `}`），用于纯静态断言。 */
+function functionBody(name: string) {
+  const source = readFileSync(scriptPath, "utf8")
+  const start = source.indexOf(`\n${name}() {`)
+  expect(start, `脚本里找不到函数 ${name}`).toBeGreaterThan(-1)
+  const end = source.indexOf("\n}\n", start)
+  expect(end, `函数 ${name} 没有闭合`).toBeGreaterThan(start)
+  return source.slice(start, end)
+}
+
 test.afterEach(cleanup)
 
 test("没有任何 Apple 凭据时降级为 ad-hoc，并通过 APPLE_SIGNING_IDENTITY=- 让 tauri 重签 bundle", () => {
@@ -144,6 +154,9 @@ test("多行 base64 证书被压成单行写进 $GITHUB_ENV（否则值会被截
 })
 
 test("非法 base64 证书在 plan 阶段就报错（不留到 notarytool）", () => {
+  // 断言的是“解出 0 字节 → 报错”，不依赖 openssl 自身的退出码：LibreSSL 遇非法字符返回 0
+  // 但输出空内容，Linux 的 OpenSSL 3 行为更严格；两种实现下字节数判定都成立，
+  // 因此用例在 ubuntu 与 macos runner 上跑出同一结论。
   const r = run(["plan"], {
     APPLE_CERTIFICATE: "!!!",
     APPLE_CERTIFICATE_PASSWORD: "pp",
@@ -271,4 +284,17 @@ test("verify 在无 --partial 时把缺失的 tar.gz / dmg 当硬错误", () => 
   const r = run(["verify", bundle], { MACOS_SIGNING_MODE: "adhoc" })
   expect(r.status).toBe(1)
   expect(r.stderr).toContain(".app.tar.gz")
+})
+
+test("dmg 的 Gatekeeper 磁盘镜像评估只记录、不作门槛（否则 Tauri 的正常产物会被拒）", () => {
+  // 纯静态断言，不构造 dmg：signed 分支只把 Authority / TeamIdentifier 当硬门槛。
+  // Tauri 只给 .app 公证装订（bundle/macos/app.rs:137-150），dmg 仅签名、没有票据
+  // （bundle/macos/dmg/mod.rs:194-207），要求 dmg 通过 primary-signature 评估会拒掉正常产物。
+  const body = functionBody("verify_dmg_signature")
+  const spctlBlock = body.slice(body.indexOf("spctl --assess --type open"))
+  expect(spctlBlock, "spctl 段落之后不应再有 failed=1").not.toMatch(/failed=1/)
+  expect(spctlBlock).toContain("仅记录，不作门槛")
+  // 两条硬校验仍在：它们是 ad-hoc 与 Developer ID 的分界。
+  expect(body).toMatch(/grep -q '\^Authority=Developer ID Application'[^]*?failed=1/)
+  expect(body).toMatch(/grep -q '\^TeamIdentifier='[^]*?failed=1/)
 })

@@ -297,8 +297,15 @@ verify_one_app() {
   return "$failed"
 }
 
-# signed 模式对 dmg 的要求：不只是「有签名」（ad-hoc 也满足），必须是 Developer ID 签名，
-# 且能被 Gatekeeper 当作可分发镜像（primary-signature）评估通过。
+# signed 模式对 dmg 的要求：不只是「有签名」（ad-hoc 也满足 codesign --verify），必须是 Developer ID 签名。
+#
+# 这里**只**把 `codesign -dv` 的 Authority / TeamIdentifier 当硬门槛，不要求 dmg 通过 Gatekeeper 的
+# 磁盘镜像评估（`spctl --assess --type open --context context:primary-signature`）：Tauri（
+# tauri-bundler 2.10.1）的公证与装订只对 `.app` 做（`src/bundle/macos/app.rs:137-150`），dmg 那一步
+# 只签名、全程没有 notarize / staple（`src/bundle/macos/dmg/mod.rs:194-207`），所以 Tauri 产出的 dmg
+# 必然是「Developer ID 签名 + 无公证票据」；拿它去要求 primary-signature 评估会把**正常产物**拒掉，
+# 让 signed 分支整块卡死。dmg 的 Gatekeeper 评估结果只记录、不作门槛；公证与装订由 `.app` 一侧的
+# stapler validate / spctl --assess --type execute 保证。
 verify_dmg_signature() {
   local dmg="$1" mode="$2" failed=0 dv
 
@@ -316,11 +323,11 @@ verify_dmg_signature() {
       echo "::error::$dmg 在 signed 模式下没有 TeamIdentifier"
       failed=1
     fi
+    # 记录性输出：Tauri 不给 dmg 装订公证票据（上游行为），被拒是预期结果，无论通过与否都不置 failed。
     if spctl --assess --type open --context context:primary-signature -vv "$dmg"; then
-      echo "spctl --assess（primary-signature）: 通过"
+      echo "spctl --assess（primary-signature）: 通过（仅记录，不作门槛）"
     else
-      echo "::error::$dmg 未通过 Gatekeeper 的磁盘镜像评估（spctl --assess --type open）"
-      failed=1
+      echo "spctl --assess（primary-signature）: 拒绝（仅记录，不作门槛；Tauri 只给 .app 装订票据，dmg 无票据属上游行为）"
     fi
     return "$failed"
   fi

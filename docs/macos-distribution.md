@@ -63,7 +63,7 @@ codesign --verify --deep --strict PiX.app
 1. **产物完整性（硬门槛）**：`macos/*.app`、`macos/*.app.tar.gz`、`dmg/*.dmg` 三者都必须至少存在一个。发布矩阵固定产出这三类文件，缺任何一个即 `::error::` + 非零退出（说明打包没完成）。本机只构建了部分产物时加 `--partial` 显式放宽，CI 不带该参数。
 2. `macos/*.app`：`Contents/_CodeSignature/CodeResources` 必须存在（本次缺陷的回归守卫），`codesign --verify --deep --strict` 必须通过。
 3. `macos/*.app.tar.gz`（自动更新包）：解包后对里面的 `.app` 做同样检查，避免升级安装后又是坏签名。
-4. `dmg/*.dmg` 自身的签名：`adhoc` 模式只记录“dmg 自身未签名”而不失败（tauri 对 `-` 身份故意不给 dmg 签名，上游 issue #12288；决定能否打开的是 dmg 内 app 的签名）。`signed` 模式则要求 `codesign -dv` 里有 `Authority=Developer ID Application` 与 `TeamIdentifier`、并且 `spctl --assess --type open --context context:primary-signature` 通过——**只有 `codesign --verify` 不够**，因为 ad-hoc 签名的 dmg 在那一项也返回 0。
+4. `dmg/*.dmg` 自身的签名：`adhoc` 模式只记录“dmg 自身未签名”而不失败（tauri 对 `-` 身份故意不给 dmg 签名，上游 issue #12288；决定能否打开的是 dmg 内 app 的签名）。`signed` 模式要求 dmg 由 Developer ID 签名（`codesign -dv` 里有 `Authority=Developer ID Application` 与 `TeamIdentifier`）——**只有 `codesign --verify` 不够**，因为 ad-hoc 签名的 dmg 在那一项也返回 0。Gatekeeper 的磁盘镜像评估（`spctl --assess --type open --context context:primary-signature`）结果**只记录、不作门槛**：Tauri 的公证与装订只对 `.app` 做，dmg 仅签名（`tauri-bundler` 的 `bundle/macos/app.rs:137-150` 与 `bundle/macos/dmg/mod.rs:194-207`），所以 Tauri 产出的 dmg 必然没有公证票据，把它当门槛会把正常产物拒掉。公证与装订由 `.app` 一侧的 `stapler validate` / `spctl --assess --type execute` 保证。
 5. **`signed` 模式还会挂载 dmg 检查里面的 `.app`**（`hdiutil attach -nobrowse -readonly -noautoopen -mountpoint <临时目录>`，`hdiutil detach` 卸载，`EXIT` trap 保证失败路径也会卸载；全程不弹 Finder 窗口、不等待 GUI）。用户双击启动的就是这份 app，外层 app 通过不代表它通过。`adhoc` 模式不做这一步：发布门槛已覆盖 app 与 tar.gz，重复挂载没有额外信息。
 6. `signed` 模式额外要求对每个 `.app`（含 tar.gz 内层、dmg 内层）`xcrun stapler validate` 与 `spctl --assess --type execute` 通过；`adhoc` 模式记录这两项结果（必然被 Gatekeeper 拒绝）但不失败。
 
@@ -100,3 +100,5 @@ xattr -dr com.apple.quarantine /Applications/PiX.app
 
 - 正式版只产出 `aarch64` 的 dmg（`macos-latest` runner 原生架构），Intel（x86_64）用户没有对应安装包。补齐需要在 macOS 矩阵里增加 `--target x86_64-apple-darwin`（或 `universal-apple-darwin` 统一包），属于发布链路独立改动，需真机验证后再合入。
 - CI 环境无法验证 Developer ID 签名 + 公证的真实效果（没有证书与 Apple 账号）；`signed` 分支只能由持有凭据的维护者在真机或 tag 发布时验证。
+- Tauri 不给 dmg 装订公证票据（只给 `.app` 装订，`bundle/macos/dmg/mod.rs:194-207` 里只有签名、没有 notarize / staple）。这是上游行为，本仓库不绕过：不另跑 `notarytool` + `stapler staple` 补 dmg 票据，所以 dmg 的 `spctl --assess --type open` 在 `signed` 模式下可能仍是 `rejected`；它只作记录，用户实际打开结果由 dmg 内 `.app` 决定（那个 `.app` 必须通过 `stapler validate` 与 `spctl --assess --type execute`）。
+- `verify` 对 dmg 内层 `.app` 的 `codesign --verify --deep --strict` 不是对所有真实 app 都成立：Chrome dmg 内层 app 因 xattrs / FinderInfo 会失败，但 `stapler validate` 与 `spctl` 都通过。PiX 不受影响（Tauri 打包前会 `xattr -crs` 清属性），但知道这个口径后便于区分“镜像带了额外属性”与“签名真的坏了”。
