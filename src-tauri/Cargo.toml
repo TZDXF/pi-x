@@ -74,6 +74,12 @@ winreg = "0.56"
 webview2-com = "0.39"
 windows-core = "0.62"
 
+[target."cfg(target_os = \"macos\")".dependencies]
+# 只读系统偏好(双击标题栏动作,见 src/platform.rs)。tauri 自身已依赖同一版本的
+# objc2 / objc2-foundation,这里只是启用在 tauri 里没被启用的 NSUserDefaults 绑定,
+# 不新增任何间接依赖,也不需要额外 capability 或前端依赖。
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults"] }
+
 # dev 构建（`tauri dev` / `cargo build`）默认携带完整 debuginfo，依赖产生的
 # DWARF 与 PDB 占据了 target 的绝大部分体积，也让增量链接明显变慢。
 # 这里只调整 dev/test profile，release 保持原样：

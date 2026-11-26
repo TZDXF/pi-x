@@ -750,7 +750,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground" style="padding-top: 2.25rem">
+  <div
+    class="desktop-shell flex h-[100dvh] overflow-hidden bg-background text-foreground"
+    style="padding-top: var(--titlebar-height)"
+  >
     <WindowTitleBar
       :workspace-layout="workspaceLayout"
       :show-sidebar="!showKanban"

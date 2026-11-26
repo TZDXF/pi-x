@@ -20,7 +20,7 @@ function closePreview() {
     <DialogContent
       @after-leave="onAfterLeave"
       :aria-describedby="undefined"
-      class="fixed inset-x-0 bottom-0 top-9 z-50 flex flex-col overflow-hidden bg-black/60 p-2 pt-10 outline-none"
+      class="fixed inset-x-0 bottom-0 top-[var(--titlebar-height)] z-50 flex flex-col overflow-hidden bg-black/60 p-2 pt-10 outline-none"
       @interact-outside.prevent
       @escape-key-down.prevent.stop="closePreview"
       @click.self="closePreview"

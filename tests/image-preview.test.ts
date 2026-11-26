@@ -11,13 +11,13 @@ test("image previews cover the chat below the title bar with a dark backdrop", (
     expect(source).toContain("<ImagePreviewContent")
   }
   const preview = chatSource("components/chat/ImagePreviewContent.vue")
-  expect(preview).toContain("inset-x-0 bottom-0 top-9")
+  expect(preview).toContain("inset-x-0 bottom-0 top-[var(--titlebar-height)]")
   expect(preview).toContain("bg-black/60")
   expect(preview).not.toMatch(/max-w-|DialogOverlay/)
   expect(preview).toContain("@interact-outside.prevent")
   expect(preview).toContain("<DialogClose as-child>")
   expect(preview).toContain('@background-click="closePreview"')
-  expect(chatSource("components/WindowTitleBar.vue")).toContain("h-9")
+  expect(chatSource("components/WindowTitleBar.vue")).toContain("h-[var(--titlebar-height)]")
 })
 
 // 编译真实模板，验证空白点击与图片、工具栏事件冒泡的区别，无需浏览器或额外依赖。
