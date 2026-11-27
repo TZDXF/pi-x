@@ -23,6 +23,7 @@ import type { AuxAskPayload } from "@/lib/auxSelection"
 import { describeAuxAskResult } from "@/lib/auxAsk"
 import { auxSessionFor, auxUiFor, type AuxTab } from "@/stores/auxChat"
 import { addAuxSelection } from "@/stores/auxSelections"
+import { auxDraftFor, saveAuxDraft } from "@/stores/auxDrafts"
 
 /**
  * aux（辅助对话）面板（`docs/aux-chat-spec.md` §3/§5）。
@@ -118,6 +119,10 @@ const sendControl = useChatSendControl({
   workspaceSelection: () => workspaceSelection.value,
   // 进程已经在跑：`ensureStarted` 只是"能不能发"的回答，不再启动任何东西（创建中则等就绪）。
   ensureStarted: ensureReady,
+  // 失败态会把输入区整块换成错误页（`bridge` 随之变 null）：把这次提交的文本存回本实例
+  // 草稿，否则 `setTextInput` 无处可写、aux 又没有 session 文件，用户输入无从找回。
+  // 重试回到 `ready` 后输入区重新挂载，`useAuxDraft` 的 `initialDraft` 会把这段原文放回去。
+  onStartFailed: text => saveAuxDraft(props.tab.runtimeId, { text, files: auxDraftFor(props.tab.runtimeId).files }),
   newSession: () => {},
   onSent: jumpToBottom,
   // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，

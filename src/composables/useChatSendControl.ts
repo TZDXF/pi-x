@@ -28,6 +28,15 @@ export function useChatSendControl(deps: {
   knownSessions: () => KnownSession[]
   workspaceSelection: () => WorkspaceSelection | null
   ensureStarted: (selection?: WorkspaceSelection | null) => Promise<boolean>
+  /**
+   * 启动失败、且输入框已经不在了时的兜底（aux 面板用，TZD-155）。
+   *
+   * `ensureStarted` 返回 false 时 `bridge` 可能已经是 `null`：aux 的失败态把输入区换成了
+   * 错误页，`setTextInput` 无处可写，本次提交的文本会丢（aux 没有 session 文件，用户输入
+   * 无从找回）。调用方在这里把文本存回自己的草稿，重试回到 `ready` 后面板重新挂载时回填。
+   * 主会话不传（它的输入框始终在，走原有的 `setTextInput` 回填）。
+   */
+  onStartFailed?: (text: string) => void
   newSession: () => void
   /** 消息实际进入对话流（非本地排队/延迟发送）后触发，用于滚动回底部。 */
   onSent?: () => void
@@ -184,7 +193,12 @@ export function useChatSendControl(deps: {
       if (!(await deps.ensureStarted(session.entries.length ? null : deps.workspaceSelection()))) {
         const currentText = bridge.value?.textInput ?? ""
         // 启动等待期间可能又引入了批注或编辑了草稿；恢复原提交时保留这些新内容。
-        bridge.value?.setTextInput(currentText && currentText !== text ? appendComposerText(text, currentText) : text)
+        if (bridge.value) {
+          bridge.value.setTextInput(currentText && currentText !== text ? appendComposerText(text, currentText) : text)
+        } else if (text) {
+          // 输入区已经卸载（aux 失败态）：交给调用方存回草稿，否则这次提交的文本会丢。
+          deps.onStartFailed?.(text)
+        }
         throw new Error(t("completion.startFailed"))
       }
       if (commandName) {

@@ -251,3 +251,103 @@ test("a removal for another parent's instance never touches this group's slots",
   expect(b.tabs.value).toHaveLength(0)
   expect(auxChat.auxInstancesFor("qa-remove-a").map(tab => tab.runtimeId)).toEqual([aAux.runtimeId])
 })
+
+/**
+ * 旧创建迟到返回时不得把**新一笔**在途创建一起清掉（TZD-155 复验 P2）。
+ *
+ * `openAux` 的 `finally` 曾经按父会话无条件 `delete` 去重键：创建期间关闭 → 立刻再新建
+ * 一笔 → 旧的那次 spawn 迟到返回并走 `finally` → 新一笔的在途创建被删掉，随后
+ * `auxCreationPending` 变 false、再来一次手势会**多起一个进程**（spawn 计数变成 3），
+ * 而旧创建的 `null` 结果还可能把新实例的状态覆盖掉。判据因此是"只删自己那一笔"。
+ */
+test("a late-returning older creation leaves the newer in-flight one intact", async () => {
+  const parent = "qa-late-old"
+  const stale = pending()
+  const fresh = pending()
+  controls.spawn.mockImplementationOnce(() => stale.promise).mockImplementationOnce(() => fresh.promise)
+
+  const { side } = mount(parent)
+  const firstOpening = side.addTab("aux")
+  const firstSlot = side.tabs.value[0]!
+  const first = auxChat.auxInstancesFor(parent)[0]!
+
+  // 创建期间关闭第一个实例：槽位与实例同步撤掉，去重键随之解除。
+  await side.closeTab(firstSlot.id)
+  expect(side.tabs.value).toHaveLength(0)
+  expect(auxChat.auxInstancesFor(parent)).toHaveLength(0)
+
+  // 紧接着再开一个：这是**第二笔**在途创建（spawn 第 2 次）。
+  const secondOpening = side.addTab("aux")
+  const second = auxChat.auxInstancesFor(parent)[0]!
+  expect(second.runtimeId).not.toBe(first.runtimeId)
+  expect(second.status).toBe("creating")
+  expect(controls.spawn).toHaveBeenCalledTimes(2)
+  expect(auxChat.auxCreationPending(parent)).toBe(true)
+  // 在途创建仍然指向**新**实例（旧实例已摘除）。
+  expect(auxChat.auxPendingCreationTab(parent)?.runtimeId).toBe(second.runtimeId)
+
+  // 旧创建迟到返回：它只能清掉自己那笔，不能把新的那笔一起删掉。
+  stale.resolve()
+  await firstOpening
+  expect(auxChat.auxInstancesFor(parent).map(tab => tab.runtimeId)).toEqual([second.runtimeId])
+  expect(auxChat.auxCreationPending(parent)).toBe(true)
+  expect(auxChat.auxPendingCreationTab(parent)?.runtimeId).toBe(second.runtimeId)
+  // 旧创建走的是"已关闭"分支：不复活、不改新实例状态、不多起进程。
+  expect(second.status).toBe("creating")
+  expect(controls.spawn).toHaveBeenCalledTimes(2)
+  expect(side.tabs.value.filter(tab => tab.type === "aux")).toHaveLength(1)
+
+  // 新的那笔正常握手：新实例转 ready，槽位仍只有一格。
+  fresh.resolve()
+  await secondOpening
+  expect(auxChat.auxInstancesFor(parent).map(tab => [tab.runtimeId, tab.status])).toEqual([[second.runtimeId, "ready"]])
+  expect(side.tabs.value.filter(tab => tab.type === "aux")).toHaveLength(1)
+  expect(controls.spawn).toHaveBeenCalledTimes(2)
+})
+
+/**
+ * 被摘实例记着的旧槽号已经被**本父会话的另一实例**占用时，关闭它不得撤掉那一格
+ * （TZD-155 复验 P3）。
+ *
+ * 判据是「本组该格的实例就是被摘的这个」；只按 `tabId` 数字撤槽位会在撞号时把仍存活
+ * 的另一个实例的入口一起摘掉 —— 面板当场消失、进程还在，用户既看不到也关不掉。
+ * 这里用 `setAuxTabId` 明确制造撞号（组被淘汰/换键后旧号落到别人身上就是这种状态）。
+ */
+test("closing a removed instance never withdraws a slot that another instance now owns", async () => {
+  const parent = "qa-slot-taken"
+  const { side } = mount(parent)
+  await side.addTab("aux")
+  await side.addTab("aux")
+  const [first, second] = auxChat.auxInstancesFor(parent)
+  expect([first!.tabId, second!.tabId]).toEqual([1, 2])
+
+  // 制造撞号：被摘实例记着的旧号改成另一实例真正占用的那一格（组被淘汰/换键后
+  // 旧号落到别人身上就是这种状态）。关闭它时若只按数字撤槽位，就会把仍然存活的
+  // second 的入口一并摘掉 —— 面板当场消失、进程还在，用户既看不到也关不掉。
+  auxChat.setAuxTabId(first!.runtimeId, second!.tabId)
+  await auxChat.closeAux(first!.runtimeId)
+  await nextTick()
+
+  expect(side.tabs.value.some(slot => slot.id === second!.tabId && slot.type === "aux")).toBe(true)
+  expect(auxChat.auxTabBySidebarId(parent, second!.tabId)?.runtimeId).toBe(second!.runtimeId)
+  expect(auxChat.auxInstancesFor(parent).map(tab => tab.runtimeId)).toEqual([second!.runtimeId])
+  expect(controls.kill.mock.calls.map(([id]) => id)).toEqual([first!.runtimeId])
+})
+
+test("closing a removed instance whose old slot id now holds a normal tab leaves it alone", async () => {
+  const parent = "qa-normal-taken"
+  const { side } = mount(parent)
+  await side.addTab("aux")
+  await side.addTab("files")
+  const aux = auxChat.auxInstancesFor(parent)[0]!
+  const files = side.tabs.value.find(tab => tab.type === "files")!
+
+  // 另一种撞号形态：aux 记着的旧号已经属于本组的普通 Tab（重挂载后重新分配的号）。
+  auxChat.setAuxTabId(aux.runtimeId, files.id)
+  await auxChat.closeAux(aux.runtimeId)
+  await nextTick()
+  // 普通 Tab 必须原样保留（撤掉等于凭一个过期号删掉用户的文件面板）。
+  expect(side.tabs.value).toContainEqual({ id: files.id, type: "files" })
+  expect(side.tabs.value.some(tab => tab.id === files.id && tab.type !== "files")).toBe(false)
+  expect(controls.kill.mock.calls.map(([id]) => id)).toEqual([aux.runtimeId])
+})

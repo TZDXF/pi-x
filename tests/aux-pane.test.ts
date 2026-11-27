@@ -73,6 +73,8 @@ test("the pane renders its skeleton and composer while the instance is still cre
   expect(
     pane.match(/<template>\n  <div class="flex min-h-0 flex-1 flex-col" :data-aux-runtime="runtimeId">/),
   ).toBeTruthy()
+  // 失败态卸载输入区时，本次提交的文本必须存回本实例草稿（否则 `setTextInput` 无处可写）。
+  expect(pane).toMatch(/onStartFailed: text =>\s*saveAuxDraft\(props\.tab\.runtimeId, \{ text, files: auxDraftFor/)
 })
 
 test("aux tabs are driven by the registry: add opens a process, close destroys it", () => {
