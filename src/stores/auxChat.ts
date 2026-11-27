@@ -79,7 +79,32 @@ const tabs = reactive<AuxTab[]>([])
 const closedAuxIds = new Set<string>()
 
 /** 同一父会话的在途创建（同一手势去重，防双击开出两个进程）。 */
-const pendingCreations = new Map<string, Promise<AuxTab | null>>()
+const pendingCreations = new Map<string, PendingCreation>()
+
+interface PendingCreation {
+  /** 这次创建要落到哪个实例上（关闭该实例时据此解除去重键）。 */
+  runtimeId: string
+  promise: Promise<AuxTab | null>
+}
+
+/**
+ * 实例被摘除时的**同步**通知（TZD-155）。
+ *
+ * 为什么要这个钩子：侧栏槽位在另一个注册表（`stores/sidebarTabs.ts`）里，面板是否渲染
+ * 又由槽位 + 实例两处共同决定（`RightSidebar` 的 `auxInstance(tab.id)`）。若只有关闭按钮
+ * 那条路径撤槽位，而实例经由别的入口消失（直接调 `closeAux`、父会话收尾、迟到收尾的调用
+ * 方），就会出现"实例已摘、Tab 还在"的空格 —— 用户看到的就是"内容先关、Tab 后关"。
+ * 接线层（`useAuxTabs`）借此在**同一同步步骤**里撤掉槽位，两者始终同帧消失。
+ */
+type AuxRemovedListener = (removed: AuxTab) => void
+
+const auxRemovedListeners = new Set<AuxRemovedListener>()
+
+/** 订阅"实例被摘除"（返回取消订阅）；回调在 `closeAux` 的同步段内触发。 */
+export function onAuxInstanceRemoved(listener: AuxRemovedListener): () => void {
+  auxRemovedListeners.add(listener)
+  return () => auxRemovedListeners.delete(listener)
+}
 
 /** aux 自己的 session / ui store 表（不进 conversations 的 `sessions`）。 */
 const auxSessions = new Map<string, SessionStore>()
@@ -347,6 +372,7 @@ export function resetAuxChatForTest() {
   closedAuxIds.clear()
   sweptStores.clear()
   pendingCreations.clear()
+  auxRemovedListeners.clear()
   auxSessions.clear()
   auxUis.clear()
   askRouters.clear()
@@ -493,7 +519,7 @@ export async function openAux(
   options: { tabId: number; titlePrefix: string; spawn: (tab: AuxTab) => Promise<void> },
 ): Promise<AuxTab | null> {
   const pending = pendingCreations.get(parentRuntimeId)
-  if (pending) return pending
+  if (pending) return pending.promise
 
   const runtimeId = createAuxRuntimeId()
   const ordinal = nextAuxOrdinal(tabs.filter(tab => tab.parentRuntimeId === parentRuntimeId).map(tab => tab.ordinal))
@@ -515,7 +541,9 @@ export async function openAux(
   startAuxLeaseHeartbeat()
   void claimAuxLease(runtimeId)
 
-  const creation = (async () => {
+  // 记录**这一笔**的归属：`finally` 只解自己的去重键，不按父会话无条件删（可能已换成新的一笔）。
+  const self = { promise: null as Promise<AuxTab | null> | null }
+  const creation: Promise<AuxTab | null> = (async () => {
     try {
       await options.spawn(tab)
       // 创建期间被关闭（spawn 成功、init 之前或之后）：统一收尾，不复活、不写状态。
@@ -538,11 +566,14 @@ export async function openAux(
       current.error = message
       return current
     } finally {
-      pendingCreations.delete(parentRuntimeId)
+      // 只撤**自己这一笔**：创建期间关闭会让 `closeAux` 提前解除去重键，下一个手势
+      // 可能已经登记了新的在途创建 —— 按父会话无条件 delete 会把那一笔也删掉（TZD-155）。
+      if (pendingCreations.get(parentRuntimeId)?.promise === self.promise) pendingCreations.delete(parentRuntimeId)
     }
   })()
 
-  pendingCreations.set(parentRuntimeId, creation)
+  self.promise = creation
+  pendingCreations.set(parentRuntimeId, { runtimeId, promise: creation })
   return creation
 }
 
@@ -559,7 +590,31 @@ export function auxCreationPending(parentRuntimeId: string) {
 
 /** 该父会话在途创建的 promise（同一手势复用，不再叠加进程/槽位）。 */
 export function auxPendingCreation(parentRuntimeId: string): Promise<AuxTab | null> | undefined {
-  return pendingCreations.get(parentRuntimeId)
+  return pendingCreations.get(parentRuntimeId)?.promise
+}
+
+/**
+ * 该父会话在途创建**已经落到哪个实例**上（仍在表里才有值，TZD-155）。
+ *
+ * 调用方（`useAuxTabs.openForAsk`）用它把划词引用立刻投给创建中的实例：实例与引用桶
+ * 在 `openAux` 里同步建好，不必等 spawn 握手。等待会带来两个问题 —— 手势期间没有任何
+ * 可见反馈（远程启动可达数秒），且等回来时实例可能已被关闭、只剩"没有可用入口"的失败
+ * 提示，而父会话本身完全可用。
+ */
+export function auxPendingCreationTab(parentRuntimeId: string): AuxTab | undefined {
+  const runtimeId = pendingCreations.get(parentRuntimeId)?.runtimeId
+  return runtimeId ? auxTabByRuntime(runtimeId) : undefined
+}
+
+/**
+ * 解除某个实例的在途创建去重键（关闭时调用，TZD-155）。
+ *
+ * 为什么必须解除：关闭后那个创建只会返回 `null`（实例已墓碑化），若去重键还留着，
+ * 用户在**同一个创建窗口内**再次提问/再次打开会复用到这次注定失败的创建，于是拿到
+ * "没有可用的辅助对话入口"的失败提示 —— 而此刻父会话完全可用、本该正常新建一个。
+ */
+function detachPendingCreation(parentRuntimeId: string, runtimeId: string) {
+  if (pendingCreations.get(parentRuntimeId)?.runtimeId === runtimeId) pendingCreations.delete(parentRuntimeId)
 }
 
 /** 失败态重试前清掉错误（不复用旧进程，重试仍走 spawn）。 */
@@ -636,9 +691,18 @@ export async function closeAux(runtimeId: string): Promise<void> {
   if (closedAuxIds.has(runtimeId)) return
   closedAuxIds.add(runtimeId)
   const index = tabs.findIndex(tab => tab.runtimeId === runtimeId)
-  if (index >= 0) tabs.splice(index, 1)
+  const removed = index >= 0 ? tabs[index] : undefined
+  if (removed) {
+    tabs.splice(index, 1)
+    // 创建期间被关闭：立刻解除去重键，下一次手势必须新建（不能复用一个注定返回 null 的创建）。
+    detachPendingCreation(removed.parentRuntimeId, runtimeId)
+  }
   // 关掉最后一个实例就停表（不必等下一拍自己发现"没有 aux 条目"）。
   if (tabs.length === 0) stopAuxLeaseHeartbeat()
+  // **同步**通知：撤槽位不能等到下一个 tick，否则会留下"实例已摘、Tab 还在"的中间态
+  // （关闭按钮那条路径虽然先撤槽位，但 `closeAux` 还有别的入口）。通知在任何 `await`
+  // 之前发出，因此面板卸载与 Tab 消失在同一个渲染帧里（TZD-155）。
+  if (removed) for (const listener of auxRemovedListeners) listener(removed)
 
   const session = auxSessions.get(runtimeId)
   const ui = auxUis.get(runtimeId)

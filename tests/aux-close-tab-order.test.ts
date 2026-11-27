@@ -35,6 +35,9 @@ vi.mock("@/stores/auxChat", () => ({
   openAux: async () => null,
   registerAuxAskRouter: () => {},
   setAuxTabId: () => {},
+  // 实例摘除通知：本文件不验证"别处关实例"那条路径，给一个可订阅的空实现即可。
+  onAuxInstanceRemoved: () => () => {},
+  auxPendingCreationTab: () => undefined,
 }))
 
 afterEach(() => {
