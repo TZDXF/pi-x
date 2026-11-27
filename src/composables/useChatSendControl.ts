@@ -2,7 +2,7 @@ import { computed, onScopeDispose, ref, watch, type Ref } from "vue"
 import { useI18n } from "vue-i18n"
 import { getConfig, type WorkspaceSelection } from "@/api/piClient"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, isImageAttachment, isImageUrl, type SubmittedAttachment } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands, type KnownSession } from "@/lib/completion"
 import { commentFilePath } from "@/lib/codeComments"
 import { appendComposerText } from "@/lib/composer"
@@ -32,11 +32,18 @@ export function useChatSendControl(deps: {
    * 启动失败、且输入框已经不在了时的兜底（aux 面板用，TZD-155）。
    *
    * `ensureStarted` 返回 false 时 `bridge` 可能已经是 `null`：aux 的失败态把输入区换成了
-   * 错误页，`setTextInput` 无处可写，本次提交的文本会丢（aux 没有 session 文件，用户输入
-   * 无从找回）。调用方在这里把文本存回自己的草稿，重试回到 `ready` 后面板重新挂载时回填。
-   * 主会话不传（它的输入框始终在，走原有的 `setTextInput` 回填）。
+   * 错误页，`setTextInput` 无处可写，本次提交的**文本与附件**会丢（aux 没有 session 文件，
+   * 用户输入无从找回）。调用方在这里把它们存回自己的草稿，重试回到 `ready` 后面板重新挂载时
+   * 回填。主会话不传（它的输入框始终在，走原有的 `setTextInput` 回填）。
+   *
+   * `files` 是调用方交上来的原始附件（带 `file` 时优先用它重建草稿）；`images` 是已解码的
+   * RPC 形状，仅附件提交时就靠它。
    */
-  onStartFailed?: (text: string) => void
+  onStartFailed?: (failed: {
+    text: string
+    images: { data: string; mimeType: string }[]
+    files: SubmittedAttachment[]
+  }) => void
   newSession: () => void
   /** 消息实际进入对话流（非本地排队/延迟发送）后触发，用于滚动回底部。 */
   onSent?: () => void
@@ -154,15 +161,15 @@ export function useChatSendControl(deps: {
     })
   }
 
-  async function onSubmit(message: {
-    text?: string
-    files?: { url?: string; mediaType?: string; filename?: string }[]
-  }) {
+  async function onSubmit(message: { text?: string; files?: SubmittedAttachment[] }) {
     if (workspace.gitBusy || deps.editBusy()) return
     if (!(await waitForConnection())) return
     if (workspace.gitBusy || deps.editBusy()) return
     const text = (message.text ?? "").trim()
     const files = message.files ?? []
+    // 提交件原样留一份：失败且输入区已卸载时，`onStartFailed` 要靠它把附件放回草稿
+    // （提交瞬间输入区已清空，草稿里的 `files` 已经是空数组）。
+    const submittedFiles = files
     if (files.some(file => !isImageAttachment(file))) {
       const error = t("chat.imageAttachmentsOnly")
       ui.pushToast(error, "error")
@@ -195,9 +202,10 @@ export function useChatSendControl(deps: {
         // 启动等待期间可能又引入了批注或编辑了草稿；恢复原提交时保留这些新内容。
         if (bridge.value) {
           bridge.value.setTextInput(currentText && currentText !== text ? appendComposerText(text, currentText) : text)
-        } else if (text) {
-          // 输入区已经卸载（aux 失败态）：交给调用方存回草稿，否则这次提交的文本会丢。
-          deps.onStartFailed?.(text)
+        } else if (text || images.length) {
+          // 输入区已经卸载（aux 失败态）：把这次提交的文本**与附件**交给调用方存回草稿，
+          // 否则它们会静默丢掉（仅附件提交同样要走这一步，因此判据是 `text || images.length`）。
+          deps.onStartFailed?.({ text, images, files: submittedFiles })
         }
         throw new Error(t("completion.startFailed"))
       }

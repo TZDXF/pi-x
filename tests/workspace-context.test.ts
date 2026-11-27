@@ -362,7 +362,9 @@ test("chat awaits preparation and throws on failure so input and attachments are
   // 回填发生在抛出之前（输入区仍在时）；输入区已卸载（aux 失败态）则交给调用方存草稿
   // （TZD-155：否则这次提交的文本会静默丢掉）。
   expect(submit).toMatch(/if \(bridge\.value\) \{\s*bridge\.value\.setTextInput/)
-  expect(submit).toMatch(/deps\.onStartFailed\?\.\(text\)/)
+  // 提交件（文本 + 已解码图片 + 原始附件）一起交出去：仅附件提交同样要走这条回退。
+  expect(submit).toMatch(/deps\.onStartFailed\?\.\(\{ text, images, files: submittedFiles \}\)/)
+  expect(submit).toMatch(/else if \(text \|\| images\.length\)/)
   expect(submit.indexOf("bridge.value.setTextInput") < submit.indexOf('throw new Error(t("completion.startFailed"))'))
   expect(submit.indexOf("deps.onStartFailed") < submit.indexOf('throw new Error(t("completion.startFailed"))'))
   expect(chat).toMatch(/v-model="workspaceSelection"/)

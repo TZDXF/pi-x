@@ -1,4 +1,5 @@
 import { reactive } from "vue"
+import { draftFilesFromSubmit, type SubmittedAttachment } from "@/lib/attachments"
 
 /**
  * aux（辅助对话）的草稿：**仅内存**。
@@ -40,4 +41,25 @@ export function clearAuxDraft(runtimeId: string) {
 /** 草稿条目数（诊断与测试用）。 */
 export function auxDraftCount() {
   return drafts.size
+}
+
+/**
+ * 失败提交的回填（`completion.startFailed` 的「输入与附件都不丢」，TZD-155）。
+ *
+ * aux 的失败态会把输入区整块换成错误页，`ChatComposer` 连同 `bridge` 一起卸载：
+ * `useChatSendControl` 的 `setTextInput` 无处可写，只能把这次提交的内容交给这里。
+ *
+ * 附件取自**调用方给的提交件**（带原始 `File` 时优先用原件，否则按已解码的 base64 重建）：
+ * `PromptInput.submitForm` 在提交瞬间已清空输入区，而 `useAuxDraft.persist()` 那一拍刚写过
+ * `files: []` —— 从草稿里回读附件只会拿到空数组，图片会静默消失。
+ */
+export function saveFailedSubmitDraft(
+  runtimeId: string,
+  failed: {
+    text: string
+    images: readonly { data: string; mimeType: string }[]
+    files: readonly SubmittedAttachment[]
+  },
+) {
+  saveAuxDraft(runtimeId, { text: failed.text, files: draftFilesFromSubmit(failed.files, failed.images) })
 }

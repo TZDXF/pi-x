@@ -73,8 +73,10 @@ test("the pane renders its skeleton and composer while the instance is still cre
   expect(
     pane.match(/<template>\n  <div class="flex min-h-0 flex-1 flex-col" :data-aux-runtime="runtimeId">/),
   ).toBeTruthy()
-  // 失败态卸载输入区时，本次提交的文本必须存回本实例草稿（否则 `setTextInput` 无处可写）。
-  expect(pane).toMatch(/onStartFailed: text =>\s*saveAuxDraft\(props\.tab\.runtimeId, \{ text, files: auxDraftFor/)
+  // 失败态卸载输入区时，本次提交的输入（文本**与附件**）必须存回本实例草稿。
+  // 附件只能取调用方给的提交件：提交瞬间 `persist()` 已写过 `files: []`，回读草稿只会拿到空数组。
+  expect(pane).toMatch(/onStartFailed: failed => saveFailedSubmitDraft\(props\.tab\.runtimeId, failed\)/)
+  expect(pane).not.toMatch(/auxDraftFor\(props\.tab\.runtimeId\)\.files/)
 })
 
 test("aux tabs are driven by the registry: add opens a process, close destroys it", () => {

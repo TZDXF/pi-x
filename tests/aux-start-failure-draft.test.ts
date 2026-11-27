@@ -5,7 +5,7 @@ import ts from "typescript"
 import { createPinia, setActivePinia } from "pinia"
 import { chatSource } from "./fixtures/chatSources"
 import { parseSendDelay, stepSendDelayWheel } from "@/lib/sendDelay"
-import { dataUrlToImage, isImageAttachment, isImageUrl } from "@/lib/attachments"
+import { dataUrlToImage, draftFilesFromSubmit, isImageAttachment, isImageUrl } from "@/lib/attachments"
 import { withSessionReferences, desktopCommands } from "@/lib/completion"
 import { commentFilePath } from "@/lib/codeComments"
 import { serializeComposerPromptContexts } from "@/lib/promptContexts"
@@ -19,16 +19,16 @@ import {
 import { useConversationSelectionsStore } from "@/stores/conversationSelections"
 
 /**
- * aux 的**启动失败**路径不能把这次提交的文本弄丢（TZD-155 复验 P1）。
+ * aux 的**启动失败**路径不能把这次提交的输入弄丢（TZD-155 复验 P1）。
  *
  * 缺陷链：创建期间发送 → 等 `ready` 时进程起不来 → 实例转 `error` → 面板整块换成错误页，
  * `ChatComposer` 在同一帧卸载（`bridge` 变 `null`）→ `useChatSendControl` 里原有的
  * `bridge.value?.setTextInput(...)` 成了空操作 → 而 `useAuxDraft` 的 `initialDraft` 是
  * 面板 setup 时的一次性快照，重试重挂载后输入框仍是空的。aux 没有 session 文件，用户
- * 输入无从找回。
+ * 输入（**文本与图片**）无从找回。
  *
- * 这里用**真实** composable（`useAuxDraft` / 草稿 store / 转译后的 `useChatSendControl`）
- * 跑完整链条：失败时文本落草稿，重试重挂载后输入框里是那次提交的原文。
+ * 这里用**真实** composable（`useAuxDraft` / 草稿 store / 真实的 `draftFilesFromSubmit` /
+ * 转译后的 `useChatSendControl`）跑完整链条：失败时文本与附件落草稿，重试重挂载后回填。
  */
 function harness(runtimeId = "aux:failed") {
   const imports = {
@@ -90,10 +90,11 @@ function harness(runtimeId = "aux:failed") {
       knownSessions: () => [],
       workspaceSelection: () => null,
       ensureStarted,
-      // 与 `AuxChatPane` 的接线一致：失败且输入区已卸载时把文本存回本实例草稿。
-      onStartFailed: text => {
-        onStartFailed(text)
-        saveDraft(runtimeId, text)
+      // 与 `AuxChatPane` 的接线一致：失败且输入区已卸载时把**文本与附件**存回本实例草稿
+      // （同一份真实实现，不是测试里另写一份）。
+      onStartFailed: failed => {
+        onStartFailed(failed)
+        saveFailedSubmitDraft(runtimeId, failed)
       },
       newSession: vi.fn(),
       onSent: vi.fn(),
@@ -103,12 +104,16 @@ function harness(runtimeId = "aux:failed") {
   return { scope, controls, session, ui, bridge, onStartFailed, ensureStarted }
 }
 
-const { auxDraftFor, clearAuxDraft, saveAuxDraft } = await import("@/stores/auxDrafts")
+const { auxDraftFor, clearAuxDraft, saveAuxDraft, saveFailedSubmitDraft } = await import("@/stores/auxDrafts")
 const { useAuxDraft } = await import("@/composables/useAuxDraft")
 
-/** 与面板的 `onStartFailed` 同一份写法（保留已挂载的附件，不覆盖）。 */
-function saveDraft(runtimeId: string, text: string) {
-  saveAuxDraft(runtimeId, { text, files: auxDraftFor(runtimeId).files })
+/** 一张真的 1×1 PNG（base64 与 `dataUrlToImage` 互逆）。 */
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+const pngImage = () => ({ url: `data:image/png;base64,${PNG_BASE64}`, mediaType: "image/png", filename: "dot.png" })
+
+/** 与面板联系的真实草稿读法（附件按原始 `File` 优先）。 */
+function draftFileNames(runtimeId: string) {
+  return auxDraftFor(runtimeId).files.map(file => file.name)
 }
 
 afterEach(() => {
@@ -117,7 +122,7 @@ afterEach(() => {
   clearAuxDraft("aux:failed")
 })
 
-test("a submit that fails after the composer unmounted keeps the text in the instance draft", async () => {
+test("a text-only submit that fails after the composer unmounted keeps the text in the instance draft", async () => {
   setActivePinia(createPinia())
   const h = harness()
   try {
@@ -126,7 +131,7 @@ test("a submit that fails after the composer unmounted keeps the text in the ins
     h.bridge.value = null
     await expect(h.controls.onSubmit({ text: "创建期间提交的原文" })).rejects.toThrow("completion.startFailed")
     // 原实现（只调 `bridge.value?.setTextInput`）在这里什么都不写：草稿没有、输入框也没有。
-    expect(h.onStartFailed).toHaveBeenCalledWith("创建期间提交的原文")
+    expect(h.onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ text: "创建期间提交的原文" }))
     expect(auxDraftFor("aux:failed").text).toBe("创建期间提交的原文")
     expect(h.session.send).not.toHaveBeenCalled()
   } finally {
@@ -134,27 +139,89 @@ test("a submit that fails after the composer unmounted keeps the text in the ins
   }
 })
 
-test("retry remounts the composer with that exact text in the input", async () => {
-  // 上一条的产物：失败时存下的草稿。
-  saveDraft("aux:failed", "创建期间提交的原文")
+test("an image-only submit that fails keeps the attachment, and the retry mounts it again", async () => {
+  setActivePinia(createPinia())
+  const h = harness()
+  try {
+    // 只有图、没有字：`else if (text)` 那种守卫会让整条钩子不触发（图与文本一起丢）。
+    h.bridge.value = null
+    await expect(h.controls.onSubmit({ text: "", files: [pngImage()] })).rejects.toThrow("completion.startFailed")
+    expect(h.onStartFailed).toHaveBeenCalledTimes(1)
+    const failed = h.onStartFailed.mock.calls[0]![0] as {
+      text: string
+      images: { data: string; mimeType: string }[]
+      files: { filename?: string }[]
+    }
+    expect(failed.images).toEqual([{ data: PNG_BASE64, mimeType: "image/png" }])
+    // 草稿里必须有那张图（重挂载的 `addFiles` 从这里取原始 `File`）。
+    expect(auxDraftFor("aux:failed").text).toBe("")
+    expect(auxDraftFor("aux:failed").files).toHaveLength(1)
+    expect(auxDraftFor("aux:failed").files[0]!.type).toBe("image/png")
+
+    // Retry 后输入区重新挂载：`useAuxDraft` 把草稿里的附件放回输入框。
+    const scope = effectScope()
+    const bridge = ref(null)
+    const addFiles = vi.fn()
+    const draft = scope.run(() => useAuxDraft("aux:failed", bridge as never))!
+    bridge.value = { textInput: "", files: [], setTextInput: vi.fn(), addFiles } as never
+    await nextTick()
+    expect(addFiles).toHaveBeenCalledTimes(1)
+    const restored = addFiles.mock.calls[0]![0] as File[]
+    expect(restored).toHaveLength(1)
+    expect(restored[0]!.type).toBe("image/png")
+    // 同一份字节：重建出来的文件与提交时的图片是同一张。
+    expect(await restored[0]!.arrayBuffer()).toBeTruthy()
+    expect(draft.initialDraft.value).toBe("")
+    scope.stop()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("a submit with both text and an image keeps both and recovers both on retry", async () => {
+  setActivePinia(createPinia())
+  const h = harness()
+  try {
+    h.bridge.value = null
+    await expect(h.controls.onSubmit({ text: "看图解释一下", files: [pngImage()] })).rejects.toThrow(
+      "completion.startFailed",
+    )
+    expect(auxDraftFor("aux:failed").text).toBe("看图解释一下")
+    expect(draftFileNames("aux:failed")).toHaveLength(1)
+
+    const scope = effectScope()
+    const bridge = ref(null)
+    const addFiles = vi.fn()
+    const draft = scope.run(() => useAuxDraft("aux:failed", bridge as never))!
+    // 文本来自 `initialDraft`（输入框初值），附件由 `addFiles` 放回。
+    expect(draft.initialDraft.value).toBe("看图解释一下")
+    bridge.value = { textInput: "", files: [], setTextInput: vi.fn(), addFiles } as never
+    await nextTick()
+    expect(addFiles).toHaveBeenCalledTimes(1)
+    expect((addFiles.mock.calls[0]![0] as File[]).map(file => file.type)).toEqual(["image/png"])
+    scope.stop()
+  } finally {
+    h.scope.stop()
+  }
+})
+
+test("the initial draft is read at mount time, so a draft written afterwards comes back too", async () => {
+  // 顺序才是关键：面板先挂载（那一刻草稿为空）→ 提交失败才写草稿 → 输入区重新挂载。
+  // `initialDraft` 若是 `ref(auxDraftFor(...).text)` 的一次性快照，这里永远是空字符串。
   const scope = effectScope()
-  const bridge = ref<{
-    textInput: string
-    files: unknown[]
-    setTextInput: (val: string) => void
-    addFiles: (files: File[]) => void
-  } | null>(null)
-  // 重试后实例回到 `ready`，`ChatComposer` 重新挂载 —— 输入框的初值来自 `useAuxDraft`。
+  const bridge = ref(null)
   const draft = scope.run(() => useAuxDraft("aux:failed", bridge as never))!
-  // `initialDraft` 必须是**当前**草稿（旧实现是面板 setup 时的一次性快照，重挂载后为空）。
-  expect(draft.initialDraft.value).toBe("创建期间提交的原文")
-  // 同一面板内再次挂载输入区时，草稿文本就是重试后输入框里的原文。
-  bridge.value = { textInput: "", files: [], setTextInput: vi.fn(), addFiles: vi.fn() }
+  expect(draft.initialDraft.value).toBe("")
+
+  // 失败态写草稿（`AuxChatPane` 的 `onStartFailed` 做的事）。
+  saveAuxDraft("aux:failed", { text: "失败也要留住的草稿", files: [] })
+  expect(draft.initialDraft.value).toBe("失败也要留住的草稿")
+
+  // 重试回到 `ready`：输入区重新挂载，初值就是这段原文。
+  bridge.value = { textInput: "", files: [], setTextInput: vi.fn(), addFiles: vi.fn() } as never
   await nextTick()
-  expect(draft.initialDraft.value).toBe("创建期间提交的原文")
+  expect(draft.initialDraft.value).toBe("失败也要留住的草稿")
   scope.stop()
-  // 卸载时的 `persist()` 不会把这段文本弄丢（空输入不会覆盖草稿的文字）。
-  expect(auxDraftFor("aux:failed").text).toBe("创建期间提交的原文")
 })
 
 test("a failed start with the composer still mounted keeps using setTextInput", async () => {
@@ -169,4 +236,26 @@ test("a failed start with the composer still mounted keeps using setTextInput", 
   } finally {
     h.scope.stop()
   }
+})
+
+test("the draft recovers the submitted attachments instead of re-reading the just-cleared draft", async () => {
+  // 回归点：`PromptInput.submitForm` 在提交瞬间清空输入区，`useAuxDraft.persist()` 那一拍
+  // 刚写过 `files: []`；从草稿里回读附件只会拿到空数组，因此接线必须用调用方给的提交件。
+  const file = new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" })
+  const rebuilt = draftFilesFromSubmit([{ ...pngImage(), file }], [{ data: PNG_BASE64, mimeType: "image/png" }])
+  expect(rebuilt).toEqual([file])
+  const fromImages = draftFilesFromSubmit([pngImage()], [{ data: PNG_BASE64, mimeType: "image/png" }])
+  expect(fromImages).toHaveLength(1)
+  expect(fromImages[0]!.type).toBe("image/png")
+
+  // 真实接线：先让草稿处于"提交瞬间被清空"的状态，再让失败提交写回 —— 附件必须还在。
+  saveAuxDraft("aux:failed", { text: "", files: [] })
+  expect(auxDraftFor("aux:failed").files).toHaveLength(0)
+  saveFailedSubmitDraft("aux:failed", {
+    text: "",
+    images: [{ data: PNG_BASE64, mimeType: "image/png" }],
+    files: [pngImage()],
+  })
+  expect(auxDraftFor("aux:failed").files).toHaveLength(1)
+  expect(auxDraftFor("aux:failed").files[0]!.type).toBe("image/png")
 })
