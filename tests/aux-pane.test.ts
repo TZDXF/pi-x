@@ -42,13 +42,41 @@ test("the composer is only usable while the pane is actually connected to its pr
   // 输入框。面板必须把两处状态绑在一起（`connected = ready && session.started`）。
   const pane = read("components/aux-chat/AuxChatPane.vue")
   expect(pane).toMatch(/const connected = computed\(\(\) => ready\.value && session\.started\)/)
-  expect(pane).toMatch(/ensureStarted: async \(\) => connected\.value/)
+  // 发送前的判据是 `ensureReady`（TZD-155）：连上就直接回答 true；创建中则等到就绪。
+  expect(pane).toMatch(/ensureStarted: ensureReady/)
   expect(pane).toMatch(/:connected="connected"/)
-  expect(pane).toMatch(/:ensure-started="async \(\) => connected"/)
-  // 反向护栏：不允许再退回只判 `ready` 的三处旧写法。
+  expect(pane).toMatch(/:ensure-started="ensureReady"/)
+  expect(pane).toMatch(/async function ensureReady\(\) \{\s*if \(connected\.value\) return true/)
+  expect(pane).toContain("await waitForAuxReady(props.tab)")
+  expect(pane).toMatch(/return connected\.value\n\}/)
+  // 反向护栏：不允许再退回只判 `ready`（或只判 `connected`、不等就绪）的旧写法。
   expect(pane).not.toMatch(/:connected="ready"/)
   expect(pane).not.toMatch(/:ensure-started="async \(\) => ready"/)
   expect(pane).not.toMatch(/ensureStarted: async \(\) => ready\.value/)
+  expect(pane).not.toMatch(/ensureStarted: async \(\) => connected\.value/)
+})
+
+test("the pane renders its skeleton and composer while the instance is still creating", () => {
+  const pane = read("components/aux-chat/AuxChatPane.vue")
+  // TZD-155：创建期间**不再**整块「加载中」盖住页面。实例一入表就有 session/ui store
+  // 与自己的引用桶，对话区与输入区可以先渲染，辅助对话内容随握手异步补齐。
+  expect(pane).not.toMatch(/v-else-if="tab\.status === 'creating'"/)
+  // 只剩一条轻量状态提示（不再是撑满整块的内容区）。
+  expect(pane).toMatch(/v-if="tab\.status === 'creating'"/)
+  expect(pane).toMatch(/data-aux-creating/)
+  // 失败态仍是整块原因 + 重试；只有它独占页面。
+  expect(pane).toMatch(/v-if="tab\.status === 'error'"/)
+  // 对话区与输入区在 `creating` 时同样挂载：两者都在 `v-else`（非 error）分支里。
+  expect(pane.indexOf("<ChatTurnList")).toBeGreaterThan(-1)
+  expect(pane.indexOf("<ChatComposer")).toBeGreaterThan(pane.indexOf("<ChatTurnList"))
+  // 两个组件都不在 `tab.status` 条件里：唯一的 `v-else` 只排除失败态。
+  expect(
+    pane.match(/<template>\n  <div class="flex min-h-0 flex-1 flex-col" :data-aux-runtime="runtimeId">/),
+  ).toBeTruthy()
+  // 失败态卸载输入区时，本次提交的输入（文本**与附件**）必须存回本实例草稿。
+  // 附件只能取调用方给的提交件：提交瞬间 `persist()` 已写过 `files: []`，回读草稿只会拿到空数组。
+  expect(pane).toMatch(/onStartFailed: failed => saveFailedSubmitDraft\(props\.tab\.runtimeId, failed\)/)
+  expect(pane).not.toMatch(/auxDraftFor\(props\.tab\.runtimeId\)\.files/)
 })
 
 test("aux tabs are driven by the registry: add opens a process, close destroys it", () => {
@@ -73,6 +101,12 @@ test("aux tabs are driven by the registry: add opens a process, close destroys i
   expect(auxTabs).toMatch(/const closing = aux \? closeAux\(aux\.runtimeId\)/)
   // 同一父会话的手势不叠加槽位（否则留下查不到实例的空壳）。
   expect(auxTabs).toMatch(/if \(auxCreationPending\(deps\.runtimeId\)\) return/)
+  // 创建中的实例已经可以直接收下引用（TZD-155）：不等握手、也不复用注定返回 null 的创建。
+  expect(auxTabs).toMatch(/const creating = auxPendingCreationTab\(deps\.runtimeId\)/)
+  expect(auxTabs).toMatch(/if \(creating\) return creating/)
+  // 实例经由任何入口消失时同步撤槽位（否则"内容先关、Tab 后关"）。
+  expect(auxTabs).toMatch(/onAuxInstanceRemoved\(dropSlotForRemoved\)/)
+  expect(auxTabs).toMatch(/id !== null && slotAt\(deps\.tabs\(\), id\)\?\.type === "aux" && !auxInstanceAtSlot\(id\)/)
   // 侧栏入口：Popover 与空态宫格各一处，只在父上下文未就绪时禁用；不再出现数量上限提示。
   expect(sidebar.match(/:disabled="!auxParent"/g)).toHaveLength(2)
   expect(sidebar.match(/@click="addTab\('aux'\)"/g)).toHaveLength(2)

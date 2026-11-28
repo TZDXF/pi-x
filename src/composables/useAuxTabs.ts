@@ -8,8 +8,10 @@ import {
   auxCreationPending,
   auxInstancesFor,
   auxPendingCreation,
+  auxPendingCreationTab,
   auxSlotlessFor,
   closeAux,
+  onAuxInstanceRemoved,
   openAux,
   registerAuxAskRouter,
   setAuxTabId,
@@ -111,6 +113,30 @@ export function useAuxTabs(deps: {
     fillWaitingAuxSlots()
     await closing
   }
+
+  /**
+   * 实例经由**任何**入口消失时同步撤掉它的槽位（TZD-155）。
+   *
+   * 关闭按钮那条路径已经自己先撤槽位，但 `closeAux` 还有别的入口（父会话收尾、后续
+   * 功能的直接关闭、迟到收尾的调用方）。没有这一层时"实例已摘、槽位还在"会出现一格
+   * 空 Tab —— 面板因为 `auxInstance(tab.id)` 为空而消失，视觉上就是"内容先关、Tab
+   * 后关"。`closeAux` 在第一个 `await` 之前就通知，所以槽位撤除与实例摘除落在**同一个
+   * 同步步骤**（同一渲染帧），不会出现中间态。
+   *
+   * 判据沿用 TZD-131：只看**本父会话、本组、仍由该实例占据**的 `aux` 槽位，绝不按裸
+   * id 误删普通 Tab 或别的父会话同号实例。
+   */
+  function dropSlotForRemoved(removed: AuxTab) {
+    if (removed.parentRuntimeId !== deps.runtimeId) return
+    const id = removed.tabId
+    // 没有槽位（等位实例）本来就没有入口，只需给别的等位实例补格。
+    if (id !== null && slotAt(deps.tabs(), id)?.type === "aux" && !auxInstanceAtSlot(id)) {
+      deps.closeSidebarTab(id)
+    }
+    fillWaitingAuxSlots()
+  }
+
+  const stopRemovedListener = onAuxInstanceRemoved(dropSlotForRemoved)
 
   /**
    * 把**没有槽位**的存活实例补回本组（TZD-131），返回已补上的实例。
@@ -262,6 +288,11 @@ export function useAuxTabs(deps: {
    * 不叠加槽位），差别是**返回实例**而不是 `void`。
    */
   async function openForAsk() {
+    // 创建中的实例**已经**在表里、也已经有槽位：直接把引用投给它，不必等 spawn 握手。
+    // 等回来才投递会让整个手势在启动期间没有任何反馈（远程启动可达数秒），并且等回来时
+    // 实例可能已被关闭，只剩一句"没有可用的辅助对话入口"（TZD-155）。
+    const creating = auxPendingCreationTab(deps.runtimeId)
+    if (creating) return creating
     const pending = auxPendingCreation(deps.runtimeId)
     if (pending) return (await pending) ?? null
     // 有实例在等槽位：先补回它并回报该实例（引用投给它，不另起进程）。
@@ -295,7 +326,10 @@ export function useAuxTabs(deps: {
     // 不看实例记着的旧号 —— 组被淘汰/排队/换键后旧号与当前组无关（TZD-131）。
     entry: tab => ownsSlot(tab.tabId, tab.runtimeId),
   })
-  onScopeDispose(() => registerAuxAskRouter(deps.runtimeId, null))
+  onScopeDispose(() => {
+    stopRemovedListener()
+    registerAuxAskRouter(deps.runtimeId, null)
+  })
 
   return {
     parent: parent as ComputedRef<AuxParentContext>,

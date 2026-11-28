@@ -14,6 +14,8 @@ import { useChatTurnList } from "@/composables/useChatTurnList"
 import { useAuxDraft } from "@/composables/useAuxDraft"
 import { useConversationModel } from "@/composables/useConversationModel"
 import { formatCodedError } from "@/lib/backendError"
+
+import { waitForAuxReady } from "@/lib/auxReady"
 import { retryAuxSpawn, type AuxParentContext } from "@/lib/auxSpawn"
 import type PromptInputBridge from "@/components/PromptInputBridge.vue"
 import type { usePromptEdit } from "@/composables/usePromptEdit"
@@ -22,7 +24,7 @@ import type { AuxAskPayload } from "@/lib/auxSelection"
 import { describeAuxAskResult } from "@/lib/auxAsk"
 import { auxSessionFor, auxUiFor, type AuxTab } from "@/stores/auxChat"
 import { addAuxSelection } from "@/stores/auxSelections"
-
+import { saveFailedSubmitDraft } from "@/stores/auxDrafts"
 /**
  * aux（辅助对话）面板（`docs/aux-chat-spec.md` §3/§5）。
  *
@@ -80,6 +82,20 @@ const ready = computed(() => props.tab.status === "ready")
  */
 const connected = computed(() => ready.value && session.started)
 
+/**
+ * 发送前的"等就绪"（TZD-155）。
+ *
+ * 面板在 `creating` 阶段就已经渲染输入区：实例入表时 store 与引用桶都是现成的，用户可以
+ * 先打字、先看引用摘要。真正发送要等进程握手完成，于是这里等到 `ready`（或 `error`/超时
+ * 的失败）再回答"能不能发" —— 用户不必看到一句"启动失败"再手动重发。超时或失败时
+ * `useChatSendControl` 会把文本填回输入框并给出提示，草稿不会丢。
+ */
+async function ensureReady() {
+  if (connected.value) return true
+  if (!(await waitForAuxReady(props.tab))) return false
+  return connected.value
+}
+
 // 父上下文只在**首轮**拼进 prompt（记账按 aux runtimeId；第 2/3 轮返回 null）。
 const { parentContext } = useAuxParentContext({
   auxRuntimeId: props.tab.runtimeId,
@@ -101,8 +117,12 @@ const sendControl = useChatSendControl({
   editBusy: () => false,
   knownSessions: () => [],
   workspaceSelection: () => workspaceSelection.value,
-  // 进程已经在跑：`ensureStarted` 只是"能不能发"的回答，不再启动任何东西。
-  ensureStarted: async () => connected.value,
+  // 进程已经在跑：`ensureStarted` 只是"能不能发"的回答，不再启动任何东西（创建中则等就绪）。
+  ensureStarted: ensureReady,
+  // 失败态会把输入区整块换成错误页（`bridge` 随之变 null）：把这次提交的文本**与附件**存回
+  // 本实例草稿，否则 `setTextInput` 无处可写、aux 又没有 session 文件，用户输入无从找回。
+  // 重试回到 `ready` 后输入区重新挂载，`useAuxDraft` 的 `initialDraft`/`addFiles` 把它们放回去。
+  onStartFailed: failed => saveFailedSubmitDraft(props.tab.runtimeId, failed),
   newSession: () => {},
   onSent: jumpToBottom,
   // aux 读**自己的**引用桶（TZD-103）：代码批注（projects 级）仍一律视为空，
@@ -182,14 +202,21 @@ async function copyText(text: string) {
         <RefreshCw class="size-3.5 shrink-0" />{{ t("auxChat.retry") }}
       </Button>
     </div>
-    <div
-      v-else-if="tab.status === 'creating'"
-      class="text-muted-foreground flex flex-1 items-center justify-center gap-2 p-6 text-sm"
-      role="status"
-    >
-      {{ t("auxChat.creating") }}
-    </div>
+    <!--
+      创建中：**先渲染页面骨架与输入区**，辅助对话内容异步补齐（TZD-155）。
+      实例一入表就有 session/ui store 与自己的引用桶，对话列表、划词引用、草稿都能先用；
+      整块"加载中"文案会把页面和输入区一起盖住，用户连引用都看不到。这里只留一条轻量的
+      状态提示，放在输入区上方。
+    -->
     <template v-else>
+      <div
+        v-if="tab.status === 'creating'"
+        class="text-muted-foreground bg-muted/40 flex shrink-0 items-center justify-center gap-2 border-b px-3 py-1.5 text-xs"
+        role="status"
+        data-aux-creating
+      >
+        <RefreshCw class="size-3 animate-spin shrink-0" aria-hidden="true" />{{ t("auxChat.creating") }}
+      </div>
       <ChatTurnList
         ref="conversation"
         :session="session"
@@ -218,7 +245,7 @@ async function copyText(text: string) {
         :edit-busy="false"
         :session-drag-over="false"
         :initial-draft="initialDraft"
-        :ensure-started="async () => connected"
+        :ensure-started="ensureReady"
         :controls="controls"
         hide-workspace-context
         @locate-selection="conversation?.locateSelection($event)"
